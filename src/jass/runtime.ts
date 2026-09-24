@@ -1442,6 +1442,14 @@ export class Runtime {
   };
   /** Global variables (name → value) and arrays (name → JassArray). */
   readonly globals = new Map<string, JassValue>();
+  /**
+   * The blows being handed to the script's damage events RIGHT NOW (Interpreter.fireDamagePhase),
+   * innermost last — a handler that deals damage raises another. The natives read and rewrite the
+   * top one: `GetEventDamage` ("calling GetEventDamage after you set it with this function will
+   * return the value you set" — jassbot), `BlzSetEventDamage`, and the attack/damage/weapon type
+   * getters and setters. The shape is the sim's `DamageBlow`, stated here structurally.
+   */
+  readonly damageStack: Array<{ phase: "damaging" | "damaged"; blow: { amount: number; attackType: string; damageType: number; weaponSound: string } }> = [];
   readonly globalArrays = new Map<string, JassArray>();
   /** The DECLARED type of each scalar global. A value does not carry it: blizzard.j and every
    *  editor-written `InitGlobals` assign integer literals to real globals (`set udg_X=0`), so a

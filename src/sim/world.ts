@@ -1226,6 +1226,33 @@ export interface SimTree {
 /** A frozen snapshot of a unit for a trigger event (death/damage/attack). Just enough
  *  for the trigger engine to mint a JASS unit handle (GetDyingUnit/GetEventDamageSource
  *  /GetAttacker/…) even after the unit is gone. */
+/**
+ * One blow handed to the map's script WHILE it is being dealt — the 1.31 damage events, raised
+ * synchronously so the script can change it (docs/map-compatibility.md; `damageHook`).
+ *
+ *   "damaging" — "triggers before any armor, armor type and other resistances": the amount is the
+ *                raw blow, and the attack type, damage type and weapon (sound) may be changed.
+ *   "damaged"  — after them: the amount is what is about to come off the target's hit points.
+ *
+ * Every field is the SCRIPT's to rewrite (`BlzSetEventDamage` & co.); the sim reads them back.
+ */
+/** DAMAGE_TYPE_NORMAL's common.j index — what an ordinary attack deals. */
+const DAMAGE_TYPE_NORMAL = 4;
+/** How deep damage events may nest before the engine stops raising them (see damageDepth). */
+const MAX_DAMAGE_EVENT_DEPTH = 8;
+
+export interface DamageBlow {
+  target: EventUnitInfo;
+  source: EventUnitInfo | null;
+  amount: number;
+  attackType: AttackType;
+  /** common.j `damagetype` index — DAMAGE_TYPE_NORMAL (4) for an attack, "a regular attack is
+   *  DAMAGE_TYPE_NORMAL" (jassbot); UNKNOWN (0) where the engine does not say. */
+  damageType: number;
+  /** The weapon's sound class as the data spells it ("MetalMediumSlice"; "" for none). */
+  weaponSound: string;
+}
+
 export interface EventUnitInfo {
   id: number;
   typeId: string;
@@ -3340,6 +3367,17 @@ export class SimWorld {
    *  for melee and for maps that don't listen, so nothing accumulates unread). */
   captureDeaths = false;
   captureDamage = false;
+  /**
+   * The map's damage events, SYNCHRONOUSLY — set by the host only for a script that can change a
+   * blow (it calls BlzSetEventDamage or a BlzSetEvent…Type, or registers a DAMAGING event). While
+   * it is set the blow is handed to it twice (DamageBlow says when) and the queued
+   * `captureDamage` path is not used, so nothing is raised twice. Every other map keeps the queue.
+   */
+  damageHook: ((phase: "damaging" | "damaged", blow: DamageBlow) => void) | null = null;
+  /** How deep in one another's damage events we are: a trigger that deals damage from a damage
+   *  event raises another one — "it will cause infinite loop and game will crash" (jassbot,
+   *  BlzSetEventDamage). The game crashes; we stop raising past a depth and let the blow land. */
+  private damageDepth = 0;
   captureAttacks = false;
   captureOrders = false;
   captureSpells = false; // EVENT_(PLAYER_)UNIT_SPELL_* (7.17)
@@ -15352,19 +15390,30 @@ export class SimWorld {
     sourceId: number,
     targetId: number,
     amount: number,
-    opts: { attack: boolean; ranged: boolean; attackType: AttackType; magic: boolean; universal: boolean },
+    opts: { attack: boolean; ranged: boolean; attackType: AttackType; magic: boolean; universal: boolean; damageType?: number; weaponSound?: string },
   ): number {
     const target = this.units.get(targetId);
     if (!target || target.hp <= 0 || amount <= 0) return 0;
     if (opts.magic && !opts.universal && target.magicImmune) return 0;
+    // The script's DAMAGING event, before the table and the armour (see applyDamage).
+    let blow: DamageBlow | null = null;
+    let attackType = opts.attackType;
+    if (this.damageHook) {
+      const src = this.units.get(sourceId);
+      blow = { target: eventInfo(target), source: src ? eventInfo(src) : null, amount, attackType, damageType: opts.damageType ?? 0, weaponSound: opts.weaponSound ?? "" };
+      if (!this.raiseDamage("damaging", blow)) return 0;
+      amount = blow.amount;
+      attackType = blow.attackType;
+      if (amount <= 0) return this.blockOrHeal(target, amount);
+    }
     let dealt = amount;
     if (!opts.universal) {
-      dealt *= damageMultiplier(opts.attackType, target.armorType);
+      dealt *= damageMultiplier(attackType, target.armorType);
       dealt *= 1 - armorDamageReduction(target.armor);
     }
     // `recordHit` is the native's own `attack` flag: a blow makes the weapon-on-armour clang
     // and a trigger's damage out of nowhere does not.
-    return this.landDamage(target, dealt, sourceId, opts.attack);
+    return this.landDamage(target, dealt, sourceId, opts.attack, blow?.weaponSound ?? "", blow);
   }
 
   /**
@@ -20682,6 +20731,19 @@ export class SimWorld {
     // `Nsi2 "Chance To Miss (%)"` (0.45/0.65/0.8) is not a damage cut or a slow — the swing
     // is thrown and goes nowhere, which is why the buff has a kind of its own.
     if (attacker && this.rollMiss(attacker)) return 0;
+    // The script's DAMAGING event: the raw blow, before every reduction below — Defend, the
+    // Arcanite Shield, the damage table, armour. "Misses don't trigger any damage events", which
+    // is why it sits after the two rolls above. The attack TYPE it may change is the one the
+    // table below then reads.
+    let blow: DamageBlow | null = null;
+    if (this.damageHook) {
+      blow = { target: eventInfo(target), source: attacker ? eventInfo(attacker) : null, amount: rawDamage, attackType, damageType: DAMAGE_TYPE_NORMAL, weaponSound };
+      if (!this.raiseDamage("damaging", blow)) return 0;
+      rawDamage = blow.amount;
+      attackType = blow.attackType;
+      weaponSound = blow.weaponSound;
+      if (rawDamage <= 0) return this.blockOrHeal(target, rawDamage);
+    }
     // Defend (Adef, granted by the Rhde research): a Footman braced behind his shield turns
     // arrows aside. Straight off the ability's own Ubertip, which spells the whole thing out:
     // "Activate to have a <DataF1>% chance to reflect Piercing attacks upon the source, and to
@@ -20723,7 +20785,7 @@ export class SimWorld {
     for (const b of target.buffs) if (b.kind === "vuln") vuln = Math.max(vuln, b.value);
     const reduction = armorDamageReduction(target.armor);
     const final = this.hardenedSkin(target, rawDamage * typeMult * (1 + vuln) * (1 - reduction), ranged);
-    return this.landDamage(target, this.spiritLinkSplit(target, final), attackerId, true, weaponSound);
+    return this.landDamage(target, this.spiritLinkSplit(target, final), attackerId, true, weaponSound, blow);
   }
 
   /**
@@ -21055,12 +21117,45 @@ export class SimWorld {
     this.recomputeStats(target); // the mana half is a stat bonus — drop it now, not next tick
   }
 
+  /** Hand a blow to the script's damage events (damageHook). False when the TARGET did not live
+   *  through the script — a trigger may kill or remove it mid-blow — so the caller lands nothing. */
+  private raiseDamage(phase: "damaging" | "damaged", blow: DamageBlow): boolean {
+    if (!this.damageHook || this.damageDepth >= MAX_DAMAGE_EVENT_DEPTH) return true;
+    this.damageDepth++;
+    try {
+      this.damageHook(phase, blow);
+    } finally {
+      this.damageDepth--;
+    }
+    const t = this.units.get(blow.target.id);
+    return !!t && t.hp > 0;
+  }
+
+  /** A blow the script took down to nothing, or below: "Set to 0.00 to completely block the
+   *  damage. Set to negative value to heal the target instead of damaging" (jassbot). */
+  private blockOrHeal(target: SimUnit, amount: number): number {
+    if (amount < 0) target.hp = Math.min(target.maxHp, target.hp - amount);
+    return 0;
+  }
+
   /** Apply FINAL (post-reduction) damage: death, return fire, and (for physical
    *  hits) the impact SFX. Spell damage calls this directly with recordHit=false —
    *  WC3 ability damage ignores the armor value and plays its own effects. Returns
    *  the HP removed (0 if the target was invulnerable). */
-  private landDamage(target: SimUnit, amount: number, attackerId: number, recordHit: boolean, weaponSound = ""): number {
+  private landDamage(target: SimUnit, amount: number, attackerId: number, recordHit: boolean, weaponSound = "", raised: DamageBlow | null = null): number {
     if (target.invulnerable) return 0; // Divine Shield / Avatar: immune to damage
+    // The script's DAMAGING event, for a blow that did not come through a path which already
+    // raised it before its own reductions (the attack, UnitDamageTarget): a spell's, a splash's,
+    // an orb's — damage the engine lands as it is, so its "before resistances" is this amount.
+    let blow = raised;
+    if (this.damageHook && !blow) {
+      const src = attackerId ? this.units.get(attackerId) : undefined;
+      blow = { target: eventInfo(target), source: src ? eventInfo(src) : null, amount, attackType: AttackType.Spells, damageType: 0, weaponSound };
+      if (!this.raiseDamage("damaging", blow)) return 0;
+      amount = blow.amount;
+      weaponSound = blow.weaponSound;
+      if (amount <= 0) return this.blockOrHeal(target, amount); // "then [DAMAGED] will never fire"
+    }
     // A Mirror Image illusion takes AOmi's DataC ("Damage Taken (%)") = 200%, which is why
     // one melts the moment somebody works out which is which. It belongs HERE and not in
     // applyDamage because that is only the ATTACK path: spellDamage lands straight here, and
@@ -21079,9 +21174,19 @@ export class SimWorld {
     if (recordHit) this.hits.push({ attackerId, targetId: target.id, weaponSound, x: target.x, y: target.y });
     this.noteAttacked(target, attackerId); // "The battle has been joined." / "Our town is under siege!"
     this.revealFoggedAttacker(attackerId, target);
+    // The script's DAMAGED event, synchronously: the amount about to come off, which it may change
+    // ("1 and 2 — modify the damage after any reduction", jassbot) — so it is raised BEFORE the
+    // hit points move, and the queued path below stays for every map that cannot change a blow.
+    if (blow) {
+      blow.amount = amount;
+      blow.target = eventInfo(target);
+      if (!this.raiseDamage("damaged", blow)) return 0;
+      amount = blow.amount;
+      if (amount <= 0) return this.blockOrHeal(target, amount);
+    }
     // EVENT_UNIT_DAMAGED: the amount that actually landed (after mana shield), with
     // the source. Captured before the hp subtraction so the target snapshot is live.
-    if (this.captureDamage) {
+    if (this.captureDamage && !this.damageHook) {
       const src = attackerId ? this.units.get(attackerId) : undefined;
       this.damageEvents.push({ target: eventInfo(target), source: src ? eventInfo(src) : null, amount });
     }

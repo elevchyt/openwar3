@@ -35,10 +35,10 @@ const PRELUDE_BODY = `
 // --- damage events (1.31) ---------------------------------------------------
 // A map's "damage engine" registers ONE of these per player instead of one
 // EVENT_UNIT_DAMAGED per unit. DAMAGED fires when a blow has landed;
-// DAMAGING fires BEFORE the reduction and lets the script change the amount,
-// which our sim has no seam for yet — it is declared so the registration
-// compiles and is never raised. Registering an event that never fires is
-// exactly what the engine does for a map that asks about something absent.
+// DAMAGING fires BEFORE the reduction and lets the script change the amount
+// (and its attack/damage/weapon type) — raised synchronously by the sim for a
+// script that can change a blow (SimWorld.damageHook). EVENT_UNIT_DAMAGING is
+// its per-unit twin.
 
 // --- camera fields (1.31) ---------------------------------------------------
 // The three LOCAL rotations, which turn the camera about its own axes rather
@@ -74,6 +74,7 @@ constant native ConvertFrameEventType  takes integer i returns frameeventtype
 globals
     constant playerunitevent EVENT_PLAYER_UNIT_DAMAGED  = ConvertPlayerUnitEvent(308)
     constant playerunitevent EVENT_PLAYER_UNIT_DAMAGING = ConvertPlayerUnitEvent(315)
+    constant unitevent       EVENT_UNIT_DAMAGING        = ConvertUnitEvent(314)
     constant camerafield CAMERA_FIELD_LOCAL_PITCH = ConvertCameraField(7)
     constant camerafield CAMERA_FIELD_LOCAL_YAW   = ConvertCameraField(8)
     constant camerafield CAMERA_FIELD_LOCAL_ROLL  = ConvertCameraField(9)

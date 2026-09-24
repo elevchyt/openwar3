@@ -16,12 +16,34 @@
 
 import { playerStateHolds, ThreadAbort, unitStateHolds, type BoolExpr, type NativeCtx, type Runtime, type TimerObj, type TriggerObj, type TriggerReg } from "../runtime";
 import { asNum, jBool, jHandle, jInt, JNULL, jReal, type JassValue } from "../values";
+import { ATTACK_TYPES } from "../../data/unitFieldCodes";
+import type { AttackType } from "../../data/enums";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
 
 const trig = (c: NativeCtx, v: JassValue): TriggerObj | undefined => c.rt.data<TriggerObj>(v);
 const timer = (c: NativeCtx, v: JassValue): TimerObj | undefined => c.rt.data<TimerObj>(v);
+
+/** common.j's WEAPON_TYPE_* constants, read off the runtime's own globals, as data-spelled sound
+ *  names ("MetalMediumSlice") both ways. Built once per runtime. */
+const weaponTypeCache = new WeakMap<Runtime, { bySound: Map<string, number>; byIndex: Map<number, string> }>();
+function weaponTypes(c: NativeCtx): { bySound: Map<string, number>; byIndex: Map<number, string> } {
+  let t = weaponTypeCache.get(c.rt);
+  if (!t) {
+    t = { bySound: new Map(), byIndex: new Map() };
+    for (const [name, v] of c.rt.globals) {
+      if (!name.startsWith("WEAPON_TYPE_") || v.k !== "handle") continue;
+      const sound = name.slice("WEAPON_TYPE_".length).toLowerCase().split("_").map((w) => w[0].toUpperCase() + w.slice(1)).join("");
+      const index = c.rt.enumIndex(v);
+      if (sound === "Whoknows") continue; // WEAPON_TYPE_WHOKNOWS — no sound at all
+      t.bySound.set(sound.toLowerCase(), index);
+      t.byIndex.set(index, sound);
+    }
+    weaponTypeCache.set(c.rt, t);
+  }
+  return t;
+}
 
 export function registerEventNatives(rt: Runtime): void {
   // --- triggers ---
@@ -221,7 +243,60 @@ export function registerEventNatives(rt: Runtime): void {
   def(rt, "GetEventPlayerChatStringMatched", (c) => resp(c, "EventPlayerChatStringMatched"));
   def(rt, "GetEventDamage", (c) => {
     const v = resp(c, "EventDamage");
+    // Inside a damage event raised WHILE the blow is dealt (Interpreter.fireDamagePhase), the
+    // live amount — so a handler reads back what it (or one before it) set: "calling
+    // GetEventDamage after you set it with this function will return the value you set" (jassbot).
+    const live = c.rt.damageStack[c.rt.damageStack.length - 1];
+    if (live && v.k === "real") return jReal(live.blow.amount);
     return v.k === "real" ? v : jReal(0);
+  });
+
+  // --- changing the blow (1.29 BlzSetEventDamage, 1.31 the types) ---
+  // Only a blow still being dealt can be changed: the sim hands it over synchronously for a map
+  // that uses these (SimWorld.damageHook), and a handler past a wait has nothing left to change.
+  // The TYPES "can be only used … before armor reduction" (jassbot, BlzSetEventAttackType) — in
+  // the DAMAGING phase — and answer false otherwise.
+  const blow = (c: NativeCtx) => c.rt.damageStack[c.rt.damageStack.length - 1];
+  def(rt, "BlzSetEventDamage", (c, a) => {
+    const b = blow(c);
+    if (b) b.blow.amount = asNum(a[0] ?? JNULL);
+    return JNULL;
+  });
+  def(rt, "BlzGetEventAttackType", (c) => {
+    const b = blow(c);
+    return b ? c.rt.enumHandle("AttackType", Math.max(0, ATTACK_TYPES.indexOf(b.blow.attackType as AttackType))) : JNULL;
+  });
+  def(rt, "BlzSetEventAttackType", (c, a) => {
+    const b = blow(c);
+    const t = ATTACK_TYPES[c.rt.enumIndex(a[0] ?? JNULL)];
+    if (!b || b.phase !== "damaging" || !t) return jBool(false);
+    b.blow.attackType = t;
+    return jBool(true);
+  });
+  def(rt, "BlzGetEventDamageType", (c) => {
+    const b = blow(c);
+    return b ? c.rt.enumHandle("DamageType", b.blow.damageType) : JNULL;
+  });
+  def(rt, "BlzSetEventDamageType", (c, a) => {
+    const b = blow(c);
+    const i = c.rt.enumIndex(a[0] ?? JNULL);
+    if (!b || b.phase !== "damaging" || i < 0) return jBool(false);
+    b.blow.damageType = i;
+    return jBool(true);
+  });
+  // The weapon type is the SOUND of the blow ("Can be used to modify the sound of impact" —
+  // jassbot). Our blows carry it as the data spells it ("MetalMediumSlice"), and common.j's own
+  // constant for it is WEAPON_TYPE_METAL_MEDIUM_SLICE, so the two are joined by name, off the
+  // running common.j's globals rather than a table typed here.
+  def(rt, "BlzGetEventWeaponType", (c) => {
+    const b = blow(c);
+    return b ? c.rt.enumHandle("WeaponType", weaponTypes(c).bySound.get(b.blow.weaponSound.toLowerCase()) ?? 0) : JNULL;
+  });
+  def(rt, "BlzSetEventWeaponType", (c, a) => {
+    const b = blow(c);
+    if (!b || b.phase !== "damaging") return jBool(false);
+    b.blow.weaponSound = weaponTypes(c).byIndex.get(c.rt.enumIndex(a[0] ?? JNULL)) ?? "";
+    return jBool(true);
   });
   // Issued-order responses (EVENT_..._ISSUED_ORDER/POINT/TARGET — 7.14).
   def(rt, "GetIssuedOrderId", (c) => {

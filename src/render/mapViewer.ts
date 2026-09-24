@@ -3702,6 +3702,14 @@ export class MapViewerScene {
     // of once per unit. The index is our own compat prelude's (src/compat/prelude.ts); without
     // it here the trigger registers and the sim never captures a blow to raise it with.
     sw.captureDamage = any("unitEvent", 52) || any("playerUnitEvent", 308);
+    // …and for a script that can CHANGE a blow (it registers a DAMAGING event, or calls
+    // BlzSetEventDamage / a BlzSetEvent…Type anywhere), the damage events are raised WHILE the blow
+    // is dealt, synchronously, so what the handlers set is what lands (SimWorld.damageHook). Every
+    // other map keeps the queued EVENT_UNIT_DAMAGED above, exactly as it was.
+    const damaging = any("unitEvent", 314) || any("playerUnitEvent", 315);
+    sw.damageHook = (damaging || (sw.captureDamage && engine.interp.scriptModifiesDamage()))
+      ? (phase, blow) => engine.interp.fireDamagePhase(phase, blow)
+      : null;
     sw.captureAttacks = any("unitEvent", 62) || any("playerUnitEvent", 18);
     sw.captureOrders = any("playerUnitEvent", 38, 40) || any("unitEvent", 75, 77);
     sw.captureConstruct = any("playerUnitEvent", 26, 28) || any("unitEvent", 64, 65);

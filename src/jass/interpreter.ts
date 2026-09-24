@@ -155,6 +155,11 @@ const IMPLIED_EVENT: Readonly<Record<string, string>> = {
 const EVENT_UNIT_DEATH = 53;
 const EVENT_PLAYER_UNIT_DEATH = 20;
 const EVENT_UNIT_DAMAGED = 52;
+/** The sim's EventUnitInfo, as much of it as the damage raise reads. */
+interface EventUnitInfoLike {
+  id: number;
+  owner: number;
+}
 // 1.31's per-PLAYER damage event, which a modern map registers ONCE instead of once per unit.
 // The index is OURS, not the file's: 1.30.4's common.j does not carry the constant at all, so
 // it is declared in our own compat prelude (src/compat/prelude.ts) and the two must agree —
@@ -162,6 +167,9 @@ const EVENT_UNIT_DAMAGED = 52;
 // DAMAGING (315) fires BEFORE the reduction and lets a script change the amount, which the sim
 // has no seam for; it is declared so the registration compiles and is never raised.
 const EVENT_PLAYER_UNIT_DAMAGED = 308;
+// …and the two raised BEFORE the resistances — ours to number, like 308 (src/compat/prelude.ts).
+const EVENT_PLAYER_UNIT_DAMAGING = 315;
+const EVENT_UNIT_DAMAGING = 314;
 const EVENT_PLAYER_UNIT_ATTACKED = 18;
 const EVENT_UNIT_ATTACKED = 62;
 // Issued-order events: no-target (38/75), point-target (39/76), unit-target (40/77).
@@ -1330,6 +1338,61 @@ export class Interpreter {
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, EVENT_PLAYER_UNIT_DAMAGED, e.target.owner, target)));
     }
   }
+
+  /**
+   * Raise one phase of a blow to the script, SYNCHRONOUSLY, while the sim is dealing it (the sim's
+   * `damageHook`, set only for a map that can change a blow). The handlers run to their first wait
+   * right here, and whatever they wrote into the blow through the natives is what the sim reads
+   * back when this returns (runtime.damageStack). DAMAGING goes to EVENT_UNIT_DAMAGING /
+   * EVENT_PLAYER_UNIT_DAMAGING, DAMAGED to the two classic damage events.
+   */
+  fireDamagePhase(phase: "damaging" | "damaged", blow: { target: EventUnitInfoLike; source: EventUnitInfoLike | null; amount: number; attackType: string; damageType: number; weaponSound: string }): void {
+    const target = this.rt.unitForSim(blow.target as never);
+    const source = blow.source ? this.rt.unitForSim(blow.source as never) : JNULL;
+    const responses = new Map<string, JassValue>([["TriggerUnit", target], ["EventDamageSource", source], ["EventDamage", jReal(blow.amount)]]);
+    const unitEvt = phase === "damaging" ? EVENT_UNIT_DAMAGING : EVENT_UNIT_DAMAGED;
+    const playerEvt = phase === "damaging" ? EVENT_PLAYER_UNIT_DAMAGING : EVENT_PLAYER_UNIT_DAMAGED;
+    this.rt.damageStack.push({ phase, blow });
+    try {
+      this.dispatchToRegs(responses, (reg) =>
+        (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, target)) ||
+        (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, blow.target.owner, target)));
+    } finally {
+      this.rt.damageStack.pop();
+    }
+  }
+
+  /** Can this script change a blow? — calls a damage-event setter anywhere, which is what makes
+   *  it need the synchronous path (SimWorld.damageHook). Asked of the loaded functions once. */
+  scriptModifiesDamage(): boolean {
+    if (this.modifiesDamage === undefined) {
+      const setters = new Set(["BlzSetEventDamage", "BlzSetEventAttackType", "BlzSetEventDamageType", "BlzSetEventWeaponType"]);
+      const inExpr = (e: Expr | undefined): boolean => {
+        if (!e) return false;
+        switch (e.kind) {
+          case "call": return setters.has(e.name) || e.args.some(inExpr);
+          case "index": return inExpr(e.index);
+          case "unary": return inExpr(e.expr);
+          case "binary": return inExpr(e.left) || inExpr(e.right);
+          default: return false;
+        }
+      };
+      const inStmts = (ss: Stmt[]): boolean => ss.some((s) => {
+        switch (s.kind) {
+          case "call": return setters.has(s.name) || s.args.some(inExpr);
+          case "set": return inExpr(s.value) || inExpr(s.index);
+          case "if": return s.branches.some((b) => inExpr(b.cond) || inStmts(b.body)) || (!!s.elseBody && inStmts(s.elseBody));
+          case "loop": return inStmts(s.body);
+          case "exitwhen": return inExpr(s.cond);
+          case "return": return inExpr(s.value);
+          default: return false;
+        }
+      });
+      this.modifiesDamage = [...this.rt.functions.values()].some((f) => f.locals.some((l) => inExpr(l.init)) || inStmts(f.body));
+    }
+    return this.modifiesDamage;
+  }
+  private modifiesDamage: boolean | undefined;
 
   /** Pump attack events (7.4c) — EVENT_UNIT_ATTACKED (specific unit) + the common
    *  EVENT_PLAYER_UNIT_ATTACKED (per player), with GetAttacker. */
