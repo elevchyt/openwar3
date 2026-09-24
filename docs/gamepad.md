@@ -68,6 +68,13 @@ focused. Seeing a pad is not the same as pairing it:
 - Options → Gameplay → **Detect Gamepad**, on both the glue panel and the F10 panel, listens for
   ten seconds. The first button pressed on any pad pairs that pad. The button greys out and
   counts down on its own label (`bindDetectGamepadButton`).
+- A pad turned on **mid-session** needs no special handling. Chromium watches udev and brings the
+  device in as soon as it connects, and the game polls `getGamepads()` every frame on every
+  screen. This was measured with an 8BitDo SN30 Pro+ over Bluetooth: turned off, the game said
+  "Gamepad disconnected.", and turned back on, "press START to pair". The page only sees the pad
+  after one of its buttons goes down, though, and the snapshot that first carries the pad shows
+  no button pressed. So that first press can never be read as Start. While Detect Gamepad is
+  listening, the pad's appearance is therefore counted as its press, and it pairs.
 - One pad is paired at a time. When it disconnects, every held button is released first, so a
   pad that goes away mid-drag cannot leave a stuck marquee or a camera riding the army.
 

@@ -202,14 +202,21 @@ function tick(now: number): void {
 
   for (const pad of pads) {
     if (!pad || !pad.connected) continue;
-    if (!prevButtons.has(pad.index)) refreshPrompt(); // a pad seen for the first time
+    // A pad seen for the FIRST time has just had a button pressed: the browser shows a page a
+    // controller only after one of its buttons goes down, and the snapshot that first carries
+    // it does not carry that press (measured with an 8BitDo SN30 Pro+ on Chromium/Linux, turned
+    // on mid-session — its first frame reads no button down). So its appearance IS the press.
+    const appeared = !prevButtons.has(pad.index);
+    if (appeared) refreshPrompt();
     const prev = prevButtons.get(pad.index) ?? [];
     const now_ = pad.buttons.map((b) => b.pressed);
     prevButtons.set(pad.index, now_);
     const pressed = (i: number): boolean => !!now_[i] && !prev[i];
     if (pad.index !== paired) {
-      // Unpaired: START pairs it, and so does any button while Detect Gamepad is listening.
-      const any = now_.some((p, i) => p && !prev[i]);
+      // Unpaired: START pairs it, and so does any button while Detect Gamepad is listening —
+      // including the press that made the pad appear, which is the one a player turning a
+      // controller on for the Detect window makes first, and which no frame will ever show.
+      const any = appeared || now_.some((p, i) => p && !prev[i]);
       if (pressed(B.start) || (detectUntil && any)) pair(pad);
       else if (any) refreshPrompt();
       continue;
