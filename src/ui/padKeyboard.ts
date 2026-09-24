@@ -55,7 +55,6 @@ export function textField(el: Element | null): Field | null {
 }
 
 let root: HTMLDivElement | null = null;
-let hintEl: HTMLDivElement | null = null;
 let field: Field | null = null;
 let layer = 0;
 let shift = false;
@@ -252,12 +251,9 @@ function build(): void {
   });
   const keys = document.createElement("div");
   keys.className = "pad-kb-keys";
+  // No legend of the shortcut buttons under it: the keys say what they do, and a line of
+  // controller glyphs is chrome the developer asked to keep off it (docs/gamepad.md has them).
   root.appendChild(keys);
-  hintEl = document.createElement("div");
-  hintEl.className = "pad-kb-hint";
-  // The pad's own glyphs for the four shortcut buttons, in the PlayStation names the mapping uses.
-  hintEl.innerHTML = "<b>✕</b> Type <b>□</b> Delete <b>△</b> Space <b>START</b> Enter <b>○</b> Close";
-  root.appendChild(hintEl);
   document.body.appendChild(root);
 }
 

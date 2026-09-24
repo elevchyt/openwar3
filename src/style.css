@@ -2585,15 +2585,7 @@ body.hud-tooltip-skinned .pad-keyboard::after,
   border-color: #fcd312;
   box-shadow: 0 0 6px 1px rgba(252, 211, 18, 0.7), inset 0 0 6px rgba(252, 211, 18, 0.35);
 }
-.pad-kb-hint {
-  margin-top: calc(var(--kb-key) * 0.22);
-  font-size: calc(var(--kb-key) * 0.36);
-  color: #a8a8a8;
-  text-align: center;
-  white-space: nowrap;
-}
-.pad-kb-hint b { color: #ffcc00; font-weight: 400; margin: 0 0.25em 0 0.8em; font-size: 1.15em; }
-.pad-kb-hint b:first-child { margin-left: 0; }
+
 /* No image to wear (before an install has given the page its gauntlet): a plain arrow. */
 .gamepad-cursor.plain::before {
   content: "";
