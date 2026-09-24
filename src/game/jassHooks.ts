@@ -6,7 +6,7 @@ import { AttackType, MoveType } from "../data/enums";
 import { MELEE } from "../data/gameplayConstants";
 import { fogStateOf, type FogState } from "../sim/vision";
 import type { FogArea } from "./fog";
-import { PrimaryAttribute } from "../data/enums";
+import { neutralSlot, PlayerSlot, PrimaryAttribute } from "../data/enums";
 import type { UnitDef } from "../data/units";
 
 /**
@@ -305,7 +305,7 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     unitInventorySize: (unitId) => sim.inventorySizeOf(unitId),
     unitItemInSlot: (unitId, slot) => sim.itemInSlot(unitId, slot),
     enumItems: () =>
-      sim.groundItems().map((it) => ({ id: it.id, typeId: it.itemId, charges: it.charges, x: it.x, y: it.y, holder: 0, slot: -1, owner: 15 })),
+      sim.groundItems().map((it) => ({ id: it.id, typeId: it.itemId, charges: it.charges, x: it.x, y: it.y, holder: 0, slot: -1, owner: neutralSlot(PlayerSlot.NeutralPassive) })),
     // Neutral-building stock (issue #57): Blizzard.j stocks the Marketplace itself, off its own
     // 30s timer — these just hand its natives the shelves. See src/jass/natives/stock.ts.
     addToStock: (shopId, wareId, kind, count, max) => void sim.addToStock(shopId, wareId, kind, count, max),
@@ -450,7 +450,7 @@ export function unitSnapshots(sim: {
     snap.push({ id: u.id, typeId: u.typeId, owner: jassOwnerOf(u), x: u.x, y: u.y, facing: u.facing });
   }
   for (const m of sim.mines.values()) {
-    snap.push({ id: MINE_ID_BASE + m.id, typeId: "ngol", owner: 15, x: m.x, y: m.y, facing: 0 });
+    snap.push({ id: MINE_ID_BASE + m.id, typeId: "ngol", owner: neutralSlot(PlayerSlot.NeutralPassive), x: m.x, y: m.y, facing: 0 });
   }
   return snap;
 }

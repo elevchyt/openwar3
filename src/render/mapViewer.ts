@@ -20,6 +20,7 @@ import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footp
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { frameModel, loadMapScript, type MapScriptEngine } from "../jass/index";
 import { learnOrderStrings } from "../jass/orders";
+import { setWidePlayerTable } from "../data/enums";
 import { ScriptFrameOverlay } from "../ui/scriptFrames";
 import { EVENT_PLAYER_END_CINEMATIC, EVENT_PLAYER_LEAVE } from "../jass/interpreter";
 import { MAP_CONTROL, type CinematicScene, type DestructableSnapshot, type DialogObj, type EngineHooks, type RectObj, type Runtime } from "../jass/runtime";
@@ -3456,6 +3457,9 @@ export class MapViewerScene {
     // behaves oddly, and every branch that CARES about them is behind a parser.
     const format = readMapFormat(this.mapArchive);
     this.mapFormat = format;
+    // A map a 1.31+ editor saved is on the 24-player table (data/enums.ts setWidePlayerTable):
+    // decided here, before its units are read or its script's constants evaluated.
+    setWidePlayerTable(format.editorBuild >= 131);
     console.info(`[map] format: w3i v${format.w3iVersion}, terrain v${format.terrainVersion}, object data v${format.objectVersion}, ${format.scriptLanguage} script`
       + (format.editorBuild ? `, editor build ${(format.editorBuild / 100).toFixed(2)}` : "")
       + (format.partialW3i ? ", w3i stops early (protected?)" : "")
@@ -13429,7 +13433,10 @@ export class MapViewerScene {
     // The menus and the next map read the install's constants — but only if the overlay is still
     // THIS scene's: a ChangeLevel/RestartGame can load the next scene before this one is
     // disposed, and taking down its constants would be the old map reaching into the new one.
-    if (this.miscEpoch >= 0 && mapMiscEpoch() === this.miscEpoch) setMapMiscOverlay(null);
+    if (this.miscEpoch >= 0 && mapMiscEpoch() === this.miscEpoch) {
+      setMapMiscOverlay(null);
+      setWidePlayerTable(false); // …and the 1.30.4 player table, under the same ownership rule
+    }
     if (this.mapSkin && mapSkinOverlay() === this.mapSkin) setMapSkinOverlay(null);
     for (const inst of this.projectileInsts.values()) inst.detach();
     this.projectileInsts.clear();

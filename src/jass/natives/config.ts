@@ -7,7 +7,7 @@
 // is pure declaration, so it runs identically headless or live.
 
 import { MELEE } from "../../data/gameplayConstants";
-import { PlayerSlot } from "../../data/enums";
+import { neutralSlot, PlayerSlot, widePlayerTable } from "../../data/enums";
 import { MAP_CONTROL, type JassPlayer, type NativeCtx, type Runtime } from "../runtime";
 import { asInt, asNum, asStr, jBool, jInt, JNULL, truthy, type JassValue } from "../values";
 
@@ -123,12 +123,14 @@ export function registerConfigNatives(rt: Runtime): void {
   // PLAYER_NEUTRAL_PASSIVE = 0 hands every gold mine, shop and tavern to the first player; and
   // bj_PLAYER_NEUTRAL_VICTIM = 0 makes `InitBlizzard`'s very first act, ConfigureNeutralVictim,
   // walk the player list un-allying player 0 from their own team-mates.
-  def(rt, "GetBJMaxPlayers", () => jInt(MELEE.MAX_PLAYERS));
-  def(rt, "GetBJMaxPlayerSlots", () => jInt(MELEE.MAX_PLAYER_SLOTS));
-  def(rt, "GetBJPlayerNeutralVictim", () => jInt(PlayerSlot.NeutralVictim));
-  def(rt, "GetBJPlayerNeutralExtra", () => jInt(PlayerSlot.NeutralExtra));
-  def(rt, "GetPlayerNeutralAggressive", () => jInt(PlayerSlot.NeutralHostile));
-  def(rt, "GetPlayerNeutralPassive", () => jInt(PlayerSlot.NeutralPassive));
+  // …and on the 24-player table (a map saved by a 1.31+ editor — enums.ts setWidePlayerTable)
+  // the answers are the ones THAT client gives: 24 players, 28 slots, neutrals on 24–27.
+  def(rt, "GetBJMaxPlayers", () => jInt(widePlayerTable() ? 24 : MELEE.MAX_PLAYERS));
+  def(rt, "GetBJMaxPlayerSlots", () => jInt(widePlayerTable() ? 28 : MELEE.MAX_PLAYER_SLOTS));
+  def(rt, "GetBJPlayerNeutralVictim", () => jInt(neutralSlot(PlayerSlot.NeutralVictim)));
+  def(rt, "GetBJPlayerNeutralExtra", () => jInt(neutralSlot(PlayerSlot.NeutralExtra)));
+  def(rt, "GetPlayerNeutralAggressive", () => jInt(neutralSlot(PlayerSlot.NeutralHostile)));
+  def(rt, "GetPlayerNeutralPassive", () => jInt(neutralSlot(PlayerSlot.NeutralPassive)));
 
   // --- player queries (used by blizzard.j slot logic + custom triggers) ---
   def(rt, "Player", (c, a) => c.rt.playerHandle(asInt(a[0])));

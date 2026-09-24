@@ -120,7 +120,32 @@ export const FIRST_NEUTRAL_SLOT = PlayerSlot.NeutralHostile;
  * (natives/config.ts) and where the map door already folds the editor's 24–27 (world/mapUnits.ts).
  */
 export function isNeutralSlot(p: number): boolean {
-  return p >= FIRST_NEUTRAL_SLOT && p <= PlayerSlot.NeutralPassive;
+  const first = neutralSlot(PlayerSlot.NeutralHostile);
+  return p >= first && p <= first + (PlayerSlot.NeutralPassive - PlayerSlot.NeutralHostile);
+}
+
+/**
+ * The 24-PLAYER TABLE (1.31+). A map a 1.31+ editor saved was written for a client with 24
+ * players, whose four neutrals sit at 24–27 — PLAYER_NEUTRAL_AGGRESSIVE is 24 there, and
+ * `Player(12)` … `Player(15)` are the 13th to 16th PLAYERS, colours and all. Our 1.30.4 table
+ * puts the neutrals on 12–15, so such a map's players 13–16 collided with them. On a map that is
+ * on the wide table the neutrals move up instead (`neutralSlot`), which is all the change is:
+ * a player keeps the number its map gave it, the `.doo` keeps the numbers the editor wrote
+ * (24–27 are its neutrals already, world/mapUnits.ts), and `GetBJMaxPlayers` /
+ * `GetPlayerNeutralAggressive` & co. answer 24 / 28 / 24–27 (jass/natives/config.ts). Set at the
+ * map door off the map's editor build (MapFormatProfile.editorBuild >= 131) and back to the
+ * 1.30.4 table when it closes.
+ */
+let widePlayers = false;
+export function setWidePlayerTable(on: boolean): void {
+  widePlayers = on;
+}
+export function widePlayerTable(): boolean {
+  return widePlayers;
+}
+/** Where neutral `slot` (a PlayerSlot) is on the table in force: itself, or twelve up. */
+export function neutralSlot(slot: PlayerSlot): number {
+  return widePlayers ? slot + 12 : slot;
 }
 
 // --- SLK-token parsers ------------------------------------------------------

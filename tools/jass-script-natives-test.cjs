@@ -212,5 +212,26 @@ check('GetTerrainCliffLevelBJ reads the terrain at each point', call('Cliffs').b
 call('PauseAi');
 check('PauseCompAI(Player(4), true)', last(), ['pauseCompAi', 4, true]);
 
+console.log('\n--- the 24-player table (a map saved by a 1.31+ editor) ---');
+{
+  const { setWidePlayerTable, isNeutralSlot } = require(join(BUILD, 'data', 'enums.js'));
+  const WIDE = `
+function Table takes nothing returns string
+    return I2S(bj_MAX_PLAYERS) + "," + I2S(bj_MAX_PLAYER_SLOTS) + "," + I2S(PLAYER_NEUTRAL_AGGRESSIVE) + "," + I2S(PLAYER_NEUTRAL_PASSIVE) + "," + I2S(bj_PLAYER_NEUTRAL_VICTIM)
+endfunction
+function Thirteenth takes nothing returns integer
+    return GetPlayerId(Player(12))
+endfunction
+`;
+  const narrow = buildInterpreter([common, COMPAT_PRELUDE, blizzard, WIDE], { hooks: {} });
+  check('on the 1.30.4 table: 12 players, 16 slots, neutrals 12/15/13', narrow.callFunction('Table', []).s, '12,16,12,15,13');
+  setWidePlayerTable(true);
+  const wide = buildInterpreter([common, COMPAT_PRELUDE, blizzard, WIDE], { hooks: {} });
+  check('on the wide one: 24 players, 28 slots, neutrals 24/27/25', wide.callFunction('Table', []).s, '24,28,24,27,25');
+  check('Player(12) is the thirteenth PLAYER', wide.callFunction('Thirteenth', []).n, 12);
+  check('…and not a neutral slot; 24–27 are', [isNeutralSlot(12), isNeutralSlot(15), isNeutralSlot(24), isNeutralSlot(27)], [false, false, true, true]);
+  setWidePlayerTable(false);
+}
+
 console.log(failures ? `\n${failures} failure(s).` : '\nAll script-native wiring checks passed.');
 process.exit(failures ? 1 : 0);

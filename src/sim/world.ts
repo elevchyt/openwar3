@@ -25,7 +25,7 @@ import {
   pickOrb,
   type OrbCandidate,
 } from "./orbs";
-import { AttackType, ArmorType, MoveType, PrimaryAttribute, RegenType, WeaponType, isRangedWeapon, launchesMissile } from "../data/enums";
+import { AttackType, ArmorType, MoveType, PlayerSlot, PrimaryAttribute, RegenType, WeaponType, isRangedWeapon, launchesMissile, neutralSlot } from "../data/enums";
 import {
   MELEE,
   gameHoursPerSec,
@@ -1303,7 +1303,8 @@ export interface EventUnitInfo {
  *  translation happens here, at the one place a sim unit becomes a JASS unit. */
 export function jassOwnerOf(u: { owner: number; neutralPassive: boolean }): number {
   if (u.owner >= 0) return u.owner;
-  return u.neutralPassive ? 15 : 12;
+  // The script's number for a neutral: 12/15, or 24/27 on the 24-player table (enums.ts).
+  return neutralSlot(u.neutralPassive ? PlayerSlot.NeutralPassive : PlayerSlot.NeutralHostile);
 }
 
 const eventInfo = (u: SimUnit): EventUnitInfo => ({ id: u.id, typeId: u.typeId, owner: jassOwnerOf(u), x: u.x, y: u.y, facing: u.facing });

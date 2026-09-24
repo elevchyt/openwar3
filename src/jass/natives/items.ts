@@ -19,6 +19,7 @@
 // Slot indices are 0-based here (as in common.j). The BJ layer does the 1-based
 // translation the GUI shows the user (UnitItemInSlotBJ passes itemSlot-1).
 
+import { neutralSlot, PlayerSlot } from "../../data/enums";
 import { intToRawcode, rawcodeToInt } from "../lexer";
 import type { BoolExpr, ItemSnapshot, JassItem, JassUnit, NativeCtx, RectObj, Runtime } from "../runtime";
 import { asInt, asNum, jBool, jHandle, jInt, JNULL, jReal, jStr, truthy, type JassValue } from "../values";
@@ -110,7 +111,7 @@ export function registerItemNatives(rt: Runtime): void {
   });
   // GetItemPlayer: the holder's slot; an item lying on the ground belongs to Neutral
   // Passive (player 15), which is what the sim's snapshot reports.
-  def(rt, "GetItemPlayer", (c, a) => c.rt.playerHandle(info(c, item(c, a[0]))?.owner ?? 15));
+  def(rt, "GetItemPlayer", (c, a) => c.rt.playerHandle(info(c, item(c, a[0]))?.owner ?? neutralSlot(PlayerSlot.NeutralPassive)));
   def(rt, "IsItemOwned", (c, a) => jBool((info(c, item(c, a[0]))?.holder ?? 0) > 0));
 
   // --- item TYPE data (the ItemRegistry, not the instance) ---

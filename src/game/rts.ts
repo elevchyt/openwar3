@@ -45,7 +45,7 @@ import { AllianceTable, AllianceType } from "../sim/alliances";
 import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
 import { modelPickVolumes, rayVolume, type CollisionShapeNode, type PickVolume } from "../render/modelCollision";
 import { autoArmed, type UnitRegistry, type UnitDef } from "../data/units";
-import { ArmorType, AttackType, MoveType, PlayerSlot, PrimaryAttribute } from "../data/enums";
+import { ArmorType, AttackType, isNeutralSlot, MoveType, neutralSlot, PlayerSlot, PrimaryAttribute } from "../data/enums";
 import { MELEE, gameNum, xpToReachLevel } from "../data/gameplayConstants";
 import { type AbilityRegistry, type AbilityDef } from "../data/abilities";
 import { resolveTipRefs } from "../data/tipRefs";
@@ -2453,10 +2453,10 @@ export class RtsController {
     // sim; the guard AI that pair implies is applied in addSimUnit. Neutral Passive (15) is
     // the other half — shops, critters, fountains a script creates — and takes the passive
     // pair, which is what makes them non-hostile with a yellow ring.
-    const creep = player === PlayerSlot.NeutralHostile;
+    const creep = player === neutralSlot(PlayerSlot.NeutralHostile);
     // 13/14/15 — never a fighting slot. And ONLY those: 16–23 are real players on a map saved
     // for the 24-player table (enums.ts isNeutralSlot).
-    const passive = player >= PlayerSlot.NeutralVictim && player <= PlayerSlot.NeutralPassive;
+    const passive = isNeutralSlot(player) && !creep;
     const owner = creep ? NEUTRAL_HOSTILE_OWNER : passive ? NEUTRAL_PASSIVE_OWNER : player;
     const team = creep ? NEUTRAL_HOSTILE_TEAM : passive ? NEUTRAL_PASSIVE_TEAM : teamOf(player);
     const simId = this.reserveUnitId();

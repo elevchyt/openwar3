@@ -1,7 +1,7 @@
 import { MpqDataSource } from "../vfs/mpq";
 import { CELL } from "./terrain";
 import { GOLD_MINE_ID, parseMapUnits } from "./mapUnits";
-import { PlayerSlot } from "../data/enums";
+import { neutralSlot, PlayerSlot } from "../data/enums";
 
 // The markers the Custom Game screen paints over a map's minimap picture (issue #61).
 //
@@ -47,7 +47,7 @@ export function readMapPreview(bytes: Uint8Array, showsMinimapIcon: (typeId: str
   const markers: PreviewMarker[] = [];
   for (const u of parseMapUnits(mpq.rawBytes("war3mapUnits.doo") ?? null)) {
     if (u.typeId === GOLD_MINE_ID) markers.push({ kind: "gold", x: u.x, y: u.y, player: -1 });
-    else if (u.player === PlayerSlot.NeutralPassive && showsMinimapIcon(u.typeId)) {
+    else if (u.player === neutralSlot(PlayerSlot.NeutralPassive) && showsMinimapIcon(u.typeId)) {
       markers.push({ kind: "building", x: u.x, y: u.y, player: -1 });
     }
   }

@@ -10,7 +10,7 @@
 
 import type { FunctionDecl } from "./ast";
 import { type JassValue, JNULL, jHandle } from "./values";
-import { isNeutralSlot, PlayerSlot } from "../data/enums";
+import { isNeutralSlot, PlayerSlot, widePlayerTable } from "../data/enums";
 import type { StoredUnitState } from "../sim/world";
 
 /** A trigger object (CreateTrigger) — its conditions + actions (function names)
@@ -1875,7 +1875,8 @@ export class Runtime {
    *  no starting units, no resources, and keep the creep camp on their start location. */
   applyLobby(slots: ReadonlyArray<LobbySlot>, localPlayer: number): void {
     this.localPlayer = localPlayer;
-    for (let i = 0; i < 12; i++) this.ensurePlayer(i).slotState = 0; // PLAYER_SLOT_STATE_EMPTY
+    // PLAYER_SLOT_STATE_EMPTY for every PLAYER the table has — 24 on a 1.31+ map (enums.ts).
+    for (let i = 0, n = widePlayerTable() ? 24 : 12; i < n; i++) this.ensurePlayer(i).slotState = 0;
     for (const s of slots) {
       const p = this.ensurePlayer(s.index);
       p.slotState = 1; // PLAYER_SLOT_STATE_PLAYING

@@ -7,6 +7,7 @@
 // record into the runtime so CreateAllUnits can be counted against war3mapUnits.doo.
 // (The text actions — floating text + on-screen messages — moved to natives/text.ts.)
 
+import { neutralSlot, PlayerSlot } from "../../data/enums";
 import { intToRawcode, rawcodeToInt } from "../lexer";
 import { orderIdOf, orderIdToString, orderStringToId } from "../orders";
 import type { BuffFilter, EngineHooks, JassPlayer, JassUnit, NativeCtx, Runtime, UnitTypeDefault } from "../runtime";
@@ -374,7 +375,7 @@ export function registerWorldNatives(rt: Runtime): void {
   def(rt, "GetUnitDefaultFlyHeight", typeDefault("flyHeight"));
   def(rt, "GetUnitDefaultAcquireRange", typeDefault("acquireRange"));
   def(rt, "GetUnitTypeId", (c, a) => jInt(unit(c, a[0]) ? rawcodeToInt(unit(c, a[0])!.typeId) : 0));
-  def(rt, "GetOwningPlayer", (c, a) => c.rt.playerHandle(unit(c, a[0])?.player ?? 15));
+  def(rt, "GetOwningPlayer", (c, a) => c.rt.playerHandle(unit(c, a[0])?.player ?? neutralSlot(PlayerSlot.NeutralPassive)));
   // Position/facing prefer the live sim value (a script-created unit's handle keeps its
   // spawn-time x/y/facing; an adopted unit's is only refreshed on the event pump).
   def(rt, "GetUnitX", (c, a) => ({ k: "real", n: liveNum(c, unit(c, a[0]), (h, id) => h.getUnitX?.(id), (u) => u.x) }));

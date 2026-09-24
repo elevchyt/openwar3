@@ -857,8 +857,12 @@ was the reason no wave had ever spawned. In the order the work landed:
   enemy on `Player(20)` — a computer in a force of its own (their w3i). Three "≥ 12 is neutral"
   tests (the script's spawn owner, the `.doo` reader, a player's default colour) turned it into
   Neutral Passive: the waves came out passive, the wave-clear trigger counted no Player(20) units,
-  and every wave ended as it began. `isNeutralSlot` (12–15) is the one test now. NOT done: a
-  24-player map that uses 12–15 as PLAYERS still collides with our neutral slots.
+  and every wave ended as it began. `isNeutralSlot` is the one test now. And a map a 1.31+
+  editor saved is ON the 24-player table (`setWidePlayerTable`, off `editorBuild >= 131` at the
+  map door): its neutrals are 24–27 — to its script (`GetPlayerNeutralAggressive` & co., 24
+  players, 28 slots), to the `.doo` (which already writes them there) and to every place the
+  sim's neutral owner is handed back to JASS (`jassOwnerOf`) — so `Player(12)`–`Player(15)` are
+  the 13th–16th players there instead of colliding with ours. A 1.30 map keeps 12–15.
 * **The rest of what the BJs reach**: `UnitStripHeroLevel` (SetHeroLevelBJ going DOWN — the wave
   bosses are levelled to half the players' food), `Get/SetPlayerHandicapXP`, `UnitPauseTimedLife`,
   `UnitAddType`/`UnitRemoveType` (only 9–20 are changeable — "0 - 8 can't be added, 9 - 20 can be

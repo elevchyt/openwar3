@@ -1,5 +1,5 @@
 import unitsdoo from "mdx-m3-viewer/dist/cjs/parsers/w3x/unitsdoo";
-import { FIRST_NEUTRAL_SLOT, isNeutralSlot, PlayerSlot } from "../data/enums";
+import { FIRST_NEUTRAL_SLOT, isNeutralSlot, neutralSlot, PlayerSlot } from "../data/enums";
 
 // Pre-placed units/buildings from war3mapUnits.doo (plan §5 / custom-map support).
 // Every WC3 map — melee or custom — stores its placed units here: creeps, gold
@@ -60,7 +60,8 @@ const EDITOR_FIRST_NEUTRAL = 24;
 /** The file's owner slot as the ENGINE's. Only the neutral block moves; 0–11 are the same
  *  number in both. */
 function ownerSlot(raw: number): number {
-  return raw >= EDITOR_FIRST_NEUTRAL ? raw - (EDITOR_FIRST_NEUTRAL - FIRST_NEUTRAL_SLOT) : raw;
+  // …onto whichever table is in force: 12–15, or left at 24–27 on the 24-player one (enums.ts).
+  return raw >= EDITOR_FIRST_NEUTRAL ? raw - EDITOR_FIRST_NEUTRAL + neutralSlot(FIRST_NEUTRAL_SLOT) : raw;
 }
 
 /** Parse war3mapUnits.doo into typed placed units. `buildVersion` comes from
@@ -88,7 +89,7 @@ export function parseMapUnits(bytes: Uint8Array | null, buildVersion = 0): Place
       targetAcquisition: u.targetAcquisition ?? -1,
       heroLevel: u.heroLevel ?? 0,
       neutral,
-      neutralPassive: player === PlayerSlot.NeutralPassive,
+      neutralPassive: player === neutralSlot(PlayerSlot.NeutralPassive),
       dropSets: (u.droppedItemSets ?? []).map((s) => ({
         items: (s.items ?? []).map((it) => ({ id: it.id, chance: it.chance })),
       })),
