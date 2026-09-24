@@ -3401,6 +3401,16 @@ export class MapViewerScene {
       chooseRandomItem: (classType, level) => this.mapScript?.interp.rt.random
         ? this.items.chooseRandom(classType, level, this.mapScript.interp.rt.random)?.id ?? ""
         : "",
+      // UnitId / UnitId2String: the unit table's internal `name`, which is also the train order.
+      // Base rows come first in `all()`, so a custom copy never shadows the stock type's name.
+      unitTypeByName: (name) => {
+        const want = name.trim().toLowerCase();
+        return want ? this.registry.all().find((d) => d.typeName.toLowerCase() === want)?.id ?? "" : "";
+      },
+      unitTypeName: (typeId) => this.registry.get(typeId)?.typeName || undefined,
+      chooseRandomCreep: (level) => this.mapScript?.interp.rt.random
+        ? this.registry.chooseRandomCreep(level, this.mapScript.interp.rt.random)?.id ?? ""
+        : "",
     };
   }
 

@@ -74,6 +74,9 @@ export class Authority {
    * nothing at all.
    */
   private foodCapAdjust = new Map<number, number>();
+  /** The same accumulator for FOOD USED: what a script's `SetPlayerState(p, FOOD_USED, n)` put
+   *  on top of what the units count (see setFoodUsed). */
+  private foodUsedAdjust = new Map<number, number>();
   /** `PLAYER_STATE_FOOD_CAP_CEILING` — what one player's cap is clamped to, where a script has
    *  said. Everyone else takes `defaultFoodCeiling`. */
   private foodCapCeiling = new Map<number, number>();
@@ -361,6 +364,8 @@ export class Authority {
     // …and whatever is finished but not yet born (SimWorld.pendingTrained) — a shop hire is
     // never in a queue at all, so without this its food is free for the tick before it spawns.
     for (const t of this.sim.pendingTrained()) if (t.owner === owner) used += this.registry.get(t.unitId)?.foodUsed ?? 0;
+    // …plus whatever the SCRIPT wrote food used to (see setFoodUsed)…
+    used = Math.max(0, used + (this.foodUsedAdjust.get(owner) ?? 0));
     // …plus whatever the SCRIPT wrote the cap to (see foodCapAdjust), under WC3's ceiling.
     made = Math.max(0, Math.min(made + (this.foodCapAdjust.get(owner) ?? 0), this.foodCapCeilingOf(owner)));
     // The cheat sits OUTSIDE the clamp on purpose: the ceiling is the rule it exists to break
@@ -389,6 +394,18 @@ export class Authority {
    *  back through `foodFor(p).made`. */
   setFoodCap(player: number, value: number): void {
     this.foodCapAdjust.set(player, Math.floor(value) - this.unitFoodMade(player));
+  }
+
+  /** `SetPlayerState(p, PLAYER_STATE_RESOURCE_FOOD_USED, n)` — the same accumulator as the cap:
+   *  the write sets the number, and a unit trained or lost afterwards moves it by its own food
+   *  from THERE. The write is not refused. A map that keeps a counter on the food bar depends on
+   *  it — Test of Balance's whole wave difficulty is the players' food used, written by its own
+   *  triggers (`current_wave × 2`, then +2 a wave) because its heroes cost none — and a unit
+   *  that dies after such a write "will decrease its food from player", which a map then has
+   *  to correct for (Ceday, hiveworkshop 252550). */
+  setFoodUsed(player: number, value: number): void {
+    this.foodUsedAdjust.delete(player);
+    this.foodUsedAdjust.set(player, Math.floor(value) - this.foodFor(player).used);
   }
 
   /** `SetPlayerState(p, PLAYER_STATE_FOOD_CAP_CEILING, n)`. */

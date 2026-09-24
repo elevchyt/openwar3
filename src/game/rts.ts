@@ -2439,7 +2439,9 @@ export class RtsController {
     // the other half — shops, critters, fountains a script creates — and takes the passive
     // pair, which is what makes them non-hostile with a yellow ring.
     const creep = player === PlayerSlot.NeutralHostile;
-    const passive = player >= PlayerSlot.NeutralVictim; // 13/14/15 — never a fighting slot
+    // 13/14/15 — never a fighting slot. And ONLY those: 16–23 are real players on a map saved
+    // for the 24-player table (enums.ts isNeutralSlot).
+    const passive = player >= PlayerSlot.NeutralVictim && player <= PlayerSlot.NeutralPassive;
     const owner = creep ? NEUTRAL_HOSTILE_OWNER : passive ? NEUTRAL_PASSIVE_OWNER : player;
     const team = creep ? NEUTRAL_HOSTILE_TEAM : passive ? NEUTRAL_PASSIVE_TEAM : teamOf(player);
     const simId = this.reserveUnitId();
@@ -8282,6 +8284,7 @@ export class RtsController {
         // PLAYER_STATE_RESOURCE_FOOD_CAP / _FOOD_CAP_CEILING — a custom map states its own
         // supply cap the same way it states its gold (issue #127). See Authority.foodCapAdjust.
         setFoodCap: (p, v) => this.authority.setFoodCap(p, v),
+        setFoodUsed: (p, v) => this.authority.setFoodUsed(p, v),
         setFoodCapCeiling: (p, v) => this.authority.setFoodCapCeiling(p, v),
         foodCapCeilingOf: (p) => this.authority.foodCapCeilingOf(p),
         // PLAYER_STATE_RESOURCE_HERO_TOKENS — the free-hero allowance, which the melee opening
@@ -8312,6 +8315,10 @@ export class RtsController {
       // Here rather than in a sub-module because the brains are the CONTROLLER's: they issue
       // their orders through `execute`, the same door a click goes through.
       startMeleeAI: (player, script) => this.startMeleeAIFor(player, script),
+      pauseCompAi: (player, pause) => {
+        this.meleeAi?.setPaused(player, pause);
+        this.computerPlus?.setPaused(player, pause);
+      },
       // The `BlzSetAbility…` / `BlzSetItemExtendedTooltip` words and art (docs/map-compatibility.md
       // pass 9). PRESENTATION, and composed here rather than in `simHooks` on purpose: a map sets a
       // tooltip for one player inside a `GetLocalPlayer` block (Test of Faith Reborn rewrites its

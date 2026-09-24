@@ -14,6 +14,7 @@
 
 import { ATTACK_TYPES } from "../../data/unitFieldCodes";
 import type { JassDestructable } from "./destructables";
+import { weaponTypes } from "./events";
 import type { JassUnit, NativeCtx, Runtime } from "../runtime";
 import { AttackType } from "../../data/enums";
 import { asNum, jBool, jReal, JNULL, truthy, type JassValue } from "../values";
@@ -24,6 +25,22 @@ const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.s
 /** `UNIT_STATE_LIFE` — common.j's `ConvertUnitState(0)`. The unit half of a widget's life is
  *  the state natives' job already; this is the index they take. */
 const UNIT_STATE_LIFE = 0;
+
+/** A trigger blow's options off the natives' shared tail — `attack, ranged, attacktype,
+ *  damagetype, weapontype` starting at argument `at`. The damage and weapon types are handed on
+ *  as well as read, so a DAMAGING handler sees them (BlzGetEventDamageType / WeaponType). */
+function triggerBlow(c: NativeCtx, a: JassValue[], at: number) {
+  const damageType = c.rt.enumIndex(a[at + 3] ?? JNULL);
+  return {
+    attack: truthy(a[at]),
+    ranged: truthy(a[at + 1]),
+    attackType: ATTACK_TYPES[c.rt.enumIndex(a[at + 2] ?? JNULL)] ?? AttackType.Spells,
+    magic: damageType === DAMAGE_TYPE_MAGIC,
+    universal: damageType === DAMAGE_TYPE_UNIVERSAL,
+    damageType,
+    weaponSound: weaponTypes(c).byIndex.get(c.rt.enumIndex(a[at + 4] ?? JNULL)) ?? "",
+  };
+}
 
 /** The sim unit behind a `unit` handle, or undefined. */
 const simOf = (c: NativeCtx, v: JassValue): number | undefined => {
@@ -118,15 +135,17 @@ export function registerWidgetNatives(rt: Runtime): void {
     const source = simOf(c, a[0]);
     const target = simOf(c, a[1]);
     if (source === undefined || target === undefined) return jBool(false);
-    const damageType = c.rt.enumIndex(a[6] ?? JNULL);
-    const dealt = c.rt.hooks?.damageTarget?.(source, target, asNum(a[2]), {
-      attack: truthy(a[3]),
-      ranged: truthy(a[4]),
-      attackType: ATTACK_TYPES[c.rt.enumIndex(a[5] ?? JNULL)] ?? AttackType.Spells,
-      magic: damageType === DAMAGE_TYPE_MAGIC,
-      universal: damageType === DAMAGE_TYPE_UNIVERSAL,
-    }) ?? 0;
+    const dealt = c.rt.hooks?.damageTarget?.(source, target, asNum(a[2]), triggerBlow(c, a, 3)) ?? 0;
     return jBool(dealt > 0);
+  });
+  // `UnitDamagePoint(source, delay, radius, x, y, amount, attack, ranged, attacktype,
+  // damagetype, weapontype)` — the same blow on an AREA, after a delay (blizzard.j's
+  // UnitDamagePointLoc; SimWorld.damagePoint says who it reaches). Test of Balance's items and
+  // its Nick hero's hotkey spells deal their area damage through it.
+  def(rt, "UnitDamagePoint", (c, a) => {
+    const source = simOf(c, a[0]);
+    if (source === undefined) return jBool(false);
+    return jBool(c.rt.hooks?.damagePoint?.(source, asNum(a[1]), asNum(a[2]), asNum(a[3]), asNum(a[4]), asNum(a[5]), triggerBlow(c, a, 6)) ?? false);
   });
   // `ConvertAttackType` / `ConvertDamageType` are NOT registered here — they are in the central
   // CONVERT_NATIVES list (natives/index.ts) with the other forty. What this file owns is what

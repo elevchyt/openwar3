@@ -243,6 +243,17 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     // native does the common.j-index → AttackType mapping and the sim is handed a column name.
     damageTarget: (sourceId, targetId, amount, opts) =>
       sim.damageTarget(sourceId, targetId, amount, { ...opts, attackType: opts.attackType as AttackType }),
+    damagePoint: (sourceId, delay, radius, x, y, amount, opts) =>
+      sim.damagePoint(sourceId, delay, radius, x, y, amount, { ...opts, attackType: opts.attackType as AttackType }),
+    stripHeroLevel: (id, n) => sim.stripHeroLevel(id, n),
+    xpHandicap: (player) => sim.xpHandicap(player),
+    setXpHandicap: (player, rate) => sim.setXpHandicap(player, rate),
+    pauseTimedLife: (id, flag) => sim.pauseTimedLife(id, flag),
+    setUnitClassification: (id, t, on) => sim.setUnitClassification(id, t, on),
+    removeBuffs: (id, q) => void sim.removeBuffs(id, q),
+    countBuffs: (id, q) => sim.countBuffs(id, q),
+    createCorpse: (typeId, x, y, owner, facingDeg) => sim.createCorpse(typeId, x, y, owner, facingDeg),
+    terrainCliffLevel: (x, y) => sim.terrainCliffLevel(x, y),
     // --- predicates (docs/map-compatibility.md pass 4) ---
     isUnitInRange: (id, otherId, distance) => sim.unitInRange(id, otherId, distance),
     isUnitInRangeXY: (id, x, y, distance) => sim.unitInRangeXY(id, x, y, distance),
@@ -322,6 +333,7 @@ export function authorityHooks(authority: {
   foodFor(owner: number): { used: number; made: number };
   setPlayerResource(player: number, resource: "gold" | "lumber", value: number): void;
   setFoodCap(player: number, value: number): void;
+  setFoodUsed(player: number, value: number): void;
   setFoodCapCeiling(player: number, value: number): void;
   foodCapCeilingOf(player: number): number;
   heroTokensFor(player: number): number;
@@ -390,13 +402,16 @@ export function authorityHooks(authority: {
     // FOOD_CAP (4) and FOOD_CAP_CEILING (6) are writes too (issue #127). Our cap is DERIVED from
     // the units — see Authority.foodFor — so the write used to be dropped on the floor, and
     // WTii's Unit Tester, which has no food-producing building and simply states the cap it
-    // wants, opened at 0/0 with nothing trainable. FOOD_USED (5) is the one that really is
-    // read-only: it counts units, and WC3 refuses that write too.
+    // wants, opened at 0/0 with nothing trainable. FOOD_USED (5) is the same accumulator
+    // (Authority.setFoodUsed): the write lands, and the units move it from there. It was once
+    // dropped here as "read-only", which left Test of Balance — whose wave difficulty IS the
+    // players' food used, written by its triggers — spawning empty waves.
     setPlayerState: (p, state, value) => {
       if (state === 1) authority.setPlayerResource(p, "gold", value);
       else if (state === 2) authority.setPlayerResource(p, "lumber", value);
       else if (state === 3) authority.setHeroTokens(p, value);
       else if (state === 4) authority.setFoodCap(p, value);
+      else if (state === 5) authority.setFoodUsed(p, value);
       else if (state === 6) authority.setFoodCapCeiling(p, value);
       // GIVES_BOUNTY (7): whether this player's units pay their bounty when killed — a flag, set
       // through `SetPlayerFlagBJ` (WarChasers turns it on for its dungeon, Player(11)).
@@ -637,6 +652,10 @@ export function rosterHooks(
       if (mineForScript(sim, id)) return t === 2 || t === 4; // STRUCTURE, GROUND
       const u = sim.units.get(id);
       if (!u) return deadTypeIs(t, typeId);
+      // A script's UnitAddType / UnitRemoveType on a classification with no flag of its own.
+      const own = u.classOverrides?.[t];
+      if (own !== undefined) return own;
+      const cls = registry.get(u.typeId)?.classification;
       switch (t) {
         case 0: return u.isHero;
         case 1: return u.hp <= 0;
@@ -650,6 +669,13 @@ export function rosterHooks(
         case 14: return u.race === "undead";
         case 15: return u.mechanical;
         case 16: return u.isPeon;
+        // The UnitBalance `type` words these four are named by (giant, sapper, townhall,
+        // tauren), and the ancients' flag the sim keeps for itself.
+        case 9: return !!cls?.includes("giant");
+        case 17: return !!cls?.includes("sapper");
+        case 18: return !!cls?.includes("townhall");
+        case 19: return u.ancient;
+        case 20: return !!cls?.includes("tauren");
         case 23: return u.asleep;
         default: return false;
       }

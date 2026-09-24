@@ -49,6 +49,12 @@ const EXPECTED = [
   // …and `UnitDamageTarget`, which is how a custom map's spells deal damage at all
   // (pass 2; sim-trigger-damage-test.cjs).
   "damageTarget",
+  // …and the natives the rebalance maps reach only through blizzard.j: the area blast, the
+  // way DOWN a hero's levels, the experience rate, a paused clock, the twelve classifications a
+  // script may change, the buff filters, a laid corpse and the cliff layer
+  // (sim-script-natives-test.cjs).
+  "damagePoint", "stripHeroLevel", "xpHandicap", "setXpHandicap", "pauseTimedLife",
+  "setUnitClassification", "removeBuffs", "countBuffs", "createCorpse", "terrainCliffLevel",
   // The PREDICATES whose answer is the world's rather than a viewpoint's (pass 4). The vision
   // half of that family is NOT here: `IsUnitVisible` and its four siblings are answered by the
   // viewpoint the renderer draws from, which is `visionHooks`' table, not this one.
@@ -231,6 +237,7 @@ const ah = authorityHooks({
   foodFor: (o) => authority.foodFor(o),
   setPlayerResource: (p, r, v) => authority.setPlayerResource(p, r, v),
   setFoodCap: (p, v) => authority.setFoodCap(p, v),
+  setFoodUsed: (p, v) => authority.setFoodUsed(p, v),
   setFoodCapCeiling: (p, v) => authority.setFoodCapCeiling(p, v),
   foodCapCeilingOf: (p) => authority.foodCapCeilingOf(p),
   currentOrderId: (id) => authority.currentOrderId(id),
@@ -267,7 +274,7 @@ check("…and reads back", ah.getPlayerState(0, 2), 310);
 // PLAYER_STATE 4/5/6 are FOOD_CAP / FOOD_USED / FOOD_CAP_CEILING. The cap is DERIVED from the
 // units here (no food-producing building seeded → 0), but it is also WRITABLE: a custom map
 // states the supply it wants and has no farm anywhere (issue #127, WTii's Unit Tester). FOOD_USED
-// is the one that really is read-only — it counts units.
+// is the same accumulator: Test of Balance keeps its wave difficulty on it.
 check("food starts derived (no units seeded)", [ah.getPlayerState(0, 4), ah.getPlayerState(0, 5)], [0, 0]);
 check("the ceiling is the engine's stock 100 until a script moves it", ah.getPlayerState(0, 6), 100);
 ah.setPlayerState(0, 4, 300);
@@ -277,7 +284,8 @@ ah.setPlayerState(0, 6, 300);
 ah.setPlayerState(0, 4, 300);
 check("ceiling then cap gives the map the 0/300 it asks for",
   [ah.getPlayerState(0, 6), ah.getPlayerState(0, 4), ah.getPlayerState(0, 5)], [300, 300, 0]);
-check("a write to FOOD_USED is still ignored", (ah.setPlayerState(0, 5, 42), ah.getPlayerState(0, 5)), 0);
+check("a write to FOOD_USED lands", (ah.setPlayerState(0, 5, 42), ah.getPlayerState(0, 5)), 42);
+check("…and a write back to 0 lands too", (ah.setPlayerState(0, 5, 0), ah.getPlayerState(0, 5)), 0);
 check("…and neither write touched the stash", [world.stashOf(0).gold, world.stashOf(0).lumber], [750, 310]);
 
 // The frozen copy is the whole reason `stashFor` exists — a reader must not be able to spend.

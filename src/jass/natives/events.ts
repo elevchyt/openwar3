@@ -28,7 +28,7 @@ const timer = (c: NativeCtx, v: JassValue): TimerObj | undefined => c.rt.data<Ti
 /** common.j's WEAPON_TYPE_* constants, read off the runtime's own globals, as data-spelled sound
  *  names ("MetalMediumSlice") both ways. Built once per runtime. */
 const weaponTypeCache = new WeakMap<Runtime, { bySound: Map<string, number>; byIndex: Map<number, string> }>();
-function weaponTypes(c: NativeCtx): { bySound: Map<string, number>; byIndex: Map<number, string> } {
+export function weaponTypes(c: NativeCtx): { bySound: Map<string, number>; byIndex: Map<number, string> } {
   let t = weaponTypeCache.get(c.rt);
   if (!t) {
     t = { bySound: new Map(), byIndex: new Map() };

@@ -1,5 +1,5 @@
 import unitsdoo from "mdx-m3-viewer/dist/cjs/parsers/w3x/unitsdoo";
-import { FIRST_NEUTRAL_SLOT, PlayerSlot } from "../data/enums";
+import { FIRST_NEUTRAL_SLOT, isNeutralSlot, PlayerSlot } from "../data/enums";
 
 // Pre-placed units/buildings from war3mapUnits.doo (plan §5 / custom-map support).
 // Every WC3 map — melee or custom — stores its placed units here: creeps, gold
@@ -75,7 +75,7 @@ export function parseMapUnits(bytes: Uint8Array | null, buildVersion = 0): Place
   }
   return file.units.map((u): PlacedUnit => {
     const player = ownerSlot(u.player ?? 0);
-    const neutral = player >= FIRST_NEUTRAL_SLOT;
+    const neutral = isNeutralSlot(player);
     return {
       typeId: u.id,
       x: u.location[0],

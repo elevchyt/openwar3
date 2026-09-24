@@ -434,6 +434,36 @@ export interface SimAbility {
 
 /** A timed effect on a unit. `kind` is our gameplay category; `group` de-dupes
  *  non-stacking sources (e.g. two Devotion Auras → one armour buff, the larger). */
+/** How a SCRIPT's damage is dealt (UnitDamageTarget, UnitDamagePoint → SimWorld.damageTarget):
+ *  the damage-table column, the two damagetype readings that change the arithmetic, and the
+ *  damage/weapon type a DAMAGING handler is shown. */
+export interface TriggerDamageOpts {
+  attack: boolean;
+  ranged: boolean;
+  attackType: AttackType;
+  magic: boolean;
+  universal: boolean;
+  damageType?: number;
+  weaponSound?: string;
+}
+
+/** The filter `UnitRemoveBuffsEx` / `UnitCountBuffsEx` take (SimWorld.removeBuffs). */
+export interface BuffQuery {
+  positive: boolean;
+  negative: boolean;
+  magic: boolean;
+  physical: boolean;
+  timedLife: boolean;
+  aura: boolean;
+  autoDispel: boolean;
+}
+
+/** The kinds that are harmful whoever cast them — polarity's fallback when a buff's source is
+ *  gone (SimWorld.buffIsPositive). */
+const NEGATIVE_BUFF_KINDS: ReadonlySet<BuffKind> = new Set<BuffKind>([
+  "stun", "slow", "dot", "sleep", "silence", "hex", "root", "vuln", "miss", "mark", "ethereal",
+]);
+
 export interface SimBuff {
   kind: BuffKind;
   group: string; // non-stacking key ("" = always its own instance)
@@ -1885,6 +1915,14 @@ export interface SimUnit {
    *   • the game's own Targets Allowed carries a `nonancient` flag (the human Repair's targs
    *     list it), so this is the data's own idea of the category rather than ours. */
   ancient: boolean;
+  /** `UnitAddType` / `UnitRemoveType` on the classifications that have no flag of their own
+   *  here (giant, stunned, plagued, snared, undead, sapper, townhall, tauren), keyed by
+   *  common.j's `ConvertUnitType` index: what IsUnitType answers for this one unit instead of
+   *  its type. The four that DO have a flag (summoned, mechanical, peon, ancient) are written
+   *  there, so the rest of the sim obeys them too. See SimWorld.setUnitClassification. */
+  classOverrides?: Record<number, boolean>;
+  /** `UnitPauseTimedLife` — the summon/timed-life clock stands still while set. */
+  timedLifePaused?: boolean;
   /** For an Entangled Gold Mine (`egol`), the SimMine it stands on — the gold its crew pulls
    *  out. 0 for everything else. See tickMineCrews. */
   mineId: number;
@@ -15001,6 +15039,7 @@ export class SimWorld {
       let amount = share;
       const isCreep = victim.team === -1; // Neutral Hostile
       if (isCreep) amount *= creepXpFactor(h.level);
+      amount *= this.xpHandicap(h.owner); // SetPlayerHandicapXP — the player's experience rate
       const before = h.xp;
       this.gainXp(h, amount, isCreep);
       // What the hero ACTUALLY banked, floated over the hero (issue #116). Reading the pool
@@ -15366,6 +15405,199 @@ export class SimWorld {
   }
 
   /**
+   * `UnitStripHeroLevel` — take levels OFF a hero, the one way down the ladder `SetHeroLevel`
+   * cannot go (blizzard.j's SetHeroLevelBJ calls this for a lower level). Every rule is
+   * jassbot's (UnitStripHeroLevel):
+   *   · false for a non-hero, for 0 levels, and for a hero already at level 1; "the level can be
+   *     reduced to 1 at most", and a NEGATIVE count reduces it to 1 (and, taking the
+   *     documentation literally, still answers false);
+   *   · the attributes fall by their per-level growth — here by construction, since
+   *     recomputeStats derives them from the level;
+   *   · the skill points fall by the levels stripped, floored at 0;
+   *   · a learned rank the new level no longer admits is unlearned, and so are ranks beyond
+   *     what the hero's remaining points can pay for, EARLIER abilities in the hero's list
+   *     first; and, per the documented bug, unlearning never GIVES points back beyond what the
+   *     hero had before the call.
+   * The experience bar is set to the new level's threshold.
+   */
+  stripHeroLevel(unitId: number, howManyLevels: number): boolean {
+    const h = this.units.get(unitId);
+    if (!h?.isHero || h.level <= 1 || howManyLevels === 0) return false;
+    const target = howManyLevels < 0 ? 1 : Math.max(1, h.level - Math.trunc(howManyLevels));
+    const stripped = h.level - target;
+    const learned = h.abilities.filter((a) => a.level > 0 && this.abilityDefOf(a)?.isHero);
+    const invested = (): number => learned.reduce((n, a) => n + a.level, 0);
+    const pointsBefore = h.skillPoints;
+    const total = invested() + h.skillPoints - stripped; // what the hero is still owed
+    h.level = target;
+    // Ranks the level no longer admits…
+    for (const a of learned) {
+      const def = this.abilityDefOf(a);
+      while (def && a.level > 0 && requiredHeroLevel(def, a.level) > h.level) a.level--;
+    }
+    // …then ranks the points no longer pay for, earliest in the list first.
+    for (const a of learned) {
+      while (a.level > 0 && invested() > Math.max(0, total)) a.level--;
+    }
+    h.skillPoints = Math.max(0, Math.min(pointsBefore, total - invested()));
+    h.xp = xpToReachLevel(h.level);
+    for (const im of this.units.values()) {
+      if (im.isIllusion && im.illusionOf === h.id && im.hp > 0) {
+        im.level = h.level;
+        im.xp = h.xp;
+        this.recomputeStats(im);
+      }
+    }
+    this.recomputeStats(h);
+    return howManyLevels > 0;
+  }
+
+  /** `SetPlayerHandicapXP` / `GetPlayerHandicapXP` — a player's EXPERIENCE RATE, 1 = 100 %.
+   *  Applied where a kill's share is paid, which is the experience a player EARNS; a script's
+   *  own AddHeroXP / SetHeroXP is the script's number and is left as written. Test of Balance
+   *  halves it for the player who takes its bonus-levelling reward. */
+  private xpRates = new Map<number, number>();
+  xpHandicap(player: number): number {
+    return this.xpRates.get(player) ?? 1;
+  }
+  setXpHandicap(player: number, rate: number): void {
+    this.xpRates.set(player, Math.max(0, rate));
+  }
+
+  /** `UnitPauseTimedLife` — stop (or restart) a unit's timed-life clock. */
+  pauseTimedLife(unitId: number, flag: boolean): void {
+    const u = this.units.get(unitId);
+    if (u) u.timedLifePaused = flag;
+  }
+
+  /**
+   * `UnitAddType` / `UnitRemoveType` — give one unit a classification, or take one away.
+   *
+   * Only TWELVE of common.j's twenty-seven `unittype`s can be changed, and which twelve was
+   * measured, not documented: "Looping through ConvertUnitType(i) from 0 to 26 … 0 - 8 can't be
+   * added, 9 - 20 can be added and removed, 21 - 26 can't be added" (KnnO, hiveworkshop 218444,
+   * confirming defskull's earlier test). Hero, dead, structure, flying, ground and the attack
+   * classes are the unit's body and weapons, not labels; poisoned, polymorphed, sleeping,
+   * resistant, ethereal and magic immune are STATES other systems own. So Test of Balance's
+   * wave creeps shed MECHANICAL and ANCIENT and stay whatever else they were — the map's
+   * `UnitRemoveTypeBJ(UNIT_TYPE_FLYING, …)` does nothing in the real game either.
+   * Answers whether the classification could be changed.
+   */
+  setUnitClassification(unitId: number, t: number, on: boolean): boolean {
+    const u = this.units.get(unitId);
+    if (!u || t < 9 || t > 20) return false;
+    switch (t) {
+      case 10: u.isSummon = on; break; // UNIT_TYPE_SUMMONED
+      case 15: u.mechanical = on; break; // UNIT_TYPE_MECHANICAL
+      case 16: u.isPeon = on; break; // UNIT_TYPE_PEON
+      case 19: u.ancient = on; break; // UNIT_TYPE_ANCIENT
+      default: (u.classOverrides ??= {})[t] = on;
+    }
+    return true;
+  }
+
+  /**
+   * `UnitRemoveBuffsEx` / `UnitCountBuffsEx` — the buffs on a unit that match a filter. The
+   * criteria are jassbot's, and the two natives read their POLARITY pair differently: to
+   * remove, `positive`/`negative` each ADD a class (both false removes nothing); to count,
+   * both false counts both.
+   *
+   *  · Polarity is who PUT the buff there — the bearer's own side is a buff it wanted, anyone
+   *    else's one it did not (the reading spells.ts `worthDispelling` makes, since
+   *    `AbilityBuffData.slk` records none). A buff whose source is gone falls back on its KIND:
+   *    a stun, a slow or a damage-over-time is negative whoever cast it.
+   *  · Magical vs physical is recorded on no buff here, so every buff counts as magical:
+   *    `magic` alone or neither matches them all, `physical` alone matches none, and both match
+   *    none ("Specifying both magic and physical as true will not include any buff").
+   *  · `timedLife`: a unit's timed life is not a buff in this sim (SimUnit.summonLeft), so the
+   *    flag has nothing to include and a summon keeps its clock.
+   *  · `aura`: an aura's buff has no clock (`timeLeft` Infinity) — left alone unless asked for.
+   *  · `autoDispel`: only what a dispel may take (never Doom's `undispellable`).
+   */
+  private buffsMatching(u: SimUnit, q: BuffQuery, counting: boolean): SimBuff[] {
+    if (q.physical) return []; // physical alone, or both: nothing here is physical
+    const anyPolarity = counting && !q.positive && !q.negative;
+    return u.buffs.filter((b) => {
+      if (!q.aura && !Number.isFinite(b.timeLeft)) return false;
+      if (q.autoDispel && b.undispellable) return false;
+      if (anyPolarity) return true;
+      return this.buffIsPositive(u, b) ? q.positive : q.negative;
+    });
+  }
+  private buffIsPositive(u: SimUnit, b: SimBuff): boolean {
+    const src = this.units.get(b.sourceId);
+    if (src) return src.team === u.team;
+    return !NEGATIVE_BUFF_KINDS.has(b.kind);
+  }
+  removeBuffs(unitId: number, q: BuffQuery): number {
+    const u = this.units.get(unitId);
+    if (!u) return 0;
+    const gone = new Set(this.buffsMatching(u, q, false));
+    if (!gone.size) return 0;
+    u.buffs = u.buffs.filter((b) => !gone.has(b));
+    this.recomputeStats(u); // the stats were derived off buffs that no longer exist
+    return gone.size;
+  }
+  countBuffs(unitId: number, q: BuffQuery): number {
+    const u = this.units.get(unitId);
+    return u ? this.buffsMatching(u, q, true).length : 0;
+  }
+
+  /**
+   * `UnitDamagePoint` — a script's blast: after `delay` seconds, `amount` to every unit within
+   * `radius` of (x, y), each blow landing through `damageTarget` exactly as `UnitDamageTarget`
+   * lands one (so a DAMAGING handler sees each). jassbot says nothing about WHO is hit; we hit
+   * what the source's side is not allied with, and never the source. That is our reading, and
+   * it is the one both corpus maps are written against: Test of Balance and Balanced Hero
+   * Survival are co-operative and set these off at a hero's own feet, beside the other players'
+   * heroes. False when there is no source to deal it.
+   */
+  damagePoint(sourceId: number, delay: number, radius: number, x: number, y: number, amount: number, opts: TriggerDamageOpts): boolean {
+    const src = this.units.get(sourceId);
+    if (!src) return false;
+    this.pointDamage.push({ sourceId, team: src.team, left: Math.max(0, delay), radius, x, y, amount, opts });
+    return true;
+  }
+  private pointDamage: Array<{ sourceId: number; team: number; left: number; radius: number; x: number; y: number; amount: number; opts: TriggerDamageOpts }> = [];
+  private tickPointDamage(dt: number): void {
+    if (!this.pointDamage.length) return;
+    const due = this.pointDamage.filter((p) => (p.left -= dt) <= 0);
+    if (!due.length) return;
+    this.pointDamage = this.pointDamage.filter((p) => p.left > 0);
+    for (const p of due) {
+      const r2 = p.radius * p.radius;
+      const hit: number[] = [];
+      for (const t of this.units.values()) {
+        if (t.id === p.sourceId || t.hp <= 0 || (t.team >= 0 && t.team === p.team)) continue;
+        if ((t.x - p.x) ** 2 + (t.y - p.y) ** 2 <= r2) hit.push(t.id);
+      }
+      for (const id of hit) this.damageTarget(p.sourceId, id, p.amount, p.opts);
+    }
+  }
+
+  /**
+   * `CreateCorpse` — "Creates the corpse of a specific unit … The unit will die upon spawning
+   * and play their decay animation … If the unit corresponding to the rawcode cannot have a
+   * corpse, then the returned value is null" (jassbot). A body on the ground here is a
+   * SimCorpse, the same one a Graveyard lays, so Raise Dead, Cannibalize and a Meat Wagon all
+   * find it and the renderer gives it its model. A BUILDING leaves no corpse. Answers whether
+   * one was laid.
+   */
+  createCorpse(unitId: string, x: number, y: number, owner: number, facingDeg: number): boolean {
+    const def = this.unitReg?.get(unitId);
+    if (!def || def.isBuilding) return false;
+    this.spawnCorpseOf(unitId, x, y, owner, 0, (facingDeg * Math.PI) / 180);
+    return true;
+  }
+
+  /** `GetTerrainCliffLevel` — the terrain's cliff LAYER at a point (the w3e's own number, so a
+   *  fresh map's ground reads the editor's default rather than 0). Walkable destructibles
+   *  adding their own level on top (jassbot) are not modelled. 0 with no terrain. */
+  terrainCliffLevel(x: number, y: number): number {
+    return this.cliffLevelAt ? Math.round(this.cliffLevelAt(x, y) / CLIFF_STEP) : 0;
+  }
+
+  /**
    * `UnitDamageTarget` — damage dealt by a TRIGGER rather than by a swing.
    *
    * The native is `UnitDamageTarget(source, target, amount, attack, ranged, attacktype,
@@ -15390,7 +15622,7 @@ export class SimWorld {
     sourceId: number,
     targetId: number,
     amount: number,
-    opts: { attack: boolean; ranged: boolean; attackType: AttackType; magic: boolean; universal: boolean; damageType?: number; weaponSound?: string },
+    opts: TriggerDamageOpts,
   ): number {
     const target = this.units.get(targetId);
     if (!target || target.hp <= 0 || amount <= 0) return 0;
@@ -16563,10 +16795,10 @@ export class SimWorld {
   /** Make a corpse from nothing, of a named type — Exhume Corpses, which is the only thing in
    *  the game that does it. `heldBy` puts it straight into a hold: the upgrade "generates a
    *  Crypt Fiend corpse WITHIN the Meat Wagon" (Liquipedia), not on the ground beside it. */
-  spawnCorpseOf(unitId: string, x: number, y: number, owner: number, heldBy = 0): void {
+  spawnCorpseOf(unitId: string, x: number, y: number, owner: number, heldBy = 0, facing = 0): void {
     const def = this.unitReg?.get(unitId);
     this.corpses.set(this.nextCorpseId, {
-      id: this.nextCorpseId, deadId: 0, unitId, x, y, facing: 0, owner,
+      id: this.nextCorpseId, deadId: 0, unitId, x, y, facing, owner,
       isHero: false, mechanical: !!def?.classification.includes("mechanical"),
       decayLeft: CORPSE_TOTAL_TIME(), raised: false, heldBy, eatenBy: 0,
     });
@@ -17286,6 +17518,7 @@ export class SimWorld {
     this.tickBuildSites(); // our own units walked off every silhouette that has been put down
     this.tickMineCrews(dt); // night elf and undead gold: no round trip, just a crew and a clock
     this.tickGraveyards(dt); // the Graveyard's hidden Create Corpse — Ghoul bodies for the Necromancers
+    this.tickPointDamage(dt); // UnitDamagePoint — a script's delayed blast
     this.tickShops(dt);
     this.tickShopBuyers(); // adopt a purchaser for whoever has just walked one up to a shop
     this.applyAuras(); // refresh aura buffs on in-range allies (before recompute)
@@ -17332,7 +17565,7 @@ export class SimWorld {
           else u.itemCooldowns.delete(group);
         }
       }
-      if (u.summonLeft > 0) {
+      if (u.summonLeft > 0 && !u.timedLifePaused) {
         u.summonLeft -= dt;
         if (u.summonLeft <= 0) {
           // Its time is up. A summon whose data declares an unsummon effect LEAVES via it

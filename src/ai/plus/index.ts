@@ -2193,9 +2193,18 @@ export class ComputerPlusAi {
     simProfile.gauge("aiOrderDrain", perfNow() - t0);
   }
 
+  /** `PauseCompAI` — seats whose AI stands still (it decides nothing and issues nothing; what
+   *  it already ordered plays out). blizzard.j's PauseAllCompAI freezes every computer for a
+   *  cinematic and lets them go at its end. */
+  private readonly paused = new Set<number>();
+  setPaused(player: number, pause: boolean): void {
+    if (pause) this.paused.add(player);
+    else this.paused.delete(player);
+  }
+
   tick(dt: number): void {
     for (const b of this.brains) {
-      if (b.gone) continue;
+      if (b.gone || this.paused.has(b.ai.player)) continue;
       b.clock += dt;
       this.drainOrders(b); // last step's leftovers go first, then this step's passes
       if ((b.buildIn -= dt) <= 0) {

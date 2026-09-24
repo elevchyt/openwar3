@@ -86,6 +86,13 @@ export function registerAbilityNatives(rt: Runtime): void {
     if (id !== undefined) c.rt.hooks?.setHeroLevel?.(id, asInt(a[1]), truthy(a[2]));
     return JNULL;
   });
+  // UnitStripHeroLevel — the way DOWN (blizzard.j's SetHeroLevelBJ for a lower level;
+  // SimWorld.stripHeroLevel carries jassbot's rules). Test of Balance levels its wave bosses
+  // through SetHeroLevelBJ, which lands here whenever the players' food is low.
+  def(rt, "UnitStripHeroLevel", (c, a) => {
+    const id = simOf(c, a[0]);
+    return jBool(id !== undefined && (c.rt.hooks?.stripHeroLevel?.(id, asInt(a[1])) ?? false));
+  });
   def(rt, "GetHeroXP", (c, a) => {
     const id = simOf(c, a[0]);
     return jInt(id === undefined ? 0 : Math.floor(c.rt.hooks?.getHeroXp?.(id) ?? 0));

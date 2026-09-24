@@ -288,7 +288,8 @@ guessed.** Three things changed the design, all of them findings:
   per-unit override table into the sim to bridge that is exactly the intrusion this layer must
   not make, so the family is still a logged default. The 1.30.4-declared setters
   (`BlzSetUnitMaxHP`, `BlzSetUnitArmor`, `BlzSetUnitBaseDamage`, …) are the per-unit half that
-  already has hooks, and are the natural next tranche.
+  already has hooks, and are the natural next tranche. *(Superseded: the setters write one unit
+  now — see "Test of Balance — the engine under the waves" below.)*
 
 What landed beside the hashtables: our own **prelude** (`src/compat/prelude.ts`) declaring only
 what 1.30.4 lacks — the 1.31 damage events, the three local camera fields, the start-location
@@ -399,7 +400,8 @@ same field, which corroborates the set without disambiguating it.
 `war3map.w3u` edit is in the answer by construction. **A setter is refused**, once and in one
 place: `BlzSetUnitRealField` changes ONE unit while our object-data routing writes the TYPE
 (`UNIT_SETTERS`), and bridging that wants a per-unit override table in the sim, which is a
-change to the standard build rather than to this layer. A field we declare and cannot answer
+change to the standard build rather than to this layer. *(Superseded — the table exists now,
+`SimUnit.fieldOverrides`; see "Test of Balance — the engine under the waves".)* A field we declare and cannot answer
 logs once and returns the typed default — better declared than missing, because an undefined
 global is a hard error in Lua and a silent null in JASS.
 
@@ -684,7 +686,8 @@ Liquipedia's Frost Nova card states. It had been a hand-typed 0.4/0.4.
 One thing was deliberately **not** done: `BlzSetEventDamage` (6 sites). `pumpDamageEvents` fires
 after the sim has applied the damage, so there is nothing left to modify, and making it work
 means first settling whether 1.31's `EVENT_PLAYER_UNIT_DAMAGED` is pre- or post-application and
-how it differs from `_DAMAGING` (315) — a question for the sources, not a guess.
+how it differs from `_DAMAGING` (315) — a question for the sources, not a guess. *(Settled and
+done — see "Test of Balance — the engine under the waves".)*
 
 Tests: `tools/sim-hero-attr-test.cjs` and `tools/sim-trigger-damage-test.cjs` (the sim
 arithmetic — the damage multipliers computed from the game's own table rather than transcribed,
@@ -799,6 +802,63 @@ camera, before the scene update, so it never trails a frame). The depth buffer i
 because `SkyLight.mdl`'s streak layers DO write depth, and a sphere around the eye is nearer than the
 far terrain. Human01's own call (`LordaeronSummerSky`) reaches it. Tests: the sky checks in
 `tools/jass-imagery-test.cjs`.
+
+### Test of Balance — the engine under the waves
+
+Test of Balance and Balanced Hero Survival now reference nothing the engine lacks — every call and
+constant in their scripts, and (since the gap walker learned to follow a call INTO blizzard.j)
+every native a BJ they call reaches. That last clause found eleven more natives, one of which
+was the reason no wave had ever spawned. In the order the work landed:
+
+* **Ability instances** (`BlzGetUnitAbility`, `BlzGetItemAbility(ByIndex)`, the eight
+  `Blz{Get,Set}Ability{Integer,Real,Boolean,String}[Level]Field` families). A write gives THAT
+  unit or item its own copy of the row (`SimAbility.def`, `SimWorld.itemAbilityDefs`) and every
+  reader goes through `abilityDefOf` / `itemAbilityDefOf`. A field constant carries its
+  `AbilityMetaData.slk` id, so a script's write and an object-editor edit share one routing
+  (`writeAbilityField` → `applyAbilityMods`). Levels count the map's way (`blzIndexBase`).
+  `tools/jass-ability-fields-test.cjs`, `tools/sim-ability-instance-test.cjs`.
+* **Per-unit unit fields** (`BlzSetUnit{Integer,Real,Boolean}Field`, the weapon fields). ONE unit
+  (`SimUnit.fieldOverrides`, `scriptWeaponsOn`, `nameOverride`), with the integer encodings the
+  maps compare as literals in `data/unitFieldCodes.ts`, each cited where it is written down.
+  `tools/sim-unit-fields-test.cjs`.
+* **Damage events a script can change.** For a script that registers DAMAGING or writes a blow
+  (`Interpreter.scriptModifiesDamage`), the blow is handed over synchronously, twice: DAMAGING
+  "before any armor, armor type and other resistances", DAMAGED just before the hit points move
+  (jassbot, `BlzSetEventDamage`). ≤ 0 in DAMAGING skips DAMAGED; negative heals; nesting is capped.
+  Every other map keeps the queued `EVENT_UNIT_DAMAGED`. `tools/sim-damage-hook-test.cjs`,
+  `tools/jass-damage-event-test.cjs`.
+* **`GetHandleId` on a `Convert…` constant is its INDEX.** The Damage Engine reads
+  `GetHandleId(BlzGetEventAttackType())` and tests `== 0` (a spell) and `== udg_DAMAGE_TYPE_NORMAL`,
+  which its own config sets to the literal 4. Our interned ids (49, 55, 76) made every blow a
+  non-spell of no known type.
+* **`ChooseRandomCreep`** — every wave creep is `CreateNUnitsAtLoc(1, ChooseRandomCreepBJ(n), …)`,
+  so a wave was a round of type-0 creates. The pool is the World Editor's own random-creep one
+  (`UnitRegistry.chooseRandomCreep`): Neutral Hostile palette, not `special`, not campaign-only,
+  not a building or a hero.
+* **`SetPlayerState(p, FOOD_USED, n)` lands.** It was dropped as "read-only", but the map keeps its
+  wave DIFFICULTY on the food bar (its heroes cost no food; its triggers write `wave × 2` and add
+  2 a wave), and a unit that dies afterwards "will decrease its food from player" (hiveworkshop
+  252550) — the same accumulator the cap already was (`Authority.setFoodUsed`).
+* **Players 16–23 are players.** 1.29 widened the table to 24, and both maps seat their entire
+  enemy on `Player(20)` — a computer in a force of its own (their w3i). Three "≥ 12 is neutral"
+  tests (the script's spawn owner, the `.doo` reader, a player's default colour) turned it into
+  Neutral Passive: the waves came out passive, the wave-clear trigger counted no Player(20) units,
+  and every wave ended as it began. `isNeutralSlot` (12–15) is the one test now. NOT done: a
+  24-player map that uses 12–15 as PLAYERS still collides with our neutral slots.
+* **The rest of what the BJs reach**: `UnitStripHeroLevel` (SetHeroLevelBJ going DOWN — the wave
+  bosses are levelled to half the players' food), `Get/SetPlayerHandicapXP`, `UnitPauseTimedLife`,
+  `UnitAddType`/`UnitRemoveType` (only 9–20 are changeable — "0 - 8 can't be added, 9 - 20 can be
+  added and removed, 21 - 26 can't be added", KnnO, hiveworkshop 218444 — so the waves' own
+  `UnitRemoveTypeBJ(UNIT_TYPE_FLYING, …)` does nothing, as in the game), `UnitRemoveBuffs(Ex)` /
+  `UnitCountBuffsEx` (jassbot's criteria; polarity is who put the buff there),
+  `UnitDamagePoint` (who it reaches is OUR reading — enemies of the source — and says so),
+  `CreateCorpse`, `GetTerrainCliffLevel`, `PauseCompAI`, `UnitId`/`UnitId2String`.
+  `UnitDamageTarget` now hands its damage and weapon types on too, so a DAMAGING handler sees them.
+
+Verified live: wave 1 spawns as Player(20), fights the heroes, and the Damage Engine reads Pierce
+/ Normal / Hero off the blow. Tests: `tools/sim-script-natives-test.cjs` (what each does),
+`tools/jass-script-natives-test.cjs` (every argument through the real blizzard.j BJ), the food
+write in `tools/sim-jass-hooks-test.cjs`.
 
 ## Traps
 

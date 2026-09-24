@@ -93,7 +93,18 @@ function registerUtilNatives(rt: Runtime): void {
   def(rt, "StringLength", (_c, a) => jInt(asStr(a[0]).length));
   def(rt, "StringCase", (_c, a) => jStr(a[1].k === "bool" && a[1].b ? asStr(a[0]).toUpperCase() : asStr(a[0]).toLowerCase()));
   // StringHash lives in natives/text.ts (a real 32-bit hash, not a 0 stub).
-  def(rt, "GetHandleId", (_c, a) => jInt(a[0].k === "handle" ? a[0].h : 0));
+  // GetHandleId. A `Convert…` constant (an attack type, a damage type, a player state …) is not
+  // an object with an id of its own in the game: its handle id IS the integer it was converted
+  // from. Scripts lean on it — the Damage Engine both rebalance maps run reads
+  // `GetHandleId(BlzGetEventAttackType())` and tests `== 0` for a spell and
+  // `== udg_DAMAGE_TYPE_NORMAL` (which its own config sets to the literal 4) for "armour applies"
+  // (Test of Balance, war3map.j 980–981 and 1170–1172). Answered with our interned id instead,
+  // every blow read as a non-spell of no known type. Every other handle keeps its own id.
+  def(rt, "GetHandleId", (c, a) => {
+    if (a[0].k !== "handle") return jInt(0);
+    const obj = c.rt.handles.get(a[0].h) as { constant?: boolean; index?: number } | undefined;
+    return jInt(obj?.constant ? obj.index ?? 0 : a[0].h);
+  });
   def(rt, "GetRandomInt", (c, a) => {
     const lo = asInt(a[0]), hi = asInt(a[1]);
     return jInt(hi < lo ? lo : lo + Math.floor(c.rt.random() * (hi - lo + 1)));

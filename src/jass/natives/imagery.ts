@@ -111,6 +111,7 @@ export function registerImageryNatives(rt: Runtime): void {
     const tile = c.rt.hooks?.terrainTypeAt?.(asNum(a[0]), asNum(a[1])) ?? "";
     return jInt(tile ? rawcodeToInt(tile) : 0);
   });
+  def(rt, "GetTerrainCliffLevel", (c, a) => jInt(c.rt.hooks?.terrainCliffLevel?.(asNum(a[0]), asNum(a[1])) ?? 0));
   def(rt, "GetTerrainVariance", (c, a) => jInt(c.rt.hooks?.terrainVarianceAt?.(asNum(a[0]), asNum(a[1])) ?? 0));
   def(rt, "SetTerrainType", (c, a) => {
     c.rt.hooks?.setTerrainType?.(asNum(a[0]), asNum(a[1]), intToRawcode(asInt(a[2])), asInt(a[3]), asInt(a[4]), asInt(a[5]));

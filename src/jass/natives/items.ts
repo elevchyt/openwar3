@@ -311,4 +311,9 @@ export function registerItemNatives(rt: Runtime): void {
   };
   def(rt, "ChooseRandomItem", (c, a) => chooseRandom(c, 8, asInt(a[0])));
   def(rt, "ChooseRandomItemEx", (c, a) => chooseRandom(c, c.rt.enumIndex(a[0]), asInt(a[1])));
+  // …and its unit twin, ChooseRandomCreep(level) → a creep TYPE id (UnitRegistry.chooseRandomCreep
+  // says which pool). Test of Balance and Balanced Hero Survival spawn EVERY wave creep through
+  // ChooseRandomCreepBJ, so without it a wave was a round of CreateNUnitsAtLoc(…, 0, …) and ended
+  // the moment it began.
+  def(rt, "ChooseRandomCreep", (c, a) => jInt(rawcodeToInt(c.rt.hooks?.chooseRandomCreep?.(asInt(a[0])) ?? "")));
 }

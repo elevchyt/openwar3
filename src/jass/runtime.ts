@@ -10,7 +10,7 @@
 
 import type { FunctionDecl } from "./ast";
 import { type JassValue, JNULL, jHandle } from "./values";
-import { FIRST_NEUTRAL_SLOT, PlayerSlot } from "../data/enums";
+import { isNeutralSlot, PlayerSlot } from "../data/enums";
 import type { StoredUnitState } from "../sim/world";
 
 /** A trigger object (CreateTrigger) — its conditions + actions (function names)
@@ -484,6 +484,17 @@ export interface GameCacheObj {
 /** The columns the GetUnitDefault… natives read (natives/world.ts). */
 export type UnitTypeDefault = "moveSpeed" | "turnRate" | "flyHeight" | "acquireRange";
 
+/** The filter UnitRemoveBuffsEx / UnitCountBuffsEx take, argument for argument (jassbot). */
+export interface BuffFilter {
+  positive: boolean;
+  negative: boolean;
+  magic: boolean;
+  physical: boolean;
+  timedLife: boolean;
+  aura: boolean;
+  autoDispel: boolean;
+}
+
 export interface JassUnit {
   handleId: number;
   player: number;
@@ -726,8 +737,33 @@ export interface EngineHooks {
     sourceId: number,
     targetId: number,
     amount: number,
-    opts: { attack: boolean; ranged: boolean; attackType: string; magic: boolean; universal: boolean },
+    opts: { attack: boolean; ranged: boolean; attackType: string; magic: boolean; universal: boolean; damageType?: number; weaponSound?: string },
   ): number;
+  /** UnitDamagePoint — the same blow, after `delay`, on every unit in the circle the source's
+   *  side is not allied with (SimWorld.damagePoint). False when there is no source. */
+  damagePoint?(
+    sourceId: number, delay: number, radius: number, x: number, y: number, amount: number,
+    opts: { attack: boolean; ranged: boolean; attackType: string; magic: boolean; universal: boolean; damageType?: number; weaponSound?: string },
+  ): boolean;
+  /** UnitStripHeroLevel — levels off a hero (SimWorld.stripHeroLevel says every rule). */
+  stripHeroLevel?(unitId: number, howManyLevels: number): boolean;
+  /** Get/SetPlayerHandicapXP — a player's experience rate, 1 = 100 %. */
+  xpHandicap?(player: number): number;
+  setXpHandicap?(player: number, rate: number): void;
+  /** UnitPauseTimedLife — hold (or release) a unit's timed-life clock. */
+  pauseTimedLife?(unitId: number, flag: boolean): void;
+  /** UnitAddType / UnitRemoveType — `t` is the ConvertUnitType index; false when the engine
+   *  lets no script change that classification (SimWorld.setUnitClassification). */
+  setUnitClassification?(unitId: number, t: number, on: boolean): boolean;
+  /** UnitRemoveBuffs(Ex) / UnitCountBuffsEx (SimWorld.removeBuffs / countBuffs). */
+  removeBuffs?(unitId: number, q: BuffFilter): void;
+  countBuffs?(unitId: number, q: BuffFilter): number;
+  /** CreateCorpse — a body on the ground; false when the type leaves none. */
+  createCorpse?(typeId: string, x: number, y: number, owner: number, facingDeg: number): boolean;
+  /** GetTerrainCliffLevel — the terrain's cliff layer at a point. */
+  terrainCliffLevel?(x: number, y: number): number;
+  /** PauseCompAI — stop (or restart) a computer player's AI. */
+  pauseCompAi?(player: number, pause: boolean): void;
   /** The `BlzGetUnit…`/`BlzSetUnit…` stat accessors (SimWorld.unitStat says what each stat
    *  means). `slot` is the weapon SLOT, 0-based — already translated from the map's index. */
   unitStat?(unitId: number, stat: string, slot: number): number | boolean | undefined;
@@ -860,6 +896,11 @@ export interface EngineHooks {
   enumItems?(): ReadonlyArray<ItemSnapshot>;
   /** ChooseRandomItem(Ex) — a random item rawcode of a class + level ("" = none). */
   chooseRandomItem?(classType: string | null, level: number): string;
+  /** UnitId / UnitId2String — a unit type by its internal UnitUI `name`, and back. */
+  unitTypeByName?(name: string): string;
+  unitTypeName?(typeId: string): string | undefined;
+  /** ChooseRandomCreep: a creep type id of that level ("" when the pool is empty). */
+  chooseRandomCreep?(level: number): string;
   // --- neutral-building stock: the Marketplace (issue #57, see natives/stock.ts) ---
   /** AddItemToStock / AddUnitToStock — put a ware on a shop's shelf. */
   addToStock?(shopId: number, wareId: string, kind: "item" | "unit", count: number, max: number): void;
@@ -1860,7 +1901,7 @@ export class Runtime {
       p = {
         index,
         handleId: 0,
-        color: index >= FIRST_NEUTRAL_SLOT ? this.neutralPlayerColor : index,
+        color: isNeutralSlot(index) ? this.neutralPlayerColor : index,
         controller: MAP_CONTROL.NEUTRAL, // until config() says otherwise
         race: 0,
         raceSelectable: false,
@@ -2010,7 +2051,8 @@ export class Runtime {
   /** An interned handle for an enum-like constant (playercolor, race, mapcontrol,
    *  …). `index` is the constant's integer value; equality then works by id. */
   enumHandle(kind: string, index: number): JassValue {
-    const id = this.handles.intern(`${kind}:${index}`, () => ({ kind, index }));
+    // `constant`: GetHandleId answers the INDEX for these (natives/index.ts says why).
+    const id = this.handles.intern(`${kind}:${index}`, () => ({ kind, index, constant: true }));
     return jHandle(id, kind);
   }
   /** Read the integer index out of an enum-like handle (or -1). */

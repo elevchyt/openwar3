@@ -234,12 +234,20 @@ export function registerMeleeNatives(rt: Runtime): void {
   // StartCampaignAI stays a no-op: a chapter's computers are the mission's, and what this
   // would load is a per-campaign .ai file we do not run.
   for (const name of [
-    "StartCampaignAI", "CommandAI", "SetPlayerHandicap", "SetPlayerHandicapXP",
+    "StartCampaignAI", "CommandAI", "SetPlayerHandicap",
     "RecycleGuardPosition", "RemoveGuardPosition", "SetUnitCreepGuard", "Preloader", "Preload",
     "PreloadStart", "PreloadEnd", "PreloadEndEx", "PreloadRefresh", "PreloadGenClear", "PreloadGenStart",
   ]) {
     def(rt, name, () => JNULL);
   }
+  // The experience rate, 1 = 100 % (SimWorld.xpHandicap). Test of Balance halves it for the
+  // player who takes its bonus-levelling reward — GetPlayerHandicapXPBJ / 2 — so the getter
+  // has to answer what the setter wrote, and the default is the engine's full rate.
+  def(rt, "SetPlayerHandicapXP", (c, a) => (c.rt.hooks?.setXpHandicap?.(playerIndex(c, a[0]), asNum(a[1])), JNULL));
+  def(rt, "GetPlayerHandicapXP", (c, a) => jReal(c.rt.hooks?.xpHandicap?.(playerIndex(c, a[0])) ?? 1));
+  // PauseCompAI — a computer player's AI stops deciding (blizzard.j's PauseAllCompAI, which a
+  // cinematic calls to freeze every computer while it plays).
+  def(rt, "PauseCompAI", (c, a) => (c.rt.hooks?.pauseCompAi?.(playerIndex(c, a[0]), truthy(a[1])), JNULL));
   // PickMeleeAI compares against AI_DIFFICULTY_NEWBIE = ConvertAIDifficulty(0), so hand
   // back a real handle rather than a null one.
   def(rt, "GetAIDifficulty", (c) => c.rt.enumHandle("AIDifficulty", 0));

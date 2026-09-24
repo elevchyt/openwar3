@@ -105,8 +105,23 @@ export enum PlayerSlot {
   NeutralPassive = 15,
 }
 
-/** The first neutral slot — anything at or above it is owned by a neutral player. */
+/** The first neutral slot. */
 export const FIRST_NEUTRAL_SLOT = PlayerSlot.NeutralHostile;
+
+/**
+ * Is slot `p` one of the four NEUTRAL players (12–15)?
+ *
+ * Not "is it 12 or more". 1.29 widened the player table to 24 (common.j's 24 player colours),
+ * and a map saved since can seat a real player on 16–23: Test of Balance and Balanced Hero
+ * Survival both put their whole enemy on `Player(20)` — a computer seat in a force of its own
+ * (their w3i) — and a "≥ 12" test turned it into Neutral Passive, so every wave came out
+ * passive, the wave-clear trigger counted no Player(20) units, and each wave ended the moment
+ * it began. The neutrals themselves stay at 12–15, where our PLAYER_NEUTRAL_* natives put them
+ * (natives/config.ts) and where the map door already folds the editor's 24–27 (world/mapUnits.ts).
+ */
+export function isNeutralSlot(p: number): boolean {
+  return p >= FIRST_NEUTRAL_SLOT && p <= PlayerSlot.NeutralPassive;
+}
 
 // --- SLK-token parsers ------------------------------------------------------
 // The SLK cells are already lowercase in the stock tables, but custom object data

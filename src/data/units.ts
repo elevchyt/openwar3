@@ -461,6 +461,12 @@ export interface UnitDef {
   attackRange: number;
   acquireRange: number; // auto-acquisition range (0 = never auto-attacks)
   canSleep: boolean; // UnitData `cansleep`: Neutral Hostile creeps of this type sleep at night
+  /** unitUI `hostilePal` / `special` / `campaign` — the World Editor's palette flags ("offered
+   *  under Neutral Hostile", "hidden special unit", "campaign-only"). No match reads them except
+   *  through `ChooseRandomCreep`, whose pool they are (UnitRegistry.chooseRandomCreep). */
+  hostilePal?: boolean;
+  special?: boolean;
+  campaign?: boolean;
   weaponType: WeaponType; // weapTp1: normal = melee, instant = hitscan, the rest fly
   attackType: AttackType; // atkType1 → the damage table's row
   armorType: ArmorType; // defType → the damage table's column
@@ -542,6 +548,19 @@ export class UnitRegistry {
    *  custom unit clones from. */
   base(id: string): UnitDef | undefined {
     return this.defs.get(id);
+  }
+  /** ChooseRandomCreep(level) (common.j) — a random creep TYPE of that level, or undefined.
+   *  Nothing in the install states the pool, so it is the one the World Editor's own
+   *  random-creep placement offers: the Neutral Hostile palette (`hostilePal`) less the hidden
+   *  `special` rows, the campaign-only ones, buildings and heroes — 272 stock rows, every
+   *  level 1..10 represented. A map's custom creep joins it by keeping its base's flags, as a
+   *  w3u copy does. `level` < 0 is any level (the rule common.j states for its item twin).
+   *  The order is the registry's own (base rows, then the map's), so a seeded RNG draws the
+   *  same type on every client. */
+  chooseRandomCreep(level: number, rng: () => number): UnitDef | undefined {
+    const pool = this.all().filter((d) => d.hostilePal && !d.special && !d.campaign && !d.isBuilding && !d.isHero
+      && (level < 0 || d.level === level));
+    return pool.length ? pool[Math.floor(rng() * pool.length)] : undefined;
   }
   /** Add/override a def in the per-map overlay (custom object data). */
   setCustom(id: string, def: UnitDef): void {
@@ -778,6 +797,9 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       attackRange: 0,
       acquireRange: w ? num(w, "acquire", 0) : 0,
       canSleep: (d ? num(d, "cansleep", 0) : 0) === 1,
+      hostilePal: (u ? num(u, "hostilePal", 0) : 0) === 1,
+      special: (u ? num(u, "special", 0) : 0) === 1,
+      campaign: (u ? num(u, "campaign", 0) : 0) === 1,
       weaponType: WeaponType.None,
       attackType: AttackType.None,
       armorType: toArmorType(b ? str(b, "defType") : ""),

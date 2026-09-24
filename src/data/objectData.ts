@@ -359,6 +359,12 @@ export const UNIT_SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   ubdg: (d, v) => { d.isBuilding = bool01(v); },
   // "Stats - Can Sleep" — whether a Neutral Hostile creep of this type sleeps at night.
   usle: (d, v) => { d.canSleep = bool01(v); },
+  // The editor's palette flags — and, through them, ChooseRandomCreep's pool (see
+  // UnitRegistry.chooseRandomCreep): a map that hides a creep from the palette hides it from
+  // the draw too.
+  uhos: (d, v) => { d.hostilePal = bool01(v); },
+  uspe: (d, v) => { d.special = bool01(v); },
+  ucam: (d, v) => { d.campaign = bool01(v); },
   // "Stats - Transported Size" — how many SEATS this unit takes in a cargo hold, which is not
   // one for the siege roster. See UnitDef.cargoSize.
   ucar: (d, v) => { d.cargoSize = Math.max(1, n(v)); },
@@ -436,9 +442,8 @@ export const UNIT_FIELD_NOTES: Record<string, string> = {
 
   // World-Editor-only: which palette/tileset a type is offered under, and whether the editor
   // draws a placement helper for it. None of it survives into a running match.
-  ucam: "editor palette only (campaign)", udro: "editor palette only (dropItems)",
-  uhos: "editor palette only (hostilePal)", uine: "editor palette only (inEditor)",
-  uspe: "editor palette only (special)", util: "editor palette only (tilesets)",
+  udro: "editor palette only (dropItems)", uine: "editor palette only (inEditor)",
+  util: "editor palette only (tilesets)",
   utss: "editor palette only (tilesetSpecific)", uuch: "editor placement helper (useClickHelper)",
   unsf: "editor palette only (EditorSuffix)",
 

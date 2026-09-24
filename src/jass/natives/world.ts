@@ -9,7 +9,7 @@
 
 import { intToRawcode, rawcodeToInt } from "../lexer";
 import { orderIdToString, orderStringToId } from "../orders";
-import type { EngineHooks, JassPlayer, JassUnit, NativeCtx, Runtime, UnitTypeDefault } from "../runtime";
+import type { BuffFilter, EngineHooks, JassPlayer, JassUnit, NativeCtx, Runtime, UnitTypeDefault } from "../runtime";
 import { asInt, asNum, asStr, jBool, jHandle, jInt, JNULL, jReal, jStr, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
@@ -103,6 +103,62 @@ export function registerWorldNatives(rt: Runtime): void {
     const u = unit(c, a[0]);
     if (u && u.simId >= 0) c.rt.hooks?.applyTimedLife?.(u.simId, asNum(a[2]), intToRawcode(asInt(a[1])));
     return JNULL;
+  });
+  def(rt, "UnitPauseTimedLife", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.pauseTimedLife?.(u.simId, a[1]?.k === "bool" && a[1].b);
+    return JNULL;
+  });
+  // UnitAddType / UnitRemoveType — one unit's classification (SimWorld.setUnitClassification
+  // says which twelve the engine lets a script change, and whose measurement that is).
+  for (const [name, on] of [["UnitAddType", true], ["UnitRemoveType", false]] as const) {
+    def(rt, name, (c, a) => {
+      const u = unit(c, a[0]);
+      return jBool(!!u && u.simId >= 0 && (c.rt.hooks?.setUnitClassification?.(u.simId, c.rt.enumIndex(a[1]), on) ?? false));
+    });
+  }
+  // The buff filters (SimWorld.removeBuffs says how each criterion is read). UnitRemoveBuffs is
+  // "like calling UnitRemoveBuffsEx(whichUnit, removePostive, removeNegative, false, false,
+  // true, true, false)" — jassbot, and that is literally what it does here.
+  const buffFilter = (a: JassValue[], at: number): BuffFilter => {
+    const b = (i: number) => a[at + i]?.k === "bool" && (a[at + i] as { b: boolean }).b;
+    return { positive: b(0), negative: b(1), magic: b(2), physical: b(3), timedLife: b(4), aura: b(5), autoDispel: b(6) };
+  };
+  def(rt, "UnitRemoveBuffsEx", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.removeBuffs?.(u.simId, buffFilter(a, 1));
+    return JNULL;
+  });
+  def(rt, "UnitRemoveBuffs", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.removeBuffs?.(u.simId, { ...buffFilter(a, 1), magic: false, physical: false, timedLife: true, aura: true, autoDispel: false });
+    return JNULL;
+  });
+  def(rt, "UnitCountBuffsEx", (c, a) => {
+    const u = unit(c, a[0]);
+    return jInt(u && u.simId >= 0 ? c.rt.hooks?.countBuffs?.(u.simId, buffFilter(a, 1)) ?? 0 : 0);
+  });
+  // CreateCorpse(player, unitid, x, y, facing) → the body's `unit` — a DEAD one (simId -1, so
+  // IsUnitType(…, UNIT_TYPE_DEAD) answers true off its type), or null when the type leaves no
+  // corpse (SimWorld.createCorpse). Both rebalance maps lay bodies for their raise-dead items.
+  def(rt, "CreateCorpse", (c, a) => {
+    const player = c.rt.data<JassPlayer>(a[0])?.index ?? asInt(a[0]);
+    const typeId = intToRawcode(asInt(a[1]));
+    const x = asNum(a[2]);
+    const y = asNum(a[3]);
+    const facing = asNum(a[4]);
+    if (!(c.rt.hooks?.createCorpse?.(typeId, x, y, player, facing) ?? false)) return JNULL;
+    return mintUnitHandle(c.rt, player, typeId, x, y, facing, -1);
+  });
+  // UnitId / UnitId2String — a unit type by its INTERNAL name (UnitUI `name`: "footman"), for
+  // blizzard.j's String2UnitIdBJ / UnitId2StringBJ.
+  def(rt, "UnitId", (c, a) => {
+    const id = c.rt.hooks?.unitTypeByName?.(asStr(a[0])) ?? "";
+    return jInt(id ? rawcodeToInt(id) : 0);
+  });
+  def(rt, "UnitId2String", (c, a) => {
+    const name = c.rt.hooks?.unitTypeName?.(intToRawcode(asInt(a[0])));
+    return name ? jStr(name) : JNULL;
   });
   def(rt, "GetUnitState", (c, a) => {
     const u = unit(c, a[0]);
