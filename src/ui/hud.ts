@@ -709,6 +709,10 @@ const HERO_LEVEL_RING = "UI\\Buttons\\HeroLevel\\HeroLevel-Border.blp";
 //                                 human-buildprogressbar-*.blp  its fill ships already gold
 //   ConsoleInventoryCoverTexture  <Race>UITile-InventoryCover   the crest over the 2×3 when
 //                                                               the selection has no inventory
+//   ConsoleInventoryNoCapacity    <race>-inventory-slotfiller   one opaque 64×64 plug per
+//                                                               pocket past the inventory's
+//                                                               "Item Capacity" (a 2-slot
+//                                                               backpack shows its top row)
 //   CommandButtonNumberOverlay    human-button-lvls-overlay.blp the boxed number in an
 //                                                               icon's corner — see countBadge
 const CONSOLE_ART = {
@@ -718,6 +722,7 @@ const CONSOLE_ART = {
   buildBarBorder: "SimpleBuildTimeIndicatorBorder",
   buildBarFill: "SimpleBuildTimeIndicator",
   inventoryCover: "ConsoleInventoryCoverTexture",
+  inventoryNoCapacity: "ConsoleInventoryNoCapacity",
   numberOverlay: "CommandButtonNumberOverlay",
   /** `CargoBackdrop` — `human-transport-slot.blp`, ONE gold-framed 64×64 pocket, drawn once
    *  per seat of a cargo hold (the panel's slots are the engine's own layout, not the FDF's:
@@ -1514,6 +1519,8 @@ export class GameHud {
     }
     const cover = url(CONSOLE_ART.inventoryCover);
     if (cover) root.setProperty("--hud-inventory-cover", `url(${cover})`);
+    const noCapacity = url(CONSOLE_ART.inventoryNoCapacity);
+    if (noCapacity) root.setProperty("--hud-inventory-nocap", `url(${noCapacity})`);
     const cargo = url(CONSOLE_ART.cargoSlot);
     if (cargo) root.setProperty("--hud-cargo-slot", `url(${cargo})`);
     // The boxed number an icon wears in its corner (see countBadge). On :root and gated by a
@@ -3309,6 +3316,11 @@ export class GameHud {
     for (let i = 0; i < this.invSlots.length; i++) {
       const btn = this.invSlots[i];
       const s = inv[i] ?? null;
+      // A pocket past the inventory's "Item Capacity" (a 2-slot backpack, the Pack Mule's
+      // four) is not a pocket at all: war3skins' `ConsoleInventoryNoCapacity` plugs it with
+      // the race's slot filler, and it takes no click, no drop and no tooltip. Only when
+      // there IS an inventory — with none, the cover stands over all six.
+      btn.classList.toggle("no-capacity", inv.length > 0 && i >= inv.length);
       if (!s) {
         btn.classList.add("empty");
         btn.style.backgroundImage = "";

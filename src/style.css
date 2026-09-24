@@ -2318,6 +2318,14 @@ body.hud-widget-skinned .hud-queue-slot { color: transparent; }
 body.carrying-item .hud-inv-slot:hover,
 body.carrying-item .hud-inv-slot.pad-hover { border-color: var(--gold); }
 .hud-console.hud-console-skinned .hud-inventory .hud-inv-slot { background-color: transparent; }
+/* A pocket past the inventory's capacity (ConsoleInventoryNoCapacity in ui/hud.ts): inert,
+   and plugged with the race's slot filler once the install's art is in — with none to hand
+   it is simply not drawn. */
+.hud-inv-slot.no-capacity { pointer-events: none; visibility: hidden; }
+body.hud-widget-skinned .hud-console.hud-console-skinned .hud-inventory .hud-inv-slot.no-capacity {
+  visibility: visible;
+  background: var(--hud-inventory-nocap) center / 100% 100% no-repeat;
+}
 
 .hud-cmd {
   font: inherit;
