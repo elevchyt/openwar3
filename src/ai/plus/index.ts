@@ -1073,7 +1073,7 @@ const EARLY_HERO_LEVEL = 3;
  * `contactPass`'s, and it is symmetric there because both armies are in the open.
  *
  * `UNDEAD_CEILING` is what stops the bar being a bar nobody can clear: every difficulty caps its
- * own production (`PlusProfile.armyFood` is 12 on Easy), so 1.75 × `attackFood` is above what an
+ * own production (`PlusProfile.armyFood` is 8 on Easy), so 1.75 × `attackFood` is above what an
  * easy computer may ever own and would read as "never attack the undead at all". Four fifths of
  * the ceiling is the most that can be asked of a difficulty without asking for the impossible —
  * a wave is measured in the food that would actually LEAVE, and the wounded are not in it.
@@ -1852,6 +1852,13 @@ interface Brain {
    *  standing outside a camp with no wand asks the belt the same question every army pass, and
    *  one WITH a wand pops a fresh double every few seconds instead of a vanguard. */
   vanguardDone: boolean;
+  /** The one opponent of a 1v1, -1 in any other game, and undefined until first asked — the
+   *  seat the two 1v1 concession terms compare against (`duelFoe`). */
+  duelFoe: number | undefined;
+  /** Each duellist's FIRST hero, by TYPE (a revived hero is a new sim id, and a melee player
+   *  cannot own two of one type): ours and the 1v1 opponent's, noted once each on the manners
+   *  pass (`noteFirstHeroes`). What `DESPAIR.firstHeroBehind` compares. */
+  firstHero: Map<number, string>;
   concededAt: number;
   gone: boolean;
 }
@@ -2036,6 +2043,8 @@ export class ComputerPlusAi {
       creepLevel: 0,
       vanguardUntil: 0,
       vanguardDone: false,
+      duelFoe: undefined,
+      firstHero: new Map(),
       concededAt: -1,
       gone: false,
     });
@@ -5442,6 +5451,9 @@ export class ComputerPlusAi {
     // The TEAM game — after the concession check, so a computer that has already said gg does not
     // then announce a build or promise to come and help (plus/teamchat.ts).
     this.teamPass(b);
+    // …and the 1v1's first heroes, from the opening on: `standing` is not asked before
+    // `CONCEDE_NOT_BEFORE`, and by then a second hero may be standing beside the first.
+    this.noteFirstHeroes(b);
     // …and the one concession that is not a reading of the position at all — see `teamCollapsed`.
     if (this.teamCollapsed(b)) return void this.concede(b);
     if (b.clock < CONCEDE_NOT_BEFORE) return; // nothing is decided this early — see the constant
@@ -6308,6 +6320,73 @@ export class ComputerPlusAi {
       // The same two lists `teamCollapsed` reads, through the same helper — so the weight and
       // the bar can never disagree about who is still playing. 0 on a 1v1 and a free-for-all.
       teamGone: goneShare(b.team, b.allies),
+      ...this.duelStanding(b),
     };
+  }
+
+  /**
+   * The one opponent of a 1v1 — -1 for a team game or a free-for-all. Off the LOBBY's seats
+   * (`startLocations`, every playing seat), and settled once: who is in the match does not
+   * change, and a 1v1 whose opponent has left is over anyway.
+   */
+  private duelFoe(b: Brain): number {
+    if (b.duelFoe === undefined) {
+      const me = b.ai.player;
+      const others = [...new Set(this.host.startLocations().map((s) => s.player))].filter((p) => p !== me);
+      b.duelFoe = others.length === 1 && !this.host.coAllied(me, others[0]) ? others[0] : -1;
+    }
+    return b.duelFoe;
+  }
+
+  /** Note each duellist's first hero the first pass one is on the field — the lowest sim id,
+   *  which is the order heroes are hired in (`SimWorld.fallenHeroesOf`). */
+  private noteFirstHeroes(b: Brain): void {
+    const foe = this.duelFoe(b);
+    if (foe < 0) return;
+    for (const p of [b.ai.player, foe]) {
+      if (b.firstHero.has(p)) continue;
+      let first: SimUnit | null = null;
+      for (const u of this.host.world.units.values()) {
+        if (u.owner !== p || !u.isHero || u.hp <= 0 || isCopy(u)) continue;
+        if (!first || u.id < first.id) first = u;
+      }
+      const fallen = this.host.world.fallenHeroesOf(p)[0];
+      if (fallen && (!first || fallen.id < first.id)) b.firstHero.set(p, fallen.typeId);
+      else if (first) b.firstHero.set(p, first.typeId);
+    }
+  }
+
+  /** A hero TYPE's level for a player — on the field, or lying on the altar roster. 0 if the
+   *  player has none of it. */
+  private heroLevel(player: number, typeId: string): number {
+    let level = 0;
+    for (const u of this.host.world.units.values()) {
+      if (u.owner === player && u.typeId === typeId && u.isHero && u.hp > 0 && !isCopy(u)) level = Math.max(level, u.level);
+    }
+    for (const f of this.host.world.fallenHeroesOf(player)) if (f.typeId === typeId) level = Math.max(level, f.level);
+    return level;
+  }
+
+  /**
+   * The two 1v1 terms of the weighed concession (plus/chatter.ts `DESPAIR.heroDeathsBehind` and
+   * `firstHeroBehind`): how many more hero deaths we have had than the opponent, and how many
+   * levels their first hero stands above ours. Both 0 outside a 1v1, and the level gap 0 until
+   * both first heroes are known.
+   *
+   * Read off the whole board rather than through the fog, like `invaders`: it decides nothing
+   * about how the game is PLAYED, only whether to stop playing it — and a 1v1 player knows
+   * perfectly well how often their own hero has died and roughly how far the other one is
+   * ahead, from every fight they lost.
+   */
+  private duelStanding(b: Brain): { heroDeathLead: number; firstHeroGap: number } {
+    const foe = this.duelFoe(b);
+    if (foe < 0) return { heroDeathLead: 0, firstHeroGap: 0 };
+    const me = b.ai.player;
+    const deaths = this.host.world.heroDeaths;
+    const heroDeathLead = (deaths.get(me) ?? 0) - (deaths.get(foe) ?? 0);
+    const mine = b.firstHero.get(me);
+    const theirs = b.firstHero.get(foe);
+    const firstHeroGap = mine && theirs ? this.heroLevel(foe, theirs) - this.heroLevel(me, mine) : 0;
+    return { heroDeathLead, firstHeroGap };
   }
 }

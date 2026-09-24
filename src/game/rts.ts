@@ -6076,7 +6076,13 @@ export class RtsController {
     // An ENABLED weapon, as the building card asks: a unit type whose `Attacks Enabled`
     // (`uaen`) is none still carries its base's weapon rows, switched off — Test of Balance's
     // invisible Dummy is a Peasant with both of the Peasant's attacks disabled.
-    for (const id of this.selected) if (this.sim.units.get(id)?.weapons.some((w) => w.enabled && w.showUI)) return true;
+    // A WARD is armed and still has no Attack (nor the Stop beside it): UnitBalance `type` =
+    // "Ward" is the classification whose units take no orders from the card — the Serpent Ward
+    // (osp1..4, showUI1 = 1 like any tower) only ever acquires its own targets in the game.
+    for (const id of this.selected) {
+      const u = this.sim.units.get(id);
+      if (u && !u.ward && u.weapons.some((w) => w.enabled && w.showUI)) return true;
+    }
     return false;
   }
 

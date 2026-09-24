@@ -105,6 +105,14 @@ export interface Standing {
   /** What SHARE of the team we started with is no longer playing — `goneShare`, the same
    *  measurement `teamLost` is a bar on. 0 on a 1v1 or a free-for-all, which have no team. */
   teamGone: number;
+  /** A 1v1 ONLY (0 anywhere else): how many more times our heroes have died this match than the
+   *  opponent's have — every death, the revived ones included. What `DESPAIR.heroDeathsBehind`
+   *  is a bar on (`HERO_DEATHS_BEHIND`). */
+  heroDeathLead: number;
+  /** A 1v1 ONLY (0 anywhere else): how many levels the opponent's FIRST hero stands above ours —
+   *  negative when ours is ahead. What `DESPAIR.firstHeroBehind` is a bar on
+   *  (`FIRST_HERO_LEVELS_BEHIND`). */
+  firstHeroGap: number;
 }
 
 /**
@@ -219,6 +227,15 @@ export function teamLost(team: readonly number[], allies: readonly number[]): bo
  *    three, a 6v6 down two of five. A 1v1 and a free-for-all have no team and score 0.
  *    "Gone" is nothing on the map, so a teammate who was WIPED OUT counts alongside one who
  *    left: either way there is nobody there to fight beside (see `teamLost`).
+ *  • `heroDeathsBehind` / `firstHeroBehind` — the two 1v1 readings, asked for by the developer in
+ *    as many words: our heroes have died `HERO_DEATHS_BEHIND` (2) or more times more than the
+ *    opponent's, and the opponent's FIRST hero is `FIRST_HERO_LEVELS_BEHIND` (2) or more levels
+ *    above ours. Both are the read a 1v1 player makes of a fight that has been going the other
+ *    way — the first hero is the one each side has been levelling since the opening, so two
+ *    levels between them is the fights they have won — and neither says anything about the
+ *    base, which is why each is only a quarter of a defeat: together they are half, the weight
+ *    of a hall, and they tip a position only beside the terms that read the board. Only a 1v1,
+ *    because in a team game the comparison has no one opponent to be made against.
  *
  * None of these numbers are Warcraft III's — nothing in the install describes an AI that resigns
  * (docs/computer-plus.md) — so they are OURS, and `tools/ai-plus-concede-test.cjs` pins them.
@@ -234,7 +251,16 @@ export const DESPAIR = {
   workersShort: 0.2,
   broke: 0.15,
   teamGone: 0.7,
+  heroDeathsBehind: 0.25,
+  firstHeroBehind: 0.25,
 } as const;
+
+/** How many MORE hero deaths than the opponent's make `DESPAIR.heroDeathsBehind` (1v1 only). */
+export const HERO_DEATHS_BEHIND = 2;
+
+/** How many levels the opponent's first hero must stand above ours for
+ *  `DESPAIR.firstHeroBehind` (1v1 only). */
+export const FIRST_HERO_LEVELS_BEHIND = 2;
 
 /** The worker count `DESPAIR.workersShort` measures the shortfall against — a working melee
  *  economy, and above every difficulty's own target but Insane's 14 (`PlusProfile.workers`). */
@@ -264,6 +290,8 @@ export function despair(s: Standing, hallCost: number): number {
   }
   if (s.gold < hallCost) d += DESPAIR.broke;
   d += DESPAIR.teamGone * s.teamGone;
+  if (s.heroDeathLead >= HERO_DEATHS_BEHIND) d += DESPAIR.heroDeathsBehind;
+  if (s.firstHeroGap >= FIRST_HERO_LEVELS_BEHIND) d += DESPAIR.firstHeroBehind;
   return d;
 }
 

@@ -3357,6 +3357,10 @@ export class SimWorld {
   readonly units = new Map<number, SimUnit>();
   /** Every hero of every player that is currently dead and revivable (see FallenHero). */
   readonly fallen = new Map<number, FallenHero>();
+  /** How many times each player's heroes have died this match — every filing on `fallen`,
+   *  which a revival strikes off and this does not. Read by Computer+'s 1v1 concession
+   *  (plus/chatter.ts `DESPAIR.heroDeathsBehind`). */
+  readonly heroDeaths = new Map<number, number>();
   readonly mines = new Map<number, SimMine>();
   readonly trees = new Map<number, SimTree>();
   readonly projectiles = new Map<number, SimProjectile>();
@@ -4905,6 +4909,7 @@ export class SimWorld {
    */
   private recordFallenHero(u: SimUnit): void {
     if (u.owner < 0 || u.isCreep || u.neutralPassive || u.isIllusion) return;
+    this.heroDeaths.set(u.owner, (this.heroDeaths.get(u.owner) ?? 0) + 1);
     this.fallen.set(u.id, {
       id: u.id, owner: u.owner, team: u.team, typeId: u.typeId, properName: u.properName,
       level: u.level, xp: u.xp, skillPoints: u.skillPoints,
@@ -8046,9 +8051,15 @@ export class SimWorld {
     // explicit cap outranks the rtma tech-availability — so the swap must override it here.
     this.tech.setMaxAllowed(owner, swap.to, -1);
     this.tech.setMaxAllowed(owner, swap.from, 0);
-    // Morph every existing unit of the withdrawn type in place.
+    // Morph every existing unit of the withdrawn type in place — and every one still in a
+    // QUEUE, which is a unit too: a Headhunter queued (or half-trained) before the upgrade
+    // finished walks out of the Barracks a Berserker. The job keeps its clock, its paid food
+    // and its refund; the two rows cost the same (UnitBalance: ohun and otbk are both
+    // 140/20, 2 food, 20 s), so a cancel after the swap still refunds what was paid.
     for (const u of this.units.values()) {
-      if (u.owner === owner && u.typeId === swap.from && u.hp > 0) this.morphUnit(u, swap.to);
+      if (u.owner !== owner || u.hp <= 0) continue;
+      if (u.typeId === swap.from) this.morphUnit(u, swap.to);
+      for (const job of u.building?.queue ?? []) if (job.kind === "unit" && job.unitId === swap.from) job.unitId = swap.to;
     }
   }
 

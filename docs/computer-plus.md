@@ -1159,7 +1159,7 @@ tier and stays where it was.
 
 `armyFood` is the single most load-bearing number, and *where* it is applied is the whole point.
 It is a budget spent down the race's unit mix inside `buildPlan`, so an easy computer **asks for
-twelve food of soldiers and then stops asking**. Capping the size of the *wave* instead would
+eight food of soldiers and then stops asking**. Capping the size of the *wave* instead would
 have produced an AI that builds twenty Grunts, attacks with six, and still has twenty Grunts
 standing when you walk into its base — which is exactly what "must NOT mass armies at all" rules
 out.
@@ -1719,7 +1719,7 @@ ladder above is bought with.
 
 `techBuildings` gated another copy of the main producer on `armyFood >= 40 && gold > 800`, and the
 first half is **above the army ceiling of two of the three difficulties** (`PlusProfile.armyFood`
-is 12 on Easy and 30 on Normal) — so neither could ever build one. It was circular besides: one
+is 8 on Easy and 30 on Normal) — so neither could ever build one. It was circular besides: one
 building trains one thing at a time (`AiPlayer.trainUnits`), so a single Barracks becomes at most
 a Grunt every thirty seconds however rich the player is, and "get a big army, then buy a second
 Barracks" says "buy one once you no longer need one". Measured headless
@@ -3553,6 +3553,8 @@ whole defeat) is the line.
 | `workersShort` | ≤0.2 | the economy — see below, the one term that is not a boolean |
 | `broke` | 0.15 | not the gold for a hall, which is what makes losing one permanent |
 | `teamGone` | ≤0.7 | × the share of the starting team no longer playing — see below |
+| `heroDeathsBehind` | 0.25 | **1v1 only:** our heroes have died `HERO_DEATHS_BEHIND` (2) or more times more than theirs |
+| `firstHeroBehind` | 0.25 | **1v1 only:** their first hero is `FIRST_HERO_LEVELS_BEHIND` (2) or more levels above ours |
 
 **The two heavy ones are the two that were asked to weigh.** A player with no hero left alive and
 a player with no hall left standing is each halfway out of the game, and together they are out of
@@ -3605,6 +3607,19 @@ food and are gone in a minute anyway. It is a step and not a ramp like the worke
 short a range to grade — and like every term it is read only past `CONCEDE_NOT_BEFORE` and cannot
 carry a concession alone. The five clauses still ask `armyFood === 0`: each of them is a whole
 defeat, and "no army at all" is what they mean.
+
+**The two 1v1 terms read the FIGHT, not the board** — the developer's own ask, and the read a
+1v1 player makes of a match whose fights have been going the other way. Hero deaths are counted for
+the whole match (`SimWorld.heroDeaths`, one per filing on the altar roster, so a revived death
+still counts and a Reincarnation or a popped illusion does not), and the first hero is noted by
+TYPE on the manners pass from the opening on (`Brain.firstHero` — a revived hero is a new sim id),
+its level read off the field or the altar roster. The opponent is the one other seat in the
+lobby's start locations, and in any other game both terms score 0. Each is a quarter of a defeat,
+so they are half together — a hall's weight — and they tip a position only beside the terms that
+read the base: two deaths behind and a hero two levels down, with the army gone and a raid in the
+town, is 1.0 and says gg; the same fight record behind a standing army plays on. They also make
+the light half's "essentially all six" ceiling a 1v1 exception: that is deliberate, since both
+are only ever true of a match being lost.
 
 **`teamGone` is the only term that is not about this player's own board.** A teammate who quits
 or concedes is one fewer army on our side of a map drawn for two of them, and that makes the game

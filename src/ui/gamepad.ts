@@ -15,9 +15,9 @@ import { anyModalOpen } from "./modal";
 //     events (`pointerover`/`enter`/`leave`/`out`) a moving mouse would have produced. So a
 //     click on the world selects through `selectAt`, a click on a glue button fires its
 //     handler, and a held X drags the selection box.
-//   · the buttons that have a KEY are that key: O is Escape, Triangle is Space ("Center on
-//     last notification"), L1 is "-", R2 is F8, Start is F10 (Escape during a cinematic, which
-//     skips it) and Select is F9.
+//   · the buttons that have a KEY are that key: O is Escape, Triangle is Tab (the next
+//     subgroup of the selection), R2 is "-", L1 is F8, Start is F10 (Escape during a cinematic,
+//     which skips it) and Select is F9.
 //   · the rest are match actions with no key at all (attack-move at the cursor, a jump to the
 //     selection, the building cycle, the command-card selector), and go through a
 //     `GamepadMatchHost` the running match installs — `render/mapViewer.ts`.
@@ -376,12 +376,12 @@ function press(button: number, now: number): void {
       holdKey(button, "Escape", "Escape");
       return;
     case B.triangle:
-      holdKey(button, " ", "Space");
-      return;
-    case B.l1:
-      holdKey(button, "-", "Minus");
+      holdKey(button, "Tab", "Tab");
       return;
     case B.r2:
+      holdKey(button, "-", "Minus");
+      return;
+    case B.l1:
       holdKey(button, "F8", "F8");
       return;
     case B.start:
@@ -577,6 +577,8 @@ function placeFocus(): void {
   if (!focusBox || !focusEl) return;
   const r = focusEl.getBoundingClientRect();
   focusAt = centre(r);
+  // A control scaled or folded to nothing by its screen's animation is not there to be framed.
+  focusBox.hidden = r.width < 2 || r.height < 2;
   focusBox.style.transform = `translate(${Math.round(r.left)}px, ${Math.round(r.top)}px)`;
   focusBox.style.width = `${Math.round(r.width)}px`;
   focusBox.style.height = `${Math.round(r.height)}px`;
@@ -611,7 +613,9 @@ function syncFocus(now: number): void {
   }
   const next = nearest(focusables(), focusAt[0], focusAt[1]);
   if (next) setFocus(next);
-  else if (focusBox) focusBox.style.width = "0px"; // nothing to stand on yet (mid-transition)
+  // Nothing to stand on yet (mid-transition): the box is put away rather than shrunk — a box
+  // with no width still draws its glow, as a gold line down the middle of the screen.
+  else if (focusBox) focusBox.hidden = true;
 }
 
 // --- dropdowns ------------------------------------------------------------------------------
@@ -689,7 +693,7 @@ function stick(x: number, y: number): [number, number] {
 
 // --- keys -------------------------------------------------------------------------------
 
-/** Press a key for as long as the pad button is held — so a held L1 after a double tap rides
+/** Press a key for as long as the pad button is held — so a held R2 after a double tap rides
  *  the army exactly as a held "-" does. Dispatched at the focused element, like a real key. */
 function holdKey(button: number, key: string, code: string): void {
   const target = document.activeElement ?? document.body;

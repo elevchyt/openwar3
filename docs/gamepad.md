@@ -12,17 +12,17 @@ the input the mouse or keyboard would have given and goes through the same doors
 | --- | --- | --- |
 | left stick | moves the cursor | a drawn virtual cursor + synthetic pointer events (below) |
 | left stick press | centre on the selection | `GamepadMatchHost.jumpToSelection` |
-| right stick | pans the camera, 360° | `gamepadPan()`, read by `updateCamera` beside the arrow keys |
+| right stick | pans the camera, 360° | `gamepadPan()`, read by `updateCamera` beside the arrow keys, at `PAD_PAN_SCALE` (¾) of their speed |
 | right stick press | nothing yet | — |
 | X | left click (or presses the card selector's button) | pointer/mouse events at the cursor |
 | R1 | right click | pointer/mouse events, button 2 |
 | O | cancel | the **Escape** key |
 | Square | attack-move at the cursor, no reticle | `padAttackMove`: the card's own Attack, armed and aimed in one step |
-| Triangle | centre on the last notification | the **Space** key |
+| Triangle | the next subgroup of the selection | the **Tab** key |
 | D-pad | moves the command-card selector | `GameHud.padCardMove` |
-| L1 | select the whole army | the **"-"** key (so double-tap and hold-to-follow come with it) |
+| L1 | select the next idle worker | the **F8** key |
 | L2 | cycle through your buildings | `RtsController.cycleBuilding` |
-| R2 | select the next idle worker | the **F8** key |
+| R2 | select the whole army | the **"-"** key (so double-tap and hold-to-follow come with it) |
 | Start | F10 menu (pairs an unpaired pad); skips a cinematic | the **F10** key — **Escape** while a cinematic is up (`inCinematic`) |
 | Select | Quest Log | the **F9** key |
 
@@ -163,12 +163,12 @@ buildings went up in. Every group is read off the data (`RtsController.buildingR
 The tier comes from `Requires`, through the hall chain and the `TWN2`/`TWN3` pseudo-techs.
 Farms, towers, Moon Wells and burrows are not visited.
 
-## Notifications (Triangle / Space)
+## Notifications (Space)
 
 The Space ring (`noteSpacebarPoint`, eight points, newest first) already held minimap pings,
 which include every raid on your base, and the script's `SetCameraQuickPosition`. Issue #162
 adds your **completions**: a building up, a unit trained, a research or a structure upgrade
-finished (`noteCompletion`). Triangle is Space, so the keyboard walks the same ring.
+finished (`noteCompletion`). Triangle was Space once; it is Tab now, and the ring is the keyboard's.
 
 ## Testing without a pad
 

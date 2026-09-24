@@ -194,6 +194,9 @@ const SKIP_FADE_IN = 0.5;
  *  Critically damped, so the lag it costs a group moving at speed `v` is `2·τ·v`: 45 ms
  *  trails a running hero by ~27 units, a fifth of a terrain tile. */
 const FOLLOW_TAU_MS = 45;
+/** The gamepad right stick's pan speed at full tilt, as a share of a held arrow key's. OURS
+ *  (issue #162 — WC3 has no controller): a bit slower than the key, not much. */
+const PAD_PAN_SCALE = 0.75;
 
 /** A match seed for a game nobody specified one for (single player). Math.random is fine
  *  HERE and nowhere near the sim: this picks the seed, it doesn't roll off it. The Park-
@@ -7868,8 +7871,8 @@ export class MapViewerScene {
    * A completion is a notification too: a building up, a unit trained, a research or a
    * structure upgrade finished. Each announces itself (the chime and the "Completed:" line)
    * without naming WHERE, and the whole point of the ring is to take you there — issue #162
-   * asks exactly this of the gamepad's Triangle, and Triangle is Space, so the keyboard walks
-   * the same ring. Placed at the building, which is what finished.
+   * asked this of the gamepad's Triangle (which has since become Tab), and Space walks the
+   * ring. Placed at the building, which is what finished.
    */
   private noteCompletion(u: { x: number; y: number } | undefined): void {
     if (u) this.noteSpacebarPoint(u.x, u.y);
@@ -7893,7 +7896,7 @@ export class MapViewerScene {
    *  for why the point has to be on a body rather than in the middle of the group. */
   /**
    * The match's side of the gamepad (issue #162, ui/gamepad.ts): the pad actions that have no
-   * key to be pressed through. Everything a pad button CAN say as a key (Escape, Space, "-",
+   * key to be pressed through. Everything a pad button CAN say as a key (Escape, Tab, "-",
    * F8, F9, F10) or as a click is sent as one, and reaches this scene by its ordinary doors.
    */
   private installGamepad(): void {
@@ -14234,11 +14237,14 @@ export class MapViewerScene {
       // Driving the camera with the keys ends a Ctrl+C lock (as every other hand on the
       // camera does — see `rideLocked`).
       // The gamepad's RIGHT STICK is the same four keys in any direction and at any strength
-      // (issue #162): each axis scales the key speed, so full tilt pans exactly as fast as a
-      // held arrow key and a diagonal is a true diagonal. Stick-down is +y, the screen's down.
+      // (issue #162): each axis scales the key speed, and a diagonal is a true diagonal.
+      // Stick-down is +y, the screen's down. Full tilt pans at `PAD_PAN_SCALE` of a held arrow
+      // key — ours, not the game's (WC3 has no pad): at the full key speed a thumb, which cannot
+      // tap a stick the way it taps a key, overshot what it was panning to.
       const [padX, padY] = gamepadPan();
-      if (padX) this.pan(right, keySpeed * padX);
-      if (padY) this.pan(fwd, -keySpeed * padY);
+      const padSpeed = keySpeed * PAD_PAN_SCALE;
+      if (padX) this.pan(right, padSpeed * padX);
+      if (padY) this.pan(fwd, -padSpeed * padY);
       if (panUp || panDown || panRight || panLeft || padX || padY) this.releaseCameraRide();
       this.updateEdgeScroll(fwd, right, speed); // pan when the cursor rests at a screen edge
     } else {
