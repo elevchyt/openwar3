@@ -171,6 +171,69 @@ export const UNIT_FIELD_FAMILIES = [
   { convert: "ConvertUnitStringField", type: "unitstringfield", fields: UNIT_STRING_FIELDS },
 ] as const;
 
+/**
+ * The ABILITY fields (`abilityintegerlevelfield` and its seven siblings — the 1.31 ability-field
+ * API, which reads and rewrites ONE unit's or ONE item's ability; natives/abilityFields.ts).
+ *
+ * Unlike the unit fields these carry no index of ours: each one's value is its column's own id
+ * in `Units\AbilityMetaData.slk` as a rawcode, because that id is how the engine already routes a
+ * field — the World Editor writes it into a map's w3a for the same column, and
+ * data/objectData.ts writeAbilityField takes it straight through applyAbilityMods. The name's
+ * suffix IS that id where the name has one (`_REJ1` → `Rej1`); where it has none the id is the
+ * meta row whose column and `useSpecific` abilities match what the maps apply it to (a Claws of
+ * Attack's `Iatt`, a Sobi Mask's `Imrp`, `acdn` for the "Cool" column).
+ *
+ * Only what a map in the corpus names is declared — a name we cannot check against anything is
+ * better left undeclared than declared wrongly (`tools/jass-ability-fields-test.cjs` asserts every
+ * id is a real meta row).
+ */
+export interface AbilityFieldDef {
+  name: string;
+  /** Which of the eight families — the JASS type and its `Convert…` native. */
+  family: "boolean" | "string" | "integerlevel" | "reallevel" | "stringlevel";
+  /** The `AbilityMetaData.slk` id. */
+  id: string;
+}
+
+export const ABILITY_FAMILIES = {
+  boolean: { type: "abilitybooleanfield", convert: "ConvertAbilityBooleanField" },
+  string: { type: "abilitystringfield", convert: "ConvertAbilityStringField" },
+  integerlevel: { type: "abilityintegerlevelfield", convert: "ConvertAbilityIntegerLevelField" },
+  reallevel: { type: "abilityreallevelfield", convert: "ConvertAbilityRealLevelField" },
+  stringlevel: { type: "abilitystringlevelfield", convert: "ConvertAbilityStringLevelField" },
+} as const;
+
+export const ABILITY_FIELDS: ReadonlyArray<AbilityFieldDef> = [
+  // "Stats - Item Ability" / "Stats - Hero Ability" — AbilityMetaData `aite` / `aher`.
+  { name: "ABILITY_BF_ITEM_ABILITY", family: "boolean", id: "aite" },
+  // The item stat columns (Test of Balance's stacking items rewrite these per charge).
+  { name: "ABILITY_ILF_ATTACK_BONUS", family: "integerlevel", id: "Iatt" },
+  { name: "ABILITY_ILF_AGILITY_BONUS", family: "integerlevel", id: "Iagi" },
+  { name: "ABILITY_ILF_INTELLIGENCE_BONUS", family: "integerlevel", id: "Iint" },
+  { name: "ABILITY_ILF_STRENGTH_BONUS_ISTR", family: "integerlevel", id: "Istr" },
+  { name: "ABILITY_ILF_DEFENSE_BONUS_IDEF", family: "integerlevel", id: "Idef" },
+  { name: "ABILITY_ILF_HIT_POINTS_GAINED_IHPG", family: "integerlevel", id: "Ihpg" },
+  { name: "ABILITY_ILF_MANA_POINTS_GAINED_IMPG", family: "integerlevel", id: "Impg" },
+  { name: "ABILITY_RLF_ATTACK_SPEED_INCREASE_ISX1", family: "reallevel", id: "Isx1" },
+  { name: "ABILITY_RLF_MANA_REGENERATION_BONUS_AS_FRACTION_OF_NORMAL", family: "reallevel", id: "Imrp" },
+  { name: "ABILITY_RLF_ATTACK_DAMAGE_INCREASE_CAC1", family: "reallevel", id: "Cac1" },
+  // Chain Lightning's two (an item's `AIcl` is `code = AOcl`, whose rows these are).
+  { name: "ABILITY_RLF_DAMAGE_PER_TARGET_OCL1", family: "reallevel", id: "Ocl1" },
+  { name: "ABILITY_ILF_NUMBER_OF_TARGETS_HIT", family: "integerlevel", id: "Ocl2" },
+  // Rejuvenation's heal (Test of Balance's pillar grows it each wave).
+  { name: "ABILITY_RLF_HIT_POINTS_GAINED_REJ1", family: "reallevel", id: "Rej1" },
+  // The generic per-level columns.
+  { name: "ABILITY_RLF_COOLDOWN", family: "reallevel", id: "acdn" },
+  { name: "ABILITY_SLF_TOOLTIP_NORMAL_EXTENDED", family: "stringlevel", id: "aub1" },
+];
+
+/** A metadata id as the rawcode integer a `Convert…Field(n)` carries (and back, in the native). */
+function rawcode(id: string): number {
+  let v = 0;
+  for (let i = 0; i < 4; i++) v = (v * 256 + id.charCodeAt(i)) | 0;
+  return v;
+}
+
 /** The JASS `globals` block that declares every constant above — generated, so the prelude and
  *  the native can never disagree about an index. */
 export function fieldConstantsJass(): string {
@@ -179,6 +242,10 @@ export function fieldConstantsJass(): string {
     for (const [i, f] of family.fields.entries()) {
       lines.push(`    constant ${family.type} ${f.name} = ${family.convert}(${i})`);
     }
+  }
+  for (const f of ABILITY_FIELDS) {
+    const fam = ABILITY_FAMILIES[f.family];
+    lines.push(`    constant ${fam.type} ${f.name} = ${fam.convert}(${rawcode(f.id)}) // '${f.id}'`);
   }
   lines.push("endglobals");
   return lines.join("\n");

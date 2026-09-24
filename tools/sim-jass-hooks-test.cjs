@@ -61,6 +61,12 @@ const EXPECTED = [
   // Pass 9's world half (sim-ability-script-test.cjs). The words and icons are NOT here — they
   // are presentation, composed on RtsController so a GetLocalPlayer block may write them.
   "unitDisableAbility", "unitHideAbility", "unitAbilityCooldownLeft", "endUnitAbilityCooldown", "abilityRankData",
+  // The ability INSTANCES — a unit's own entry or an item's ability, its fields read and written
+  // (the 1.31 ability-field API; jass-ability-fields-test.cjs).
+  "unitHasAbility", "unitAbilityAt", "itemAbilityIds", "abilityField", "setAbilityField",
+  "startUnitAbilityCooldown", "unitAbilityRankData",
+  // SetUnitExploded — the burst and no corpse (SimWorld.kill).
+  "setUnitExploded",
   // UnitApplyTimedLife (pass 6; sim-summon-test.cjs).
   "applyTimedLife",
   "setHeroXp", "setItemCharges", "setItemDroppable", "setItemPosition", "setPlayerTechMaxAllowed",

@@ -591,6 +591,15 @@ export interface MapSetup {
  *  over SimWorld/RtsController; every method is optional so the interpreter runs
  *  headlessly (config-only, or corpus tests) with no engine attached. `typeId` is
  *  the 4-char rawcode string (e.g. "hfoo"); unit ids are our engine's sim ids. */
+/** An ability INSTANCE a script names — a unit's entry (`owner` = sim id) or an item's ability
+ *  (`owner` = the item's entity id). The sim's `AbilityRef`, stated structurally here because the
+ *  interpreter does not import the sim. */
+export interface AbilityInstanceRef {
+  kind: "unit" | "item";
+  owner: number;
+  abilId: string;
+}
+
 export interface EngineHooks {
   createUnit?(player: number, typeId: string, x: number, y: number, facing: number): number;
   /** `StoreUnit` — write a unit down for another chapter (see SimWorld.storeUnitState for
@@ -731,6 +740,24 @@ export interface EngineHooks {
   endUnitAbilityCooldown?(unitId: number, abilityId: string): void;
   /** One rank (0-based) of an ability TYPE's cost and cooldown. */
   abilityRankData?(abilityId: string, rank: number): { cost: number; cooldown: number } | undefined;
+  // --- ability INSTANCES (the 1.31 ability-field API; docs/map-compatibility.md) ---
+  /** SetUnitExploded — the unit bursts when it dies instead of leaving a body. */
+  setUnitExploded?(unitId: number, exploded: boolean): void;
+  /** Does this unit have this ability at all (learned or not)? — `BlzGetUnitAbility`'s null. */
+  unitHasAbility?(unitId: number, abilityId: string): boolean;
+  /** The id of the unit's `index`-th ability (0-based), or undefined past the end. */
+  unitAbilityAt?(unitId: number, index: number): string | undefined;
+  /** The ability ids an item ENTITY carries, in its row's order. */
+  itemAbilityIds?(itemEntity: number): string[];
+  /** One field of an ability instance, by its AbilityMetaData id ('Iatt'); `level` is 1-based. */
+  abilityField?(ref: AbilityInstanceRef, metaId: string, level: number): number | string | boolean | undefined;
+  /** …and its write, into the instance's OWN copy of the row. False when nothing was written. */
+  setAbilityField?(ref: AbilityInstanceRef, metaId: string, level: number, value: string | number): boolean;
+  /** BlzStartUnitAbilityCooldown — this unit's ability goes down for `seconds`. */
+  startUnitAbilityCooldown?(unitId: number, abilityId: string, seconds: number): void;
+  /** One rank (0-based) of a unit's OWN ability — its instance's cost and cooldown, which a
+   *  script may have rewritten (`BlzGetUnitAbilityCooldown`). */
+  unitAbilityRankData?(unitId: number, abilityId: string, rank: number): { cost: number; cooldown: number } | undefined;
   /** An ability type's words and art — PRESENTATION, so the renderer's half (RtsController),
    *  not `simHooks`: a map sets these inside `GetLocalPlayer` blocks. `rank` is 0-based. */
   abilityText?(abilityId: string, rank: number, extended: boolean): string;

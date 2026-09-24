@@ -199,6 +199,16 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     unitAbilityCooldownLeft: (id, abil) => sim.unitAbilityCooldownLeft(id, abil),
     endUnitAbilityCooldown: (id, abil) => sim.endUnitAbilityCooldown(id, abil),
     abilityRankData: (abil, rank) => sim.abilityRankData(abil, rank),
+    // The ability INSTANCES (the 1.31 ability-field API): a unit's own entry or an item's
+    // ability, read and rewritten through the same metadata routing a w3a edit takes.
+    setUnitExploded: (id, exploded) => sim.setUnitExploded(id, exploded),
+    unitHasAbility: (id, abil) => sim.units.get(id)?.abilities.some((a) => a.id === abil) ?? false,
+    unitAbilityAt: (id, index) => sim.units.get(id)?.abilities[index]?.id,
+    itemAbilityIds: (item) => sim.itemAbilityIds(item),
+    abilityField: (ref, metaId, level) => sim.abilityInstanceField(ref, metaId, level),
+    setAbilityField: (ref, metaId, level, value) => sim.setAbilityInstanceField(ref, metaId, level, value),
+    startUnitAbilityCooldown: (id, abil, seconds) => sim.startAbilityCooldown(id, abil, seconds),
+    unitAbilityRankData: (id, abil, rank) => sim.unitAbilityRankData(id, abil, rank),
     applyTimedLife: (id, seconds, buffId) => sim.applyTimedLife(id, seconds, buffId),
     setUnitStat: (id, stat, value, slot) =>
       stat === "invulnerable" ? false : sim.setUnitStat(id, stat as Exclude<UnitStat, "invulnerable">, value, slot),

@@ -374,6 +374,13 @@ export function registerWorldNatives(rt: Runtime): void {
   def(rt, "SetUnitAnimation", (c, a) => anim(c, a[0], a[1].k === "string" ? a[1].s : ""));
   def(rt, "QueueUnitAnimation", (c, a) => anim(c, a[0], a[1].k === "string" ? a[1].s : ""));
   def(rt, "ResetUnitAnimation", (c, a) => anim(c, a[0], ""));
+  // SetUnitExploded (common.j 1608) — the unit bursts into its "Art - Special" when it dies and
+  // leaves no corpse (SimWorld.kill). A world fact: nothing can raise what was not left.
+  def(rt, "SetUnitExploded", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.setUnitExploded?.(u.simId, a[1]?.k === "bool" && a[1].b);
+    return JNULL;
+  });
   // AddUnitAnimationProperties — "Add/Remove Unit Animation Tag" (UI\TriggerStrings.txt): the
   // same kind of word a type's Animprops holds, laid on ONE unit by its script (see
   // RtsController.addUnitAnimationProperties). Test of Balance tags its Sacred Pillar with it.

@@ -114,4 +114,16 @@ export function registerFieldNatives(rt: Runtime): void {
   for (const kind of ["ConvertUnitIntegerField", "ConvertUnitRealField", "ConvertUnitBooleanField", "ConvertUnitStringField"]) {
     def(rt, kind, (c, a) => c.rt.enumHandle(kind, asInt(a[0])));
   }
+  // …and every other field family the prelude declares — the weapon, item and ABILITY fields,
+  // whose index is the column's AbilityMetaData id as a rawcode (compat/blzFields.ts
+  // ABILITY_FIELDS; natives/abilityFields.ts reads it back). Unregistered, each of their
+  // constants was null and every ability-field write asked about no field at all.
+  for (const kind of [
+    "ConvertUnitWeaponIntegerField", "ConvertUnitWeaponRealField", "ConvertUnitWeaponBooleanField", "ConvertUnitWeaponStringField",
+    "ConvertItemIntegerField", "ConvertItemRealField", "ConvertItemBooleanField", "ConvertItemStringField",
+    "ConvertAbilityIntegerField", "ConvertAbilityRealField", "ConvertAbilityBooleanField", "ConvertAbilityStringField",
+    "ConvertAbilityIntegerLevelField", "ConvertAbilityRealLevelField", "ConvertAbilityBooleanLevelField", "ConvertAbilityStringLevelField",
+  ]) {
+    def(rt, kind, (c, a) => c.rt.enumHandle(kind, asInt(a[0])));
+  }
 }

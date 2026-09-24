@@ -286,7 +286,48 @@ native SetThematicMusicVolumeBJ takes integer volume returns nothing
 
 // --- the minimap terrain texture (1.31) -------------------------------------
 native BlzChangeMinimapTerrainTex takes string texFile returns boolean
+
+// --- tooltip tags (1.32) -----------------------------------------------------
+// Documented nowhere beyond its signature; natives/abilityFields.ts says what we do.
+constant native ParseTags takes string taggedString returns string
+
+// --- the cinematic volume groups (1.32) -------------------------------------
+// Channels for Reforged's in-engine cinematic sound. This engine's mixer has the
+// eight 1.30.4 groups and nothing else, so these are numbered past them and the
+// volume natives ignore them — muting a channel that carries no sound.
+globals
+    constant volumegroup SOUND_VOLUMEGROUP_CINEMATIC_GENERAL         = ConvertVolumeGroup(8)
+    constant volumegroup SOUND_VOLUMEGROUP_CINEMATIC_AMBIENT         = ConvertVolumeGroup(9)
+    constant volumegroup SOUND_VOLUMEGROUP_CINEMATIC_MUSIC           = ConvertVolumeGroup(10)
+    constant volumegroup SOUND_VOLUMEGROUP_CINEMATIC_DIALOGUE        = ConvertVolumeGroup(11)
+    constant volumegroup SOUND_VOLUMEGROUP_CINEMATIC_SOUND_EFFECTS_1 = ConvertVolumeGroup(12)
+    constant volumegroup SOUND_VOLUMEGROUP_CINEMATIC_SOUND_EFFECTS_2 = ConvertVolumeGroup(13)
+    constant volumegroup SOUND_VOLUMEGROUP_CINEMATIC_SOUND_EFFECTS_3 = ConvertVolumeGroup(14)
+endglobals
 `;
+
+/**
+ * The GUI's FIELD actions — `BlzSetUnitRealFieldBJ(u, UNIT_RF_TURN_RATE, 1.0)` and the rest. A
+ * 1.31+ editor writes these for its "Unit - Set Unit Real Field" family of actions and a later
+ * `blizzard.j` defines them; 1.30.4's has none of them, so a map calling one was an unknown
+ * function. Each is nothing but its native with the same arguments, returning nothing — the
+ * argument order is the maps' own (`BlzSetAbilityIntegerLevelFieldBJ(ability, field, level,
+ * value)` in Test of Balance) — so they are written here, as OURS, after every globals block.
+ */
+function fieldActionsJass(): string {
+  const out: string[] = [];
+  const fn = (name: string, params: string, call: string) =>
+    out.push(`function ${name} takes ${params} returns nothing\n    call ${call}\nendfunction`);
+  for (const [T, t] of [["Real", "real"], ["Integer", "integer"], ["Boolean", "boolean"], ["String", "string"]] as const) {
+    fn(`BlzSetUnit${T}FieldBJ`, `unit whichUnit, unit${t}field whichField, ${t} value`, `BlzSetUnit${T}Field(whichUnit, whichField, value)`);
+    fn(`BlzSetUnitWeapon${T}FieldBJ`, `unit whichUnit, unitweapon${t}field whichField, integer index, ${t} value`, `BlzSetUnitWeapon${T}Field(whichUnit, whichField, index, value)`);
+    fn(`BlzSetItem${T}FieldBJ`, `item whichItem, item${t}field whichField, ${t} value`, `BlzSetItem${T}Field(whichItem, whichField, value)`);
+    fn(`BlzSetAbility${T}FieldBJ`, `ability whichAbility, ability${t}field whichField, ${t} value`, `BlzSetAbility${T}Field(whichAbility, whichField, value)`);
+    fn(`BlzSetAbility${T}LevelFieldBJ`, `ability whichAbility, ability${t}levelfield whichField, integer level, ${t} value`, `BlzSetAbility${T}LevelField(whichAbility, whichField, level, value)`);
+  }
+  return out.join("\n");
+}
+
 
 /**
  * The prelude, as JASS source: the hand-written declarations above plus the generated
@@ -296,4 +337,4 @@ native BlzChangeMinimapTerrainTex takes string texFile returns boolean
  * one table, and an index typed twice is an index that eventually differs. Appended last, so a
  * `globals` block never lands in the middle of the type and native declarations above it.
  */
-export const COMPAT_PRELUDE = `${PRELUDE_BODY}\n${fieldConstantsJass()}\n`;
+export const COMPAT_PRELUDE = `${PRELUDE_BODY}\n${fieldConstantsJass()}\n${fieldActionsJass()}\n`;

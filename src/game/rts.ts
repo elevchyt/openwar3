@@ -4934,6 +4934,13 @@ export class RtsController {
    *  (flesh → bone) in place until it's fully removed (see tickCorpses). */
   private onDeath(simId: number): void {
     const e = this.byId.get(simId);
+    // An EXPLODED death (SetUnitExploded) leaves nothing to animate: the sim has already put the
+    // unit's "Art - Special" burst where it stood, and the body simply goes.
+    if (this.sim.diedExploded(simId)) {
+      if (e) this.dropEntry(e);
+      this.animTags.delete(simId);
+      return;
+    }
     if (!e) return;
     // A destructible does not die like a unit, and its body is not ours to bury (see
     // Entry.borrowedBody). mapViewer's `killDestructible` is already playing the model's own

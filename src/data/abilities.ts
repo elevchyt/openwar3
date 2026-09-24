@@ -947,6 +947,11 @@ export class AbilityRegistry {
      *  DataB is 0. */
     private buffs = new Map<string, BuffDef>(),
   ) {}
+  /** `Units\AbilityMetaData.slk` — what each 4-char FIELD id ('Iatt', 'acdn', 'Rej1') is: which
+   *  column, which Data slot. The routing a map's w3a edits go through (objectData.ts
+   *  applyAbilityMods), kept for the run-time twin of those edits: a script writing ONE unit's
+   *  or ONE item's ability field (`BlzSetAbility…Field`, objectData.ts writeAbilityField). */
+  meta: MappedData | null = null;
   /** The persistent models a given buff id hangs on its holder ([] if unknown). */
   buffFx(buffId: string): BuffFx[] {
     return this.buff(buffId)?.fx ?? [];
@@ -1218,7 +1223,10 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       suffix: s ? str(s, "EditorSuffix") : "",
     });
   }
-  return new AbilityRegistry(defs, new Map(), buffs);
+  const reg = new AbilityRegistry(defs, new Map(), buffs);
+  const metaBytes = vfs.rawBytes("Units\\AbilityMetaData.slk");
+  if (metaBytes) reg.meta = new MappedData(new TextDecoder("windows-1252").decode(metaBytes));
+  return reg;
 }
 
 /** Command buttons the ENGINE draws that are not abilities: they have a `[…]` section in

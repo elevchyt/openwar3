@@ -6,6 +6,7 @@ import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, 
 import { BlightGrid } from "./blight";
 import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isCriticalStrikeCode, isRepairCode, normalizeTargetFlags, requiredHeroLevel, KNOWN_ABILITIES, morphFlags, MORPH_FLAG_PERMANENT, MORPH_FLAG_REQUIRES_PAYMENT } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
+import { cloneAbilityDef, readAbilityField, writeAbilityField } from "../data/objectData";
 import { slotMissileArt, autoArmed, type UnitDef, type UnitRegistry } from "../data/units";
 import { type TechRegistry } from "../data/techtree";
 import { RACE_INDEX, workerProfileFor, harvestAbilityOf, type PlayableRace } from "../data/races";
@@ -394,6 +395,14 @@ export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "hold" | "att
 
 /** A learned/innate ability on a unit. `code` is the base ability code (dispatch
  *  key — see data/abilities). `level` 0 = a hero ability not yet learned. */
+/** One ability INSTANCE a script can name (`BlzGetUnitAbility` / `BlzGetItemAbility…`): a unit's
+ *  entry (`owner` = the unit's sim id) or an item's ability (`owner` = the item's entity id). */
+export interface AbilityRef {
+  kind: "unit" | "item";
+  owner: number;
+  abilId: string;
+}
+
 export interface SimAbility {
   id: string; // alias (for tooltip/icon lookup in the registry)
   code: string; // base ability code — spell dispatch key
@@ -413,6 +422,13 @@ export interface SimAbility {
    *  See SimWorld.scriptDisabled for what each one stops. */
   disableCount?: number;
   hideCount?: number;
+  /** THIS unit's own copy of its ability row, made the first time a script writes one of its
+   *  fields (`BlzSetAbility…Field` on `BlzGetUnitAbility` — docs/map-compatibility.md). WC3's
+   *  abilities are INSTANCES: Test of Balance's cooldown rewards shorten one hero's `acdn`, and
+   *  its pillar's heal grows each wave, without touching the type. Read through
+   *  SimWorld.abilityDefOf, never directly; it goes with the entry, so losing the ability loses
+   *  the changes, as in the game. Host state — not on the wire. */
+  def?: AbilityDef;
 }
 
 /** A timed effect on a unit. `kind` is our gameplay category; `group` de-dupes
@@ -1809,6 +1825,8 @@ export interface SimUnit {
   // like any other soldier — which is why the classification, not "can harvest", is
   // the flag to key off.
   isPeon: boolean;
+  /** `SetUnitExploded` — dies in a burst of its "Art - Special" and leaves no corpse. */
+  explodes?: boolean;
   /** "Ward" in UnitBalance.slk's `type` column — the ten planted, immobile gadgets: Serpent
    *  Ward (`osp1`-`osp4`), Healing Ward (`ohwd`), Sentry Ward (`oeye`), Stasis Trap (`otot`),
    *  Watcher Ward (`nwad`), Monster Lure (`nlur`), Goblin Land Mine (`nglm`). They are units
@@ -5928,7 +5946,7 @@ export class SimWorld {
   entangleTarget(caster: SimUnit, def?: AbilityDef): SimMine | null {
     if (!def) {
       const ab = caster.abilities.find((a) => a.code === "Aent" && a.level >= 1);
-      def = ab ? this.abilities?.get(ab.id) : undefined;
+      def = ab ? this.abilityDefOf(ab) : undefined;
       if (!def) return null;
     }
     const range = def.levelData[0]?.castRange || 500;
@@ -5994,7 +6012,7 @@ export class SimWorld {
     const mine = mineId ? this.mines.get(mineId) : undefined;
     if (mineId && !mine) return false;
     const ab = u.abilities.find((a) => a.code === "Aent" && a.level >= 1);
-    const def = ab && this.abilities.get(ab.id);
+    const def = ab && this.abilityDefOf(ab);
     if (!def) return false;
     return this.entangleMine(u, def, mine, true);
   }
@@ -6019,7 +6037,7 @@ export class SimWorld {
     const u = this.units.get(id);
     if (!u || u.hp <= 0 || !this.abilities) return false;
     const ab = u.abilities.find((a) => a.code === "Aent" && a.level >= 1);
-    const def = ab && this.abilities.get(ab.id);
+    const def = ab && this.abilityDefOf(ab);
     if (!def) return false;
     const range = def.levelData[0]?.castRange || 500;
     const body = this.entangleBody(u);
@@ -6166,7 +6184,7 @@ export class SimWorld {
     }
     u.entanglePending = 0;
     const ab = u.abilities.find((a) => a.code === "Aent" && a.level >= 1);
-    const def = ab && this.abilities?.get(ab.id);
+    const def = ab && this.abilityDefOf(ab);
     if (def) this.entangleMine(u, def, mine);
   }
 
@@ -6539,7 +6557,7 @@ export class SimWorld {
       if (u.hp <= 0 || !u.building || this.raising(u)) continue;
       const ab = u.abilities.find((a) => a.code === "Agyd" && a.level >= 1 && this.techMeets(u.owner, a.id));
       if (!ab) continue;
-      const def = this.abilities.get(ab.id);
+      const def = this.abilityDefOf(ab);
       const lvl = def?.levelData[0];
       if (!def || !lvl) continue;
       // A clock at exactly 0 has not been STARTED: the first body comes a full pulse after the
@@ -7558,7 +7576,7 @@ export class SimWorld {
       u.nodeRetries = 0;
       if (u.order === "move") this.stop(u.id); // the errand's own walk is over
       const ab = u.abilities.find((a) => a.code === "Amil" && a.level >= 1);
-      const def = ab && this.abilities?.get(ab.id);
+      const def = ab && this.abilityDefOf(ab);
       if (def) this.morphToggle(u, def); // …and THIS is where the Peasant becomes a Militia
       return;
     }
@@ -7611,7 +7629,7 @@ export class SimWorld {
    */
   private toggleImmolation(u: SimUnit): void {
     const ab = u.abilities.find((a) => a.code === "AEim");
-    const def = ab && this.abilities?.get(ab.id);
+    const def = ab && this.abilityDefOf(ab);
     if (!ab || !def) return;
     if (u.immolation) {
       this.douseImmolation(u);
@@ -7760,7 +7778,7 @@ export class SimWorld {
     if (u.hp <= 0) return;
     const ab = u.abilities.find((a) => a.code === "Amin" && a.level >= 1);
     if (!ab) return;
-    const def = this.abilities?.get(ab.id);
+    const def = this.abilityDefOf(ab);
     const lvl = def?.levelData[Math.min(ab.level, def.levelData.length) - 1];
     if (!def || !lvl) return;
     // HIDE. Laid once and never refreshed — re-applying it every tick would restart the
@@ -7843,7 +7861,7 @@ export class SimWorld {
       u.exhumeLeft = 0;
       return;
     }
-    const def = this.abilities?.get(ab.id);
+    const def = this.abilityDefOf(ab);
     const lvl = def?.levelData[Math.max(0, Math.min(ab.level, def.levelData.length) - 1)];
     const interval = lvl?.duration || 15;
     const body = lvl?.summon || "";
@@ -8993,6 +9011,19 @@ export class SimWorld {
   }
 
   /** Sim ids of units that died since the last drain (renderer plays deaths). */
+  /** Deaths that EXPLODED (`SetUnitExploded`), for the renderer to retire without a death clip
+   *  or a corpse. Consumed by the one question. */
+  private readonly explodedDeaths = new Set<number>();
+  diedExploded(id: number): boolean {
+    return this.explodedDeaths.delete(id);
+  }
+
+  /** `SetUnitExploded` — this unit bursts when it dies instead of falling. */
+  setUnitExploded(id: number, exploded: boolean): void {
+    const u = this.units.get(id);
+    if (u) u.explodes = exploded || undefined;
+  }
+
   drainDeaths(): number[] {
     if (!this.deaths.length) return this.deaths;
     const out = this.deaths;
@@ -11323,7 +11354,7 @@ export class SimWorld {
       const item = this.itemReg.get(held.itemId);
       if (!item) continue;
       for (const abilId of item.abilities) {
-        const def = this.abilities.get(abilId);
+        const def = this.itemAbilityDefOf(held.id, abilId);
         if (!def) continue;
         const d = def.levelData[0]?.data ?? [];
         const val = (i: number) => (d[i] === undefined || Number.isNaN(d[i]) ? 0 : d[i]);
@@ -11889,7 +11920,7 @@ export class SimWorld {
     for (const a of u.abilities) {
       if ((a.code !== "Atru" && a.code !== "Adet" && a.code !== "Adts") || a.level < 1) continue;
       if (!this.techMeets(u.owner, a.id)) continue;
-      const lvl = this.abilities?.get(a.id)?.levelData[Math.max(0, a.level - 1)];
+      const lvl = this.abilityDefOf(a)?.levelData[Math.max(0, a.level - 1)];
       const r = lvl?.castRange;
       if (r !== undefined && !Number.isNaN(r)) u.detectRadius = Math.max(u.detectRadius, r);
     }
@@ -12200,8 +12231,95 @@ export class SimWorld {
     const ab = u.abilities.find((a) => a.code === "Adef" && a.level >= 1 && a.autocastOn);
     if (!ab || !this.abilities) return null;
     if (this.tech && !this.tech.meets(u.owner, ab.id)) return null; // Rhde not researched
-    const def = this.abilities.get(ab.id);
+    const def = this.abilityDefOf(ab);
     return def?.levelData[0] ?? null;
+  }
+
+  // === ability INSTANCES (docs/map-compatibility.md — the 1.31 ability-field API) ============
+  //
+  // A WC3 ability is an INSTANCE: `BlzGetUnitAbility(u, 'A0PD')` hands back THIS unit's copy, and
+  // `BlzSetAbilityRealLevelField` on it changes that unit and no other; `BlzGetItemAbilityByIndex`
+  // does the same for one ITEM. Until a script writes, the instance simply IS the type's row — so
+  // nothing is copied up front, and every reader asks through one of these two.
+
+  /** The row a unit's ability entry answers with: its own copy if a script has written one. */
+  abilityDefOf(ab: { id: string; def?: AbilityDef }): AbilityDef | undefined {
+    return ab.def ?? this.abilities?.get(ab.id);
+  }
+
+  /** Per-ITEM ability rows a script has rewritten, keyed by the item's ENTITY id — which the item
+   *  keeps on the ground, in a pack and across a hand-over (HeldItem.id), so the change travels
+   *  with the item without any move having to carry it. Test of Balance's stacking items are
+   *  this: each charge rewrites the item's own Claws of Attack `Iatt`. */
+  private readonly itemAbilityDefs = new Map<number, Map<string, AbilityDef>>();
+
+  /** The row one item's ability answers with. */
+  itemAbilityDefOf(itemEntity: number, abilId: string): AbilityDef | undefined {
+    return this.itemAbilityDefs.get(itemEntity)?.get(abilId) ?? this.abilities?.get(abilId);
+  }
+
+  /** The ability ids an item carries, in its row's order (`BlzGetItemAbilityByIndex`), for an
+   *  item on the ground or in anybody's pack; [] for no such item. */
+  itemAbilityIds(itemEntity: number): string[] {
+    const type = this.items.get(itemEntity)?.itemId ?? this.heldItem(itemEntity)?.itemId;
+    return type ? [...(this.itemReg?.get(type)?.abilities ?? [])] : [];
+  }
+
+  /** A carried item by its entity id, wherever it is held. */
+  private heldItem(itemEntity: number): HeldItem | undefined {
+    for (const u of this.units.values()) for (const h of u.inventory) if (h?.id === itemEntity) return h;
+    return undefined;
+  }
+
+  /** The row an ability INSTANCE answers with — a unit's entry or an item's ability — or
+   *  undefined when the unit has no such ability / the item does not carry it. */
+  abilityInstanceDef(ref: AbilityRef): AbilityDef | undefined {
+    if (ref.kind === "unit") {
+      const ab = this.units.get(ref.owner)?.abilities.find((a) => a.id === ref.abilId);
+      return ab ? this.abilityDefOf(ab) : undefined;
+    }
+    return this.itemAbilityIds(ref.owner).includes(ref.abilId) ? this.itemAbilityDefOf(ref.owner, ref.abilId) : undefined;
+  }
+
+  /** The instance's OWN row, copied off the type the first time it is asked for — the one a
+   *  script's field write lands on. */
+  ownAbilityDef(ref: AbilityRef): AbilityDef | undefined {
+    const base = this.abilityInstanceDef(ref);
+    if (!base) return undefined;
+    if (ref.kind === "unit") {
+      const ab = this.units.get(ref.owner)!.abilities.find((a) => a.id === ref.abilId)!;
+      return (ab.def ??= cloneAbilityDef(base));
+    }
+    let byItem = this.itemAbilityDefs.get(ref.owner);
+    if (!byItem) this.itemAbilityDefs.set(ref.owner, (byItem = new Map()));
+    let own = byItem.get(ref.abilId);
+    if (!own) byItem.set(ref.abilId, (own = cloneAbilityDef(base)));
+    return own;
+  }
+
+  /** `BlzSetAbility…Field`: write one field (by its AbilityMetaData id) into the instance's own
+   *  row. `level` is 1-based. False when there is no such instance or no such field. A write to
+   *  a unit's ability re-derives the unit's stats, since an aura or an item bonus may have moved. */
+  setAbilityInstanceField(ref: AbilityRef, metaId: string, level: number, value: string | number): boolean {
+    const meta = this.abilities?.meta;
+    if (!meta) return false;
+    const own = this.ownAbilityDef(ref);
+    if (!own || !writeAbilityField(own, metaId, level, value, meta)) return false;
+    return true;
+  }
+
+  /** `BlzGetAbility…Field`: read one field of an instance, or undefined. */
+  abilityInstanceField(ref: AbilityRef, metaId: string, level: number): number | string | boolean | undefined {
+    const meta = this.abilities?.meta;
+    const def = this.abilityInstanceDef(ref);
+    return meta && def ? readAbilityField(def, metaId, level, meta) : undefined;
+  }
+
+  /** `BlzStartUnitAbilityCooldown` — this unit's ability goes down for `seconds`, whatever its row
+   *  says (a map's own cooldown rules — Test of Balance's on-hit items start theirs by hand). */
+  startAbilityCooldown(unitId: number, abilId: string, seconds: number): void {
+    const ab = this.units.get(unitId)?.abilities.find((a) => a.id === abilId);
+    if (ab) ab.cooldownLeft = Math.max(0, seconds);
   }
 
   /** The level-data for a passive ability the unit has learned (by base code), or
@@ -12218,7 +12336,7 @@ export class SimWorld {
     if (!this.abilities) return null;
     const ab = u.abilities.find((a) => a.code === code && a.level >= 1);
     if (!ab) return this.itemAbilityLevel(u, code);
-    const def = this.abilities.get(ab.id);
+    const def = this.abilityDefOf(ab);
     if (!def) return null;
     return def.levelData[Math.min(ab.level, def.levelData.length) - 1] ?? null;
   }
@@ -12237,7 +12355,7 @@ export class SimWorld {
       const item = this.itemReg.get(held.itemId);
       if (!item) continue;
       for (const abilId of item.abilities) {
-        const def = this.abilities.get(abilId);
+        const def = this.itemAbilityDefOf(held.id, abilId);
         const level = def?.levelData[0];
         if (def && def.code === code && level) return { def, level };
       }
@@ -12412,7 +12530,7 @@ export class SimWorld {
   /** This unit's Replenish row (`Ambt`), or undefined for everything that is not a battery. */
   private replenishAbility(u: SimUnit): AbilityDef | undefined {
     const ab = u.abilities.find((a) => a.code === "Ambt" && a.level >= 1);
-    return ab && this.abilities ? this.abilities.get(ab.id) : undefined;
+    return ab ? this.abilityDefOf(ab) : undefined;
   }
 
   /** How often ONE well may play its pour art, in seconds. OURS, not the game's: nothing in
@@ -12441,7 +12559,7 @@ export class SimWorld {
     // Ages before any of the pour's own early-outs, so the art cooldown runs on the clock
     // rather than on how often this well happened to find a drinker.
     if (u.replenishArtT > 0) u.replenishArtT = Math.max(0, u.replenishArtT - dt);
-    const def = this.abilities?.get(ab.id);
+    const def = this.abilityDefOf(ab);
     const lvl = def?.levelData[0];
     if (!def || !lvl) return;
     // A well still going up holds no mana and pours nothing (see recomputeStats' mana0 rule).
@@ -12617,7 +12735,7 @@ export class SimWorld {
     // No repair row on the type: nothing to check the target against, and nothing to do the
     // repairing. (Kept permissive for a bare test/sim world with no ability registry.)
     if (!ab || !this.abilities) return this.abilities ? "Cantrepair" : null;
-    const def = this.abilities.get(ab.id);
+    const def = this.abilityDefOf(ab);
     if (!def) return null;
     return this.targetError(w, b, def.targetFlags, def.code);
   }
@@ -12834,7 +12952,7 @@ export class SimWorld {
       for (const ab of this.auraSources(src)) {
         const make = AURA_BUFFS[ab.code];
         if (!make) continue;
-        const def = this.abilities.get(ab.id);
+        const def = this.abilityDefOf(ab);
         if (!def) continue;
         const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
         const radius = lvl.area || 900;
@@ -12961,7 +13079,7 @@ export class SimWorld {
     for (const held of u.inventory) {
       if (!held) continue;
       for (const abilId of this.itemReg.get(held.itemId)?.abilities ?? []) {
-        const def = this.abilities.get(abilId);
+        const def = this.itemAbilityDefOf(held.id, abilId);
         if (def && AURA_BUFFS[def.code]) yield { id: abilId, code: def.code, level: 1 };
       }
     }
@@ -13030,7 +13148,7 @@ export class SimWorld {
     // same columns (15% for 25 damage and a 2s stun), so it wants the same lookup and the
     // same buff art rather than a second copy of this method.
     const ab = this.findAbility(attacker, "AHbh");
-    const def = (ab && this.abilities.get(ab.id)) || this.itemAbility(attacker, "AHbh")?.def;
+    const def = (ab && this.abilityDefOf(ab)) || this.itemAbility(attacker, "AHbh")?.def;
     const lvl = this.passiveLevelData(attacker, "AHbh");
     if (!def || !lvl) return;
     // Dur1=2 / HeroDur1=1 — the game gives heroes their own, shorter stun rather than
@@ -13285,7 +13403,7 @@ export class SimWorld {
     if (!u || !this.abilities) return "Notthisunit";
     const ab = this.findAbility(u, code);
     if (!ab) return "Notthisunit";
-    const def = this.abilities.get(ab.id);
+    const def = this.abilityDefOf(ab);
     if (!def || def.target === "passive") return "Notthisunit";
     // Silenced/stunned has no string in the data because WC3 never needs one — it greys the
     // button out, so the click can't happen. We refuse with the error beep and no sentence
@@ -13461,7 +13579,7 @@ export class SimWorld {
     // tutorial says it does.
     if (this.tech && !this.tech.abilityAvailable(u.owner, ab.id)) return false;
     if (this.scriptDisabled(ab)) return false; // per UNIT, the same door (see SimAbility.disableCount)
-    const def = this.abilities.get(ab.id);
+    const def = this.abilityDefOf(ab);
     if (!def || def.target === "passive") return false;
     // Already hidden by this ability: the press restarts nothing and pays for it (see
     // alreadyHidden). Refused at this door as well as at the button, so a trigger, a hotkey
@@ -14040,11 +14158,11 @@ export class SimWorld {
       // target off `Rng1 = 99999`, i.e. the whole map.
       if (ab.code === "Ambt") continue;
       // …and the ability's own Targets Allowed, read once: every branch below asks it.
-      const F = new Set(this.abilities.get(ab.id)?.targetFlags.map((f) => f.toLowerCase()) ?? []);
+      const F = new Set(this.abilityDefOf(ab)?.targetFlags.map((f) => f.toLowerCase()) ?? []);
       // Renew is not a cast either — it is the ordinary repair JOB under the wisp's own art
       // (see KNOWN_ABILITIES). tickRenew hands out the work.
       if (isRepairCode(ab.code)) continue;
-      const def = this.abilities.get(ab.id);
+      const def = this.abilityDefOf(ab);
       if (!def) continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
       if (u.mana < lvl.cost) continue;
@@ -15372,6 +15490,14 @@ export class SimWorld {
     return lvl ? { cost: lvl.cost, cooldown: lvl.cooldown } : undefined;
   }
 
+  /** The same for ONE unit's ability — its own copy of the row if a script rewrote it, else the
+   *  type's (`BlzGetUnitAbilityCooldown` / `…ManaCost`). */
+  unitAbilityRankData(unitId: number, abilityId: string, rank: number): { cost: number; cooldown: number } | undefined {
+    const ab = this.units.get(unitId)?.abilities.find((a) => a.id === abilityId);
+    const lvl = ab ? this.abilityDefOf(ab)?.levelData[rank] : this.abilities?.get(abilityId)?.levelData[rank];
+    return lvl ? { cost: lvl.cost, cooldown: lvl.cooldown } : undefined;
+  }
+
   /** The starting primary attribute data/units.ts folded into a hero's `dmgplus` (0 for
    *  anybody else) — so `unitStat("baseDamage")` can hand back the editor's own column. */
   private foldedPrimary(u: SimUnit): number {
@@ -15507,7 +15633,7 @@ export class SimWorld {
     u.baseMaxHp += stored.tomes.hp;
     for (const a of stored.abilities) {
       const ab = u.abilities.find((x) => x.id === a.id);
-      const def = this.abilities?.get(a.id);
+      const def = this.abilityDefOf(a);
       // Only a rank the NEW map's version of the ability actually has. A chapter may retune a
       // spell, and a rank past its ceiling is the cache overruling the map (`setAbilityLevel`
       // clamps the same way; this is the same clamp without its recompute, which runs below).
@@ -15854,7 +15980,7 @@ export class SimWorld {
     const caster = this.units.get(f.casterId);
     const team = caster?.team ?? 0;
     const ab = caster ? this.findAbility(caster, f.code) : undefined;
-    const flags = (ab && this.abilities?.get(ab.id)?.targetFlags) ?? [];
+    const flags = (ab && this.abilityDefOf(ab)?.targetFlags) ?? [];
     // timer counts down to the next wave; seeding it with `delay` (default 0) postpones the
     // FIRST wave without dropping any (Flame Strike's subsiding burn starts after the pillar).
     this.spellFields.push({ ...f, timer: f.delay ?? 0, done: 0, team, flags });
@@ -16360,7 +16486,7 @@ export class SimWorld {
   private cargoCapacityOf(u: SimUnit): number {
     for (const ab of u.abilities) {
       if (ab.code !== "Amtc") continue;
-      const def = this.abilities?.get(ab.id);
+      const def = this.abilityDefOf(ab);
       const lvl = def?.levelData[Math.max(0, Math.min(ab.level, def.levelData.length) - 1)];
       const cap = lvl?.data[0];
       return cap === undefined || Number.isNaN(cap) ? 0 : cap;
@@ -20069,7 +20195,7 @@ export class SimWorld {
       if (isArrowOrb(ab.code)) {
         if (!ab.autocastOn && ab.code !== aimed) continue;
       } else if (!this.techMeets(attacker.owner, ab.id)) continue;
-      const def = this.abilities.get(ab.id);
+      const def = this.abilityDefOf(ab);
       if (!def) continue;
       // …and what this particular orb may strike is its own `targs1`, read by the same
       // predicate every cast uses: Searing Arrows lists `structure` and so fires at a
@@ -20087,7 +20213,7 @@ export class SimWorld {
         const codes: string[] = [];
         const parts: ResolvedOrb[] = [];
         for (const abilId of item.abilities) {
-          const def = this.abilities.get(abilId);
+          const def = held ? this.itemAbilityDefOf(held.id, abilId) : undefined;
           if (!def || !isOrbCode(def.code)) continue;
           codes.push(def.code);
           parts.push(this.orbOf(def, 1));
@@ -20406,7 +20532,7 @@ export class SimWorld {
       const item = this.itemReg.get(held.itemId);
       if (!item) continue;
       for (const abilId of item.abilities) {
-        const def = this.abilities.get(abilId);
+        const def = this.itemAbilityDefOf(held.id, abilId);
         if (!def || !isOrbCode(def.code) || !def.targetArt) continue;
         out.push({ path: def.targetArt, attach: def.targetAttach });
       }
@@ -20561,7 +20687,7 @@ export class SimWorld {
     if (!this.abilities) return null;
     for (const ab of u.abilities) {
       if (ab.level < 1 || !isCriticalStrikeCode(ab.code)) continue;
-      const def = this.abilities.get(ab.id);
+      const def = this.abilityDefOf(ab);
       const lvl = def?.levelData[Math.min(ab.level, def.levelData.length) - 1];
       if (lvl) return lvl;
     }
@@ -20605,7 +20731,7 @@ export class SimWorld {
     if (!this.abilities) return false;
     for (const ab of u.abilities) {
       if (ab.level < 1 || !isCriticalStrikeCode(ab.code)) continue;
-      const def = this.abilities.get(ab.id);
+      const def = this.abilityDefOf(ab);
       if (def) return this.targsAdmit(t, def.targetFlags); // the same "first one found" criticalStrikeLevel reads
     }
     return false;
@@ -21028,7 +21154,7 @@ export class SimWorld {
     if (u.isHero && this.tryAnkh(u)) return true;
     const ab = u.abilities.find((a) => (a.code === "AOre" || a.code === "ACrn") && a.level >= 1 && a.cooldownLeft <= 0);
     if (!ab || !this.abilities) return false;
-    const def = this.abilities.get(ab.id);
+    const def = this.abilityDefOf(ab);
     if (!def) return false;
     const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
     ab.cooldownLeft = lvl.cooldown > 0 ? lvl.cooldown : 240;
@@ -21162,7 +21288,7 @@ export class SimWorld {
     if (this.exploded.has(u.id) || !this.abilities) return;
     const ab = u.abilities.find((a) => a.code === "Adda" && a.level >= 1);
     if (!ab) return;
-    const lvl = this.abilities.get(ab.id)?.levelData[Math.max(0, ab.level - 1)];
+    const lvl = this.abilityDefOf(ab)?.levelData[Math.max(0, ab.level - 1)];
     if (!lvl) return;
     this.exploded.add(u.id);
     const num = (i: number) => (lvl.data[i] === undefined || Number.isNaN(lvl.data[i]) ? 0 : lvl.data[i]);
@@ -21385,7 +21511,14 @@ export class SimWorld {
     // deleting them with it would destroy something that still belongs to the field. (The
     // same call covers a wagon removed outright; see removeUnit.)
     this.dropHeldCorpses(u.id, u.x, u.y);
-    this.spawnCorpse(u); // leave a decaying corpse (targetable by corpse spells)
+    // `SetUnitExploded`: the body does not fall, it BURSTS — "Art - Special" (UnitFunc
+    // `Specialart`, e.g. HumanLargeDeathExplode) where it stood, and nothing left to raise or
+    // eat. A hero is left out: it never leaves a body anyway, and dissipates to its altar.
+    if (u.explodes && !u.isHero) {
+      this.explodedDeaths.add(u.id);
+      const art = this.unitReg?.get(u.typeId)?.specialArt;
+      if (art) this.spellEffects.push({ art, x: u.x, y: u.y, targetId: 0, z: 0 });
+    } else this.spawnCorpse(u); // leave a decaying corpse (targetable by corpse spells)
     // A hero has fallen, and the whole army is told. Raised HERE rather than off the death
     // event stream because that one only runs when a script is listening (captureDeaths) —
     // and a melee match, which is exactly where this line matters, listens to nothing.
@@ -21820,7 +21953,7 @@ export class SimWorld {
     if (!def) { this.removeGroundItem(it.id); return true; }
     if (def.powerup) {
       this.noteItem(u, it, "pickup");
-      this.applyPowerup(u, def);
+      this.applyPowerup(u, def, it.id);
       // A consumed powerup DIES where it lay — it doesn't just vanish. Playing the model's
       // Death clip is what gives the tome its little burst on the ground (the clip carries
       // the ToonBoom spawn event), and it is the reason `died` exists at all.
@@ -21961,7 +22094,7 @@ export class SimWorld {
     const channel = this.holdsChannel(u.id) ? u.pendingCast : null;
     // The active behaviour is the first granted ability with a code we handle.
     for (const abilId of def.abilities) {
-      const ad = this.abilities.get(abilId);
+      const ad = this.itemAbilityDefOf(held.id, abilId);
       if (!ad) continue;
       const fired = this.applyItemAbility(u, ad, held, targetId, x, y);
       if (fired === "unhandled") continue; // ability we don't handle — try the next one
@@ -22389,7 +22522,7 @@ export class SimWorld {
     const def = this.itemReg!.get(u.inventory[slot]!.itemId)!;
     if (!this.abilities) return "Cantuseitem";
     for (const abilId of def.abilities) {
-      const ad = this.abilities.get(abilId);
+      const ad = this.itemAbilityDefOf(u.inventory[slot]!.id, abilId);
       if (!ad) continue;
       // The corpse items — the Rod of Necromancy and the two Runes of Resurrection — refuse
       // exactly as the spells they ARE do, and for the same reason: pressing one with nothing
@@ -22448,7 +22581,7 @@ export class SimWorld {
     if (!held) return;
     if (def.charges > 0) {
       held.charges -= 1;
-      if (held.charges <= 0 && def.perishable) { u.inventory[slot] = null; this.recomputeStats(u); }
+      if (held.charges <= 0 && def.perishable) { u.inventory[slot] = null; this.itemAbilityDefs.delete(held.id); this.recomputeStats(u); }
     }
     // "Even though the ability has a cooldown, it will be set to 0 when this is True"
     // (ItemDef.ignoreCooldown) — so such an item neither waits nor makes its group wait.
@@ -22989,7 +23122,7 @@ export class SimWorld {
       // A LEARNABLE ability, which is the `hero` column on its own row — not "an ability a
       // hero has". A Demon Hunter's Evasion and his Immolation sit side by side on the same
       // unit and only one of them was ever paid for.
-      if (!this.abilities?.get(a.id)?.isHero || a.level < 1) continue;
+      if (!this.abilityDefOf(a)?.isHero || a.level < 1) continue;
       refunded += a.level;
       a.level = 0;
       a.cooldownLeft = 0;
@@ -23057,10 +23190,10 @@ export class SimWorld {
 
   /** Apply a powerup consumed on pickup (tomes, manuals, runes, gold/lumber),
    *  dispatched on its granted ability's base `code`. */
-  private applyPowerup(u: SimUnit, def: ItemDef): void {
+  private applyPowerup(u: SimUnit, def: ItemDef, itemEntity = 0): void {
     if (!this.abilities) return;
     for (const abilId of def.abilities) {
-      const ad = this.abilities.get(abilId);
+      const ad = this.itemAbilityDefOf(itemEntity, abilId); // a picked-up rune's own row, if a script wrote it
       if (!ad) continue;
       // The SAME dispatcher a pressed item goes through (see applyItemAbility). A rune and
       // the scroll beside it on the shop shelf are one ability with one set of numbers —
@@ -23136,6 +23269,7 @@ export class SimWorld {
 
   /** RemoveItem — destroy an item wherever it is (ground or inventory). */
   removeItemById(id: number): boolean {
+    this.itemAbilityDefs.delete(id); // its own ability rows go with it
     this.forgetItem(id);
     if (this.items.has(id)) { this.removeGroundItem(id); return true; }
     for (const u of this.units.values()) {
@@ -23854,7 +23988,7 @@ export class SimWorld {
     if (!ab) return;
     const fighting = this.creepInFight(u);
     if (fighting && !u.creepFighting) {
-      const def = this.abilities?.get(ab.id);
+      const def = this.abilityDefOf(ab);
       const reach = def?.levelData[Math.min(ab.level, def.levelData.length) - 1]?.castRange ?? 0;
       const seen = new Set<number>();
       for (const t of this.units.values()) {

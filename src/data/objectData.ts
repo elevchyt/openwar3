@@ -170,6 +170,8 @@ export const UNIT_SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   // points effects ride on this type (`alternate` on a metamorphosed hero; UnitDef.attachLinkProps).
   ualp: (d, v) => { d.attachLinkProps = targetList(s(v)); },
   uico: (d, v) => { d.icon = normIcon(s(v)); },
+  // "Art - Special": what an exploding death leaves (SetUnitExploded).
+  uspa: (d, v) => { d.specialArt = normModel(s(v)); },
   ubpx: (d, v) => { d.buttonX = n(v); },
   ubpy: (d, v) => { d.buttonY = n(v); },
   // "Art - Tinting Color" — three 0–255 channels written as three separate codes. Each lands
@@ -442,7 +444,7 @@ export const UNIT_FIELD_NOTES: Record<string, string> = {
   // has to exist before the field has anywhere to land.
   ubpr: "no per-bone art overrides (Boneprops)",
   ucua: "no caster-upgrade art (Casterupgradeart)", ussi: "no score screen (ScoreScreenIcon)",
-  uspa: "no per-unit Specialart hook", utaa: "no per-unit Targetart hook",
+  utaa: "no per-unit Targetart hook",
   uept: "no elevation sampling (elevPts)", uerd: "no elevation sampling (elevRad)",
   ufrd: "fog radius is taken from sight, not fogRad",
   ulos: "no fat line-of-sight (fatLOS)", uver: "no SD/HD asset split (fileVerFlags)",
@@ -727,6 +729,65 @@ interface AbilMod { id: string; levelOrVariation: number; value: Val }
 
 const emptyLevel = emptyAbilityLevel; // the canonical blank rank — see src/data/abilities.ts
 const cloneLevel = (l: AbilityLevel): AbilityLevel => ({ ...l, data: [...l.data], dataStr: [...l.dataStr], buffs: [...l.buffs] });
+
+/** A deep copy of an ability row — what a unit's or an item's OWN ability becomes the first time a
+ *  script writes one of its fields (SimWorld.ownAbilityDef). */
+export function cloneAbilityDef(base: AbilityDef): AbilityDef {
+  return cloneAbility(base, base.id);
+}
+
+/**
+ * A script's write of ONE ability field — `BlzSetAbilityIntegerLevelField(ability,
+ * ABILITY_ILF_ATTACK_BONUS, 0, 9)` — onto a row. The field is named by its `AbilityMetaData.slk`
+ * id (`Iatt`), which is how the World Editor names it in a w3a too, so this is the SAME routing a
+ * map's object-editor edit takes (applyAbilityMods) and the two can never mean different
+ * things. `level` is 1-based (the caller has already applied the map's index base); a field that
+ * is not per level ignores it. False for an id the meta file does not have.
+ */
+export function writeAbilityField(def: AbilityDef, metaId: string, level: number, value: string | number, meta: MappedData): boolean {
+  if (!meta.getRow(metaId)) return false;
+  applyAbilityMods(def, [{ id: metaId, levelOrVariation: Math.max(1, level), value }], meta, (v) => v);
+  return true;
+}
+
+/** The read half of `writeAbilityField` — the value a row holds for one metadata field id, or
+ *  undefined for a field the row does not model (the same set applyAbilityMods routes). */
+export function readAbilityField(def: AbilityDef, metaId: string, level: number, meta: MappedData): number | string | boolean | undefined {
+  const row = meta.getRow(metaId) as { string(k: string): string | undefined } | undefined;
+  if (!row) return undefined;
+  const lvl = def.levelData[Math.min(Math.max(1, level), def.levelData.length) - 1];
+  const at = Math.max(0, level - 1);
+  switch ((row.string("field") ?? "").toLowerCase()) {
+    case "name": return def.name;
+    case "art": return def.icon;
+    case "hero": return def.isHero;
+    case "item": return def.isItem;
+    case "levels": return def.levels;
+    case "reqlevel": return def.reqLevel;
+    case "levelskip": return def.levelSkip;
+    case "hotkey": return def.hotkey;
+    case "researchtip": return def.researchTip;
+    case "researchubertip": return def.researchUberTip;
+    case "tip": return def.tips[at] ?? def.tips[def.tips.length - 1] ?? "";
+    case "ubertip": return def.uberTips[at] ?? def.uberTips[def.uberTips.length - 1] ?? "";
+    case "area": return lvl?.area;
+    case "cool": return lvl?.cooldown;
+    case "cost": return lvl?.cost;
+    case "dur": return lvl?.duration;
+    case "herodur": return lvl?.heroDuration;
+    case "rng": return lvl?.castRange;
+    case "cast": return lvl?.castTime;
+    case "unitid": return lvl?.summon;
+    case "buffid": return lvl?.buffs.join(",");
+    case "data": {
+      const slot = parseInt(row.string("data") ?? "0", 10) - 1;
+      if (!lvl || slot < 0) return undefined;
+      const v = lvl.data[slot];
+      return v === undefined || Number.isNaN(v) ? lvl.dataStr[slot] ?? 0 : v;
+    }
+    default: return undefined;
+  }
+}
 
 function cloneAbility(base: AbilityDef, id: string): AbilityDef {
   return {

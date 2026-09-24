@@ -206,6 +206,10 @@ export interface UnitDef {
   lumberSound: string;
   armorSound: string; // unitUI "armor" material struck ("Metal"/"Flesh"/…) → combat-sound suffix
   icon: string; // command-card BTN icon path (from UnitFunc "art")
+  /** "Art - Special" (UnitFunc `Specialart`) — what an EXPLODING death leaves instead of a body:
+   *  `[hfoo] Specialart=…\HumanLargeDeathExplode.mdl`. Played by SimWorld.kill for a unit a script
+   *  marked with `SetUnitExploded`. "" for a row that names none (optional, as on a stub row). */
+  specialArt?: string;
   description: string; // command-card tooltip body (UnitStrings "Ubertip"), WC3 markup intact
   // The command-card tooltip TITLE, exactly as the game writes it (UnitStrings
   // "Tip"): "Train |cffffcc00P|reasant" / "Build |cffffcc00F|rarm". It already
@@ -668,6 +672,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       lumberSound: soundBase(u ? str(u, "weap2") : ""),
       armorSound: soundBase(u ? str(u, "armor") : ""),
       icon: fn ? str(fn, "art") : "",
+      specialArt: fn ? mdxPath(str(fn, "specialart")) : "",
       // Tooltip text (Name/Tip/Ubertip/Hotkey) lives in the per-race *UnitStrings*
       // INI, NOT the *UnitFunc* INI (which only holds art/buttonpos/missile). The
       // description was previously read from `fn` → always empty → generic fallback.

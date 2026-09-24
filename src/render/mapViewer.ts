@@ -10509,7 +10509,7 @@ export class MapViewerScene {
       const su = this.rts!.simView.units.get(sel.id);
       if (su) {
         for (const ab of su.abilities) {
-          const def = this.abilities.get(ab.id);
+          const def = ab.def ?? this.abilities.get(ab.id); // the unit's own instance, if a script rewrote it
           // Only the hero's SKILLS: an innate unit ability on a hero's sheet (the Warden's
           // Shadow Meld) is a command-card button and never a row here (SimWorld.learnable).
           if (!def || !this.rts!.simView.learnable(su, ab.id)) continue;
@@ -10810,7 +10810,7 @@ export class MapViewerScene {
       // a plain `BlzUnitDisableAbility` leaves the button on the card, drawn unavailable below.
       if (this.rts.simView.scriptHidden(ab)) continue;
       const scriptOff = this.rts.simView.scriptDisabled(ab);
-      const def = this.abilities.get(ab.id);
+      const def = ab.def ?? this.abilities.get(ab.id); // the unit's own instance, if a script rewrote it
       if (!def) continue;
       // An ITEM ability a unit carries directly draws no button — the whole Hive trick of
       // hiding a bonus on a unit rests on it, and "Kelen's Daggers of Escape work just fine"

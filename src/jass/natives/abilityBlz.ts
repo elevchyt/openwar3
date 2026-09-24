@@ -12,10 +12,9 @@
 //   * `BlzUnitDisableAbility`/`BlzUnitHideAbility` are COUNTERS, and what each stops is on
 //     SimAbility.disableCount / SimWorld.scriptDisabled.
 //
-// Not here, deliberately: `BlzSetUnitAbilityCooldown` / `BlzSetUnitAbilityManaCost`. They are
-// per-UNIT overrides of a per-TYPE value — a second place the cast cost and the cooldown would
-// have to be read from — and no map in the corpus calls either, so their unit-level GETTERS
-// answer the type's value, which is exactly right while nothing can have changed it.
+// Not here: the unit-level cost and cooldown (`BlzGetUnitAbilityCooldown`/`…ManaCost` and their
+// setters). A unit's ability is an INSTANCE a script may rewrite, so they read and write that
+// instance — natives/abilityFields.ts, with the rest of the ability-field API.
 
 import { intToRawcode } from "../lexer";
 import type { JassItem, JassUnit, NativeCtx, Runtime } from "../runtime";
@@ -60,9 +59,6 @@ export function registerAbilityBlzNatives(rt: Runtime): void {
   const rank = (c: NativeCtx, abilV: JassValue, levelV: JassValue) => c.rt.hooks?.abilityRankData?.(abil(abilV), rankOf(c, levelV));
   def(rt, "BlzGetAbilityManaCost", (c, a) => jInt(rank(c, a[0], a[1])?.cost ?? 0));
   def(rt, "BlzGetAbilityCooldown", (c, a) => jReal(rank(c, a[0], a[1])?.cooldown ?? 0));
-  // The unit-level readers answer the type — see the note at the top for why that is exact.
-  def(rt, "BlzGetUnitAbilityManaCost", (c, a) => jInt(rank(c, a[1], a[2])?.cost ?? 0));
-  def(rt, "BlzGetUnitAbilityCooldown", (c, a) => jReal(rank(c, a[1], a[2])?.cooldown ?? 0));
 
   // --- an ability TYPE's words and art ---
   // Presentation: the hooks are the renderer's half, so a map may call these inside a
