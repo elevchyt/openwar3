@@ -1,5 +1,5 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
-import { SimWorld, weaponsFromDef, isOffField, CREEP_CAMP_ACQUIRE_RANGE, BUILD_START_HP_FRAC, ANIM_FOR_DURATION, HERO_FADE_TIME, HERO_DISSIPATE_TIME, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText, type FallenHero, type SimSpellEffect, type StoredUnitState } from "../sim/world";
+import { SimWorld, weaponsFromDef, inventoryCapacity, isOffField, CREEP_CAMP_ACQUIRE_RANGE, BUILD_START_HP_FRAC, ANIM_FOR_DURATION, HERO_FADE_TIME, HERO_DISSIPATE_TIME, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText, type FallenHero, type SimSpellEffect, type StoredUnitState } from "../sim/world";
 import { KNOWN_ABILITIES, NO_AOE_CURSOR, aoeCursorRadius } from "../data/abilities";
 import type { Command } from "./commands";
 import { PATHING_CELL, footprintCells, type PathingGrid } from "../sim/pathing";
@@ -697,17 +697,12 @@ export interface SelectionEvent {
   selected: boolean;
 }
 
-/** A type's inventory slots: the "Item Capacity" (`AbilityMetaData` `inv1`, DataA) of the
- *  inventory ability it carries — every one of them is base code `AInv` (the hero's own `AInv`,
- *  the Pack Mule's `Apak`, the four racial `Ai?n` backpacks). Undefined when it carries none. */
-function inventoryCapacity(innate: ReadonlyArray<{ code: string; data: ReadonlyArray<unknown> }>): number | undefined {
-  let slots: number | undefined;
-  for (const a of innate) {
-    if (a.code !== "AInv") continue;
-    const n = Number(a.data[0]);
-    if (Number.isFinite(n)) slots = Math.max(slots ?? 0, Math.max(0, Math.min(6, Math.trunc(n))));
-  }
-  return slots;
+/** A type's INVENTORY abilities — every one of them is base code `AInv` (the hero's own `AInv`,
+ *  the Pack Mule's `Apak`, the four racial `Ai?n` backpacks) — with the slots each opens. The
+ *  sim opens them only once each one's `Requires` is met (`SimUnit.backpacks`): a Footman lists
+ *  `Aihn` from the start, and has no inventory until the Backpack research is in. */
+function inventoryAbilities(innate: ReadonlyArray<{ id: string; code: string; data: ReadonlyArray<unknown> }>): Array<{ id: string; slots: number }> {
+  return innate.filter((a) => a.code === "AInv").map((a) => ({ id: a.id, slots: inventoryCapacity(a.data[0]) }));
 }
 
 export class RtsController {
@@ -4010,7 +4005,7 @@ export class RtsController {
       // harvests lumber but is NOT Peon-classified — it fights like any other unit.
       // "Ward" classification = a planted gadget (Serpent/Healing/Sentry Ward, Stasis Trap,
       // …): like a worker, it is the last thing a creep camp turns on (SimUnit.ward).
-      { hero, abilities: this.buildInitialAbilities(def), mechanical: def.classification.includes("mechanical"), isPeon: def.classification.includes("peon"), ward: def.classification.includes("ward"), ancient: def.classification.includes("ancient"), level: def.level, baseInvulnerable: def.abilities.includes("Avul"), inventorySize: inventoryCapacity(innate) },
+      { hero, abilities: this.buildInitialAbilities(def), mechanical: def.classification.includes("mechanical"), isPeon: def.classification.includes("peon"), ward: def.classification.includes("ward"), ancient: def.classification.includes("ancient"), level: def.level, baseInvulnerable: def.abilities.includes("Avul"), backpacks: inventoryAbilities(innate) },
     );
     // A structure spawned WITH a build time is a foundation just laid — that's the
     // moment EVENT_(PLAYER_)UNIT_CONSTRUCT_START fires (7.17). A pre-placed/instant

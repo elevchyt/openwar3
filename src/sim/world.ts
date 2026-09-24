@@ -322,6 +322,13 @@ export interface CombatText {
  *  each one). A slot carrying no damage at all is dropped — that is how a Town Hall, which has
  *  a UnitWeapons row like everything else, ends up unarmed. A DISABLED slot is KEPT: the Flying
  *  Machine's bombs must be sitting there, switched off, for Flying Machine Bombs to switch on. */
+/** An inventory ability's slots: its "Item Capacity" (`AbilityMetaData` `inv1`, DataA — 6 for
+ *  the hero's `AInv`, 4 for the Pack Mule's `Apak`, 2 for the racial backpacks), which the
+ *  command card's six places cap. */
+export function inventoryCapacity(dataA: unknown): number {
+  return Math.max(0, Math.min(6, Math.trunc(Number(dataA)) || 0));
+}
+
 export function weaponsFromDef(def: UnitDef): SimWeapon[] {
   const out: SimWeapon[] = [];
   for (const s of def.weapons) {
@@ -2258,6 +2265,15 @@ export interface SimUnit {
   returnStuckT: number; // seconds making no homeward progress while returning (→ give up, fight)
   // --- inventory (heroes) ---------------------------------------------------
   inventory: (HeldItem | null)[]; // 6 slots for heroes ([] for units without an inventory)
+  /**
+   * The INVENTORY abilities the unit carries (every one base code `AInv`) and the "Item
+   * Capacity" each opens (DataA, `inv1`). Kept apart from `inventory` because a pack is GATED:
+   * every stock Footman, Grunt, Archer and Ghoul lists a racial backpack (`Aihn`/`Aion`/`Aien`/
+   * `Aiun`, 2 slots) whose `Requires` is the Backpack research (`Rhpm`/`Ropm`/`Repm`/`Rupm`),
+   * and the Kodo's `Apak` wants `Ropm` too. Until that is met the unit has no inventory at all;
+   * `openBackpacks` opens the slots the tick it is. Undefined for a unit that carries none.
+   */
+  backpacks?: Array<{ id: string; slots: number }>;
   /**
    * The COOLDOWN GROUP clocks — group id → seconds left — and the reason they live on the
    * UNIT rather than on the bottle.
@@ -8460,7 +8476,7 @@ export class SimWorld {
       | "baseSightNight"
     >,
     building?: BuildingState | null,
-    opts?: { hero?: HeroInit; abilities?: SimAbility[]; mechanical?: boolean; isPeon?: boolean; ward?: boolean; ancient?: boolean; manaRegen?: number; level?: number; baseInvulnerable?: boolean; inventorySize?: number },
+    opts?: { hero?: HeroInit; abilities?: SimAbility[]; mechanical?: boolean; isPeon?: boolean; ward?: boolean; ancient?: boolean; manaRegen?: number; level?: number; baseInvulnerable?: boolean; backpacks?: Array<{ id: string; slots: number }> },
   ): SimUnit {
     const hero = opts?.hero;
     // The primary weapon is DERIVED, never passed in: it is the first slot `weapsOn` has
@@ -8732,11 +8748,13 @@ export class SimWorld {
       struckAt: -Infinity,
       returnBestDist: 0,
       returnStuckT: 0,
-      // The slots are the type's INVENTORY ability's "Item Capacity" (`AInv` DataA — 6 for a
-      // hero, 4 for the Pack Mule `Apak`, 2 for the racial backpacks; the caller reads it off
-      // the row, `inventorySize`). A hero whose row names no inventory still gets the six every
-      // stock hero has; anything else without one has none, and item logic simply skips it.
-      inventory: new Array<null>(opts?.inventorySize ?? (hero ? 6 : 0)).fill(null),
+      // The slots are the type's INVENTORY abilities' "Item Capacity" (`AInv` DataA — 6 for a
+      // hero, 4 for the Pack Mule `Apak`, 2 for the racial backpacks), opened by `openBackpacks`
+      // once each one's `Requires` is met — recomputeStats below is the first time it asks. A
+      // hero whose row names no inventory still gets the six every stock hero has; anything
+      // else without an OPEN one has none, and item logic simply skips it.
+      inventory: new Array<null>(hero && !opts?.backpacks?.length ? 6 : 0).fill(null),
+      backpacks: opts?.backpacks?.length ? opts.backpacks.map((p) => ({ ...p })) : undefined,
       getItemId: 0,
       pendingGive: null,
       pendingUse: null,
@@ -11685,8 +11703,20 @@ export class SimWorld {
   /** Recompute a unit's effective stats from its base values, hero attribute
    *  growth, active buffs, items and the owner's researched upgrades. Called every
    *  tick (cheap, idempotent). */
+  /** Open the slots of every inventory ability whose `Requires` the owner now meets
+   *  (`SimUnit.backpacks`) — asked every tick, so researching Backpack hands every Footman
+   *  already on the field its two slots. Never fewer than it has: a requirement once met is
+   *  not taken back, and a hero's six are its own. */
+  private openBackpacks(u: SimUnit): void {
+    for (const p of u.backpacks!) {
+      if (p.slots <= u.inventory.length || !this.techMeets(u.owner, p.id)) continue;
+      while (u.inventory.length < p.slots) u.inventory.push(null);
+    }
+  }
+
   private recomputeStats(u: SimUnit): void {
     const wasInvulnerable = u.invulnerable; // for the rising edge — see clearStatusForInvulnerable
+    if (u.backpacks) this.openBackpacks(u);
     const item = this.itemBonuses(u);
     const upg = this.upgradeBonuses(u);
     // Buffed attributes (Robo-Goblin's Strength) count exactly as an item's do — same pool,
@@ -15304,11 +15334,9 @@ export class SimWorld {
     if (u.abilities.some((a) => a.id === abilityId)) return false;
     u.abilities.push({ id: abilityId, code: def.code, level: 1, cooldownLeft: 0, autocastOn: false });
     // An INVENTORY given at run time opens its slots ("Item Capacity", DataA) — how a map
-    // hands a courier or a dummy a backpack. Never fewer than it has.
-    if (def.code === "AInv") {
-      const slots = Math.max(0, Math.min(6, Math.trunc(Number(def.levelData[0]?.data[0]) || 0)));
-      while (u.inventory.length < slots) u.inventory.push(null);
-    }
+    // hands a courier or a dummy a backpack — once its own `Requires` is met, like the type's
+    // own packs (recomputeStats → openBackpacks, just below).
+    if (def.code === "AInv") (u.backpacks ??= []).push({ id: abilityId, slots: inventoryCapacity(def.levelData[0]?.data[0]) });
     this.recomputeStats(u); // an ability can carry stat bonuses / an aura
     return true;
   }

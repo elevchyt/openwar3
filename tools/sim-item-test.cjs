@@ -443,6 +443,19 @@ console.log("\nan inventory is an ABILITY, sized by its Item Capacity");
   world.addAbility(mule.id, "Apak");
   check("UnitAddAbility of an AInv-coded ability opens its DataA slots (the Pack Mule's four)", mule.inventory.length, 4);
 }
+{
+  // …and a GATED one: every stock Footman lists `Aihn` ([Aihn] Requires=Rhpm), so it has no
+  // inventory until the Backpack research is in — and gets its two slots the tick it is.
+  world = newWorld();
+  const researched = new Set();
+  world.techMeets = (_player, id) => id !== "Apak" || researched.has("Ropm");
+  const grunt = unit({ backpacks: [{ id: "Apak", slots: 2 }] });
+  world.recomputeStats(grunt);
+  check("a unit whose inventory ability's Requires is unmet has no slots", grunt.inventory.length, 0);
+  researched.add("Ropm");
+  world.recomputeStats(grunt);
+  check("…the research opens them", grunt.inventory.length, 2);
+}
 
 console.log(failed ? `\nitems: ${failed} check(s) FAILED` : "\nitems: all checks passed");
 process.exit(failed ? 1 : 0);

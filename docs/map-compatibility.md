@@ -791,7 +791,11 @@ And the map's interface layer, with the four bugs found standing on it:
   existed they still held nothing, because only a HERO was given slots. An inventory is an
   ABILITY: every one is base code `AInv`, and its `DataA` is the "Item Capacity" (`inv1` — 6 for
   the hero's, 4 for the Pack Mule's `Apak`, 2 for the racial backpacks), so a unit's slots come
-  off the inventory ability it carries (and `UnitAddAbility` of one opens them at run time). The
+  off the inventory ability it carries (and `UnitAddAbility` of one opens them at run time) —
+  once that ability's own `Requires` is met. Every stock Footman, Grunt, Archer and Ghoul lists
+  a racial backpack gated on the Backpack research (`[Aihn] Requires=Rhpm`, and the Kodo's `Apak`
+  on `Ropm`), so sizing off the row alone handed every melee soldier two slots from the start
+  (`SimUnit.backpacks` / `openBackpacks`, asked every tick so the research opens them live). The
   last starting item, `sxpl`, is a stock item from AFTER 1.30.4 that the map edits in its
   ORIGINAL table; with no row to edit it was dropped. An item edit (a row setting an `i…` field)
   whose base this install lacks is now the map's fields over an EMPTY row (`blankItemDef`): the
