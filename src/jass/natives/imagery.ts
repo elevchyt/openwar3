@@ -26,10 +26,11 @@
 // does not have is LOADED: "A texture is loaded if it is used in the map's tileset or the first
 // time a trigger places it in the world", at most 16 (hiveworkshop 339901).
 //
+// THE SKY (`SetSkyModel`, "Environment - Set Sky") is a model drawn around the eye behind the
+// world, "" (the GUI's `SkyModelNone`, its default) for none — render/sky.ts says how.
+//
 // Not here, for want of anything that says what they do: SetUbersplatRender (no documentation
 // at all) and SetImageAboveWater ("doesn't seem to do much"). Neither is called in the corpus.
-// Nor SetSkyModel (4 call sites): the renderer draws no sky at all yet, and a native that
-// answered while nothing changed on screen would only hide that from the coverage report.
 
 import { intToRawcode, rawcodeToInt } from "../lexer";
 import type { NativeCtx, Runtime } from "../runtime";
@@ -113,6 +114,12 @@ export function registerImageryNatives(rt: Runtime): void {
   def(rt, "GetTerrainVariance", (c, a) => jInt(c.rt.hooks?.terrainVarianceAt?.(asNum(a[0]), asNum(a[1])) ?? 0));
   def(rt, "SetTerrainType", (c, a) => {
     c.rt.hooks?.setTerrainType?.(asNum(a[0]), asNum(a[1]), intToRawcode(asInt(a[2])), asInt(a[3]), asInt(a[4]), asInt(a[5]));
+    return JNULL;
+  });
+
+  // --- the sky ---
+  def(rt, "SetSkyModel", (c, a) => {
+    c.rt.hooks?.setSkyModel?.(asStr(a[0] ?? JNULL));
     return JNULL;
   });
 

@@ -55,6 +55,7 @@ const hooks = {
   setImagePosition: rec('imagePos'),
   setImageType: rec('imageType'),
   setWaterBaseColor: rec('water'),
+  setSkyModel: rec('sky'),
   terrainTypeAt: (x) => (x > 0 ? 'Ldrt' : ''),
   terrainVarianceAt: () => 17,
   setTerrainType: rec('tile'),
@@ -97,6 +98,10 @@ function Missing takes nothing returns boolean
 endfunction
 function Water takes nothing returns nothing
     call SetWaterBaseColor(0, 255, 256, 511)
+endfunction
+function Sky takes nothing returns nothing
+    call SetSkyModel("Environment\\\\Sky\\\\LordaeronSummerSky\\\\LordaeronSummerSky.mdl")
+    call SetSkyModel(null)
 endfunction
 function TileHere takes nothing returns boolean
     return GetTerrainType(100.0, 0.0) == 'Ldrt'
@@ -151,6 +156,10 @@ console.log('\n--- water and terrain ---');
 calls.length = 0;
 call('Water');
 check('SetWaterBaseColor takes each channel mod 256', J(calls[0]), J(['water', 0, 255, 0, 255]));
+calls.length = 0;
+call('Sky');
+// The GUI's own default is SkyModelNone — a NULL string (UI\TriggerData.txt) — which means "no sky".
+check('SetSkyModel reaches the engine with the path as written, and null as ""', J(calls), J([['sky', 'Environment\\Sky\\LordaeronSummerSky\\LordaeronSummerSky.mdl'], ['sky', '']]));
 check("GetTerrainType answers the tile's rawcode", call('TileHere').b, true);
 check('…and 0 off the map', call('TileOff').n, 0);
 check('GetTerrainVariance', call('Variance').n, 17);

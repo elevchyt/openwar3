@@ -7,6 +7,7 @@ import { MpqDataSource } from "../vfs/mpq";
 import { LayeredDataSource } from "../vfs/layered";
 import { tilesetOverlay } from "../vfs/tileset";
 import { createAssetSolver, type MapFileLayer, type Solver } from "./assetSolver";
+import { SkyDome, skyModelPath, type SkyViewer } from "./sky";
 import { CAMERA_MARGIN, CELL, cameraBoundsOf, parseW3E, type TerrainData, type WorldRect } from "../world/terrain";
 import { brushPoints, parseCellRarity, pickCell } from "./terrainBrush";
 import { parseDoo } from "../world/doodads";
@@ -3521,6 +3522,21 @@ export class MapViewerScene {
       + (unread.length ? ` — no system reads: ${unread.join(", ")}` : ""));
   }
 
+  /** The script's sky (`SetSkyModel` — render/sky.ts), made on the first call. */
+  private sky: SkyDome | null = null;
+
+  /** SetSkyModel: the named sky around the eye from now on; "" takes it away. */
+  private setSky(path: string): void {
+    const world = this.viewer.map?.worldScene;
+    if (!world) return;
+    if (!this.sky) {
+      if (!skyModelPath(path)) return; // no sky asked for, and none up
+      this.sky = new SkyDome(this.viewer as unknown as SkyViewer, this.solver, world);
+    }
+    void this.sky.setModel(path);
+    this.sky.follow(world.camera as unknown as { location: Float32Array });
+  }
+
   /** The map's own interface layer (`war3mapSkin.txt` — data/mapSkin.ts), or null. Kept so
    *  dispose takes down only the layer THIS scene put up (see the misc overlay beside it). */
   private mapSkin: MapSkin | null = null;
@@ -5557,6 +5573,7 @@ export class MapViewerScene {
         this.syncScriptImage(img);
       },
       setWaterBaseColor: (r, g, b, a) => this.setWaterTint([r / 255, g / 255, b / 255, a / 255]),
+      setSkyModel: (path) => this.setSky(path),
       terrainTypeAt: (x, y) => this.terrainTypeAt(x, y),
       terrainVarianceAt: (x, y) => this.terrainVarianceAt(x, y),
       setTerrainType: (x, y, tile, variation, area, shape) => this.setTerrainType(x, y, tile, variation, area, shape),
@@ -13095,6 +13112,7 @@ export class MapViewerScene {
       }
       if (map && fogScene && map.anyReady) {
         fogScene.startFrame();
+        this.sky?.renderBehind(); // FIRST: a sky neither tests nor writes depth (render/sky.ts)
         this.syncBlight(map); // the Undead's rot, painted onto the ground before it is drawn
         map.renderGround();
         map.renderCliffs();
@@ -13332,6 +13350,8 @@ export class MapViewerScene {
     this.scriptImages.clear();
     this.waterBase = null; // the next map's tileset has its own water
     this.waterTint = null;
+    this.sky?.dispose(); // …and starts with no sky at all (render/sky.ts)
+    this.sky = null;
     // The menus and the next map read the install's constants — but only if the overlay is still
     // THIS scene's: a ChangeLevel/RestartGame can load the next scene before this one is
     // disposed, and taking down its constants would be the old map reaching into the new one.
@@ -14081,6 +14101,7 @@ export class MapViewerScene {
     // FARZ 0 = "the game camera's own rule", which is 8× the focus distance.
     scene.camera.perspective(this.fov, this.aspect(), 16, this.farZ > 0 ? this.farZ : this.distance * 8);
     scene.camera.moveToAndFace(eye, this.target, this.upVector(eye));
+    this.sky?.follow(scene.camera); // the sky surrounds the EYE (render/sky.ts)
     // Drive positional (WANT3D) audio: listener at the ground focus, facing the
     // camera's look direction so on-screen battles pan + attenuate around center.
     this.sounds?.setListener(this.target, eye);

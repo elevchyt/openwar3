@@ -442,7 +442,7 @@ The work is going in passes, largest first, each with its own test and each re-m
 | 9 | the `Blz…` ability natives — per-unit disable/hide, clocks, costs, words, icons | 576 | ✓ |
 | 6 | the summon event, `GetSummonedUnit`/`GetSummoningUnit`, `UnitApplyTimedLife` | 200 | ✓ |
 | 7 | `ReviveHero`, `ReviveHeroLoc` | 72 | ✓ |
-| 10 | what a script paints — its own lightning, the `BlzSetSpecialEffect…` transforms, ubersplats, images, terrain tiles, water tint; and `GetLocationZ` | 127 | ✓ (not `SetSkyModel`) |
+| 10 | what a script paints — its own lightning, the `BlzSetSpecialEffect…` transforms, ubersplats, images, terrain tiles, water tint; and `GetLocationZ` | 127 | ✓ (`SetSkyModel` since, below) |
 | — | the `GetUnitDefault…` family, `GetUnitAcquireRange`, and `SetUnitAcquireRange` actually doing something | 303 | ✓ |
 | 11 | a map's own `war3mapMisc.txt` applied (no natives — the constants every system reads) | — | ✓ |
 
@@ -633,9 +633,9 @@ from one page of lep.nrw/jassbot or a Hive thread, cited at the code.
   blight texture. `SetWaterBaseColor` multiplies the tileset's four water colours, held against
   the viewer reading Water.slk asynchronously.
 
-Not done, on purpose: `SetSkyModel` (the renderer draws no sky at all yet, so a native that
-answered would only hide that), `SetUbersplatRender` and `SetImageAboveWater` (nothing says what
-they do). Tests: `tools/jass-lightning-test.cjs`, `tools/jass-effect-blz-test.cjs`,
+Not done, on purpose: `SetUbersplatRender` and `SetImageAboveWater` (nothing says what they do).
+`SetSkyModel` was held back here because nothing drew a sky; it is done now (`render/sky.ts`, the
+Test of Balance section below). Tests: `tools/jass-lightning-test.cjs`, `tools/jass-effect-blz-test.cjs`,
 `tools/jass-imagery-test.cjs`, `tools/sim-effect-anim-test.cjs`, `tools/sim-terrain-brush-test.cjs`.
 
 ### `GetUnitDefault…` — the type, even after the unit is gone
@@ -789,6 +789,16 @@ And the map's interface layer, with the four bugs found standing on it:
   first now, for the same reason `assetSolver.ts` does.
 
 Tests: `tools/sim-map-skin-test.cjs`, the selection case in `tools/jass-audience-test.cjs`.
+
+**`SetSkyModel`** ("Environment - Set Sky") — `render/sky.ts`. There is no sky unless a script sets
+one: the GUI's default is `SkyModelNone`, a null string (`UI\TriggerData.txt`), and Test of Balance's
+black horizon is right. A sky is an ordinary MDX — the editor offers 14, `Environment\Sky\<Name>`,
+spheres 3–4 thousand units across — whose layers mostly neither test nor write depth, so it is drawn
+FIRST, in a scene of its own that shares the world's camera, centred on the EYE (moved after the
+camera, before the scene update, so it never trails a frame). The depth buffer is cleared after it,
+because `SkyLight.mdl`'s streak layers DO write depth, and a sphere around the eye is nearer than the
+far terrain. Human01's own call (`LordaeronSummerSky`) reaches it. Tests: the sky checks in
+`tools/jass-imagery-test.cjs`.
 
 ## Traps
 
