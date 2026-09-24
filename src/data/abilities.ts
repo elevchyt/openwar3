@@ -1003,6 +1003,16 @@ export class AbilityRegistry {
   all(): AbilityDef[] {
     return [...new Map([...this.defs, ...this.custom]).values()];
   }
+  /** `UI\TriggerData.txt`'s `UnitOrder…` strings — every order the GUI can issue by name. */
+  triggerOrders: string[] = [];
+  /** Every string that IS an order: each ability's `Order`/`Orderon`/`Orderoff`/`Unorder` (the
+   *  map's own rows included) and TriggerData's list — what `OrderId` answers for (jass/orders.ts
+   *  learnOrderStrings). */
+  orderVocabulary(): string[] {
+    const out = new Set(this.triggerOrders);
+    for (const d of this.all()) for (const o of [d.order, d.orderOn, d.orderOff, d.unOrder]) if (o) out.add(o.trim().toLowerCase());
+    return [...out];
+  }
   /** The base (install) def for `id`, ignoring the custom overlay — what a custom
    *  ability clones from. */
   base(id: string): AbilityDef | undefined {
@@ -1047,9 +1057,9 @@ const STRING_FILES = FUNC_FILES.map((f) => f.replace("Func", "Strings"));
  * tables on that name is the class → order map, with nothing typed here. Only a row that has no
  * `Order` of its own takes one: where the Func file speaks, it wins.
  */
-function fillIntrinsicOrders(defs: Map<string, AbilityDef>, vfs: DataSource): void {
+function fillIntrinsicOrders(defs: Map<string, AbilityDef>, vfs: DataSource): string[] {
   const bytes = vfs.rawBytes("UI\\TriggerData.txt");
-  if (!bytes) return;
+  if (!bytes) return [];
   const skillCode = new Map<string, string>(); // "fingerofdeath" (the NAME) → "ANfd"
   const orderOf = new Map<string, string>(); // "fingerofdeath" (the NAME) → "fingerofdeath"
   for (const line of new TextDecoder("windows-1252").decode(bytes).split(/\r?\n/)) {
@@ -1066,6 +1076,7 @@ function fillIntrinsicOrders(defs: Map<string, AbilityDef>, vfs: DataSource): vo
   for (const def of defs.values()) {
     if (!def.order) def.order = byCode.get(def.code) ?? "";
   }
+  return [...new Set(orderOf.values())];
 }
 
 export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
@@ -1193,7 +1204,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
     });
   }
   for (const id of UI_BUTTON_IDS) addUiButton(defs, id, func, strs);
-  fillIntrinsicOrders(defs, vfs);
+  const triggerOrders = fillIntrinsicOrders(defs, vfs);
 
   // Index every buff section — its models (so an ability that lists several buffs can pick
   // the one its numbers call for) AND its icon/name/tooltip (the info panel's Status row).
@@ -1224,6 +1235,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
     });
   }
   const reg = new AbilityRegistry(defs, new Map(), buffs);
+  reg.triggerOrders = triggerOrders;
   const metaBytes = vfs.rawBytes("Units\\AbilityMetaData.slk");
   if (metaBytes) reg.meta = new MappedData(new TextDecoder("windows-1252").decode(metaBytes));
   return reg;

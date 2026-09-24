@@ -19,6 +19,7 @@ import { summonsBuildings, castCostOf, isOffField, type Alert, type EffectAnim, 
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintBuildable, footprintCellsAt, footprintRadius, quarterTurns, rotateFootprint, type Footprint, type PlacedFootprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { frameModel, loadMapScript, type MapScriptEngine } from "../jass/index";
+import { learnOrderStrings } from "../jass/orders";
 import { ScriptFrameOverlay } from "../ui/scriptFrames";
 import { EVENT_PLAYER_END_CINEMATIC, EVENT_PLAYER_LEAVE } from "../jass/interpreter";
 import { MAP_CONTROL, type CinematicScene, type DestructableSnapshot, type DialogObj, type EngineHooks, type RectObj, type Runtime } from "../jass/runtime";
@@ -3644,6 +3645,9 @@ export class MapViewerScene {
         })),
         localPlayer: this.localPlayer,
       };
+      // Which strings are ORDERS, for `OrderId` (jass/orders.ts): the map's own abilities are
+      // loaded by now, so its custom order strings are in the list with the stock ones.
+      learnOrderStrings(this.abilities.orderVocabulary());
       const engine = loadMapScript(this.vfs, this.mapArchive, {
         melee: opts.melee,
         runMain: true,

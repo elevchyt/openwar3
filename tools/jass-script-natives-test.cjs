@@ -21,6 +21,7 @@ writeFileSync(join(REPO, '.jass-build', 'package.json'), '{"type":"commonjs"}');
 const { buildInterpreter } = require(join(BUILD, 'jass', 'headless.js'));
 const { COMPAT_PRELUDE } = require(join(BUILD, 'compat', 'prelude.js'));
 const { rawcodeToInt } = require(join(BUILD, 'jass', 'lexer.js'));
+const { learnOrderStrings } = require(join(BUILD, 'jass', 'orders.js'));
 
 const SCRIPTS = join(REPO, 'Warcraft III', 'ExtractedData', 'merged', 'Scripts');
 if (!existsSync(join(SCRIPTS, 'common.j'))) {
@@ -113,6 +114,18 @@ endfunction
 function FootmanId takes nothing returns integer
     return String2UnitIdBJ("footman")
 endfunction
+function TrainOrder takes nothing returns integer
+    return String2OrderIdBJ("footman")
+endfunction
+function OrderIds takes nothing returns string
+    return I2S(OrderId("footman")) + "," + I2S(OrderId("attack")) + "," + I2S(OrderId("nonsense"))
+endfunction
+function EngineOrder takes nothing returns boolean
+    return OrderId("acolyteharvest") != 0
+endfunction
+function HolyBolt takes nothing returns boolean
+    return OrderId("holybolt") != 0 and OrderId("holybolt") == OrderId("HolyBolt")
+endfunction
 function FootmanName takes nothing returns string
     return UnitId2StringBJ('hfoo')
 endfunction
@@ -186,6 +199,13 @@ check("UnitId2StringBJ('hfoo')", call('FootmanName').s, 'footman');
 console.log('\n--- GetHandleId on a Convert constant is its index ---');
 check("ATTACK_TYPE_HERO, DAMAGE_TYPE_NORMAL, WEAPON_TYPE_METAL_HEAVY_SLICE (the Damage Engine's literals)", call('ConstIds').s, '6,4,6');
 check('…while a player keeps a handle id of its own', call('PlayerIdIsOwn').b, true);
+
+console.log('\n--- OrderId answers for ORDERS only ---');
+learnOrderStrings(['holybolt', 'attack', 'smart']);
+check("a unit's name, an unknown word: 0, as in the game; a generic order keeps its real id", call('OrderIds').s, '0,851983,0');
+check('an ability order (in the vocabulary) gets its stable id', call('HolyBolt').b, true);
+check("an ENGINE order no data file names is still an order (DotA's acolyteharvest)", call('EngineOrder').b, true);
+check('…so a unit\'s name is a TRAIN order: String2OrderIdBJ falls back on UnitId', call('TrainOrder').n, rawcodeToInt('hfoo'));
 
 console.log('\n--- the rest ---');
 check('GetTerrainCliffLevelBJ reads the terrain at each point', call('Cliffs').b, true);

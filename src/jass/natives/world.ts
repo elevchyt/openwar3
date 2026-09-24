@@ -8,7 +8,7 @@
 // (The text actions — floating text + on-screen messages — moved to natives/text.ts.)
 
 import { intToRawcode, rawcodeToInt } from "../lexer";
-import { orderIdToString, orderStringToId } from "../orders";
+import { orderIdOf, orderIdToString, orderStringToId } from "../orders";
 import type { BuffFilter, EngineHooks, JassPlayer, JassUnit, NativeCtx, Runtime, UnitTypeDefault } from "../runtime";
 import { asInt, asNum, asStr, jBool, jHandle, jInt, JNULL, jReal, jStr, type JassValue } from "../values";
 
@@ -339,8 +339,8 @@ export function registerWorldNatives(rt: Runtime): void {
   def(rt, "IssueTargetOrderById", (c, a) => byId(c, a[0], a[1], "target", 0, 0, a[2]));
 
   // Order id ↔ string vocabulary (OrderId/String2OrderId → int, OrderId2String → string).
-  def(rt, "OrderId", (_c, a) => jInt(orderStringToId(orderStr(a[0]))));
-  def(rt, "String2OrderId", (_c, a) => jInt(orderStringToId(orderStr(a[0]))));
+  def(rt, "OrderId", (_c, a) => jInt(orderIdOf(orderStr(a[0]))));
+  def(rt, "String2OrderId", (_c, a) => jInt(orderIdOf(orderStr(a[0]))));
   def(rt, "OrderId2String", (_c, a) => jStr(orderIdToString(asInt(a[0]))));
   def(rt, "GetUnitCurrentOrder", (c, a) => {
     const u = unit(c, a[0]);
