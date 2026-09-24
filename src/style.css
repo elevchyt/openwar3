@@ -2519,6 +2519,81 @@ body.hud-widget-skinned .hud-console.hud-console-skinned .hud-inventory .hud-inv
   box-shadow: 0 0 0 2px #fcd312, 0 0 10px 3px rgba(252, 211, 18, 0.75), inset 0 0 8px 1px rgba(252, 211, 18, 0.45);
 }
 .gamepad-focus[hidden] { display: none; }
+/* The gamepad's on-screen keyboard (ui/padKeyboard.ts): small, beside the field it types into,
+   and dressed as the game's own tooltip slab — the slate fill in the gold nine-patch the hover
+   hints wear (placeholder slate until an install is mounted). Under the veil and the focus box,
+   so the OS pointer stays hidden over it and the field's gold frame draws on top. */
+.pad-keyboard {
+  --kb-key: clamp(22px, 3.1vh, 38px);
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 2147483644;
+  padding: calc(var(--kb-key) * 0.3);
+  font-family: var(--game-font);
+  color: #fff;
+  background: rgba(30, 40, 55, 0.9);
+  border: 1px solid rgba(126, 146, 176, 0.55);
+  border-radius: 2px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+  user-select: none;
+}
+.pad-keyboard[hidden] { display: none; }
+/* The slate is translucent — right for a hint over the world, and wrong under fifty keys over a
+   menu panel whose labels read through the gaps — so a dark layer goes under it. */
+body.hud-tooltip-skinned .pad-keyboard,
+.pad-keyboard.skinned {
+  background: linear-gradient(rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0.45)), var(--hud-tooltip-fill);
+  border: none;
+  border-radius: calc(var(--tt-band, 10px) * 0.4);
+}
+body.hud-tooltip-skinned .pad-keyboard::after,
+.pad-keyboard.skinned::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--tt-bg-inset, 3px) * -1);
+  border: var(--tt-band, 10px) solid transparent;
+  border-image: var(--hud-tooltip-border) 16 / var(--tt-band, 10px) round;
+  pointer-events: none;
+}
+.pad-kb-keys {
+  display: grid;
+  grid-template-columns: repeat(10, var(--kb-key));
+  grid-auto-rows: calc(var(--kb-key) * 0.86);
+  gap: calc(var(--kb-key) * 0.12);
+}
+.pad-kb-key {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(var(--kb-key) * 0.46);
+  line-height: 1;
+  color: #fff;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.9);
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(216, 180, 90, 0.28);
+  border-radius: 2px;
+}
+.pad-kb-key.pad-kb-wide { font-size: calc(var(--kb-key) * 0.36); color: #e8dcb8; }
+.pad-kb-key:hover,
+.pad-kb-key.pad-hover { border-color: rgba(252, 211, 18, 0.7); }
+/* Shift held: the game's warning gold, as a hotkey letter wears it. */
+.pad-kb-key.on { color: #ffcc00; border-color: rgba(252, 211, 18, 0.7); }
+/* The key X will type: the D-pad's own gold frame (.gamepad-focus), drawn inside the cell. */
+.pad-kb-key.sel {
+  color: #ffcc00;
+  border-color: #fcd312;
+  box-shadow: 0 0 6px 1px rgba(252, 211, 18, 0.7), inset 0 0 6px rgba(252, 211, 18, 0.35);
+}
+.pad-kb-hint {
+  margin-top: calc(var(--kb-key) * 0.22);
+  font-size: calc(var(--kb-key) * 0.36);
+  color: #a8a8a8;
+  text-align: center;
+  white-space: nowrap;
+}
+.pad-kb-hint b { color: #ffcc00; font-weight: 400; margin: 0 0.25em 0 0.8em; font-size: 1.15em; }
+.pad-kb-hint b:first-child { margin-left: 0; }
 /* No image to wear (before an install has given the page its gauntlet): a plain arrow. */
 .gamepad-cursor.plain::before {
   content: "";

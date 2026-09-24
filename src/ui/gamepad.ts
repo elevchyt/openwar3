@@ -1,5 +1,9 @@
 import type { FdfScreen } from "./fdf/render";
 import { anyModalOpen } from "./modal";
+import {
+  closeKeyboard, keyboardBackspace, keyboardEnter, keyboardHasPad, keyboardMove, keyboardOpen, keyboardPadMode,
+  keyboardPress, keyboardSpace, openKeyboard, syncKeyboard, textField,
+} from "./padKeyboard";
 
 // Gamepad support (issue #162).
 //
@@ -16,8 +20,11 @@ import { anyModalOpen } from "./modal";
 //     click on the world selects through `selectAt`, a click on a glue button fires its
 //     handler, and a held X drags the selection box.
 //   · the buttons that have a KEY are that key: O is Escape, Triangle is Tab (the next
-//     subgroup of the selection), R2 is "-", L1 is F8, Start is F10 (Escape during a cinematic,
-//     which skips it) and Select is F9.
+//     subgroup of the selection), R3 is Space ("Center on last notification"), R2 is "-", L1 is
+//     F8, Start is F10 (Escape during a cinematic, which skips it) and Select is F9.
+//   · X on a TEXT FIELD puts up an on-screen keyboard (ui/padKeyboard.ts), and while it is up
+//     the D-pad walks its keys and Square / Triangle / Start / O are Delete / Space / Enter /
+//     put it away.
 //   · the rest are match actions with no key at all (attack-move at the cursor, a jump to the
 //     selection, the building cycle, the command-card selector), and go through a
 //     `GamepadMatchHost` the running match installs — `render/mapViewer.ts`.
@@ -274,6 +281,7 @@ function tick(now: number): void {
       continue;
     }
     syncDropdown();
+    syncKeyboard();
     syncFocus(now);
     drive(pad, now_, prev, dt, now);
   }
@@ -303,6 +311,7 @@ function unpair(announce: boolean): void {
   dpadHeld = null;
   pan = [0, 0];
   setCardMode(false);
+  closeKeyboard();
   if (menuEl) for (const it of menuItems(menuEl)) it.classList.remove("pad-sel");
   menuEl = null;
   menuMode = false;
@@ -324,6 +333,7 @@ function drive(pad: Gamepad, down: boolean[], prev: boolean[], dt: number, now: 
     if (focusOn) leaveFocus();
     setCardMode(false);
     menuMode = false;
+    keyboardPadMode(false);
     const speed = CURSOR_SPEED * window.innerHeight;
     moveCursor(cx + lx * speed * dt, cy + ly * speed * dt);
   } else if (cursorOn && !focusOn && now - cursorStyleAt > CURSOR_STYLE_MS) {
@@ -348,10 +358,15 @@ function drive(pad: Gamepad, down: boolean[], prev: boolean[], dt: number, now: 
 
 function press(button: number, now: number): void {
   switch (button) {
-    case B.cross:
+    case B.cross: {
       // An open dropdown the D-pad is walking: X picks the option the frame is on.
       if (menuMode && menuEl) {
         pickMenuItem();
+        return;
+      }
+      // The on-screen keyboard the D-pad is walking: X types the key the frame is on.
+      if (keyboardOpen() && keyboardHasPad()) {
+        keyboardPress();
         return;
       }
       // The selector's X, while the D-pad has it: press the command button it is on. Leaving
@@ -361,8 +376,13 @@ function press(button: number, now: number): void {
         if (host.targeting()) setCardMode(false);
         return;
       }
+      // X on a text field is a click into it (the focus, the caret) — and the keyboard, since
+      // a pad has no other way to put a letter in it.
+      const field = textField(focusOn ? focusEl : hit(cx, cy));
       holdMouse(button, 0);
+      if (field && document.activeElement === field) openKeyboard(field);
       return;
+    }
     case B.r1:
       holdMouse(button, 2);
       return;
@@ -373,10 +393,19 @@ function press(button: number, now: number): void {
         closeDropdown();
         return;
       }
+      // …and over the keyboard it puts the KEYBOARD away, keeping what was typed.
+      if (keyboardOpen()) {
+        closeKeyboard();
+        return;
+      }
       holdKey(button, "Escape", "Escape");
       return;
     case B.triangle:
+      if (keyboardOpen()) return keyboardSpace();
       holdKey(button, "Tab", "Tab");
+      return;
+    case B.r3:
+      holdKey(button, " ", "Space");
       return;
     case B.r2:
       holdKey(button, "-", "Minus");
@@ -385,6 +414,8 @@ function press(button: number, now: number): void {
       holdKey(button, "F8", "F8");
       return;
     case B.start:
+      // Over the keyboard, Enter: what creates the profile or sends the chat line.
+      if (keyboardOpen()) return keyboardEnter();
       // F10 — except during a cinematic, where it is Escape: the key that SKIPS one
       // (mapViewer's cinematic-skip, EVENT_PLAYER_END_CINEMATIC), and the thing a player
       // reaching for Start in the middle of one is asking for. F10 does nothing there anyway.
@@ -395,6 +426,7 @@ function press(button: number, now: number): void {
       holdKey(button, "F9", "F9");
       return;
     case B.square:
+      if (keyboardOpen()) return keyboardBackspace();
       if (host?.canAct()) host.attackMoveAt(cursorPoint()[0], cursorPoint()[1]);
       return;
     case B.l2:
@@ -422,6 +454,11 @@ function dpad(button: number): void {
   }
   const dx = button === B.left ? -1 : button === B.right ? 1 : 0;
   const dy = button === B.up ? -1 : button === B.down ? 1 : 0;
+  // …then the on-screen keyboard, over the field it is typing into.
+  if (keyboardOpen()) {
+    keyboardMove(dx, dy);
+    return;
+  }
   // Any menu — every glue screen, and in a match the F10 panel or a dialog over it — is walked
   // control by control; a match with nothing over it gives the D-pad to the command card.
   if (menuNavigation()) {
@@ -597,6 +634,12 @@ function leaveFocus(): void {
  *  the box hands back to the cursor — the D-pad is the command card's there. */
 function syncFocus(now: number): void {
   if (!focusOn) return;
+  // The keyboard covers part of the screen, so the field may no longer be "on top" at its
+  // centre — the box stays on the field it is typing into rather than hopping to a neighbour.
+  if (keyboardOpen()) {
+    placeFocus();
+    return;
+  }
   if (!menuNavigation()) {
     leaveFocus();
     paintCursor();

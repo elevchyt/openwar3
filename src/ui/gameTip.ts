@@ -38,9 +38,16 @@ export function setGameTipSkin(vars: Record<string, string> | null): void {
   if (slab) dress(slab);
 }
 
-function dress(el: HTMLDivElement): void {
+function dress(el: HTMLElement): void {
   el.classList.toggle("skinned", !!menuSkin);
   for (const [k, v] of Object.entries(menuSkin ?? {})) el.style.setProperty(k, v);
+}
+
+/** Put the same dress on another of our own slabs (the gamepad's on-screen keyboard,
+ *  ui/padKeyboard.ts): `.skinned` and the art's properties outside a match, nothing in one —
+ *  there `body.hud-tooltip-skinned` already carries it. */
+export function dressAsGameTip(el: HTMLElement): void {
+  dress(el);
 }
 
 /**

@@ -7871,7 +7871,7 @@ export class MapViewerScene {
    * A completion is a notification too: a building up, a unit trained, a research or a
    * structure upgrade finished. Each announces itself (the chime and the "Completed:" line)
    * without naming WHERE, and the whole point of the ring is to take you there — issue #162
-   * asked this of the gamepad's Triangle (which has since become Tab), and Space walks the
+   * asked this of the gamepad (the right-stick press, which is Space), and Space walks the
    * ring. Placed at the building, which is what finished.
    */
   private noteCompletion(u: { x: number; y: number } | undefined): void {

@@ -13,7 +13,7 @@ the input the mouse or keyboard would have given and goes through the same doors
 | left stick | moves the cursor | a drawn virtual cursor + synthetic pointer events (below) |
 | left stick press | centre on the selection | `GamepadMatchHost.jumpToSelection` |
 | right stick | pans the camera, 360° | `gamepadPan()`, read by `updateCamera` beside the arrow keys, at `PAD_PAN_SCALE` (¾) of their speed |
-| right stick press | nothing yet | — |
+| right stick press | centre on the last notification | the **Space** key |
 | X | left click (or presses the card selector's button) | pointer/mouse events at the cursor |
 | R1 | right click | pointer/mouse events, button 2 |
 | O | cancel | the **Escape** key |
@@ -25,6 +25,16 @@ the input the mouse or keyboard would have given and goes through the same doors
 | R2 | select the whole army | the **"-"** key (so double-tap and hold-to-follow come with it) |
 | Start | F10 menu (pairs an unpaired pad); skips a cinematic | the **F10** key — **Escape** while a cinematic is up (`inCinematic`) |
 | Select | Quest Log | the **F9** key |
+
+**Typing.** X on a text field (a profile name, a LAN game name, the chat line) clicks into it
+and puts up an on-screen keyboard beside it ([`src/ui/padKeyboard.ts`](../src/ui/padKeyboard.ts)).
+While it is up the D-pad walks its keys and X types one, Square is Delete, Triangle a space, Start
+Enter (the edit box's submit, the chat line's send — it is dispatched as a real key, the letters
+are not) and O puts it away with the text kept. The left stick takes X back for the cursor, and a
+click on a key types it, mouse or pad. Text goes in at the caret with `setRangeText` plus an
+`input` event, which is what every edit box listens to, and the field's own `maxLength` holds. It
+wears the tooltip slab's dress (`dressAsGameTip`) — nothing in WC3 is a keyboard — and closes
+itself when the field loses the focus or leaves the page.
 
 A button that has a key IS that key. It is dispatched as a real `KeyboardEvent` at the focused
 element, held for as long as the pad button is held, so it inherits every gate the key handlers
@@ -163,12 +173,12 @@ buildings went up in. Every group is read off the data (`RtsController.buildingR
 The tier comes from `Requires`, through the hall chain and the `TWN2`/`TWN3` pseudo-techs.
 Farms, towers, Moon Wells and burrows are not visited.
 
-## Notifications (Space)
+## Notifications (R3 / Space)
 
 The Space ring (`noteSpacebarPoint`, eight points, newest first) already held minimap pings,
 which include every raid on your base, and the script's `SetCameraQuickPosition`. Issue #162
 adds your **completions**: a building up, a unit trained, a research or a structure upgrade
-finished (`noteCompletion`). Triangle was Space once; it is Tab now, and the ring is the keyboard's.
+finished (`noteCompletion`). The right-stick press is Space, so the keyboard walks the same ring.
 
 ## Testing without a pad
 
