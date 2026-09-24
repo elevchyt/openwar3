@@ -25,11 +25,33 @@ import { MODAL_FX_OVERHANG, ModalButtonFx } from "./modalButtonFx";
 import { anyModalOpen } from "./modal";
 import { gridCommandKey, gridCommandSlot, gridHotkeys, gridInventoryKey, gridInventorySlot, hotkeyMode, hotkeysOnButtons } from "../data/hotkeys";
 
+/** The three upkeep bands: the food each covers and the share of mined gold it lets through.
+ *  The game's own words, from the official basics page (classic.battle.net/war3/basics/
+ *  upkeep.shtml): "No Upkeep (0-50 Food: 100% income)", "Low Upkeep (51-80 Food: 70% income)",
+ *  "High Upkeep (81-100 Food: 40% income)". The install states none of it — `UpkeepUsage` and
+ *  `UpkeepGoldTax` are MiscMetaData fields a map's war3mapMisc.txt may set, with no default in
+ *  any file — which is why they are written out here, and in exactly the shape the resource bar's
+ *  `RESOURCE_UBERTIP_UPKEEP_INFO` line prints ("%d-%d Food: %s (%d%% income)"). */
+export const UPKEEP_BANDS: ReadonlyArray<{ from: number; to: number; income: number }> = [
+  { from: 0, to: 50, income: 100 },
+  { from: 51, to: 80, income: 70 },
+  { from: 81, to: 100, income: 40 },
+];
+
 /** Which upkeep band a food count falls in: 0 none (0–50), 1 low (51–80), 2 high (81+).
  *  Shared with the message the game prints when a player crosses one (`Upkeeplevel`, see
  *  MapViewerScene.noteUpkeep) so the label and the line can never disagree. */
 export function upkeepBand(foodUsed: number): 0 | 1 | 2 {
-  return foodUsed <= 50 ? 0 : foodUsed <= 80 ? 1 : 2;
+  return foodUsed <= UPKEEP_BANDS[0].to ? 0 : foodUsed <= UPKEEP_BANDS[1].to ? 1 : 2;
+}
+
+/** The resource bar's four readouts, as `ConsoleUi` reports a hover over one. */
+export type ResourceKind = "gold" | "lumber" | "supply" | "upkeep";
+
+/** GlobalStrings' printf: `%d` and `%s` in order, `%%` a literal percent. */
+function printf(fmt: string, args: Array<string | number>): string {
+  let i = 0;
+  return fmt.replace(/%%|%[sd]/g, (m) => (m === "%%" ? "%" : String(args[i++] ?? "")));
 }
 
 /** The band's label, as the resource bar prints it: `UPKEEP_NONE`/`_LOW`/`_HIGH`, which carry
@@ -3511,6 +3533,43 @@ export class GameHud {
     if (c) this.showTooltip(c);
     else this.cmdTooltip.hidden = true; // …and `cmdHover` stands, so a button that lands here later gets its slab
   }
+
+  /**
+   * The slab for a hover over the resource bar (reported by `ConsoleUi`; null when it leaves).
+   *
+   * Every word is GlobalStrings.fdf's, by key, so a map's war3mapSkin.txt reaches it — Test of
+   * Balance rewrites the supply and upkeep ones to describe its difficulty counter. The bodies
+   * are the engine's `RESOURCE_UBERTIP_*`. The TITLES are ours: GlobalStrings has `GOLD` and
+   * `LUMBER` and nothing for supply, so the supply slab is its line alone, and the upkeep slab
+   * is titled by the band it is in (the bar's own label) over one `RESOURCE_UBERTIP_UPKEEP_INFO`
+   * line per band. `|N` in those lines is the game's newline in its other case.
+   */
+  showResourceTip(kind: ResourceKind | null): void {
+    if (!kind) {
+      if (this.resourceTip) this.cmdTooltip.hidden = true;
+      this.resourceTip = false;
+      return;
+    }
+    const s = (key: string, fallback: string): string => this.driver.uiString(key, fallback);
+    const block = (title: string, body: string): string =>
+      `${title ? `<div class="hud-tooltip-title">${wc3ToHtml(title)}</div>` : ""}<div class="hud-tooltip-desc">${wc3ToHtml(body)}</div>`;
+    let html: string;
+    if (kind === "gold") html = block(s("GOLD", "Gold"), s("RESOURCE_UBERTIP_GOLD", "Gold is mined from gold mines."));
+    else if (kind === "lumber") html = block(s("LUMBER", "Lumber"), s("RESOURCE_UBERTIP_LUMBER", "Lumber is harvested from trees."));
+    else if (kind === "supply") {
+      html = block("", s("RESOURCE_UBERTIP_SUPPLY", "The amount of food you are using over the total amount you can currently sustain."));
+    } else {
+      const band = upkeepBand(this.driver.resources().foodUsed);
+      const line = s("RESOURCE_UBERTIP_UPKEEP_INFO", "|N%d-%d Food: %s|R (%d%% income)");
+      const lines = UPKEEP_BANDS.map((b, i) => printf(line, [b.from, b.to, s(UPKEEP_KEY[i], UPKEEP_FALLBACK[i]), b.income])).join("");
+      html = block(s(UPKEEP_KEY[band], UPKEEP_FALLBACK[band]),
+        s("RESOURCE_UBERTIP_UPKEEP", "Upkeep is determined by the amount of food your forces are currently using.") + lines);
+    }
+    this.resourceTip = true;
+    this.setTooltip(html);
+  }
+  /** The slab on display is a resource bar's (so leaving the bar hides it, and nothing else). */
+  private resourceTip = false;
 
   /** The ONE write to the tooltip slab. Skips the DOM when the text is what is already there
    *  (the per-frame re-show above), and never skips un-hiding it. */

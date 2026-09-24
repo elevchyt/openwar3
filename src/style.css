@@ -2658,6 +2658,15 @@ body.in-game .fdf-screen.fdf-ingame {
   box-shadow: none;
 }
 
+/* The resource bar's hover zones (ui/consoleUi.ts hoverZones): invisible, over each readout,
+   the one part of the SIMPLEFRAME bar that answers the mouse. */
+.console-resource-hover {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  pointer-events: auto;
+}
+
 .fdf-button {
   pointer-events: auto;
   /* No cursor override — the WC3 hand cursor (ui/cursor.ts) stays in every state. */

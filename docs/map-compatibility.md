@@ -772,8 +772,13 @@ And the map's interface layer, with the four bugs found standing on it:
   For any of that to reach the HUD, the HUD had to read those words and icons BY KEY: the upkeep
   label is `UPKEEP_NONE`/`_LOW`/`_HIGH` now, with the string's own colour (the game's "low" is
   `ffff00`, where our hand-picked one was orange), and the idle-worker button is `IdlePeon` art under
-  `IDLE_PEON`/`IDLE_PEON_DESC`, all three of which 1.30.4's own data carries. Not done: hover slabs
-  on the resource bar, which is where `COLON_FOOD` and `RESOURCE_UBERTIP_*` would show.
+  `IDLE_PEON`/`IDLE_PEON_DESC`, all three of which 1.30.4's own data carries. The resource bar's
+  four readouts answer the mouse too (`ConsoleUi.hoverZones` → `GameHud.showResourceTip`): the
+  `RESOURCE_UBERTIP_*` bodies by key, and the upkeep slab's one `RESOURCE_UBERTIP_UPKEEP_INFO`
+  line per band, off the bands the official basics page states (`hud.ts UPKEEP_BANDS`) — so the
+  map's "This map is Balanced." and its three renamed bands show there. The slab TITLES are ours
+  (GlobalStrings has `GOLD`/`LUMBER` and nothing for supply); `COLON_FOOD` is the info panel's
+  "Food:" and never the bar's.
 * **A model file that is not there is an INVISIBLE unit, not an absent one.** Pointing Art - Model
   File at a path that does not exist is the standard way to make a dummy ("NONE.mdx",
   "Whatever.mdx" — hiveworkshop 165420), and the viewer cannot deliver such a unit, so

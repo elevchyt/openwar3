@@ -38,6 +38,7 @@ import type { Arg, FdfFrame, FdfProp } from "./fdf/parser";
 import { type FdfLibrary } from "./fdf/library";
 import { UI_HEIGHT, UI_WIDTH } from "./fdf/layout";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
+import type { ResourceKind } from "./hud";
 import { setGameTip } from "./gameTip";
 
 const CONSOLE_FDF = "UI\\FrameDef\\UI\\ConsoleUI.fdf";
@@ -153,6 +154,9 @@ export interface ConsoleUiActions {
    * mid-match and a resize rebuilds every frame from the FDF.
    */
   disabledPanels?(): ReadonlySet<ConsolePanel>;
+  /** The mouse is over one of the resource bar's four readouts (null: it has left the bar) —
+   *  the HUD raises that readout's slab (GameHud.showResourceTip). */
+  resourceHover?(kind: ResourceKind | null): void;
   /** Put the day/night medallion in the slot the strip leaves for it (render/timeIndicator.ts).
    *  Returns false when there is no install to render the model from. */
   mountClock(slot: HTMLElement): boolean;
@@ -218,6 +222,37 @@ export class ConsoleUi {
       && prev.supply === next.supply && prev.upkeep === next.upkeep) return;
     this.last = next;
     this.paint();
+  }
+
+  /**
+   * The four readouts answer the mouse, as the game's own do (hovering one raises its slab).
+   *
+   * The bar is a SIMPLEFRAME whose icons and strings take no pointer, so each readout gets a
+   * zone of its own laid over it: from where the previous one ends to the right edge of its own
+   * number — the icon and the figure together, in the file's own positions (read off the frames
+   * the renderer just placed, never retyped). Rebuilt with the strip, like everything else here.
+   */
+  private hoverZones(screen: FdfScreen): void {
+    const bar = screen.frame("ResourceBarFrame");
+    if (!bar || !this.actions.resourceHover) return;
+    const texts: Array<[ResourceKind, string]> = [
+      ["gold", "ResourceBarGoldText"], ["lumber", "ResourceBarLumberText"],
+      ["supply", "ResourceBarSupplyText"], ["upkeep", "ResourceBarUpkeepText"],
+    ];
+    let left = 0;
+    for (const [kind, name] of texts) {
+      const el = screen.frame(name);
+      if (!el) continue;
+      const right = parseFloat(el.style.left) + parseFloat(el.style.width);
+      const zone = document.createElement("div");
+      zone.className = "console-resource-hover";
+      zone.style.left = `${left}px`;
+      zone.style.width = `${Math.max(0, right - left)}px`;
+      zone.addEventListener("pointerenter", () => this.actions.resourceHover?.(kind));
+      zone.addEventListener("pointerleave", () => this.actions.resourceHover?.(null));
+      bar.appendChild(zone);
+      left = right;
+    }
   }
 
   /** `screen` is passed in rather than read off `this`, because the build hook fires from
@@ -332,6 +367,7 @@ export class ConsoleUi {
         onBuild: (built) => {
           this.backing(built);
           this.paint(built);
+          this.hoverZones(built);
           this.mountClock(built);
           this.applyEnabled(built);
         },

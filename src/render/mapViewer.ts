@@ -8493,6 +8493,7 @@ export class MapViewerScene {
       openPanel: (panel) => this.togglePanel(panel),
       disabledPanels: () => this.deadPanels(),
       mountClock: (slot) => this.mountClock(slot),
+      resourceHover: (kind) => this.hud?.showResourceTip(kind),
     });
     this.hud = new GameHud(ui, driver);
     this.mountScriptUi(ui);
