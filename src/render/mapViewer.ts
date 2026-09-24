@@ -1248,6 +1248,8 @@ export class MapViewerScene {
   private readonly combatText = new CombatTextTags();
   private leaderboard: LeaderboardOverlay | null = null; // CreateLeaderboard, top-right
   private scriptFrames: ScriptFrameOverlay | null = null; // the map's own BlzCreateFrame UI
+  /** `BlzHideOriginFrames(true)` is in force (see syncHudVisible). */
+  private originHidden = false;
   private multiboard: MultiboardOverlay | null = null; // CreateMultiboard — the grid scoreboard (7.22)
   private timerDialogs: TimerDialogOverlay | null = null; // CreateTimerDialog — the countdown windows (7.21)
   private cinematic: CinematicPanelOverlay | null = null; // the letterbox + transmissions + the fade (7.24)
@@ -3412,6 +3414,12 @@ export class MapViewerScene {
         : "",
       // UnitId / UnitId2String: the unit table's internal `name`, which is also the train order.
       // Base rows come first in `all()`, so a custom copy never shadows the stock type's name.
+      // BlzHideOriginFrames / the ConsoleUIBackdrop frame (compat/frames.ts): this screen's.
+      hideOriginFrames: (hide) => {
+        this.originHidden = hide;
+        this.syncHudVisible();
+      },
+      setConsoleBackdropVisible: (visible) => this.consoleUi?.setBackdropVisible(visible),
       // BlzLoadTOCFile's .toc and .fdf files: the map's archive over the install, synchronously.
       readMapFile: (path) => this.assetFiles().rawBytes(path.replace(/\//g, "\\")),
       unitTypeByName: (name) => {
@@ -3904,6 +3912,7 @@ export class MapViewerScene {
     this.interfaceShown = true;
     this.userUi = true;
     this.userControl = true;
+    this.originHidden = false; // a map's BlzHideOriginFrames is that map's
     document.body.classList.remove("cine-on", "dialog-on");
     this.gameSpeed = 2; // MAP_SPEED_NORMAL
     this.cinePortraitFor = "";
@@ -9542,8 +9551,13 @@ export class MapViewerScene {
    *  duration of a cinematic; EnableUserUI hides everything for the duration of a fade. */
   private syncHudVisible(): void {
     const on = this.interfaceShown && this.userUi;
-    if (on) this.hud?.show();
+    // A map's `BlzHideOriginFrames(true)` takes the HUD's sockets away (the command card, the
+    // portrait, the minimap, the hero bar, the inventory) and the system buttons with them,
+    // while the console ART and the resource bar stay — a third owner beside the letterbox and
+    // the momentary blackout, which is why it is a flag of its own (compat/frames.ts).
+    if (on && !this.originHidden) this.hud?.show();
     else this.hud?.hide();
+    this.consoleUi?.setOriginHidden(this.originHidden);
     // **And the console CHROME, which is a different element.** `GameHud` owns what sits IN
     // the console's sockets — the minimap picture, the portrait, the command card, the
     // hero bar; the console art itself (the bottom band AND the top strip carrying the
@@ -13355,6 +13369,7 @@ export class MapViewerScene {
     this.interfaceShown = true;
     this.userUi = true;
     this.userControl = true;
+    this.originHidden = false; // a map's BlzHideOriginFrames is that map's
     // A Lua map's front end goes with it: the state itself is GC'd with the interpreter, but
     // its host functions were registered in that interpreter's runtime, and dropping them
     // here is what keeps "nothing a match puts on the page outlives it" true of this too.

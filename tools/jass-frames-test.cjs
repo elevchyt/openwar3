@@ -68,8 +68,11 @@ Frame "BACKDROP" "BoxedText" INHERITS "BoxedTextBackgroundTemplate" {
 }
 `,
 };
+const hides = [];
 const hooks = {
   readMapFile: (p) => (p in FILES ? new TextEncoder().encode(FILES[p]) : null),
+  hideOriginFrames: (h) => hides.push(['origin', h]),
+  setConsoleBackdropVisible: (v) => hides.push(['backdrop', v]),
 };
 
 const SRC = `
@@ -119,6 +122,15 @@ function TitleIsChild takes nothing returns boolean
 endfunction
 function HoverKeepsParent takes nothing returns boolean
     return BlzFrameGetParent(hover) == icon
+endfunction
+function Loose takes nothing returns nothing
+    call BlzFrameSetAbsPoint(BlzCreateFrameByType("BACKDROP", "", BlzGetOriginFrame(ORIGIN_FRAME_GAME_UI, 0), "", 0), FRAMEPOINT_TOPLEFT, 0.9, 0.5)
+    call BlzFrameSetAbsPoint(BlzCreateFrameByType("SIMPLEFRAME", "", BlzGetOriginFrame(ORIGIN_FRAME_GAME_UI, 0), "", 0), FRAMEPOINT_TOPLEFT, 0.9, 0.4)
+endfunction
+function Hides takes nothing returns nothing
+    call BlzHideOriginFrames(true)
+    call BlzFrameSetVisible(BlzGetFrameByName("ConsoleUIBackdrop", 0), false)
+    call BlzHideOriginFrames(false)
 endfunction
 function NoToc takes nothing returns boolean
     return BlzLoadTOCFile("Missing.toc")
@@ -177,6 +189,17 @@ check('the hover frame and the button are listened on; the button takes clicks',
 const hoverNode = find(tree.root, tree.names.get(g('hover').h));
 check('SetAllPoints is two opposite corners on the frame it covers', prop(hoverNode, 'SetPoint'),
   [['TOPLEFT', tree.names.get(g('icon').h), 'TOPLEFT', 0, 0], ['BOTTOMRIGHT', tree.names.get(g('icon').h), 'BOTTOMRIGHT', 0, 0]]);
+
+console.log('\n--- the 4:3 box, and the game frames a map hides ---');
+call('Loose');
+const tree2 = buildScriptFrameTree(model, model.lib);
+const box = tree2.root.children.find((c) => c.name === SCRIPT_UI_43);
+check('the clipped box is the 4:3 one', tree2.clipped, SCRIPT_UI_43);
+check('a BACKDROP on the plain game UI is drawn INSIDE it (held to 4:3)', box.children.some((c) => c.type === 'BACKDROP'), true);
+check('a SIMPLEFRAME is free of it', tree2.root.children.some((c) => c.type === 'SIMPLEFRAME'), true);
+check('…and so is a frame on ConsoleUIBackdrop', tree2.root.children.some((c) => c.name === tree2.names.get(g('panel').h)), true);
+call('Hides');
+check('BlzHideOriginFrames and ConsoleUIBackdrop reach the screen', JSON.stringify(hides), JSON.stringify([['origin', true], ['backdrop', false], ['origin', false]]));
 
 console.log(failures ? `\n${failures} failure(s).` : '\nAll frame checks passed.');
 process.exit(failures ? 1 : 0);

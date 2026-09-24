@@ -193,6 +193,36 @@ export class ConsoleUi {
     return this.screen?.element ?? null;
   }
 
+  /**
+   * The two halves of the strip a MAP's script may take away (compat/frames.ts):
+   *
+   *  · `BlzHideOriginFrames(true)` hides the game's ORIGIN frames, and of those this strip holds
+   *    the system buttons (ORIGIN_FRAME_SYSTEM_BUTTON — Quests/Menu/Allies/Chat). The console art
+   *    and the resource bar are not origin frames and stay (Tasyen, "UI: OriginFrames",
+   *    hiveworkshop 316034).
+   *  · `ConsoleUIBackdrop` is "additional BACKDROP Blizzard added for the Bottom UI … not hidden
+   *    by BlzHideOriginFrames" (same thread) — our flat black behind the bottom console
+   *    (`backing`), which a map hides by name: Test of Balance does, around its intro.
+   *
+   * Both re-applied on every build, since a resize rebuilds the strip.
+   */
+  setOriginHidden(hidden: boolean): void {
+    this.originHidden = hidden;
+    this.applyScriptHides();
+  }
+  setBackdropVisible(on: boolean): void {
+    this.backdropShown = on;
+    this.applyScriptHides();
+  }
+  private originHidden = false;
+  private backdropShown = true;
+  private applyScriptHides(screen: FdfScreen | null = this.screen): void {
+    if (!screen) return;
+    const buttons = screen.frame("UpperButtonBarFrame");
+    if (buttons) buttons.style.visibility = this.originHidden ? "hidden" : "";
+    for (const el of screen.element.querySelectorAll<HTMLElement>(".console-backing")) el.style.visibility = this.backdropShown ? "" : "hidden";
+  }
+
   setVisible(on: boolean): void {
     this.shown = on;
     const el = this.screen?.element;
@@ -366,6 +396,7 @@ export class ConsoleUi {
         // that runs on EVERY build instead of only the first.
         onBuild: (built) => {
           this.backing(built);
+          this.applyScriptHides(built);
           this.paint(built);
           this.hoverZones(built);
           this.mountClock(built);

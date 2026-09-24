@@ -262,12 +262,13 @@ export function registerFrameNatives(rt: Runtime): void {
     }
     return jHandle(id, "framehandle");
   });
-  // "Hide the whole 2003 console" — a full-screen custom UI's first call. Recorded and not
-  // obeyed: taking the real console down is a HUD change, and every call in the corpus is a
-  // cinematic's, which already takes the console away (Test of Balance hides and restores it
-  // around its intro, inside CinematicModeBJ).
-  def(rt, "BlzHideOriginFrames", (c) => {
-    c.rt.warnOnce("BlzHideOriginFrames", "the console is the HUD's to hide — left up");
+  // "Hide the whole 2003 console" — a full-screen custom UI's first call. It takes the ORIGIN
+  // frames away (command card, hero bar, inventory, minimap and its buttons, portrait, the
+  // system buttons, the tooltips) and leaves the console art, the resource bar and the black
+  // `ConsoleUIBackdrop`, which a map hides by name (Tasyen, "UI: OriginFrames", hiveworkshop
+  // 316034). The scene owns all of that (MapViewerScene.originHidden).
+  def(rt, "BlzHideOriginFrames", (c, a) => {
+    c.rt.hooks?.hideOriginFrames?.(truthy(a[0] ?? JNULL));
     return JNULL;
   });
 
@@ -282,7 +283,11 @@ export function registerFrameNatives(rt: Runtime): void {
       return JNULL;
     });
   };
-  set("BlzFrameSetVisible", (f, a) => { f.visible = truthy(a[1]); });
+  set("BlzFrameSetVisible", (f, a, c) => {
+    f.visible = truthy(a[1]);
+    // The one game frame whose visibility is ours to draw: the black behind the bottom console.
+    if (f.origin && f.name === "ConsoleUIBackdrop") c.rt.hooks?.setConsoleBackdropVisible?.(f.visible);
+  });
   set("BlzFrameSetEnable", (f, a) => { f.enabled = truthy(a[1]); });
   set("BlzFrameSetAlpha", (f, a) => { f.alpha = asInt(a[1]); });
   set("BlzFrameSetScale", (f, a) => { f.scale = asNum(a[1]); });

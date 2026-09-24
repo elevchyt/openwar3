@@ -123,6 +123,9 @@ export class ScriptFrameOverlay {
   private wire(screen: FdfScreen): void {
     const tree = this.tree;
     if (!tree) return;
+    // The 4:3 box holds the frames the game will not let out of it (scriptFrameTree's header).
+    const box = screen.frame(tree.clipped);
+    if (box) box.style.overflow = "hidden";
     for (const { tip } of tree.tooltips) {
       const el = screen.frame(tip);
       if (el) el.style.visibility = "hidden";

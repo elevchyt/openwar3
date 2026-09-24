@@ -18,7 +18,11 @@
 //    and its toggle button sits at 0.9084, both past 0.8, parented to `ConsoleUIBackdrop`
 //    ("Most custom created Frames from the Frame group can not leave the 4:3 part of the
 //    screen" — Tasyen, The Big UI-Frame Tutorial, hiveworkshop pastebin 20598 — which is why a
-//    map hangs them on that frame). We do not clamp.
+//    map hangs them on that frame). A frame from the FRAME group on any other parent is held to
+//    the box — "If a part of them leave it, they become malformed … A TEXT-Frame might cut off
+//    some chars. A BACKDROP becomes smaller" (same tutorial) — which the drawing reproduces by
+//    clipping it there (`clipped`). SimpleFrames are "unrestricted", and the tutorial names the
+//    Leaderboard and Multiboard frames as parents that free a frame too.
 //  * `BlzFrameSetScale` scales the frame — its size, its font and the offsets of its points
 //    ("BlzFrameSetScale of the moved frame affect the x&y offset", same tutorial) — and its
 //    children with it. An ABSOLUTE position is a place on the screen and is not scaled.
@@ -54,7 +58,12 @@ export interface ScriptFrameTree {
   alpha: Record<string, number>;
   /** Controls the script disabled. */
   disabled: string[];
+  /** The FDF name of the box the 4:3-bound frames are drawn inside, which clips them. */
+  clipped: string;
 }
+
+/** Game frames a map may hang its own on to let them leave the 4:3 area (see the header). */
+const FREEING_PARENTS = new Set(["ConsoleUIBackdrop", "Leaderboard", "Multiboard"]);
 
 const str = (s: string): Arg => ({ s, n: null, str: true });
 const word = (s: string): Arg => ({ s, n: null, str: false });
@@ -97,7 +106,7 @@ function scaleNode(f: FdfFrame, s: number): void {
 export function buildScriptFrameTree(model: FrameModel, lib: FdfLibrary): ScriptFrameTree {
   const out: ScriptFrameTree = {
     root: { type: "FRAME", name: SCRIPT_UI_ROOT, inherits: null, withChildren: false, props: [], children: [] },
-    names: new Map(), texts: {}, tooltips: [], listen: [], alpha: {}, disabled: [],
+    names: new Map(), texts: {}, tooltips: [], listen: [], alpha: {}, disabled: [], clipped: SCRIPT_UI_43,
   };
   out.root.children.push({
     type: "FRAME", name: SCRIPT_UI_43, inherits: null, withChildren: false,
@@ -152,6 +161,8 @@ export function buildScriptFrameTree(model: FrameModel, lib: FdfLibrary): Script
       node.props.push({ key: "SetPoint", args: [word(mine), str(rel), word(POINTS[p.relativePoint] ?? mine), num(p.x * s), num(p.y * s)] });
     }
     if (f.textSet) out.texts[node.name] = f.text;
+    // A SIMPLE frame's picture is a `Texture` child, and its image is that block's `File`.
+    if (f.textureSet && node.type === "TEXTURE") setProp(node, "File", [str(f.texture.replace(/\//g, "\\"))]);
     if (f.textureSet && node.type === "BACKDROP") {
       setProp(node, "BackdropBackground", [str(f.texture.replace(/\//g, "\\"))]);
       // A script's texture is a PATH, never a skin key, and a typed backdrop has no border:
@@ -230,7 +241,11 @@ export function buildScriptFrameTree(model: FrameModel, lib: FdfLibrary): Script
     const parent = frames.get(f.parent);
     if (parent && !parent.origin) continue; // drawn under its parent
     const built = build(f);
-    if (built) out.root.children.push(built);
+    if (!built) continue;
+    const free = /^SIMPLE/.test(built.type) || (!!parent && FREEING_PARENTS.has(parent.name));
+    // Free frames hang off the screen root; everything else is drawn inside the 4:3 box, which
+    // clips it — the child's anchors name the box by name either way, so nothing moves.
+    (free ? out.root : out.root.children[0]).children.push(built);
   }
   return out;
 }

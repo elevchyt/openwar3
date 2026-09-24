@@ -899,6 +899,10 @@ export interface EngineHooks {
   /** A file of the running MAP (its archive over the install), read synchronously — how
    *  `BlzLoadTOCFile` brings in the map's own FDF templates while the script waits. */
   readMapFile?(path: string): Uint8Array | null;
+  /** BlzHideOriginFrames — the game's own console furniture (compat/frames.ts says which). */
+  hideOriginFrames?(hide: boolean): void;
+  /** BlzFrameSetVisible on `ConsoleUIBackdrop` — the black box behind the bottom console. */
+  setConsoleBackdropVisible?(visible: boolean): void;
   /** UnitId / UnitId2String — a unit type by its internal UnitUI `name`, and back. */
   unitTypeByName?(name: string): string;
   unitTypeName?(typeId: string): string | undefined;

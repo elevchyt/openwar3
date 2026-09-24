@@ -905,9 +905,13 @@ over the install.
   did (the stock screens that had the same shape already declared a Height of their own, which
   is why none of them changed). And `BlzGetAbilityIcon` answers any object with an Art field:
   the map fills its hero column with `BlzGetAbilityIcon(GetUnitTypeId(u))`.
-* **Not done:** `BlzHideOriginFrames` (every call in the corpus is inside a cinematic, which
-  already takes the console away), SIMPLE frames drawn as such, and the 4:3 clamp for frames
-  NOT hung on `ConsoleUIBackdrop`.
+* **The game's own frames.** `BlzHideOriginFrames(true)` takes the ORIGIN frames away — the
+  HUD's sockets and the system buttons — and leaves the console art, the resource bar and the
+  black `ConsoleUIBackdrop`, which a map hides by name (`BlzFrameSetVisible` on it reaches
+  `ConsoleUi.setBackdropVisible`); both per Tasyen's "UI: OriginFrames" (hiveworkshop 316034).
+  A frame of the FRAME group on any parent but `ConsoleUIBackdrop`/Leaderboard/Multiboard is
+  held to the 4:3 box ("If a part of them leave it, they become malformed"), drawn clipped to
+  it; SIMPLE frames are free, and a script texture on one's `Texture` block is its `File`.
 
 Tests: `tools/jass-frames-test.cjs` (the model through the real interpreter, and the tree it
 becomes). Verified live: the Info toggle opens the panel, hovering a learned skill shows its
