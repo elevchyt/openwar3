@@ -53,9 +53,11 @@ StringList {
     // ...and the checkbox under it: whether that key is printed in the corner of every button
     // that takes a press. The game prints a key only inside the tooltip, so it has no string.
     SHOW_HOTKEYS_ON_BUTTONS     "Show hotkeys on command buttons",
-    // ...and the button under that (issue #162), which listens for a gamepad to pair. The game
-    // never knew a controller, so it has no word for one.
+    // ...and the button under that (issue #162): it listens for a gamepad to pair, and once one
+    // is paired it wears the second string and lets it go. The game never knew a controller, so
+    // it has no word for one.
     DETECT_GAMEPAD              "Detect Gamepad",
+    UNPAIR_GAMEPAD              "Unpair Gamepad",
 
     // Options, Video panel, under "Occlusion:": the desktop app's vsync switch. The game has no
     // such row. It is a Chromium LAUNCH switch there (electron/main.mjs), so OK asks the second

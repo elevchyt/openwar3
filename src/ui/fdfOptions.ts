@@ -20,7 +20,7 @@ import { nativeVsync, relaunchNative, setNativeVsync } from "../assets/nativeIns
 import { showGlueDialog } from "./glueDialog";
 import { showHotkeyEditor } from "./hotkeyEditor";
 import { setGameTip } from "./gameTip";
-import { bindDetectGamepadButton, startGamepadDetect } from "./gamepad";
+import { bindGamepadButton, gamepadButtonPressed } from "./gamepad";
 
 // The Options screen (issue #81), built from the game's own UI\FrameDef\Glue\OptionsMenu.fdf:
 // the three category buttons (Gameplay / Video / Sound) down the right, the settings for the
@@ -146,8 +146,8 @@ export async function mountOptions(
       },
       // The hotkey editor (issue #156) — its own modal over this screen, saving its own file.
       HotkeyEditorButton: () => void openHotkeyEditor(),
-      // Listen for a gamepad to pair (issue #162) — ui/gamepad.ts owns the ten seconds.
-      DetectGamepadButton: () => startGamepadDetect(),
+      // Detect a gamepad to pair, or unpair the one that is (issue #162) — ui/gamepad.ts.
+      GamepadButton: () => gamepadButtonPressed(),
       // Undo everything this visit changed — including the audio applied live along the way.
       CancelButton: () => { Object.assign(working, committed); applyAudio(committed); applyVideo(committed); applyGameplay(committed); h.onClose(); },
     },
@@ -223,7 +223,10 @@ export async function mountOptions(
     applyPanelState(s);
     for (const d of OPTION_DEFS) bindOne(s, d);
     syncEditorButton(s);
-    bindDetectGamepadButton(s, lib?.string("DETECT_GAMEPAD") ?? "Detect Gamepad");
+    bindGamepadButton(s, {
+      detect: lib?.string("DETECT_GAMEPAD") ?? "Detect Gamepad",
+      unpair: lib?.string("UNPAIR_GAMEPAD") ?? "Unpair Gamepad",
+    });
   }
 
   /** The editor's button stands beside "Hotkeys:" only while it says Custom — the one rung with

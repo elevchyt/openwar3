@@ -177,16 +177,17 @@ Frame "TEXT" "VsyncLabel" INHERITS "StandardInfoTextTemplate" {
 // Gameplay panel: "Detect Gamepad" (issue #162), a button under "Show hotkeys on command
 // buttons" — the panel's last row. Nothing in 1.30.4 knows a controller exists, so the row is
 // ours. Pressing it LISTENS for ten seconds and pairs whichever pad presses a button in that
-// window; the button greys and counts the seconds down on itself while it does
-// (src/ui/gamepad.ts). The game's own button art, as the dialogs' OK and Cancel wear it
+// window; the button greys and counts the seconds down on itself while it does. Once a pad IS
+// paired the same button reads "Unpair Gamepad" (`UNPAIR_GAMEPAD`) and hands the game back to the
+// mouse and keyboard — one frame, two faces, dressed by src/ui/gamepad.ts. The game's own button art, as the dialogs' OK and Cancel wear it
 // (`StandardButtonTemplate`), narrowed to fit under the checkbox column and hung off the
 // checkbox's left edge a checkbox-row step down.
-Frame "GLUETEXTBUTTON" "DetectGamepadButton" INHERITS WITHCHILDREN "StandardButtonTemplate" {
+Frame "GLUETEXTBUTTON" "GamepadButton" INHERITS WITHCHILDREN "StandardButtonTemplate" {
     Width 0.16,
     SetPoint TOPLEFT, "ShowHotkeysCheckBox", BOTTOMLEFT, 0.0, -0.008,
 
-    ButtonText "DetectGamepadButtonText",
-    Frame "TEXT" "DetectGamepadButtonText" INHERITS "StandardButtonTextTemplate" {
+    ButtonText "GamepadButtonText",
+    Frame "TEXT" "GamepadButtonText" INHERITS "StandardButtonTextTemplate" {
         Text "DETECT_GAMEPAD",
     }
 }

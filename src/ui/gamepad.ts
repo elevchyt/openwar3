@@ -30,7 +30,8 @@ import type { FdfScreen } from "./fdf/render";
 // with the page focused, and a connected pad is not yet a paired one: a pad that has been seen
 // but not paired puts up "press START to pair" in the notification stack above the fps strip,
 // and START pairs it. Options → Gameplay → "Detect Gamepad" listens for ten seconds and pairs
-// whichever pad presses ANY button in that window. One pad is paired at a time.
+// whichever pad presses ANY button in that window. One pad is paired at a time, and while one is,
+// the same button reads "Unpair Gamepad" and hands the game back to the mouse and keyboard.
 
 /** Standard Gamepad mapping (w3c "standard" layout) — the PlayStation names issue #162 uses. */
 const B = {
@@ -98,6 +99,11 @@ let paired: number | null = null;
 const prevButtons = new Map<number, boolean[]>();
 /** "Detect Gamepad" is listening until this `performance.now()` (0 = not listening). */
 let detectUntil = 0;
+/** Pads the player UNPAIRED with the Options button. The standing "press START to pair" line is
+ *  not put up for them — they asked for the pad to be left alone, and a line parked over the
+ *  minimap for as long as it stays switched on is not that. START still pairs one, as it pairs
+ *  any pad. Forgotten when the pad disconnects or is paired again. */
+const quiet = new Set<number>();
 /** The D-pad owns X (the command-card selector) until the left stick moves. */
 let cardMode = false;
 /** Right-stick deflection, read by the camera every frame (`gamepadPan`). */
@@ -150,6 +156,7 @@ export function startGamepad(): void {
   window.addEventListener("gamepaddisconnected", (e) => {
     const idx = (e as GamepadEvent).gamepad.index;
     prevButtons.delete(idx);
+    quiet.delete(idx);
     if (idx === paired) unpair(true);
     refreshPrompt();
   });
@@ -256,12 +263,6 @@ function tick(now: number): void {
       else if (any) refreshPrompt();
       continue;
     }
-    // Detect Gamepad pressed with a pad already paired: that pad answering IS the detection.
-    if (detectUntil && now_.some((p, i) => p && !prev[i])) {
-      detectUntil = 0;
-      paintDetect();
-      toast("Gamepad paired.");
-    }
     drive(pad, now_, prev, dt, now);
   }
   if (paired !== null && !pads[paired]?.connected) unpair(true);
@@ -270,6 +271,7 @@ function tick(now: number): void {
 function pair(pad: Gamepad): void {
   if (paired !== null && paired !== pad.index) unpair(false);
   paired = pad.index;
+  quiet.delete(pad.index);
   detectUntil = 0;
   paintDetect();
   refreshPrompt();
@@ -278,15 +280,20 @@ function pair(pad: Gamepad): void {
 
 function unpair(announce: boolean): void {
   // Nothing may stay held down behind a pad that has gone: a lost release is a stuck drag box
-  // or a camera riding the army for ever.
-  for (const release of holds.values()) release();
+  // or a camera riding the army for ever. The table is emptied and the pad let go of BEFORE any
+  // release runs, because a release can come straight back here: X's release is a CLICK, and
+  // the click on "Unpair Gamepad" unpairs — which found X still in the table and clicked again,
+  // until the stack ran out.
+  const releases = [...holds.values()];
   holds.clear();
+  paired = null;
+  for (const release of releases) release();
   dpadHeld = null;
   pan = [0, 0];
-  paired = null;
   setCardMode(false);
   hideCursor();
   if (announce) toast("Gamepad disconnected.");
+  paintDetect(); // "Unpair Gamepad" goes back to "Detect Gamepad"
   refreshPrompt();
 }
 
@@ -307,8 +314,10 @@ function drive(pad: Gamepad, down: boolean[], prev: boolean[], dt: number, now: 
   for (let i = 0; i < down.length; i++) {
     if (down[i] && !prev[i]) press(i, now);
     else if (!down[i] && prev[i]) {
-      holds.get(i)?.();
+      // Out of the table first, then run — see `unpair` for what a release can lead back to.
+      const release = holds.get(i);
       holds.delete(i);
+      release?.();
       if (dpadHeld?.button === i) dpadHeld = null;
     }
   }
@@ -466,6 +475,11 @@ function paintCursor(): void {
   cursorEl.style.transform = `translate(${Math.round(cx)}px, ${Math.round(cy)}px)`;
   const now = performance.now();
   if (now - cursorStyleAt < CURSOR_STYLE_MS) return;
+  // The page can take the element out from under a STILL cursor — X on an Options category
+  // rebuilds that panel's whole tree — and a detached element's `cursor` reads "" (drawn as the
+  // plain fallback arrow, over a panel that asks for the gauntlet). A real mouse is re-targeted by
+  // the browser after such a change; the pad's is re-targeted here, boundary events and all.
+  if (hoverEl && !hoverEl.isConnected) setHover(hit(cx, cy));
   cursorStyleAt = now;
   const value = hoverEl ? getComputedStyle(hoverEl).cursor : getComputedStyle(document.body).cursor;
   if (value === cursorValue) return;
@@ -624,7 +638,7 @@ function toast(text: string): void {
 function refreshPrompt(): void {
   let seen = false;
   try {
-    seen = navigator.getGamepads().some((p) => !!p?.connected);
+    seen = navigator.getGamepads().some((p) => !!p?.connected && !quiet.has(p.index));
   } catch {
     // no Gamepad API in this document
   }
@@ -642,36 +656,56 @@ function refreshPrompt(): void {
   }
 }
 
-// --- Options → Gameplay → "Detect Gamepad" ----------------------------------------------
+// --- Options → Gameplay → "Detect Gamepad" / "Unpair Gamepad" ---------------------------
 
-/** The Options panel on screen now, and the label its button wears at rest. Replaced on every
- *  build (a screen rebuilds its whole tree on resize), so the countdown follows the rebuild. */
-let detectScreen: { screen: FdfScreen; label: string } | null = null;
+/** The Options panel on screen now, and the two labels its button wears. Replaced on every build
+ *  (a screen rebuilds its whole tree on resize), so the countdown follows the rebuild. */
+let optionsScreen: { screen: FdfScreen; detect: string; unpair: string } | null = null;
 
-/** Wire a screen's Detect Gamepad button. Called from each Options panel's bind. */
-export function bindDetectGamepadButton(screen: FdfScreen, label: string): void {
-  detectScreen = { screen, label };
+/** Wire a screen's gamepad button. Called from each Options panel's bind, with the two labels
+ *  resolved through that screen's GlobalStrings (`DETECT_GAMEPAD`, `UNPAIR_GAMEPAD`). */
+export function bindGamepadButton(screen: FdfScreen, labels: { detect: string; unpair: string }): void {
+  optionsScreen = { screen, ...labels };
   paintDetect();
 }
 
-/** The button's click: listen for `DETECT_MS` for any button on any pad. */
-export function startGamepadDetect(): void {
+/** The button's click: with a pad paired, let it go; without one, listen for `DETECT_MS` for any
+ *  button on any pad. */
+export function gamepadButtonPressed(): void {
+  if (paired !== null) {
+    unpairGamepad();
+    return;
+  }
   if (detectUntil) return;
   detectUntil = performance.now() + DETECT_MS;
   toast("Press any button on your gamepad…");
   paintDetect();
 }
 
-/** Grey the button and count the seconds down on it while it listens (issue #162). */
+/**
+ * "Unpair Gamepad": back to the mouse and keyboard. Everything the pad held is released and its
+ * cursor, its veil and the command-card frame go (`unpair`) — the frame because the HUD asks
+ * `gamepadPaired()` before drawing it. The pad itself stays connected and is left alone
+ * (`quiet`), until START or this button pairs it again.
+ */
+function unpairGamepad(): void {
+  if (paired === null) return;
+  quiet.add(paired);
+  unpair(false);
+  toast("Gamepad unpaired.");
+}
+
+/** Dress the button for the state it is in: "Unpair Gamepad" while a pad is paired, "Detect
+ *  Gamepad" otherwise — greyed, with the seconds counting down on it, while it listens. */
 function paintDetect(): void {
-  if (!detectScreen) return;
-  const { screen, label } = detectScreen;
+  if (!optionsScreen) return;
+  const { screen, detect, unpair: unpairLabel } = optionsScreen;
   if (!screen.element.isConnected) {
-    detectScreen = null;
+    optionsScreen = null;
     return;
   }
   const left = detectUntil ? Math.max(0, Math.ceil((detectUntil - performance.now()) / 1000)) : 0;
-  const text = left ? `${label} (${left}s)` : label;
-  if (screen.frame("DetectGamepadButtonText")?.textContent !== text) screen.setText("DetectGamepadButtonText", text);
-  screen.setEnabled("DetectGamepadButton", !left);
+  const text = paired !== null ? unpairLabel : left ? `${detect} (${left}s)` : detect;
+  if (screen.frame("GamepadButtonText")?.textContent !== text) screen.setText("GamepadButtonText", text);
+  screen.setEnabled("GamepadButton", !left);
 }

@@ -78,7 +78,11 @@ focused. Seeing a pad is not the same as pairing it:
   also open F10.
 - Options → Gameplay → **Detect Gamepad**, on both the glue panel and the F10 panel, listens for
   ten seconds. The first button pressed on any pad pairs that pad. The button greys out and
-  counts down on its own label (`bindDetectGamepadButton`).
+  counts down on its own label (`bindGamepadButton`).
+- While a pad is paired, that same button reads **Unpair Gamepad**. Pressing it releases
+  everything the pad holds and takes away its cursor, the veil and the command-card frame, which
+  puts the game back on the mouse and keyboard. The pad stays connected, and the "press START to
+  pair" line is not raised for it again (`quiet`). START, or Detect Gamepad, pairs it again.
 - A pad turned on **mid-session** needs no special handling. Chromium watches udev and brings the
   device in as soon as it connects, and the game polls `getGamepads()` every frame on every
   screen. This was measured with an 8BitDo SN30 Pro+ over Bluetooth: turned off, the game said
