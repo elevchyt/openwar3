@@ -5965,6 +5965,19 @@ export class RtsController {
     return false;
   }
 
+  /** Can any selected unit MOVE — does it carry the move ability's buttons (Move, Hold Position,
+   *  Patrol)? The engine grants that ability to a unit with a movement type and a speed, and to
+   *  nothing else: a ward, or Test of Balance's Dummy (no `umvt`, speed 0), has no Move on its
+   *  card, and a press there could only be refused. Asked of the whole selection, like Attack. */
+  selectionCanMove(): boolean {
+    for (const id of this.selected) {
+      const u = this.sim.units.get(id);
+      if (!u || u.building || u.baseSpeed <= 0) continue;
+      if (this.registry.get(u.typeId)?.moveType !== MoveType.None) return true;
+    }
+    return false;
+  }
+
   /** Is a transport among the selected units? Decides what a right-click on a friendly
    *  ground unit means — pick it up, rather than follow it. */
   private selectionHasTransport(): boolean {

@@ -10597,18 +10597,23 @@ export class MapViewerScene {
     // (0,1); a worker's Build (or a hero's learn-skill) at (3,1); the bottom row
     // is reserved for learned skills/abilities.
     const active = this.activeCommandId();
+    // Move, Hold Position and Patrol are the MOVE ability's, and a unit that cannot move has none
+    // of them (RtsController.selectionCanMove); Stop goes with either that or a weapon. The
+    // slots stay where they are, so an immobile tower's Attack is still top-right.
+    const canMove = this.rts?.selectionCanMove() ?? true;
+    const canAttack = this.rts?.selectionCanAttack() ?? false;
     // Every one of these speaks from its own `Units\CommandStrings.txt` section — see cmdSection.
-    out.push(this.cmd({
+    if (canMove) out.push(this.cmd({
       id: "move", icon: btnIcon("BTNMove"), name: "Move", hotkey: "M", col: 0, row: 0, active: active === "move",
       ...this.cmdSection("CmdMove", "|cffffcc00M|rove",
         "Orders your units to move to the target area while ignoring enemy units and attacks. Issuing a move order onto a target unit will cause your unit to follow the target using move orders."),
     }));
-    out.push(this.cmd({
+    if (canMove || canAttack) out.push(this.cmd({
       id: "stop", icon: btnIcon("BTNStop"), name: "Stop", hotkey: "S", col: 1, row: 0, active: active === "stop",
       ...this.cmdSection("CmdStop", "|cffffcc00S|rtop",
         "Orders your units to stop whatever order they were previously given. Units that have been told to stop will attack enemy units and move to engage nearby enemies."),
     }));
-    out.push(this.cmd({
+    if (canMove) out.push(this.cmd({
       id: "hold", icon: btnIcon("BTNHoldPosition"), name: "Hold Position", hotkey: "H", col: 2, row: 0, active: active === "hold",
       ...this.cmdSection("CmdHoldPos", "|cffffcc00H|rold Position",
         "Orders your units to stand where they are and attack units that are within range. When on Hold Position your units will not chase down enemy units that run away, nor move to engage ranged attackers."),
@@ -10618,14 +10623,14 @@ export class MapViewerScene {
     // a press that can only be refused is not a button. Asked of the whole selection rather
     // than of the primary alone, as the game does: a Zeppelin grabbed together with the
     // Footmen it is about to carry still lets the group attack-move.
-    if (this.rts?.selectionCanAttack()) {
+    if (canAttack) {
       out.push(this.cmd({
         id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A", col: 3, row: 0, active: active === "attack",
         ...this.cmdSection("CmdAttack", "|cffffcc00A|rttack",
           "Orders your units to move to the target area and attack any enemy units they see on the way. If you order them to attack a specific unit, your units will ignore other enemy units and will attack the targeted unit until it is destroyed."),
       }));
     }
-    out.push(this.cmd({
+    if (canMove) out.push(this.cmd({
       id: "patrol", icon: btnIcon("BTNPatrol"), name: "Patrol", hotkey: "P", col: 0, row: 1, active: active === "patrol",
       ...this.cmdSection("CmdPatrol", "|cffffcc00P|ratrol",
         "Orders your units to continually move from their current position to the targeted area until given another command. Units on patrol will move to engage enemy units that come within range. Issuing a patrol order onto a target unit will cause your unit to imitate the targeted unit's behavior."),
