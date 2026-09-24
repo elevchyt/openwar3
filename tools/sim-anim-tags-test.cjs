@@ -42,6 +42,17 @@ check("`work` replaces BOTH plain stands, keeping both work variants", set(PEASA
 check("a multi-word tag is all of its words", set(["Stand", "Stand Upgrade First", "Stand Upgrade Second"], ["upgrade first"]).anims.stand, 1);
 check("an Ancient's `work` + its own alternate (\"Stand Work Alternate\") composes", set(["Stand", "Stand Alternate", "Stand Work Alternate"], ["work"], ["alternate"]).anims.stand, 2);
 
+// Defend (issue #164): the engine tags a braced Footman `defend` (rts.ts applyStanceAnims), and
+// Footman.mdx's own sequence list, in file order, is what the tag has to sort out.
+console.log("\nFootman.mdx braced in Defend");
+const FOOTMAN = ["Stand - 1", "Stand - 2", "Stand Victory", "Stand - 4", "Attack - 1", "Attack - 2", "Walk", "Stand Defend", "Walk Defend", "Death", "Decay Flesh", "Attack Defend", "Decay Bone"];
+check("unbraced it fidgets through its three plain stands", set(FOOTMAN, []).anims.standVariants, [0, 1, 3]);
+check("…and rolls between its two plain swings", set(FOOTMAN, []).anims.attackVariants, [4, 5]);
+check("braced, \"Stand Defend\" is its ONLY idle stand (no plain stand rolled in)", set(FOOTMAN, ["defend"]).anims.standVariants, [7]);
+check("…\"Attack Defend\" its only swing", set(FOOTMAN, ["defend"]).anims.attackVariants, [11]);
+check("…and \"Walk Defend\" its walk", set(FOOTMAN, ["defend"]).anims.walk, 8);
+check("…while its death is still its own", set(FOOTMAN, ["defend"]).anims.death, 9);
+
 if (failed) {
   console.log(`\n${failed} check(s) failed`);
   process.exit(1);

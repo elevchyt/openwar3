@@ -16085,8 +16085,21 @@ export class SimWorld {
     const u = this.units.get(unitId);
     const ab = u ? this.findAbility(u, code) : undefined;
     if (!ab || !u) return false;
+    // A STANCE (an `Unorder` row riding this flag — Defend's `Order=defend / Unorder=undefend`)
+    // is not an autocast setting but the unit's state, and the renderer wears it: the button
+    // turns over to its `Unart`, the model takes its "defend" clips. So it may not be switched
+    // ON before its research is in (`[Adef] Requires=Rhde`) — defendStance ignores it then, but
+    // the Footman would still stand behind a shield that does nothing.
+    const def = this.abilityDefOf(ab);
+    const stance = !!def?.autocast && !!def.unOrder;
+    if (stance && !ab.autocastOn && this.tech && !this.tech.meets(u.owner, ab.id)) return false;
     ab.autocastOn = !ab.autocastOn;
     if (ab.autocastOn) for (const other of u.abilities) if (other !== ab) other.autocastOn = false;
+    // …and raising it is HEARD, once: `DefendCaster.wav`, reached the way every cast sound is —
+    // the row's `Casterart` (DefendCaster.mdl) carries an SND event `ADEF`, which AnimLookups
+    // files under "Defend" and AnimSounds sends to Abilities\Spells\Human\Defend\DefendCaster.wav.
+    // Sound only, like a no-wind-up cast: no castStarts, so no clip is held.
+    if (stance && ab.autocastOn) this.castFires.push({ casterId: u.id, code: ab.code, abilityId: ab.id });
     return ab.autocastOn;
   }
 
@@ -21043,7 +21056,17 @@ export class SimWorld {
     // arrows aside. Straight off the ability's own Ubertip, which spells the whole thing out:
     // "Activate to have a <DataF1>% chance to reflect Piercing attacks upon the source, and to
     // take only <DataA1,%>% of the damage from attacks that are not reflected."
-    const defend = attackType === AttackType.Pierce ? this.defendStance(target) : null;
+    const stance = this.defendStance(target);
+    // …and every blow that reaches a braced Footman flashes off the shield: the row's own
+    // `Casterart` (DefendCaster.mdl), whose geometry is authored ~45 units FORWARD of its
+    // origin — so it is hung on the unit's `origin` bone and turns with him, which is what
+    // puts it in front rather than at his feet. Its Birth (0.5 s) is its whole life (life 0).
+    if (stance && !target.invulnerable) {
+      const ab = target.abilities.find((a) => a.code === "Adef" && a.autocastOn);
+      const art = ab ? this.abilityDefOf(ab)?.casterArt : "";
+      if (art) this.spellEffects.push({ art, x: target.x, y: target.y, targetId: target.id, z: 0, life: 0, attach: ["origin"] });
+    }
+    const defend = attackType === AttackType.Pierce ? stance : null;
     if (defend) {
       if (this.rng() * 100 < this.dataOf(defend, 5, 30)) {
         // Reflected: the shot goes back down its own flight path. The defender takes nothing.

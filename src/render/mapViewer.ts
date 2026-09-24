@@ -10849,6 +10849,12 @@ export class MapViewerScene {
    *      autocast row whose `UnitID1` names a summon (Black Arrow's `ndr1`) can never match
    *      the caster's own type, so it stays untouched.
    *
+   *    • A STANCE — an `Unorder` row riding the autocast flag, Defend being the one stock
+   *      case (`[Adef] Order=defend / Unorder=undefend`, Art=BTNDefend /
+   *      Unart=BTNDefendStop) — is on when its toggle is. Its on/off is a STATE of the unit,
+   *      and the game says so the way it says it for Immolation: with the other icon, and
+   *      with no autocast border at all (see `modal` in pushAbilityButtons).
+   *
    *  Autocast toggles are NOT here: their on/off is the green autocast border, not a
    *  different icon, and both directions of those rows carry the same `Art`. */
   private toggleIsOn(su: SimUnit, code: string, def: AbilityDef): boolean {
@@ -10861,6 +10867,7 @@ export class MapViewerScene {
     if (code === "Aroo") return !su.uprooted;
     if (code === "AEim") return !!su.immolation;
     if (code === "ANms") return su.buffs.some((b) => b.kind === "manaShield");
+    if (def.autocast && def.unOrder) return su.abilities.some((a) => a.code === code && a.autocastOn);
     if (def.autocast) return false;
     const lvl = def.levelData[0];
     const alt = lvl ? lvl.summon || lvl.dataStr[1] || "" : "";
@@ -11091,7 +11098,9 @@ export class MapViewerScene {
         // the toggle from birth (`[ucry] auto = Aweb`) while the upgrade is what unlocks the
         // row, so an un-researched Web read as "on" for an ability that could not fire. The
         // sim agrees from the other side — tickAutocast skips it (and issueCast refuses it).
-        modal: def.autocast && ab.autocastOn && techMet,
+        // …and none on a STANCE either: Defend switched on is shown by its `Unart`
+        // (BTNDefendStop, via toggleIsOn) — the border would be claiming an autocast it has not got.
+        modal: def.autocast && !def.unOrder && ab.autocastOn && techMet,
         cooldownLeft: onCd ? ready.ab.cooldownLeft : 0,
         cooldownFrac: onCd && ready.lvl.cooldown > 0 ? Math.max(0, Math.min(1, ready.ab.cooldownLeft / ready.lvl.cooldown)) : 0,
       }));
@@ -11222,8 +11231,11 @@ export class MapViewerScene {
       // `AutoCastButtonClick` = Sound\Interface\AutoCastButtonClick1.wav. Read back off the
       // unit rather than predicted, because a multi-unit selection toggles each one to its
       // own new state and it is the primary's that the card is showing.
+      // A STANCE is not an autocast and has no sparkle to announce: raising Defend is heard as
+      // its own DefendCaster.wav instead (SimWorld.toggleAutocast), at the Footman.
       const su = this.rts.selectedSimUnit();
-      if (su?.abilities.some((a) => a.code === code && a.autocastOn)) this.sounds?.playUi("AutoCastButtonClick");
+      const ab = su?.abilities.find((a) => a.code === code && a.autocastOn);
+      if (ab && !(ab.def ?? this.abilities.get(ab.id))?.unOrder) this.sounds?.playUi("AutoCastButtonClick");
       return;
     }
     if (id === "learnpage") {

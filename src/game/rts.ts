@@ -713,11 +713,15 @@ export class RtsController {
    *  than on the entry: a script tags the unit it has just created, a line after `CreateUnit`,
    *  while its model is still loading — the tag has to be there when the body arrives. */
   private readonly animTags = new Map<number, string[]>();
+  /** Units braced in Defend (`Adef` switched on), which wear the model's "defend" clips — see
+   *  applyStanceAnims. By sim id beside `animTags`, because it is the same kind of word. */
+  private readonly stancePoses = new Set<number>();
 
   /** The clip set for a unit: its type's props, plus whatever its script has tagged it with
    *  (unitAnims.scriptAnimTags). Every rebuild of a unit's clips goes through here. */
   private animSetFor(simId: number, seqs: Array<{ name: string }>, props: string[] | undefined): AnimSet {
-    const tags = this.animTags.get(simId);
+    const scripted = this.animTags.get(simId);
+    const tags = this.stancePoses.has(simId) ? [...(scripted ?? []), "defend"] : scripted;
     if (!tags?.length) return buildAnimSet(seqs, props);
     const tagged = scriptAnimTags(seqs, tags);
     return buildAnimSet(tagged.seqs, [...(props ?? []), ...tagged.props]);
@@ -2029,6 +2033,27 @@ export class RtsController {
     e.unit.state = WidgetState.WALK; // hold it against the idle picker, as a cast clip does
     e.castAnimT = seqDuration(inst, morph, CAST_ANIM_HOLD);
     e.castAnimSticky = true;
+  }
+
+  /**
+   * Defend is a POSE as well as a stance. Footman.mdx authors "Stand Defend", "Walk Defend" and
+   * "Attack Defend" beside its plain "Stand - 1/2/4", "Walk" and "Attack - 1/2", and while the
+   * shield is up those three ARE the unit's stand, walk and swing — the engine's own "defend"
+   * animation tag, the same word a script may hand AddUnitAnimationProperties. So it rides the
+   * tag path (unitAnims.scriptAnimTags): a tagged clip replaces every variant of the same action,
+   * which is what keeps the idle fidget and the swing roll from drawing a plain clip while braced
+   * (both pools shrink to the one defend clip; "Stand Victory" is a different action and stays).
+   *
+   * No re-seat is needed: the picker compares the playing clip against the new set on the very
+   * next line and moves the unit onto it — stand, walk or the next swing. */
+  private applyStanceAnims(e: Entry, u: RenderUnit): void {
+    const on = u.abilities.some((a) => a.code === "Adef" && a.autocastOn);
+    if (on === this.stancePoses.has(e.simId)) return;
+    if (on) this.stancePoses.add(e.simId);
+    else this.stancePoses.delete(e.simId);
+    const seqs = e.unit.instance.model?.sequences;
+    if (!seqs) return; // no body yet — attachInstance builds the set through animSetFor
+    e.anims = this.animSetFor(e.simId, seqs, animPropsFor(this.registry.get(e.typeId), u.altModel));
   }
 
   /**
@@ -4733,6 +4758,7 @@ export class RtsController {
       // A unit that has changed FORM wears the other half of its model — a rooted Ancient, a
       // burrowed Crypt Fiend. Skipped entirely for the vast majority, which have only one.
       if (u.altModel || e.altModel !== undefined) this.applyFormAnims(e, u, this.registry.get(e.typeId));
+      this.applyStanceAnims(e, u);
       // A building under construction: play its own "Birth" animation, scrubbed
       // to the construction progress so it assembles in sync with the timer.
       // Models without a Birth clip fall back to scaling up from ~40% to full.
@@ -5059,6 +5085,7 @@ export class RtsController {
     if (this.sim.diedExploded(simId)) {
       if (e) this.dropEntry(e);
       this.animTags.delete(simId);
+      this.stancePoses.delete(simId);
       return;
     }
     if (!e) return;
@@ -5105,6 +5132,7 @@ export class RtsController {
     if (def?.soundSet && !this.local.fogBlocksAt({ x: loc[0], y: loc[1] })) this.sounds?.play(def.soundSet, "Death", { x: loc[0], y: loc[1], z: loc[2] });
     this.byId.delete(simId);
     this.animTags.delete(simId);
+    this.stancePoses.delete(simId);
     this.entries.splice(this.entries.indexOf(e), 1);
     this.deselect(simId);
     e.unit.state = WidgetState.WALK; // keep mdx-m3-viewer from overriding the death sequence

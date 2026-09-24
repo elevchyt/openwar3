@@ -85,11 +85,15 @@ export interface RenderBuff {
  *
  * Three fields, and they are the three questions that row asks: WHICH row it is (the alias, to
  * find the icon and whether it is a hero spell at all), what RANK it stands at (the pips), and
- * whether it is ready. `code`/`autocastOn` are the command card's business — the card reads a
- * `SimAbility` directly, because a card is only ever drawn for a unit this machine owns.
+ * whether it is ready. The card itself reads a `SimAbility` directly, because a card is only
+ * ever drawn for a unit this machine owns.
  */
 export interface RenderAbility {
   readonly id: string;
+  /** Base code and toggle state — read by the world layer for one thing only: a STANCE the
+   *  model wears (Defend's "defend" clips; rts.ts applyStanceAnims). Already on the wire. */
+  readonly code: string;
+  readonly autocastOn: boolean;
   readonly level: number;
   readonly cooldownLeft: number;
 }
