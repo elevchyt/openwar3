@@ -847,6 +847,9 @@ export interface EngineHooks {
   setUnitPathing?(unitId: number, flag: boolean): void; // SetUnitPathing (false = ghost)
   /** SetUnitAnimation / ResetUnitAnimation — play the named clip ("" resets to stand). */
   setUnitAnimation?(unitId: number, animation: string): void;
+  /** AddUnitAnimationProperties — add (true) or remove (false) an animation TAG ("alternate",
+   *  "work", "upgrade first") that picks which of the model's clips the unit wears. */
+  addUnitAnimationProperties?(unitId: number, props: string, add: boolean): void;
   /** Player resource / state: SetPlayerState & GetPlayerState. `state` is the raw
    *  playerstate index (1 = gold, 2 = lumber, 4 = food cap, 5 = food used). */
   setPlayerState?(player: number, state: number, value: number): void;
@@ -1404,6 +1407,24 @@ export class Runtime {
   /** Global variables (name → value) and arrays (name → JassArray). */
   readonly globals = new Map<string, JassValue>();
   readonly globalArrays = new Map<string, JassArray>();
+  /** The DECLARED type of each scalar global. A value does not carry it: blizzard.j and every
+   *  editor-written `InitGlobals` assign integer literals to real globals (`set udg_X=0`), so a
+   *  real variable routinely holds an int. `TriggerRegisterVariableEvent` asks this. */
+  readonly globalTypes = new Map<string, string>();
+  /** Scalar globals at least one `TriggerRegisterVariableEvent` watches — the cheap test every
+   *  write makes before anything else (see `assignGlobal`). Never shrinks: a stale name costs
+   *  one lookup that finds no registration. */
+  readonly watchedGlobals = new Set<string>();
+  /** Set by the interpreter: a WATCHED global has just been written (natives/events.ts). */
+  onWatchedGlobal?: (name: string, before: JassValue, after: JassValue) => void;
+
+  /** Write a scalar global — the one door for it, so the JASS `set` and a Lua map's `_G` write
+   *  (src/compat/lua/host.ts) raise the variable event alike. */
+  assignGlobal(name: string, value: JassValue): void {
+    const before = this.globals.get(name);
+    this.globals.set(name, value);
+    if (this.watchedGlobals.has(name)) this.onWatchedGlobal?.(name, before ?? value, value);
+  }
   /**
    * Functions a HOST LANGUAGE has put into this runtime — today, a Lua map's own functions
    * (src/compat/lua/). They are named and called exactly like a JASS one, so everything that

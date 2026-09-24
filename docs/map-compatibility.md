@@ -732,6 +732,31 @@ install), `tools/render-asset-solver-test.cjs` (map first, per mount), the minim
 `tools/jass-imagery-test.cjs`, and the trigger-added-ability checks in
 `tools/sim-shadowmeld-test.cjs`.
 
+The three natives the map logged as missing, done after it:
+
+* **`TriggerRegisterVariableEvent`** — "Value Of Real Variable", "only … non-array variables of
+  type 'Real'" (`UI\TriggerStrings.txt`). Raised by the WRITE, synchronously, through one door
+  (`Runtime.assignGlobal` — the JASS `set` and a Lua map's `_G` write alike), and asked of the
+  DECLARED type (`Runtime.globalTypes`), because the editor's own `InitGlobals` writes integer
+  literals into real globals. A write that leaves the value where it was raises nothing ("you set
+  variable with value 1 to 1 again which doesn't trigger the event" — hiveworkshop 201641), which
+  is why every library resets its variable to 0 between events. NOT settled by any source: a write
+  that changes the value while the condition already held (1 → 2 under "greater than 0") — we
+  raise it; every call in the corpus is `EQUAL`, where the readings agree. On THIS map it matters
+  less than it looks: Damage Engine 5 hooks the native and dispatches its 20 registrations
+  itself, so what it needs is the native to exist.
+* **`ConvertMouseButtonType`** was never this map's: the install's own `common.j` initialises
+  `MOUSE_BUTTON_TYPE_*` with it (lines 299–301), so every map logged it. It was the one
+  `Convert*` of common.j's 47 missing from `CONVERT_NATIVES`, and the test now asks for all 47.
+* **`AddUnitAnimationProperties`** — "Add/Remove Unit Animation Tag": the same word a type's
+  `Animprops` holds, on one unit (`unitAnims.scriptAnimTags`). A tier/state word (`alternate`)
+  joins the unit's props; any other (`work`) makes the clip carrying it stand in for the same clip
+  without it. Kept per SIM id so a tag set before the model has loaded is there when it does, and
+  worn at once, since a map-placed neutral is not re-posed every frame. The pillar's three stands
+  (`stand`, `stand work`, `stand alternate`) are its three states.
+
+Tests: `tools/jass-variable-event-test.cjs`, `tools/sim-anim-tags-test.cjs`.
+
 ## Traps
 
 * **After editing the viewer patch, restart the dev server AND delete `node_modules/.vite`**, or

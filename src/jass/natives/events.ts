@@ -157,6 +157,19 @@ export function registerEventNatives(rt: Runtime): void {
     c.rt.triggerRegs.push(reg);
     return jHandle(0, "event");
   });
+  // TriggerRegisterVariableEvent — EVENT_GAME_VARIABLE_LIMIT, "Value Of Real Variable": raised
+  // by the write itself (Interpreter.fireVariableEvent says when). "This only works for
+  // non-array variables of type 'Real'" (UI\TriggerStrings.txt's own hint), so anything else —
+  // an integer, an array, a name no global has — registers nothing. Asked of the DECLARED type:
+  // a real global holds an int after the editor's own `set udg_X=0`.
+  def(rt, "TriggerRegisterVariableEvent", (c, a) => {
+    const t = trig(c, a[0]);
+    const name = a[1]?.k === "string" ? a[1].s : "";
+    if (!t || c.rt.globalTypes.get(name) !== "real") return jHandle(0, "event");
+    c.rt.triggerRegs.push({ kind: "variable", trigId: t.handleId, params: [a[1], a[2], a[3]] });
+    c.rt.watchedGlobals.add(name);
+    return jHandle(0, "event");
+  });
   // TriggerRegisterTimerEvent creates its OWN one-shot/periodic timer + a timerExpire
   // registration bound to it (common.j: takes trigger, real timeout, boolean periodic).
   def(rt, "TriggerRegisterTimerEvent", (c, a) => {

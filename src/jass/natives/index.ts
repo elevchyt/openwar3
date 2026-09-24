@@ -72,6 +72,9 @@ const CONVERT_NATIVES = [
   // the install's own 1.30.4 common.j; without them every ANIM_TYPE_/SUBANIM_TYPE_ constant
   // was null and BlzPlaySpecialEffect could not be told which clip to play.
   "ConvertAnimType", "ConvertSubAnimType",
+  // …and the mouse button (common.j 146; its three MOUSE_BUTTON_TYPE_ constants at 299-301 are
+  // initialised by EVERY map's globals, so its absence was a "not implemented" line on each one).
+  "ConvertMouseButtonType",
 ];
 
 /** Cheap, pure utility natives (string/number conversions, RNG, camera/env

@@ -3368,6 +3368,7 @@ export class MapViewerScene {
       getDefaultDifficulty: () => this.defaultDifficulty,
       // --- animation (7.17) — a model's, not the world's, so it stays with the renderer ---
       setUnitAnimation: (id, animation) => this.rts?.setUnitAnimation(id, animation),
+      addUnitAnimationProperties: (id, props, add) => this.rts?.addUnitAnimationProperties(id, props, add),
       // --- items (7.18) ---
       // The item natives themselves moved to jassHooks.ts (the sim owns the item system).
       // These two stayed: both read the ItemRegistry — a DATA table with the custom .w3t

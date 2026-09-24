@@ -14,6 +14,7 @@ import {
   type AnimSet,
   animPropsFor,
   buildAnimSet,
+  scriptAnimTags,
   findBirthFields,
   setAnimRate,
   attackAnimRate,
@@ -699,6 +700,19 @@ export class RtsController {
   private sim: SimWorld;
   private entries: Entry[] = [];
   private byId = new Map<number, Entry>();
+  /** A script's animation tags per unit (`AddUnitAnimationProperties`), kept by SIM id rather
+   *  than on the entry: a script tags the unit it has just created, a line after `CreateUnit`,
+   *  while its model is still loading — the tag has to be there when the body arrives. */
+  private readonly animTags = new Map<number, string[]>();
+
+  /** The clip set for a unit: its type's props, plus whatever its script has tagged it with
+   *  (unitAnims.scriptAnimTags). Every rebuild of a unit's clips goes through here. */
+  private animSetFor(simId: number, seqs: Array<{ name: string }>, props: string[] | undefined): AnimSet {
+    const tags = this.animTags.get(simId);
+    if (!tags?.length) return buildAnimSet(seqs, props);
+    const tagged = scriptAnimTags(seqs, tags);
+    return buildAnimSet(tagged.seqs, [...(props ?? []), ...tagged.props]);
+  }
   /**
    * Defs for the sim units the unit REGISTRY does not hold: the map's destructibles, whose
    * type codes come out of `DestructableData.slk` rather than `UnitData.slk`. Combat reads a
@@ -1978,11 +1992,11 @@ export class RtsController {
     e.altModel = alt;
     const seqs = e.unit.instance.model?.sequences;
     if (!seqs) return;
-    e.anims = buildAnimSet(seqs, animPropsFor(def, alt));
+    e.anims = this.animSetFor(e.simId, seqs, animPropsFor(def, alt));
     if (first) return; // baseline only — no transition to play
     // The clip belongs to the form being LEFT, so it is read out of that form's set. One
     // extra buildAnimSet, only on a form change (twice in an Ancient's life, usually).
-    const morph = buildAnimSet(seqs, animPropsFor(def, !alt)).morph;
+    const morph = this.animSetFor(e.simId, seqs, animPropsFor(def, !alt)).morph;
     // Hold the morph clip for its own length: castAnimT keeps the ordinary stand/walk picker
     // off this unit until the Ancient has finished hauling itself up or settling down.
     //
@@ -3646,7 +3660,7 @@ export class RtsController {
     const entry: Entry = {
       simId,
       unit,
-      anims: buildAnimSet(unit.instance.model.sequences, def?.animProps),
+      anims: this.animSetFor(simId, unit.instance.model.sequences, def?.animProps),
       altModel: false, // the form baseline, stated — see the note on the creep seed above
       // A static neutral keeps its map-placed Z (tick() does not drive it); a mobile one is
       // drawn like any unit, so it needs the same flight lift its sim unit carries.
@@ -3954,7 +3968,7 @@ export class RtsController {
     // Everything else starts on the plain half and only the sim can move it off (a Crypt
     // Fiend that burrows). See animPropsFor / applyFormAnims.
     const alt = this.sim.units.get(simId)?.altModel ?? false;
-    const anims = buildAnimSet(instance.model.sequences, animPropsFor(def, alt));
+    const anims = this.animSetFor(simId, instance.model.sequences, animPropsFor(def, alt));
     // Per-unit animation blending: cross-fade between sequences over this unit's
     // own UnitUI `blend` time (0.15s for most WC3 units) so walk↔stand↔attack
     // transitions ease instead of hard-cutting (issue #8).
@@ -4071,7 +4085,7 @@ export class RtsController {
     // still the same unit underneath.
     const props = skin ? animPropsFor(skin, false) : animPropsFor(def, this.sim.units.get(simId)?.altModel ?? false);
     const seqs = entry.unit.instance.model.sequences;
-    entry.anims = buildAnimSet(seqs, props);
+    entry.anims = this.animSetFor(simId, seqs, props);
     Object.assign(entry, findBirthFields(seqs, props));
     // A form that moved it between the ground and the air: from here on the SIM says how high.
     const was = this.registry.get(entry.typeId);
@@ -4215,6 +4229,30 @@ export class RtsController {
    *  unit's stand). WC3 matches on the model's own sequence names, so this is a name
    *  test over `anims.seqNames`, not a fixed table. The clip is held like a cast
    *  animation so the idle picker doesn't stomp it on the next frame. */
+  /**
+   * JASS AddUnitAnimationProperties — add (or take back) an animation TAG on one unit
+   * (unitAnims.scriptAnimTags says what a tag does to its clips). Presentation, like
+   * SetUnitAnimation: the tag is the model's business, not the world's.
+   *
+   * The new set is worn AT ONCE — the stand re-seated, as ResetUnitAnimation does — because a
+   * map-placed neutral is not re-posed every frame (the tick skips static neutrals), and that
+   * is exactly what Test of Balance tags: its Sacred Pillar, "alternate" between rounds.
+   */
+  addUnitAnimationProperties(simId: number, props: string, add: boolean): void {
+    const tag = props.trim().toLowerCase();
+    if (!tag) return;
+    const tags = (this.animTags.get(simId) ?? []).filter((t) => t !== tag);
+    if (add) tags.push(tag);
+    if (tags.length) this.animTags.set(simId, tags);
+    else this.animTags.delete(simId);
+    const e = this.byId.get(simId);
+    const seqs = e?.unit.instance.model?.sequences;
+    if (!e || !seqs) return; // no body yet — attachInstance reads the tags when it comes
+    const def = this.registry.get(e.typeId);
+    e.anims = this.animSetFor(simId, seqs, animPropsFor(def, this.sim.units.get(simId)?.altModel ?? false));
+    this.setUnitAnimation(simId, "");
+  }
+
   setUnitAnimation(simId: number, animation: string): void {
     const e = this.byId.get(simId);
     if (!e) return;
@@ -4934,6 +4972,7 @@ export class RtsController {
     // silenced by this: a viewpoint always has live sight of what it owns.
     if (def?.soundSet && !this.local.fogBlocksAt({ x: loc[0], y: loc[1] })) this.sounds?.play(def.soundSet, "Death", { x: loc[0], y: loc[1], z: loc[2] });
     this.byId.delete(simId);
+    this.animTags.delete(simId);
     this.entries.splice(this.entries.indexOf(e), 1);
     this.deselect(simId);
     e.unit.state = WidgetState.WALK; // keep mdx-m3-viewer from overriding the death sequence

@@ -374,6 +374,15 @@ export function registerWorldNatives(rt: Runtime): void {
   def(rt, "SetUnitAnimation", (c, a) => anim(c, a[0], a[1].k === "string" ? a[1].s : ""));
   def(rt, "QueueUnitAnimation", (c, a) => anim(c, a[0], a[1].k === "string" ? a[1].s : ""));
   def(rt, "ResetUnitAnimation", (c, a) => anim(c, a[0], ""));
+  // AddUnitAnimationProperties — "Add/Remove Unit Animation Tag" (UI\TriggerStrings.txt): the
+  // same kind of word a type's Animprops holds, laid on ONE unit by its script (see
+  // RtsController.addUnitAnimationProperties). Test of Balance tags its Sacred Pillar with it.
+  def(rt, "AddUnitAnimationProperties", (c, a) => {
+    const u = unit(c, a[0]);
+    const tag = a[1]?.k === "string" ? a[1].s : "";
+    if (u && u.simId >= 0 && tag) c.rt.hooks?.addUnitAnimationProperties?.(u.simId, tag, a[2]?.k === "bool" && a[2].b);
+    return JNULL;
+  });
 
   // SelectUnit(u, flag) / ClearSelection — the script drives the player's SELECTION (7.24).
   // A cinematic clears it on the way in (nothing should stay ringed and command-carded while

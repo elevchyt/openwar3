@@ -17,7 +17,7 @@
 
 import type { Expr, FunctionDecl, JassProgram, Stmt, VarDecl } from "./ast";
 import { rawcodeToInt } from "./lexer";
-import { Runtime, JassArray, playerStateHolds, ThreadAbort, unitStateHolds, type BoolExpr, type HostFunction, type JassPlayer, type JassUnit, type NativeCtx, type RectObj, type RegionObj, type SoundObj, type TimerObj, type TriggerObj, type TriggerReg, type UnitSnapshot } from "./runtime";
+import { Runtime, JassArray, compareLimit, playerStateHolds, ThreadAbort, unitStateHolds, type BoolExpr, type HostFunction, type JassPlayer, type JassUnit, type NativeCtx, type RectObj, type RegionObj, type SoundObj, type TimerObj, type TriggerObj, type TriggerReg, type UnitSnapshot } from "./runtime";
 import {
   asInt, asNum, asStr, defaultForType, jassEquals, jBool, jHandle, jInt, jReal, jStr, JNULL, truthy, type JassValue,
 } from "./values";
@@ -150,6 +150,7 @@ const IMPLIED_EVENT: Readonly<Record<string, string>> = {
   playerChat: "EVENT_PLAYER_CHAT",
   dialogButton: "EVENT_DIALOG_BUTTON_CLICK",
   dialogEvent: "EVENT_DIALOG_CLICK",
+  variable: "EVENT_GAME_VARIABLE_LIMIT",
 };
 const EVENT_UNIT_DEATH = 53;
 const EVENT_PLAYER_UNIT_DEATH = 20;
@@ -300,6 +301,7 @@ export class Interpreter {
       call: (name, args) => this.callFunction(name, args),
       fireEvent: (kind, responses, matches) => this.fireEvent(kind, responses, matches),
     };
+    rt.onWatchedGlobal = (name, before, after) => this.fireVariableEvent(name, before, after);
   }
 
   /** Register a program's natives/functions and collect its global declarations
@@ -318,6 +320,7 @@ export class Interpreter {
       if (g.isArray) {
         this.rt.globalArrays.set(g.name, new JassArray(g.type, () => defaultForType(g.type)));
       } else {
+        this.rt.globalTypes.set(g.name, g.type);
         this.rt.globals.set(g.name, g.init ? this.eval(g.init, null) : defaultForType(g.type));
       }
     }
@@ -543,7 +546,7 @@ export class Interpreter {
         } else if (frame.vars.has(s.name)) {
           frame.vars.set(s.name, value);
         } else {
-          this.rt.globals.set(s.name, value);
+          this.rt.assignGlobal(s.name, value); // may raise a variable event, synchronously
         }
         return JNULL;
       }
@@ -982,6 +985,35 @@ export class Interpreter {
       this.rt.eventStack.pop();
     }
     if (pass) this.startThread(`trigger#${trig.handleId}`, this.runActionsG(trig), responses);
+  }
+
+  /**
+   * `TriggerRegisterVariableEvent` — "Value Of Real Variable": `<Variable> becomes <Operation>
+   * <Value>` (UI\TriggerStrings.txt). Raised by the WRITE itself, synchronously: the trigger's
+   * conditions run and its actions start before the statement after the `set` does, and a
+   * variable event raised from inside another one's actions runs to its first wait before the
+   * outer dispatch goes on (hiveworkshop 370527 — Dr Super Good on why "the last onDeath
+   * function will never be called" when handlers nest; that is this order, not a bug in it).
+   *
+   * An assignment that does not CHANGE the value raises nothing: "If the function is called
+   * twice before it can be set to 0, the second event won't fire because you set variable with
+   * value 1 to 1 again which doesn't trigger the event" (hiveworkshop 201641, GUI Unit Event) —
+   * which is why every such library resets its variable to 0 between events. What no source we
+   * found settles is a write that changes the value while the condition ALREADY held (1 → 2
+   * under "greater than 0"); we raise it, on the reading that the comparison is made at each
+   * write. The GUI's "becomes" is the only hint the other way. Every map in the corpus compares
+   * with EQUAL, where the two readings are the same.
+   */
+  private fireVariableEvent(name: string, before: JassValue, after: JassValue): void {
+    const was = asNum(before);
+    const now = asNum(after);
+    if (was === now) return;
+    const regs = this.rt.triggerRegs.filter((r) => r.kind === "variable" && r.params[0]?.k === "string" && r.params[0].s === name);
+    for (const reg of regs) {
+      if (!compareLimit(this.rt.enumIndex(reg.params[1] ?? JNULL), now, asNum(reg.params[2] ?? JNULL))) continue;
+      const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
+      if (trig) this.fireTrigger(trig, this.withTrigger(new Map(), trig, reg));
+    }
   }
 
   /** Dispatch a sim-raised event to every trigger registered for `kind` whose
