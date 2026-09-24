@@ -767,8 +767,8 @@ data, or asset behaviour, **consult our sources** and cite what you used.
 - **Gamepad:** read [`docs/gamepad.md`](docs/gamepad.md) before touching
   [`src/ui/gamepad.ts`](src/ui/gamepad.ts) or a `:hover` rule. WC3 has no controller support,
   so the MAPPING is the developer's (issue #162), but what a button does is the game's: a
-  button with a key IS that key (O Escape, Triangle Space, L1 "-", R2 F8, Start F10, Select
-  F9), and the stick and X/R1 are a drawn cursor dispatching real pointer events with
+  button with a key IS that key (O Escape, Triangle Space, L1 "-", R2 F8, Start F10 — Escape
+  during a cinematic, which skips it — Select F9), and the stick and X/R1 are a drawn cursor dispatching real pointer events with
   `pointerId: 1`, so every existing gate applies unchanged. `:hover` cannot see that cursor:
   ask `isHovered(el)`, and give a hover glow a `.pad-hover` twin. The OS pointer is hidden by
   a transparent `#gamepad-veil` over the page, never by a global `cursor: none`: the drawn cursor

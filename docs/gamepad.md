@@ -23,7 +23,7 @@ the input the mouse or keyboard would have given and goes through the same doors
 | L1 | select the whole army | the **"-"** key (so double-tap and hold-to-follow come with it) |
 | L2 | cycle through your buildings | `RtsController.cycleBuilding` |
 | R2 | select the next idle worker | the **F8** key |
-| Start | F10 menu (pairs an unpaired pad) | the **F10** key |
+| Start | F10 menu (pairs an unpaired pad); skips a cinematic | the **F10** key — **Escape** while a cinematic is up (`inCinematic`) |
 | Select | Quest Log | the **F9** key |
 
 A button that has a key IS that key. It is dispatched as a real `KeyboardEvent` at the focused
@@ -104,6 +104,21 @@ X aims it in the world. The frame starts over when the selection or the card pag
 - on a building's card it starts at the **top-left** slot, and the same goes for shops and
   taverns;
 - a submenu (the build list, the skill page) also starts at the **top-left**.
+
+## Dropdowns
+
+An open dropdown list is an `.fdf-popup-menu` (`ui/fdf/widgets.ts buildPopup`), and only one is
+ever open. So the pad finds it from the page and the widget knows nothing about the pad. Every
+pulldown gets the same treatment: the lobby's race, team, colour and handicap menus, the Options
+rows, and a script's dialog. While a pad is paired, an open list wears the command card's gold
+frame (`.pad-sel`) on the option already chosen. Then:
+
+- the **D-pad** walks the frame up and down, and holding it repeats, so a long list scrolls;
+- **X** picks the framed option with that option's own click;
+- **O** shuts the list without choosing. It does not act as Escape here, which would also back
+  out of the panel the dropdown is on.
+
+The left stick hands X back to the cursor, as it does for the card.
 
 ## The building cycle (L2)
 

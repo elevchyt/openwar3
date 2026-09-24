@@ -3084,6 +3084,14 @@ body.in-game .fdf-screen.fdf-ingame {
   white-space: nowrap;
   text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.9);
 }
+/* The gamepad's frame on an open dropdown's option (issue #162, ui/gamepad.ts): the command
+   card's gold selector, drawn as an OUTLINE so it paints over a colour menu's swatch chip too. */
+.fdf-popup-item.pad-sel {
+  outline: 2px solid #fcd312;
+  outline-offset: -2px;
+  box-shadow: inset 0 0 8px 2px rgba(252, 211, 18, 0.7);
+  color: var(--fdf-menu-highlight, #fcd312);
+}
 /* MenuTextHighlightColor 0.99 0.827 0.0705 — the FDF's own hover colour, and the only thing
    that changes under the mouse: the game tints the row's TEXT, it does not light its
    background. */

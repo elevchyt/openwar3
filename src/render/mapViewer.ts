@@ -7921,6 +7921,7 @@ export class MapViewerScene {
       cardPress: () => this.hud?.padCardPress() ?? false,
       cardMode: (on) => this.hud?.padCardMode(on),
       targeting: () => !!this.rts?.orderMode || !!this.placement,
+      inCinematic: () => !this.interfaceShown,
     });
   }
 

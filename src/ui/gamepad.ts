@@ -15,7 +15,8 @@ import type { FdfScreen } from "./fdf/render";
 //     click on the world selects through `selectAt`, a click on a glue button fires its
 //     handler, and a held X drags the selection box.
 //   · the buttons that have a KEY are that key: O is Escape, Triangle is Space ("Center on
-//     last notification"), L1 is "-", R2 is F8, Start is F10 and Select is F9.
+//     last notification"), L1 is "-", R2 is F8, Start is F10 (Escape during a cinematic, which
+//     skips it) and Select is F9.
 //   · the rest are match actions with no key at all (attack-move at the cursor, a jump to the
 //     selection, the building cycle, the command-card selector), and go through a
 //     `GamepadMatchHost` the running match installs — `render/mapViewer.ts`.
@@ -79,6 +80,9 @@ export interface GamepadMatchHost {
   cardMode(on: boolean): void;
   /** Is a click now wanted in the WORLD — an armed order, or a building on the cursor? */
   targeting(): boolean;
+  /** Is a cinematic up (`ShowInterface(false)`, the letterbox)? Start is Escape then — the
+   *  skip — since F10 has no menu to open until the cinematic is over. */
+  inCinematic(): boolean;
 }
 
 let host: GamepadMatchHost | null = null;
@@ -106,6 +110,11 @@ let detectUntil = 0;
 const quiet = new Set<number>();
 /** The D-pad owns X (the command-card selector) until the left stick moves. */
 let cardMode = false;
+/** The dropdown list open now, while a pad is paired (`syncDropdown`), and whether the D-pad owns
+ *  X in it — the same hand-over the command card has: the D-pad walks the gold frame down the
+ *  list and X picks what it is on, until the left stick takes X back for the cursor. */
+let menuEl: HTMLElement | null = null;
+let menuMode = false;
 /** Right-stick deflection, read by the camera every frame (`gamepadPan`). */
 let pan: [number, number] = [0, 0];
 
@@ -263,6 +272,7 @@ function tick(now: number): void {
       else if (any) refreshPrompt();
       continue;
     }
+    syncDropdown();
     drive(pad, now_, prev, dt, now);
   }
   if (paired !== null && !pads[paired]?.connected) unpair(true);
@@ -291,6 +301,9 @@ function unpair(announce: boolean): void {
   dpadHeld = null;
   pan = [0, 0];
   setCardMode(false);
+  if (menuEl) for (const it of menuItems(menuEl)) it.classList.remove("pad-sel");
+  menuEl = null;
+  menuMode = false;
   hideCursor();
   if (announce) toast("Gamepad disconnected.");
   paintDetect(); // "Unpair Gamepad" goes back to "Detect Gamepad"
@@ -305,6 +318,7 @@ function drive(pad: Gamepad, down: boolean[], prev: boolean[], dt: number, now: 
   if (lx || ly) {
     if (!cursorOn) showCursor();
     setCardMode(false);
+    menuMode = false;
     const speed = CURSOR_SPEED * window.innerHeight;
     moveCursor(cx + lx * speed * dt, cy + ly * speed * dt);
   } else if (cursorOn && now - cursorStyleAt > CURSOR_STYLE_MS) {
@@ -330,6 +344,11 @@ function drive(pad: Gamepad, down: boolean[], prev: boolean[], dt: number, now: 
 function press(button: number, now: number): void {
   switch (button) {
     case B.cross:
+      // An open dropdown the D-pad is walking: X picks the option the frame is on.
+      if (menuMode && menuEl) {
+        pickMenuItem();
+        return;
+      }
       // The selector's X, while the D-pad has it: press the command button it is on. Leaving
       // the mode once the press armed something is what lets the NEXT X aim it in the world.
       if (cardMode && host?.canAct()) {
@@ -343,6 +362,12 @@ function press(button: number, now: number): void {
       holdMouse(button, 2);
       return;
     case B.circle:
+      // O over an open dropdown shuts the LIST and nothing else — as Escape it would also back
+      // out of the panel the dropdown is on (F10's Options, the Custom Game screen).
+      if (menuEl) {
+        closeDropdown();
+        return;
+      }
       holdKey(button, "Escape", "Escape");
       return;
     case B.triangle:
@@ -355,7 +380,11 @@ function press(button: number, now: number): void {
       holdKey(button, "F8", "F8");
       return;
     case B.start:
-      holdKey(button, "F10", "F10");
+      // F10 — except during a cinematic, where it is Escape: the key that SKIPS one
+      // (mapViewer's cinematic-skip, EVENT_PLAYER_END_CINEMATIC), and the thing a player
+      // reaching for Start in the middle of one is asking for. F10 does nothing there anyway.
+      if (host?.inCinematic()) holdKey(button, "Escape", "Escape");
+      else holdKey(button, "F10", "F10");
       return;
     case B.select:
       holdKey(button, "F9", "F9");
@@ -380,11 +409,75 @@ function press(button: number, now: number): void {
 }
 
 function dpad(button: number): void {
+  // An open dropdown takes the D-pad first, on any screen — menus and a match alike.
+  if (menuEl) {
+    const dy = button === B.up ? -1 : button === B.down ? 1 : 0;
+    if (dy) moveMenu(dy);
+    return;
+  }
   if (!host?.canAct()) return;
   setCardMode(true);
   const dx = button === B.left ? -1 : button === B.right ? 1 : 0;
   const dy = button === B.up ? -1 : button === B.down ? 1 : 0;
   host.cardMove(dx, dy);
+}
+
+// --- dropdowns ------------------------------------------------------------------------------
+//
+// A dropdown's open list is an `.fdf-popup-menu` (ui/fdf/widgets.ts `buildPopup`), and only one
+// is ever open, so the pad finds it off the page rather than being told: every pulldown in the
+// game — the lobby's race, team, colour and handicap menus, the Options rows, a script's dialog
+// — is the same widget. While one is open the gold frame the command card wears sits on an
+// option (`.pad-sel`), starting on the one already chosen; the D-pad walks it (held, it repeats,
+// so a long list scrolls), X picks it, and O shuts the list.
+
+/** The open dropdown list, if any. */
+function openDropdown(): HTMLElement | null {
+  for (const m of document.querySelectorAll<HTMLElement>(".fdf-popup-menu")) if (!m.hidden) return m;
+  return null;
+}
+
+/** Follow the open list: frame its chosen option when it opens, forget it when it shuts. */
+function syncDropdown(): void {
+  const m = openDropdown();
+  if (m === menuEl) return;
+  menuEl = m;
+  menuMode = false;
+  if (!m) return;
+  const items = menuItems(m);
+  const at = items.findIndex((i) => i.classList.contains("selected"));
+  frameMenuItem(items, Math.max(0, at));
+}
+
+function menuItems(m: HTMLElement): HTMLElement[] {
+  return [...m.querySelectorAll<HTMLElement>(".fdf-popup-item")];
+}
+
+function frameMenuItem(items: HTMLElement[], index: number): void {
+  items.forEach((it, i) => it.classList.toggle("pad-sel", i === index));
+  items[index]?.scrollIntoView({ block: "nearest" }); // the list scrolls past 42vh
+}
+
+/** D-pad up/down: the frame one option along, stopping at either end. */
+function moveMenu(dy: number): void {
+  if (!menuEl) return;
+  menuMode = true;
+  const items = menuItems(menuEl);
+  const at = items.findIndex((i) => i.classList.contains("pad-sel"));
+  frameMenuItem(items, Math.min(items.length - 1, Math.max(0, (at < 0 ? 0 : at) + dy)));
+}
+
+/** X: choose the framed option — its own click, which sets the value and shuts the list. */
+function pickMenuItem(): void {
+  const item = menuEl?.querySelector<HTMLElement>(".fdf-popup-item.pad-sel");
+  menuMode = false;
+  item?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+}
+
+/** O: shut the list with nothing chosen — the "click anywhere else" every dropdown listens for. */
+function closeDropdown(): void {
+  menuMode = false;
+  document.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
 }
 
 function setCardMode(on: boolean): void {
