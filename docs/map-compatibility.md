@@ -206,7 +206,7 @@ binding the existing `registerNatives` table into a Lua VM, not a second engine.
   byte against the file). Alongside it, the model handler no longer turns a v1000+ file into a
   `.dds` request or writes `reforged` into the SHARED solver params — the model-side twin of
   blocker 4. Pinned by `tools/render-mdx-v1100-test.cjs`.
-* `war3mapSkin.txt` (the map's own war3skins overlay) is unread. Noted, not scheduled.
+* `war3mapSkin.txt` (the map's own war3skins and FrameDef-string overlay) is read — see "Test of Balance" below.
 
 ## Where each fix belongs
 
@@ -756,6 +756,39 @@ The three natives the map logged as missing, done after it:
   (`stand`, `stand work`, `stand alternate`) are its three states.
 
 Tests: `tools/jass-variable-event-test.cjs`, `tools/sim-anim-tags-test.cjs`.
+
+And the map's interface layer, with the four bugs found standing on it:
+
+* **`war3mapSkin.txt`** (`src/data/mapSkin.ts`) — the World Editor's "Game Interface" dialog. Its
+  `[CustomSkin]` is a layer over `UI\war3skins.txt` for EVERY race, read inside `skinValue`, so the
+  FDF `DecorateFileNames` art, the console's own widgets and the music playlists all see it; its
+  `[FrameDef]` is a layer over the FrameDef string tables with `TRIGSTR_` resolved, read inside
+  `FdfLibrary.strings` (an `OverlaidStrings`). Both belong to the map: put up at the map door, taken
+  down only by the scene that put them up. Test of Balance renames the food counter "Difficulty
+  Level:", the upkeep label Balanced / Average / Not Balanced and the idle-worker button "Traits".
+  For any of that to reach the HUD, the HUD had to read those words and icons BY KEY: the upkeep
+  label is `UPKEEP_NONE`/`_LOW`/`_HIGH` now, with the string's own colour (the game's "low" is
+  `ffff00`, where our hand-picked one was orange), and the idle-worker button is `IdlePeon` art under
+  `IDLE_PEON`/`IDLE_PEON_DESC`, all three of which 1.30.4's own data carries. Not done: hover slabs
+  on the resource bar, which is where `COLON_FOOD` and `RESOURCE_UBERTIP_*` would show.
+* **A model file that is not there is an INVISIBLE unit, not an absent one.** Pointing Art - Model
+  File at a path that does not exist is the standard way to make a dummy ("NONE.mdx",
+  "Whatever.mdx" — hiveworkshop 165420), and the viewer cannot deliver such a unit, so
+  `seedModellessPlaced` now seeds any placed unit whose model does not EXIST, not only one with an
+  empty path; and `spawnUnit` makes a trained or summoned one bodiless instead of dropping it. Test
+  of Balance's four `umdl=none` Dummies had vanished with their starting items.
+* **A unit with no body still has a panel and a card** (`RtsController.infoFor` reads the type row
+  when there is no render entry), with an empty portrait rather than the last unit's bust; and the
+  Attack button asks for an ENABLED weapon, as the building card already did — a unit type whose
+  `uaen` is none still carries its base's weapon rows, switched off.
+* **A selection is this screen's.** `selectUnit`/`clearSelection` are local-view hooks now: in the
+  per-recipient re-run of blizzard.j's `SelectUnitForPlayerSingle` (`if GetLocalPlayer() ==
+  whichPlayer`), every OTHER seat's pass wrote this machine's selection, so Test of Balance's draft
+  ended with the last seat's hero selected — somebody else's unit, and an empty card.
+* Map-imported ICONS (`blpIcon`) and the console strip read only the install; both read the map
+  first now, for the same reason `assetSolver.ts` does.
+
+Tests: `tools/sim-map-skin-test.cjs`, the selection case in `tools/jass-audience-test.cjs`.
 
 ## Traps
 

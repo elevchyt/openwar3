@@ -60,6 +60,16 @@ function GatedWorldWrite takes nothing returns nothing
     endif
 endfunction
 
+// blizzard.j's SelectUnitForPlayerSingle, as Test of Balance calls it once per seat for that
+// seat's drafted hero: presentation for ONE screen.
+function SelectHeroForSeat takes integer seat returns nothing
+    local unit hero = CreateUnit(Player(seat), 'Hpal', 0, 0, 0)
+    if GetLocalPlayer() == Player(seat) then
+        call ClearSelection()
+        call SelectUnit(hero, true)
+    endif
+endfunction
+
 // No GetLocalPlayer anywhere in the condition: must not fan out at all.
 function Ungated takes nothing returns nothing
     if 1 == 1 then
@@ -295,6 +305,25 @@ console.log("\n…and the host's OWN pass still moves it");
   interp.callFunction("GatedCamera", []);
   // Once, from the unmuzzled host pass — a melee start must still frame your own base.
   check("it fires once, for the human at this machine", JSON.stringify(cam), '["1000,2000/5"]');
+  rt.localViewHooks = new Set();
+}
+
+console.log("\nsomebody else's SelectUnitForPlayerSingle does not change MY selection");
+{
+  // The selection is this machine's, like the camera — render/mapViewer.ts lists selectUnit and
+  // clearSelection among its localViewHooks. Before that, every other seat's pass of the gate
+  // reached them, and Test of Balance's draft left the host with the LAST seat's hero selected.
+  rt.applyLobby([seat(0), seat(5), seat(9)], 0);
+  let nextId = 100;
+  const sel = [];
+  rt.hooks = {
+    createUnit: () => nextId++,
+    clearSelection: () => sel.push(`clear/${rt.localViewer}`),
+    selectUnit: (id) => sel.push(`${id}/${rt.localViewer}`),
+  };
+  rt.localViewHooks = new Set(["selectUnit", "clearSelection"]);
+  for (const p of [0, 5, 9]) interp.callFunction("SelectHeroForSeat", [{ k: "int", n: p }]);
+  check("only my own seat's hero is selected here", JSON.stringify(sel), '["clear/0","100/0"]');
   rt.localViewHooks = new Set();
 }
 

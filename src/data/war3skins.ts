@@ -13,6 +13,8 @@
 // Structure: `[Section]` blocks of `Key=Value`, `//` comments. `[Default]` carries the
 // full table (Human's art); each race section overrides a handful of entries.
 
+import { mapSkinValue } from "./mapSkin";
+
 export const WAR3SKINS = "UI\\war3skins.txt";
 
 // The `_V<n>` suffix the engine appends to a versioned key (`Music_V0` is Reign of Chaos,
@@ -39,7 +41,8 @@ export function parseWar3Skins(src: string): Map<string, Map<string, string>> {
 }
 
 /** Look a key up in `skin`'s section, falling back to `[Default]`. Returns undefined
- *  when neither has it — callers treat that as "the name is already a literal". */
+ *  when neither has it — callers treat that as "the name is already a literal". The running
+ *  map's own `war3mapSkin.txt` [CustomSkin] sits above both, for every race (data/mapSkin.ts). */
 export function skinValue(skins: Map<string, Map<string, string>>, skin: string, key: string): string | undefined {
-  return skins.get(skin)?.get(key) ?? skins.get("Default")?.get(key);
+  return mapSkinValue(key) ?? skins.get(skin)?.get(key) ?? skins.get("Default")?.get(key);
 }

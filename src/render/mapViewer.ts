@@ -38,7 +38,7 @@ import type { MatchLinkSetup } from "../game/matchLink";
 import { unitSnapshot, unitSnapshots } from "../game/jassHooks";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
-import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData, applyMapTechData, heroFoldConstants, refoldHeroConstants } from "../data/objectData";
+import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData, applyMapTechData, heroFoldConstants, makeTrigStr, refoldHeroConstants } from "../data/objectData";
 import { readMapFormat, UNKNOWN_FORMAT, type MapFormatProfile } from "../compat/mapFormat";
 import { readW3i } from "../compat/w3i";
 import { preloadLuaHost } from "../compat/lua/index";
@@ -108,6 +108,7 @@ import { blpToCanvas, blpToDataUrl } from "./blputil";
 import { loadTechRegistry, type TechRegistry } from "../data/techtree";
 import { loadUpgradeRegistry, type UpgradeRegistry } from "../data/upgrades";
 import { parseWar3Skins, skinValue, WAR3SKINS } from "../data/war3skins";
+import { MAP_SKIN_FILE, mapSkinOverlay, parseMapSkin, setMapSkinOverlay, type MapSkin } from "../data/mapSkin";
 
 // Our race ids → the section names in the game's own skin table (UI\war3skins.txt), which
 // is what decorates a `DecorateFileNames` frame's textures. WC3 skins the in-game panels
@@ -1777,6 +1778,7 @@ export class MapViewerScene {
     // startCustom call meant melee maps were reading their own .w3u nowhere.
     this.loadMapObjectData();
     this.loadMapMisc();
+    this.loadMapSkin();
     // …and mounted over the install for AUDIO, so a map's imported clips resolve: the paths
     // its CreateSound calls name (`war3mapImported\HalloweenMusic.wav`) are inside this
     // archive and nowhere else. See SoundBoard.mountMap.
@@ -2569,7 +2571,7 @@ export class MapViewerScene {
     // browser is free to paint through, so it is what the loading bar creeps on (see
     // `startGame` in src/main.ts).
     await this.waitForMapUnits(onProgress);
-    this.rts.seedModellessPlaced(); // …including the ones the renderer never delivers (dummy units)
+    this.rts.seedModellessPlaced((path) => this.assetFiles().exists(path)); // …including the ones the renderer never delivers (dummy units)
     await this.preloadScriptHost();
     const engine = this.runMapScript({ melee: true, races, slots: config.slots });
     // No script (or it created nothing for the local player — a script that leans on
@@ -2885,7 +2887,7 @@ export class MapViewerScene {
     // A dummy unit never arrives through the renderer at all, and on a custom map it is often
     // load-bearing — Extreme Candy War's cinematic vision pair is the whole reason its intro
     // is visible. Seed those from the .doo before the script runs, like everything else.
-    const dummies = this.rts.seedModellessPlaced();
+    const dummies = this.rts.seedModellessPlaced((path) => this.assetFiles().exists(path));
 
     // Run the map's own script (Phase 7). config() sets players/start-locations;
     // main() fires the map's initialization triggers, so its welcome text / quest
@@ -2958,6 +2960,15 @@ export class MapViewerScene {
    */
   private localViewHooks(): Partial<EngineHooks> {
     return {
+      // --- the selection (7.24) ---
+      // The SELECTION is the person at this machine's, like the camera: blizzard.j's
+      // `SelectUnitForPlayerSingle` is `if GetLocalPlayer() == whichPlayer then ClearSelection()
+      // SelectUnit(u, true)`, and in the per-recipient re-run of that block every OTHER seat's
+      // pass wrote this machine's selection too. Test of Balance calls it for each player's
+      // drafted hero, so the host ended the draft with the LAST seat's hero selected — somebody
+      // else's unit, and so an empty command card.
+      selectUnit: (id, select) => this.rts?.scriptSelect(id, select),
+      clearSelection: () => this.rts?.clearSelection(),
       // --- cameras + cinematics (7.24) ---
       // Every camera MOVE is one call: the script names fields and (maybe) a destination,
       // and ScriptCamera blends the live camera there. It used to say here that the …ForPlayer
@@ -3257,8 +3268,7 @@ export class MapViewerScene {
       },
       setUnitTimeScale: (id, scale) => this.rts?.setUnitTimeScale(id, scale),
       selectedUnits: (player) => (player === this.localPlayer ? this.rts?.selectedUnitIds() ?? [] : []),
-      selectUnit: (id, select) => this.rts?.scriptSelect(id, select),
-      clearSelection: () => this.rts?.clearSelection(),
+      // (selectUnit / clearSelection are in localViewHooks — a selection is this screen's.)
       // IsUnitAlly/IsUnitEnemy: team-based, so neutral hostile (team -1) is nobody's ally.
       // --- the atmospheric distance haze — a DIFFERENT system (7.22) ---
       // Replaces the map's w3i fog on `scene.distFog` (read fresh each frame, so this
@@ -3509,6 +3519,28 @@ export class MapViewerScene {
     console.info(`[jass] map gameplay constants (${MAP_MISC_FILE}): ${stated}`
       + (refolded ? ` — ${refolded} hero type(s) re-folded` : "")
       + (unread.length ? ` — no system reads: ${unread.join(", ")}` : ""));
+  }
+
+  /** The map's own interface layer (`war3mapSkin.txt` — data/mapSkin.ts), or null. Kept so
+   *  dispose takes down only the layer THIS scene put up (see the misc overlay beside it). */
+  private mapSkin: MapSkin | null = null;
+
+  private loadMapSkin(): void {
+    this.mapSkin = null;
+    setMapSkinOverlay(null); // never the last map's
+    const bytes = this.mapArchive?.rawBytes(MAP_SKIN_FILE);
+    if (!bytes) return;
+    try {
+      // The World Editor writes this file as UTF-8, like war3map.wts beside it.
+      const wts = this.mapArchive?.rawBytes("war3map.wts") ?? undefined;
+      this.mapSkin = parseMapSkin(new TextDecoder("utf-8").decode(bytes), makeTrigStr(wts));
+    } catch (err) {
+      console.warn(`[jass] ${MAP_SKIN_FILE} failed (non-fatal):`, err);
+      return;
+    }
+    setMapSkinOverlay(this.mapSkin);
+    this.skins = undefined; // skinPath re-reads through the new layer
+    console.info(`[jass] map interface (${MAP_SKIN_FILE}): ${[...this.mapSkin.skins.keys()].join(", ") || "no"} skin key(s), ${this.mapSkin.strings.size} string(s).`);
   }
 
   /** Run the map's config() + main() through the JASS interpreter (Phase 7 — issue #33).
@@ -4405,8 +4437,7 @@ export class MapViewerScene {
 
     // A type with NO model is invisible, not absent — WC3's dummy-unit convention (see
     // `normModel`). It is still a unit in every other respect, so it gets a record and no
-    // body. Distinct from art we merely failed to FIND, which falls through to the load
-    // below and is still dropped: that is a broken asset, and it should look like one.
+    // body. A model path that names no file ends up the same way, after the load below.
     if (!def.model) {
       // A reserved id means the record already exists (the JASS CreateUnit path) and this
       // call was only here to hand it a body. There is none. Every other caller is asking
@@ -4416,7 +4447,14 @@ export class MapViewerScene {
         : this.rts.addSimUnit(def, x, y, facing, owner, team, constructionTime);
     }
     const model = await this.viewer.load(def.model, this.solver);
-    if (!model) return null;
+    // A model that is not there is an INVISIBLE unit, not an absent one — the standard dummy
+    // trick is a path to a file that does not exist (RtsController.seedModellessPlaced), and a
+    // trained or summoned dummy must still be made. Same as the no-model branch above.
+    if (!model) {
+      return reservedId !== undefined || !this.rts
+        ? null
+        : this.rts.addSimUnit(def, x, y, facing, owner, team, constructionTime);
+    }
     const instance = model.addInstance();
     instance.setScene(map.worldScene);
     instance.setTeamColor(this.rts.unitColor(owner)); // a slot's colour is not its index (and Ally Color Mode paints over both)
@@ -7854,7 +7892,11 @@ export class MapViewerScene {
   }
 
   /** Command-card icon (BLP path) of the local race's worker, for the idle button. */
+  /** The idle-worker button's art: war3skins' own `IdlePeon` key for the local race (and the
+   *  map's war3mapSkin.txt over it), else — no install — the race's worker's icon. */
   private workerIcon(): string | null {
+    const skinned = this.skinPath("IdlePeon");
+    if (this.assetFiles().exists(skinned)) return skinned;
     const workerId = (STARTING_UNITS[this.localRace] ?? []).map((s) => s.id).find((id) => WORKERS[id]);
     return (workerId && this.registry.get(workerId)?.icon) || null;
   }
@@ -8390,7 +8432,9 @@ export class MapViewerScene {
     this.consoleUi?.dispose();
     // Built BEFORE the HUD so the HUD's own layers (the day/night medallion that hangs in the
     // strip's gap, the message column) stack over the console chrome rather than under it.
-    this.consoleUi = new ConsoleUi(ui, this.vfs, SKIN_SECTION[this.localRace], {
+    // Its art is read through the map's archive too: a war3mapSkin.txt [CustomSkin] may name an
+    // icon the map imports for the resource bar (data/mapSkin.ts).
+    this.consoleUi = new ConsoleUi(ui, this.assetFiles(), SKIN_SECTION[this.localRace], {
       openPanel: (panel) => this.togglePanel(panel),
       disabledPanels: () => this.deadPanels(),
       mountClock: (slot) => this.mountClock(slot),
@@ -8963,7 +9007,16 @@ export class MapViewerScene {
       }
       return;
     }
-    if ((sel.id === this.portraitFor && sel.altModel === this.portraitAlt) || this.portraitLoading || !sel.model) return;
+    if ((sel.id === this.portraitFor && sel.altModel === this.portraitAlt) || this.portraitLoading) return;
+    if (!sel.model) {
+      // A unit with no model has no bust — the frame stands empty rather than keep showing
+      // whoever was selected before it (an invisible dummy, RtsController.infoFor).
+      this.portraitFor = sel.id;
+      this.portraitAlt = sel.altModel;
+      this.portraitLabel = "";
+      this.portraitViewer?.stop();
+      return;
+    }
     // The sound-set of the unit now in the portrait — a voice line with this label
     // drives the bust's talk animation (see the onVoiceStart hook in the ctor).
     this.portraitLabel = this.registry.get(sel.typeId)?.soundSet ?? "";
@@ -11943,11 +11996,16 @@ export class MapViewerScene {
 
   /** Decode a BLP to a cached data URL for DOM use (icons). */
   private blpIcon(path: string): string | null {
-    let url = this.iconCache.get(path);
+    // The running map's archive first, as for every other asset (render/assetSolver.ts): a map's
+    // units and its war3mapSkin.txt name icons it imports. Such a path is cached under the MOUNT,
+    // so the next map's `war3mapImported\x.blp` is never the last one's picture.
+    const map = this.mapFiles.archive;
+    const key = map?.exists(path) ? `map${this.mapFiles.epoch}:${path}` : path;
+    let url = this.iconCache.get(key);
     if (url === undefined) {
-      const bytes = this.vfs.rawBytes(path);
+      const bytes = key === path ? this.vfs.rawBytes(path) : map!.rawBytes(path);
       url = bytes ? blpToDataUrl(bytes) : null;
-      this.iconCache.set(path, url);
+      this.iconCache.set(key, url);
       if (url) this.iconSource.set(url, path);
     }
     return url;
@@ -13278,6 +13336,7 @@ export class MapViewerScene {
     // THIS scene's: a ChangeLevel/RestartGame can load the next scene before this one is
     // disposed, and taking down its constants would be the old map reaching into the new one.
     if (this.miscEpoch >= 0 && mapMiscEpoch() === this.miscEpoch) setMapMiscOverlay(null);
+    if (this.mapSkin && mapSkinOverlay() === this.mapSkin) setMapSkinOverlay(null);
     for (const inst of this.projectileInsts.values()) inst.detach();
     this.projectileInsts.clear();
     this.projectileLoading.clear();

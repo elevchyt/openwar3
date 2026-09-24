@@ -163,9 +163,8 @@ export interface ConsoleResources {
   gold: string;
   lumber: string;
   supply: string;
+  /** The upkeep label, with its own colour code (hud.ts UPKEEP_KEY). */
   upkeep: string;
-  /** Upkeep's colour band (WC3 turns the label orange at low, red at high upkeep). */
-  upkeepColor: string;
 }
 
 export class ConsoleUi {
@@ -216,8 +215,7 @@ export class ConsoleUi {
   update(next: ConsoleResources): void {
     const prev = this.last;
     if (prev && prev.gold === next.gold && prev.lumber === next.lumber
-      && prev.supply === next.supply && prev.upkeep === next.upkeep
-      && prev.upkeepColor === next.upkeepColor) return;
+      && prev.supply === next.supply && prev.upkeep === next.upkeep) return;
     this.last = next;
     this.paint();
   }
@@ -230,9 +228,7 @@ export class ConsoleUi {
     screen.setText("ResourceBarGoldText", r.gold);
     screen.setText("ResourceBarLumberText", r.lumber);
     screen.setText("ResourceBarSupplyText", r.supply);
-    screen.setText("ResourceBarUpkeepText", r.upkeep);
-    const upkeep = screen.frame("ResourceBarUpkeepText")?.querySelector("span");
-    if (upkeep) upkeep.style.color = r.upkeepColor;
+    screen.setText("ResourceBarUpkeepText", r.upkeep); // its colour is in the string
   }
 
   /**

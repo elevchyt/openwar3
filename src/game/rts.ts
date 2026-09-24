@@ -3732,11 +3732,16 @@ export class RtsController {
    * Called once adoption has settled (`waitForMapUnits`) — before then, "unclaimed" only means
    * "still streaming".
    */
-  seedModellessPlaced(): number {
+  seedModellessPlaced(modelExists: (path: string) => boolean = () => true): number {
     let seeded = 0;
     for (const p of this.placed.unclaimedPlaced()) {
       const def = this.registry.get(p.typeId);
-      if (!def || def.model) continue;
+      // "No model" is also a model FILE that is not there: pointing Art - Model File at a path
+      // that does not exist ("NONE.mdx", "Whatever.mdx") is the community's standard way to
+      // make an invisible dummy, and the unit still works (hiveworkshop 165420). The viewer
+      // cannot deliver such a unit — it has nothing to load — so it is seeded here or lost:
+      // Test of Balance's four `umdl=none` Dummies, carrying the player's starting items.
+      if (!def || (def.model && modelExists(def.model))) continue;
       // Owner by the same three-way split trySeed uses; a dummy has no aggro post, no drop
       // table and no footprint to inherit, so `addSimUnit` alone is the whole seed.
       const seed = this.placed.playerSeedAt(p.x, p.y);
@@ -5913,7 +5918,10 @@ export class RtsController {
    *  game's card has no Attack for them, while a Zeppelin grabbed with the Footmen it is about
    *  to carry still lets the group attack-move. */
   selectionCanAttack(): boolean {
-    for (const id of this.selected) if ((this.sim.units.get(id)?.weapons.length ?? 0) > 0) return true;
+    // An ENABLED weapon, as the building card asks: a unit type whose `Attacks Enabled`
+    // (`uaen`) is none still carries its base's weapon rows, switched off — Test of Balance's
+    // invisible Dummy is a Peasant with both of the Peasant's attacks disabled.
+    for (const id of this.selected) if (this.sim.units.get(id)?.weapons.some((w) => w.enabled && w.showUI)) return true;
     return false;
   }
 
@@ -7006,14 +7014,21 @@ export class RtsController {
     // a client must not answer for itself, and now it does not. The panel steps at the
     // snapshot's 10 Hz rather than the frame's 60; that IS the rate at which the host knows.
     const u = this.frameUnit(id);
+    if (!u) return null;
+    // A unit with NO model has no render entry — no body to draw — but it is still a unit you
+    // can select (a script's SelectUnit, a control group, the idle-worker button), and WC3
+    // gives it a panel and a card like any other: the standard invisible dummy is exactly such
+    // a unit (RtsController.seedModellessPlaced). Everything the panel wants from the entry is
+    // the TYPE's, so without one it reads the type row instead.
     const e = this.byId.get(id);
-    if (!u || !e) return null;
+    const typeId = e?.typeId ?? this.sim.units.get(id)?.typeId;
+    if (!typeId) return null;
     const w = u.weapon;
     const b = u.building;
     const q = b?.queue ?? [];
-    const def = this.registry.get(e.typeId);
-    const upgradeBoxes = this.upgradeBoxes(e.typeId);
-    const builderId = b && b.constructionLeft > 0 ? this.builderInside(e.simId) : 0;
+    const def = this.registry.get(typeId);
+    const upgradeBoxes = this.upgradeBoxes(typeId);
+    const builderId = b && b.constructionLeft > 0 ? this.builderInside(id) : 0;
     const form = u.altFormLeft > 0 ? this.timedFormOf(id) : null;
     const hex = this.hexBarOf(u);
     /**
@@ -7042,10 +7057,10 @@ export class RtsController {
     //  a mod that turns it on turns this on.)
     const status = gameNum("DisplayBuildingStatus") !== 0 || this.readsSideOf(u.owner);
     return {
-      id: e.simId,
-      typeId: e.typeId,
-      race: e.race,
-      name: e.name,
+      id,
+      typeId,
+      race: e?.race ?? def?.race ?? "",
+      name: e?.name ?? def?.name ?? typeId,
       owner: u.owner,
       hp: u.hp,
       maxHp: u.maxHp,
@@ -7089,7 +7104,7 @@ export class RtsController {
       agilityBonus: u.isHero ? u.bonusAgi : 0,
       intelligenceBonus: u.isHero ? u.bonusInt : 0,
       primaryAttr: def?.primaryAttr ?? PrimaryAttribute.None,
-      model: e.modelPath,
+      model: e?.modelPath ?? "", // no body, no bust
       altModel: u.altModel,
       isWorker: !!u.worker,
       isBuilding: !!b,
@@ -7107,7 +7122,7 @@ export class RtsController {
         // shape needs no cast back to the union it came from.
         icon: (j.kind === "research" ? this.upgrades.icon(j.unitId, j.level ?? 0) : this.registry.get(j.unitId)?.icon) ?? "",
       })),
-      icon: this.registry.get(e.typeId)?.icon ?? "",
+      icon: def?.icon ?? "",
       builderId,
       builderIcon: builderId ? (this.registry.get(this.byId.get(builderId)?.typeId ?? "")?.icon ?? "") : "",
       carryGold: u.worker?.carryGold ?? 0,

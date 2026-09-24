@@ -606,7 +606,7 @@ function cloneDef(base: UnitDef, id: string): UnitDef {
  * name references; without it names stay as their raw key.
  */
 /** Build a TRIGSTR_-resolver from a map's war3map.wts bytes (identity if none). */
-function makeTrigStr(wtsBytes?: Uint8Array): (v: string) => string {
+export function makeTrigStr(wtsBytes?: Uint8Array): (v: string) => string {
   const table = wtsBytes ? parseWts(new TextDecoder("utf-8").decode(wtsBytes)) : null;
   return (v: string): string => {
     if (!table || !v.startsWith("TRIGSTR_")) return v;

@@ -1,4 +1,5 @@
 import { parseWar3Skins, skinValue, WAR3SKINS } from "../../data/war3skins";
+import { OverlaidStrings } from "../../data/mapSkin";
 import type { DataSource } from "../../vfs/types";
 import { parseFdf, type FdfFrame, type FdfProp } from "./parser";
 
@@ -28,7 +29,8 @@ function cloneFrame(f: FdfFrame): FdfFrame {
 export class FdfLibrary {
   private templates = new Map<string, FdfFrame>(); // exact name → frame
   private lowered = new Map<string, FdfFrame>(); // lowercased name → frame (fallback)
-  readonly strings = new Map<string, string>();
+  /** The FrameDef strings — with the running map's war3mapSkin.txt [FrameDef] on top. */
+  readonly strings: Map<string, string> = new OverlaidStrings();
   private loaded = new Set<string>();
   /** The DecorateFileNames skin table (UI\war3skins.txt): section → key → BLP path. */
   private skins = new Map<string, Map<string, string>>();

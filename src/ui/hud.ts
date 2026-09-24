@@ -25,9 +25,6 @@ import { MODAL_FX_OVERHANG, ModalButtonFx } from "./modalButtonFx";
 import { anyModalOpen } from "./modal";
 import { gridCommandKey, gridCommandSlot, gridHotkeys, gridInventoryKey, gridInventorySlot, hotkeyMode, hotkeysOnButtons } from "../data/hotkeys";
 
-/** WC3's upkeep bands, as the resource bar colours them. */
-const UPKEEP_COLORS = { none: "#5be05a", low: "#e0c146", high: "#e05046" };
-
 /** Which upkeep band a food count falls in: 0 none (0–50), 1 low (51–80), 2 high (81+).
  *  Shared with the message the game prints when a player crosses one (`Upkeeplevel`, see
  *  MapViewerScene.noteUpkeep) so the label and the line can never disagree. */
@@ -35,8 +32,12 @@ export function upkeepBand(foodUsed: number): 0 | 1 | 2 {
   return foodUsed <= 50 ? 0 : foodUsed <= 80 ? 1 : 2;
 }
 
-/** The band's label, as the resource bar prints it. */
-export const UPKEEP_LABEL = ["No Upkeep", "Low Upkeep", "High Upkeep"] as const;
+/** The band's label, as the resource bar prints it: `UPKEEP_NONE`/`_LOW`/`_HIGH`, which carry
+ *  their OWN colour (GlobalStrings.fdf 1025-1027 — green, yellow, red), read by key so a map's
+ *  war3mapSkin.txt can rename them (Test of Balance: Balanced / Average / Not Balanced). The
+ *  fallbacks are the file's own text, for a HUD with no install behind it. */
+export const UPKEEP_KEY = ["UPKEEP_NONE", "UPKEEP_LOW", "UPKEEP_HIGH"] as const;
+const UPKEEP_FALLBACK = ["|Cff00ff00No Upkeep", "|Cffffff00Low Upkeep", "|Cffff0000High Upkeep"] as const;
 
 export type OrderMode = "move" | "attack" | null;
 
@@ -143,6 +144,8 @@ export interface HudInvSlot {
 export interface HudSelection {
   id: number;
   name: string;
+  /** The model the portrait busts; "" for a unit with none (an invisible dummy) — no bust. */
+  model?: string;
   hp: number;
   maxHp: number;
   mana: number;
@@ -2476,16 +2479,26 @@ export class GameHud {
     // at the bottom-right. Click (or F8 / ~) selects and cycles through workers doing nothing.
     // Hidden when there are none.
     //
-    // The art is the worker's `BTN*.blp` and nothing else: a command button in WC3 carries its
-    // gold frame IN the texture, so a border of our own around it is a second frame. It sinks
-    // under the press exactly as a hero-bar button does — same `onPress`, same `.pressed`.
+    // The art is war3skins' `IdlePeon` for the local race (BTNPeasant / BTNPeon / BTNWisp /
+    // BTNAcolyte) and nothing else: a command button in WC3 carries its gold frame IN the
+    // texture, so a border of our own around it is a second frame. It sinks under the press
+    // exactly as a hero-bar button does — same `onPress`, same `.pressed`.
+    //
+    // Its words are the game's too: `IDLE_PEON` "Idle Workers (F8)" over `IDLE_PEON_DESC`
+    // (GlobalStrings.fdf 525-526) — both of which, with the icon, a map's war3mapSkin.txt may
+    // rewrite (Test of Balance renames all three "Traits").
     this.idleWorkerBadge = document.createElement("button");
     this.idleWorkerBadge.className = "hud-idle-worker hud-iconbtn";
-    setGameTip(this.idleWorkerBadge, "Select idle worker (F8 / ~)");
+    this.idleWorkerBadge.onpointerenter = () => {
+      const t = this.driver.uiString("IDLE_PEON", "Idle Workers (|Cfffed312F8|R)");
+      const b = this.driver.uiString("IDLE_PEON_DESC", "One or more workers aren't earning their keep.");
+      this.setTooltip(`<div class="hud-tooltip-title">${wc3ToHtml(t)}</div><div class="hud-tooltip-desc">${wc3ToHtml(b)}</div>`);
+    };
+    this.idleWorkerBadge.onpointerleave = () => {
+      this.cmdTooltip.hidden = true;
+    };
     this.idleWorkerBadge.hidden = true;
     // Its count wears the same boxed badge every other count in the game does (countBadge).
-    // This button is OpenWar3's own — 1.30 has no idle-worker button to copy — so there is no
-    // original to match here; matching the rest of our own console is the whole argument.
     this.idleWorkerCount = countBadge();
     this.idleWorkerCount.classList.add("hud-idle-count");
     this.idleWorkerBadge.appendChild(this.idleWorkerCount);
@@ -3557,12 +3570,12 @@ export class GameHud {
       gold: String(Math.floor(r.gold)),
       lumber: String(Math.floor(r.lumber)),
       supply: `${r.foodUsed}/${r.foodMax}`,
-      upkeep: UPKEEP_LABEL[band],
-      upkeepColor: [UPKEEP_COLORS.none, UPKEEP_COLORS.low, UPKEEP_COLORS.high][band],
+      upkeep: this.driver.uiString(UPKEEP_KEY[band], UPKEEP_FALLBACK[band]),
     });
 
     const sel = this.driver.selection();
-    this.portrait.classList.toggle("empty", !sel && !this.portraitForced);
+    // …and so is a unit with no MODEL: there is no bust to draw (an invisible dummy).
+    this.portrait.classList.toggle("empty", (!sel || sel.model === "") && !this.portraitForced);
     if (!sel || this.driver.selectionIcons().length > 0) this.xpBar.hidden = true; // no single hero shown
     if (sel) {
       // A hero is titled by its GIVEN name ("Painkiller"); its class ("Demon Hunter")
