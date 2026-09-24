@@ -146,6 +146,7 @@ native BlzGetOriginFrame           takes originframetype frameType, integer inde
 native BlzHideOriginFrames         takes boolean enable returns nothing
 native BlzGetTriggerFrame          takes nothing returns framehandle
 native BlzGetTriggerFrameEvent     takes nothing returns frameeventtype
+native BlzFrameGetParent           takes framehandle frame returns framehandle
 native BlzTriggerRegisterFrameEvent takes trigger whichTrigger, framehandle frame, frameeventtype eventId returns event
 
 // --- the object-FIELD accessors (1.29-1.31) ---------------------------------

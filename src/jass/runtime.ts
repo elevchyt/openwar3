@@ -896,6 +896,9 @@ export interface EngineHooks {
   enumItems?(): ReadonlyArray<ItemSnapshot>;
   /** ChooseRandomItem(Ex) — a random item rawcode of a class + level ("" = none). */
   chooseRandomItem?(classType: string | null, level: number): string;
+  /** A file of the running MAP (its archive over the install), read synchronously — how
+   *  `BlzLoadTOCFile` brings in the map's own FDF templates while the script waits. */
+  readMapFile?(path: string): Uint8Array | null;
   /** UnitId / UnitId2String — a unit type by its internal UnitUI `name`, and back. */
   unitTypeByName?(name: string): string;
   unitTypeName?(typeId: string): string | undefined;

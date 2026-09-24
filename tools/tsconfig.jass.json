@@ -31,6 +31,7 @@
     "../src/compat/blzFields.ts",
     "../src/jass/natives/blzFields.ts",
     "../src/compat/frames.ts",
+    "../src/ui/scriptFrameTree.ts",
     "../src/compat/lua/host.ts",
     "../src/data/objectData.ts",
     "../src/sim/alliances.ts",

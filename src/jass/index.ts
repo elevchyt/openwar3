@@ -36,6 +36,10 @@ function readUtf8(vfs: DataSource | MpqDataSource, ...paths: string[]): string |
   return null;
 }
 
+// The map's own FRAMES (the 1.31 UI API — compat/frames.ts) are drawn by ui/scriptFrames.ts,
+// and reach it through this door rather than by an import of the compatibility layer.
+export { frameModel, type FrameModel, type FrameObj } from "../compat/frames";
+
 export interface MapScriptEngine {
   interp: Interpreter;
   setup: MapSetup;

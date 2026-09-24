@@ -18,7 +18,8 @@ import { AllianceType } from "../sim/alliances";
 import { summonsBuildings, castCostOf, isOffField, type Alert, type EffectAnim, type RallyKind, type ShopResult, type ShopStock, type SimUnit, type SimWorld } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintBuildable, footprintCellsAt, footprintRadius, quarterTurns, rotateFootprint, type Footprint, type PlacedFootprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
-import { loadMapScript, type MapScriptEngine } from "../jass/index";
+import { frameModel, loadMapScript, type MapScriptEngine } from "../jass/index";
+import { ScriptFrameOverlay } from "../ui/scriptFrames";
 import { EVENT_PLAYER_END_CINEMATIC, EVENT_PLAYER_LEAVE } from "../jass/interpreter";
 import { MAP_CONTROL, type CinematicScene, type DestructableSnapshot, type DialogObj, type EngineHooks, type RectObj, type Runtime } from "../jass/runtime";
 import { makeHeightSampler, makeWaterSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type HeightSampler, type FootprintMaxSampler } from "../game/heightmap";
@@ -1245,6 +1246,7 @@ export class MapViewerScene {
   // a melee match, where `rt.textTags` stays empty for the whole game.
   private readonly combatText = new CombatTextTags();
   private leaderboard: LeaderboardOverlay | null = null; // CreateLeaderboard, top-right
+  private scriptFrames: ScriptFrameOverlay | null = null; // the map's own BlzCreateFrame UI
   private multiboard: MultiboardOverlay | null = null; // CreateMultiboard — the grid scoreboard (7.22)
   private timerDialogs: TimerDialogOverlay | null = null; // CreateTimerDialog — the countdown windows (7.21)
   private cinematic: CinematicPanelOverlay | null = null; // the letterbox + transmissions + the fade (7.24)
@@ -3403,6 +3405,8 @@ export class MapViewerScene {
         : "",
       // UnitId / UnitId2String: the unit table's internal `name`, which is also the train order.
       // Base rows come first in `all()`, so a custom copy never shadows the stock type's name.
+      // BlzLoadTOCFile's .toc and .fdf files: the map's archive over the install, synchronously.
+      readMapFile: (path) => this.assetFiles().rawBytes(path.replace(/\//g, "\\")),
       unitTypeByName: (name) => {
         const want = name.trim().toLowerCase();
         return want ? this.registry.all().find((d) => d.typeName.toLowerCase() === want)?.id ?? "" : "";
@@ -3879,6 +3883,7 @@ export class MapViewerScene {
   private mountScriptUi(ui: HTMLElement): void {
     this.textTags?.dispose();
     this.leaderboard?.dispose();
+    this.scriptFrames?.dispose();
     this.multiboard?.dispose();
     this.timerDialogs?.dispose();
     this.cinematic?.dispose();
@@ -3934,6 +3939,11 @@ export class MapViewerScene {
     this.textTags = new TextTagOverlay(worldLayer());
     this.combatText.clear(); // last match's numbers are not this one's
     this.leaderboard = new LeaderboardOverlay(ui, this.vfs, skin, (p) => this.rts?.playerColor(p) ?? p);
+    // The map's own frames (BlzCreateFrame …), drawn out of its archive over the install, and
+    // the mouse on them raised as the frame events its triggers registered — on this machine,
+    // for the local player, as a dialog button's click is.
+    this.scriptFrames = new ScriptFrameOverlay(ui, () => this.assetFiles(), skin, (frame, event) =>
+      this.mapScript?.interp.fireFrameEvent(frame, event, this.localPlayer));
     this.multiboard = new MultiboardOverlay(ui, this.vfs, skin);
     this.timerDialogs = new TimerDialogOverlay(ui, this.vfs, skin);
     this.cinematic = new CinematicPanelOverlay(ui, this.vfs, skin);
@@ -4024,6 +4034,8 @@ export class MapViewerScene {
     // multiboard, then the countdown windows — each hangs below whatever the ones above it
     // are already using, so they never overlap.
     const underBoard = this.leaderboard?.occupiedHeight() ?? 0;
+    // …and the map's own panels are interface too.
+    this.scriptFrames?.update(cine ? null : frameModel(rt));
     this.multiboard?.update(rt.multiboards, cine || rt.multiboardSuppressed, underBoard ? underBoard + TIMER_STACK_GAP : 0);
     // Countdown windows stack below both (7.21). Their TIME isn't pushed — it's read live
     // off each dialog's timer, so this runs every frame, not just when something changed.
@@ -13297,6 +13309,8 @@ export class MapViewerScene {
     this.textTags = null;
     this.combatText.clear();
     this.leaderboard?.dispose();
+    this.scriptFrames?.dispose();
+    this.scriptFrames = null;
     this.multiboard?.dispose();
     this.multiboard = null;
     this.weather?.dispose();

@@ -1735,6 +1735,22 @@ export class Interpreter {
       (reg.kind === "dialogEvent" && reg.params[0]?.k === "handle" && reg.params[0].h === dialogHandleId));
   }
 
+  /** The player did something to one of the map's own FRAMES (compat/frames.ts) — clicked a
+   *  button, moved the mouse onto one. Fires every `BlzTriggerRegisterFrameEvent` that named
+   *  that frame and that event, with `BlzGetTriggerFrame` / `BlzGetTriggerFrameEvent` /
+   *  `GetTriggerPlayer` in scope. Raised by the drawing, which owns the mouse — as a dialog
+   *  button's click is (`fireDialogClick`). */
+  fireFrameEvent(frameHandleId: number, eventIndex: number, player: number): void {
+    const responses = new Map<string, JassValue>([
+      ["TriggerFrame", jHandle(frameHandleId, "framehandle")],
+      ["TriggerFrameEvent", this.rt.enumHandle("FrameEventType", eventIndex)],
+      ["TriggerPlayer", this.rt.playerHandle(player)],
+    ]);
+    this.dispatchToRegs(responses, (reg) =>
+      reg.kind === "frameEvent" && reg.params[0]?.k === "handle" && reg.params[0].h === frameHandleId &&
+      this.rt.enumIndex(reg.params[1] ?? JNULL) === eventIndex);
+  }
+
   /**
    * A `playerevent` happened to `player` — fire every `TriggerRegisterPlayerEvent` that named
    * both that player and that event.

@@ -8336,7 +8336,10 @@ export class RtsController {
         (extended ? clone.uberTips : clone.tips)[rank] = text;
         this.abilities.setCustom(abilId, clone);
       },
-      abilityIcon: (abilId) => this.abilities.get(abilId)?.icon ?? "",
+      // Any object with an Art field answers, not only an ability: Test of Balance fills its
+      // scoreboard's hero column with `BlzGetAbilityIcon(GetUnitTypeId(u))` (AddHero), and a
+      // unit TYPE id is what it hands over.
+      abilityIcon: (id) => this.abilities.get(id)?.icon || this.registry.get(id)?.icon || this.items.get(id)?.icon || "",
       setAbilityIcon: (abilId, path) => {
         const def = this.abilities.get(abilId);
         if (def) this.abilities.setCustom(abilId, { ...def, icon: path });

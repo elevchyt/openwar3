@@ -301,7 +301,7 @@ found by (name, create context), remember their points, text, texture, visibilit
 enabled-ness, and hand back stable handles. It does not DRAW yet, and that split is the point:
 before it, `BlzGetFrameByName` answered null and every following call in the map's UI code was a
 null dereference dressed up as a no-op, which is how a script silently skips the rest of the
-function it is in.
+function it is in. *(It draws now — see "Test of Balance — the map's own frames".)*
 
 The result, measured by running `config()` and `main()` against the install's own libraries: both
 JASS maps in the corpus **run to completion**, with six and eight distinct "safe default" notes
@@ -859,6 +859,45 @@ Verified live: wave 1 spawns as Player(20), fights the heroes, and the Damage En
 / Normal / Hero off the blow. Tests: `tools/sim-script-natives-test.cjs` (what each does),
 `tools/jass-script-natives-test.cjs` (every argument through the real blizzard.j BJ), the food
 write in `tools/sim-jass-hooks-test.cjs`.
+
+### Test of Balance — the map's own frames
+
+The frame model DRAWS now (`ui/scriptFrames.ts`), and it is drawn by the code that draws the
+game's own panels rather than by a second renderer: `ui/scriptFrameTree.ts` turns the model
+into ONE FDF tree — a size is `Width`/`Height`, an anchor is `SetPoint`, a script texture is
+`BackdropBackground` — and `mountFdfScreen` lays it out and paints it, out of the map's archive
+over the install.
+
+* **Templates are stamped, children and all.** `BlzLoadTOCFile` reads the `.toc` and its
+  `.fdf`s out of the map WHILE THE SCRIPT WAITS (`readMapFile`, synchronous), so the
+  `BlzCreateFrame("BoxedText", …)` on the next line finds the template, and every NAMED frame
+  inside it becomes a frame the script can find — Test of Balance fetches the tooltip's title
+  with `BlzGetFrameByName("BoxedTextTitle", 0)` right after creating it. The drawing clones the
+  template per instance (`cloneNamespaced`) and lays the script's changes over it.
+* **Where things land.** An ABSOLUTE point is measured from the bottom-left of the 0.8 × 0.6
+  box centred on the screen and may leave it (the panel runs to x 0.936 on a wide screen, hung on
+  `ConsoleUIBackdrop` — the frame a map uses to get out of 4:3, per Tasyen's UI tutorial);
+  `BlzFrameSetScale` scales size, font and point offsets, and children with it; `SetAllPoints`
+  covers a frame WITHOUT reparenting it (it used to reparent).
+* **Text is patched, everything else rebuilds.** The map rewrites a player's damage total on
+  every blow; a text change is written into the frames on screen, and only a change that moves
+  or reveals something rebuilds the screen (throttled, swapped when the new one is up).
+* **The mouse.** A BUTTON raises `FRAMEEVENT_CONTROL_CLICK` through `Interpreter.fireFrameEvent`
+  (`BlzGetTriggerFrame`, `GetTriggerPlayer` in scope) — the Info toggle; a frame with a tooltip
+  shows it only while hovered; mouse enter/leave fire where a trigger registered them.
+* **Two general fixes it surfaced.** The layout solver gave a TEXT pinned at two horizontal
+  points (TOPLEFT + TOPRIGHT) with no Height a height of ZERO, and a text box clips, so every
+  tooltip title was blank — it now shrink-wraps to its lines as a singly-anchored TEXT already
+  did (the stock screens that had the same shape already declared a Height of their own, which
+  is why none of them changed). And `BlzGetAbilityIcon` answers any object with an Art field:
+  the map fills its hero column with `BlzGetAbilityIcon(GetUnitTypeId(u))`.
+* **Not done:** `BlzHideOriginFrames` (every call in the corpus is inside a cinematic, which
+  already takes the console away), SIMPLE frames drawn as such, and the 4:3 clamp for frames
+  NOT hung on `ConsoleUIBackdrop`.
+
+Tests: `tools/jass-frames-test.cjs` (the model through the real interpreter, and the tree it
+becomes). Verified live: the Info toggle opens the panel, hovering a learned skill shows its
+`BoxedText`.
 
 ## Traps
 
