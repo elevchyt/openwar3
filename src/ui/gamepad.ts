@@ -617,7 +617,7 @@ function paintDetect(): void {
     return;
   }
   const left = detectUntil ? Math.max(0, Math.ceil((detectUntil - performance.now()) / 1000)) : 0;
-  const text = left ? `${label} (${left})` : label;
+  const text = left ? `${label} (${left}s)` : label;
   if (screen.frame("DetectGamepadButtonText")?.textContent !== text) screen.setText("DetectGamepadButtonText", text);
   screen.setEnabled("DetectGamepadButton", !left);
 }
