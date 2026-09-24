@@ -791,9 +791,12 @@ And the map's interface layer, with the four bugs found standing on it:
   existed they still held nothing, because only a HERO was given slots. An inventory is an
   ABILITY: every one is base code `AInv`, and its `DataA` is the "Item Capacity" (`inv1` — 6 for
   the hero's, 4 for the Pack Mule's `Apak`, 2 for the racial backpacks), so a unit's slots come
-  off the inventory ability it carries (and `UnitAddAbility` of one opens them at run time). One
-  starting item still does not arrive: `sxpl` is a stock item from AFTER 1.30.4, which the map
-  edits in its ORIGINAL table and this install has no row for.
+  off the inventory ability it carries (and `UnitAddAbility` of one opens them at run time). The
+  last starting item, `sxpl`, is a stock item from AFTER 1.30.4 that the map edits in its
+  ORIGINAL table; with no row to edit it was dropped. An item edit (a row setting an `i…` field)
+  whose base this install lacks is now the map's fields over an EMPTY row (`blankItemDef`): the
+  map restates what makes it work — class, charges, price, ability, name — and only the art it
+  never restated (the icon) is missing, drawn as the plain slot.
 * **A unit with no body still has a panel and a card** (`RtsController.infoFor` reads the type row
   when there is no render entry), with an empty portrait rather than the last unit's bust; and the
   Attack button asks for an ENABLED weapon, as the building card already did — a unit type whose

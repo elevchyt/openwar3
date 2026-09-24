@@ -89,6 +89,24 @@ if (!existsSync(MAP) || !existsSync(META)) {
     applyMapAbilityData(reg, file("war3mapSkin.w3a"), meta, wts, { skin: true });
     check("with it, A03G is the map's Glow", reg.get("A03G")?.name, "Glow");
   }
+
+  console.log("\nan item a LATER patch added is the map's own fields over an empty row");
+  {
+    const { ItemRegistry } = B("data", "items.js");
+    const { applyMapItemData } = B("data", "objectData.js");
+    const items = new ItemRegistry(new Map()); // 1.30.4 has no `sxpl` row (1.32 added it)
+    applyMapItemData(items, file("war3map.w3t"), wts);
+    applyMapItemData(items, file("war3mapSkin.w3t"), wts, { skin: true });
+    const sxpl = items.get("sxpl");
+    check("sxpl exists, with the class, charges, price and ability the map gave it",
+      sxpl && [sxpl.classType, sxpl.charges, sxpl.gold, sxpl.abilities], ["Charged", 1, 250, ["A0OJ"]]);
+    check("…and the skin file's name", !!sxpl && sxpl.name !== "sxpl" && sxpl.name.length > 0, true);
+    check("…still droppable, as every stock item but one is", sxpl?.droppable, true);
+    check("I045, built on it, exists too", items.get("I045")?.abilities, ["AIm1"]);
+    const units = new ItemRegistry(new Map());
+    applyMapItemData(units, file("war3map.w3u"), wts);
+    check("…while the UNIT file's rows stay units (no item field, no item)", units.all().length, 0);
+  }
 }
 
 console.log("\na unit a SCRIPT stocked is one the shop sells");

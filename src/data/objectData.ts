@@ -30,7 +30,7 @@ import { PrimaryAttribute, toArmorType, toAttackType, toMoveType, toPrimaryAttri
 import { gameNum } from "./gameplayConstants";
 import { syncPrimaryWeapon, type UnitDef, type UnitRegistry, type WeaponSlotDef } from "./units";
 import { emptyAbilityLevel, mdlPath, normalizeTargetFlags, type AbilityDef, type AbilityLevel, type AbilityRegistry } from "./abilities";
-import type { ItemDef, ItemRegistry } from "./items";
+import { blankItemDef, type ItemDef, type ItemRegistry } from "./items";
 import type { UpgradeDef, UpgradeRegistry } from "./upgrades";
 import type { TechDef, TechRegistry } from "./techtree";
 import { parseWts } from "../jass/wts";
@@ -1155,8 +1155,17 @@ export function applyMapItemData(registry: ItemRegistry, w3tBytes: Uint8Array, w
       ITEM_SETTERS[m.id]?.(def, m.value);
     }
   };
+  // A base row this install does not have (a stock item a later patch added) is an EMPTY row
+  // with the map's fields over it (items.ts blankItemDef) rather than no item at all: the map
+  // restates what makes the item work — its class, charges, price and ability — and dropping it
+  // left a starting item nobody could ever hold. Only for a row that sets an ITEM field (the
+  // `i…` codes, UnitMetaData's `useItem` rows — all but `ides`, the Description line units share):
+  // the w3u is offered here too, and a unit row must stay a unit row.
+  const unknownItem = (id: string, mods: Array<{ id: string }>): ItemDef | undefined =>
+    mods.some((m) => m.id.startsWith("i") && m.id !== "ides") ? blankItemDef(id) : undefined;
   for (const obj of w3t.customTable.objects) {
-    const base = (layer.skin ? registry.get(obj.newId) : undefined) ?? registry.base(obj.oldId) ?? registry.get(obj.oldId);
+    const base = (layer.skin ? registry.get(obj.newId) : undefined) ?? registry.base(obj.oldId) ?? registry.get(obj.oldId)
+      ?? unknownItem(obj.oldId, obj.modifications as AbilMod[]);
     if (!base) continue;
     const def = cloneItem(base, obj.newId);
     applyItemMods(def, obj.modifications as AbilMod[]);
@@ -1164,7 +1173,7 @@ export function applyMapItemData(registry: ItemRegistry, w3tBytes: Uint8Array, w
     count++;
   }
   for (const obj of w3t.originalTable.objects) {
-    const base = layer.skin ? registry.get(obj.oldId) : registry.base(obj.oldId);
+    const base = (layer.skin ? registry.get(obj.oldId) : registry.base(obj.oldId)) ?? unknownItem(obj.oldId, obj.modifications as AbilMod[]);
     if (!base) continue;
     const def = cloneItem(base, obj.oldId);
     applyItemMods(def, obj.modifications as AbilMod[]);
