@@ -324,6 +324,32 @@ index fbd43cb761b6de95a8a74aacc2f3087203c5c9e7..bf8e927987f5295727656033499491fa
          }
      }
      return offset;
+diff --git a/dist/cjs/parsers/w3x/map.js b/dist/cjs/parsers/w3x/map.js
+index 2e429462c9fe97126996684b8d998a3b7d2c3f21..7647d576ec1558edd81189c436666d837c9c7b22 100644
+--- a/dist/cjs/parsers/w3x/map.js
++++ b/dist/cjs/parsers/w3x/map.js
+@@ -274,6 +274,21 @@ class War3Map {
+                     modifications[fileNames[i]] = modification;
+                 }
+             }
++            // OpenWar3: the SKIN half of the same objects. A map saved by a 1.33+ editor keeps
++            // each object's art and words (model, icon, name, sounds, scale) in
++            // war3mapSkin.w3u/.w3t/.w3b/.w3d, same object ids and field codes, laid on AFTER
++            // the main file (the viewer applies `<ext>Skin` right behind `<ext>`). Without it
++            // every custom unit on such a map drew its BASE type's model -- Test of Balance's
++            // hero pillar was a Marketplace.
++            const skin = this.archive.get(`war3mapSkin.${fileNames[i]}`);
++            if (skin) {
++                const buffer = skin.arrayBuffer();
++                if (buffer) {
++                    const modification = useOptionalInts[i] ? new file_2.default() : new file_3.default();
++                    modification.load(buffer);
++                    modifications[`${fileNames[i]}Skin`] = modification;
++                }
++            }
+         }
+         return modifications;
+     }
 diff --git a/dist/cjs/parsers/w3x/w3d/file.d.ts b/dist/cjs/parsers/w3x/w3d/file.d.ts
 index c210e02c8002aed4e3ddc02e42ebe25f04d2a27e..af203a247a924c6a0a427b75735e919df367ffb9 100644
 --- a/dist/cjs/parsers/w3x/w3d/file.d.ts
@@ -338,7 +364,7 @@ index c210e02c8002aed4e3ddc02e42ebe25f04d2a27e..af203a247a924c6a0a427b75735e919d
      save(): Uint8Array;
      getByteLength(): number;
 diff --git a/dist/cjs/parsers/w3x/w3d/file.js b/dist/cjs/parsers/w3x/w3d/file.js
-index 5c2629bdcf279decae84d9fddfc523d5548192e8..276d18c22305fb19eb65a0e7a5a0132cfc85b3cb 100644
+index 5c2629bdcf279decae84d9fddfc523d5548192e8..c86626b0bed35ec36dcfe3cecc535efed6f9f270 100644
 --- a/dist/cjs/parsers/w3x/w3d/file.js
 +++ b/dist/cjs/parsers/w3x/w3d/file.js
 @@ -12,6 +12,8 @@ class War3MapW3d {
@@ -403,7 +429,7 @@ index 5c2629bdcf279decae84d9fddfc523d5548192e8..276d18c22305fb19eb65a0e7a5a0132c
  }
  exports.default = War3MapW3d;
 diff --git a/dist/cjs/parsers/w3x/w3e/corner.js b/dist/cjs/parsers/w3x/w3e/corner.js
-index 22bc46919b2ae341d6139fd2f544bcbc04d816e9..4957509b8e3b176559d946f20f99c19b942edeaf 100644
+index 22bc46919b2ae341d6139fd2f544bcbc04d816e9..f74b2c8697c5cf994565b3fbf16c0baa408932c3 100644
 --- a/dist/cjs/parsers/w3x/w3e/corner.js
 +++ b/dist/cjs/parsers/w3x/w3e/corner.js
 @@ -18,17 +18,36 @@ class Corner {
@@ -472,7 +498,7 @@ index 22bc46919b2ae341d6139fd2f544bcbc04d816e9..4957509b8e3b176559d946f20f99c19b
          stream.writeUint8((this.cliffTexture << 4) + this.layerHeight);
      }
 diff --git a/dist/cjs/parsers/w3x/w3e/file.js b/dist/cjs/parsers/w3x/w3e/file.js
-index 49ce36b8bddb89496d1873b3200f85ff75c845bf..fe328d3fbe9390b9d98afa0cb4227c22bce93a82 100644
+index 49ce36b8bddb89496d1873b3200f85ff75c845bf..ee6d758757c8a8e1b25891e99c3f184b3b48557a 100644
 --- a/dist/cjs/parsers/w3x/w3e/file.js
 +++ b/dist/cjs/parsers/w3x/w3e/file.js
 @@ -36,7 +36,7 @@ class War3MapW3e {
@@ -502,7 +528,7 @@ index 49ce36b8bddb89496d1873b3200f85ff75c845bf..fe328d3fbe9390b9d98afa0cb4227c22
  }
  exports.default = War3MapW3e;
 diff --git a/dist/cjs/parsers/w3x/w3i/file.js b/dist/cjs/parsers/w3x/w3i/file.js
-index be984fa634f4f125fce57ba4a109f455ff8f39b1..e96af48dcc3599b4945ffb4c54a603e8f81cc202 100644
+index be984fa634f4f125fce57ba4a109f455ff8f39b1..2596069827696ba8953e991355afc539acf0fc4b 100644
 --- a/dist/cjs/parsers/w3x/w3i/file.js
 +++ b/dist/cjs/parsers/w3x/w3i/file.js
 @@ -53,6 +53,10 @@ class War3MapW3i {
@@ -570,7 +596,7 @@ index be984fa634f4f125fce57ba4a109f455ff8f39b1..e96af48dcc3599b4945ffb4c54a603e8
      }
      /**
 diff --git a/dist/cjs/parsers/w3x/w3u/file.js b/dist/cjs/parsers/w3x/w3u/file.js
-index 6b5a2a2e41deee0595104564daf9fdb71fab4257..1acab5fc85627b3f93f89946953a17eb0d725408 100644
+index 6b5a2a2e41deee0595104564daf9fdb71fab4257..9113710fb1140299825d1fb27f90ab5ef891567f 100644
 --- a/dist/cjs/parsers/w3x/w3u/file.js
 +++ b/dist/cjs/parsers/w3x/w3u/file.js
 @@ -22,18 +22,19 @@ class War3MapW3u {
@@ -599,7 +625,7 @@ index 6b5a2a2e41deee0595104564daf9fdb71fab4257..1acab5fc85627b3f93f89946953a17eb
  }
  exports.default = War3MapW3u;
 diff --git a/dist/cjs/parsers/w3x/w3u/modificationtable.js b/dist/cjs/parsers/w3x/w3u/modificationtable.js
-index 509893d4076882fb2b2edb1780a203743b9c0af8..6fd437e2393a2ded8c309e692301aa09730cdfaa 100644
+index 509893d4076882fb2b2edb1780a203743b9c0af8..27f462f8b26f39d7ea1c5c4752b5f3804bd0a076 100644
 --- a/dist/cjs/parsers/w3x/w3u/modificationtable.js
 +++ b/dist/cjs/parsers/w3x/w3u/modificationtable.js
 @@ -8,23 +8,23 @@ class ModificationTable {
@@ -633,7 +659,7 @@ index 509893d4076882fb2b2edb1780a203743b9c0af8..6fd437e2393a2ded8c309e692301aa09
          return size;
      }
 diff --git a/dist/cjs/parsers/w3x/w3u/modifiedobject.js b/dist/cjs/parsers/w3x/w3u/modifiedobject.js
-index b602f3b841d5cab7679b90e7505b6b5b64be9278..24ac2edfba41c9b200668b9e536686b5c79f704a 100644
+index b602f3b841d5cab7679b90e7505b6b5b64be9278..c412b5465f68e67d0425cea0a14f50c026e5a8bd 100644
 --- a/dist/cjs/parsers/w3x/w3u/modifiedobject.js
 +++ b/dist/cjs/parsers/w3x/w3u/modifiedobject.js
 @@ -9,17 +9,33 @@ class ModifiedObject {
@@ -1534,7 +1560,7 @@ index 49733805785c0ef269901d8928e47a953ada93a9..ff78a025f24375c345bb3ac705f0e393
    gl_Position = u_VP * vec4(position, 1.0);
  }
 diff --git a/dist/cjs/viewer/handlers/w3x/map.js b/dist/cjs/viewer/handlers/w3x/map.js
-index e4c8ea760e92653ef6423bd34f9111d0b062a901..601e7c6b601488be3dbe477500a3ed3ebd610d6b 100644
+index e4c8ea760e92653ef6423bd34f9111d0b062a901..34bdc892b283216fa1390e306383a63497b71129 100644
 --- a/dist/cjs/viewer/handlers/w3x/map.js
 +++ b/dist/cjs/viewer/handlers/w3x/map.js
 @@ -16,6 +16,41 @@ const file_3 = require("../../../parsers/w3x/doo/file");
@@ -1604,7 +1630,21 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..601e7c6b601488be3dbe477500a3ed3e
          this.heightMap = null;
          this.waterHeightMap = null;
          this.cliffHeightMap = null;
-@@ -109,9 +155,15 @@ class War3MapViewerMap {
+@@ -85,6 +131,13 @@ class War3MapViewerMap {
+         this.applyModificationFile(viewer.doodadsData, viewer.destructableMetaData, modifications.w3b);
+         this.applyModificationFile(viewer.unitsData, viewer.unitMetaData, modifications.w3u);
+         this.applyModificationFile(viewer.unitsData, viewer.unitMetaData, modifications.w3t);
++        // OpenWar3: each file's SKIN twin, on the rows the main file just built (see
++        // War3Map.readModifications). Same writer: a skin row is the same object, so a custom
++        // id already has its row and only the art/word fields are overwritten.
++        this.applyModificationFile(viewer.doodadsData, viewer.doodadMetaData, modifications.w3dSkin);
++        this.applyModificationFile(viewer.doodadsData, viewer.destructableMetaData, modifications.w3bSkin);
++        this.applyModificationFile(viewer.unitsData, viewer.unitMetaData, modifications.w3uSkin);
++        this.applyModificationFile(viewer.unitsData, viewer.unitMetaData, modifications.w3tSkin);
+         this.loadDoodadsAndDestructibles();
+         this.loadUnitsAndItems();
+     }
+@@ -109,9 +162,15 @@ class War3MapViewerMap {
          }
          this.solverParams.tileset = parser.tileset.toLowerCase();
          this.buildVersion = parser.getBuildVersion();
@@ -1623,7 +1663,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..601e7c6b601488be3dbe477500a3ed3e
      }
      async loadTerrainCliffsAndWater() {
          const mpqFile = this.map.get('war3map.w3e');
-@@ -136,12 +188,32 @@ class War3MapViewerMap {
+@@ -136,12 +195,32 @@ class War3MapViewerMap {
          // Override the grid based on the map.
          this.worldScene.grid = new grid_1.default(centerOffset[0], centerOffset[1], mapSize[0] * 128 - 128, mapSize[1] * 128 - 128, 16 * 128, 16 * 128);
          const texturesExt = this.solverParams.reforged ? '.dds' : '.blp';
@@ -1658,7 +1698,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..601e7c6b601488be3dbe477500a3ed3e
              this.tilesets.push(row);
              tilesetTextures.push(this.load(`${row.string('dir')}\\${row.string('file')}${texturesExt}`));
          }
-@@ -165,10 +237,19 @@ class War3MapViewerMap {
+@@ -165,10 +244,19 @@ class War3MapViewerMap {
              Y: 'Village',
              Z: 'Ruins',
          };
@@ -1680,7 +1720,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..601e7c6b601488be3dbe477500a3ed3e
              this.cliffTilesets.push(row);
              cliffTextures.push(this.load(`${row.string('texDir')}\\${row.string('texFile')}${texturesExt}`));
          }
-@@ -199,6 +280,99 @@ class War3MapViewerMap {
+@@ -199,6 +287,99 @@ class War3MapViewerMap {
          const cliffs = {};
          this.columns = columns - 1;
          this.rows = rows - 1;
@@ -1780,7 +1820,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..601e7c6b601488be3dbe477500a3ed3e
          for (let y = 0; y < rows; y++) {
              for (let x = 0; x < columns; x++) {
                  const bottomLeft = corners[y][x];
-@@ -209,8 +383,12 @@ class War3MapViewerMap {
+@@ -209,8 +390,12 @@ class War3MapViewerMap {
                  if (y < rows - 1 && x < columns - 1) {
                      // Water can be used with cliffs and normal corners, so store water state regardless.
                      waterFlags[instance] = this.isWater(x, y);
@@ -1795,7 +1835,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..601e7c6b601488be3dbe477500a3ed3e
                          const bottomLeftLayer = bottomLeft.layerHeight;
                          const bottomRightLayer = corners[y][x + 1].layerHeight;
                          const topLeftLayer = corners[y + 1][x].layerHeight;
-@@ -234,38 +412,30 @@ class War3MapViewerMap {
+@@ -234,38 +419,30 @@ class War3MapViewerMap {
                          }
                      }
                      else {
@@ -1853,7 +1893,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..601e7c6b601488be3dbe477500a3ed3e
          const gl = this.viewer.gl;
          const webgl = this.viewer.webgl;
          this.vertexBuffer = gl.createBuffer();
-@@ -291,10 +461,17 @@ class War3MapViewerMap {
+@@ -291,10 +468,17 @@ class War3MapViewerMap {
          gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(instanceCount).map((currentValue, index) => index), gl.STATIC_DRAW);
          this.textureBuffer = gl.createBuffer();
          gl.bindBuffer(gl.ARRAY_BUFFER, this.textureBuffer);
@@ -1873,7 +1913,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..601e7c6b601488be3dbe477500a3ed3e
          this.waterBuffer = gl.createBuffer();
          gl.bindBuffer(gl.ARRAY_BUFFER, this.waterBuffer);
          gl.bufferData(gl.ARRAY_BUFFER, waterFlags, gl.STATIC_DRAW);
-@@ -358,7 +535,25 @@ class War3MapViewerMap {
+@@ -358,7 +542,25 @@ class War3MapViewerMap {
                          }
                          promise.then((model) => {
                              if (model) {
@@ -1900,7 +1940,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..601e7c6b601488be3dbe477500a3ed3e
                              }
                          });
                      }
-@@ -485,6 +680,31 @@ class War3MapViewerMap {
+@@ -485,6 +687,31 @@ class War3MapViewerMap {
              worldScene.renderTranslucent();
          }
      }
@@ -1932,7 +1972,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..601e7c6b601488be3dbe477500a3ed3e
      renderGround() {
          if (this.terrainReady) {
              const gl = this.viewer.gl;
-@@ -503,6 +723,8 @@ class War3MapViewerMap {
+@@ -503,6 +730,8 @@ class War3MapViewerMap {
              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
              webgl.useShader(shader);
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -1941,7 +1981,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..601e7c6b601488be3dbe477500a3ed3e
              gl.uniform2fv(uniforms['u_offset'], this.centerOffset);
              gl.uniform2f(uniforms['u_size'], this.columns, this.rows);
              gl.uniform1i(uniforms['u_heightMap'], 15);
-@@ -527,7 +749,19 @@ class War3MapViewerMap {
+@@ -527,7 +756,19 @@ class War3MapViewerMap {
                  gl.uniform1i(uniforms[`u_tilesets[${i}]`], i);
                  webgl.bindTexture(tilesetTextures[i], i);
              }
@@ -1962,7 +2002,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..601e7c6b601488be3dbe477500a3ed3e
              if (tilesetCount > 15) {
                  gl.uniform1f(uniforms['u_baseTileset'], 15);
                  for (let i = 0, l = tilesetCount - 15; i < l; i++) {
-@@ -535,7 +769,7 @@ class War3MapViewerMap {
+@@ -535,7 +776,7 @@ class War3MapViewerMap {
                      gl.uniform1f(uniforms[`u_extended[${i}]`], isExtended);
                      webgl.bindTexture(tilesetTextures[i + 15], i);
                  }
@@ -1971,7 +2011,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..601e7c6b601488be3dbe477500a3ed3e
              }
              instancedArrays.vertexAttribDivisorANGLE(texturesAttrib, 0);
              instancedArrays.vertexAttribDivisorANGLE(variationsAttrib, 0);
-@@ -558,11 +792,17 @@ class War3MapViewerMap {
+@@ -558,11 +799,17 @@ class War3MapViewerMap {
              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
              webgl.useShader(shader);
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -1989,7 +2029,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..601e7c6b601488be3dbe477500a3ed3e
              gl.uniform1f(uniforms['u_offsetHeight'], this.waterHeightOffset);
              gl.uniform4fv(uniforms['u_maxDeepColor'], this.maxDeepColor);
              gl.uniform4fv(uniforms['u_minDeepColor'], this.minDeepColor);
-@@ -582,7 +822,14 @@ class War3MapViewerMap {
+@@ -582,7 +829,14 @@ class War3MapViewerMap {
              gl.vertexAttribPointer(isWaterAttrib, 1, gl.UNSIGNED_BYTE, false, 1, 0);
              instancedArrays.vertexAttribDivisorANGLE(isWaterAttrib, 1);
              gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.faceBuffer);
@@ -2005,7 +2045,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..601e7c6b601488be3dbe477500a3ed3e
              instancedArrays.vertexAttribDivisorANGLE(isWaterAttrib, 0);
              instancedArrays.vertexAttribDivisorANGLE(instanceAttrib, 0);
          }
-@@ -599,6 +846,8 @@ class War3MapViewerMap {
+@@ -599,6 +853,8 @@ class War3MapViewerMap {
              gl.disable(gl.BLEND);
              shader.use();
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -2014,7 +2054,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..601e7c6b601488be3dbe477500a3ed3e
              gl.uniform1i(uniforms['u_heightMap'], 0);
              gl.uniform2f(uniforms['u_pixel'], 1 / (this.columns + 1), 1 / (this.rows + 1));
              gl.uniform2fv(uniforms['u_centerOffset'], this.centerOffset);
-@@ -612,6 +861,9 @@ class War3MapViewerMap {
+@@ -612,6 +868,9 @@ class War3MapViewerMap {
                  gl.activeTexture(gl.TEXTURE2);
                  gl.bindTexture(gl.TEXTURE_2D, this.cliffTextures[1].webglResource);
              }
@@ -2024,7 +2064,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..601e7c6b601488be3dbe477500a3ed3e
              // Set instanced attributes.
              if (!vertexArrayObject) {
                  instancedArrays.vertexAttribDivisorANGLE(attribs['a_instancePosition'], 1);
-@@ -671,6 +923,86 @@ class War3MapViewerMap {
+@@ -671,6 +930,86 @@ class War3MapViewerMap {
          const topRight = corners[row + 1][column + 1].layerHeight;
          return bottomLeft !== bottomRight || bottomLeft !== topLeft || bottomLeft !== topRight;
      }
@@ -2111,7 +2151,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..601e7c6b601488be3dbe477500a3ed3e
      /**
       * Is the tile at the given column and row water?
       */
-@@ -692,6 +1024,108 @@ class War3MapViewerMap {
+@@ -692,6 +1031,108 @@ class War3MapViewerMap {
          }
          return 0;
      }
@@ -2220,7 +2260,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..601e7c6b601488be3dbe477500a3ed3e
      /**
       * Get the ground texture of a corner, whether it's normal ground, a cliff, or a blighted corner.
       */
-@@ -730,17 +1164,37 @@ class War3MapViewerMap {
+@@ -730,17 +1171,37 @@ class War3MapViewerMap {
      applyModificationTable(dataMap, metadataMap, modificationTable) {
          for (const modificationObject of modificationTable.objects) {
              let row;

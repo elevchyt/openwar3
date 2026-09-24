@@ -60,6 +60,8 @@ export interface SimView {
   alreadyHidden(u: SimUnit, code: string): boolean;
   barredByDay(code: string): boolean;
   learnable(u: SimUnit, abilityId: string): boolean;
+  /** Does this hero have any skill to learn at all — a learn page to open, points to show? */
+  hasHeroSkills(u: SimUnit): boolean;
 
   /** The seats a cargo hold has left (its capacity less what its passengers TAKE — a
    *  Demolisher counts two). A READ the command card greys the Load button on, and the same

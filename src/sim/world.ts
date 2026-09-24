@@ -4259,6 +4259,18 @@ export class SimWorld {
     return this.units.get(shopId)?.building?.stock?.get(wareId) ?? null;
   }
 
+  /** The UNITS on this building's shelves right now, in the order they were stocked — its
+   *  `Sellunits` and whatever a script put there with `AddUnitToStock`. The second kind is in no
+   *  object-data list at all: Test of Balance's hero pillar sells nothing by data, and its
+   *  draft is eight `AddUnitToStockBJ(heroType, pillar, 1, 1)` calls at the start of the match. */
+  stockedUnits(shopId: number): string[] {
+    const stock = this.units.get(shopId)?.building?.stock;
+    if (!stock) return [];
+    const out: string[] = [];
+    for (const [id, st] of stock) if (st.kind === "unit") out.push(id);
+    return out;
+  }
+
   /** Seed a shop's shelves. The restock schedule runs on the GAME clock, not on when the shop
    *  was raised, so a shop built (or captured) late already carries whatever has come due —
    *  otherwise an Arcane Vault put up at minute 10 would make you wait until 17:20 for a
@@ -15000,14 +15012,26 @@ export class SimWorld {
    * Meld beside the four skills of her `heroAbilList`, and the Keeper of the Grove, the Priestess
    * of the Moon and the Demon Hunter all carry it too — an innate UNIT ability at rank 1, which
    * the learn page listed (and a skill point could "rank up") because it walked every ability
-   * on the sheet. The game's own word for the other kind is AbilityData.slk's `hero` column
-   * (`AbilityDef.research`, which a map's `aher` edit overrides too); the type's
-   * `heroAbilList` is asked as well, since that list is where a hero's skills come from
-   * (`buildAbilitiesFor` seeds them at rank 0) and a map may put anything in it.
+   * on the sheet.
+   *
+   * The TYPE's `heroAbilList` is the whole answer — that list is where a hero's skills come
+   * from (`buildAbilitiesFor` seeds them at rank 0), a map's `uhab` rewrites it, and every hero
+   * form carries its own copy of it (Edem/Edmm, Nalc…Nal3). It used to be OR'd with the
+   * ability row's `hero` flag, which let a hero-class ability a SCRIPT added onto the page too;
+   * the game does not: "Abilities added through triggers will not show up in the skill level
+   * list. Adding an ability to a hero always sets it to level 1" (hiveworkshop 257081). Test of
+   * Balance is built on that — its heroes list no skills, its reward dialog adds hero-class
+   * spells at rank 1 and levels them by trigger, and the flag clause gave every one of them a
+   * learn page and a skill-point badge the Reforged client does not show.
    */
   learnable(u: SimUnit, abilityId: string): boolean {
-    if (this.abilities?.get(abilityId)?.research) return true;
     return this.unitReg?.get(u.typeId)?.heroAbilities.includes(abilityId) ?? false;
+  }
+
+  /** A hero with no learnable row has no learn page and shows no unspent points — see the
+   *  Hero Abilities button in MapViewerScene.pushAbilityButtons. */
+  hasHeroSkills(u: SimUnit): boolean {
+    return u.isHero && u.abilities.some((a) => this.learnable(u, a.id));
   }
 
   /** Learn (or rank up) a hero ability by spending a skill point. Returns true on

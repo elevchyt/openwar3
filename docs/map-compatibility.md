@@ -41,8 +41,10 @@ learn about it. Four constraints, and they are the point of the feature rather t
    would be a second, disagreeing copy. Those go in the viewer patch as small version branches —
    and are the only part of this work that is not contained in one directory.
 
-What this layer is NOT: a Reforged mode. We draw SD art out of an SD install. The HD object set
-a Reforged map ships (`war3mapSkin.w3u` and friends) is ignored on purpose, as is `conversation.json`.
+What this layer is NOT: a Reforged mode. We draw SD art out of an SD install, and
+`conversation.json` is ignored on purpose. `war3mapSkin.w3u` and friends looked like an HD object
+set to ignore as well, and are NOT: they carry the art and the NAMES of every object for SD too,
+and a map can depend on them (see "Test of Balance" below).
 
 ## What was measured
 
@@ -685,6 +687,43 @@ against the install's own `common.j`; the predicate stubs answer each hook DIFFE
 native wired to the wrong one of five vision questions cannot pass by accident).
 `tools/sim-jass-hooks-test.cjs` pins the exact hook roster on both tables, so every pass that
 adds a hook adds its name there too.
+
+### Test of Balance — skin object files, imported art, and the shelf a script stocks
+
+One map, seven reports, five root causes. Every one of them is general.
+
+* **`war3mapSkin.w3u/.w3a/.w3t/.w3b/.w3d`** (1.33+) hold the ART and the WORDS of each object —
+  `umdl`, `unam`, `uico`, `usca`, `utub` — under the same ids and field codes as the main files,
+  and are applied AFTER them. The main `war3map.w3u` says what a type IS; its skin twin says what
+  it LOOKS like and is called. Unread, Test of Balance's invisible hero pickers were Peasants,
+  its Sacred Pillar a Marketplace, and every ability carried its base name — which broke the
+  map outright, because the dialog picks find the ability by NAME (`GetAbilityName(a) ==
+  udg_Abilities[n] + " Q"`). A skin pass starts each object from the row the main file built,
+  never from the install's (`ObjectLayer.skin` in `objectData.ts`), and the viewer patch
+  applies the same files to the rows it keeps for PRE-PLACED units, which it reads for itself.
+* **A map's imported models were found only for what the map PLACES.** The viewer's map handler
+  asks the map archive first; the scene's own solver, which loads every unit a trigger creates
+  or a shop sells and every script effect, asked only the install — so a drafted hero wearing
+  `war3mapImported\Santa.mdx` got no model, no body (`rts.byId`), no `selectedInfo()` and so an
+  EMPTY command card. `render/assetSolver.ts` layers the map over the tileset over the install,
+  keyed per mount; the console portraits read the same layering (`assetFiles()`), and the audio
+  had it already (`SoundBoard.mountMap`).
+* **`BlzChangeMinimapTerrainTex`** is real: a Reforged-era map's `war3mapMap.blp` is often its
+  lobby SPLASH, and the map puts the real minimap back from its script.
+* **A shop's shelf is what the SCRIPT stocked too.** The draft is `AddUnitToStockBJ(hero,
+  pillar, 1, 1)`, which no `Sellunits` column names; the card and the authority's "does this
+  building sell that" read the live shelf as well as the data (`World.stockedUnits`).
+* **A hero with no Hero Abilities has no Learn button**, and a hero-class ability a TRIGGER added
+  is not learnable ("Abilities added through triggers will not show up in the skill level
+  list" — hiveworkshop 257081; hiveworkshop 139838), so `learnable()` asks the type's own `heroAbilities`
+  alone. And an ITEM ability on a unit gets no card button unless it has an on/off order
+  (hiveworkshop 134863) — Test of Balance hangs `GeneralHeroGlow.mdx` on its heroes through a
+  zero-regeneration `AIgx`, which had drawn as a dead "Glow" button.
+
+Tests: `tools/sim-object-skin-test.cjs` (the skin layer, against the real map when it is in the
+install), `tools/render-asset-solver-test.cjs` (map first, per mount), the minimap checks in
+`tools/jass-imagery-test.cjs`, and the trigger-added-ability checks in
+`tools/sim-shadowmeld-test.cjs`.
 
 ## Traps
 

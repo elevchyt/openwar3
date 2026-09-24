@@ -4,7 +4,9 @@ import ModelViewer from "mdx-m3-viewer/dist/cjs/viewer/viewer";
 import type { DataSource } from "../vfs/types";
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { MpqDataSource } from "../vfs/mpq";
+import { LayeredDataSource } from "../vfs/layered";
 import { tilesetOverlay } from "../vfs/tileset";
+import { createAssetSolver, type MapFileLayer, type Solver } from "./assetSolver";
 import { CAMERA_MARGIN, CELL, cameraBoundsOf, parseW3E, type TerrainData, type WorldRect } from "../world/terrain";
 import { brushPoints, parseCellRarity, pickCell } from "./terrainBrush";
 import { parseDoo } from "../world/doodads";
@@ -572,9 +574,6 @@ const RING_TEX_BUILDING = "ui\\Feedback\\selectioncircle\\SelectionCircleBuildin
 const RING_NATIVE = 38;
 
 // Minimal local typings (mdx-m3-viewer's exports drag in their own gl-matrix).
-// The viewer calls the solver as (src, solverParams) — params carry the map's
-// tileset letter once war3map.w3i is parsed.
-type Solver = (src: unknown, params?: { tileset?: string }) => unknown;
 interface Camera {
   perspective(fov: number, aspect: number, near: number, far: number): void;
   moveToAndFace(from: Float32Array, to: Float32Array, up: Float32Array): void;
@@ -1541,6 +1540,7 @@ export class MapViewerScene {
     private tech: TechRegistry,
     private upgrades: UpgradeRegistry,
     private solver: Solver,
+    private mapFiles: MapFileLayer,
     shared: SoundBoard | null,
   ) {
     // The menu already built a SoundBoard (and with it the page's one AudioContext) to play
@@ -1565,6 +1565,23 @@ export class MapViewerScene {
     this.warmIconCache();
   }
 
+  /**
+   * The install with the running map's archive laid over it — what a PORTRAIT's model and its
+   * textures are read from. The busts are drawn by their own little viewers (ModelViewerScene)
+   * with their own reader, so the map-first layer `create`'s solver gives the world
+   * (render/assetSolver.ts) does not reach them: a drafted hero with an imported model (Test of
+   * Balance's `Santa.mdx`, and the `Santa_Portrait.mdx` beside it) stood on the terrain with a
+   * black console bust. Built once per mount; the viewers themselves are made per match (and
+   * dropped with it).
+   */
+  private assetFiles(): DataSource {
+    const map = this.mapFiles.archive;
+    if (!map) return this.vfs;
+    if (this.assetLayer?.epoch !== this.mapFiles.epoch) this.assetLayer = { epoch: this.mapFiles.epoch, files: new LayeredDataSource([map, this.vfs]) };
+    return this.assetLayer.files;
+  }
+  private assetLayer: { epoch: number; files: DataSource } | null = null;
+
   /** Construct the viewer and wait for its base SLK tables (required before loadMap). */
   static async create(canvas: HTMLCanvasElement, vfs: DataSource, sounds: SoundBoard | null = null): Promise<MapViewerScene> {
     syncCanvasSize(canvas);
@@ -1578,39 +1595,10 @@ export class MapViewerScene {
       created.push(url);
     }
 
-    // Every model/texture path resolves to a STABLE, cached blob-url string —
-    // never a Promise<bytes>. This is the load-time win behind issue #14: the
-    // viewer only DEDUPES a resource when the path solver hands it a string it
-    // can key its promiseMap/resourceMap on. A Promise (what `vfs.read()`
-    // returns) sends the load down the viewer's __DIRECT_LOAD path, which mints a
-    // unique id and parses a *fresh* resource EVERY call — so a map with hundreds
-    // of trees all referencing one LordaeronTree.mdx re-read and re-parsed that
-    // model once per tree, the dominant cost of map init. One blob url per path
-    // (cached here, tracked in `created` for revocation on dispose) means each
-    // shared model/texture is fetched once and parsed exactly once.
-    const blobUrls = new Map<string, string | null>();
-    // The map's tileset archive, layered over the mount for the whole match (issue #152).
-    // Cliff faces, water frames and ubersplats are one path per set and one SET PER TILESET,
-    // told apart by the archive they sit in, so this has to go here — at the one place a
-    // logical path becomes bytes — rather than at any single asset's call site.
-    const overlay = tilesetOverlay(vfs);
-    const solver: Solver = (src, params) => {
-      if (typeof src !== "string") return src; // in-memory loads pass through
-      // The viewer hands the tileset letter down with every load the map handler makes,
-      // its own models and their textures included — which is exactly the reach the
-      // overlay wants, since the re-tinted creep skins ride in the same archive.
-      const { key, source, path } = overlay(src.replace(/\//g, "\\"), params?.tileset);
-      const cached = baseUrls.get(key);
-      if (cached) return cached; // preloaded base SLKs
-      let url = blobUrls.get(key);
-      if (url === undefined) {
-        const bytes = source.rawBytes(path); // MPQ decode is synchronous (mpq.ts)
-        url = bytes ? URL.createObjectURL(new Blob([bytes as BlobPart])) : null;
-        blobUrls.set(key, url);
-        if (url) created.push(url);
-      }
-      return url ?? src; // string ⇒ the viewer caches+dedupes by this url
-    };
+    // Map archive, then tileset archive, then the install — one stable blob URL per path
+    // (render/assetSolver.ts says why each layer is there).
+    const mapFiles: MapFileLayer = { archive: null, epoch: 0 };
+    const solver = createAssetSolver(vfs, mapFiles, baseUrls, created);
 
     const viewer = new ViewerClass(canvas, solver, false);
     viewer.terrainModelExists = (path) => vfs.exists(path);
@@ -1676,7 +1664,7 @@ export class MapViewerScene {
       baseUrls.delete(path);
     }
 
-    return new MapViewerScene(canvas, viewer, created, vfs, loadUnitRegistry(vfs), loadAbilityRegistry(vfs), loadItemRegistry(vfs), loadTechRegistry(vfs), loadUpgradeRegistry(vfs), solver, sounds);
+    return new MapViewerScene(canvas, viewer, created, vfs, loadUnitRegistry(vfs), loadAbilityRegistry(vfs), loadItemRegistry(vfs), loadTechRegistry(vfs), loadUpgradeRegistry(vfs), solver, mapFiles, sounds);
   }
 
   /**
@@ -1772,6 +1760,10 @@ export class MapViewerScene {
     // Stand up the simulation: terrain height + pathing from the map's own files.
     const archive = new MpqDataSource("map", bytes);
     this.mapArchive = archive; // kept so startCustom can read war3map.j (Phase 7 triggers)
+    // Laid over the install for every MODEL and texture the scene loads itself — the units a
+    // trigger creates, the effects it spawns (see `create`'s solver). Audio's twin is below.
+    this.mapFiles.archive = archive;
+    this.mapFiles.epoch++;
     // The map's own object data goes in FIRST — before anything reads the registries for this
     // map. It is the map's declaration of what its types ARE, so every question asked below
     // (a building's pathing footprint, its ground texture, whether it is a building at all)
@@ -3030,6 +3022,21 @@ export class MapViewerScene {
         this.noteSpacebarPoint(ping.x, ping.y);
       },
       setSpacebarPoint: (x, y) => this.noteSpacebarPoint(x, y),
+      // BlzChangeMinimapTerrainTex (compat/frames.ts): the minimap's terrain picture becomes the
+      // map's own art. A picture on THIS machine's screen, so a writer of the local view.
+      changeMinimapTerrainTex: (path) => {
+        const bytes = this.mapArchive?.rawBytes(path) ?? this.vfs.rawBytes(path);
+        let canvas: HTMLCanvasElement | null = null;
+        try {
+          canvas = bytes ? blpToCanvas(bytes) : null;
+        } catch {
+          canvas = null; // not a BLP we can read — the map keeps the picture it had
+        }
+        if (!canvas) return false;
+        this.minimap = canvas;
+        this.hud?.setMinimapImage(canvas);
+        return true;
+      },
       // A speaker's white blink (TransmissionFromUnitWithNameBJ → UnitAddIndicator). The
       // colour MULTIPLIES the white ring, alpha scaling all three — see tickFlashCircles.
       unitAddIndicator: (unitId, r, g, b, a) => {
@@ -3437,6 +3444,22 @@ export class MapViewerScene {
       if (w3q && meta) console.info(`[jass] custom object data: ${applyMapUpgradeData(this.upgrades, w3q, meta, wts)} custom upgrade(s) (war3map.w3q).`);
     } catch (err) {
       console.warn("[jass] custom upgrade data failed (non-fatal):", err);
+    }
+    // …and the SKIN half of the same objects: a map saved by a 1.33+ editor keeps each object's
+    // art and words (model, icon, name, tooltips, sounds) in `war3mapSkin.w3u/.w3a/.w3t`, laid
+    // on the rows the files above just built (see ObjectLayer in data/objectData.ts). Same
+    // parsers, same field codes; the one difference is where each object starts from.
+    const skin = (name: string): Uint8Array | undefined => this.mapArchive?.rawBytes(name) ?? undefined;
+    const skinU = skin("war3mapSkin.w3u");
+    const skinA = skin("war3mapSkin.w3a");
+    const skinT = skin("war3mapSkin.w3t");
+    try {
+      if (skinU) console.info(`[jass] object skins: ${applyMapUnitData(this.registry, skinU, wts, { skin: true })} unit(s) (war3mapSkin.w3u).`);
+      const meta = this.vfs.rawBytes("Units\\AbilityMetaData.slk");
+      if (skinA && meta) console.info(`[jass] object skins: ${applyMapAbilityData(this.abilities, skinA, meta, wts, { skin: true })} abilit(ies) (war3mapSkin.w3a).`);
+      if (skinT) console.info(`[jass] object skins: ${applyMapItemData(this.items, skinT, wts, { skin: true })} item(s) (war3mapSkin.w3t).`);
+    } catch (err) {
+      console.warn("[jass] object skin data failed (non-fatal):", err);
     }
     // …and the map's own TECH TREE, which is what a building's command card is BUILT from
     // (`Trains`, `Sellunits`, `Sellitems`, `Researches`, `Builds`, `Upgrade`, `Requires`).
@@ -8944,7 +8967,7 @@ export class MapViewerScene {
     // drives the bust's talk animation (see the onVoiceStart hook in the ctor).
     this.portraitLabel = this.registry.get(sel.typeId)?.soundSet ?? "";
     const canvas = this.hud.portraitCanvas();
-    if (!this.portraitViewer) this.portraitViewer = new ModelViewerScene(canvas, this.vfs);
+    if (!this.portraitViewer) this.portraitViewer = new ModelViewerScene(canvas, this.assetFiles());
     // The bust wears the same wash the unit wears on the terrain, so the panel and the
     // battlefield agree about what you have selected. Set on EVERY selection, not once at
     // load: one viewer is reused for every unit, and an illusion shares the hero's model —
@@ -8954,7 +8977,7 @@ export class MapViewerScene {
     this.portraitViewer.setTint(sel.isIllusion ? [ILLUSION_TINT[0], ILLUSION_TINT[1], ILLUSION_TINT[2], 1] : sel.isRaised ? [RAISED_TINT[0], RAISED_TINT[1], RAISED_TINT[2], 1] : [1, 1, 1, 1]);
     // WC3 ships dedicated talking-head models alongside most units.
     const portraitPath = sel.model.replace(/\.mdx$/i, "_Portrait.mdx");
-    const path = this.vfs.exists(portraitPath) ? portraitPath : sel.model;
+    const path = this.assetFiles().exists(portraitPath) ? portraitPath : sel.model;
     this.portraitLoading = true;
     const id = sel.id;
     // Team glow follows the owner's COLOUR, not their slot (see RtsController.playerColor) —
@@ -9051,11 +9074,11 @@ export class MapViewerScene {
       this.portraitViewer?.stop();
       return;
     }
-    this.portraitViewer ??= new ModelViewerScene(this.hud.portraitCanvas(), this.vfs);
+    this.portraitViewer ??= new ModelViewerScene(this.hud.portraitCanvas(), this.assetFiles());
     const viewer = this.portraitViewer;
     viewer.setTint([1, 1, 1, 1]);
     const portraitPath = def.model.replace(/\.mdx$/i, "_Portrait.mdx");
-    const path = this.vfs.exists(portraitPath) ? portraitPath : def.model;
+    const path = this.assetFiles().exists(portraitPath) ? portraitPath : def.model;
     // The selection's voice lines must not work the speaker's mouth.
     this.portraitLabel = "";
     this.portraitFor = null;
@@ -9468,7 +9491,7 @@ export class MapViewerScene {
     const panel = this.cinematic;
     if (!panel || !typeId) return;
     const canvas = panel.portraitCanvas();
-    this.cinePortraitViewer ??= new ModelViewerScene(canvas, this.vfs);
+    this.cinePortraitViewer ??= new ModelViewerScene(canvas, this.assetFiles());
     if (this.cinePortraitLoading) return; // the running pump will pick the newer want up
     this.cinePortraitLoading = true;
     try {
@@ -9481,7 +9504,7 @@ export class MapViewerScene {
           continue;
         }
         const portraitPath = def.model.replace(/\.mdx$/i, "_Portrait.mdx");
-        const path = this.vfs.exists(portraitPath) ? portraitPath : def.model;
+        const path = this.assetFiles().exists(portraitPath) ? portraitPath : def.model;
         try {
           await this.cinePortraitViewer.load(path, Number(wantColor), true, 0);
           this.cinePortraitFor = want;
@@ -9517,7 +9540,7 @@ export class MapViewerScene {
       const def = this.registry.get(typeId);
       if (!def?.model) return;
       const portraitPath = def.model.replace(/\.mdx$/i, "_Portrait.mdx");
-      const path = this.vfs.exists(portraitPath) ? portraitPath : def.model; // mirror updatePortrait()
+      const path = this.assetFiles().exists(portraitPath) ? portraitPath : def.model; // mirror updatePortrait()
       if (this.warmedPortraits.has(path)) return;
       this.warmedPortraits.add(path);
       this.portraitWarmQueue.push(path);
@@ -9540,7 +9563,7 @@ export class MapViewerScene {
     const run = () => {
       this.portraitWarmScheduled = false;
       if (!this.hud) return; // match torn down
-      if (!this.portraitViewer) this.portraitViewer = new ModelViewerScene(this.hud.portraitCanvas(), this.vfs);
+      if (!this.portraitViewer) this.portraitViewer = new ModelViewerScene(this.hud.portraitCanvas(), this.assetFiles());
       if (this.portraitLoading) { this.schedulePortraitWarm(); return; } // let the real selection win
       const path = this.portraitWarmQueue.shift();
       if (!path) return;
@@ -9668,8 +9691,12 @@ export class MapViewerScene {
   private pushTrainButtons(sel: SelectionInfo, out: CommandButton[], reserved: string[] = []): void {
     const world = this.rts!.simWorld;
     const t = this.tech.get(sel.typeId);
-    const sold = new Set(t.sellunits);
-    const list = [...t.trains, ...t.sellunits];
+    // What it sells is its `Sellunits` AND whatever a script has stocked on its shelf
+    // (AddUnitToStock — SimWorld.stockedUnits): Test of Balance's hero pillar lists nothing in
+    // its data, and its whole draft arrives that way.
+    const scripted = world.stockedUnits(sel.id).filter((id) => !t.sellunits.includes(id) && !t.trains.includes(id));
+    const sold = new Set([...t.sellunits, ...scripted]);
+    const list = [...t.trains, ...t.sellunits, ...scripted];
     if (!list.length) return;
     const food = this.rts!.foodFor(this.localPlayer);
     const stash = this.rts!.stashFor(this.localPlayer);
@@ -10714,6 +10741,15 @@ export class MapViewerScene {
       const scriptOff = this.rts.simView.scriptDisabled(ab);
       const def = this.abilities.get(ab.id);
       if (!def) continue;
+      // An ITEM ability a unit carries directly draws no button — the whole Hive trick of
+      // hiding a bonus on a unit rests on it, and "Kelen's Daggers of Escape work just fine"
+      // while an item-flagged Defend DID show, "due to the fact that Defend is an order-based
+      // item … the on/off part" (hiveworkshop 134863). The item rows were never laid out for a
+      // unit's card: `ItemAbilityFunc.txt` gives five of its 234 abilities a Buttonpos. Test of
+      // Balance hangs a hero glow on every hero this way (`A03G`, an `AIgx` Regeneration Aura
+      // at 0 regen), and it showed as an aura button nobody could press. No stock unit carries
+      // an item ability in its abilList, so nothing stock is touched.
+      if (def.isItem && !def.orderOn && !def.orderOff) continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
       // A PERMANENT form has no second face at all: a Destroyer still lists `Aave` in its
       // abilList, but "Once morphed, the Destroyer cannot turn back into an Obsidian Statue"
@@ -10844,11 +10880,16 @@ export class MapViewerScene {
         cooldownFrac: onCd && ready.lvl.cooldown > 0 ? Math.max(0, Math.min(1, ready.ab.cooldownLeft / ready.lvl.cooldown)) : 0,
       }));
     }
-    if (su.isHero) {
+    // …for a hero that HAS skills to learn. A hero whose `Hero Abilities` list is empty has no
+    // learn page at all: its unspent points are neither shown nor spendable (the premise of
+    // hiveworkshop 139838, a map author asking how to show points on a hero with none). Test of
+    // Balance's heroes are all `uhab=` — their abilities come from the map's own reward dialog —
+    // and the Reforged client shows them no Hero Abilities button.
+    if (su.isHero && this.rts.simView.hasHeroSkills(su)) {
       // Hero Abilities (learn-skill): opens the skill list to spend unspent points.
       // WC3's canonical learn-abilities "Skillz" book art, default hotkey O, and a
       // corner badge showing the points available. The button is on the card for EVERY
-      // hero, points or not — the game never takes it away; with nothing to spend it simply
+      // hero with skills, points or not — the game never takes it away; with nothing to spend it simply
       // wears no badge, and the page it opens shows every row greyed. Take the
       // CommandButtons copy, not the CommandButtonsDisabled one — the button is live either
       // way, and DISBTN* is just the desaturated art the engine swaps in when a button is
@@ -13186,6 +13227,7 @@ export class MapViewerScene {
     // The SoundBoard is shared with the menu, so this map's archive comes back off it with
     // everything else this map brought (see mountMap).
     this.sounds?.mountMap(null);
+    this.mapFiles.archive = null;
     this.registry.clearCustom(); // drop this map's custom object data
     this.abilities.clearCustom();
     this.items.clearCustom();

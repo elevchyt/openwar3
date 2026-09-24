@@ -3098,7 +3098,8 @@ export class RtsController {
         icon: this.registry.get(u.typeId)?.icon ?? "",
         hpFrac: u.maxHp > 0 ? u.hp / u.maxHp : 1,
         manaFrac: u.maxMana > 0 ? u.mana / u.maxMana : -1, // -1: no pool, so no mana bar
-        skillPoints: u.skillPoints,
+        // No badge on a hero with nothing to learn — its points have nowhere to go (hasHeroSkills).
+        skillPoints: this.sim.hasHeroSkills(u) ? u.skillPoints : 0,
         dead: false, disabledIcon: null, reviveSecondsLeft: 0, reviveFrac: 0,
       });
     }

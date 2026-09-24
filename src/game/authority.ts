@@ -799,7 +799,9 @@ export class Authority {
         if (!def) return false;
         // "Does this building even train that?" — never checked before, because the card
         // only ever offered what the building trains. The card does not come over the wire.
-        const isSold = this.tech.get(b.typeId).sellunits.includes(cmd.unitId);
+        // SOLD = on its `Sellunits` list, or on its shelf because a script stocked it there
+        // (AddUnitToStock — SimWorld.stockedUnits), which no object-data list records.
+        const isSold = this.tech.get(b.typeId).sellunits.includes(cmd.unitId) || this.sim.shopStockInfo(cmd.buildingId, cmd.unitId)?.kind === "unit";
         if (!isSold && !this.tech.trains(b.typeId).includes(cmd.unitId)) return false;
         if (this.sim.queueFull(cmd.buildingId)) return false; // 7-deep — before charging
         // WC3's hero rules — BOTH of which are tech caps a script sets, not engine law

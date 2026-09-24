@@ -669,7 +669,24 @@ export function refoldHeroConstants(registry: UnitRegistry, from: HeroFoldConsta
   return n;
 }
 
-export function applyMapUnitData(registry: UnitRegistry, w3uBytes: Uint8Array, wtsBytes?: Uint8Array): number {
+/**
+ * How an object file is laid on. A map's `war3map.w3*` starts every object from the INSTALL's
+ * row; its `war3mapSkin.w3*` twin — what a 1.33+ editor writes, and what a map saved by one
+ * ships (Test of Balance: skin files for units, abilities, items, destructables and doodads) —
+ * is the SECOND half of the same objects. The editor split each object's fields in two when
+ * skins arrived: the gameplay columns stay in `war3map.w3*`, and the ART and the WORDS (model,
+ * icon, name, tooltips, sounds, scale — `umdl`/`uico`/`unam`/`utub`/`usnd`/`usca` …) moved to
+ * the skin file, same object ids, same field codes. So a skin pass starts each object from the
+ * row the main file already built (`skin: true`), never from the install's, or it would throw
+ * the gameplay half away. Without it, every custom unit on such a map wore its BASE type's
+ * model and name: Test of Balance's hero pillar was a Marketplace and its invisible
+ * hero-pickers were Peasants.
+ */
+export interface ObjectLayer {
+  skin?: boolean;
+}
+
+export function applyMapUnitData(registry: UnitRegistry, w3uBytes: Uint8Array, wtsBytes?: Uint8Array, layer: ObjectLayer = {}): number {
   const trigStr = makeTrigStr(wtsBytes);
 
   const w3u = new War3MapW3u();
@@ -678,7 +695,7 @@ export function applyMapUnitData(registry: UnitRegistry, w3uBytes: Uint8Array, w
 
   // Custom table: NEW unit ids, each based on (oldId) an existing type.
   for (const obj of w3u.customTable.objects) {
-    const base = registry.base(obj.oldId) ?? registry.get(obj.oldId);
+    const base = (layer.skin ? registry.get(obj.newId) : undefined) ?? registry.base(obj.oldId) ?? registry.get(obj.oldId);
     if (!base) continue; // base type unknown (chained custom / non-unit) — skip, don't crash
     const def = cloneDef(base, obj.newId);
     applyMods(def, obj.modifications, trigStr);
@@ -687,7 +704,7 @@ export function applyMapUnitData(registry: UnitRegistry, w3uBytes: Uint8Array, w
   }
   // Original table: field overrides applied to a base-game type in-place (overlay it).
   for (const obj of w3u.originalTable.objects) {
-    const base = registry.base(obj.oldId);
+    const base = layer.skin ? registry.get(obj.oldId) : registry.base(obj.oldId);
     if (!base) continue;
     const def = cloneDef(base, obj.oldId);
     applyMods(def, obj.modifications, trigStr);
@@ -858,7 +875,7 @@ function applyAbilityMods(def: AbilityDef, mods: AbilMod[], meta: MappedData, tr
  * many were installed. `metaBytes` = the install's Units\AbilityMetaData.slk (routes
  * each 4-char field code to its column/data slot); without it nothing can be applied.
  */
-export function applyMapAbilityData(registry: AbilityRegistry, w3aBytes: Uint8Array, metaBytes: Uint8Array, wtsBytes?: Uint8Array): number {
+export function applyMapAbilityData(registry: AbilityRegistry, w3aBytes: Uint8Array, metaBytes: Uint8Array, wtsBytes?: Uint8Array, layer: ObjectLayer = {}): number {
   const meta = new MappedData(new TextDecoder("windows-1252").decode(metaBytes));
   const trigStr = makeTrigStr(wtsBytes);
   const w3a = new War3MapW3d();
@@ -866,7 +883,7 @@ export function applyMapAbilityData(registry: AbilityRegistry, w3aBytes: Uint8Ar
   let count = 0;
 
   for (const obj of w3a.customTable.objects) {
-    const base = registry.base(obj.oldId) ?? registry.get(obj.oldId);
+    const base = (layer.skin ? registry.get(obj.newId) : undefined) ?? registry.base(obj.oldId) ?? registry.get(obj.oldId);
     if (!base) continue; // base ability unknown — skip (the clone would have no `code`)
     const def = cloneAbility(base, obj.newId);
     applyAbilityMods(def, obj.modifications as AbilMod[], meta, trigStr, registry);
@@ -874,7 +891,7 @@ export function applyMapAbilityData(registry: AbilityRegistry, w3aBytes: Uint8Ar
     count++;
   }
   for (const obj of w3a.originalTable.objects) {
-    const base = registry.base(obj.oldId);
+    const base = layer.skin ? registry.get(obj.oldId) : registry.base(obj.oldId);
     if (!base) continue;
     const def = cloneAbility(base, obj.oldId);
     applyAbilityMods(def, obj.modifications as AbilMod[], meta, trigStr, registry);
@@ -1057,7 +1074,7 @@ function cloneItem(base: ItemDef, id: string): ItemDef {
  * and an item (ItemData.slk's 273 ids and UnitData/UnitBalance's 836 do not meet). So both
  * loaders are simply offered the w3u, and each takes the rows whose base is in its own registry.
  */
-export function applyMapItemData(registry: ItemRegistry, w3tBytes: Uint8Array, wtsBytes?: Uint8Array): number {
+export function applyMapItemData(registry: ItemRegistry, w3tBytes: Uint8Array, wtsBytes?: Uint8Array, layer: ObjectLayer = {}): number {
   const trigStr = makeTrigStr(wtsBytes);
   const w3t = new War3MapW3u(); // items reuse the flat unit parser (no level data)
   w3t.load(w3tBytes);
@@ -1072,7 +1089,7 @@ export function applyMapItemData(registry: ItemRegistry, w3tBytes: Uint8Array, w
     }
   };
   for (const obj of w3t.customTable.objects) {
-    const base = registry.base(obj.oldId) ?? registry.get(obj.oldId);
+    const base = (layer.skin ? registry.get(obj.newId) : undefined) ?? registry.base(obj.oldId) ?? registry.get(obj.oldId);
     if (!base) continue;
     const def = cloneItem(base, obj.newId);
     applyItemMods(def, obj.modifications as AbilMod[]);
@@ -1080,7 +1097,7 @@ export function applyMapItemData(registry: ItemRegistry, w3tBytes: Uint8Array, w
     count++;
   }
   for (const obj of w3t.originalTable.objects) {
-    const base = registry.base(obj.oldId);
+    const base = layer.skin ? registry.get(obj.oldId) : registry.base(obj.oldId);
     if (!base) continue;
     const def = cloneItem(base, obj.oldId);
     applyItemMods(def, obj.modifications as AbilMod[]);

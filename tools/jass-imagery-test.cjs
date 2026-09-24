@@ -58,6 +58,7 @@ const hooks = {
   terrainTypeAt: (x) => (x > 0 ? 'Ldrt' : ''),
   terrainVarianceAt: () => 17,
   setTerrainType: rec('tile'),
+  changeMinimapTerrainTex: (path) => { calls.push(['minimap', path]); return path.endsWith('miniMap.blp'); },
 };
 
 const SRC = `
@@ -106,6 +107,12 @@ endfunction
 function Variance takes nothing returns integer
     return GetTerrainVariance(0.0, 0.0)
 endfunction
+function Minimap takes nothing returns boolean
+    return BlzChangeMinimapTerrainTex("war3mapImported\\\\miniMap.blp")
+endfunction
+function NoMinimap takes nothing returns boolean
+    return BlzChangeMinimapTerrainTex("nothing.blp")
+endfunction
 function Paint takes nothing returns nothing
     call SetTerrainTypeBJ(Location(1.0, 2.0), 'Nsnw', -1, 5, 0)
 endfunction
@@ -150,6 +157,14 @@ check('GetTerrainVariance', call('Variance').n, 17);
 calls.length = 0;
 call('Paint');
 check("SetTerrainTypeBJ reaches it with the tile id, -1, size and shape", J(calls[0]), J(['tile', 1, 2, 'Nsnw', -1, 5, 0]));
+
+console.log('\n--- the minimap picture ---');
+// Test of Balance's own call: its war3mapMap.blp is its lobby splash, and the real minimap is an
+// import it hands back at init — the ReforgedMapPreviewReplacer habit.
+calls.length = 0;
+check('BlzChangeMinimapTerrainTex reaches the engine with the path', call('Minimap').b, true);
+check('…exactly as the script spelled it', calls[0] && calls[0][1], 'war3mapImported\\miniMap.blp');
+check('…and answers false for a picture that is not there', call('NoMinimap').b, false);
 
 console.log(failures ? `\n${failures} failure(s).` : '\nAll imagery native checks passed.');
 process.exit(failures ? 1 : 0);

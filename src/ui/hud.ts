@@ -2361,6 +2361,20 @@ export class GameHud {
     this.msgLog.replaceChildren();
   }
 
+  /** `BlzChangeMinimapTerrainTex` — the map swaps the minimap's terrain picture for art of its
+   *  own. Cropped and letterboxed exactly as the picture `buildMinimap` reads at start is, and
+   *  hidden with it by the terrain toggle. Before the HUD is built there is nothing to swap: the
+   *  driver hands the new picture to `buildMinimap` itself. */
+  setMinimapImage(image: HTMLCanvasElement): void {
+    if (!this.minimapView) return;
+    const cropped = cropMinimapLetterbox(image, this.minimapAspect);
+    cropped.className = "hud-minimap-img";
+    cropped.hidden = !this.minimapTerrainShown;
+    if (this.minimapImg) this.minimapImg.replaceWith(cropped);
+    else this.minimapView.insertBefore(cropped, this.dotsCanvas ?? null);
+    this.minimapImg = cropped;
+  }
+
   private buildMinimap(): HTMLDivElement {
     const box = document.createElement("div");
     box.className = "hud-minimap";

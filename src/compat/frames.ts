@@ -197,10 +197,12 @@ export function registerFrameNatives(rt: Runtime): void {
   });
 
   // --- the minimap's terrain picture ------------------------------------------------
-  // A map swaps the minimap image for its own art. We have not wired it, so say so once and
-  // report failure rather than claiming a picture nobody changed.
-  def(rt, "BlzChangeMinimapTerrainTex", (c) => {
-    c.rt.warnOnce("BlzChangeMinimapTerrainTex", "the minimap picture is not swappable yet");
-    return jBool(false);
-  });
+  // A map swaps the minimap image for its own art. The standard reason is a Reforged editor
+  // habit: saving a map OVERWRITES war3mapMap.blp with a generated minimap, so a map that wants
+  // its own preview picture on the lobby screen puts that picture in war3mapMap.blp and hands
+  // the real minimap back at init — "call BlzChangeMinimapTerrainTex(\"war3mapMap_ingame.blp\")"
+  // is exactly what the ReforgedMapPreviewReplacer tool writes (github.com/inwc3). Test of
+  // Balance does it by hand with `war3mapImported\miniMap.blp`, and without this its minimap was
+  // its lobby splash — five heroes posing — for the whole match.
+  def(rt, "BlzChangeMinimapTerrainTex", (c, a) => jBool(c.rt.hooks?.changeMinimapTerrainTex?.(asStr(a[0])) ?? false));
 }

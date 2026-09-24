@@ -1162,6 +1162,9 @@ export interface EngineHooks {
   setTerrainType?(x: number, y: number, tile: string, variation: number, area: number, shape: number): void;
   /** SetWaterBaseColor — the tint over the tileset's own water colours, 0–255 (255 = none). */
   setWaterBaseColor?(r: number, g: number, b: number, a: number): void;
+  /** BlzChangeMinimapTerrainTex — the minimap's terrain picture becomes this texture (a path in
+   *  the map's archive or the install). False when there is no such picture. */
+  changeMinimapTerrainTex?(path: string): boolean;
   /** BlzGetUnitZ / BlzGetLocalUnitZ — the surface under the unit "plus the unit's occluder
    *  height" (jassbot), NOT its fly height. 0 for a unit that is gone. */
   unitZ?(unitId: number): number;

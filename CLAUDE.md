@@ -665,6 +665,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   `Blz*` natives are a DEGRADATION surface, not a blocker — an unknown native and an undefined
   global are each logged once and stepped over, so such a map runs before any of them exist —
   and their constants must come from a prelude of OUR OWN, never Blizzard's newer `common.j`.
+  The `war3mapSkin.w3u/.w3a/.w3t/…` files are NOT an HD extra to skip: they hold every object's
+  art and NAME, applied over the main files, and a map's triggers can find abilities by name.
+  And a map's imported art is found through `render/assetSolver.ts` (map archive first) for
+  every unit a SCRIPT makes — without it a sold hero has no body and an empty command card.
   A map's script may also be **LUA** (`war3map.lua`), and the reason that is a front end rather
   than a second engine is that the LANGUAGE is different and the API is not: every name such a
   script calls is an engine native, a BJ out of the install's own `blizzard.j` (Test of Faith
