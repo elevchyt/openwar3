@@ -1,4 +1,5 @@
 import type { FdfScreen } from "./fdf/render";
+import { anyModalOpen } from "./modal";
 
 // Gamepad support (issue #162).
 //
@@ -273,6 +274,7 @@ function tick(now: number): void {
       continue;
     }
     syncDropdown();
+    syncFocus(now);
     drive(pad, now_, prev, dt, now);
   }
   if (paired !== null && !pads[paired]?.connected) unpair(true);
@@ -317,11 +319,14 @@ function drive(pad: Gamepad, down: boolean[], prev: boolean[], dt: number, now: 
   // The left stick is the mouse — and taking the mouse back is what ends the D-pad's hold on X.
   if (lx || ly) {
     if (!cursorOn) showCursor();
+    // The stick is the cursor, and taking it puts the D-pad's selection away (issue #162):
+    // the cursor comes back where the selection was, so the eye does not have to find it.
+    if (focusOn) leaveFocus();
     setCardMode(false);
     menuMode = false;
     const speed = CURSOR_SPEED * window.innerHeight;
     moveCursor(cx + lx * speed * dt, cy + ly * speed * dt);
-  } else if (cursorOn && now - cursorStyleAt > CURSOR_STYLE_MS) {
+  } else if (cursorOn && !focusOn && now - cursorStyleAt > CURSOR_STYLE_MS) {
     paintCursor(); // the world moves under a still cursor, and so does what it should look like
   }
 
@@ -415,11 +420,198 @@ function dpad(button: number): void {
     if (dy) moveMenu(dy);
     return;
   }
-  if (!host?.canAct()) return;
-  setCardMode(true);
   const dx = button === B.left ? -1 : button === B.right ? 1 : 0;
   const dy = button === B.up ? -1 : button === B.down ? 1 : 0;
+  // Any menu — every glue screen, and in a match the F10 panel or a dialog over it — is walked
+  // control by control; a match with nothing over it gives the D-pad to the command card.
+  if (menuNavigation()) {
+    focusStep(dx, dy);
+    return;
+  }
+  if (!host?.canAct()) return;
+  setCardMode(true);
   host.cardMove(dx, dy);
+}
+
+// --- the menu selection -------------------------------------------------------------------
+//
+// Every menu can be walked with the D-pad alone (issue #162): a gold box sits on one control at a
+// time — a button, a dropdown, a checkbox, a slider, a list row, an edit box — the D-pad moves it
+// to the nearest control in that direction, and X presses it. What counts as a control is read
+// off the PAGE, like the dropdowns below: whatever the FDF renderer (and the load gate's kit, and
+// the hotkey editor) draws as clickable, that is visible, enabled and actually on top at its own
+// centre. That last test is what scopes the walk with no list of screens: a dialog's scrim covers
+// the screen behind it, so only the dialog's controls pass; a panel fading out is not hit-testable,
+// so nothing on it can be chosen mid-transition.
+//
+// The box and the cursor are one pointer in two forms. A D-pad press shows the box (the first
+// press only shows it, near where the cursor was) and puts the cursor away; the left stick puts
+// the box away and brings the cursor back where the box was; a real mouse move puts both away.
+// While the box is up, the pad's pointer events are aimed at its centre — so X is a click on the
+// control, R1 a right-click, and the control's own hover glow and tooltip come up with it.
+
+/** What the D-pad can land on. Nested matches keep the OUTER one (a dropdown's title button is
+ *  part of the dropdown; a list row's delete action is part of the row). */
+const FOCUSABLE = [
+  ".fdf-button", ".fdf-popup", ".fdf-checkbox", ".fdf-slider", ".fdf-list-row", ".fdf-editbox-input",
+  ".ow3-glue-btn", ".hk-slot",
+].join(", ");
+
+let focusOn = false;
+let focusEl: HTMLElement | null = null;
+let focusBox: HTMLDivElement | null = null;
+/** Where the focused control was, to pick its nearest successor when it goes (a screen swapped). */
+let focusAt: [number, number] = [0, 0];
+let focusCheckAt = 0;
+
+/** Is the D-pad walking a menu rather than the command card? Any time outside a match, and in
+ *  one while the F10 panel or a dialog is over it. */
+function menuNavigation(): boolean {
+  return !host || document.body.classList.contains("game-menu-open") || anyModalOpen();
+}
+
+function centre(r: DOMRect): [number, number] {
+  return [r.left + r.width / 2, r.top + r.height / 2];
+}
+
+/** Can the D-pad land on this control right now? */
+function focusable(el: HTMLElement): boolean {
+  if (!el.isConnected || el.closest(".fdf-disabled, .is-disabled, [disabled], [hidden]")) return false;
+  const r = el.getBoundingClientRect();
+  if (r.width < 2 || r.height < 2) return false;
+  // A list row may be scrolled out of its list: it counts while its LIST is on top, and is
+  // scrolled into view when the box reaches it.
+  const probe = el.classList.contains("fdf-list-row") ? el.closest<HTMLElement>(".fdf-list") ?? el : el;
+  const [x, y] = centre(probe.getBoundingClientRect());
+  if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) return false;
+  const top = hit(x, y);
+  return !!top && probe.contains(top);
+}
+
+function focusables(): HTMLElement[] {
+  const all = [...document.querySelectorAll<HTMLElement>(FOCUSABLE)];
+  return all.filter((el) => !all.some((o) => o !== el && o.contains(el)) && focusable(el));
+}
+
+/** The control nearest a point. */
+function nearest(list: HTMLElement[], x: number, y: number): HTMLElement | null {
+  let best: HTMLElement | null = null;
+  let bestD = Infinity;
+  for (const el of list) {
+    const [cx_, cy_] = centre(el.getBoundingClientRect());
+    const d = Math.hypot(cx_ - x, cy_ - y);
+    if (d < bestD) { bestD = d; best = el; }
+  }
+  return best;
+}
+
+/**
+ * The control one step from `from` in direction (dx, dy): of the controls whose centre lies that
+ * way, the one with the smallest gap along the direction, with a gap ACROSS it costing triple — so
+ * "down" from a button prefers the button under it to one down and far to the side, and a row of
+ * dropdowns is walked along the row by left/right rather than jumping lines.
+ */
+function neighbour(from: HTMLElement, dx: number, dy: number): HTMLElement | null {
+  const a = from.getBoundingClientRect();
+  const [ax, ay] = centre(a);
+  let best: HTMLElement | null = null;
+  let bestScore = Infinity;
+  for (const el of focusables()) {
+    if (el === from) continue;
+    const b = el.getBoundingClientRect();
+    const [bx, by] = centre(b);
+    const along = dx ? (bx - ax) * dx : (by - ay) * dy;
+    if (along <= 2) continue;
+    // Edge gaps: along the direction, and across it (0 when the two overlap on that axis).
+    const gapAlong = Math.max(0, dx ? (dx > 0 ? b.left - a.right : a.left - b.right) : (dy > 0 ? b.top - a.bottom : a.top - b.bottom));
+    const gapAcross = dx ? Math.max(0, b.top - a.bottom, a.top - b.bottom) : Math.max(0, b.left - a.right, a.left - b.right);
+    const score = gapAlong + gapAcross * 3 + Math.abs(dx ? by - ay : bx - ax) * 0.05;
+    if (score < bestScore) { bestScore = score; best = el; }
+  }
+  return best;
+}
+
+/** A D-pad press on a menu: the first shows the box, the rest move it (or turn a slider). */
+function focusStep(dx: number, dy: number): void {
+  if (!focusOn || !focusEl || !focusable(focusEl)) {
+    const [x, y] = focusOn ? focusAt : cursorPoint();
+    enterFocus(nearest(focusables(), x, y));
+    return;
+  }
+  // A slider takes left/right as its own keys do (ui/fdf/widgets.ts buildSlider), a few steps a
+  // press so a 0–100 volume does not take a hundred presses; up/down still leave it.
+  if (dx && focusEl.classList.contains("fdf-slider")) {
+    const key = dx > 0 ? "ArrowRight" : "ArrowLeft";
+    for (let i = 0; i < 5; i++) focusEl.dispatchEvent(new KeyboardEvent("keydown", { key, code: key, bubbles: true, cancelable: true }));
+    return;
+  }
+  const next = neighbour(focusEl, dx, dy);
+  if (next) setFocus(next);
+}
+
+function enterFocus(el: HTMLElement | null): void {
+  if (!el) return;
+  if (!cursorOn) showCursor(); // the veil: the OS pointer stays hidden while the box is the pointer
+  focusOn = true;
+  if (cursorEl) cursorEl.hidden = true;
+  if (!focusBox) {
+    focusBox = document.createElement("div");
+    focusBox.className = "gamepad-focus";
+    document.body.appendChild(focusBox);
+  }
+  focusBox.hidden = false;
+  setFocus(el);
+}
+
+function setFocus(el: HTMLElement): void {
+  focusEl = el;
+  if (el.classList.contains("fdf-list-row")) el.scrollIntoView({ block: "nearest" });
+  placeFocus();
+  // The pad's pointer now IS the box: its events land on the control's centre, and the control
+  // hears the pointer arrive exactly as it would a mouse (glow, tooltip, hover sound).
+  [cx, cy] = focusAt;
+  setHover(hit(cx, cy));
+}
+
+function placeFocus(): void {
+  if (!focusBox || !focusEl) return;
+  const r = focusEl.getBoundingClientRect();
+  focusAt = centre(r);
+  focusBox.style.transform = `translate(${Math.round(r.left)}px, ${Math.round(r.top)}px)`;
+  focusBox.style.width = `${Math.round(r.width)}px`;
+  focusBox.style.height = `${Math.round(r.height)}px`;
+}
+
+/** The left stick took the pointer back: the box goes, the cursor comes back where it was. */
+function leaveFocus(): void {
+  focusOn = false;
+  if (focusBox) focusBox.hidden = true;
+  if (cursorEl) cursorEl.hidden = false;
+  cursorStyleAt = 0;
+}
+
+/** Keep the box on its control as the page moves, and on a successor when the control goes (the
+ *  screen it was on swapped for the next one, a dialog closed). In a match with nothing over it,
+ *  the box hands back to the cursor — the D-pad is the command card's there. */
+function syncFocus(now: number): void {
+  if (!focusOn) return;
+  if (!menuNavigation()) {
+    leaveFocus();
+    paintCursor();
+    return;
+  }
+  if (focusEl && focusEl.isConnected && now - focusCheckAt < 200) {
+    placeFocus();
+    return;
+  }
+  focusCheckAt = now;
+  if (focusEl && focusable(focusEl)) {
+    placeFocus();
+    return;
+  }
+  const next = nearest(focusables(), focusAt[0], focusAt[1]);
+  if (next) setFocus(next);
+  else if (focusBox) focusBox.style.width = "0px"; // nothing to stand on yet (mid-transition)
 }
 
 // --- dropdowns ------------------------------------------------------------------------------
@@ -535,6 +727,8 @@ function showCursor(): void {
 function hideCursor(): void {
   if (!cursorOn) return;
   cursorOn = false;
+  focusOn = false;
+  if (focusBox) focusBox.hidden = true;
   if (cursorEl) cursorEl.hidden = true;
   if (veilEl) veilEl.hidden = true;
   setHover(null);

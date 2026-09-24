@@ -772,7 +772,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   `pointerId: 1`, so every existing gate applies unchanged. `:hover` cannot see that cursor:
   ask `isHovered(el)`, and give a hover glow a `.pad-hover` twin. The OS pointer is hidden by
   a transparent `#gamepad-veil` over the page, never by a global `cursor: none`: the drawn cursor
-  READS the page's `cursor:` values, so a global rule would hide it too.
+  READS the page's `cursor:` values, so a global rule would hide it too. The D-pad walks every
+  MENU with a gold box (`FOCUSABLE`, read off the page: visible, enabled, on top at its centre —
+  a new kind of clickable control needs adding there) and drives the command card only in a
+  match with no menu or dialog up.
 - **Never edit the install's UI files.** `UI\FrameDef\` is the player's. A control OpenWar3 needs
   that the 2003 UI has no frame for goes in [`src/overrides/`](src/overrides/) — our own FrameDef
   files, layered onto the screen at mount through `mountFdfScreen`'s `overrides` option — and its

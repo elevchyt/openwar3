@@ -105,6 +105,34 @@ X aims it in the world. The frame starts over when the selection or the card pag
   taverns;
 - a submenu (the build list, the skill page) also starts at the **top-left**.
 
+## Menus
+
+Every menu can be walked with the D-pad alone. A gold box (`.gamepad-focus`) sits on one control
+at a time: a button, a dropdown, a checkbox, a slider, a list row or an edit box. The D-pad moves
+it to the nearest control in that direction, and X presses it (`focusStep` / `neighbour`). What
+counts as a control is read off the PAGE (`FOCUSABLE`): it must be visible, enabled and on top at
+its own centre. That last test scopes the walk with no list of screens. A dialog's scrim covers
+the screen behind it, and a panel fading out cannot be hit, so nothing on either can be chosen. A
+list row is judged by its LIST instead, so a row scrolled out of view is still reachable and is
+scrolled in when the box gets there. On a slider, left/right turn it five steps at a time,
+through the slider's own arrow keys; up/down leave it.
+
+The box and the cursor are one pointer in two forms:
+
+- a **D-pad press** shows the box and puts the cursor away. The first press only shows it, on
+  the control nearest where the cursor was;
+- the **left stick** puts the box away and brings the cursor back where the box was;
+- a **real mouse move** puts both away.
+
+While the box is up, the pad's pointer events land on the box's centre. So X is a click on the
+control, R1 is a right-click, and the control's own hover glow and tooltip come up with it. When
+the control goes away (the screen swapped, a dialog closed), the box moves to the nearest control
+on what replaced it.
+
+**Which one the D-pad drives:** an open dropdown comes first. After that it walks the menu on
+every glue screen, and in a match while the F10 panel or a dialog is up (`menuNavigation`).
+Otherwise, in a match, it drives the command card.
+
 ## Dropdowns
 
 An open dropdown list is an `.fdf-popup-menu` (`ui/fdf/widgets.ts buildPopup`), and only one is

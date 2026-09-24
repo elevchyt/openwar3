@@ -2507,6 +2507,18 @@ body.hud-widget-skinned .hud-console.hud-console-skinned .hud-inventory .hud-inv
   cursor: none !important;
 }
 #gamepad-veil[hidden] { display: none; }
+/* The D-pad's selection on a menu (ui/gamepad.ts `focusBox`): the command card's gold, drawn
+   AROUND the control rather than inside it, since a menu control does not clip like a card slot. */
+.gamepad-focus {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 2147483645;
+  pointer-events: none;
+  border-radius: 2px;
+  box-shadow: 0 0 0 2px #fcd312, 0 0 10px 3px rgba(252, 211, 18, 0.75), inset 0 0 8px 1px rgba(252, 211, 18, 0.45);
+}
+.gamepad-focus[hidden] { display: none; }
 /* No image to wear (before an install has given the page its gauntlet): a plain arrow. */
 .gamepad-cursor.plain::before {
   content: "";
