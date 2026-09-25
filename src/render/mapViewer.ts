@@ -8519,6 +8519,7 @@ export class MapViewerScene {
       icon: (kind) => this.resourceIcon(kind),
       commandIcon: (name) => this.blpIcon(`ReplaceableTextures\\CommandButtons\\${name}.blp`),
       blpUrl: (path) => this.blpIcon(path),
+      illusionIconUrl: (path) => this.illusionIcon(path),
       blpCanvas: (path) => {
         const bytes = this.vfs.rawBytes(path);
         return bytes ? blpToCanvas(bytes) : null;
@@ -12279,6 +12280,38 @@ export class MapViewerScene {
       url = bytes ? blpToDataUrl(bytes) : null;
       this.iconCache.set(key, url);
       if (url) this.iconSource.set(url, path);
+    }
+    return url;
+  }
+
+  /** An illusion's icon in the selection grid: the unit's own art multiplied by
+   *  `ILLUSION_TINT`, the SAME wash `applyFogTint` puts on its model and the portrait bust
+   *  wears, so the grid tells the images from the original exactly as the field does (the
+   *  viewpoint gate is `SelIcon.illusion`'s). No file carries this tint — like the model's, it
+   *  is an engine look (docs/illusions.md) — so it is baked per icon and cached beside it. */
+  private illusionIcon(path: string): string | null {
+    const map = this.mapFiles.archive;
+    const inMap = map?.exists(path) ?? false;
+    const key = `illus:${inMap ? `map${this.mapFiles.epoch}:` : ""}${path}`;
+    let url = this.iconCache.get(key);
+    if (url === undefined) {
+      const bytes = inMap ? map!.rawBytes(path) : this.vfs.rawBytes(path);
+      const canvas = bytes ? blpToCanvas(bytes) : null;
+      url = null;
+      if (canvas) {
+        const ctx = canvas.getContext("2d")!;
+        const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const d = img.data;
+        // Uint8ClampedArray: the blue channel's ×1.9 saturates at 255, as the framebuffer clamps the model's.
+        for (let i = 0; i < d.length; i += 4) {
+          d[i] *= ILLUSION_TINT[0];
+          d[i + 1] *= ILLUSION_TINT[1];
+          d[i + 2] *= ILLUSION_TINT[2];
+        }
+        ctx.putImageData(img, 0, 0);
+        url = canvas.toDataURL();
+      }
+      this.iconCache.set(key, url);
     }
     return url;
   }

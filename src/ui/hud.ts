@@ -295,7 +295,7 @@ export interface HudDriver {
   setOrderMode(mode: OrderMode): void;
   stopSelected(): void;
   /** Icons for a multi-unit selection grid (empty for a single unit / mine). */
-  selectionIcons(): Array<{ simId: number; icon: string; hpFrac: number; manaFrac: number; focused: boolean; owner: number }>;
+  selectionIcons(): Array<{ simId: number; icon: string; hpFrac: number; manaFrac: number; focused: boolean; owner: number; illusion: boolean }>;
   /** Grid icon click: focus the unit's sub-group (like Tab), or (if that group is
    *  already focused) drill down to just this one unit. */
   selectGridUnit(simId: number): void;
@@ -385,6 +385,8 @@ export interface HudDriver {
   commandIcon(name: string): string | null;
   /** Data URL for an arbitrary BLP path (e.g. a unit's command icon), or null. */
   blpUrl(path: string): string | null;
+  /** The same icon washed blue, for an illusion's grid slot. */
+  illusionIconUrl(path: string): string | null;
   /** An arbitrary BLP decoded to a canvas, for chrome that needs pixel work — the
    *  tooltip border ships as an 8-tile strip that has to be re-sliced. Null if the
    *  file isn't in the mounted archives. */
@@ -4010,7 +4012,7 @@ export class GameHud {
         return;
       }
       slot.hidden = false;
-      const url = ic.icon ? this.driver.blpUrl(ic.icon) : null;
+      const url = ic.icon ? (ic.illusion ? this.driver.illusionIconUrl(ic.icon) : this.driver.blpUrl(ic.icon)) : null;
       bars.art.style.backgroundImage = url ? `url(${url})` : "";
       slot.classList.toggle("focused", ic.focused);
       const frac = Math.max(0, Math.min(1, ic.hpFrac));

@@ -84,6 +84,10 @@ off the unit:**
   `SelectionInfo.isIllusion`). Set it on **every selection**, not once at load: one viewer is
   reused for every unit and an illusion shares the original's model, so selecting the real
   hero right after one of his images would otherwise inherit the blue.
+- **The selection-grid icon** wears it too: `SelIcon.illusion` (same gate) swaps the slot's
+  art for `illusionIcon`, the unit's own icon multiplied pixel by pixel by `ILLUSION_TINT`
+  and cached per path. A group of a Blademaster and his three images would otherwise be four
+  identical faces, and the grid is where you pick one of them out.
 
 To an enemy, `isSummon`/`isIllusion` both report `false`, so the image keeps a hero's XP bar,
 no tint and no timer — an ordinary Blademaster.

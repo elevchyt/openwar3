@@ -642,6 +642,7 @@ export interface SelIcon {
   manaFrac: number; // -1 when the unit has no mana pool (no bar drawn), like the hero bar
   focused: boolean; // part of the currently-focused sub-group
   owner: number;
+  illusion: boolean; // an image the LOCAL viewpoint may tell apart (the tint's own rule)
 }
 
 /** One button of the hero bar in the screen's top-left corner (issue #95). */
@@ -2750,6 +2751,7 @@ export class RtsController {
           manaFrac: u.maxMana > 0 ? u.mana / u.maxMana : -1, // -1: no pool, so no mana bar (issue #109)
           focused: key === this.focusedKey,
           owner: u.owner,
+          illusion: u.isIllusion && (this.snapshot.active || this.readsSideOf(u.owner)),
         });
       }
     }
