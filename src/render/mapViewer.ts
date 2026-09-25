@@ -7925,6 +7925,7 @@ export class MapViewerScene {
       cardMode: (on) => this.hud?.padCardMode(on),
       targeting: () => !!this.rts?.orderMode || !!this.placement,
       inCinematic: () => !this.interfaceShown,
+      toggleChat: () => this.hud?.padToggleChat() ?? null,
     });
   }
 

@@ -11,9 +11,10 @@ the input the mouse or keyboard would have given and goes through the same doors
 | button | does | how |
 | --- | --- | --- |
 | left stick | moves the cursor | a drawn virtual cursor + synthetic pointer events (below) |
-| left stick press | centre on the selection | `GamepadMatchHost.jumpToSelection` |
+| left stick press | centre on the selection, on RELEASE | `GamepadMatchHost.jumpToSelection` |
 | right stick | pans the camera, 360° | `gamepadPan()`, read by `updateCamera` beside the arrow keys, at `PAD_PAN_SCALE` (¾) of their speed |
-| right stick press | centre on the last notification | the **Space** key |
+| right stick press | centre on the last notification, on RELEASE | the **Space** key, tapped |
+| both stick presses | open the chat line (with the keyboard over it), or close it unsent | `GamepadMatchHost.toggleChat` → `GameHud.padToggleChat` |
 | X | left click (or presses the card selector's button) | pointer/mouse events at the cursor |
 | R1 | right click | pointer/mouse events, button 2 |
 | O | cancel | the **Escape** key |
@@ -138,6 +139,20 @@ While the box is up, the pad's pointer events land on the box's centre. So X is 
 control, R1 is a right-click, and the control's own hover glow and tooltip come up with it. When
 the control goes away (the screen swapped, a dialog closed), the box moves to the nearest control
 on what replaced it.
+
+**A pressed BUTTON puts the box away at once** (`focusPressed`). A menu button usually sends its
+whole screen away, and the box standing on a dead button while the panel slides off reads as the
+pad still pointing at it. So it goes on the frame X goes down, and comes back either on the SAME
+button, if that is still live `FOCUS_SETTLE_MS` (250 ms) after X came up, or on the nearest
+control of the next screen once it has landed and can be pressed (the arriving screen is
+`fdf-screen-inert` until then). Measured: hidden 7 ms after X on Single Player, back 50 ms after
+the profile screen landed. A dead SCREEN (`fdf-screen-disabled`/`-inert` on the overlay) also
+puts the box away between the 200 ms full checks, so backing out with O does not leave it behind
+either.
+
+**The stick-press chord.** L3 and R3 fire on their RELEASE, not their press, because pressing
+both is a third button: the chat line. A release that was part of the chord fires nothing, so
+opening chat neither jumps the camera nor centres on a notification. Either stick may go first.
 
 **Which one the D-pad drives:** an open dropdown comes first. After that it walks the menu on
 every glue screen, and in a match while the F10 panel or a dialog is up (`menuNavigation`).

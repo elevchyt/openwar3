@@ -20,7 +20,8 @@ import {
 //     click on the world selects through `selectAt`, a click on a glue button fires its
 //     handler, and a held X drags the selection box.
 //   · the buttons that have a KEY are that key: O is Escape, Triangle is Tab (the next
-//     subgroup of the selection), R3 is Space ("Center on last notification"), R2 is "-", L1 is
+//     subgroup of the selection), R3 is Space ("Center on last notification") — on its RELEASE,
+//     like L3's jump, because the two sticks pressed TOGETHER open the chat line — R2 is "-", L1 is
 //     F8, Start is F10 (Escape during a cinematic, which skips it) and Select is F9.
 //   · X on a TEXT FIELD puts up an on-screen keyboard (ui/padKeyboard.ts), and while it is up
 //     the D-pad walks its keys and Square / Triangle / Start / O are Delete / Space / Enter /
@@ -91,6 +92,8 @@ export interface GamepadMatchHost {
   /** Is a cinematic up (`ShowInterface(false)`, the letterbox)? Start is Escape then — the
    *  skip — since F10 has no menu to open until the cinematic is over. */
   inCinematic(): boolean;
+  /** L3+R3: open the chat line (returning its field, for the keyboard) or put it away. */
+  toggleChat(): HTMLInputElement | null;
 }
 
 let host: GamepadMatchHost | null = null;
@@ -159,6 +162,13 @@ let captureEl: Element | null = null;
 let heldMask = 0;
 let cursorStyleAt = 0;
 let cursorValue = "";
+
+/** The two stick presses held now, and whether they have been pressed TOGETHER since they were
+ *  both last up. L3 and R3 each fire on their RELEASE rather than their press, and a release
+ *  that was part of the L3+R3 chord (the chat line) fires nothing — or opening the chat would
+ *  also jump the camera to the selection and on to the last notification. */
+const sticksDown = new Set<number>();
+let stickChord = false;
 
 /** What each held pad button started, so its release ends the same thing. */
 const holds = new Map<number, () => void>();
@@ -379,7 +389,21 @@ function press(button: number, now: number): void {
       // X on a text field is a click into it (the focus, the caret) — and the keyboard, since
       // a pad has no other way to put a letter in it.
       const field = textField(focusOn ? focusEl : hit(cx, cy));
+      // A BUTTON under the box: put the box away now, not once its screen has finished leaving.
+      const pressedButton = focusOn && !!focusEl?.matches(".fdf-button, .ow3-glue-btn");
+      if (pressedButton && focusBox) {
+        focusPressed = true;
+        focusPressedAt = 0;
+        focusBox.hidden = true;
+      }
       holdMouse(button, 0);
+      if (pressedButton) {
+        const release = holds.get(button);
+        holds.set(button, () => {
+          release?.();
+          focusPressedAt = performance.now();
+        });
+      }
       if (field && document.activeElement === field) openKeyboard(field);
       return;
     }
@@ -404,8 +428,9 @@ function press(button: number, now: number): void {
       if (keyboardOpen()) return keyboardSpace();
       holdKey(button, "Tab", "Tab");
       return;
+    case B.l3:
     case B.r3:
-      holdKey(button, " ", "Space");
+      stickPress(button);
       return;
     case B.r2:
       holdKey(button, "-", "Minus");
@@ -432,9 +457,6 @@ function press(button: number, now: number): void {
     case B.l2:
       if (host?.canAct()) host.cycleBuilding();
       return;
-    case B.l3:
-      if (host?.canAct()) host.jumpToSelection();
-      return;
     case B.up:
     case B.down:
     case B.left:
@@ -443,6 +465,33 @@ function press(button: number, now: number): void {
       dpad(button);
       return;
   }
+}
+
+/**
+ * A stick press. Alone it is its own button — L3 the jump to the selection, R3 Space — fired when
+ * it comes back up; with the other stick already held it is the CHORD, which toggles the chat
+ * line (and puts the keyboard up over it). Either stick may go first, and whichever is released
+ * first does not fire its own action once the chord has happened.
+ */
+function stickPress(button: number): void {
+  sticksDown.add(button);
+  if (sticksDown.size === 2) {
+    stickChord = true;
+    const field = host?.toggleChat() ?? null;
+    // Closing it needs nothing more: the line gives up the focus, and the keyboard follows it.
+    if (field) openKeyboard(field);
+  }
+  holds.set(button, () => {
+    sticksDown.delete(button);
+    const chord = stickChord;
+    if (!sticksDown.size) stickChord = false;
+    if (chord || paired === null) return; // part of the chord, or the pad went away mid-press
+    if (button === B.l3) {
+      if (host?.canAct()) host.jumpToSelection();
+    } else {
+      tapKey(" ", "Space");
+    }
+  });
 }
 
 function dpad(button: number): void {
@@ -500,6 +549,21 @@ let focusBox: HTMLDivElement | null = null;
 /** Where the focused control was, to pick its nearest successor when it goes (a screen swapped). */
 let focusAt: [number, number] = [0, 0];
 let focusCheckAt = 0;
+/**
+ * X went down on a BUTTON while the box was on it, and the box has been put away until the
+ * press has played out. A menu button usually sends its whole screen away, and the box standing
+ * on a button that has gone dead while the panel slides off reads as the pad still pointing at
+ * something — so it goes the moment X does, and comes back either on the SAME button, once it is
+ * plainly still live `FOCUS_SETTLE_MS` after X came up (a Create that stays on its screen), or on
+ * the nearest control of the NEXT screen once that has landed and can be pressed.
+ * `focusPressedAt` is X's release (0 while X is still down).
+ */
+let focusPressed = false;
+let focusPressedAt = 0;
+/** How long a pressed button must stay live after X comes up to count as having kept its screen.
+ *  Ours: a glue screen goes dead on the click itself (`GlueStack.goTo` → `setAllDisabled`), so
+ *  anything still pressable a few frames later is staying. */
+const FOCUS_SETTLE_MS = 250;
 
 /** Is the D-pad walking a menu rather than the command card? Any time outside a match, and in
  *  one while the F10 panel or a dialog is over it. */
@@ -570,6 +634,12 @@ function neighbour(from: HTMLElement, dx: number, dy: number): HTMLElement | nul
 
 /** A D-pad press on a menu: the first shows the box, the rest move it (or turn a slider). */
 function focusStep(dx: number, dy: number): void {
+  // The box is away after a press: the D-pad brings it back where it can stand, without a step.
+  if (focusPressed && focusOn) {
+    focusPressed = false;
+    enterFocus(focusEl && focusable(focusEl) ? focusEl : nearest(focusables(), focusAt[0], focusAt[1]));
+    return;
+  }
   if (!focusOn || !focusEl || !focusable(focusEl)) {
     const [x, y] = focusOn ? focusAt : cursorPoint();
     enterFocus(nearest(focusables(), x, y));
@@ -624,6 +694,7 @@ function placeFocus(): void {
 /** The left stick took the pointer back: the box goes, the cursor comes back where it was. */
 function leaveFocus(): void {
   focusOn = false;
+  focusPressed = false;
   if (focusBox) focusBox.hidden = true;
   if (cursorEl) cursorEl.hidden = false;
   cursorStyleAt = 0;
@@ -645,7 +716,28 @@ function syncFocus(now: number): void {
     paintCursor();
     return;
   }
-  if (focusEl && focusEl.isConnected && now - focusCheckAt < 200) {
+  if (focusPressed) {
+    if (!focusPressedAt || now - focusCheckAt < 100) return; // X still down, or checked just now
+    focusCheckAt = now;
+    if (focusEl && focusable(focusEl)) {
+      // Still live: the press kept its screen. Back on the same button once that is certain.
+      if (now - focusPressedAt < FOCUS_SETTLE_MS) return;
+      focusPressed = false;
+      placeFocus();
+      return;
+    }
+    // The screen is going: wait for a control of the next one that can actually be pressed —
+    // the arriving screen is inert until it has landed, so this is the moment it lands.
+    const next = nearest(focusables(), focusAt[0], focusAt[1]);
+    if (!next) return;
+    focusPressed = false;
+    focusBox!.hidden = false;
+    setFocus(next);
+    return;
+  }
+  // Between full checks the box just follows its control — unless that control's SCREEN has
+  // gone dead (leaving, or not yet landed), which is a class on the screen and cheap to ask.
+  if (focusEl && focusEl.isConnected && now - focusCheckAt < 200 && !focusEl.closest(".fdf-screen-disabled, .fdf-screen-inert")) {
     placeFocus();
     return;
   }
@@ -736,6 +828,14 @@ function stick(x: number, y: number): [number, number] {
 
 // --- keys -------------------------------------------------------------------------------
 
+/** Press and release a key at once — a stick press that fires on its own release. */
+function tapKey(key: string, code: string): void {
+  const target = document.activeElement ?? document.body;
+  const init = { key, code, bubbles: true, cancelable: true, composed: true };
+  target.dispatchEvent(new KeyboardEvent("keydown", init));
+  target.dispatchEvent(new KeyboardEvent("keyup", init));
+}
+
 /** Press a key for as long as the pad button is held — so a held R2 after a double tap rides
  *  the army exactly as a held "-" does. Dispatched at the focused element, like a real key. */
 function holdKey(button: number, key: string, code: string): void {
@@ -775,6 +875,7 @@ function hideCursor(): void {
   if (!cursorOn) return;
   cursorOn = false;
   focusOn = false;
+  focusPressed = false;
   if (focusBox) focusBox.hidden = true;
   if (cursorEl) cursorEl.hidden = true;
   if (veilEl) veilEl.hidden = true;

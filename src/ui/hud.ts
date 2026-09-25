@@ -2242,6 +2242,21 @@ export class GameHud {
     return !this.chatBar.hidden;
   }
 
+  /**
+   * The gamepad's L3+R3 (issue #162): open the chat line at the default audience, as Enter does
+   * and behind the same gates, or put an open one away UNSENT, as Escape does. Returns the field
+   * when it opened it, so the pad can put its keyboard up over it — null otherwise.
+   */
+  padToggleChat(): HTMLInputElement | null {
+    if (this.chatOpen) {
+      this.closeChat();
+      return null;
+    }
+    if (!this.acceptsInput()) return null;
+    this.openChat(this.defaultChatTarget());
+    return this.chatInput;
+  }
+
   /** The Quests button's flash (FlashQuestDialogButton): on when the script announced
    *  something, off the moment the log is opened — as in the game. */
   flashQuests(on: boolean): void {
