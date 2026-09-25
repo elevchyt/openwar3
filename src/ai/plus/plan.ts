@@ -28,7 +28,7 @@ import type { PlusRaceTable, PlusStrategy } from "./races";
 //     the upgrades it takes (whichever its buildings can research) fall out of that. A strategy
 //     therefore cannot ask for a unit it has not built the producer for — see plus/races.ts.
 //  3. **The army has a ceiling, and it is enforced here.** `PlusProfile.armyFood` is a food
-//     budget spent down the race's mix; an easy computer asks for twelve food of soldiers and
+//     budget spent down the race's mix; an easy computer asks for eight food of soldiers and
 //     then stops asking. That is issue #124's "must NOT mass armies at all (must have
 //     constraints for this)", and it has to be at PRODUCTION — an AI that builds twenty Grunts
 //     and attacks with six still owns twenty Grunts when you walk into its base.
@@ -738,7 +738,7 @@ function army(c: PlusCtx, budget: number): void {
     }
   }
   // A budget spread thinly enough rounds EVERY share to nothing — a wide mix of expensive
-  // units under an Easy computer's twelve food, say — and then a pass that can plainly build
+  // units under an Easy computer's eight food, say — and then a pass that can plainly build
   // something asks for nothing at all. That is the same empty field `buildableMix`'s fallback
   // exists to prevent, arrived at from the other side, and it feeds the same food gates. So
   // the heaviest share of the build order gets one body whatever the arithmetic says.

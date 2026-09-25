@@ -1,3 +1,4 @@
+import { isNeutralSlot } from "../data/enums";
 // Player alliances (7.22 — issue #33; see docs/triggers.md).
 //
 // WC3 keeps a per-PAIR, per-SETTING alliance matrix — not a team number. common.j:
@@ -51,8 +52,10 @@ export enum AllianceType {
 }
 
 /** common.j: `constant integer bj_MAX_PLAYER_SLOTS = 16` — slots 0–11 are players,
- *  12 is Neutral Hostile and 15 Neutral Passive. */
-const SLOTS = 16;
+ *  12 is Neutral Hostile and 15 Neutral Passive — and 28 on the 24-player table a 1.31+ map is
+ *  written for (players 0–23, neutrals 24–27; data/enums.ts setWidePlayerTable). The matrix is
+ *  sized for the wider one, so a map on either table fits. */
+const SLOTS = 28;
 const TYPES = 10;
 
 export class AllianceTable {
@@ -137,7 +140,7 @@ export class AllianceTable {
         // They start granting nothing and being granted nothing, which is what the game has:
         // Neutral Hostile fights everyone until a script says otherwise, and Neutral Passive
         // is held out of the fight by `neutralPassive` rather than by this matrix.
-        if (a >= 12 || b >= 12) continue;
+        if (isNeutralSlot(a) || isNeutralSlot(b)) continue;
         if (a === b || teamOf(a) !== teamOf(b)) continue;
         const grants = grantsOf?.(teamOf(a)) ?? { allied: true, sharedVision: true };
         // The five `SetPlayerAllianceStateAllyBJ` sets, and then sight — which is its own

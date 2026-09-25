@@ -36,6 +36,10 @@ function readUtf8(vfs: DataSource | MpqDataSource, ...paths: string[]): string |
   return null;
 }
 
+// The map's own FRAMES (the 1.31 UI API — compat/frames.ts) are drawn by ui/scriptFrames.ts,
+// and reach it through this door rather than by an import of the compatibility layer.
+export { frameModel, type FrameModel, type FrameObj } from "../compat/frames";
+
 export interface MapScriptEngine {
   interp: Interpreter;
   setup: MapSetup;
@@ -93,6 +97,8 @@ export function loadMapScript(
      *  black swatch, whose index is the install's (render/teamColor.ts `neutralTeamColor`).
      *  Passed in rather than read here: the interpreter never opens the art. */
     neutralColor?: number;
+    /** Runtime.blzIndexBase, off the map's own format (MapFormatProfile.blzIndexBase). */
+    blzIndexBase?: number;
     /** Called with the booted engine BEFORE config()/main() run, so the host can publish
      *  it (e.g. a hook that needs the interpreter's seeded RNG — ChooseRandomItem, 7.18)
      *  while the script is still initialising. Waiting for the return value is too late:
@@ -120,6 +126,7 @@ export function loadMapScript(
     gameType: opts.melee ? 1 : 4, hooks: opts.hooks,
     worldWritingHooks: opts.worldWritingHooks, localViewHooks: opts.localViewHooks, wts,
     neutralColor: opts.neutralColor,
+    blzIndexBase: opts.blzIndexBase,
   });
   const engine: MapScriptEngine = { interp, setup: interp.rt.setup };
   // The Lua chunk runs LAST, after the JASS libraries are in the runtime, because that is what

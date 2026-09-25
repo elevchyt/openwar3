@@ -1,3 +1,67 @@
+diff --git a/dist/cjs/parsers/mdlx/layer.js b/dist/cjs/parsers/mdlx/layer.js
+index f9e7f8614096ec0da6a9b2dd7cb827777aff4bc1..bbecdac6514cfdcd07bc178f94eabbd90edf4882 100644
+--- a/dist/cjs/parsers/mdlx/layer.js
++++ b/dist/cjs/parsers/mdlx/layer.js
+@@ -1,6 +1,7 @@
+ "use strict";
+ Object.defineProperty(exports, "__esModule", { value: true });
+ const animatedobject_1 = require("./animatedobject");
++const animationmap_1 = require("./animationmap");
+ // These two functions are needed because I am using const enums, which lets TS completely remove them from the output.
+ // I think it's worth it for the price of these two functions that effectively were always here either way.
+ function stringToMode(s) {
+@@ -82,6 +83,34 @@ class Layer extends animatedobject_1.default {
+             this.fresnelOpacity = stream.readFloat32();
+             this.fresnelTeamColor = stream.readFloat32();
+         }
++        // OpenWar3: v1100 (1.33+) gives a layer a LIST of textures — an HD material's diffuse,
++        // normal, ORM, emissive… — after a shader-type id: `uint32 shaderTypeId, uint32 count`,
++        // then per texture `int32 textureId, uint32 slot`, each optionally followed by its own
++        // KMTF track (war3-model's parseMaterials; the byte layout checked against Obelisk.mdx,
++        // whose every layer it consumes exactly). An SD renderer draws slot 0, the diffuse, and
++        // the legacy `textureId` above is not it (0 on every layer of that file).
++        if (version >= 1100) {
++            this.shaderTypeId = stream.readUint32();
++            for (let i = 0, l = stream.readUint32(); i < l; i++) {
++                const textureId = stream.readInt32();
++                stream.readUint32(); // slot
++                if (i === 0) {
++                    this.textureId = textureId;
++                }
++                const u = stream.uint8array;
++                const at = stream.index;
++                if (stream.remaining >= 4 && u[at] === 0x4b && u[at + 1] === 0x4d && u[at + 2] === 0x54 && u[at + 3] === 0x46) {
++                    // An animated texture id for this slot: the diffuse's drives the layer,
++                    // the others' are read past.
++                    const name = stream.readBinary(4);
++                    const animation = new animationmap_1.default[name][1]();
++                    animation.readMdx(stream, name);
++                    if (i === 0) {
++                        this.animations.push(animation);
++                    }
++                }
++            }
++        }
+         this.readAnimations(stream, size - (stream.index - start));
+     }
+     writeMdx(stream, version) {
+diff --git a/dist/cjs/parsers/mdlx/material.js b/dist/cjs/parsers/mdlx/material.js
+index e2dd7133b41aae9be6a700950611adf97b7e9934..b266107dbc3429bb5a7addcaf3597b06230f0dd5 100644
+--- a/dist/cjs/parsers/mdlx/material.js
++++ b/dist/cjs/parsers/mdlx/material.js
+@@ -18,7 +18,11 @@ class Material {
+         stream.readUint32(); // Don't care about the size.
+         this.priorityPlane = stream.readInt32();
+         this.flags = stream.readUint32();
+-        if (version > 800) {
++        // OpenWar3: the 80-byte shader name exists in 900 and 1000 only — a v1100 (1.33+) material
++        // goes straight from its flags to LAYS (read off Test of Balance's Obelisk.mdx, and what
++        // war3-model's parseMaterials does: `Version >= 900 && Version < 1100`). Reading it anyway
++        // swallowed the layers and the model drew nothing.
++        if (version > 800 && version < 1100) {
+             this.shader = stream.read(80);
+         }
+         stream.skip(4); // LAYS
 diff --git a/dist/cjs/parsers/mpq/adpcm.js b/dist/cjs/parsers/mpq/adpcm.js
 index 819b5459014ef60441683f396f391ec82df03281..401e55a45dd6111fec9d5a4576f4b0ea7fed35b4 100644
 --- a/dist/cjs/parsers/mpq/adpcm.js
@@ -324,6 +388,32 @@ index fbd43cb761b6de95a8a74aacc2f3087203c5c9e7..bf8e927987f5295727656033499491fa
          }
      }
      return offset;
+diff --git a/dist/cjs/parsers/w3x/map.js b/dist/cjs/parsers/w3x/map.js
+index 2e429462c9fe97126996684b8d998a3b7d2c3f21..f0de2e2350c99916185a20c1c3bf9f96152ee322 100644
+--- a/dist/cjs/parsers/w3x/map.js
++++ b/dist/cjs/parsers/w3x/map.js
+@@ -274,6 +274,21 @@ class War3Map {
+                     modifications[fileNames[i]] = modification;
+                 }
+             }
++            // OpenWar3: the SKIN half of the same objects. A map saved by a 1.33+ editor keeps
++            // each object's art and words (model, icon, name, sounds, scale) in
++            // war3mapSkin.w3u/.w3t/.w3b/.w3d, same object ids and field codes, laid on AFTER
++            // the main file (the viewer applies `<ext>Skin` right behind `<ext>`). Without it
++            // every custom unit on such a map drew its BASE type's model -- Test of Balance's
++            // hero pillar was a Marketplace.
++            const skin = this.archive.get(`war3mapSkin.${fileNames[i]}`);
++            if (skin) {
++                const buffer = skin.arrayBuffer();
++                if (buffer) {
++                    const modification = useOptionalInts[i] ? new file_2.default() : new file_3.default();
++                    modification.load(buffer);
++                    modifications[`${fileNames[i]}Skin`] = modification;
++                }
++            }
+         }
+         return modifications;
+     }
 diff --git a/dist/cjs/parsers/w3x/w3d/file.d.ts b/dist/cjs/parsers/w3x/w3d/file.d.ts
 index c210e02c8002aed4e3ddc02e42ebe25f04d2a27e..af203a247a924c6a0a427b75735e919df367ffb9 100644
 --- a/dist/cjs/parsers/w3x/w3d/file.d.ts
@@ -1018,8 +1108,38 @@ index 0d26837b8214841c35ccc52702bb9593a1cc18fc..da36f77883806182bb3b4b37a0f89e3c
              gl.depthMask(false);
          }
          else {
+diff --git a/dist/cjs/viewer/handlers/mdx/model.js b/dist/cjs/viewer/handlers/mdx/model.js
+index 5f2c0c2ffbfae107c42070fe99e41669814924ef..3101fe8514c3933b217efeeaa2f1397b99c5d7ea 100644
+--- a/dist/cjs/viewer/handlers/mdx/model.js
++++ b/dist/cjs/viewer/handlers/mdx/model.js
+@@ -86,7 +86,11 @@ class MdxModel extends model_2.default {
+         const pathSolver = this.pathSolver;
+         const solverParams = this.solverParams;
+         const reforged = parser.version > 800;
+-        const texturesExt = reforged ? '.dds' : '.blp';
++        // OpenWar3: the VERSION is a file layout, not an asset flavour. We draw SD out of an SD
++        // install, which has no .dds at all, so a v1000/v1100 model imported into a custom map
++        // wants the same ReplaceableTextures\*.blp as any other (see solverParams below, and
++        // docs/map-compatibility.md on the map handler's twin of this).
++        const texturesExt = '.blp';
+         let hasTeamColors = false;
+         this.reforged = reforged;
+         this.name = parser.name;
+@@ -119,9 +123,9 @@ class MdxModel extends model_2.default {
+                 this.hd = true;
+             }
+         }
+-        if (reforged) {
+-            solverParams.reforged = true;
+-        }
++        // OpenWar3: never flag the SHARED params. For a unit the map places, `solverParams` is
++        // the map handler's own object, so one v1100 model (Test of Balance's pillar) switched
++        // every later texture swap on the map — every placed tree's canopy — to .dds.
+         if (this.hd) {
+             solverParams.hd = true;
+             // mdxHandler.loadEnv(viewer);
 diff --git a/dist/cjs/viewer/handlers/mdx/modelinstance.js b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-index 020a99b949ec1634579d439261027e00b6da23ac..a99d1abc0b3812f6eaadeaae05d57342f9da7ff6 100644
+index 020a99b949ec1634579d439261027e00b6da23ac..1d5d5653136cfdc12127afc1964eda234d5258b4 100644
 --- a/dist/cjs/viewer/handlers/mdx/modelinstance.js
 +++ b/dist/cjs/viewer/handlers/mdx/modelinstance.js
 @@ -21,6 +21,524 @@ const scaleHeap = gl_matrix_1.vec3.create();
@@ -2017,6 +2137,19 @@ index 34686902ea449513570fad17cecbb6938ad9547a..2d355bcd094726e48a364a491faa5fb6
              }
          }
      }
+diff --git a/dist/cjs/viewer/handlers/mdx/particleemitter2object.js b/dist/cjs/viewer/handlers/mdx/particleemitter2object.js
+index 86f9b942bde23d1f97252ef5b457b65aa6e1cbcf..41c7789da6b9e4fd661999ec627e9a7c964cc3c7 100644
+--- a/dist/cjs/viewer/handlers/mdx/particleemitter2object.js
++++ b/dist/cjs/viewer/handlers/mdx/particleemitter2object.js
+@@ -44,7 +44,7 @@ class ParticleEmitter2Object extends genericobject_1.default {
+             this.teamColored = 1;
+         }
+         else if (replaceableId > 2) {
+-            const texturesExt = model.reforged ? '.dds' : '.blp';
++            const texturesExt = '.blp'; // OpenWar3: an SD install has no .dds (see MdxModel.load)
+             this.internalTexture = new texture_1.default(replaceableId, 0 /* RepeatBoth */);
+             model.viewer.load(`ReplaceableTextures\\${replaceableids_1.default[replaceableId]}${texturesExt}`, model.pathSolver, model.solverParams)
+                 .then((texture) => {
 diff --git a/dist/cjs/viewer/handlers/mdx/shaders/hd.vert.js b/dist/cjs/viewer/handlers/mdx/shaders/hd.vert.js
 index 3e7460e457fec7d247ebcb2b8641ffb028f47736..6bca9cb85b2e627bb4b110d8f4cc065503f3561b 100644
 --- a/dist/cjs/viewer/handlers/mdx/shaders/hd.vert.js
@@ -2292,7 +2425,7 @@ index 49733805785c0ef269901d8928e47a953ada93a9..f15149f33f353822f4cb73eaf85eb727
    gl_Position = u_VP * vec4(position, 1.0);
  }
 diff --git a/dist/cjs/viewer/handlers/w3x/map.js b/dist/cjs/viewer/handlers/w3x/map.js
-index e4c8ea760e92653ef6423bd34f9111d0b062a901..a66add78794d91318a073834fa3d46198e822a29 100644
+index e4c8ea760e92653ef6423bd34f9111d0b062a901..205e1f1d8971735c75b168669d44cb634ebb64fe 100644
 --- a/dist/cjs/viewer/handlers/w3x/map.js
 +++ b/dist/cjs/viewer/handlers/w3x/map.js
 @@ -16,6 +16,41 @@ const file_3 = require("../../../parsers/w3x/doo/file");
@@ -2362,7 +2495,21 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a66add78794d91318a073834fa3d4619
          this.heightMap = null;
          this.waterHeightMap = null;
          this.cliffHeightMap = null;
-@@ -109,9 +155,15 @@ class War3MapViewerMap {
+@@ -85,6 +131,13 @@ class War3MapViewerMap {
+         this.applyModificationFile(viewer.doodadsData, viewer.destructableMetaData, modifications.w3b);
+         this.applyModificationFile(viewer.unitsData, viewer.unitMetaData, modifications.w3u);
+         this.applyModificationFile(viewer.unitsData, viewer.unitMetaData, modifications.w3t);
++        // OpenWar3: each file's SKIN twin, on the rows the main file just built (see
++        // War3Map.readModifications). Same writer: a skin row is the same object, so a custom
++        // id already has its row and only the art/word fields are overwritten.
++        this.applyModificationFile(viewer.doodadsData, viewer.doodadMetaData, modifications.w3dSkin);
++        this.applyModificationFile(viewer.doodadsData, viewer.destructableMetaData, modifications.w3bSkin);
++        this.applyModificationFile(viewer.unitsData, viewer.unitMetaData, modifications.w3uSkin);
++        this.applyModificationFile(viewer.unitsData, viewer.unitMetaData, modifications.w3tSkin);
+         this.loadDoodadsAndDestructibles();
+         this.loadUnitsAndItems();
+     }
+@@ -109,9 +162,15 @@ class War3MapViewerMap {
          }
          this.solverParams.tileset = parser.tileset.toLowerCase();
          this.buildVersion = parser.getBuildVersion();
@@ -2381,7 +2528,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a66add78794d91318a073834fa3d4619
      }
      async loadTerrainCliffsAndWater() {
          const mpqFile = this.map.get('war3map.w3e');
-@@ -136,12 +188,32 @@ class War3MapViewerMap {
+@@ -136,12 +195,32 @@ class War3MapViewerMap {
          // Override the grid based on the map.
          this.worldScene.grid = new grid_1.default(centerOffset[0], centerOffset[1], mapSize[0] * 128 - 128, mapSize[1] * 128 - 128, 16 * 128, 16 * 128);
          const texturesExt = this.solverParams.reforged ? '.dds' : '.blp';
@@ -2416,7 +2563,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a66add78794d91318a073834fa3d4619
              this.tilesets.push(row);
              tilesetTextures.push(this.load(`${row.string('dir')}\\${row.string('file')}${texturesExt}`));
          }
-@@ -165,10 +237,19 @@ class War3MapViewerMap {
+@@ -165,10 +244,19 @@ class War3MapViewerMap {
              Y: 'Village',
              Z: 'Ruins',
          };
@@ -2438,7 +2585,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a66add78794d91318a073834fa3d4619
              this.cliffTilesets.push(row);
              cliffTextures.push(this.load(`${row.string('texDir')}\\${row.string('texFile')}${texturesExt}`));
          }
-@@ -199,6 +280,99 @@ class War3MapViewerMap {
+@@ -199,6 +287,99 @@ class War3MapViewerMap {
          const cliffs = {};
          this.columns = columns - 1;
          this.rows = rows - 1;
@@ -2538,7 +2685,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a66add78794d91318a073834fa3d4619
          for (let y = 0; y < rows; y++) {
              for (let x = 0; x < columns; x++) {
                  const bottomLeft = corners[y][x];
-@@ -209,8 +383,12 @@ class War3MapViewerMap {
+@@ -209,8 +390,12 @@ class War3MapViewerMap {
                  if (y < rows - 1 && x < columns - 1) {
                      // Water can be used with cliffs and normal corners, so store water state regardless.
                      waterFlags[instance] = this.isWater(x, y);
@@ -2553,7 +2700,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a66add78794d91318a073834fa3d4619
                          const bottomLeftLayer = bottomLeft.layerHeight;
                          const bottomRightLayer = corners[y][x + 1].layerHeight;
                          const topLeftLayer = corners[y + 1][x].layerHeight;
-@@ -234,38 +412,30 @@ class War3MapViewerMap {
+@@ -234,38 +419,30 @@ class War3MapViewerMap {
                          }
                      }
                      else {
@@ -2611,7 +2758,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a66add78794d91318a073834fa3d4619
          const gl = this.viewer.gl;
          const webgl = this.viewer.webgl;
          this.vertexBuffer = gl.createBuffer();
-@@ -291,10 +461,17 @@ class War3MapViewerMap {
+@@ -291,10 +468,17 @@ class War3MapViewerMap {
          gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(instanceCount).map((currentValue, index) => index), gl.STATIC_DRAW);
          this.textureBuffer = gl.createBuffer();
          gl.bindBuffer(gl.ARRAY_BUFFER, this.textureBuffer);
@@ -2631,7 +2778,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a66add78794d91318a073834fa3d4619
          this.waterBuffer = gl.createBuffer();
          gl.bindBuffer(gl.ARRAY_BUFFER, this.waterBuffer);
          gl.bufferData(gl.ARRAY_BUFFER, waterFlags, gl.STATIC_DRAW);
-@@ -358,7 +535,25 @@ class War3MapViewerMap {
+@@ -358,7 +542,25 @@ class War3MapViewerMap {
                          }
                          promise.then((model) => {
                              if (model) {
@@ -2658,7 +2805,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a66add78794d91318a073834fa3d4619
                              }
                          });
                      }
-@@ -485,6 +680,31 @@ class War3MapViewerMap {
+@@ -485,6 +687,31 @@ class War3MapViewerMap {
              worldScene.renderTranslucent();
          }
      }
@@ -2690,7 +2837,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a66add78794d91318a073834fa3d4619
      renderGround() {
          if (this.terrainReady) {
              const gl = this.viewer.gl;
-@@ -503,6 +723,8 @@ class War3MapViewerMap {
+@@ -503,6 +730,8 @@ class War3MapViewerMap {
              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
              webgl.useShader(shader);
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -2699,7 +2846,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a66add78794d91318a073834fa3d4619
              gl.uniform2fv(uniforms['u_offset'], this.centerOffset);
              gl.uniform2f(uniforms['u_size'], this.columns, this.rows);
              gl.uniform1i(uniforms['u_heightMap'], 15);
-@@ -527,7 +749,19 @@ class War3MapViewerMap {
+@@ -527,7 +756,19 @@ class War3MapViewerMap {
                  gl.uniform1i(uniforms[`u_tilesets[${i}]`], i);
                  webgl.bindTexture(tilesetTextures[i], i);
              }
@@ -2720,7 +2867,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a66add78794d91318a073834fa3d4619
              if (tilesetCount > 15) {
                  gl.uniform1f(uniforms['u_baseTileset'], 15);
                  for (let i = 0, l = tilesetCount - 15; i < l; i++) {
-@@ -535,7 +769,7 @@ class War3MapViewerMap {
+@@ -535,7 +776,7 @@ class War3MapViewerMap {
                      gl.uniform1f(uniforms[`u_extended[${i}]`], isExtended);
                      webgl.bindTexture(tilesetTextures[i + 15], i);
                  }
@@ -2729,7 +2876,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a66add78794d91318a073834fa3d4619
              }
              instancedArrays.vertexAttribDivisorANGLE(texturesAttrib, 0);
              instancedArrays.vertexAttribDivisorANGLE(variationsAttrib, 0);
-@@ -558,11 +792,17 @@ class War3MapViewerMap {
+@@ -558,11 +799,17 @@ class War3MapViewerMap {
              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
              webgl.useShader(shader);
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -2747,7 +2894,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a66add78794d91318a073834fa3d4619
              gl.uniform1f(uniforms['u_offsetHeight'], this.waterHeightOffset);
              gl.uniform4fv(uniforms['u_maxDeepColor'], this.maxDeepColor);
              gl.uniform4fv(uniforms['u_minDeepColor'], this.minDeepColor);
-@@ -582,7 +822,14 @@ class War3MapViewerMap {
+@@ -582,7 +829,14 @@ class War3MapViewerMap {
              gl.vertexAttribPointer(isWaterAttrib, 1, gl.UNSIGNED_BYTE, false, 1, 0);
              instancedArrays.vertexAttribDivisorANGLE(isWaterAttrib, 1);
              gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.faceBuffer);
@@ -2763,7 +2910,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a66add78794d91318a073834fa3d4619
              instancedArrays.vertexAttribDivisorANGLE(isWaterAttrib, 0);
              instancedArrays.vertexAttribDivisorANGLE(instanceAttrib, 0);
          }
-@@ -599,6 +846,8 @@ class War3MapViewerMap {
+@@ -599,6 +853,8 @@ class War3MapViewerMap {
              gl.disable(gl.BLEND);
              shader.use();
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -2772,7 +2919,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a66add78794d91318a073834fa3d4619
              gl.uniform1i(uniforms['u_heightMap'], 0);
              gl.uniform2f(uniforms['u_pixel'], 1 / (this.columns + 1), 1 / (this.rows + 1));
              gl.uniform2fv(uniforms['u_centerOffset'], this.centerOffset);
-@@ -612,6 +861,9 @@ class War3MapViewerMap {
+@@ -612,6 +868,9 @@ class War3MapViewerMap {
                  gl.activeTexture(gl.TEXTURE2);
                  gl.bindTexture(gl.TEXTURE_2D, this.cliffTextures[1].webglResource);
              }
@@ -2782,7 +2929,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a66add78794d91318a073834fa3d4619
              // Set instanced attributes.
              if (!vertexArrayObject) {
                  instancedArrays.vertexAttribDivisorANGLE(attribs['a_instancePosition'], 1);
-@@ -671,6 +923,86 @@ class War3MapViewerMap {
+@@ -671,6 +930,86 @@ class War3MapViewerMap {
          const topRight = corners[row + 1][column + 1].layerHeight;
          return bottomLeft !== bottomRight || bottomLeft !== topLeft || bottomLeft !== topRight;
      }
@@ -2869,7 +3016,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a66add78794d91318a073834fa3d4619
      /**
       * Is the tile at the given column and row water?
       */
-@@ -692,6 +1024,108 @@ class War3MapViewerMap {
+@@ -692,6 +1031,108 @@ class War3MapViewerMap {
          }
          return 0;
      }
@@ -2978,7 +3125,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a66add78794d91318a073834fa3d4619
      /**
       * Get the ground texture of a corner, whether it's normal ground, a cliff, or a blighted corner.
       */
-@@ -730,17 +1164,37 @@ class War3MapViewerMap {
+@@ -730,17 +1171,37 @@ class War3MapViewerMap {
      applyModificationTable(dataMap, metadataMap, modificationTable) {
          for (const modificationObject of modificationTable.objects) {
              let row;

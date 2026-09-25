@@ -240,6 +240,25 @@ export function loadItemRegistry(vfs: DataSource): ItemRegistry {
   return new ItemRegistry(defs);
 }
 
+/**
+ * An item row this install does not HAVE — what a map's object data is laid over when it edits a
+ * stock item from a later patch (Test of Balance edits `sxpl`, which 1.32 added, in its ORIGINAL
+ * table). Every value is the loader's own reading of an empty row (the treasure-chest model,
+ * 75 hit points, no charges, no abilities, nothing sellable), with one exception: it is
+ * DROPPABLE, which every stock item but `soul` is and the one an empty column would get wrong.
+ * The art the map does not restate — the icon, above all — has no source anywhere and stays
+ * empty, so the button draws the placeholder.
+ */
+export function blankItemDef(id: string): ItemDef {
+  return {
+    id, name: id, description: "", summary: "", icon: "", tip: "", hotkey: "", buttonX: 0, buttonY: 0,
+    model: itemModel(""), scale: 1, gold: 0, lumber: 0, level: 0, classType: "Miscellaneous", abilities: [],
+    charges: 0, cooldownGroup: "", ignoreCooldown: false, usable: false, perishable: false, powerup: false,
+    droppable: true, sellable: false, pawnable: false, pickRandom: false, maxHp: 75, stockMax: 0,
+    stockRegen: 0, stockStart: 0,
+  };
+}
+
 // Ground-model paths in the data are ".mdl"; the MPQ ships compiled ".mdx".
 // Fall back to the generic treasure chest (what the SLK uses for most items).
 function itemModel(v: string): string {

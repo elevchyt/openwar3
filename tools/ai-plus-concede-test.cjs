@@ -24,7 +24,7 @@
 const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
-const { hopeless, despair, goneShare, teamLost, DESPAIR, CONCEDE_AT, WORKER_ECONOMY, ARMY_REMNANT, CONCEDE_NOT_BEFORE, LEAVE_AFTER } = require(join(REPO, ".sim-build", "src", "ai", "plus", "chatter.js"));
+const { hopeless, despair, goneShare, teamLost, DESPAIR, CONCEDE_AT, WORKER_ECONOMY, ARMY_REMNANT, CONCEDE_NOT_BEFORE, LEAVE_AFTER, HERO_DEATHS_BEHIND, FIRST_HERO_LEVELS_BEHIND } = require(join(REPO, ".sim-build", "src", "ai", "plus", "chatter.js"));
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 
 let failed = 0;
@@ -38,7 +38,7 @@ function check(what, got, want) {
 // The Great Hall's own price, which is what `mannersPass` reads off the registry for an orc.
 const HALL = 385;
 const at = (o) => ({ halls: 0, structures: 0, workers: 0, armyFood: 0, armyUnits: 0, gold: 0, invaders: 0,
-  invaderHeroes: 0, heroes: 0, heroesReviving: 0, heroesLost: 0, teamGone: 0, ...o });
+  invaderHeroes: 0, heroes: 0, heroesReviving: 0, heroesLost: 0, teamGone: 0, heroDeathLead: 0, firstHeroGap: 0, ...o });
 // A position with a base and an army standing — what clause 4's cases vary the HEROES of, so
 // that nothing in them can be passing for one of the first three clauses' reasons.
 const holding = (o) => at({ halls: 1, structures: 6, workers: 5, armyFood: 30, armyUnits: 10, gold: 500, ...o });
@@ -253,6 +253,28 @@ check("…and Insane the least", PLUS_NORMAL.concedeAfter > PLUS_INSANE.concedeA
 // un-latches the instant one recovers — so it is short. Half a minute of a decided game is half
 // a minute nobody wants to play.
 check("even the slowest of them accepts it inside half a minute", PLUS_EASY.concedeAfter <= 30, true);
+
+console.log("\n-- the 1v1 fight record ------------------------------------------------------");
+
+// Asked for in as many words: in a 1v1, two MORE hero deaths than the opponent, and the
+// opponent's first hero two levels above ours, each lean a quarter towards conceding.
+check("two more hero deaths than the opponent is a quarter",
+  despair(holding({ heroes: 1, workers: 12, heroDeathLead: HERO_DEATHS_BEHIND }), HALL), DESPAIR.heroDeathsBehind);
+check("…one more is nothing",
+  despair(holding({ heroes: 1, workers: 12, heroDeathLead: HERO_DEATHS_BEHIND - 1 }), HALL), 0);
+check("their first hero two levels up is a quarter",
+  despair(holding({ heroes: 1, workers: 12, firstHeroGap: FIRST_HERO_LEVELS_BEHIND }), HALL), DESPAIR.firstHeroBehind);
+check("…one level is nothing, and ours ahead is nothing",
+  despair(holding({ heroes: 1, workers: 12, firstHeroGap: 1 }), HALL) + despair(holding({ heroes: 1, workers: 12, firstHeroGap: -3 }), HALL), 0);
+check("both at once, behind a standing base and army, still plays on",
+  hopeless(holding({ heroes: 1, workers: 12, heroDeathLead: 3, firstHeroGap: 2 }), HALL), false);
+// Army gone (0.3) and a raid in the town (0.2) are 0.5 and nothing like a concession on their own —
+// with the fight record behind them they are a lost 1v1.
+const beaten = { halls: 1, structures: 6, workers: 12, gold: 500, heroes: 1, invaders: 6 };
+check("army gone and a raid in the town plays on",
+  hopeless(at(beaten), HALL), false);
+check("…and says gg two deaths and two levels behind",
+  hopeless(at({ ...beaten, heroDeathLead: 2, firstHeroGap: 2 }), HALL), true);
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");
 process.exit(failed ? 1 : 0);

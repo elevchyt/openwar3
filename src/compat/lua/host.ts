@@ -343,7 +343,7 @@ export function createLuaMapScript(interp: Interpreter, seed: number): LuaMapScr
       // install's blizzard.j never hold two copies of one variable. `__newindex` fires only
       // for a key absent from `_G`, and this branch never adds one — so every later write
       // comes back here too.
-      if (rt.globals.has(key)) { rt.globals.set(key, read(S, 3)); return 0; }
+      if (rt.globals.has(key)) { rt.assignGlobal(key, read(S, 3)); return 0; }
       lua.lua_pushvalue(S, 2);
       lua.lua_pushvalue(S, 3);
       lua.lua_rawset(S, 1);

@@ -96,6 +96,17 @@ export interface BoltRequest {
   delay: number;
   /** Owner key for a bolt that can be cut short (a Drain's tether). See `stop`. */
   tag?: string;
+  /** A SCRIPT's bolt (`AddLightning[Ex]`) — the engine id its `lightning` handle carries.
+   *  It lives until the script destroys it: no lifetime, no fade (see `addScript`). */
+  scriptId?: number;
+  /** `sz`/`tz` are ABSOLUTE world heights rather than heights above the ground —
+   *  `AddLightningEx`'s z, which a map builds by adding `GetLocationZ` itself. */
+  absZ?: boolean;
+  /** `checkVisibility`: "type true and the lightning will not appear through the fog, type
+   *  false and it will" (hiveworkshop 220370). Only a script bolt carries it. */
+  checkVis?: boolean;
+  /** `SetLightningColor`'s tint, 0..1 — replaces the row's R,G,B,A when set. */
+  color?: [number, number, number, number];
 }
 
 interface Bolt {
@@ -139,6 +150,9 @@ export class LightningOverlay {
   private textures = new Map<string, CachedTexture>();
   private clock = 0; // seconds since the overlay was created (scroll + noise phase)
   private nextSeed = 1;
+  /** The script's bolts, by the engine id their `lightning` handle carries. The same Bolt
+   *  objects sit in `bolts`; this is only the index MoveLightning and friends look them up by. */
+  private scriptBolts = new Map<number, Bolt>();
 
   constructor(gl: GL, loader: TextureLoader, defs: LightningRegistry) {
     this.gl = gl;
@@ -166,6 +180,53 @@ export class LightningOverlay {
     if (!this.textures.has(def.texture)) this.textures.set(def.texture, { canvas: this.loader(def.texture), tex: null });
   }
 
+  /** A SCRIPT's bolt — `AddLightning[Ex]`. Unlike a spell's, it has no lifetime and never
+   *  fades: it stands between its two points until `DestroyLightning` (every tutorial's recipe
+   *  is to store the handle and destroy it yourself — hiveworkshop 220370), and its ends are
+   *  POINTS the script moves, never units. False for a row id the table does not have. */
+  addScript(id: number, req: BoltRequest): boolean {
+    const def = this.defs.get(req.type);
+    if (!def) return false;
+    const b: Bolt = { def, req: { ...req, srcId: 0, dstId: 0, scriptId: id, life: 0, delay: 0 }, t: 0, life: Infinity, seed: this.nextSeed++ };
+    this.bolts.push(b);
+    this.scriptBolts.set(id, b);
+    if (!this.textures.has(def.texture)) this.textures.set(def.texture, { canvas: this.loader(def.texture), tex: null });
+    return true;
+  }
+
+  /** `MoveLightning[Ex]` — both ends to new points (and the visibility rule with them, since
+   *  the native takes it again). False for a bolt that is gone. */
+  moveScript(id: number, ends: Pick<BoltRequest, "sx" | "sy" | "sz" | "tx" | "ty" | "tz" | "absZ" | "checkVis">): boolean {
+    const b = this.scriptBolts.get(id);
+    if (!b) return false;
+    Object.assign(b.req, ends);
+    return true;
+  }
+
+  /** `DestroyLightning` — gone at once. A script bolt does not fade out: the fade is a SPELL
+   *  bolt's `Duration`, and nothing here is timed. */
+  removeScript(id: number): boolean {
+    const b = this.scriptBolts.get(id);
+    if (!b) return false;
+    this.scriptBolts.delete(id);
+    this.bolts = this.bolts.filter((x) => x !== b);
+    return true;
+  }
+
+  /** `SetLightningColor` / the `GetLightningColor*` readers. Until the script sets one, a
+   *  bolt's colour is its row's R,G,B,A. */
+  setScriptColor(id: number, rgba: [number, number, number, number]): boolean {
+    const b = this.scriptBolts.get(id);
+    if (!b) return false;
+    b.req.color = rgba;
+    return true;
+  }
+  scriptColor(id: number): [number, number, number, number] | null {
+    const b = this.scriptBolts.get(id);
+    if (!b) return null;
+    return b.req.color ?? [b.def.color[0], b.def.color[1], b.def.color[2], b.def.alpha];
+  }
+
   /** Advance every bolt's clock and retire the finished ones. Separate from render() so the
    *  bolts age on the sim's paused/unpaused clock rather than the frame's. */
   update(dt: number): void {
@@ -188,6 +249,7 @@ export class LightningOverlay {
   /** Drop every live bolt (map teardown, a fresh match). */
   clear(): void {
     this.bolts.length = 0;
+    this.scriptBolts.clear();
   }
 
   /** Draw. `resolve` supplies both ends of each bolt in world space this frame; `camPos`
@@ -294,7 +356,8 @@ export class LightningOverlay {
     // the tail of the bolt's life, not its length. A bolt shorter-lived than its own fade
     // (Finger of Death's 1s against AFOD's 2s) simply fades across all of it.
     const fade = Math.min(def.duration, b.life);
-    const alpha = def.alpha * (age > b.life - fade ? Math.max(0, (b.life - age) / fade) : 1);
+    const tint = b.req.color;
+    const alpha = (tint ? tint[3] : def.alpha) * (age > b.life - fade ? Math.max(0, (b.life - age) / fade) : 1);
     if (alpha <= 0) return;
 
     const segs = Math.max(1, Math.min(MAX_SEGMENTS, Math.round(len / Math.max(1, def.avgSegLen))));
@@ -354,7 +417,7 @@ export class LightningOverlay {
     const scroll = def.texCoordScale !== 0 ? (this.clock * SCROLL_SPANS_PER_SEC) / def.texCoordScale : 0;
     const half = def.width / 2;
     const batch = this.batchFor(def.texture, segs * 6);
-    const [cr, cg, cb] = def.color;
+    const [cr, cg, cb] = tint ?? def.color;
 
     for (let i = 0; i < segs; i++) {
       // Face the quad at the eye: its width axis is perpendicular to both the segment and

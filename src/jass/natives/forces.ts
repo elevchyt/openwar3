@@ -1,3 +1,4 @@
+import { widePlayerTable } from "../../data/enums";
 // Force (player-group) natives (Phase 7 — issue #33; see docs/triggers.md).
 //
 // A `force` is a set of players. It's the target of most "Text Message" trigger
@@ -33,7 +34,7 @@ const playerIndex = (c: NativeCtx, v: JassValue): number => c.rt.data<JassPlayer
  *  over-includes a slot in bj_FORCE_ALL_PLAYERS (harmless for text; noted). */
 function enumSlots(rt: Runtime): number[] {
   if (rt.setup.players.size) return [...rt.setup.players.keys()].sort((a, b) => a - b);
-  return Array.from({ length: 16 }, (_v, i) => i);
+  return Array.from({ length: widePlayerTable() ? 28 : 16 }, (_v, i) => i);
 }
 
 /** Run a boolexpr `filter` for player `idx`, exposing it as GetFilterPlayer.

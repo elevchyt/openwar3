@@ -190,8 +190,18 @@ export class MeleeAi {
     this.brains.length = 0;
   }
 
+  /** `PauseCompAI` — seats whose AI stands still (it decides nothing and issues nothing; what
+   *  it already ordered plays out). blizzard.j's PauseAllCompAI freezes every computer for a
+   *  cinematic and lets them go at its end. */
+  private readonly paused = new Set<number>();
+  setPaused(player: number, pause: boolean): void {
+    if (pause) this.paused.add(player);
+    else this.paused.delete(player);
+  }
+
   tick(dt: number): void {
     for (const b of this.brains) {
+      if (this.paused.has(b.ai.player)) continue;
       b.buildIn -= dt;
       if (b.buildIn <= 0) {
         b.buildIn = BUILD_PERIOD;

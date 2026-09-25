@@ -13,6 +13,9 @@ export interface TerrainCorner {
   waterHeight: number;
   layerHeight: number; // cliff layer 0..15
   groundTexture: number; // index into groundTilesets
+  /** Which cell of the tile's texture this corner draws — 0–15 the extra variations, 16/17 the
+   *  two originals (UI\WorldEditData.txt [TerrainCellRarity]). What GetTerrainVariance reads. */
+  groundVariation: number;
   cliffTexture: number; // index into cliffTilesets
   ramp: boolean;
   water: boolean;
@@ -186,6 +189,7 @@ export function parseW3E(bytes: Uint8Array): TerrainData {
         waterHeight: c.waterHeight,
         layerHeight: c.layerHeight,
         groundTexture: c.groundTexture,
+        groundVariation: c.groundVariation,
         cliffTexture: c.cliffTexture,
         ramp: !!c.ramp,
         water: !!c.water,

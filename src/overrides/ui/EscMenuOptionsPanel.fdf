@@ -121,6 +121,26 @@ Frame "TEXT" "ShowHotkeysLabel" INHERITS "EscMenuLabelTextTemplate" {
     Text "SHOW_HOTKEYS_ON_BUTTONS",
 }
 
+// "Detect Gamepad" / "Unpair Gamepad" (issue #162), under "Show hotkeys on command buttons" as on the glue panel —
+// see `OptionsMenu.fdf` for what it does. The panel's own button (`EscMenuButtonTemplate`, the
+// Gameplay/Video/Sound buttons' art), narrowed to the checkbox column's label width.
+//
+// CENTRED on the panel, directly over OK and Cancel. The file's OK/Cancel pair is what is centred
+// on it (0.028125 in from the left, 0.112 + 0.00625 + 0.112 wide), so the pair's middle — OK's
+// right edge plus half the 0.00625 between the two — is the panel's middle. Its BOTTOM hangs
+// there, in the band between the last row and the pair: measured at ~0.035 tall, so the button
+// is 0.026 rather than the template's 0.035 and stands 0.0045 clear of both edges.
+Frame "GLUETEXTBUTTON" "GamepadButton" INHERITS WITHCHILDREN "EscMenuButtonTemplate" {
+    Width 0.16,
+    Height 0.026,
+    SetPoint BOTTOM, "OptionsOKButton", TOPRIGHT, 0.003125, 0.0045,
+
+    ButtonText "GamepadButtonText",
+    Frame "TEXT" "GamepadButtonText" INHERITS "EscMenuButtonTextTemplate" {
+        Text "DETECT_GAMEPAD",
+    }
+}
+
 // --- Video panel -----------------------------------------------------------------------
 
 // "Low Performance Mode" (issue #161), the same row the glue panel grows under "Resolution:"

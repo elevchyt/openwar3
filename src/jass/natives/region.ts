@@ -129,5 +129,12 @@ export function registerRegionNatives(rt: Runtime): void {
 
   def(rt, "GetLocationX", (c, a) => jReal(loc(c, a[0])?.x ?? 0));
   def(rt, "GetLocationY", (c, a) => jReal(loc(c, a[0])?.y ?? 0));
-  def(rt, "GetLocationZ", () => jReal(0)); // terrain height — needs the sim; 0 for now
+  // The SURFACE under the point: terrain, the water on it and any walkable destructable's deck
+  // (jassbot, GetLocationZ). It used to answer 0 everywhere, which put every GUI-made lightning
+  // bolt underground on raised terrain — blizzard.j's AddLightningLoc passes this straight in
+  // as an ABSOLUTE height. "Returns 0 if whichLocation is null."
+  def(rt, "GetLocationZ", (c, a) => {
+    const l = loc(c, a[0]);
+    return jReal(l ? c.rt.hooks?.surfaceZ?.(l.x, l.y) ?? 0 : 0);
+  });
 }

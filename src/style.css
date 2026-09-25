@@ -1035,7 +1035,8 @@ body.hud-tooltip-skinned .hud-chatbar::after {
   background: transparent center / 100% 100% no-repeat;
   cursor: pointer;
 }
-.hud-iconbtn:hover { filter: brightness(1.12); }
+.hud-iconbtn:hover,
+.hud-iconbtn.pad-hover { filter: brightness(1.12); }
 .hud-iconbtn.pressed { transform: scale(0.98); }
 
 /* Ally Color Mode button — the third socket of the column the console art punches to the
@@ -1130,7 +1131,8 @@ body.hud-tooltip-skinned .hud-chatbar::after {
   cursor: pointer;
   pointer-events: auto;
 }
-.hud-hero-btn:hover { filter: brightness(1.12); }
+.hud-hero-btn:hover,
+.hud-hero-btn.pad-hover { filter: brightness(1.12); }
 /* Sink under the press, exactly as a command-card button does. */
 .hud-hero-btn.pressed { transform: scale(0.98); }
 /* Unspent skill points: `HeroLevel.mdx` around the portrait (`.hud-herolevel-fx`, below),
@@ -1430,6 +1432,20 @@ body.hud-tooltip-skinned .unit-crew-count::after {
   background-blend-mode: multiply;
 }
 .hud-cmd { position: relative; overflow: hidden; }
+/* The gamepad's command-card selector (issue #162): a gold frame on the slot the D-pad is on,
+   drawn INSIDE the slot because the slot clips its children. Brighter while the D-pad owns the
+   X button (`.pad-live`), dim while the left stick has it back. */
+.hud-cmd.pad-sel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 2px rgba(252, 211, 18, 0.6);
+}
+.hud-cmd.pad-sel.pad-live::after {
+  box-shadow: inset 0 0 0 3px #fcd312, inset 0 0 14px 4px rgba(252, 211, 18, 0.85);
+}
 .hud-cmd-label { pointer-events: none; }
 /* Radial cooldown sweep (clockwise dark wedge) + seconds count over an ability. */
 .hud-cmd-cd {
@@ -2298,8 +2314,18 @@ body.hud-widget-skinned .hud-queue-slot { color: transparent; }
    slot already goes through the same `onPress`, it just never had the rule. */
 .hud-inv-slot.pressed { transform: scale(0.98); }
 .hud-inv-slot:not(.empty):hover,
-body.carrying-item .hud-inv-slot:hover { border-color: var(--gold); }
+.hud-inv-slot:not(.empty).pad-hover,
+body.carrying-item .hud-inv-slot:hover,
+body.carrying-item .hud-inv-slot.pad-hover { border-color: var(--gold); }
 .hud-console.hud-console-skinned .hud-inventory .hud-inv-slot { background-color: transparent; }
+/* A pocket past the inventory's capacity (ConsoleInventoryNoCapacity in ui/hud.ts): inert,
+   and plugged with the race's slot filler once the install's art is in — with none to hand
+   it is simply not drawn. */
+.hud-inv-slot.no-capacity { pointer-events: none; visibility: hidden; }
+body.hud-widget-skinned .hud-console.hud-console-skinned .hud-inventory .hud-inv-slot.no-capacity {
+  visibility: visible;
+  background: var(--hud-inventory-nocap) center / 100% 100% no-repeat;
+}
 
 .hud-cmd {
   font: inherit;
@@ -2432,6 +2458,144 @@ body.carrying-item .hud-inv-slot:hover { border-color: var(--gold); }
   padding: 2px 5px;
 }
 .metrics-mute:hover { background: rgba(255, 255, 255, 0.18); }
+
+/* Gamepad (issue #162, ui/gamepad.ts). The notification stack stands directly above the fps
+   strip — the script lifts it by the strip's height while that is up — in the strip's own
+   dress, newest line at the bottom. */
+.gamepad-toasts {
+  position: fixed;
+  left: 10px;
+  bottom: 10px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  pointer-events: none;
+}
+.gamepad-toast {
+  padding: 3px 8px;
+  font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace;
+  color: #cfe8cf;
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 4px;
+  transition: opacity 0.4s;
+}
+/* The standing "press START to pair" line is the one asking for something, so it is gold. */
+.gamepad-toast.prompt { color: #fcd312; }
+.gamepad-toast.leaving { opacity: 0; }
+/* The virtual cursor: an image wearing whatever `cursor:` the element under it asks for, at
+   that cursor's own hotspot (the img is offset by it). Above everything, and never a target. */
+.gamepad-cursor {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 2147483647;
+  pointer-events: none;
+  will-change: transform;
+}
+.gamepad-cursor img { position: absolute; display: block; }
+/* The OS pointer's cover while the pad has the pointer (ui/gamepad.ts `veilEl`): transparent,
+   over the page and under the drawn cursor. An ID and !important, because every other cursor rule
+   is !important too (the race gauntlet on `body.in-game *`, the menu hand on
+   `body:not(.in-game) *`), and this one has to beat all of them. */
+#gamepad-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  background: transparent;
+  cursor: none !important;
+}
+#gamepad-veil[hidden] { display: none; }
+/* The D-pad's selection on a menu (ui/gamepad.ts `focusBox`): the command card's gold, drawn
+   AROUND the control rather than inside it, since a menu control does not clip like a card slot. */
+.gamepad-focus {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 2147483645;
+  pointer-events: none;
+  border-radius: 2px;
+  box-shadow: 0 0 0 2px #fcd312, 0 0 10px 3px rgba(252, 211, 18, 0.75), inset 0 0 8px 1px rgba(252, 211, 18, 0.45);
+}
+.gamepad-focus[hidden] { display: none; }
+/* The gamepad's on-screen keyboard (ui/padKeyboard.ts): small, beside the field it types into,
+   and dressed as the game's own tooltip slab — the slate fill in the gold nine-patch the hover
+   hints wear (placeholder slate until an install is mounted). Under the veil and the focus box,
+   so the OS pointer stays hidden over it and the field's gold frame draws on top. */
+.pad-keyboard {
+  --kb-key: clamp(22px, 3.1vh, 38px);
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 2147483644;
+  padding: calc(var(--kb-key) * 0.3);
+  font-family: var(--game-font);
+  color: #fff;
+  background: rgba(30, 40, 55, 0.9);
+  border: 1px solid rgba(126, 146, 176, 0.55);
+  border-radius: 2px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+  user-select: none;
+}
+.pad-keyboard[hidden] { display: none; }
+/* The slate is translucent — right for a hint over the world, and wrong under fifty keys over a
+   menu panel whose labels read through the gaps — so a dark layer goes under it. */
+body.hud-tooltip-skinned .pad-keyboard,
+.pad-keyboard.skinned {
+  background: linear-gradient(rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0.45)), var(--hud-tooltip-fill);
+  border: none;
+  border-radius: calc(var(--tt-band, 10px) * 0.4);
+}
+body.hud-tooltip-skinned .pad-keyboard::after,
+.pad-keyboard.skinned::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--tt-bg-inset, 3px) * -1);
+  border: var(--tt-band, 10px) solid transparent;
+  border-image: var(--hud-tooltip-border) 16 / var(--tt-band, 10px) round;
+  pointer-events: none;
+}
+.pad-kb-keys {
+  display: grid;
+  grid-template-columns: repeat(10, var(--kb-key));
+  grid-auto-rows: calc(var(--kb-key) * 0.86);
+  gap: calc(var(--kb-key) * 0.12);
+}
+.pad-kb-key {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(var(--kb-key) * 0.46);
+  line-height: 1;
+  color: #fff;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.9);
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(216, 180, 90, 0.28);
+  border-radius: 2px;
+}
+.pad-kb-key.pad-kb-wide { font-size: calc(var(--kb-key) * 0.36); color: #e8dcb8; }
+.pad-kb-key:hover,
+.pad-kb-key.pad-hover { border-color: rgba(252, 211, 18, 0.7); }
+/* Shift held: the game's warning gold, as a hotkey letter wears it. */
+.pad-kb-key.on { color: #ffcc00; border-color: rgba(252, 211, 18, 0.7); }
+/* The key X will type: the D-pad's own gold frame (.gamepad-focus), drawn inside the cell. */
+.pad-kb-key.sel {
+  color: #ffcc00;
+  border-color: #fcd312;
+  box-shadow: 0 0 6px 1px rgba(252, 211, 18, 0.7), inset 0 0 6px rgba(252, 211, 18, 0.35);
+}
+
+/* No image to wear (before an install has given the page its gauntlet): a plain arrow. */
+.gamepad-cursor.plain::before {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 20px;
+  background: #fff;
+  clip-path: polygon(0 0, 100% 72%, 55% 72%, 78% 100%, 62% 100%, 40% 76%, 0 100%);
+  filter: drop-shadow(0 0 1px #000);
+}
 
 #ui {
   position: fixed;
@@ -2658,11 +2822,21 @@ body.in-game .fdf-screen.fdf-ingame {
   box-shadow: none;
 }
 
+/* The resource bar's hover zones (ui/consoleUi.ts hoverZones): invisible, over each readout,
+   the one part of the SIMPLEFRAME bar that answers the mouse. */
+.console-resource-hover {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  pointer-events: auto;
+}
+
 .fdf-button {
   pointer-events: auto;
   /* No cursor override — the WC3 hand cursor (ui/cursor.ts) stays in every state. */
 }
-.fdf-button:hover .fdf-button-glow { opacity: 1; }
+.fdf-button:hover .fdf-button-glow,
+.fdf-button.pad-hover .fdf-button-glow { opacity: 1; }
 /* A campaign/chapter row's text is part of its button (ui/fdfCampaign.ts): it takes the click,
    and hovering anywhere on the row lights the arrow and whitens both lines. */
 .campaign-row-text { pointer-events: auto; }
@@ -2808,8 +2982,10 @@ body.in-game .fdf-screen.fdf-ingame {
 }
 .fdf-simple-text-high,
 .fdf-simple-text-dis { opacity: 0; }
-.fdf-button:hover > .fdf-simple-text-normal { opacity: 0; }
-.fdf-button:hover > .fdf-simple-text-high { opacity: 1; }
+.fdf-button:hover > .fdf-simple-text-normal,
+.fdf-button.pad-hover > .fdf-simple-text-normal { opacity: 0; }
+.fdf-button:hover > .fdf-simple-text-high,
+.fdf-button.pad-hover > .fdf-simple-text-high { opacity: 1; }
 .fdf-button:active > .fdf-simple-text { transform: translate(var(--push-x, 0), var(--push-y, 0)); }
 /* Disabled wins over hover: a dead button neither lights up nor answers. */
 .fdf-button.fdf-disabled > .fdf-simple-text-normal,
@@ -2987,10 +3163,19 @@ body.in-game .fdf-screen.fdf-ingame {
   white-space: nowrap;
   text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.9);
 }
+/* The gamepad's frame on an open dropdown's option (issue #162, ui/gamepad.ts): the command
+   card's gold selector, drawn as an OUTLINE so it paints over a colour menu's swatch chip too. */
+.fdf-popup-item.pad-sel {
+  outline: 2px solid #fcd312;
+  outline-offset: -2px;
+  box-shadow: inset 0 0 8px 2px rgba(252, 211, 18, 0.7);
+  color: var(--fdf-menu-highlight, #fcd312);
+}
 /* MenuTextHighlightColor 0.99 0.827 0.0705 — the FDF's own hover colour, and the only thing
    that changes under the mouse: the game tints the row's TEXT, it does not light its
    background. */
 .fdf-popup-item:hover,
+.fdf-popup-item.pad-hover,
 .fdf-popup-item.selected { color: var(--fdf-menu-highlight, #fcd312); }
 /* The colour menu's rows: one chip each, a bar stretched across the column the button
    dropped, inset a little from its border (ui/fdf/widgets.ts — the game's TeamColorMenu
@@ -3034,7 +3219,8 @@ body.in-game .fdf-screen.fdf-ingame {
 /* The selected row: the game's own bar — a flat, saturated blue (sampled off the reference
    at rgb(7,7,162)) with the row's text turned gold, exactly as an open menu highlights. */
 .fdf-list-row.selected { background: #0707a2; color: var(--fdf-menu-highlight, #fcd312); }
-.fdf-list-row:not(.selected):not(.disabled):hover { background: rgba(60, 80, 140, 0.35); }
+.fdf-list-row:not(.selected):not(.disabled):hover,
+.fdf-list-row:not(.selected):not(.disabled).pad-hover { background: rgba(60, 80, 140, 0.35); }
 /* A map the engine cannot open is SHOWN and not pickable (ui/mapBrowser.ts, src/compat/):
    greyed the way a dead console button is, its icon drained, hovering its own reason. The
    2003 UI has no such row — it leaves the file out entirely, which is why a download that

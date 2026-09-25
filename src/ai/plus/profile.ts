@@ -280,8 +280,13 @@ export const PLUS_EASY: PlusProfile = {
   // It does not counter at all: an easy computer builds what it opened with, whatever walks
   // into its base. This is the single biggest thing the top two difficulties do that it doesn't.
   counterWeight: 0, counterSample: Infinity, counterShare: 1, counterMemory: 0,
-  armyFood: 12, towers: 0, heroes: 1, techTier: 1, upgradeRank: 1,
-  firstAttack: 420, waveGap: 150, attackFood: 10, retreatHp: 0,
+  // Eight food of soldiers, and a wave of six. It was twelve and ten, and reported as "builds
+  // kinda big armies for beginner players" — the ceiling is spent PER ROW of the mix, so the
+  // opening Footmen a rifle build falls back on stay standing when the Riflemen come online
+  // beside them, and twelve food of each was a two-dozen-food army facing somebody's first
+  // game. Eight is four Footmen or two Riflemen, and still clears the Blacksmith's `after` (6).
+  armyFood: 8, towers: 0, heroes: 1, techTier: 1, upgradeRank: 1,
+  firstAttack: 420, waveGap: 150, attackFood: 6, retreatHp: 0,
   // It never creeps and never shops, so neither clock nor purse below ever matters — the two
   // booleans are the switch. They are still stated rather than left to a default, because a
   // profile that only half-describes a difficulty is how one of them ends up playing another's

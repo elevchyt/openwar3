@@ -401,7 +401,10 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
     w.u16(w.intern(a.id));
     w.u16(w.intern(a.code));
     w.u8(a.level);
-    w.u8(a.autocastOn ? 1 : 0);
+    // Bit 0 is autocast; bits 1 and 2 are a script's per-unit disable/hide (SimAbility.
+    // disableCount/hideCount), so a remote client greys or drops the same button. Only the
+    // STATE crosses — the counter is the authority's.
+    w.u8((a.autocastOn ? 1 : 0) | ((a.disableCount ?? 0) > 0 ? 2 : 0) | ((a.hideCount ?? 0) > 0 ? 4 : 0));
     w.f32(a.cooldownLeft);
   }
 
@@ -531,6 +534,7 @@ function readUnit(r: Reader): UnitSnapshot {
     summonLeft: 0,
     summonMax: 0,
     raisedBy: "",
+    timedLifeBuff: "", // never sent — see RenderUnit.timedLifeBuff
     isIllusion: (flags & F_IS_ILLUSION) !== 0,
     illusionOf: 0,
     guardX: 0,
@@ -618,7 +622,10 @@ function readUnit(r: Reader): UnitSnapshot {
   const nAbilities = r.u8();
   for (let i = 0; i < nAbilities; i++) {
     const a: SimAbility = { id: r.str(), code: r.str(), level: r.u8(), cooldownLeft: 0, autocastOn: false };
-    a.autocastOn = r.u8() !== 0;
+    const flags = r.u8();
+    a.autocastOn = (flags & 1) !== 0;
+    if (flags & 2) a.disableCount = 1;
+    if (flags & 4) a.hideCount = 1;
     a.cooldownLeft = r.f32();
     s.abilities.push(a);
   }

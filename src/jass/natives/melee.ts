@@ -111,6 +111,15 @@ export function registerMeleeNatives(rt: Runtime): void {
     c.rt.hooks?.setPlayerTechMaxAllowed?.(player, tech, max);
     return JNULL;
   });
+  // SetPlayerAbilityAvailable(p, abil, avail) — the ABILITY twin of the cap above, and the
+  // most-called native a downloaded map used that we had no answer for after the predicates:
+  // 420 calls in DotA alone. It takes the button off the card and the ability out of the
+  // player's hands without taking it off any unit (TechState.abilityAvailable says what
+  // survives, and why).
+  def(rt, "SetPlayerAbilityAvailable", (c, a) => {
+    c.rt.hooks?.setPlayerAbilityAvailable?.(playerIndex(c, a[0]), intToRawcode(asInt(a[1])), truthy(a[2]));
+    return JNULL;
+  });
   def(rt, "GetPlayerTechMaxAllowed", (c, a) => jInt(c.rt.techMaxAllowed.get(`${playerIndex(c, a[0])}:${asInt(a[1])}`) ?? -1));
   // For an upgrade the count is its researched LEVEL; for a unit type it's how many the
   // player owns. One native, both meanings — that's WC3's own overload.
@@ -225,12 +234,20 @@ export function registerMeleeNatives(rt: Runtime): void {
   // StartCampaignAI stays a no-op: a chapter's computers are the mission's, and what this
   // would load is a per-campaign .ai file we do not run.
   for (const name of [
-    "StartCampaignAI", "CommandAI", "SetPlayerHandicap", "SetPlayerHandicapXP",
+    "StartCampaignAI", "CommandAI", "SetPlayerHandicap",
     "RecycleGuardPosition", "RemoveGuardPosition", "SetUnitCreepGuard", "Preloader", "Preload",
     "PreloadStart", "PreloadEnd", "PreloadEndEx", "PreloadRefresh", "PreloadGenClear", "PreloadGenStart",
   ]) {
     def(rt, name, () => JNULL);
   }
+  // The experience rate, 1 = 100 % (SimWorld.xpHandicap). Test of Balance halves it for the
+  // player who takes its bonus-levelling reward — GetPlayerHandicapXPBJ / 2 — so the getter
+  // has to answer what the setter wrote, and the default is the engine's full rate.
+  def(rt, "SetPlayerHandicapXP", (c, a) => (c.rt.hooks?.setXpHandicap?.(playerIndex(c, a[0]), asNum(a[1])), JNULL));
+  def(rt, "GetPlayerHandicapXP", (c, a) => jReal(c.rt.hooks?.xpHandicap?.(playerIndex(c, a[0])) ?? 1));
+  // PauseCompAI — a computer player's AI stops deciding (blizzard.j's PauseAllCompAI, which a
+  // cinematic calls to freeze every computer while it plays).
+  def(rt, "PauseCompAI", (c, a) => (c.rt.hooks?.pauseCompAi?.(playerIndex(c, a[0]), truthy(a[1])), JNULL));
   // PickMeleeAI compares against AI_DIFFICULTY_NEWBIE = ConvertAIDifficulty(0), so hand
   // back a real handle rather than a null one.
   def(rt, "GetAIDifficulty", (c) => c.rt.enumHandle("AIDifficulty", 0));

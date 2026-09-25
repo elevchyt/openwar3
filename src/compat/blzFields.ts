@@ -14,11 +14,10 @@
 // **What a field READS is the unit's TYPE row**, out of the same registry the rest of the engine
 // reads (`UnitDef`). That is what the getter half of the family means, and it is right for every
 // field a map asks about here: a Blademaster's `UNIT_RF_STRENGTH_PER_LEVEL` is a property of
-// Blademasters. The SETTER half is not implemented and says so: `BlzSetUnitRealField` changes
-// ONE unit, while our routing writes the TYPE (`UNIT_SETTERS` in data/objectData.ts), and
-// bridging that means a per-unit override table in the sim — which is exactly the intrusion the
-// compatibility layer must not make (src/compat/README.md). A setter therefore logs once and
-// answers false, which is what a 2003 map gets from any native we have not written.
+// Blademasters — unless THIS unit has a value of its own, which the per-unit field layer answers
+// first (SimWorld.unitField). The SETTER half writes that layer (SimWorld.setUnitField): each
+// write lands where the engine already reads that value per unit, so nothing here is a second
+// copy of the unit.
 //
 // A row with a null `reads` is DECLARED and not answered: the map compiles and runs, the read
 // logs once and returns the typed default. That is deliberate — a constant a map mentions is
@@ -39,7 +38,10 @@ export type UnitFieldKey =
   | "attackRange" | "attackCooldown" | "attackDamageBase" | "attackDice" | "attackSides"
   | "collisionSize" | "speed" | "sightRadiusDay" | "sightRadiusNight"
   | "hitPointsMaximum" | "manaMaximum" | "manaInitial" | "manaRegeneration"
-  | "hitPointsRegeneration" | "defense" | "isBuilding" | "canSleep" | "isHero";
+  | "hitPointsRegeneration" | "defense" | "isBuilding" | "canSleep" | "isHero"
+  | "raisable" | "decayable" | "minimumAttackRange"
+  // The WEAPON fields, read and written per weapon SLOT (the native translates the map's index).
+  | "weaponAttackRange" | "weaponAttacksEnabled" | "weaponAttackType";
 
 export interface BlzFieldDef {
   /** The constant a map writes. */
@@ -123,7 +125,7 @@ export const UNIT_REAL_FIELDS: ReadonlyArray<BlzFieldDef> = [
   { name: "UNIT_RF_HIT_POINTS_REGENERATION_RATE", reads: "hitPointsRegeneration" },
   { name: "UNIT_RF_MANA_REGENERATION", reads: "manaRegeneration" },
   { name: "UNIT_RF_BUILD_TIME", reads: "buildTime" },
-  { name: "UNIT_RF_MINIMUM_ATTACK_RANGE", reads: null },
+  { name: "UNIT_RF_MINIMUM_ATTACK_RANGE", reads: "minimumAttackRange" },
   { name: "UNIT_RF_OCCLUSION_HEIGHT", reads: null },
   { name: "UNIT_RF_FLY_HEIGHT", reads: null },
   { name: "UNIT_RF_ELEVATION_SAMPLE_RADIUS", reads: null },
@@ -141,8 +143,8 @@ export const UNIT_BOOLEAN_FIELDS: ReadonlyArray<BlzFieldDef> = [
   { name: "UNIT_BF_IS_A_BUILDING", reads: "isBuilding" },
   { name: "UNIT_BF_SLEEPS", reads: "canSleep" },
   { name: "UNIT_BF_IS_A_HERO_UNIT", reads: "isHero" },
-  { name: "UNIT_BF_RAISABLE", reads: null },
-  { name: "UNIT_BF_DECAYABLE", reads: null },
+  { name: "UNIT_BF_RAISABLE", reads: "raisable" },
+  { name: "UNIT_BF_DECAYABLE", reads: "decayable" },
   { name: "UNIT_BF_CAN_BE_BUILT_ON", reads: null },
   { name: "UNIT_BF_CAN_BUILD_ON", reads: null },
   { name: "UNIT_BF_CAN_FLEE", reads: null },
@@ -163,13 +165,85 @@ export const UNIT_STRING_FIELDS: ReadonlyArray<BlzFieldDef> = [
   { name: "UNIT_SF_SHADOW_IMAGE_UNIT", reads: null },
 ];
 
+/** The WEAPON fields (`BlzGetUnitWeapon…Field(u, field, index)`) — only what a map in the corpus
+ *  names: the range the rebalance maps double, the "Attacks Enabled" switch and the attack type. */
+export const UNIT_WEAPON_REAL_FIELDS: ReadonlyArray<BlzFieldDef> = [{ name: "UNIT_WEAPON_RF_ATTACK_RANGE", reads: "weaponAttackRange" }];
+export const UNIT_WEAPON_INTEGER_FIELDS: ReadonlyArray<BlzFieldDef> = [{ name: "UNIT_WEAPON_IF_ATTACK_ATTACK_TYPE", reads: "weaponAttackType" }];
+export const UNIT_WEAPON_BOOLEAN_FIELDS: ReadonlyArray<BlzFieldDef> = [{ name: "UNIT_WEAPON_BF_ATTACKS_ENABLED", reads: "weaponAttacksEnabled" }];
+
 /** Every family, in the order their `Convert*` natives are declared. */
 export const UNIT_FIELD_FAMILIES = [
   { convert: "ConvertUnitIntegerField", type: "unitintegerfield", fields: UNIT_INTEGER_FIELDS },
   { convert: "ConvertUnitRealField", type: "unitrealfield", fields: UNIT_REAL_FIELDS },
   { convert: "ConvertUnitBooleanField", type: "unitbooleanfield", fields: UNIT_BOOLEAN_FIELDS },
   { convert: "ConvertUnitStringField", type: "unitstringfield", fields: UNIT_STRING_FIELDS },
+  { convert: "ConvertUnitWeaponRealField", type: "unitweaponrealfield", fields: UNIT_WEAPON_REAL_FIELDS },
+  { convert: "ConvertUnitWeaponIntegerField", type: "unitweaponintegerfield", fields: UNIT_WEAPON_INTEGER_FIELDS },
+  { convert: "ConvertUnitWeaponBooleanField", type: "unitweaponbooleanfield", fields: UNIT_WEAPON_BOOLEAN_FIELDS },
 ] as const;
+
+/**
+ * The ABILITY fields (`abilityintegerlevelfield` and its seven siblings — the 1.31 ability-field
+ * API, which reads and rewrites ONE unit's or ONE item's ability; natives/abilityFields.ts).
+ *
+ * Unlike the unit fields these carry no index of ours: each one's value is its column's own id
+ * in `Units\AbilityMetaData.slk` as a rawcode, because that id is how the engine already routes a
+ * field — the World Editor writes it into a map's w3a for the same column, and
+ * data/objectData.ts writeAbilityField takes it straight through applyAbilityMods. The name's
+ * suffix IS that id where the name has one (`_REJ1` → `Rej1`); where it has none the id is the
+ * meta row whose column and `useSpecific` abilities match what the maps apply it to (a Claws of
+ * Attack's `Iatt`, a Sobi Mask's `Imrp`, `acdn` for the "Cool" column).
+ *
+ * Only what a map in the corpus names is declared — a name we cannot check against anything is
+ * better left undeclared than declared wrongly (`tools/jass-ability-fields-test.cjs` asserts every
+ * id is a real meta row).
+ */
+export interface AbilityFieldDef {
+  name: string;
+  /** Which of the eight families — the JASS type and its `Convert…` native. */
+  family: "boolean" | "string" | "integerlevel" | "reallevel" | "stringlevel";
+  /** The `AbilityMetaData.slk` id. */
+  id: string;
+}
+
+export const ABILITY_FAMILIES = {
+  boolean: { type: "abilitybooleanfield", convert: "ConvertAbilityBooleanField" },
+  string: { type: "abilitystringfield", convert: "ConvertAbilityStringField" },
+  integerlevel: { type: "abilityintegerlevelfield", convert: "ConvertAbilityIntegerLevelField" },
+  reallevel: { type: "abilityreallevelfield", convert: "ConvertAbilityRealLevelField" },
+  stringlevel: { type: "abilitystringlevelfield", convert: "ConvertAbilityStringLevelField" },
+} as const;
+
+export const ABILITY_FIELDS: ReadonlyArray<AbilityFieldDef> = [
+  // "Stats - Item Ability" / "Stats - Hero Ability" — AbilityMetaData `aite` / `aher`.
+  { name: "ABILITY_BF_ITEM_ABILITY", family: "boolean", id: "aite" },
+  // The item stat columns (Test of Balance's stacking items rewrite these per charge).
+  { name: "ABILITY_ILF_ATTACK_BONUS", family: "integerlevel", id: "Iatt" },
+  { name: "ABILITY_ILF_AGILITY_BONUS", family: "integerlevel", id: "Iagi" },
+  { name: "ABILITY_ILF_INTELLIGENCE_BONUS", family: "integerlevel", id: "Iint" },
+  { name: "ABILITY_ILF_STRENGTH_BONUS_ISTR", family: "integerlevel", id: "Istr" },
+  { name: "ABILITY_ILF_DEFENSE_BONUS_IDEF", family: "integerlevel", id: "Idef" },
+  { name: "ABILITY_ILF_HIT_POINTS_GAINED_IHPG", family: "integerlevel", id: "Ihpg" },
+  { name: "ABILITY_ILF_MANA_POINTS_GAINED_IMPG", family: "integerlevel", id: "Impg" },
+  { name: "ABILITY_RLF_ATTACK_SPEED_INCREASE_ISX1", family: "reallevel", id: "Isx1" },
+  { name: "ABILITY_RLF_MANA_REGENERATION_BONUS_AS_FRACTION_OF_NORMAL", family: "reallevel", id: "Imrp" },
+  { name: "ABILITY_RLF_ATTACK_DAMAGE_INCREASE_CAC1", family: "reallevel", id: "Cac1" },
+  // Chain Lightning's two (an item's `AIcl` is `code = AOcl`, whose rows these are).
+  { name: "ABILITY_RLF_DAMAGE_PER_TARGET_OCL1", family: "reallevel", id: "Ocl1" },
+  { name: "ABILITY_ILF_NUMBER_OF_TARGETS_HIT", family: "integerlevel", id: "Ocl2" },
+  // Rejuvenation's heal (Test of Balance's pillar grows it each wave).
+  { name: "ABILITY_RLF_HIT_POINTS_GAINED_REJ1", family: "reallevel", id: "Rej1" },
+  // The generic per-level columns.
+  { name: "ABILITY_RLF_COOLDOWN", family: "reallevel", id: "acdn" },
+  { name: "ABILITY_SLF_TOOLTIP_NORMAL_EXTENDED", family: "stringlevel", id: "aub1" },
+];
+
+/** A metadata id as the rawcode integer a `Convert…Field(n)` carries (and back, in the native). */
+function rawcode(id: string): number {
+  let v = 0;
+  for (let i = 0; i < 4; i++) v = (v * 256 + id.charCodeAt(i)) | 0;
+  return v;
+}
 
 /** The JASS `globals` block that declares every constant above — generated, so the prelude and
  *  the native can never disagree about an index. */
@@ -179,6 +253,10 @@ export function fieldConstantsJass(): string {
     for (const [i, f] of family.fields.entries()) {
       lines.push(`    constant ${family.type} ${f.name} = ${family.convert}(${i})`);
     }
+  }
+  for (const f of ABILITY_FIELDS) {
+    const fam = ABILITY_FAMILIES[f.family];
+    lines.push(`    constant ${fam.type} ${f.name} = ${fam.convert}(${rawcode(f.id)}) // '${f.id}'`);
   }
   lines.push("endglobals");
   return lines.join("\n");

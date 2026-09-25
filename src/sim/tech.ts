@@ -31,6 +31,10 @@ export class TechState {
   private dirty = true;
   /** player → unit id → max allowed (JASS SetPlayerTechMaxAllowed / Blizzard.j). */
   private maxAllowedOverride = new Map<number, Map<string, number>>();
+  /** `SetPlayerAbilityAvailable(p, abil, false)` — the abilities a player's units may not USE.
+   *  Per player and never per unit: "the action covers all the units of a given player and
+   *  there is no variant for a specific unit" (hiveworkshop 225879). See `abilityAvailable`. */
+  private abilityOff = new Map<number, Set<string>>();
   /** The `rtma` ("Tech Max Allowed") effects, indexed by the unit they name. This is how WC3
    *  SWAPS a unit for its upgraded form. Barrage (`Rhrt`) carries two of them at once:
    *
@@ -192,12 +196,39 @@ export class TechState {
     return this.maxAllowed(player, unitId) !== 0 && this.meets(player, unitId, owned);
   }
 
+  /**
+   * `SetPlayerAbilityAvailable` — take an ability away from a player's hands without taking it
+   * off a single unit (docs/map-compatibility.md pass 8).
+   *
+   * What "unavailable" means is not in any data file, so it is read off two Hive tutorials that
+   * agree (225879 "Disable an ability for a specific hero/unit", 120518): the button leaves the
+   * command card and the ability cannot be used, but — "in contrast to `UnitRemoveAbility`" —
+   * the unit still HAS it: "the cooldown of the ability keeps running in the background and any
+   * momentary casts of this ability do not get interrupted", and a passive keeps working. So
+   * this is asked only where an ability is USED (`castUseError`, `issueCast`) and where its
+   * button is DRAWN, and never by anything that models the ability itself.
+   */
+  setAbilityAvailable(player: number, abilityId: string, available: boolean): void {
+    let off = this.abilityOff.get(player);
+    if (available) {
+      off?.delete(abilityId);
+      return;
+    }
+    if (!off) this.abilityOff.set(player, (off = new Set()));
+    off.add(abilityId);
+  }
+
+  abilityAvailable(player: number, abilityId: string): boolean {
+    return !this.abilityOff.get(player)?.has(abilityId);
+  }
+
   /** Drop every player's state (new match). */
   reset(): void {
     this.research.clear();
     this.researchVersion++;
     this.counts.clear();
     this.maxAllowedOverride.clear();
+    this.abilityOff.clear();
     this.dirty = true;
   }
 }

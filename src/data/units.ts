@@ -1,5 +1,6 @@
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { layCustomKeys } from "./customKeys";
+import { versionIndex } from "./edition";
 import type { DataSource } from "../vfs/types";
 import {
   ArmorType,
@@ -31,6 +32,10 @@ import {
  *  buildings. Modelling one weapon per unit made a Footman able to swing at a Gryphon and
  *  a Siege Engine able to mow down Footmen — neither of which WC3 permits. */
 export interface WeaponSlotDef {
+  /** Which of the row's two weapon slots this is, 0-based (slot 1 = 0). Carried because the
+   *  list SKIPS undeclared slots, so a unit with only a slot-2 attack has it at index 0 — and
+   *  `BlzSetUnitBaseDamage(u, d, <weapon 2>)` has to find slot 2, not the first entry. */
+  slot: number;
   /** This slot's bit in `weapsOn` ("Attacks Enabled"). The Flying Machine ships weapsOn=1
    *  (air only) and the Chimaera weapsOn=2 (ground only — its acid breath is slot 1, OFF).
    *  The `renw` upgrade effect REPLACES the whole mask: Flying Machine Bombs (`Rhgb`) and
@@ -127,6 +132,10 @@ export interface UnitDef {
   tilesets: string[];
   model: string; // MDX path, backslashes, with extension
   modelScale: number;
+  /** Art - Occlusion Height (unitUI `occH`). What `BlzGetUnitZ` adds on top of the surface
+   *  under a unit — "plus the unit's occluder height" (jassbot, BlzGetUnitZ) — and NOT its fly
+   *  height. 0 for nearly every ground unit. */
+  occlusionHeight: number;
   selScale: number; // Art - Selection Scale (unitUI "scale"); ring size basis
   /** Art - Animation - Walk Speed / Run Speed (unitUI "walk"/"run"). NOT how fast the unit
    *  moves — the movement speed at which the model's "Walk" / "Walk Fast" clips were AUTHORED
@@ -198,6 +207,10 @@ export interface UnitDef {
   lumberSound: string;
   armorSound: string; // unitUI "armor" material struck ("Metal"/"Flesh"/…) → combat-sound suffix
   icon: string; // command-card BTN icon path (from UnitFunc "art")
+  /** "Art - Special" (UnitFunc `Specialart`) — what an EXPLODING death leaves instead of a body:
+   *  `[hfoo] Specialart=…\HumanLargeDeathExplode.mdl`. Played by SimWorld.kill for a unit a script
+   *  marked with `SetUnitExploded`. "" for a row that names none (optional, as on a stub row). */
+  specialArt?: string;
   description: string; // command-card tooltip body (UnitStrings "Ubertip"), WC3 markup intact
   // The command-card tooltip TITLE, exactly as the game writes it (UnitStrings
   // "Tip"): "Train |cffffcc00P|reasant" / "Build |cffffcc00F|rarm". It already
@@ -333,6 +346,10 @@ export interface UnitDef {
    * (see `heroBodyTime`), which is what the altar's revive button waits on.
    */
   deathTime: number;
+  /** UnitData `deathType` — 0 none, 1 raise, 2 decay, 3 both (UI\\UnitEditorData.txt
+   *  [deathType]). Read for UNIT_BF_RAISABLE / _DECAYABLE; the corpse rules themselves still come
+   *  from classification (SimWorld.spawnCorpse). */
+  deathType?: number;
   hitPoints: number;
   /** UnitBalance.slk `regenHP` — the unit type's own hit-point regeneration (hp/sec). The sim
    *  adds the attribute/buff/item regen on top of this (world.ts recomputeStats), so this is
@@ -437,11 +454,20 @@ export interface UnitDef {
   // Cast backswing = the recovery animation AFTER the effect — pure follow-through
   // that a new order cancels for free (the "animation canceling" micro). Verified
   // against the real game data (Archmage 0.3/2.4, Paladin 0.5/1.67, MK 0.4/0.5).
+  /** UnitWeapons `minRange` — how close is too close to fire (the siege roster's dead zone);
+   *  read by UNIT_RF_MINIMUM_ATTACK_RANGE. */
+  minRange?: number;
   castPoint: number;
   castBackswing: number;
   attackRange: number;
   acquireRange: number; // auto-acquisition range (0 = never auto-attacks)
   canSleep: boolean; // UnitData `cansleep`: Neutral Hostile creeps of this type sleep at night
+  /** unitUI `hostilePal` / `special` / `campaign` — the World Editor's palette flags ("offered
+   *  under Neutral Hostile", "hidden special unit", "campaign-only"). No match reads them except
+   *  through `ChooseRandomCreep`, whose pool they are (UnitRegistry.chooseRandomCreep). */
+  hostilePal?: boolean;
+  special?: boolean;
+  campaign?: boolean;
   weaponType: WeaponType; // weapTp1: normal = melee, instant = hitscan, the rest fly
   attackType: AttackType; // atkType1 → the damage table's row
   armorType: ArmorType; // defType → the damage table's column
@@ -523,6 +549,19 @@ export class UnitRegistry {
    *  custom unit clones from. */
   base(id: string): UnitDef | undefined {
     return this.defs.get(id);
+  }
+  /** ChooseRandomCreep(level) (common.j) — a random creep TYPE of that level, or undefined.
+   *  Nothing in the install states the pool, so it is the one the World Editor's own
+   *  random-creep placement offers: the Neutral Hostile palette (`hostilePal`) less the hidden
+   *  `special` rows, the campaign-only ones, buildings and heroes — 272 stock rows, every
+   *  level 1..10 represented. A map's custom creep joins it by keeping its base's flags, as a
+   *  w3u copy does. `level` < 0 is any level (the rule common.j states for its item twin).
+   *  The order is the registry's own (base rows, then the map's), so a seeded RNG draws the
+   *  same type on every client. */
+  chooseRandomCreep(level: number, rng: () => number): UnitDef | undefined {
+    const pool = this.all().filter((d) => d.hostilePal && !d.special && !d.campaign && !d.isBuilding && !d.isHero
+      && (level < 0 || d.level === level));
+    return pool.length ? pool[Math.floor(rng() * pool.length)] : undefined;
   }
   /** Add/override a def in the per-map overlay (custom object data). */
   setCustom(id: string, def: UnitDef): void {
@@ -642,8 +681,9 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       typeName: u ? str(u, "name") : "",
       race: d ? str(d, "race") : "",
       tilesets: (b ? str(b, "tilesets") : "").split(",").map((s) => s.trim().toUpperCase()).filter((s) => s && s !== "_" && s !== "-"),
-      model: unitModelPath(vfs, file, animProps),
+      model: unitModelPath(vfs, file, u ? num(u, "fileVerFlags", 0) : 0),
       modelScale: u ? num(u, "modelScale", 1) : 1,
+      occlusionHeight: u ? num(u, "occH", 0) : 0,
       selScale: u ? num(u, "scale", 1) : 1,
       animWalkSpeed: u ? num(u, "walk", 0) : 0,
       animRunSpeed: u ? num(u, "run", 0) : 0,
@@ -659,6 +699,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       lumberSound: soundBase(u ? str(u, "weap2") : ""),
       armorSound: soundBase(u ? str(u, "armor") : ""),
       icon: fn ? str(fn, "art") : "",
+      specialArt: fn ? mdxPath(str(fn, "specialart")) : "",
       // Tooltip text (Name/Tip/Ubertip/Hotkey) lives in the per-race *UnitStrings*
       // INI, NOT the *UnitFunc* INI (which only holds art/buttonpos/missile). The
       // description was previously read from `fn` → always empty → generic fallback.
@@ -704,6 +745,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       sightNight: b ? num(b, "nsight", 0) : 0,
       // UnitData.slk `death` — how long this type takes to die. See UnitDef.deathTime.
       deathTime: d ? num(d, "death", 0) : 0,
+      deathType: d ? num(d, "deathType", 3) : 3,
       hitPoints: isHero && realhp > 0 ? realhp : b ? num(b, "hp", 0) : 0,
       hpRegen: b ? num(b, "regenHP", 0) : 0,
       regenType: toRegenType(b ? str(b, "regenType") : ""),
@@ -751,10 +793,14 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       // apply to the unit's casting, not to any one weapon). Default 0 → an instant
       // cast / no backswing for units with no weapons row (wards, most summons).
       castPoint: w ? num(w, "castpt", 0) : 0,
+      minRange: w ? num(w, "minRange", 0) : 0, // UnitWeapons `minRange` — the artillery dead zone
       castBackswing: w ? num(w, "castbsw", 0) : 0,
       attackRange: 0,
       acquireRange: w ? num(w, "acquire", 0) : 0,
       canSleep: (d ? num(d, "cansleep", 0) : 0) === 1,
+      hostilePal: (u ? num(u, "hostilePal", 0) : 0) === 1,
+      special: (u ? num(u, "special", 0) : 0) === 1,
+      campaign: (u ? num(u, "campaign", 0) : 0) === 1,
       weaponType: WeaponType.None,
       attackType: AttackType.None,
       armorType: toArmorType(b ? str(b, "defType") : ""),
@@ -888,6 +934,7 @@ function weaponSlots(w: Row | undefined, fn: Row | undefined, primaryVal: number
     if (!targets.length) continue; // the row declares no such slot
     const weaponType = toWeaponType(str(w, `weapTp${n}`));
     out.push({
+      slot: n - 1,
       enabled: (mask & (1 << (n - 1))) !== 0,
       targets,
       damage: num(w, `dmgplus${n}`, 0) + primaryVal,
@@ -937,11 +984,28 @@ function list(v: string): string[] {
 // We only reach for `_V1` when the unit actually needs those alternate clips (its Animprops name
 // `alternate`), since forcing `_V1` on every unit swaps sequence sets in ways that break some
 // models' idle/stand pickers; everything else keeps the plain `.mdx`.
-function unitModelPath(vfs: DataSource, file: string, animProps: string[]): string {
+/**
+ * The model a unit type draws, honouring UnitUI's `fileVerFlags` (UnitMetaData `uver`, type
+ * "versionFlags"): bit `1 << version` set means the type has a model of its own for that game
+ * VERSION, at `<file>_V<version>.mdx` — the same `_V0`/`_V1` suffix war3skins keys carry
+ * (edition.ts versionIndex: 0 Reign of Chaos, 1 The Frozen Throne).
+ *
+ * Nineteen rows carry `2` in every one of the four table sets and no row carries anything
+ * else, and they are exactly the install's thirteen `_V1.mdx` twins: the Demolisher (`ocat`,
+ * `ncat` — catapult_V1.mdx wears `Textures\Demolisher.blp` where Catapult.mdx wears
+ * `Catapult.blp`), the Ballista, Gyrocopter, Priest, Sorceress, both War Wagon rows, the
+ * Headhunter and Berserker, the Lich and Kel'Thuzad, the Fel Hound and the five Murlocs. So
+ * The Frozen Throne draws the `_V1` model and Reign of Chaos the plain one.
+ *
+ * This replaced a guess — "take `_V1` when the type's Animprops say alternate" — which found
+ * the Berserker's (HeadHunter_V1 holds its alternate clips) and missed the other seventeen. A
+ * flagged twin the install does not ship falls back to the plain file.
+ */
+function unitModelPath(vfs: DataSource, file: string, verFlags: number): string {
   const base = file.replace(/\//g, "\\");
-  const wantsAlternate = animProps.includes("alternate") || animProps.includes("alternateex");
-  const v1 = `${base}_V1.mdx`;
-  return wantsAlternate && vfs.exists(v1) ? v1 : `${base}.mdx`;
+  const v = versionIndex();
+  const twin = `${base}_V${v}.mdx`;
+  return verFlags & (1 << v) && vfs.exists(twin) ? twin : `${base}.mdx`;
 }
 
 // A .mdl model path from the Func profile → the .mdx the MPQ actually ships.
@@ -1027,6 +1091,7 @@ export function destructibleUnitDef(d: {
     // dedicated bust for that — the doodad's own model is a piece of terrain.
     model: d.portraitModel,
     modelScale: 1,
+    occlusionHeight: 0,
     // The selection circle, which is the field the CLICK is measured against, and it is
     // NOT `radius`. `radius` is the "Elevation Sample Radius" — 50 on every gate in the
     // game, so a 640-unit-long Elven Gate could only be picked within a stride of its

@@ -6,8 +6,8 @@
 
 import { ArmorType, AttackType, PrimaryAttribute } from "../data/enums";
 import {
-  ALLY_DOT_COLOR, armorDamageReduction, attackSpeedRung, campMarker, ENEMY_DOT_COLOR, INFO_PANEL, MISC_GAME, moveSpeedRung,
-  NEUTRAL_DOT_COLOR, SELF_DOT_COLOR,
+  ALLY_DOT_COLOR, armorDamageReduction, attackSpeedRung, campMarker, ENEMY_DOT_COLOR, gameNum, INFO_PANEL, moveSpeedRung,
+  NEUTRAL_DOT_COLOR, SELF_DOT_COLOR, upkeepBandIndex, upkeepBands,
 } from "../data/gameplayConstants";
 import type { MinimapPing } from "../jass/runtime";
 import { escapeHtml, wc3StripMarkup, wc3ToHtml } from "./wc3Text";
@@ -19,24 +19,36 @@ import type { MinimapDot } from "../game/minimapView";
 import { CONSOLE_BAND_H, type ConsoleResources } from "./consoleUi";
 import { UI_HEIGHT, UI_WIDTH } from "./fdf/layout";
 import { MinimapModel } from "./minimapModel";
+import { gamepadPaired, isHovered } from "./gamepad";
 import { setGameTip } from "./gameTip";
 import { HERO_LEVEL_FX_OVERHANG, HeroLevelFx } from "./heroLevelFx";
 import { MODAL_FX_OVERHANG, ModalButtonFx } from "./modalButtonFx";
 import { anyModalOpen } from "./modal";
 import { gridCommandKey, gridCommandSlot, gridHotkeys, gridInventoryKey, gridInventorySlot, hotkeyMode, hotkeysOnButtons } from "../data/hotkeys";
 
-/** WC3's upkeep bands, as the resource bar colours them. */
-const UPKEEP_COLORS = { none: "#5be05a", low: "#e0c146", high: "#e05046" };
-
-/** Which upkeep band a food count falls in: 0 none (0–50), 1 low (51–80), 2 high (81+).
- *  Shared with the message the game prints when a player crosses one (`Upkeeplevel`, see
+/** Which upkeep band a food count falls in: 0 none, 1 low, 2 high — at the bands of this match
+ *  (gameplayConstants `upkeepBands`: the edition's, or the map's war3mapMisc.txt). Shared with
+ *  the message the game prints when a player crosses one (`Upkeeplevel`, see
  *  MapViewerScene.noteUpkeep) so the label and the line can never disagree. */
 export function upkeepBand(foodUsed: number): 0 | 1 | 2 {
-  return foodUsed <= 50 ? 0 : foodUsed <= 80 ? 1 : 2;
+  return Math.min(2, upkeepBandIndex(foodUsed)) as 0 | 1 | 2;
 }
 
-/** The band's label, as the resource bar prints it. */
-export const UPKEEP_LABEL = ["No Upkeep", "Low Upkeep", "High Upkeep"] as const;
+/** The resource bar's four readouts, as `ConsoleUi` reports a hover over one. */
+export type ResourceKind = "gold" | "lumber" | "supply" | "upkeep";
+
+/** GlobalStrings' printf: `%d` and `%s` in order, `%%` a literal percent. */
+function printf(fmt: string, args: Array<string | number>): string {
+  let i = 0;
+  return fmt.replace(/%%|%[sd]/g, (m) => (m === "%%" ? "%" : String(args[i++] ?? "")));
+}
+
+/** The band's label, as the resource bar prints it: `UPKEEP_NONE`/`_LOW`/`_HIGH`, which carry
+ *  their OWN colour (GlobalStrings.fdf 1025-1027 — green, yellow, red), read by key so a map's
+ *  war3mapSkin.txt can rename them (Test of Balance: Balanced / Average / Not Balanced). The
+ *  fallbacks are the file's own text, for a HUD with no install behind it. */
+export const UPKEEP_KEY = ["UPKEEP_NONE", "UPKEEP_LOW", "UPKEEP_HIGH"] as const;
+const UPKEEP_FALLBACK = ["|Cff00ff00No Upkeep", "|Cffffff00Low Upkeep", "|Cffff0000High Upkeep"] as const;
 
 export type OrderMode = "move" | "attack" | null;
 
@@ -143,6 +155,8 @@ export interface HudInvSlot {
 export interface HudSelection {
   id: number;
   name: string;
+  /** The model the portrait busts; "" for a unit with none (an invisible dummy) — no bust. */
+  model?: string;
   hp: number;
   maxHp: number;
   mana: number;
@@ -351,6 +365,9 @@ export interface HudDriver {
   dropItemOnUnit(simId: number, slot?: number): boolean;
   /** Command-card buttons for the current selection (empty = no card). */
   commandCard(): CommandButton[];
+  /** Which page of the card is up — "root", or a submenu (the build list, the hero's skill
+   *  page). The gamepad's selector starts over when it turns (issue #162). */
+  cardPage(): string;
   /** Run a command-card button by id. */
   runCommand(id: string): void;
   /** The primary selected hero's 6 inventory slots (null = empty; [] = no inventory). */
@@ -695,6 +712,10 @@ const HERO_LEVEL_RING = "UI\\Buttons\\HeroLevel\\HeroLevel-Border.blp";
 //                                 human-buildprogressbar-*.blp  its fill ships already gold
 //   ConsoleInventoryCoverTexture  <Race>UITile-InventoryCover   the crest over the 2×3 when
 //                                                               the selection has no inventory
+//   ConsoleInventoryNoCapacity    <race>-inventory-slotfiller   one opaque 64×64 plug per
+//                                                               pocket past the inventory's
+//                                                               "Item Capacity" (a 2-slot
+//                                                               backpack shows its top row)
 //   CommandButtonNumberOverlay    human-button-lvls-overlay.blp the boxed number in an
 //                                                               icon's corner — see countBadge
 const CONSOLE_ART = {
@@ -704,6 +725,7 @@ const CONSOLE_ART = {
   buildBarBorder: "SimpleBuildTimeIndicatorBorder",
   buildBarFill: "SimpleBuildTimeIndicator",
   inventoryCover: "ConsoleInventoryCoverTexture",
+  inventoryNoCapacity: "ConsoleInventoryNoCapacity",
   numberOverlay: "CommandButtonNumberOverlay",
   /** `CargoBackdrop` — `human-transport-slot.blp`, ONE gold-framed 64×64 pocket, drawn once
    *  per seat of a cargo hold (the panel's slots are the engine's own layout, not the FDF's:
@@ -1313,6 +1335,13 @@ export class GameHud {
    *  cost row reddens and un-reddens with the stash and the "Requires:" line comes and goes
    *  while the cursor sits still, and `pointerenter` fires only when it moves. */
   private cmdHover = -1;
+  /** The gamepad's command-card selector (issue #162): the slot it is on (-1 = none), whether
+   *  the D-pad currently owns X (`padLive` — the left stick takes it back), what it was last
+   *  reset for (the selection and the card page), and what was last painted. */
+  private padSlot = -1;
+  private padLive = false;
+  private padKey = "";
+  private padPainted = "";
   /** What the slab was last given, so a per-frame re-show writes the DOM only on a change —
    *  every writer goes through `setTooltip`, or the memo would lie about what is on screen. */
   private tooltipHtml = "";
@@ -1327,6 +1356,9 @@ export class GameHud {
   private cmdCount: HTMLSpanElement[] = []; // per-slot corner count badge (skill points)
   private cmdHotkey: HTMLSpanElement[] = []; // per-slot corner key box ("Show hotkeys on command buttons")
   private cmdKey = "";
+  /** The icon each button was last drawn with — compared per slot rather than folded into
+   *  `cmdKey`, because an icon is a data URL (see refreshCommandCard). */
+  private cmdIcons: Array<string | null> = [];
   // Hero inventory: 6 slot buttons (2×3) with icon, charge badge, cooldown sweep.
   private invSlots: HTMLButtonElement[] = [];
   private invCount: HTMLSpanElement[] = []; // per-slot charge count badge
@@ -1495,6 +1527,8 @@ export class GameHud {
     }
     const cover = url(CONSOLE_ART.inventoryCover);
     if (cover) root.setProperty("--hud-inventory-cover", `url(${cover})`);
+    const noCapacity = url(CONSOLE_ART.inventoryNoCapacity);
+    if (noCapacity) root.setProperty("--hud-inventory-nocap", `url(${noCapacity})`);
     const cargo = url(CONSOLE_ART.cargoSlot);
     if (cargo) root.setProperty("--hud-cargo-slot", `url(${cargo})`);
     // The boxed number an icon wears in its corner (see countBadge). On :root and gated by a
@@ -1600,6 +1634,7 @@ export class GameHud {
     }
     this.updateCameraRect(); // every frame, unthrottled: the box IS the camera's motion
     this.refreshCommandCard();
+    this.syncPadCard();
     this.refreshInventory();
     this.refreshHeroBar();
     this.updateIdleWorkers();
@@ -2215,6 +2250,21 @@ export class GameHud {
     return !this.chatBar.hidden;
   }
 
+  /**
+   * The gamepad's L3+R3 (issue #162): open the chat line at the default audience, as Enter does
+   * and behind the same gates, or put an open one away UNSENT, as Escape does. Returns the field
+   * when it opened it, so the pad can put its keyboard up over it — null otherwise.
+   */
+  padToggleChat(): HTMLInputElement | null {
+    if (this.chatOpen) {
+      this.closeChat();
+      return null;
+    }
+    if (!this.acceptsInput()) return null;
+    this.openChat(this.defaultChatTarget());
+    return this.chatInput;
+  }
+
   /** The Quests button's flash (FlashQuestDialogButton): on when the script announced
    *  something, off the moment the log is opened — as in the game. */
   flashQuests(on: boolean): void {
@@ -2366,6 +2416,20 @@ export class GameHud {
     this.msgLog.replaceChildren();
   }
 
+  /** `BlzChangeMinimapTerrainTex` — the map swaps the minimap's terrain picture for art of its
+   *  own. Cropped and letterboxed exactly as the picture `buildMinimap` reads at start is, and
+   *  hidden with it by the terrain toggle. Before the HUD is built there is nothing to swap: the
+   *  driver hands the new picture to `buildMinimap` itself. */
+  setMinimapImage(image: HTMLCanvasElement): void {
+    if (!this.minimapView) return;
+    const cropped = cropMinimapLetterbox(image, this.minimapAspect);
+    cropped.className = "hud-minimap-img";
+    cropped.hidden = !this.minimapTerrainShown;
+    if (this.minimapImg) this.minimapImg.replaceWith(cropped);
+    else this.minimapView.insertBefore(cropped, this.dotsCanvas ?? null);
+    this.minimapImg = cropped;
+  }
+
   private buildMinimap(): HTMLDivElement {
     const box = document.createElement("div");
     box.className = "hud-minimap";
@@ -2467,16 +2531,26 @@ export class GameHud {
     // at the bottom-right. Click (or F8 / ~) selects and cycles through workers doing nothing.
     // Hidden when there are none.
     //
-    // The art is the worker's `BTN*.blp` and nothing else: a command button in WC3 carries its
-    // gold frame IN the texture, so a border of our own around it is a second frame. It sinks
-    // under the press exactly as a hero-bar button does — same `onPress`, same `.pressed`.
+    // The art is war3skins' `IdlePeon` for the local race (BTNPeasant / BTNPeon / BTNWisp /
+    // BTNAcolyte) and nothing else: a command button in WC3 carries its gold frame IN the
+    // texture, so a border of our own around it is a second frame. It sinks under the press
+    // exactly as a hero-bar button does — same `onPress`, same `.pressed`.
+    //
+    // Its words are the game's too: `IDLE_PEON` "Idle Workers (F8)" over `IDLE_PEON_DESC`
+    // (GlobalStrings.fdf 525-526) — both of which, with the icon, a map's war3mapSkin.txt may
+    // rewrite (Test of Balance renames all three "Traits").
     this.idleWorkerBadge = document.createElement("button");
     this.idleWorkerBadge.className = "hud-idle-worker hud-iconbtn";
-    setGameTip(this.idleWorkerBadge, "Select idle worker (F8 / ~)");
+    this.idleWorkerBadge.onpointerenter = () => {
+      const t = this.driver.uiString("IDLE_PEON", "Idle Workers (|Cfffed312F8|R)");
+      const b = this.driver.uiString("IDLE_PEON_DESC", "One or more workers aren't earning their keep.");
+      this.setTooltip(`<div class="hud-tooltip-title">${wc3ToHtml(t)}</div><div class="hud-tooltip-desc">${wc3ToHtml(b)}</div>`);
+    };
+    this.idleWorkerBadge.onpointerleave = () => {
+      this.cmdTooltip.hidden = true;
+    };
     this.idleWorkerBadge.hidden = true;
     // Its count wears the same boxed badge every other count in the game does (countBadge).
-    // This button is OpenWar3's own — 1.30 has no idle-worker button to copy — so there is no
-    // original to match here; matching the rest of our own console is the whole argument.
     this.idleWorkerCount = countBadge();
     this.idleWorkerCount.classList.add("hud-idle-count");
     this.idleWorkerBadge.appendChild(this.idleWorkerCount);
@@ -3265,6 +3339,11 @@ export class GameHud {
     for (let i = 0; i < this.invSlots.length; i++) {
       const btn = this.invSlots[i];
       const s = inv[i] ?? null;
+      // A pocket past the inventory's "Item Capacity" (a 2-slot backpack, the Pack Mule's
+      // four) is not a pocket at all: war3skins' `ConsoleInventoryNoCapacity` plugs it with
+      // the race's slot filler, and it takes no click, no drop and no tooltip. Only when
+      // there IS an inventory — with none, the cover stands over all six.
+      btn.classList.toggle("no-capacity", inv.length > 0 && i >= inv.length);
       if (!s) {
         btn.classList.add("empty");
         btn.style.backgroundImage = "";
@@ -3349,12 +3428,20 @@ export class GameHud {
     // The printed keys hang off two options rather than off the buttons, so the options are in
     // the key too: `applyHotkeyOptions` switching either has to re-dress a card that did not change.
     const printKeys = hotkeysOnButtons();
-    const key = `${printKeys ? hotkeyMode() : "-"}#` + cmds.map((c) => `${c.id}:${c.hotkey}:${c.disabled}:${!!c.cantAfford}:${!!c.noMana}:${c.active}:${c.modal}:${c.count ?? 0}:${!!c.countKeySize}:${c.desc}`).join("|");
-    if (key === this.cmdKey) {
+    // The TITLE and the ICON can change under an unchanged id too, since a map may rewrite an
+    // ability's words and art mid-match (`BlzSetAbilityTooltip` / `BlzSetAbilityIcon`, pass 9 of
+    // docs/map-compatibility.md) — left out, the button kept Slow's art after the map had given
+    // it Storm Bolt's. The titles are short and go in the key; the icon is a DATA URL, kilobytes
+    // per button on a key rebuilt every frame, so it is compared per slot instead — the cached
+    // string for an unchanged icon is the same string, and that comparison costs nothing.
+    const key = `${printKeys ? hotkeyMode() : "-"}#` + cmds.map((c) => `${c.id}:${c.hotkey}:${c.disabled}:${!!c.cantAfford}:${!!c.noMana}:${c.active}:${c.modal}:${c.count ?? 0}:${!!c.countKeySize}:${c.name}:${c.tip ?? ""}:${c.desc}`).join("|");
+    const iconsSame = cmds.length === this.cmdIcons.length && cmds.every((c, i) => c.icon === this.cmdIcons[i]);
+    if (key === this.cmdKey && iconsSame) {
       this.refreshCmdTooltip(cmds); // every frame: the stash moves without the card changing
       return;
     }
     this.cmdKey = key;
+    this.cmdIcons = cmds.map((c) => c.icon);
     for (let i = 0; i < this.cmdSlots.length; i++) {
       const btn = this.cmdSlots[i];
       btn.disabled = true;
@@ -3453,6 +3540,77 @@ export class GameHud {
     this.refreshCmdTooltip(cmds);
   }
 
+  // --- the gamepad's command-card selector (issue #162) -----------------------------------
+  //
+  // The D-pad walks a frame over the 4×3 card and X presses the button under it, so a pad can
+  // reach every command without the cursor. Where it STARTS is the issue's rule: a unit's card
+  // opens on the bottom-left slot (the row a worker's Build and a soldier's Hold Position live
+  // on), a building's — a shop's, a tavern's — on the top-left, which is where their first
+  // unit, item or research is. A submenu (the build list, the skill page) opens top-left too,
+  // because it is a list of those.
+
+  /** May the player give an order through the console now? Every gate `onKey` asks, in one
+   *  place, for the gamepad's actions that have no key to go through `onKey` with. */
+  acceptsInput(): boolean {
+    if (this.root.hidden || !this.driver.controlEnabled()) return false;
+    const body = document.body.classList;
+    return !body.contains("game-menu-open") && !body.contains("game-paused") && !anyModalOpen();
+  }
+
+  /** Move the selector one slot, clamped to the card's edges. */
+  padCardMove(dx: number, dy: number): void {
+    if (this.padSlot < 0) return;
+    const col = Math.min(3, Math.max(0, (this.padSlot % 4) + dx));
+    const row = Math.min(2, Math.max(0, Math.floor(this.padSlot / 4) + dy));
+    this.padSlot = row * 4 + col;
+    this.syncPadCard();
+    this.padTooltip(this.driver.commandCard());
+  }
+
+  /** Press the button the selector is on, exactly as a click on it would — an unavailable or
+   *  passive one takes no press, as it takes no click. False when nothing was pressed. */
+  padCardPress(): boolean {
+    const c = this.driver.commandCard().find((b) => b.row * 4 + b.col === this.padSlot);
+    if (!c || c.disabled || c.passive) return false;
+    this.driver.runCommand(c.id);
+    this.refreshSelectionNow();
+    return true;
+  }
+
+  /** The D-pad took X (show the selected button's tooltip), or the left stick took it back. */
+  padCardMode(on: boolean): void {
+    this.padLive = on;
+    this.syncPadCard();
+    if (on) this.padTooltip(this.driver.commandCard());
+    else if (this.cmdHover < 0 && this.invHover < 0 && this.buffHover < 0 && !this.statHover) this.cmdTooltip.hidden = true;
+  }
+
+  /** Start the selector over when the selection or the card page changes, and paint it. */
+  private syncPadCard(): void {
+    const sel = gamepadPaired() && !this.root.hidden ? this.driver.selection() : null;
+    const page = sel ? this.driver.cardPage() : "";
+    const key = sel ? `${sel.id}|${page}` : "";
+    if (key !== this.padKey) {
+      this.padKey = key;
+      this.padSlot = !sel ? -1 : page !== "root" || sel.isBuilding ? 0 : 8;
+    }
+    const paint = `${this.padSlot}|${this.padLive}`;
+    if (paint === this.padPainted) return;
+    this.padPainted = paint;
+    this.cmdSlots.forEach((btn, i) => {
+      btn.classList.toggle("pad-sel", i === this.padSlot);
+      btn.classList.toggle("pad-live", i === this.padSlot && this.padLive);
+    });
+  }
+
+  /** The tooltip of the button the selector is on — or none, over an empty slot. */
+  private padTooltip(cmds: CommandButton[]): void {
+    if (!this.padLive || this.padSlot < 0) return;
+    const c = cmds.find((b) => b.row * 4 + b.col === this.padSlot);
+    if (c) this.showTooltip(c);
+    else this.cmdTooltip.hidden = true;
+  }
+
   /**
    * Re-show the command tooltip for the slot under the cursor against the card's CURRENT
    * contents, or take it down if that slot has emptied.
@@ -3468,9 +3626,14 @@ export class GameHud {
    * a `pointerleave` ever arriving, and `cmdHover` would name a slot it is no longer over.
    */
   private refreshCmdTooltip(cmds: CommandButton[]): void {
-    if (this.cmdHover < 0) return;
+    if (this.cmdHover < 0) {
+      // The gamepad's selector is a hover too, while the D-pad has it — and a still one, so it
+      // is re-read against the card every frame for the same reasons (issue #162).
+      if (this.padLive && this.padSlot >= 0) this.padTooltip(cmds);
+      return;
+    }
     const btn = this.cmdSlots[this.cmdHover];
-    if (!btn?.matches(":hover")) {
+    if (!btn || !isHovered(btn)) {
       this.cmdHover = -1;
       // Another slab owner (an item, a buff) may already have taken over; leave its text up.
       if (this.invHover < 0 && this.buffHover < 0 && !this.statHover) this.cmdTooltip.hidden = true;
@@ -3481,6 +3644,47 @@ export class GameHud {
     if (c) this.showTooltip(c);
     else this.cmdTooltip.hidden = true; // …and `cmdHover` stands, so a button that lands here later gets its slab
   }
+
+  /**
+   * The slab for a hover over the resource bar (reported by `ConsoleUi`; null when it leaves).
+   *
+   * Every word is GlobalStrings.fdf's, by key, so a map's war3mapSkin.txt reaches it — Test of
+   * Balance rewrites the supply and upkeep ones to describe its difficulty counter. The bodies
+   * are the engine's `RESOURCE_UBERTIP_*`. The TITLES are ours: GlobalStrings has `GOLD` and
+   * `LUMBER` and nothing for supply, so the supply slab is its line alone, and the upkeep slab
+   * is titled by the band it is in (the bar's own label) over one `RESOURCE_UBERTIP_UPKEEP_INFO`
+   * line per band (the bands `upkeepBands` answers for this match — the sim taxes by the same
+   * ones). `|N` in those lines is the game's newline in its other case.
+   */
+  showResourceTip(kind: ResourceKind | null): void {
+    if (!kind) {
+      if (this.resourceTip) this.cmdTooltip.hidden = true;
+      this.resourceTip = false;
+      return;
+    }
+    const s = (key: string, fallback: string): string => this.driver.uiString(key, fallback);
+    const block = (title: string, body: string): string =>
+      `${title ? `<div class="hud-tooltip-title">${wc3ToHtml(title)}</div>` : ""}<div class="hud-tooltip-desc">${wc3ToHtml(body)}</div>`;
+    let html: string;
+    if (kind === "gold") html = block(s("GOLD", "Gold"), s("RESOURCE_UBERTIP_GOLD", "Gold is mined from gold mines."));
+    else if (kind === "lumber") html = block(s("LUMBER", "Lumber"), s("RESOURCE_UBERTIP_LUMBER", "Lumber is harvested from trees."));
+    else if (kind === "supply") {
+      html = block("", s("RESOURCE_UBERTIP_SUPPLY", "The amount of food you are using over the total amount you can currently sustain."));
+    } else {
+      const band = upkeepBand(this.driver.resources().foodUsed);
+      const line = s("RESOURCE_UBERTIP_UPKEEP_INFO", "|N%d-%d Food: %s|R (%d%% income)");
+      const lines = upkeepBands().map((b, i) => {
+        const k = Math.min(i, 2);
+        return printf(line, [b.from, b.to, s(UPKEEP_KEY[k], UPKEEP_FALLBACK[k]), b.income]);
+      }).join("");
+      html = block(s(UPKEEP_KEY[band], UPKEEP_FALLBACK[band]),
+        s("RESOURCE_UBERTIP_UPKEEP", "Upkeep is determined by the amount of food your forces are currently using.") + lines);
+    }
+    this.resourceTip = true;
+    this.setTooltip(html);
+  }
+  /** The slab on display is a resource bar's (so leaving the bar hides it, and nothing else). */
+  private resourceTip = false;
 
   /** The ONE write to the tooltip slab. Skips the DOM when the text is what is already there
    *  (the per-frame re-show above), and never skips un-hiding it. */
@@ -3540,12 +3744,12 @@ export class GameHud {
       gold: String(Math.floor(r.gold)),
       lumber: String(Math.floor(r.lumber)),
       supply: `${r.foodUsed}/${r.foodMax}`,
-      upkeep: UPKEEP_LABEL[band],
-      upkeepColor: [UPKEEP_COLORS.none, UPKEEP_COLORS.low, UPKEEP_COLORS.high][band],
+      upkeep: this.driver.uiString(UPKEEP_KEY[band], UPKEEP_FALLBACK[band]),
     });
 
     const sel = this.driver.selection();
-    this.portrait.classList.toggle("empty", !sel && !this.portraitForced);
+    // …and so is a unit with no MODEL: there is no bust to draw (an invisible dummy).
+    this.portrait.classList.toggle("empty", (!sel || sel.model === "") && !this.portraitForced);
     if (!sel || this.driver.selectionIcons().length > 0) this.xpBar.hidden = true; // no single hero shown
     if (sel) {
       // A hero is titled by its GIVEN name ("Painkiller"); its class ("Demon Hunter")
@@ -3972,7 +4176,7 @@ export class GameHud {
     if (!which) return;
     const el = which === "attack" ? this.attackStat.icon : which === "armor" ? this.armorStat.icon : this.attrIconEl;
     const sel = this.driver.selection();
-    const html = sel && el.matches(":hover") && el.getClientRects().length > 0 ? this.statTooltipHtml(which, sel) : "";
+    const html = sel && isHovered(el) && el.getClientRects().length > 0 ? this.statTooltipHtml(which, sel) : "";
     if (!html) {
       this.statHover = null;
       this.cmdTooltip.hidden = true;
@@ -4043,22 +4247,22 @@ export class GameHud {
     const block = (attr: PrimaryAttribute, label: string, own: string[]): string[] => [
       str(label),
       ...(sel.primaryAttr === attr
-        ? [` - ${str("PRIMARY_ATTRIBUTE")}`, fdfFormat(str("BONUS_DAMAGE"), MISC_GAME.StrAttackBonus)]
+        ? [` - ${str("PRIMARY_ATTRIBUTE")}`, fdfFormat(str("BONUS_DAMAGE"), gameNum("StrAttackBonus"))]
         : []),
       ...own,
     ];
     const lines = [
       ...block(PrimaryAttribute.Strength, "COLON_STRENGTH", [
-        fdfFormat(str("BONUS_HITPOINTS"), MISC_GAME.StrHitPointBonus),
+        fdfFormat(str("BONUS_HITPOINTS"), gameNum("StrHitPointBonus")),
         str("BONUS_HPREGEN"),
       ]),
       ...block(PrimaryAttribute.Agility, "COLON_AGILITY", [
         // "Every 3 points increase armor by 1" — the FIXED form, since 0.3 a point is a third.
-        fdfFormat(str("BONUS_DEFENSE_FIXED"), Math.round(1 / MISC_GAME.AgiDefenseBonus)),
+        fdfFormat(str("BONUS_DEFENSE_FIXED"), Math.round(1 / gameNum("AgiDefenseBonus"))),
         str("BONUS_ATTACK_SPEED"),
       ]),
       ...block(PrimaryAttribute.Intelligence, "COLON_INTELLECT", [
-        fdfFormat(str("BONUS_MANA"), MISC_GAME.IntManaBonus),
+        fdfFormat(str("BONUS_MANA"), gameNum("IntManaBonus")),
         str("BONUS_MANAREGEN"),
       ]),
     ];

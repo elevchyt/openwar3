@@ -27,10 +27,10 @@ import War3MapW3u from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3u/file";
 import War3MapW3d from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3d/file";
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { PrimaryAttribute, toArmorType, toAttackType, toMoveType, toPrimaryAttribute, toRegenType, toWeaponType } from "./enums";
-import { MISC_GAME } from "./gameplayConstants";
+import { gameNum } from "./gameplayConstants";
 import { syncPrimaryWeapon, type UnitDef, type UnitRegistry, type WeaponSlotDef } from "./units";
 import { emptyAbilityLevel, mdlPath, normalizeTargetFlags, type AbilityDef, type AbilityLevel, type AbilityRegistry } from "./abilities";
-import type { ItemDef, ItemRegistry } from "./items";
+import { blankItemDef, type ItemDef, type ItemRegistry } from "./items";
 import type { UpgradeDef, UpgradeRegistry } from "./upgrades";
 import type { TechDef, TechRegistry } from "./techtree";
 import { parseWts } from "../jass/wts";
@@ -147,6 +147,7 @@ export const UNIT_SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   // --- Art ------------------------------------------------------------------------
   umdl: (d, v) => { d.model = normModel(s(v)); },
   usca: (d, v) => { d.modelScale = n(v); },
+  uocc: (d, v) => { d.occlusionHeight = n(v); }, // Art - Occlusion Height (unitUI occH)
   // "Art - Selection Scale" (unitUI `scale`) — the SELECTION CIRCLE's size, which is a
   // different column from the model scale above and the one the click radius is measured in
   // (SEL_RADIUS_PER_SCALE). Azure Tower Defense sets it on 37 of its types.
@@ -159,8 +160,7 @@ export const UNIT_SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   urun: (d, v) => { d.animRunSpeed = n(v); },
   // "Art - Required Animation Names" (`Animprops`) — which set of a multi-tier model's
   // sequences is this type's own (the Keep is `upgrade,first`). A custom building that names
-  // its tier here rendered as tier 1 without this. Note this arrives too late to re-pick the
-  // `_V1` model variant (units.ts unitModelPath), which only the SLK path does.
+  // its tier here rendered as tier 1 without this.
   uani: (d, v) => { d.animProps = targetList(s(v)); },
   // "Art - Required Animation Names - Attachments" (`Attachmentanimprops`) — the size of clip
   // an effect riding this unit plays (Ensnare's net; see SimWorld.bodySize).
@@ -169,6 +169,10 @@ export const UNIT_SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   // points effects ride on this type (`alternate` on a metamorphosed hero; UnitDef.attachLinkProps).
   ualp: (d, v) => { d.attachLinkProps = targetList(s(v)); },
   uico: (d, v) => { d.icon = normIcon(s(v)); },
+  // deathType: read by UNIT_BF_RAISABLE/_DECAYABLE; the corpse RULES still come from classification.
+  udea: (d, v) => { d.deathType = n(v); },
+  // "Art - Special": what an exploding death leaves (SetUnitExploded).
+  uspa: (d, v) => { d.specialArt = normModel(s(v)); },
   ubpx: (d, v) => { d.buttonX = n(v); },
   ubpy: (d, v) => { d.buttonY = n(v); },
   // "Art - Tinting Color" — three 0–255 channels written as three separate codes. Each lands
@@ -354,6 +358,12 @@ export const UNIT_SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   ubdg: (d, v) => { d.isBuilding = bool01(v); },
   // "Stats - Can Sleep" — whether a Neutral Hostile creep of this type sleeps at night.
   usle: (d, v) => { d.canSleep = bool01(v); },
+  // The editor's palette flags — and, through them, ChooseRandomCreep's pool (see
+  // UnitRegistry.chooseRandomCreep): a map that hides a creep from the palette hides it from
+  // the draw too.
+  uhos: (d, v) => { d.hostilePal = bool01(v); },
+  uspe: (d, v) => { d.special = bool01(v); },
+  ucam: (d, v) => { d.campaign = bool01(v); },
   // "Stats - Transported Size" — how many SEATS this unit takes in a cargo hold, which is not
   // one for the siege roster. See UnitDef.cargoSize.
   ucar: (d, v) => { d.cargoSize = Math.max(1, n(v)); },
@@ -431,9 +441,8 @@ export const UNIT_FIELD_NOTES: Record<string, string> = {
 
   // World-Editor-only: which palette/tileset a type is offered under, and whether the editor
   // draws a placement helper for it. None of it survives into a running match.
-  ucam: "editor palette only (campaign)", udro: "editor palette only (dropItems)",
-  uhos: "editor palette only (hostilePal)", uine: "editor palette only (inEditor)",
-  uspe: "editor palette only (special)", util: "editor palette only (tilesets)",
+  udro: "editor palette only (dropItems)", uine: "editor palette only (inEditor)",
+  util: "editor palette only (tilesets)",
   utss: "editor palette only (tilesetSpecific)", uuch: "editor placement helper (useClickHelper)",
   unsf: "editor palette only (EditorSuffix)",
 
@@ -441,10 +450,10 @@ export const UNIT_FIELD_NOTES: Record<string, string> = {
   // has to exist before the field has anywhere to land.
   ubpr: "no per-bone art overrides (Boneprops)",
   ucua: "no caster-upgrade art (Casterupgradeart)", ussi: "no score screen (ScoreScreenIcon)",
-  uspa: "no per-unit Specialart hook", utaa: "no per-unit Targetart hook",
+  utaa: "no per-unit Targetart hook",
   uept: "no elevation sampling (elevPts)", uerd: "no elevation sampling (elevRad)",
-  ufrd: "fog radius is taken from sight, not fogRad", uocc: "no occluder height (occH)",
-  ulos: "no fat line-of-sight (fatLOS)", uver: "no SD/HD asset split (fileVerFlags)",
+  ufrd: "fog radius is taken from sight, not fogRad",
+  ulos: "no fat line-of-sight (fatLOS)", uver: "a map's own fileVerFlags (the table's `_V1` twin is picked at load, units.ts unitModelPath)",
   umxp: "no terrain pitch/roll on models (maxPitch)", umxr: "no terrain pitch/roll on models (maxRoll)",
   uori: "orientInterp — turnRate carries the turn; no interpolation mode",
   uprw: "no propulsion window (propWin)", uscb: "no bull-scaling (scaleBull)",
@@ -459,7 +468,6 @@ export const UNIT_FIELD_NOTES: Record<string, string> = {
   // classification (utyp, which is applied), the hero flag and the air/ground split, each with
   // its own citation in world.ts — so wiring this in means replacing that rule wholesale
   // rather than adding a field. Left for that change, not for this one.
-  udea: "deathType — corpse rules come from classification + hero/air instead; see world.ts",
   udu1: "dmgUp1 — every one of the 837 stock rows leaves it empty", udu2: "dmgUp2 — likewise empty on every stock row",
   uamn: "minRange — no minimum attack range; 6 stock rows carry one (the mortar/siege pair)",
   uma1: "no missile arc (Missilearc)", uma2: "no missile arc (Missilearc)",
@@ -554,16 +562,16 @@ function applyMods(def: UnitDef, mods: Array<{ id: string; value: Val }>, trigSt
   //    unstated one keeps the clone's already-folded value and moves by the attribute delta.
   //    Non-heroes carry no attributes, so both arms collapse to "use what was stated".
   const hero = def.isHero;
-  if (rawHp !== undefined) def.hitPoints = rawHp + (hero ? def.strength * MISC_GAME.StrHitPointBonus : 0);
-  else if (hero) def.hitPoints += (def.strength - was.str) * MISC_GAME.StrHitPointBonus;
-  if (rawMana !== undefined) def.mana = rawMana + (hero ? def.intelligence * MISC_GAME.IntManaBonus : 0);
-  else if (hero) def.mana += (def.intelligence - was.int) * MISC_GAME.IntManaBonus;
+  if (rawHp !== undefined) def.hitPoints = rawHp + (hero ? def.strength * gameNum("StrHitPointBonus") : 0);
+  else if (hero) def.hitPoints += (def.strength - was.str) * gameNum("StrHitPointBonus");
+  if (rawMana !== undefined) def.mana = rawMana + (hero ? def.intelligence * gameNum("IntManaBonus") : 0);
+  else if (hero) def.mana += (def.intelligence - was.int) * gameNum("IntManaBonus");
   // Unrounded, as the SLK's own `realdef` is (units.ts): the 0.3-per-point fold leaves tenths,
   // and "Damage Reduction" is computed off them. Snapped only to clear the float noise.
   if (rawArmor !== undefined) {
-    def.armor = snapArmor(rawArmor + (hero ? MISC_GAME.AgiDefenseBase + def.agility * MISC_GAME.AgiDefenseBonus : 0));
+    def.armor = snapArmor(rawArmor + (hero ? gameNum("AgiDefenseBase") + def.agility * gameNum("AgiDefenseBonus") : 0));
   } else if (hero) {
-    def.armor = snapArmor(def.armor + (def.agility - was.agi) * MISC_GAME.AgiDefenseBonus);
+    def.armor = snapArmor(def.armor + (def.agility - was.agi) * gameNum("AgiDefenseBonus"));
   }
   const primary = primaryVal(def);
   def.weapons.forEach((w, i) => {
@@ -605,7 +613,7 @@ function cloneDef(base: UnitDef, id: string): UnitDef {
  * name references; without it names stay as their raw key.
  */
 /** Build a TRIGSTR_-resolver from a map's war3map.wts bytes (identity if none). */
-function makeTrigStr(wtsBytes?: Uint8Array): (v: string) => string {
+export function makeTrigStr(wtsBytes?: Uint8Array): (v: string) => string {
   const table = wtsBytes ? parseWts(new TextDecoder("utf-8").decode(wtsBytes)) : null;
   return (v: string): string => {
     if (!table || !v.startsWith("TRIGSTR_")) return v;
@@ -614,7 +622,78 @@ function makeTrigStr(wtsBytes?: Uint8Array): (v: string) => string {
   };
 }
 
-export function applyMapUnitData(registry: UnitRegistry, w3uBytes: Uint8Array, wtsBytes?: Uint8Array): number {
+/** The five `Misc` rows a hero TYPE's stored vitals are folded with (see the attribute fold
+ *  above): hit points per strength, mana per intelligence, armour's agility base and step, and
+ *  damage per point of the primary attribute. */
+export interface HeroFoldConstants {
+  str: number; // StrHitPointBonus
+  int: number; // IntManaBonus
+  agiBase: number; // AgiDefenseBase
+  agi: number; // AgiDefenseBonus
+  primary: number; // StrAttackBonus
+}
+
+/** The fold constants this match reads right now (gameplayConstants.ts — the map's own
+ *  war3mapMisc.txt when it states them). */
+export function heroFoldConstants(): HeroFoldConstants {
+  return {
+    str: gameNum("StrHitPointBonus"),
+    int: gameNum("IntManaBonus"),
+    agiBase: gameNum("AgiDefenseBase"),
+    agi: gameNum("AgiDefenseBonus"),
+    primary: gameNum("StrAttackBonus"),
+  };
+}
+
+/**
+ * Re-fold every HERO type's stored vitals for a map that changes the attribute constants
+ * (war3mapMisc.txt — docs/map-compatibility.md pass 11).
+ *
+ * A hero type carries its vitals ALREADY FOLDED (units.ts reads `realHP`/`realM`/`realdef`,
+ * and the fold above keeps them so), and the sim adds only the attributes gained since spawn on
+ * top (recomputeStats). So a map lowering `StrHitPointBonus` 25 → 15 — Angel Arena, Balanced
+ * Hero Survival and six more do — moved only the strength a hero gains later, while the game's
+ * own formula is base + strength × the bonus for ALL of it. The difference is applied here, per
+ * type, into the registry's per-map overlay, which `clearCustom` already takes down with the map.
+ * Returns how many types moved.
+ */
+export function refoldHeroConstants(registry: UnitRegistry, from: HeroFoldConstants, to: HeroFoldConstants): number {
+  const d = { str: to.str - from.str, int: to.int - from.int, agiBase: to.agiBase - from.agiBase, agi: to.agi - from.agi, primary: to.primary - from.primary };
+  if (!d.str && !d.int && !d.agiBase && !d.agi && !d.primary) return 0;
+  let n = 0;
+  for (const def of registry.all()) {
+    if (!def.isHero) continue;
+    const next = cloneDef(def, def.id);
+    next.hitPoints = def.hitPoints + def.strength * d.str;
+    next.mana = def.mana + def.intelligence * d.int;
+    next.armor = snapArmor(def.armor + d.agiBase + def.agility * d.agi);
+    const primary = primaryVal(def);
+    for (const w of next.weapons) w.damage += primary * d.primary;
+    syncPrimaryWeapon(next);
+    registry.setCustom(def.id, next);
+    n++;
+  }
+  return n;
+}
+
+/**
+ * How an object file is laid on. A map's `war3map.w3*` starts every object from the INSTALL's
+ * row; its `war3mapSkin.w3*` twin — what a 1.33+ editor writes, and what a map saved by one
+ * ships (Test of Balance: skin files for units, abilities, items, destructables and doodads) —
+ * is the SECOND half of the same objects. The editor split each object's fields in two when
+ * skins arrived: the gameplay columns stay in `war3map.w3*`, and the ART and the WORDS (model,
+ * icon, name, tooltips, sounds, scale — `umdl`/`uico`/`unam`/`utub`/`usnd`/`usca` …) moved to
+ * the skin file, same object ids, same field codes. So a skin pass starts each object from the
+ * row the main file already built (`skin: true`), never from the install's, or it would throw
+ * the gameplay half away. Without it, every custom unit on such a map wore its BASE type's
+ * model and name: Test of Balance's hero pillar was a Marketplace and its invisible
+ * hero-pickers were Peasants.
+ */
+export interface ObjectLayer {
+  skin?: boolean;
+}
+
+export function applyMapUnitData(registry: UnitRegistry, w3uBytes: Uint8Array, wtsBytes?: Uint8Array, layer: ObjectLayer = {}): number {
   const trigStr = makeTrigStr(wtsBytes);
 
   const w3u = new War3MapW3u();
@@ -623,7 +702,7 @@ export function applyMapUnitData(registry: UnitRegistry, w3uBytes: Uint8Array, w
 
   // Custom table: NEW unit ids, each based on (oldId) an existing type.
   for (const obj of w3u.customTable.objects) {
-    const base = registry.base(obj.oldId) ?? registry.get(obj.oldId);
+    const base = (layer.skin ? registry.get(obj.newId) : undefined) ?? registry.base(obj.oldId) ?? registry.get(obj.oldId);
     if (!base) continue; // base type unknown (chained custom / non-unit) — skip, don't crash
     const def = cloneDef(base, obj.newId);
     applyMods(def, obj.modifications, trigStr);
@@ -632,7 +711,7 @@ export function applyMapUnitData(registry: UnitRegistry, w3uBytes: Uint8Array, w
   }
   // Original table: field overrides applied to a base-game type in-place (overlay it).
   for (const obj of w3u.originalTable.objects) {
-    const base = registry.base(obj.oldId);
+    const base = layer.skin ? registry.get(obj.oldId) : registry.base(obj.oldId);
     if (!base) continue;
     const def = cloneDef(base, obj.oldId);
     applyMods(def, obj.modifications, trigStr);
@@ -655,6 +734,65 @@ interface AbilMod { id: string; levelOrVariation: number; value: Val }
 
 const emptyLevel = emptyAbilityLevel; // the canonical blank rank — see src/data/abilities.ts
 const cloneLevel = (l: AbilityLevel): AbilityLevel => ({ ...l, data: [...l.data], dataStr: [...l.dataStr], buffs: [...l.buffs] });
+
+/** A deep copy of an ability row — what a unit's or an item's OWN ability becomes the first time a
+ *  script writes one of its fields (SimWorld.ownAbilityDef). */
+export function cloneAbilityDef(base: AbilityDef): AbilityDef {
+  return cloneAbility(base, base.id);
+}
+
+/**
+ * A script's write of ONE ability field — `BlzSetAbilityIntegerLevelField(ability,
+ * ABILITY_ILF_ATTACK_BONUS, 0, 9)` — onto a row. The field is named by its `AbilityMetaData.slk`
+ * id (`Iatt`), which is how the World Editor names it in a w3a too, so this is the SAME routing a
+ * map's object-editor edit takes (applyAbilityMods) and the two can never mean different
+ * things. `level` is 1-based (the caller has already applied the map's index base); a field that
+ * is not per level ignores it. False for an id the meta file does not have.
+ */
+export function writeAbilityField(def: AbilityDef, metaId: string, level: number, value: string | number, meta: MappedData): boolean {
+  if (!meta.getRow(metaId)) return false;
+  applyAbilityMods(def, [{ id: metaId, levelOrVariation: Math.max(1, level), value }], meta, (v) => v);
+  return true;
+}
+
+/** The read half of `writeAbilityField` — the value a row holds for one metadata field id, or
+ *  undefined for a field the row does not model (the same set applyAbilityMods routes). */
+export function readAbilityField(def: AbilityDef, metaId: string, level: number, meta: MappedData): number | string | boolean | undefined {
+  const row = meta.getRow(metaId) as { string(k: string): string | undefined } | undefined;
+  if (!row) return undefined;
+  const lvl = def.levelData[Math.min(Math.max(1, level), def.levelData.length) - 1];
+  const at = Math.max(0, level - 1);
+  switch ((row.string("field") ?? "").toLowerCase()) {
+    case "name": return def.name;
+    case "art": return def.icon;
+    case "hero": return def.isHero;
+    case "item": return def.isItem;
+    case "levels": return def.levels;
+    case "reqlevel": return def.reqLevel;
+    case "levelskip": return def.levelSkip;
+    case "hotkey": return def.hotkey;
+    case "researchtip": return def.researchTip;
+    case "researchubertip": return def.researchUberTip;
+    case "tip": return def.tips[at] ?? def.tips[def.tips.length - 1] ?? "";
+    case "ubertip": return def.uberTips[at] ?? def.uberTips[def.uberTips.length - 1] ?? "";
+    case "area": return lvl?.area;
+    case "cool": return lvl?.cooldown;
+    case "cost": return lvl?.cost;
+    case "dur": return lvl?.duration;
+    case "herodur": return lvl?.heroDuration;
+    case "rng": return lvl?.castRange;
+    case "cast": return lvl?.castTime;
+    case "unitid": return lvl?.summon;
+    case "buffid": return lvl?.buffs.join(",");
+    case "data": {
+      const slot = parseInt(row.string("data") ?? "0", 10) - 1;
+      if (!lvl || slot < 0) return undefined;
+      const v = lvl.data[slot];
+      return v === undefined || Number.isNaN(v) ? lvl.dataStr[slot] ?? 0 : v;
+    }
+    default: return undefined;
+  }
+}
 
 function cloneAbility(base: AbilityDef, id: string): AbilityDef {
   return {
@@ -803,7 +941,7 @@ function applyAbilityMods(def: AbilityDef, mods: AbilMod[], meta: MappedData, tr
  * many were installed. `metaBytes` = the install's Units\AbilityMetaData.slk (routes
  * each 4-char field code to its column/data slot); without it nothing can be applied.
  */
-export function applyMapAbilityData(registry: AbilityRegistry, w3aBytes: Uint8Array, metaBytes: Uint8Array, wtsBytes?: Uint8Array): number {
+export function applyMapAbilityData(registry: AbilityRegistry, w3aBytes: Uint8Array, metaBytes: Uint8Array, wtsBytes?: Uint8Array, layer: ObjectLayer = {}): number {
   const meta = new MappedData(new TextDecoder("windows-1252").decode(metaBytes));
   const trigStr = makeTrigStr(wtsBytes);
   const w3a = new War3MapW3d();
@@ -811,7 +949,7 @@ export function applyMapAbilityData(registry: AbilityRegistry, w3aBytes: Uint8Ar
   let count = 0;
 
   for (const obj of w3a.customTable.objects) {
-    const base = registry.base(obj.oldId) ?? registry.get(obj.oldId);
+    const base = (layer.skin ? registry.get(obj.newId) : undefined) ?? registry.base(obj.oldId) ?? registry.get(obj.oldId);
     if (!base) continue; // base ability unknown — skip (the clone would have no `code`)
     const def = cloneAbility(base, obj.newId);
     applyAbilityMods(def, obj.modifications as AbilMod[], meta, trigStr, registry);
@@ -819,7 +957,7 @@ export function applyMapAbilityData(registry: AbilityRegistry, w3aBytes: Uint8Ar
     count++;
   }
   for (const obj of w3a.originalTable.objects) {
-    const base = registry.base(obj.oldId);
+    const base = layer.skin ? registry.get(obj.oldId) : registry.base(obj.oldId);
     if (!base) continue;
     const def = cloneAbility(base, obj.oldId);
     applyAbilityMods(def, obj.modifications as AbilMod[], meta, trigStr, registry);
@@ -1002,7 +1140,7 @@ function cloneItem(base: ItemDef, id: string): ItemDef {
  * and an item (ItemData.slk's 273 ids and UnitData/UnitBalance's 836 do not meet). So both
  * loaders are simply offered the w3u, and each takes the rows whose base is in its own registry.
  */
-export function applyMapItemData(registry: ItemRegistry, w3tBytes: Uint8Array, wtsBytes?: Uint8Array): number {
+export function applyMapItemData(registry: ItemRegistry, w3tBytes: Uint8Array, wtsBytes?: Uint8Array, layer: ObjectLayer = {}): number {
   const trigStr = makeTrigStr(wtsBytes);
   const w3t = new War3MapW3u(); // items reuse the flat unit parser (no level data)
   w3t.load(w3tBytes);
@@ -1016,8 +1154,17 @@ export function applyMapItemData(registry: ItemRegistry, w3tBytes: Uint8Array, w
       ITEM_SETTERS[m.id]?.(def, m.value);
     }
   };
+  // A base row this install does not have (a stock item a later patch added) is an EMPTY row
+  // with the map's fields over it (items.ts blankItemDef) rather than no item at all: the map
+  // restates what makes the item work — its class, charges, price and ability — and dropping it
+  // left a starting item nobody could ever hold. Only for a row that sets an ITEM field (the
+  // `i…` codes, UnitMetaData's `useItem` rows — all but `ides`, the Description line units share):
+  // the w3u is offered here too, and a unit row must stay a unit row.
+  const unknownItem = (id: string, mods: Array<{ id: string }>): ItemDef | undefined =>
+    mods.some((m) => m.id.startsWith("i") && m.id !== "ides") ? blankItemDef(id) : undefined;
   for (const obj of w3t.customTable.objects) {
-    const base = registry.base(obj.oldId) ?? registry.get(obj.oldId);
+    const base = (layer.skin ? registry.get(obj.newId) : undefined) ?? registry.base(obj.oldId) ?? registry.get(obj.oldId)
+      ?? unknownItem(obj.oldId, obj.modifications as AbilMod[]);
     if (!base) continue;
     const def = cloneItem(base, obj.newId);
     applyItemMods(def, obj.modifications as AbilMod[]);
@@ -1025,7 +1172,7 @@ export function applyMapItemData(registry: ItemRegistry, w3tBytes: Uint8Array, w
     count++;
   }
   for (const obj of w3t.originalTable.objects) {
-    const base = registry.base(obj.oldId);
+    const base = (layer.skin ? registry.get(obj.oldId) : registry.base(obj.oldId)) ?? unknownItem(obj.oldId, obj.modifications as AbilMod[]);
     if (!base) continue;
     const def = cloneItem(base, obj.oldId);
     applyItemMods(def, obj.modifications as AbilMod[]);

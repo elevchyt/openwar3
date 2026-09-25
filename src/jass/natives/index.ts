@@ -15,6 +15,8 @@ import { registerConfigNatives } from "./config";
 import { registerDestructableNatives } from "./destructables";
 import { registerDialogNatives } from "./dialogs";
 import { registerEffectNatives } from "./effects";
+import { registerLightningNatives } from "./lightning";
+import { registerImageryNatives } from "./imagery";
 import { registerEventNatives } from "./events";
 import { registerLeaderboardNatives } from "./leaderboard";
 import { registerForceNatives } from "./forces";
@@ -37,6 +39,9 @@ import { registerTimerDialogNatives } from "./timerdialog";
 import { registerVisionNatives } from "./vision";
 import { registerWeatherNatives } from "./weather";
 import { registerPredicateNatives } from "./predicates";
+import { registerUnitStatNatives } from "./unitStats";
+import { registerAbilityBlzNatives } from "./abilityBlz";
+import { registerAbilityFieldNatives } from "./abilityFields";
 import { registerWidgetNatives } from "./widgets";
 import { registerWorldNatives } from "./world";
 
@@ -64,6 +69,13 @@ const CONVERT_NATIVES = [
   // `ConvertUnit*Field` families are NOT here: natives/blzFields.ts registers them beside the
   // table whose indices they carry.
   "ConvertOriginFrameType", "ConvertFramePointType", "ConvertFrameEventType",
+  // …and the two the special-effect animation natives take (natives/effects.ts). Both are in
+  // the install's own 1.30.4 common.j; without them every ANIM_TYPE_/SUBANIM_TYPE_ constant
+  // was null and BlzPlaySpecialEffect could not be told which clip to play.
+  "ConvertAnimType", "ConvertSubAnimType",
+  // …and the mouse button (common.j 146; its three MOUSE_BUTTON_TYPE_ constants at 299-301 are
+  // initialised by EVERY map's globals, so its absence was a "not implemented" line on each one).
+  "ConvertMouseButtonType",
 ];
 
 /** Cheap, pure utility natives (string/number conversions, RNG, camera/env
@@ -81,7 +93,18 @@ function registerUtilNatives(rt: Runtime): void {
   def(rt, "StringLength", (_c, a) => jInt(asStr(a[0]).length));
   def(rt, "StringCase", (_c, a) => jStr(a[1].k === "bool" && a[1].b ? asStr(a[0]).toUpperCase() : asStr(a[0]).toLowerCase()));
   // StringHash lives in natives/text.ts (a real 32-bit hash, not a 0 stub).
-  def(rt, "GetHandleId", (_c, a) => jInt(a[0].k === "handle" ? a[0].h : 0));
+  // GetHandleId. A `Convert…` constant (an attack type, a damage type, a player state …) is not
+  // an object with an id of its own in the game: its handle id IS the integer it was converted
+  // from. Scripts lean on it — the Damage Engine both rebalance maps run reads
+  // `GetHandleId(BlzGetEventAttackType())` and tests `== 0` for a spell and
+  // `== udg_DAMAGE_TYPE_NORMAL` (which its own config sets to the literal 4) for "armour applies"
+  // (Test of Balance, war3map.j 980–981 and 1170–1172). Answered with our interned id instead,
+  // every blow read as a non-spell of no known type. Every other handle keeps its own id.
+  def(rt, "GetHandleId", (c, a) => {
+    if (a[0].k !== "handle") return jInt(0);
+    const obj = c.rt.handles.get(a[0].h) as { constant?: boolean; index?: number } | undefined;
+    return jInt(obj?.constant ? obj.index ?? 0 : a[0].h);
+  });
   def(rt, "GetRandomInt", (c, a) => {
     const lo = asInt(a[0]), hi = asInt(a[1]);
     return jInt(hi < lo ? lo : lo + Math.floor(c.rt.random() * (hi - lo + 1)));
@@ -142,10 +165,15 @@ export function registerNatives(rt: Runtime): void {
   registerAbilityNatives(rt); // abilities + heroes (7.17)
   registerWidgetNatives(rt); // a widget's life, and damage dealt by a trigger (docs/map-compatibility.md)
   registerPredicateNatives(rt); // the `Is…` conditions a custom map gates on (ditto)
+  registerUnitStatNatives(rt); // BlzGet/SetUnit… — a map rebalancing a unit at run time (ditto)
+  registerAbilityBlzNatives(rt); // Blz… abilities: off/hidden per unit, clocks, costs, words (ditto)
+  registerAbilityFieldNatives(rt); // the 1.31 ability INSTANCES and their fields (docs/map-compatibility.md)
   registerCameraNatives(rt); // camera setups + the camera-move family (7.24)
   registerCinematicNatives(rt); // letterbox, fade, transmissions, minimap pings (7.24)
   registerDialogNatives(rt); // dialogs + the victory/defeat screen (7.19)
   registerEffectNatives(rt); // the trigger puts a model in the world (7.26 — issue #68)
+  registerLightningNatives(rt); // a script's own bolts (docs/map-compatibility.md pass 10)
+  registerImageryNatives(rt); // ubersplats, images, water tint, sky (ditto)
   registerEventNatives(rt);
   registerLeaderboardNatives(rt); // the scoreboard every TD/AoS shows (7.19)
   registerForceNatives(rt);

@@ -10,7 +10,7 @@
 
 import type { FunctionDecl } from "./ast";
 import { type JassValue, JNULL, jHandle } from "./values";
-import { FIRST_NEUTRAL_SLOT, PlayerSlot } from "../data/enums";
+import { isNeutralSlot, PlayerSlot, widePlayerTable } from "../data/enums";
 import type { StoredUnitState } from "../sim/world";
 
 /** A trigger object (CreateTrigger) — its conditions + actions (function names)
@@ -481,6 +481,20 @@ export interface GameCacheObj {
 /** A unit created by the script (CreateUnit). Kept so main()/CreateAllUnits can be
  *  cross-checked against war3mapUnits.doo (the 7.2 oracle) even with no engine
  *  attached, and so bridge lookups can map a unit handle back to our sim id. */
+/** The columns the GetUnitDefault… natives read (natives/world.ts). */
+export type UnitTypeDefault = "moveSpeed" | "turnRate" | "flyHeight" | "acquireRange";
+
+/** The filter UnitRemoveBuffsEx / UnitCountBuffsEx take, argument for argument (jassbot). */
+export interface BuffFilter {
+  positive: boolean;
+  negative: boolean;
+  magic: boolean;
+  physical: boolean;
+  timedLife: boolean;
+  aura: boolean;
+  autoDispel: boolean;
+}
+
 export interface JassUnit {
   handleId: number;
   player: number;
@@ -588,6 +602,15 @@ export interface MapSetup {
  *  over SimWorld/RtsController; every method is optional so the interpreter runs
  *  headlessly (config-only, or corpus tests) with no engine attached. `typeId` is
  *  the 4-char rawcode string (e.g. "hfoo"); unit ids are our engine's sim ids. */
+/** An ability INSTANCE a script names — a unit's entry (`owner` = sim id) or an item's ability
+ *  (`owner` = the item's entity id). The sim's `AbilityRef`, stated structurally here because the
+ *  interpreter does not import the sim. */
+export interface AbilityInstanceRef {
+  kind: "unit" | "item";
+  owner: number;
+  abilId: string;
+}
+
 export interface EngineHooks {
   createUnit?(player: number, typeId: string, x: number, y: number, facing: number): number;
   /** `StoreUnit` — write a unit down for another chapter (see SimWorld.storeUnitState for
@@ -600,6 +623,13 @@ export interface EngineHooks {
   restoreUnit?(stored: StoredUnitState, player: number, x: number, y: number, facing: number): number;
   setResourceAmount?(unitId: number, amount: number): void;
   setUnitAcquireRange?(unitId: number, range: number): void;
+  /** GetUnitAcquireRange — the range the unit auto-acquires at: a script's, else its own
+   *  (a creep's placed aggro range, else its weapon's `acquire`). undefined when it is gone. */
+  getUnitAcquireRange?(unitId: number): number | undefined;
+  /** GetUnitDefault… — one column of the unit TYPE's row, the map's object data applied. Asked
+   *  by TYPE, never by unit: Test of Faith asks it of `GetDyingUnit()`, which has already left
+   *  the world. undefined for a type the registry does not have. */
+  unitTypeDefault?(typeId: string, field: UnitTypeDefault): number | undefined;
   setUnitState?(unitId: number, whichState: number, value: number): void;
   getUnitState?(unitId: number, whichState: number): number; // GetUnitState (life/mana/…)
   setUnitColor?(unitId: number, color: number): void; // SetUnitColor — team-colour tint
@@ -707,8 +737,77 @@ export interface EngineHooks {
     sourceId: number,
     targetId: number,
     amount: number,
-    opts: { attack: boolean; ranged: boolean; attackType: string; magic: boolean; universal: boolean },
+    opts: { attack: boolean; ranged: boolean; attackType: string; magic: boolean; universal: boolean; damageType?: number; weaponSound?: string },
   ): number;
+  /** UnitDamagePoint — the same blow, after `delay`, on every unit in the circle the source's
+   *  side is not allied with (SimWorld.damagePoint). False when there is no source. */
+  damagePoint?(
+    sourceId: number, delay: number, radius: number, x: number, y: number, amount: number,
+    opts: { attack: boolean; ranged: boolean; attackType: string; magic: boolean; universal: boolean; damageType?: number; weaponSound?: string },
+  ): boolean;
+  /** UnitStripHeroLevel — levels off a hero (SimWorld.stripHeroLevel says every rule). */
+  stripHeroLevel?(unitId: number, howManyLevels: number): boolean;
+  /** Get/SetPlayerHandicapXP — a player's experience rate, 1 = 100 %. */
+  xpHandicap?(player: number): number;
+  setXpHandicap?(player: number, rate: number): void;
+  /** UnitPauseTimedLife — hold (or release) a unit's timed-life clock. */
+  pauseTimedLife?(unitId: number, flag: boolean): void;
+  /** UnitAddType / UnitRemoveType — `t` is the ConvertUnitType index; false when the engine
+   *  lets no script change that classification (SimWorld.setUnitClassification). */
+  setUnitClassification?(unitId: number, t: number, on: boolean): boolean;
+  /** UnitRemoveBuffs(Ex) / UnitCountBuffsEx (SimWorld.removeBuffs / countBuffs). */
+  removeBuffs?(unitId: number, q: BuffFilter): void;
+  countBuffs?(unitId: number, q: BuffFilter): number;
+  /** CreateCorpse — a body on the ground; false when the type leaves none. */
+  createCorpse?(typeId: string, x: number, y: number, owner: number, facingDeg: number): boolean;
+  /** GetTerrainCliffLevel — the terrain's cliff layer at a point. */
+  terrainCliffLevel?(x: number, y: number): number;
+  /** PauseCompAI — stop (or restart) a computer player's AI. */
+  pauseCompAi?(player: number, pause: boolean): void;
+  /** The `BlzGetUnit…`/`BlzSetUnit…` stat accessors (SimWorld.unitStat says what each stat
+   *  means). `slot` is the weapon SLOT, 0-based — already translated from the map's index. */
+  unitStat?(unitId: number, stat: string, slot: number): number | boolean | undefined;
+  // --- pass 9: abilities, per unit and per type (docs/map-compatibility.md) ---
+  /** BlzUnitDisableAbility / BlzUnitHideAbility — per-UNIT counters (SimAbility.disableCount). */
+  unitDisableAbility?(unitId: number, abilityId: string, disable: boolean, hideUI: boolean): void;
+  unitHideAbility?(unitId: number, abilityId: string, hide: boolean): void;
+  /** BlzGetUnitAbilityCooldownRemaining / BlzEndUnitAbilityCooldown. */
+  unitAbilityCooldownLeft?(unitId: number, abilityId: string): number;
+  endUnitAbilityCooldown?(unitId: number, abilityId: string): void;
+  /** One rank (0-based) of an ability TYPE's cost and cooldown. */
+  abilityRankData?(abilityId: string, rank: number): { cost: number; cooldown: number } | undefined;
+  // --- ability INSTANCES (the 1.31 ability-field API; docs/map-compatibility.md) ---
+  /** SetUnitExploded — the unit bursts when it dies instead of leaving a body. */
+  setUnitExploded?(unitId: number, exploded: boolean): void;
+  /** Does this unit have this ability at all (learned or not)? — `BlzGetUnitAbility`'s null. */
+  unitHasAbility?(unitId: number, abilityId: string): boolean;
+  /** The id of the unit's `index`-th ability (0-based), or undefined past the end. */
+  unitAbilityAt?(unitId: number, index: number): string | undefined;
+  /** The ability ids an item ENTITY carries, in its row's order. */
+  itemAbilityIds?(itemEntity: number): string[];
+  /** One field of an ability instance, by its AbilityMetaData id ('Iatt'); `level` is 1-based. */
+  abilityField?(ref: AbilityInstanceRef, metaId: string, level: number): number | string | boolean | undefined;
+  /** …and its write, into the instance's OWN copy of the row. False when nothing was written. */
+  setAbilityField?(ref: AbilityInstanceRef, metaId: string, level: number, value: string | number): boolean;
+  /** BlzStartUnitAbilityCooldown — this unit's ability goes down for `seconds`. */
+  startUnitAbilityCooldown?(unitId: number, abilityId: string, seconds: number): void;
+  /** One rank (0-based) of a unit's OWN ability — its instance's cost and cooldown, which a
+   *  script may have rewritten (`BlzGetUnitAbilityCooldown`). */
+  unitAbilityRankData?(unitId: number, abilityId: string, rank: number): { cost: number; cooldown: number } | undefined;
+  /** An ability type's words and art — PRESENTATION, so the renderer's half (RtsController),
+   *  not `simHooks`: a map sets these inside `GetLocalPlayer` blocks. `rank` is 0-based. */
+  abilityText?(abilityId: string, rank: number, extended: boolean): string;
+  setAbilityText?(abilityId: string, rank: number, text: string, extended: boolean): void;
+  abilityIcon?(abilityId: string): string;
+  setAbilityIcon?(abilityId: string, path: string): void;
+  /** BlzSetItemExtendedTooltip — one item ENTITY's own long description. */
+  setItemExtendedTooltip?(itemId: number, text: string): void;
+  /** ReviveHero / ReviveHeroLoc — a fallen hero back, instantly, under the id it died with
+   *  (RtsController.reviveHeroByScript). False when nothing is dead behind it, or food refuses. */
+  reviveHero?(heroId: number, x: number, y: number, eyeCandy: boolean): boolean;
+  /** UnitApplyTimedLife — a clock that kills the unit when it runs out (SimWorld.applyTimedLife). */
+  applyTimedLife?(unitId: number, seconds: number, buffId: string): void;
+  setUnitStat?(unitId: number, stat: string, value: number, slot: number): boolean;
   // --- predicates a custom map gates on (docs/map-compatibility.md pass 4) ---
   /** IsUnitInRange / IsUnitInRangeXY / IsUnitInRangeLoc. Measured the way the SIM measures
    *  every other range — centre distance against `distance + both collision radii` — so a
@@ -797,6 +896,18 @@ export interface EngineHooks {
   enumItems?(): ReadonlyArray<ItemSnapshot>;
   /** ChooseRandomItem(Ex) — a random item rawcode of a class + level ("" = none). */
   chooseRandomItem?(classType: string | null, level: number): string;
+  /** A file of the running MAP (its archive over the install), read synchronously — how
+   *  `BlzLoadTOCFile` brings in the map's own FDF templates while the script waits. */
+  readMapFile?(path: string): Uint8Array | null;
+  /** BlzHideOriginFrames — the game's own console furniture (compat/frames.ts says which). */
+  hideOriginFrames?(hide: boolean): void;
+  /** BlzFrameSetVisible on `ConsoleUIBackdrop` — the black box behind the bottom console. */
+  setConsoleBackdropVisible?(visible: boolean): void;
+  /** UnitId / UnitId2String — a unit type by its internal UnitUI `name`, and back. */
+  unitTypeByName?(name: string): string;
+  unitTypeName?(typeId: string): string | undefined;
+  /** ChooseRandomCreep: a creep type id of that level ("" when the pool is empty). */
+  chooseRandomCreep?(level: number): string;
   // --- neutral-building stock: the Marketplace (issue #57, see natives/stock.ts) ---
   /** AddItemToStock / AddUnitToStock — put a ware on a shop's shelf. */
   addToStock?(shopId: number, wareId: string, kind: "item" | "unit", count: number, max: number): void;
@@ -811,6 +922,9 @@ export interface EngineHooks {
   setUnitPathing?(unitId: number, flag: boolean): void; // SetUnitPathing (false = ghost)
   /** SetUnitAnimation / ResetUnitAnimation — play the named clip ("" resets to stand). */
   setUnitAnimation?(unitId: number, animation: string): void;
+  /** AddUnitAnimationProperties — add (true) or remove (false) an animation TAG ("alternate",
+   *  "work", "upgrade first") that picks which of the model's clips the unit wears. */
+  addUnitAnimationProperties?(unitId: number, props: string, add: boolean): void;
   /** Player resource / state: SetPlayerState & GetPlayerState. `state` is the raw
    *  playerstate index (1 = gold, 2 = lumber, 4 = food cap, 5 = food used). */
   setPlayerState?(player: number, state: number, value: number): void;
@@ -833,9 +947,16 @@ export interface EngineHooks {
    * holds a row per unit type, the map's own w3u is an overlay on it, and nothing writes a
    * column for one unit (see natives/blzFields.ts).
    */
-  unitTypeField?(unitId: number, field: string): number | boolean | string | undefined;
+  unitTypeField?(unitId: number, field: string, slot?: number): number | boolean | string | undefined;
+  /** BlzSetUnit…Field / BlzSetUnitWeapon…Field — ONE unit's own value (SimWorld.setUnitField);
+   *  `slot` is the weapon slot, 0-based. Booleans cross as 1/0. False when nothing was written. */
+  setUnitField?(unitId: number, field: string, value: number, slot?: number): boolean;
 
+  /** GetUnitName — THIS unit's own name if a script gave it one (BlzSetUnitName), else undefined
+   *  and the type's name answers. */
   unitName?(unitId: number): string | undefined;
+  /** BlzSetUnitName / BlzSetHeroProperName — one unit's name, or a hero's given name. */
+  setUnitName?(unitId: number, name: string, proper: boolean): void;
   /** Resolve an object (unit/ability/…) name from its rawcode (GetObjectName). */
   objectName?(typeId: string): string | undefined;
   // --- melee from the script (7.3) — what blizzard.j's Melee* library reaches for ---
@@ -900,6 +1021,9 @@ export interface EngineHooks {
   setPlayerTechResearched?(player: number, tech: string, level: number): void;
   /** SetPlayerTechMaxAllowed — 0 makes a unit type untrainable for that player. */
   setPlayerTechMaxAllowed?(player: number, tech: string, max: number): void;
+  /** SetPlayerAbilityAvailable — `available` false takes the ability off every card of that
+   *  player's units and out of their hands, without removing it from a unit (TechState). */
+  setPlayerAbilityAvailable?(player: number, abilityId: string, available: boolean): void;
   /** GetPlayerTypedUnitCount — count a player's units of one internal TYPE name (the
    *  `name` column of UnitUI.slk: "townhall", "greathall", …). Melee asks for the four
    *  main halls: owning none while still holding structures is what "crippled" means. */
@@ -1069,6 +1193,83 @@ export interface EngineHooks {
   addSpecialEffectTarget?(path: string, unitId: number, attach: string[]): number;
   /** DestroyEffect — play the model's Death clip out, then take it off the scene. */
   destroyEffect?(id: number): void;
+  // --- an effect's transform and look (the BlzSetSpecialEffect… family — pass 10) ---
+  /** BlzSetSpecialEffectPosition/X/Y/Z/Height — ABSOLUTE map coordinates; a null keeps that
+   *  axis. "Does not apply if the effect is attached" (jassbot) — the engine ignores it there. */
+  setSpecialEffectPosition?(id: number, x: number | null, y: number | null, z: number | null): void;
+  /** BlzSetSpecialEffectOrientation/Yaw/Pitch/Roll — RADIANS; a null keeps that angle. */
+  setSpecialEffectOrientation?(id: number, yaw: number | null, pitch: number | null, roll: number | null): void;
+  setSpecialEffectScale?(id: number, scale: number): void;
+  /** BlzSetSpecialEffectColor — vertex colour, 0–255 each (the native drops anything else). */
+  setSpecialEffectColor?(id: number, r: number, g: number, b: number): void;
+  /** BlzSetSpecialEffectAlpha — 0–255. */
+  setSpecialEffectAlpha?(id: number, alpha: number): void;
+  /** BlzSetSpecialEffectColorByPlayer — the player's COLOUR index (not their slot). */
+  setSpecialEffectTeamColor?(id: number, color: number): void;
+  /** BlzPlaySpecialEffect — play the clip named `anim` ("stand", "birth"), qualified by the
+   *  effect's sub-animation tags. */
+  playSpecialEffect?(id: number, anim: string): void;
+  /** BlzSpecialEffectAdd/RemoveSubAnimation — one tag ("second", "upgrade"); `tag` null with
+   *  `add` false is BlzSpecialEffectClearSubAnimations. */
+  specialEffectSubAnim?(id: number, tag: string | null, add: boolean): void;
+  /** BlzGetLocalSpecialEffectX/Y/Z — where it stands; all zero for an attached effect. */
+  specialEffectPosition?(id: number): { x: number; y: number; z: number } | null;
+  /** GetLocationZ — "the current surface elevation … This includes the terrain (hills or
+   *  water) and walkable destructables" (jassbot). */
+  surfaceZ?(x: number, y: number): number;
+  // --- what a script paints on the world (natives/imagery.ts — pass 10) ---
+  /** CreateUbersplat — an UberSplatData row at (x, y), tinted r,g,b,a (0–255), playing the
+   *  row's Birth → Pause → Decay envelope (`forcePaused` holds the pause, `noBirthTime` skips
+   *  the birth). -1 for a row the table does not have. */
+  createUbersplat?(x: number, y: number, name: string, r: number, g: number, b: number, a: number, forcePaused: boolean, noBirthTime: boolean): number;
+  destroyUbersplat?(id: number): void;
+  showUbersplat?(id: number, show: boolean): void;
+  /** True draws it whatever the fog; false leaves it to the fog, like a spell's splat. */
+  setUbersplatRenderAlways?(id: number, always: boolean): void;
+  /** CreateImage — `file` laid on the ground, sizeX × sizeY, its bottom-left corner at
+   *  (posX − originX, posY − originY). -1 for a texture that is not there. */
+  createImage?(file: string, sizeX: number, sizeY: number, posX: number, posY: number, posZ: number, originX: number, originY: number, originZ: number, type: number): number;
+  destroyImage?(id: number): void;
+  showImage?(id: number, show: boolean): void;
+  setImageRenderAlways?(id: number, always: boolean): void;
+  /** 0–255 each. */
+  setImageColor?(id: number, r: number, g: number, b: number, a: number): void;
+  /** Flat at an absolute `height` while `flag`, else back on the terrain. */
+  setImageConstantHeight?(id: number, flag: boolean, height: number): void;
+  setImagePosition?(id: number, x: number, y: number): void;
+  setImageType?(id: number, type: number): void;
+  /** GetTerrainType — the tile id ("Ldrt") at the tile point nearest (x, y); "" off the map. */
+  terrainTypeAt?(x: number, y: number): string;
+  /** GetTerrainVariance — that point's variation cell. */
+  terrainVarianceAt?(x: number, y: number): number;
+  /** SetTerrainType — paint `tile` over an area of `area` (the editor's brush size) and
+   *  `shape` (0 circle, 1 square); `variation` -1 picks randomly per point. */
+  setTerrainType?(x: number, y: number, tile: string, variation: number, area: number, shape: number): void;
+  /** SetWaterBaseColor — the tint over the tileset's own water colours, 0–255 (255 = none). */
+  setWaterBaseColor?(r: number, g: number, b: number, a: number): void;
+  /** SetSkyModel — the model drawn around the eye behind the world; "" for none. */
+  setSkyModel?(path: string): void;
+  /** BlzChangeMinimapTerrainTex — the minimap's terrain picture becomes this texture (a path in
+   *  the map's archive or the install). False when there is no such picture. */
+  changeMinimapTerrainTex?(path: string): boolean;
+  /** BlzGetUnitZ / BlzGetLocalUnitZ — the surface under the unit "plus the unit's occluder
+   *  height" (jassbot), NOT its fly height. 0 for a unit that is gone. */
+  unitZ?(unitId: number): number;
+  // --- lightning: a SCRIPT's bolt (docs/map-compatibility.md pass 10) ---
+  /** AddLightning[Ex] — a `Splats\LightningData.slk` row (`code`, "CLPB") strung between two
+   *  POINTS, standing until `destroyLightning`. `absZ` false is plain `AddLightning`, whose
+   *  ends "attach to the ground" (hiveworkshop 278746) — `z1`/`z2` are then 0 and mean "on
+   *  the ground"; true is the Ex form, whose z is an ABSOLUTE height. Returns the engine's
+   *  id, or -1 for a row the table does not have. */
+  addLightning?(code: string, checkVis: boolean, x1: number, y1: number, z1: number, x2: number, y2: number, z2: number, absZ: boolean): number;
+  /** MoveLightning[Ex] — the same bolt to two new points. False for a bolt that is gone. */
+  moveLightning?(id: number, checkVis: boolean, x1: number, y1: number, z1: number, x2: number, y2: number, z2: number, absZ: boolean): boolean;
+  destroyLightning?(id: number): boolean;
+  /** SetLightningColor — 0..1, alpha included. False for a bolt that is gone. */
+  setLightningColor?(id: number, r: number, g: number, b: number, a: number): boolean;
+  /** The bolt's colour as `GetLightningColorR/G/B/A` read it — its row's until the script
+   *  sets one. Null for a bolt that is gone. */
+  lightningColor?(id: number): [number, number, number, number] | null;
   /** Find the sim unit a PRE-PLACED `CreateUnit` row refers to (7.22). Inside
    *  `CreateAllUnits()` we record the row and never spawn (the unit is already on the map,
    *  adopted from war3mapUnits.doo — Runtime.recordOnlySpawnFns), which used to leave the
@@ -1289,7 +1490,33 @@ export class Runtime {
   };
   /** Global variables (name → value) and arrays (name → JassArray). */
   readonly globals = new Map<string, JassValue>();
+  /**
+   * The blows being handed to the script's damage events RIGHT NOW (Interpreter.fireDamagePhase),
+   * innermost last — a handler that deals damage raises another. The natives read and rewrite the
+   * top one: `GetEventDamage` ("calling GetEventDamage after you set it with this function will
+   * return the value you set" — jassbot), `BlzSetEventDamage`, and the attack/damage/weapon type
+   * getters and setters. The shape is the sim's `DamageBlow`, stated here structurally.
+   */
+  readonly damageStack: Array<{ phase: "damaging" | "damaged"; blow: { amount: number; attackType: string; damageType: number; weaponSound: string } }> = [];
   readonly globalArrays = new Map<string, JassArray>();
+  /** The DECLARED type of each scalar global. A value does not carry it: blizzard.j and every
+   *  editor-written `InitGlobals` assign integer literals to real globals (`set udg_X=0`), so a
+   *  real variable routinely holds an int. `TriggerRegisterVariableEvent` asks this. */
+  readonly globalTypes = new Map<string, string>();
+  /** Scalar globals at least one `TriggerRegisterVariableEvent` watches — the cheap test every
+   *  write makes before anything else (see `assignGlobal`). Never shrinks: a stale name costs
+   *  one lookup that finds no registration. */
+  readonly watchedGlobals = new Set<string>();
+  /** Set by the interpreter: a WATCHED global has just been written (natives/events.ts). */
+  onWatchedGlobal?: (name: string, before: JassValue, after: JassValue) => void;
+
+  /** Write a scalar global — the one door for it, so the JASS `set` and a Lua map's `_G` write
+   *  (src/compat/lua/host.ts) raise the variable event alike. */
+  assignGlobal(name: string, value: JassValue): void {
+    const before = this.globals.get(name);
+    this.globals.set(name, value);
+    if (this.watchedGlobals.has(name)) this.onWatchedGlobal?.(name, before ?? value, value);
+  }
   /**
    * Functions a HOST LANGUAGE has put into this runtime — today, a Lua map's own functions
    * (src/compat/lua/). They are named and called exactly like a JASS one, so everything that
@@ -1400,6 +1627,14 @@ export class Runtime {
    *  `neutralTeamColor`; the host sets this through `HeadlessOptions.neutralColor`). A
    *  neutral slot's own index is not a colour at all on the wide table — 12 there is maroon. */
   neutralPlayerColor: number = PlayerSlot.NeutralHostile;
+  /** What the `Blz…` natives count FROM — 1 or 0 — for BOTH of the indices they take: a weapon
+   *  (`weaponIndex − this` is the weapon slot) and an ability LEVEL (`level − this` is the rank,
+   *  0-based). One patch moved both: "in 1.30 or lower, the function is 1-indexed, but in 1.31
+   *  and newer, it is 0-indexed" (hiveworkshop 319334, weapons), and 1.31's `BlzSetAbility…`
+   *  family "require 0-indexed levels instead of 1-indexed" (hiveworkshop 316163). 1 is our own 1.30.4's answer; a map saved by a 1.31+
+   *  editor was only ever run on a 1.31+ client, so the map door sets 0 for it
+   *  (MapFormatProfile.blzIndexBase). A plain number, so no native imports `src/compat/`. */
+  blzIndexBase = 1;
 
   /** Which slot the human at THIS MACHINE is playing. The lobby's user slot isn't always 0,
    *  so the host sets this with applyLobby. */
@@ -1640,7 +1875,8 @@ export class Runtime {
    *  no starting units, no resources, and keep the creep camp on their start location. */
   applyLobby(slots: ReadonlyArray<LobbySlot>, localPlayer: number): void {
     this.localPlayer = localPlayer;
-    for (let i = 0; i < 12; i++) this.ensurePlayer(i).slotState = 0; // PLAYER_SLOT_STATE_EMPTY
+    // PLAYER_SLOT_STATE_EMPTY for every PLAYER the table has — 24 on a 1.31+ map (enums.ts).
+    for (let i = 0, n = widePlayerTable() ? 24 : 12; i < n; i++) this.ensurePlayer(i).slotState = 0;
     for (const s of slots) {
       const p = this.ensurePlayer(s.index);
       p.slotState = 1; // PLAYER_SLOT_STATE_PLAYING
@@ -1673,7 +1909,7 @@ export class Runtime {
       p = {
         index,
         handleId: 0,
-        color: index >= FIRST_NEUTRAL_SLOT ? this.neutralPlayerColor : index,
+        color: isNeutralSlot(index) ? this.neutralPlayerColor : index,
         controller: MAP_CONTROL.NEUTRAL, // until config() says otherwise
         race: 0,
         raceSelectable: false,
@@ -1823,7 +2059,8 @@ export class Runtime {
   /** An interned handle for an enum-like constant (playercolor, race, mapcontrol,
    *  …). `index` is the constant's integer value; equality then works by id. */
   enumHandle(kind: string, index: number): JassValue {
-    const id = this.handles.intern(`${kind}:${index}`, () => ({ kind, index }));
+    // `constant`: GetHandleId answers the INDEX for these (natives/index.ts says why).
+    const id = this.handles.intern(`${kind}:${index}`, () => ({ kind, index, constant: true }));
     return jHandle(id, kind);
   }
   /** Read the integer index out of an enum-like handle (or -1). */

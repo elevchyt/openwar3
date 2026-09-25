@@ -17,7 +17,7 @@
 
 import type { Expr, FunctionDecl, JassProgram, Stmt, VarDecl } from "./ast";
 import { rawcodeToInt } from "./lexer";
-import { Runtime, JassArray, playerStateHolds, ThreadAbort, unitStateHolds, type BoolExpr, type HostFunction, type JassPlayer, type JassUnit, type NativeCtx, type RectObj, type RegionObj, type SoundObj, type TimerObj, type TriggerObj, type TriggerReg, type UnitSnapshot } from "./runtime";
+import { Runtime, JassArray, compareLimit, playerStateHolds, ThreadAbort, unitStateHolds, type BoolExpr, type HostFunction, type JassPlayer, type JassUnit, type NativeCtx, type RectObj, type RegionObj, type SoundObj, type TimerObj, type TriggerObj, type TriggerReg, type UnitSnapshot } from "./runtime";
 import {
   asInt, asNum, asStr, defaultForType, jassEquals, jBool, jHandle, jInt, jReal, jStr, JNULL, truthy, type JassValue,
 } from "./values";
@@ -82,6 +82,11 @@ export interface SellUnitEvent {
   shop: UnitSnapshot;
   sold: UnitSnapshot;
 }
+/** A unit spawned a summoned unit (EVENT_(PLAYER_)UNIT_SUMMON). */
+export interface SummonEvent {
+  summoner: UnitSnapshot;
+  summoned: UnitSnapshot;
+}
 /** A hero levelling up or learning a skill (7.17). */
 export interface HeroEvent {
   hero: UnitSnapshot;
@@ -131,9 +136,30 @@ export const EVENT_PLAYER_END_CINEMATIC = 17;
 export const EVENT_PLAYER_LEAVE = 15;
 
 // common.j event enum indices (ConvertUnitEvent/ConvertPlayerUnitEvent values).
+/** The registration kinds whose registrar IS the event — no constant is passed, so
+ *  `GetTriggerEventId` names it by the `common.j` constant it corresponds to, looked up by NAME
+ *  in the runtime's globals so no index is retyped (see Interpreter.eventIdOf). */
+const IMPLIED_EVENT: Readonly<Record<string, string>> = {
+  timerExpire: "EVENT_GAME_TIMER_EXPIRED",
+  enterRegion: "EVENT_GAME_ENTER_REGION",
+  leaveRegion: "EVENT_GAME_LEAVE_REGION",
+  gameStateEvent: "EVENT_GAME_STATE_LIMIT",
+  unitDeath: "EVENT_WIDGET_DEATH", // TriggerRegisterDeathEvent takes a WIDGET
+  unitState: "EVENT_UNIT_STATE_LIMIT",
+  playerState: "EVENT_PLAYER_STATE_LIMIT",
+  playerChat: "EVENT_PLAYER_CHAT",
+  dialogButton: "EVENT_DIALOG_BUTTON_CLICK",
+  dialogEvent: "EVENT_DIALOG_CLICK",
+  variable: "EVENT_GAME_VARIABLE_LIMIT",
+};
 const EVENT_UNIT_DEATH = 53;
 const EVENT_PLAYER_UNIT_DEATH = 20;
 const EVENT_UNIT_DAMAGED = 52;
+/** The sim's EventUnitInfo, as much of it as the damage raise reads. */
+interface EventUnitInfoLike {
+  id: number;
+  owner: number;
+}
 // 1.31's per-PLAYER damage event, which a modern map registers ONCE instead of once per unit.
 // The index is OURS, not the file's: 1.30.4's common.j does not carry the constant at all, so
 // it is declared in our own compat prelude (src/compat/prelude.ts) and the two must agree —
@@ -141,6 +167,9 @@ const EVENT_UNIT_DAMAGED = 52;
 // DAMAGING (315) fires BEFORE the reduction and lets a script change the amount, which the sim
 // has no seam for; it is declared so the registration compiles and is never raised.
 const EVENT_PLAYER_UNIT_DAMAGED = 308;
+// …and the two raised BEFORE the resistances — ours to number, like 308 (src/compat/prelude.ts).
+const EVENT_PLAYER_UNIT_DAMAGING = 315;
+const EVENT_UNIT_DAMAGING = 314;
 const EVENT_PLAYER_UNIT_ATTACKED = 18;
 const EVENT_UNIT_ATTACKED = 62;
 // Issued-order events: no-target (38/75), point-target (39/76), unit-target (40/77).
@@ -189,6 +218,8 @@ const EVENT_UNIT_SELL_ITEM = 288;
 // the same Scroll of Town Portal a trained one does).
 const EVENT_PLAYER_UNIT_SELL = 269;
 const EVENT_UNIT_SELL = 286;
+const EVENT_PLAYER_UNIT_SUMMON = 47;
+const EVENT_UNIT_SUMMON = 84;
 /** The three contiguous item phases, in common.j's order (phase index + base = event id). */
 const ITEM_PHASES = ["drop", "pickup", "use"] as const;
 // A unit loaded into a transport / burrow (common.j 51 player, 88 unit).
@@ -278,6 +309,7 @@ export class Interpreter {
       call: (name, args) => this.callFunction(name, args),
       fireEvent: (kind, responses, matches) => this.fireEvent(kind, responses, matches),
     };
+    rt.onWatchedGlobal = (name, before, after) => this.fireVariableEvent(name, before, after);
   }
 
   /** Register a program's natives/functions and collect its global declarations
@@ -296,6 +328,7 @@ export class Interpreter {
       if (g.isArray) {
         this.rt.globalArrays.set(g.name, new JassArray(g.type, () => defaultForType(g.type)));
       } else {
+        this.rt.globalTypes.set(g.name, g.type);
         this.rt.globals.set(g.name, g.init ? this.eval(g.init, null) : defaultForType(g.type));
       }
     }
@@ -521,7 +554,7 @@ export class Interpreter {
         } else if (frame.vars.has(s.name)) {
           frame.vars.set(s.name, value);
         } else {
-          this.rt.globals.set(s.name, value);
+          this.rt.assignGlobal(s.name, value); // may raise a variable event, synchronously
         }
         return JNULL;
       }
@@ -962,6 +995,35 @@ export class Interpreter {
     if (pass) this.startThread(`trigger#${trig.handleId}`, this.runActionsG(trig), responses);
   }
 
+  /**
+   * `TriggerRegisterVariableEvent` — "Value Of Real Variable": `<Variable> becomes <Operation>
+   * <Value>` (UI\TriggerStrings.txt). Raised by the WRITE itself, synchronously: the trigger's
+   * conditions run and its actions start before the statement after the `set` does, and a
+   * variable event raised from inside another one's actions runs to its first wait before the
+   * outer dispatch goes on (hiveworkshop 370527 — Dr Super Good on why "the last onDeath
+   * function will never be called" when handlers nest; that is this order, not a bug in it).
+   *
+   * An assignment that does not CHANGE the value raises nothing: "If the function is called
+   * twice before it can be set to 0, the second event won't fire because you set variable with
+   * value 1 to 1 again which doesn't trigger the event" (hiveworkshop 201641, GUI Unit Event) —
+   * which is why every such library resets its variable to 0 between events. What no source we
+   * found settles is a write that changes the value while the condition ALREADY held (1 → 2
+   * under "greater than 0"); we raise it, on the reading that the comparison is made at each
+   * write. The GUI's "becomes" is the only hint the other way. Every map in the corpus compares
+   * with EQUAL, where the two readings are the same.
+   */
+  private fireVariableEvent(name: string, before: JassValue, after: JassValue): void {
+    const was = asNum(before);
+    const now = asNum(after);
+    if (was === now) return;
+    const regs = this.rt.triggerRegs.filter((r) => r.kind === "variable" && r.params[0]?.k === "string" && r.params[0].s === name);
+    for (const reg of regs) {
+      if (!compareLimit(this.rt.enumIndex(reg.params[1] ?? JNULL), now, asNum(reg.params[2] ?? JNULL))) continue;
+      const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
+      if (trig) this.fireTrigger(trig, this.withTrigger(new Map(), trig, reg));
+    }
+  }
+
   /** Dispatch a sim-raised event to every trigger registered for `kind` whose
    *  registration `params` match (the caller supplies both the event responses and
    *  the matcher). Used by the bridge to raise unit-death / enter-region / … from
@@ -971,7 +1033,7 @@ export class Interpreter {
     const regs = this.rt.triggerRegs.filter((r) => r.kind === kind && (!matches || matches(r.params)));
     for (const reg of regs) {
       const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
-      if (trig) this.fireTrigger(trig, this.withTrigger(responses, trig));
+      if (trig) this.fireTrigger(trig, this.withTrigger(responses, trig, reg));
     }
   }
 
@@ -1027,16 +1089,49 @@ export class Interpreter {
         // response it never turned itself off and re-queued Gerard's quest for ever — every
         // half-second Arthas stood in the rect (and a queued trigger still runs disabled:
         // `TriggerExecuteBJ` gates on TriggerEvaluate, not on the enabled flag).
-        if (trig) this.fireTrigger(trig, this.withTrigger(responses, trig));
+        if (trig) this.fireTrigger(trig, this.withTrigger(responses, trig, reg));
       }
     }
   }
 
-  /** Add the standard GetTriggeringTrigger response for the trigger being fired. */
-  private withTrigger(responses: Map<string, JassValue>, trig: TriggerObj): Map<string, JassValue> {
+  /** Add the standard responses for the trigger being fired: `GetTriggeringTrigger`, and —
+   *  when the dispatch knows which REGISTRATION matched — `GetTriggerEventId`. */
+  private withTrigger(responses: Map<string, JassValue>, trig: TriggerObj, reg?: TriggerReg): Map<string, JassValue> {
     const m = new Map(responses);
     m.set("TriggeringTrigger", jHandle(trig.handleId, "trigger"));
+    const id = reg ? this.eventIdOf(reg) : undefined;
+    if (id) m.set("TriggerEventId", id);
     return m;
+  }
+
+  /**
+   * `GetTriggerEventId` — WHICH event fired this trigger, as the very constant the map compares
+   * it against (docs/map-compatibility.md pass 5).
+   *
+   * It is a fact about the REGISTRATION, not the trigger, and the maps that call it are the
+   * proof: they register one trigger on several events and branch on which one arrived. Across
+   * the later-format corpus the commonest comparisons are `EVENT_UNIT_DEATH` (114) and
+   * `EVENT_UNIT_DAMAGED` (72) — typically both registered on the SAME trigger — so an id
+   * stored per trigger would answer the last one registered for every event it received.
+   *
+   * Two ways a registration names its event, and both hand back the handle the map already
+   * holds, so `GetTriggerEventId() == EVENT_UNIT_DEATH` is plain handle identity:
+   *
+   *   * EXPLICITLY — `TriggerRegisterUnitEvent(t, u, EVENT_UNIT_DEATH)` and its player, game and
+   *     player-unit siblings carry the constant in their params. Enum handles are interned by
+   *     `(Convert…, index)`, so the param IS the global. Found by type rather than by position,
+   *     because the position differs between the four registrars.
+   *   * IMPLICITLY — a timer, a region, a death on a widget, a state limit, a chat line, a
+   *     dialog: the registrar's NAME is the event and no constant is passed. Those are resolved
+   *     by NAME against the runtime's own globals, i.e. against `common.j` as the install ships
+   *     it, so no index is retyped here. A kind with no constant in 1.30.4 — the unit-in-range
+   *     circle has none — gets no id, and the native answers null, which is what a map comparing
+   *     against nothing would get anyway.
+   */
+  private eventIdOf(reg: TriggerReg): JassValue | undefined {
+    for (const p of reg.params) if (p?.k === "handle" && p.ty.endsWith("Event")) return p;
+    const name = IMPLIED_EVENT[reg.kind];
+    return name ? this.rt.globals.get(name) : undefined;
   }
 
   // --- live enter/leave-region pump (milestone 7.4b) -------------------------
@@ -1159,7 +1254,7 @@ export class Interpreter {
     const handle = this.rt.unitForSim(u);
     if (!this.eventFilterPasses(reg.params[reg.kind === "unitInRange" ? 2 : 1], handle)) return;
     const responses = new Map<string, JassValue>([["TriggerUnit", handle], [respKey, handle]]);
-    this.fireTrigger(trig, this.withTrigger(responses, trig));
+    this.fireTrigger(trig, this.withTrigger(responses, trig, reg));
   }
 
   /** Evaluate an event registration's boolexpr filter (enter-region's 3rd arg, a
@@ -1226,7 +1321,7 @@ export class Interpreter {
         const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
         if (!trig) continue;
         const responses = new Map<string, JassValue>([["DyingDestructable", subject], ["TriggerWidget", subject]]);
-        this.fireTrigger(trig, this.withTrigger(responses, trig));
+        this.fireTrigger(trig, this.withTrigger(responses, trig, reg));
       }
     }
   }
@@ -1243,6 +1338,61 @@ export class Interpreter {
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, EVENT_PLAYER_UNIT_DAMAGED, e.target.owner, target)));
     }
   }
+
+  /**
+   * Raise one phase of a blow to the script, SYNCHRONOUSLY, while the sim is dealing it (the sim's
+   * `damageHook`, set only for a map that can change a blow). The handlers run to their first wait
+   * right here, and whatever they wrote into the blow through the natives is what the sim reads
+   * back when this returns (runtime.damageStack). DAMAGING goes to EVENT_UNIT_DAMAGING /
+   * EVENT_PLAYER_UNIT_DAMAGING, DAMAGED to the two classic damage events.
+   */
+  fireDamagePhase(phase: "damaging" | "damaged", blow: { target: EventUnitInfoLike; source: EventUnitInfoLike | null; amount: number; attackType: string; damageType: number; weaponSound: string }): void {
+    const target = this.rt.unitForSim(blow.target as never);
+    const source = blow.source ? this.rt.unitForSim(blow.source as never) : JNULL;
+    const responses = new Map<string, JassValue>([["TriggerUnit", target], ["EventDamageSource", source], ["EventDamage", jReal(blow.amount)]]);
+    const unitEvt = phase === "damaging" ? EVENT_UNIT_DAMAGING : EVENT_UNIT_DAMAGED;
+    const playerEvt = phase === "damaging" ? EVENT_PLAYER_UNIT_DAMAGING : EVENT_PLAYER_UNIT_DAMAGED;
+    this.rt.damageStack.push({ phase, blow });
+    try {
+      this.dispatchToRegs(responses, (reg) =>
+        (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, target)) ||
+        (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, blow.target.owner, target)));
+    } finally {
+      this.rt.damageStack.pop();
+    }
+  }
+
+  /** Can this script change a blow? — calls a damage-event setter anywhere, which is what makes
+   *  it need the synchronous path (SimWorld.damageHook). Asked of the loaded functions once. */
+  scriptModifiesDamage(): boolean {
+    if (this.modifiesDamage === undefined) {
+      const setters = new Set(["BlzSetEventDamage", "BlzSetEventAttackType", "BlzSetEventDamageType", "BlzSetEventWeaponType"]);
+      const inExpr = (e: Expr | undefined): boolean => {
+        if (!e) return false;
+        switch (e.kind) {
+          case "call": return setters.has(e.name) || e.args.some(inExpr);
+          case "index": return inExpr(e.index);
+          case "unary": return inExpr(e.expr);
+          case "binary": return inExpr(e.left) || inExpr(e.right);
+          default: return false;
+        }
+      };
+      const inStmts = (ss: Stmt[]): boolean => ss.some((s) => {
+        switch (s.kind) {
+          case "call": return setters.has(s.name) || s.args.some(inExpr);
+          case "set": return inExpr(s.value) || inExpr(s.index);
+          case "if": return s.branches.some((b) => inExpr(b.cond) || inStmts(b.body)) || (!!s.elseBody && inStmts(s.elseBody));
+          case "loop": return inStmts(s.body);
+          case "exitwhen": return inExpr(s.cond);
+          case "return": return inExpr(s.value);
+          default: return false;
+        }
+      });
+      this.modifiesDamage = [...this.rt.functions.values()].some((f) => f.locals.some((l) => inExpr(l.init)) || inStmts(f.body));
+    }
+    return this.modifiesDamage;
+  }
+  private modifiesDamage: boolean | undefined;
 
   /** Pump attack events (7.4c) — EVENT_UNIT_ATTACKED (specific unit) + the common
    *  EVENT_PLAYER_UNIT_ATTACKED (per player), with GetAttacker. */
@@ -1424,6 +1574,30 @@ export class Interpreter {
    * This is the second half of MeleeGrantHeroItems: a melee player's first hero carries a
    * Scroll of Town Portal whether it was trained at an Altar or woken at a Tavern.
    */
+  /**
+   * Pump summon events — a unit SPAWNED a summoned unit.
+   *
+   * The SUMMONER is the subject, and the install says so in the event's own words: "When
+   * responding to a 'Spawns A Summoned Unit' unit event" (`UI\TriggerStrings.txt`, the hints for
+   * `GetSummonedUnit`/`GetSummoningUnit`) — the unit that spawns is the "A unit", which is the
+   * triggering unit (hiveworkshop 264641). So `GetTriggerUnit` is the summoner, a unit-scoped
+   * registration matches the summoner, and the player event is filed under the summoner's owner.
+   */
+  pumpSummonEvents(events: ReadonlyArray<SummonEvent>): void {
+    for (const e of events) {
+      const summoner = this.rt.unitForSim(e.summoner);
+      const summoned = this.rt.unitForSim(e.summoned);
+      const responses = new Map<string, JassValue>([
+        ["TriggerUnit", summoner],
+        ["SummoningUnit", summoner],
+        ["SummonedUnit", summoned],
+      ]);
+      this.dispatchToRegs(responses, (reg) =>
+        (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, EVENT_PLAYER_UNIT_SUMMON, e.summoner.owner, summoner)) ||
+        (reg.kind === "unitEvent" && this.unitEventIs(reg, EVENT_UNIT_SUMMON) && this.paramUnitIs(reg, summoner)));
+    }
+  }
+
   pumpSellUnitEvents(events: ReadonlyArray<SellUnitEvent>): void {
     for (const e of events) {
       const shop = this.rt.unitForSim(e.shop);
@@ -1513,7 +1687,7 @@ export class Interpreter {
       const u = this.rt.data<JassUnit>(reg.params[0] ?? JNULL);
       if (!trig || !u) continue;
       const handle = jHandle(u.handleId, "unit");
-      this.fireTrigger(trig, this.withTrigger(new Map([["TriggerUnit", handle]]), trig));
+      this.fireTrigger(trig, this.withTrigger(new Map([["TriggerUnit", handle]]), trig, reg));
     }
   }
 
@@ -1539,7 +1713,7 @@ export class Interpreter {
       const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
       const p = this.rt.data<JassPlayer>(reg.params[0] ?? JNULL);
       if (!trig || !p) continue;
-      this.fireTrigger(trig, this.withTrigger(new Map([["TriggerPlayer", this.rt.playerHandle(p.index)]]), trig));
+      this.fireTrigger(trig, this.withTrigger(new Map([["TriggerPlayer", this.rt.playerHandle(p.index)]]), trig, reg));
     }
   }
 
@@ -1559,6 +1733,22 @@ export class Interpreter {
     this.dispatchToRegs(responses, (reg) =>
       (reg.kind === "dialogButton" && reg.params[0]?.k === "handle" && reg.params[0].h === buttonHandleId) ||
       (reg.kind === "dialogEvent" && reg.params[0]?.k === "handle" && reg.params[0].h === dialogHandleId));
+  }
+
+  /** The player did something to one of the map's own FRAMES (compat/frames.ts) — clicked a
+   *  button, moved the mouse onto one. Fires every `BlzTriggerRegisterFrameEvent` that named
+   *  that frame and that event, with `BlzGetTriggerFrame` / `BlzGetTriggerFrameEvent` /
+   *  `GetTriggerPlayer` in scope. Raised by the drawing, which owns the mouse — as a dialog
+   *  button's click is (`fireDialogClick`). */
+  fireFrameEvent(frameHandleId: number, eventIndex: number, player: number): void {
+    const responses = new Map<string, JassValue>([
+      ["TriggerFrame", jHandle(frameHandleId, "framehandle")],
+      ["TriggerFrameEvent", this.rt.enumHandle("FrameEventType", eventIndex)],
+      ["TriggerPlayer", this.rt.playerHandle(player)],
+    ]);
+    this.dispatchToRegs(responses, (reg) =>
+      reg.kind === "frameEvent" && reg.params[0]?.k === "handle" && reg.params[0].h === frameHandleId &&
+      this.rt.enumIndex(reg.params[1] ?? JNULL) === eventIndex);
   }
 
   /**
@@ -1650,7 +1840,7 @@ export class Interpreter {
       // The MATCHED string is per-registration, so it is added here rather than above.
       const own = new Map(responses);
       own.set("EventPlayerChatStringMatched", { k: "string", s: pattern });
-      this.fireTrigger(trig, this.withTrigger(own, trig));
+      this.fireTrigger(trig, this.withTrigger(own, trig, reg));
     }
   }
 
@@ -1660,7 +1850,7 @@ export class Interpreter {
     for (const reg of [...this.rt.triggerRegs]) {
       if (!pred(reg)) continue;
       const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
-      if (trig) this.fireTrigger(trig, this.withTrigger(responses, trig));
+      if (trig) this.fireTrigger(trig, this.withTrigger(responses, trig, reg));
     }
   }
 

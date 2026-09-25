@@ -12,7 +12,7 @@ language that is layered onto the screen at mount time:
 | file | what it does |
 | --- | --- |
 | [`ui/GlobalStrings.fdf`](ui/GlobalStrings.fdf) | strings the game has no key for |
-| [`ui/OptionsMenu.fdf`](ui/OptionsMenu.fdf) | Options → Gameplay: drops two rows, adds two — the Computer+ default at the end, and the "Healthbars:" pulldown SPLICED IN under "Always show Health Bars" — and the hotkey editor's icon button beside "Hotkeys:" |
+| [`ui/OptionsMenu.fdf`](ui/OptionsMenu.fdf) | Options → Gameplay: drops two rows, adds two — the Computer+ default at the end, and the "Healthbars:" pulldown SPLICED IN under "Always show Health Bars" — the hotkey editor's icon button beside "Hotkeys:", and the "Detect Gamepad" button at the bottom (issue #162, both Options panels) |
 | [`ui/EscMenuOptionsPanel.fdf`](ui/EscMenuOptionsPanel.fdf) | F10 → Options: the same edits, on the game's IN-GAME panel — three dead checkbox rows and the Network category out, the "Healthbars:" and "Hotkeys:" pulldowns in. Its frames deliberately share their names with the glue file's, which is how one `OPTION_DEFS` row binds on either screen |
 | [`ui/AdvancedOptionsPane.fdf`](ui/AdvancedOptionsPane.fdf) | Custom Game → Advanced Options: adds a row, and replaces the Observers one. The LAN create screen layers the same file through a second manifest that adds the row and KEEPS the Observers one — on a hosted game that dropdown means what it says |
 | [`ui/AdvancedOptionsDisplay.fdf`](ui/AdvancedOptionsDisplay.fdf) | the LAN game lobby's Advanced Options summary: adds the Computer+ row to the seven the game prints |

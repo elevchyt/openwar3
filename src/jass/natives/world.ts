@@ -7,10 +7,11 @@
 // record into the runtime so CreateAllUnits can be counted against war3mapUnits.doo.
 // (The text actions — floating text + on-screen messages — moved to natives/text.ts.)
 
+import { neutralSlot, PlayerSlot } from "../../data/enums";
 import { intToRawcode, rawcodeToInt } from "../lexer";
-import { orderIdToString, orderStringToId } from "../orders";
-import type { EngineHooks, JassPlayer, JassUnit, NativeCtx, Runtime } from "../runtime";
-import { asInt, asNum, jBool, jHandle, jInt, JNULL, jReal, jStr, type JassValue } from "../values";
+import { orderIdOf, orderIdToString, orderStringToId } from "../orders";
+import type { BuffFilter, EngineHooks, JassPlayer, JassUnit, NativeCtx, Runtime, UnitTypeDefault } from "../runtime";
+import { asInt, asNum, asStr, jBool, jHandle, jInt, JNULL, jReal, jStr, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -95,6 +96,71 @@ export function registerWorldNatives(rt: Runtime): void {
     if (u && u.simId >= 0) c.rt.hooks?.setUnitState?.(u.simId, c.rt.enumIndex(a[1]), asNum(a[2]));
     return JNULL;
   });
+  // UnitApplyTimedLife(u, buffId, duration) — the summon clock, handed to any unit (88 call
+  // sites, 80 of them DotA's dummy casters). The buff id is the clock's LABEL — 'BTLF' "Timed
+  // Life" for most maps, one of UI\TriggerData.txt's `timedlifebuffcode` list — which is what the
+  // info panel prints on the bar. See SimWorld.applyTimedLife.
+  def(rt, "UnitApplyTimedLife", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.applyTimedLife?.(u.simId, asNum(a[2]), intToRawcode(asInt(a[1])));
+    return JNULL;
+  });
+  def(rt, "UnitPauseTimedLife", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.pauseTimedLife?.(u.simId, a[1]?.k === "bool" && a[1].b);
+    return JNULL;
+  });
+  // UnitAddType / UnitRemoveType — one unit's classification (SimWorld.setUnitClassification
+  // says which twelve the engine lets a script change, and whose measurement that is).
+  for (const [name, on] of [["UnitAddType", true], ["UnitRemoveType", false]] as const) {
+    def(rt, name, (c, a) => {
+      const u = unit(c, a[0]);
+      return jBool(!!u && u.simId >= 0 && (c.rt.hooks?.setUnitClassification?.(u.simId, c.rt.enumIndex(a[1]), on) ?? false));
+    });
+  }
+  // The buff filters (SimWorld.removeBuffs says how each criterion is read). UnitRemoveBuffs is
+  // "like calling UnitRemoveBuffsEx(whichUnit, removePostive, removeNegative, false, false,
+  // true, true, false)" — jassbot, and that is literally what it does here.
+  const buffFilter = (a: JassValue[], at: number): BuffFilter => {
+    const b = (i: number) => a[at + i]?.k === "bool" && (a[at + i] as { b: boolean }).b;
+    return { positive: b(0), negative: b(1), magic: b(2), physical: b(3), timedLife: b(4), aura: b(5), autoDispel: b(6) };
+  };
+  def(rt, "UnitRemoveBuffsEx", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.removeBuffs?.(u.simId, buffFilter(a, 1));
+    return JNULL;
+  });
+  def(rt, "UnitRemoveBuffs", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.removeBuffs?.(u.simId, { ...buffFilter(a, 1), magic: false, physical: false, timedLife: true, aura: true, autoDispel: false });
+    return JNULL;
+  });
+  def(rt, "UnitCountBuffsEx", (c, a) => {
+    const u = unit(c, a[0]);
+    return jInt(u && u.simId >= 0 ? c.rt.hooks?.countBuffs?.(u.simId, buffFilter(a, 1)) ?? 0 : 0);
+  });
+  // CreateCorpse(player, unitid, x, y, facing) → the body's `unit` — a DEAD one (simId -1, so
+  // IsUnitType(…, UNIT_TYPE_DEAD) answers true off its type), or null when the type leaves no
+  // corpse (SimWorld.createCorpse). Both rebalance maps lay bodies for their raise-dead items.
+  def(rt, "CreateCorpse", (c, a) => {
+    const player = c.rt.data<JassPlayer>(a[0])?.index ?? asInt(a[0]);
+    const typeId = intToRawcode(asInt(a[1]));
+    const x = asNum(a[2]);
+    const y = asNum(a[3]);
+    const facing = asNum(a[4]);
+    if (!(c.rt.hooks?.createCorpse?.(typeId, x, y, player, facing) ?? false)) return JNULL;
+    return mintUnitHandle(c.rt, player, typeId, x, y, facing, -1);
+  });
+  // UnitId / UnitId2String — a unit type by its INTERNAL name (UnitUI `name`: "footman"), for
+  // blizzard.j's String2UnitIdBJ / UnitId2StringBJ.
+  def(rt, "UnitId", (c, a) => {
+    const id = c.rt.hooks?.unitTypeByName?.(asStr(a[0])) ?? "";
+    return jInt(id ? rawcodeToInt(id) : 0);
+  });
+  def(rt, "UnitId2String", (c, a) => {
+    const name = c.rt.hooks?.unitTypeName?.(intToRawcode(asInt(a[0])));
+    return name ? jStr(name) : JNULL;
+  });
   def(rt, "GetUnitState", (c, a) => {
     const u = unit(c, a[0]);
     return { k: "real", n: u && u.simId >= 0 ? c.rt.hooks?.getUnitState?.(u.simId, c.rt.enumIndex(a[1])) ?? 0 : 0 };
@@ -153,6 +219,21 @@ export function registerWorldNatives(rt: Runtime): void {
     if (u.simId >= 0) c.rt.hooks?.setUnitFacing?.(u.simId, deg * DEG, instant);
   };
   def(rt, "SetUnitFacing", (c, a) => (unit(c, a[0]) && face(c, unit(c, a[0])!, asNum(a[1]), true), JNULL));
+  // "Same as SetUnitFacing, but turns the unit around immediately" (jassbot) — and our
+  // SetUnitFacing is already the immediate turn, so it is that call.
+  def(rt, "BlzSetUnitFacingEx", (c, a) => (unit(c, a[0]) && face(c, unit(c, a[0])!, asNum(a[1]), true), JNULL));
+  // One unit's name (BlzSetUnitName) and a hero's given name (BlzSetHeroProperName), "Applies
+  // immediately" (jassbot) — to its panel and to GetUnitName / GetHeroProperName.
+  def(rt, "BlzSetUnitName", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.setUnitName?.(u.simId, asStr(a[1] ?? JNULL), false);
+    return JNULL;
+  });
+  def(rt, "BlzSetHeroProperName", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.setUnitName?.(u.simId, asStr(a[1] ?? JNULL), true);
+    return JNULL;
+  });
   def(rt, "SetUnitFacingTimed", (c, a) => (unit(c, a[0]) && face(c, unit(c, a[0])!, asNum(a[1]), false), JNULL));
 
   def(rt, "SetUnitOwner", (c, a) => {
@@ -259,8 +340,8 @@ export function registerWorldNatives(rt: Runtime): void {
   def(rt, "IssueTargetOrderById", (c, a) => byId(c, a[0], a[1], "target", 0, 0, a[2]));
 
   // Order id ↔ string vocabulary (OrderId/String2OrderId → int, OrderId2String → string).
-  def(rt, "OrderId", (_c, a) => jInt(orderStringToId(orderStr(a[0]))));
-  def(rt, "String2OrderId", (_c, a) => jInt(orderStringToId(orderStr(a[0]))));
+  def(rt, "OrderId", (_c, a) => jInt(orderIdOf(orderStr(a[0]))));
+  def(rt, "String2OrderId", (_c, a) => jInt(orderIdOf(orderStr(a[0]))));
   def(rt, "OrderId2String", (_c, a) => jStr(orderIdToString(asInt(a[0]))));
   def(rt, "GetUnitCurrentOrder", (c, a) => {
     const u = unit(c, a[0]);
@@ -279,8 +360,22 @@ export function registerWorldNatives(rt: Runtime): void {
     return fromHandle(u);
   };
   const rad2deg = (r: number | undefined): number | undefined => (r === undefined ? undefined : (r * 180) / Math.PI);
+  def(rt, "GetUnitAcquireRange", (c, a) => jReal(liveNum(c, unit(c, a[0]), (h, id) => h.getUnitAcquireRange?.(id), () => 0)));
+  // GetUnitDefault… — what the unit's TYPE says, whatever a script has since done to the unit
+  // (Test of Faith resets a slowed unit with `SetUnitMoveSpeed(u, GetUnitDefaultMoveSpeed(u))`).
+  // 284 call sites between them, 268 of them Test of Faith's "can this thing move at all" test.
+  // Read off the handle's type, the one GetUnitTypeId answers with, so a unit that has died or
+  // been removed still has a default.
+  const typeDefault = (field: UnitTypeDefault) => (c: NativeCtx, a: JassValue[]): JassValue => {
+    const u = unit(c, a[0]);
+    return jReal(u ? c.rt.hooks?.unitTypeDefault?.(u.typeId, field) ?? 0 : 0);
+  };
+  def(rt, "GetUnitDefaultMoveSpeed", typeDefault("moveSpeed"));
+  def(rt, "GetUnitDefaultTurnSpeed", typeDefault("turnRate"));
+  def(rt, "GetUnitDefaultFlyHeight", typeDefault("flyHeight"));
+  def(rt, "GetUnitDefaultAcquireRange", typeDefault("acquireRange"));
   def(rt, "GetUnitTypeId", (c, a) => jInt(unit(c, a[0]) ? rawcodeToInt(unit(c, a[0])!.typeId) : 0));
-  def(rt, "GetOwningPlayer", (c, a) => c.rt.playerHandle(unit(c, a[0])?.player ?? 15));
+  def(rt, "GetOwningPlayer", (c, a) => c.rt.playerHandle(unit(c, a[0])?.player ?? neutralSlot(PlayerSlot.NeutralPassive)));
   // Position/facing prefer the live sim value (a script-created unit's handle keeps its
   // spawn-time x/y/facing; an adopted unit's is only refreshed on the event pump).
   def(rt, "GetUnitX", (c, a) => ({ k: "real", n: liveNum(c, unit(c, a[0]), (h, id) => h.getUnitX?.(id), (u) => u.x) }));
@@ -351,6 +446,22 @@ export function registerWorldNatives(rt: Runtime): void {
   def(rt, "SetUnitAnimation", (c, a) => anim(c, a[0], a[1].k === "string" ? a[1].s : ""));
   def(rt, "QueueUnitAnimation", (c, a) => anim(c, a[0], a[1].k === "string" ? a[1].s : ""));
   def(rt, "ResetUnitAnimation", (c, a) => anim(c, a[0], ""));
+  // SetUnitExploded (common.j 1608) — the unit bursts into its "Art - Special" when it dies and
+  // leaves no corpse (SimWorld.kill). A world fact: nothing can raise what was not left.
+  def(rt, "SetUnitExploded", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.setUnitExploded?.(u.simId, a[1]?.k === "bool" && a[1].b);
+    return JNULL;
+  });
+  // AddUnitAnimationProperties — "Add/Remove Unit Animation Tag" (UI\TriggerStrings.txt): the
+  // same kind of word a type's Animprops holds, laid on ONE unit by its script (see
+  // RtsController.addUnitAnimationProperties). Test of Balance tags its Sacred Pillar with it.
+  def(rt, "AddUnitAnimationProperties", (c, a) => {
+    const u = unit(c, a[0]);
+    const tag = a[1]?.k === "string" ? a[1].s : "";
+    if (u && u.simId >= 0 && tag) c.rt.hooks?.addUnitAnimationProperties?.(u.simId, tag, a[2]?.k === "bool" && a[2].b);
+    return JNULL;
+  });
 
   // SelectUnit(u, flag) / ClearSelection — the script drives the player's SELECTION (7.24).
   // A cinematic clears it on the way in (nothing should stay ringed and command-carded while

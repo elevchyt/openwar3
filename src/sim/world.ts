@@ -6,6 +6,8 @@ import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, 
 import { BlightGrid } from "./blight";
 import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isCriticalStrikeCode, isRepairCode, targetFlagSet, requiredHeroLevel, KNOWN_ABILITIES, morphFlags, MORPH_FLAG_PERMANENT, MORPH_FLAG_REQUIRES_PAYMENT } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
+import { cloneAbilityDef, readAbilityField, writeAbilityField } from "../data/objectData";
+import { ATTACK_TYPES, defenseTypeCode, defenseTypeFrom, targetedAsCode, targetedAsFrom } from "../data/unitFieldCodes";
 import { slotMissileArt, autoArmed, type UnitDef, type UnitRegistry } from "../data/units";
 import { type TechRegistry } from "../data/techtree";
 import { RACE_INDEX, workerProfileFor, harvestAbilityOf, type PlayableRace } from "../data/races";
@@ -13,8 +15,8 @@ import { type UpgradeRegistry } from "../data/upgrades";
 import { TechState } from "./tech";
 import {
   ENABLED_ATTACK_INDEX,
-  SLOWED_ATTACK,
-  SLOWED_MOVE,
+  slowedAttack,
+  slowedMove,
   STACK_DAMAGE,
   abilityOrbTier,
   isArrowOrb,
@@ -23,20 +25,22 @@ import {
   pickOrb,
   type OrbCandidate,
 } from "./orbs";
-import { AttackType, ArmorType, MoveType, PrimaryAttribute, RegenType, WeaponType, isRangedWeapon, launchesMissile } from "../data/enums";
+import { AttackType, ArmorType, MoveType, PlayerSlot, PrimaryAttribute, RegenType, WeaponType, isRangedWeapon, launchesMissile, neutralSlot } from "../data/enums";
 import {
-  MISC_DATA,
-  MISC_GAME,
   MELEE,
-  GAME_HOURS_PER_SEC,
+  gameHoursPerSec,
+  gameNum,
+  dataNum,
   armorDamageReduction,
   creepXpFactor,
   miscGame,
   damageMultiplier,
   etherealDamageMultiplier,
-  ETHEREAL_SPELL_BONUS,
+  etherealSpellBonus,
   grantedXp,
   heroReviveVitals,
+  upkeepBandIndex,
+  upkeepBands,
   xpToReachLevel,
   type ReviveMode,
 } from "../data/gameplayConstants";
@@ -84,6 +88,9 @@ export interface SimWeapon {
   baseBackswing: number;
   /** Whether this slot may be used at all: its bit in `weapsOn`, which the `renw` upgrade
    *  effect can rewrite (Flying Machine Bombs switches the bomb slot on). See WeaponSlotDef. */
+  /** The unit type's weapon SLOT this is, 0-based — see WeaponSlotDef.slot. `weapons` also
+   *  drops unarmed slots, so its index is not the slot either. */
+  slot: number;
   enabled: boolean;
   /** "Targets Allowed" (`targs1`/`targs2`). A weapon strikes a target only if its list admits
    *  it — `air` for a flyer, `structure` for a building, `ground` for everything else — which
@@ -315,6 +322,13 @@ export interface CombatText {
  *  each one). A slot carrying no damage at all is dropped — that is how a Town Hall, which has
  *  a UnitWeapons row like everything else, ends up unarmed. A DISABLED slot is KEPT: the Flying
  *  Machine's bombs must be sitting there, switched off, for Flying Machine Bombs to switch on. */
+/** An inventory ability's slots: its "Item Capacity" (`AbilityMetaData` `inv1`, DataA — 6 for
+ *  the hero's `AInv`, 4 for the Pack Mule's `Apak`, 2 for the racial backpacks), which the
+ *  command card's six places cap. */
+export function inventoryCapacity(dataA: unknown): number {
+  return Math.max(0, Math.min(6, Math.trunc(Number(dataA)) || 0));
+}
+
 export function weaponsFromDef(def: UnitDef): SimWeapon[] {
   const out: SimWeapon[] = [];
   for (const s of def.weapons) {
@@ -325,6 +339,7 @@ export function weaponsFromDef(def: UnitDef): SimWeapon[] {
     // same column what art, if any, this slot may show.
     const ranged = isRangedWeapon(s.weaponType);
     out.push({
+      slot: s.slot,
       damage: s.damage,
       dice: s.dice,
       sides: s.sides,
@@ -390,6 +405,14 @@ export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "hold" | "att
 
 /** A learned/innate ability on a unit. `code` is the base ability code (dispatch
  *  key — see data/abilities). `level` 0 = a hero ability not yet learned. */
+/** One ability INSTANCE a script can name (`BlzGetUnitAbility` / `BlzGetItemAbility…`): a unit's
+ *  entry (`owner` = the unit's sim id) or an item's ability (`owner` = the item's entity id). */
+export interface AbilityRef {
+  kind: "unit" | "item";
+  owner: number;
+  abilId: string;
+}
+
 export interface SimAbility {
   id: string; // alias (for tooltip/icon lookup in the registry)
   code: string; // base ability code — spell dispatch key
@@ -400,10 +423,56 @@ export interface SimAbility {
    *  of Shadows' Shadow Meld (see `syncCarriedAbilities`), taken off again with the item. Host
    *  bookkeeping only: it does not cross the wire, and nothing but the sync reads it. */
   carried?: true;
+  /** `BlzUnitDisableAbility` / `BlzUnitHideAbility` — two COUNTERS, not flags (docs/map-
+   *  compatibility.md pass 9). Each call moves one by one, and the state flips only across zero:
+   *  "BlzUnitHideAbility & BlzUnitDisableAbility increase/decrease counters on each usage. The
+   *  Ability switches hidden/shown Enabled/Disabled state only when moving over the 0 even line"
+   *  (hiveworkshop 312477) — so a map that disables twice must enable twice (312184). Kept ON the
+   *  entry because "the counters reset when the ability is lost", which is then free. Absent = 0.
+   *  See SimWorld.scriptDisabled for what each one stops. */
+  disableCount?: number;
+  hideCount?: number;
+  /** THIS unit's own copy of its ability row, made the first time a script writes one of its
+   *  fields (`BlzSetAbility…Field` on `BlzGetUnitAbility` — docs/map-compatibility.md). WC3's
+   *  abilities are INSTANCES: Test of Balance's cooldown rewards shorten one hero's `acdn`, and
+   *  its pillar's heal grows each wave, without touching the type. Read through
+   *  SimWorld.abilityDefOf, never directly; it goes with the entry, so losing the ability loses
+   *  the changes, as in the game. Host state — not on the wire. */
+  def?: AbilityDef;
 }
 
 /** A timed effect on a unit. `kind` is our gameplay category; `group` de-dupes
  *  non-stacking sources (e.g. two Devotion Auras → one armour buff, the larger). */
+/** How a SCRIPT's damage is dealt (UnitDamageTarget, UnitDamagePoint → SimWorld.damageTarget):
+ *  the damage-table column, the two damagetype readings that change the arithmetic, and the
+ *  damage/weapon type a DAMAGING handler is shown. */
+export interface TriggerDamageOpts {
+  attack: boolean;
+  ranged: boolean;
+  attackType: AttackType;
+  magic: boolean;
+  universal: boolean;
+  damageType?: number;
+  weaponSound?: string;
+}
+
+/** The filter `UnitRemoveBuffsEx` / `UnitCountBuffsEx` take (SimWorld.removeBuffs). */
+export interface BuffQuery {
+  positive: boolean;
+  negative: boolean;
+  magic: boolean;
+  physical: boolean;
+  timedLife: boolean;
+  aura: boolean;
+  autoDispel: boolean;
+}
+
+/** The kinds that are harmful whoever cast them — polarity's fallback when a buff's source is
+ *  gone (SimWorld.buffIsPositive). */
+const NEGATIVE_BUFF_KINDS: ReadonlySet<BuffKind> = new Set<BuffKind>([
+  "stun", "slow", "dot", "sleep", "silence", "hex", "root", "vuln", "miss", "mark", "ethereal",
+]);
+
 export interface SimBuff {
   kind: BuffKind;
   group: string; // non-stacking key ("" = always its own instance)
@@ -820,6 +889,11 @@ export interface ItemDropSet {
   items: Array<{ id: string; chance: number }>;
 }
 
+/** The per-unit stats the `BlzGetUnit…`/`BlzSetUnit…` natives read and write
+ *  (SimWorld.unitStat). The first three are TOTALS, the weapon four are the weapon's own
+ *  columns, and `invulnerable` is read-only. */
+export type UnitStat = "maxHp" | "maxMana" | "armor" | "invulnerable" | "baseDamage" | "attackCooldown" | "diceNumber" | "diceSides";
+
 /** Attributes + growth for a hero, applied on spawn and each level-up. */
 export interface HeroInit {
   /** The hero's randomly-drawn name ("Painkiller"), from the unit's `Propernames`
@@ -1191,6 +1265,33 @@ export interface SimTree {
 /** A frozen snapshot of a unit for a trigger event (death/damage/attack). Just enough
  *  for the trigger engine to mint a JASS unit handle (GetDyingUnit/GetEventDamageSource
  *  /GetAttacker/…) even after the unit is gone. */
+/**
+ * One blow handed to the map's script WHILE it is being dealt — the 1.31 damage events, raised
+ * synchronously so the script can change it (docs/map-compatibility.md; `damageHook`).
+ *
+ *   "damaging" — "triggers before any armor, armor type and other resistances": the amount is the
+ *                raw blow, and the attack type, damage type and weapon (sound) may be changed.
+ *   "damaged"  — after them: the amount is what is about to come off the target's hit points.
+ *
+ * Every field is the SCRIPT's to rewrite (`BlzSetEventDamage` & co.); the sim reads them back.
+ */
+/** DAMAGE_TYPE_NORMAL's common.j index — what an ordinary attack deals. */
+const DAMAGE_TYPE_NORMAL = 4;
+/** How deep damage events may nest before the engine stops raising them (see damageDepth). */
+const MAX_DAMAGE_EVENT_DEPTH = 8;
+
+export interface DamageBlow {
+  target: EventUnitInfo;
+  source: EventUnitInfo | null;
+  amount: number;
+  attackType: AttackType;
+  /** common.j `damagetype` index — DAMAGE_TYPE_NORMAL (4) for an attack, "a regular attack is
+   *  DAMAGE_TYPE_NORMAL" (jassbot); UNKNOWN (0) where the engine does not say. */
+  damageType: number;
+  /** The weapon's sound class as the data spells it ("MetalMediumSlice"; "" for none). */
+  weaponSound: string;
+}
+
 export interface EventUnitInfo {
   id: number;
   typeId: string;
@@ -1209,7 +1310,8 @@ export interface EventUnitInfo {
  *  translation happens here, at the one place a sim unit becomes a JASS unit. */
 export function jassOwnerOf(u: { owner: number; neutralPassive: boolean }): number {
   if (u.owner >= 0) return u.owner;
-  return u.neutralPassive ? 15 : 12;
+  // The script's number for a neutral: 12/15, or 24/27 on the 24-player table (enums.ts).
+  return neutralSlot(u.neutralPassive ? PlayerSlot.NeutralPassive : PlayerSlot.NeutralHostile);
 }
 
 const eventInfo = (u: SimUnit): EventUnitInfo => ({ id: u.id, typeId: u.typeId, owner: jassOwnerOf(u), x: u.x, y: u.y, facing: u.facing });
@@ -1293,6 +1395,13 @@ export interface TrainEvent {
 export interface SellUnitEvent {
   shop: EventUnitInfo; // GetSellingUnit (and GetTriggerUnit)
   sold: EventUnitInfo; // GetSoldUnit
+}
+
+/** A unit spawned a summoned unit — EVENT_(PLAYER_)UNIT_SUMMON. The SUMMONER is the event's
+ *  subject: the install words it "'Spawns A Summoned Unit'" with the spawner as "A unit". */
+export interface SummonEvent {
+  summoner: EventUnitInfo; // GetSummoningUnit (and GetTriggerUnit)
+  summoned: EventUnitInfo; // GetSummonedUnit
 }
 
 /** A hero gaining a level (EVENT_PLAYER_HERO_LEVEL) or learning a skill
@@ -1784,6 +1893,18 @@ export interface SimUnit {
   // like any other soldier — which is why the classification, not "can harvest", is
   // the flag to key off.
   isPeon: boolean;
+  /** `SetUnitExploded` — dies in a burst of its "Art - Special" and leaves no corpse. */
+  explodes?: boolean;
+  /** Per-unit values a script set through `BlzSetUnit…Field` that have no field of their own on
+   *  SimUnit — the bounty, the hit-sound class, the model and selection scale, the run speed —
+   *  keyed by the field layer's own names (SimWorld.setUnitField). Absent = the type's. */
+  fieldOverrides?: Record<string, number>;
+  /** `BlzSetUnitName` — THIS unit's own name ("Change individual unit's name at runtime",
+   *  jassbot), shown on its panel and answered by GetUnitName. Absent = its type's. */
+  nameOverride?: string;
+  /** `BlzSetUnitWeaponBooleanField(u, UNIT_WEAPON_BF_ATTACKS_ENABLED, i, …)` — the unit's own
+   *  "Attacks Enabled" mask, replacing its type's `weapsOn` (recomputeStats). */
+  scriptWeaponsOn?: number;
   /** "Ward" in UnitBalance.slk's `type` column — the ten planted, immobile gadgets: Serpent
    *  Ward (`osp1`-`osp4`), Healing Ward (`ohwd`), Sentry Ward (`oeye`), Stasis Trap (`otot`),
    *  Watcher Ward (`nwad`), Monster Lure (`nlur`), Goblin Land Mine (`nglm`). They are units
@@ -1804,6 +1925,14 @@ export interface SimUnit {
    *   • the game's own Targets Allowed carries a `nonancient` flag (the human Repair's targs
    *     list it), so this is the data's own idea of the category rather than ours. */
   ancient: boolean;
+  /** `UnitAddType` / `UnitRemoveType` on the classifications that have no flag of their own
+   *  here (giant, stunned, plagued, snared, undead, sapper, townhall, tauren), keyed by
+   *  common.j's `ConvertUnitType` index: what IsUnitType answers for this one unit instead of
+   *  its type. The four that DO have a flag (summoned, mechanical, peon, ancient) are written
+   *  there, so the rest of the sim obeys them too. See SimWorld.setUnitClassification. */
+  classOverrides?: Record<number, boolean>;
+  /** `UnitPauseTimedLife` — the summon/timed-life clock stands still while set. */
+  timedLifePaused?: boolean;
   /** For an Entangled Gold Mine (`egol`), the SimMine it stands on — the gold its crew pulls
    *  out. 0 for everything else. See tickMineCrews. */
   mineId: number;
@@ -1973,6 +2102,15 @@ export interface SimUnit {
   isSummon: boolean; // a summoned unit (Water Elemental) — leaves no corpse, ×0.5 XP
   spawning: number; // >0: materializing (playing its birth clip) — cannot act yet
   summonLeft: number; // >0: a temporary summon that expires (Water Elemental); else 0
+  /** The buff a SCRIPT's `UnitApplyTimedLife` named for this unit's clock — `'BTLF'` "Timed Life"
+   *  for most maps (UI\TriggerData.txt's `timedlifebuffcode` list) — or "" when no script put it
+   *  on one. It is what lets the info panel show the clock on a unit that is NOT a summon, and
+   *  what the bar is labelled with. */
+  timedLifeBuff: string;
+  /** A SCRIPT's acquisition range (`SetUnitAcquireRange`), or -1 for the unit's own. It
+   *  replaces the range, never the gates in `acquireRange` — a worker, a cloaked or a hidden
+   *  unit still picks no fights of its own. */
+  scriptAcquire: number;
   summonMax: number; // the summon's full duration (for the "Summoned Unit" bar fill)
   /** The summoner this summon is BOUND to (0 = none, which is almost everything). A bound
    *  summon leaves the moment its summoner does — "Lasts 50 seconds or until the avatar
@@ -2128,6 +2266,15 @@ export interface SimUnit {
   // --- inventory (heroes) ---------------------------------------------------
   inventory: (HeldItem | null)[]; // 6 slots for heroes ([] for units without an inventory)
   /**
+   * The INVENTORY abilities the unit carries (every one base code `AInv`) and the "Item
+   * Capacity" each opens (DataA, `inv1`). Kept apart from `inventory` because a pack is GATED:
+   * every stock Footman, Grunt, Archer and Ghoul lists a racial backpack (`Aihn`/`Aion`/`Aien`/
+   * `Aiun`, 2 slots) whose `Requires` is the Backpack research (`Rhpm`/`Ropm`/`Repm`/`Rupm`),
+   * and the Kodo's `Apak` wants `Ropm` too. Until that is met the unit has no inventory at all;
+   * `openBackpacks` opens the slots the tick it is. Undefined for a unit that carries none.
+   */
+  backpacks?: Array<{ id: string; slots: number }>;
+  /**
    * The COOLDOWN GROUP clocks — group id → seconds left — and the reason they live on the
    * UNIT rather than on the bottle.
    *
@@ -2212,9 +2359,9 @@ const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
 // Hero inventory reach, straight from the Gameplay Constants. Note that picking an
 // item up reaches FURTHER than dropping one does (150 vs 100) — they are separate
 // constants in the game, not one shared radius.
-const ITEM_PICKUP_RANGE = MISC_GAME.PickupItemRange;
-const ITEM_GIVE_RANGE = MISC_GAME.GiveItemRange;
-const ITEM_DROP_RANGE = MISC_GAME.DropItemRange;
+const ITEM_PICKUP_RANGE = (): number => gameNum("PickupItemRange");
+const ITEM_GIVE_RANGE = (): number => gameNum("GiveItemRange");
+const ITEM_DROP_RANGE = (): number => gameNum("DropItemRange");
 // Being PAID for an item: the coins that land on the seller, the label of the sound they
 // land with, and how long they last (issue #120).
 //
@@ -2610,11 +2757,11 @@ const RENEW_SEEK_RANGE = 500;
 // The tables and thresholds live in data/gameplayConstants (Units\MiscGame.txt),
 // derived from the game's own base lists + `f(x) = A·f(x-1) + B·x + C` formulas.
 // Cross-checked with Liquipedia: Experience + warcraft3.info article 232.
-const MAX_HERO_LEVEL = MISC_GAME.MaxHeroLevel;
+const MAX_HERO_LEVEL = (): number => gameNum("MaxHeroLevel");
 /** Heroes within this of a kill share its XP; with none in range, GlobalExperience=1
  *  spreads it across all the killer's heroes instead. */
-const XP_SHARE_RANGE = MISC_GAME.HeroExpRange;
-const SUMMON_XP_FACTOR = MISC_GAME.SummonedKillFactor;
+const XP_SHARE_RANGE = (): number => gameNum("HeroExpRange");
+const SUMMON_XP_FACTOR = (): number => gameNum("SummonedKillFactor");
 
 /** Clear the float noise off a derived life/mana ceiling — see `refreshDerived`, where it is
  *  applied. Six decimals is far below anything the data can mean and far above the 1e-13 a
@@ -2624,13 +2771,13 @@ function snapPool(v: number): number {
 }
 
 // Attribute → stat conversions (MiscGame Str/Int/Agi bonuses; Liquipedia: Hero).
-const HP_PER_STR = MISC_GAME.StrHitPointBonus;
-const MANA_PER_INT = MISC_GAME.IntManaBonus;
+const HP_PER_STR = (): number => gameNum("StrHitPointBonus");
+const MANA_PER_INT = (): number => gameNum("IntManaBonus");
 /** One cliff layer in world units (world/terrain.ts `CELL`) — see SimWorld.cliffApart. */
 const CLIFF_STEP = 128;
-const ARMOR_PER_AGI = MISC_GAME.AgiDefenseBonus;
-const REGEN_PER_STR = MISC_GAME.StrRegenBonus; // hp/sec per Strength point
-const REGEN_PER_INT = MISC_GAME.IntRegenBonus; // mana/sec per Intelligence point
+const ARMOR_PER_AGI = (): number => gameNum("AgiDefenseBonus");
+const REGEN_PER_STR = (): number => gameNum("StrRegenBonus"); // hp/sec per Strength point
+const REGEN_PER_INT = (): number => gameNum("IntRegenBonus"); // mana/sec per Intelligence point
 // Attack-speed (IAS) caps. NOT in MiscGame/MiscData — neither file carries any attack-speed
 // cap key; the engine hardcodes them, so they live here at the use site rather than in
 // gameplayConstants.ts (which mirrors the data files). "The most FAR a unit can have is +400%
@@ -2926,7 +3073,7 @@ const MAGIC_IMMUNE_EXEMPT = new Set(["Adis", "Aadm", "Adcn"]);
 // death — the renderer sequences it Death → Decay Flesh → Decay Bone within this
 // window — and is then removed. The flesh stage is an early sub-phase, not added
 // on top; 88s is the full lifetime from the moment of death.
-const CORPSE_TOTAL_TIME = MISC_DATA.BoneDecayTime;
+const CORPSE_TOTAL_TIME = (): number => dataNum("BoneDecayTime");
 
 // A HERO's body instead of a corpse (issue #126). It plays its death clip — the type's own
 // `death` time — and then DISSIPATES, which `Units\MiscData.txt` states as a duration under
@@ -2937,7 +3084,7 @@ const CORPSE_TOTAL_TIME = MISC_DATA.BoneDecayTime;
 // alpha at all (HeroPaladin.mdx loads with an empty `geosetAnimations` and no layer anims —
 // read off the live model), so the going-away is ours to time and the clip is only the gesture
 // inside it. HeroPaladin's Dissipate runs 2.0s of the 3.
-export const HERO_DISSIPATE_TIME = MISC_DATA.DissipateTime;
+export const HERO_DISSIPATE_TIME = (): number => dataNum("DissipateTime");
 /** The fade at the TAIL of that window — the last second of the dissipate, once the clip has
  *  played itself out, ramping the body away to nothing.
  *
@@ -2954,7 +3101,7 @@ export const HERO_FADE_TIME = 1;
  *  body finishing and the button lighting are one moment, and one number is how they stay
  *  one moment. */
 export function heroBodyTime(deathTime: number): number {
-  return Math.max(0, deathTime) + HERO_DISSIPATE_TIME;
+  return Math.max(0, deathTime) + HERO_DISSIPATE_TIME();
 }
 
 // Repair's share of the target's repair cost and repair time, for a worker whose repair
@@ -2979,13 +3126,13 @@ const NO_SITES: ReadonlyArray<{ x: number; y: number; half: number; builderId: n
 // WC3 day/night (Units\MiscData.txt): a full cycle is DayLength=480 real seconds =
 // DayHours=24 game hours (so one game hour = 20 real seconds); daytime runs from
 // Dawn to Dusk. Melee games open at bj_MELEE_STARTING_TOD = 08:00.
-const DAY_START = MISC_DATA.Dawn;
-const DAY_END = MISC_DATA.Dusk;
+const DAY_START = (): number => dataNum("Dawn");
+const DAY_END = (): number => dataNum("Dusk");
 
 // Neutral-hostile creep guard/leash AI, from Units\MiscGame.txt. (These supersede
 // the ~1.8×-aggro guess — the MPQ wins; see CLAUDE.md.)
-const GUARD_DISTANCE = MISC_GAME.GuardDistance; // strayed this far from home → start the return timer
-const MAX_GUARD_DISTANCE = MISC_GAME.MaxGuardDistance; // strayed this far → return home unconditionally, even under attack
+const GUARD_DISTANCE = (): number => gameNum("GuardDistance"); // strayed this far from home → start the return timer
+const MAX_GUARD_DISTANCE = (): number => gameNum("MaxGuardDistance"); // strayed this far → return home unconditionally, even under attack
 
 /**
  * The ENGINE's movement ceiling, above the game's own `MaxUnitSpeed` (400, MiscGame.txt).
@@ -3011,17 +3158,17 @@ const HEX_TARGET_SOUND = `${POLYMORPH_DIR}PolymorphTarget1.wav`;
 const HEX_TARGET_SOUND_AIR = `${POLYMORPH_DIR}PolymorphTargetAir1.wav`;
 const HEX_DONE_ART = `${POLYMORPH_DIR}PolyMorphDoneGround.mdx`;
 const HEX_DONE_SOUND = `${POLYMORPH_DIR}PolymorphDone.wav`;
-const GUARD_RETURN_TIME = MISC_GAME.GuardReturnTime; // also the "can't get home, resume fighting" window
+const GUARD_RETURN_TIME = (): number => gameNum("GuardReturnTime"); // also the "can't get home, resume fighting" window
 // Seconds a camp must go unstruck before a creep may doze off (campQuiet). OURS, not the game's —
 // no file states a sleep delay; the maintainer's value, short so a camp still sleeps quickly.
 const CREEP_SLEEP_CALM = 3;
-const CREEP_CALL_FOR_HELP = MISC_GAME.CreepCallForHelp; // camp cohesion: one aggros → the whole camp wakes/joins
-const CALL_FOR_HELP = MISC_GAME.CallForHelp; // a PLAYER's attacked unit or building calls its owner's idle units in — see callForHelp
+const CREEP_CALL_FOR_HELP = (): number => gameNum("CreepCallForHelp"); // camp cohesion: one aggros → the whole camp wakes/joins
+const CALL_FOR_HELP = (): number => gameNum("CallForHelp"); // a PLAYER's attacked unit or building calls its owner's idle units in — see callForHelp
 // "Radius of creep notification when a new building gets placed" — Units\MiscData.txt's
 // own comment on this constant. Laying a foundation shouts to the creeps around it, quite
 // apart from anyone's acquisition range: this is why a gold mine's guards charge a Peasant
 // who starts an expansion from further out than they'd have noticed him merely walking by.
-const BUILDING_PLACEMENT_NOTIFY_RADIUS = MISC_DATA.BuildingPlacementNotifyRadius;
+const BUILDING_PLACEMENT_NOTIFY_RADIUS = (): number => dataNum("BuildingPlacementNotifyRadius");
 /**
  * A "Camp" creep's acquisition range. The World Editor's per-unit Target Acquisition radio has
  * three settings — Normal (the type's own `acquire`, 500 on nearly every creep), **Camp (200)**
@@ -3052,7 +3199,7 @@ const CREEP_RETURN_TRIGGER = 128; // 4 cells — safely beyond CREEP_HOME_EPS + 
 // Shooting from the dark gives you away (issue #45). MiscData names no duration for
 // FoggedAttackRevealRadius, so the blow buys the attacker's position one second,
 // re-stamped by every following blow.
-const FOGGED_ATTACK_REVEAL_RADIUS = MISC_DATA.FoggedAttackRevealRadius;
+const FOGGED_ATTACK_REVEAL_RADIUS = (): number => dataNum("FoggedAttackRevealRadius");
 const FOGGED_ATTACK_REVEAL_TIME = 1;
 
 // A DYING unit goes on seeing (issue #126). "Fog Reveal Radius - Dying Unit" is the World
@@ -3063,7 +3210,7 @@ const FOGGED_ATTACK_REVEAL_TIME = 1;
 // critters, on 350, are not. (DotA sets the same constant to 500 and the guide reads it the
 // same way — hiveworkshop "Vision guide" 290769.) How LONG it lasts is the type's own death
 // time (UnitData `death`, UnitDef.deathTime) — the body sees for as long as it takes to fall.
-const DYING_REVEAL_RADIUS = MISC_DATA.DyingRevealRadius;
+const DYING_REVEAL_RADIUS = (): number => dataNum("DyingRevealRadius");
 
 /**
  * The sight a body keeps while it falls — a dying unit's own eyes, outliving it.
@@ -3277,6 +3424,10 @@ export class SimWorld {
   }
   /** Every hero of every player that is currently dead and revivable (see FallenHero). */
   readonly fallen = new Map<number, FallenHero>();
+  /** How many times each player's heroes have died this match — every filing on `fallen`,
+   *  which a revival strikes off and this does not. Read by Computer+'s 1v1 concession
+   *  (plus/chatter.ts `DESPAIR.heroDeathsBehind`). */
+  readonly heroDeaths = new Map<number, number>();
   readonly mines = new Map<number, SimMine>();
   readonly trees = new Map<number, SimTree>();
   readonly projectiles = new Map<number, SimProjectile>();
@@ -3344,6 +3495,17 @@ export class SimWorld {
    *  for melee and for maps that don't listen, so nothing accumulates unread). */
   captureDeaths = false;
   captureDamage = false;
+  /**
+   * The map's damage events, SYNCHRONOUSLY — set by the host only for a script that can change a
+   * blow (it calls BlzSetEventDamage or a BlzSetEvent…Type, or registers a DAMAGING event). While
+   * it is set the blow is handed to it twice (DamageBlow says when) and the queued
+   * `captureDamage` path is not used, so nothing is raised twice. Every other map keeps the queue.
+   */
+  damageHook: ((phase: "damaging" | "damaged", blow: DamageBlow) => void) | null = null;
+  /** How deep in one another's damage events we are: a trigger that deals damage from a damage
+   *  event raises another one — "it will cause infinite loop and game will crash" (jassbot,
+   *  BlzSetEventDamage). The game crashes; we stop raising past a depth and let the blow land. */
+  private damageDepth = 0;
   captureAttacks = false;
   captureOrders = false;
   captureSpells = false; // EVENT_(PLAYER_)UNIT_SPELL_* (7.17)
@@ -3355,6 +3517,7 @@ export class SimWorld {
   captureHeroEvents = false; // EVENT_PLAYER_HERO_LEVEL / _SKILL (7.17)
   captureItems = false; // EVENT_(PLAYER_)UNIT_PICKUP/DROP/USE/SELL_ITEM (7.18)
   captureSellUnits = false; // EVENT_(PLAYER_)UNIT_SELL — a unit bought from a shop (269/286)
+  captureSummons = false; // EVENT_(PLAYER_)UNIT_SUMMON — a unit spawned a summoned unit (47/84)
   captureLoads = false; // EVENT_UNIT_LOADED (88) / EVENT_PLAYER_UNIT_LOADED (51)
   private deathEvents: Array<{ victim: EventUnitInfo; killer: EventUnitInfo | null }> = [];
   /** The last `HERO_KILL_LOG` hero deaths, oldest first, each numbered — read, never drained, by
@@ -3368,6 +3531,7 @@ export class SimWorld {
   private constructEvents: ConstructEvent[] = [];
   private trainEvents: TrainEvent[] = [];
   private sellUnitEvents: SellUnitEvent[] = [];
+  private summonEvents: SummonEvent[] = [];
   private heroEvents: HeroEvent[] = [];
   private itemEvents: ItemEvent[] = [];
   private loadEvents: LoadEvent[] = [];
@@ -3664,6 +3828,26 @@ export class SimWorld {
    * map's economy changes — only what one player's bank makes of the same trip.
    */
   private readonly harvestBonus = new Map<number, number>();
+
+  /**
+   * How much food a player is using — installed by the controller, whose Authority derives it
+   * from the unit table (`Authority.foodFor`). Read only for UPKEEP (`upkeepShare`); absent in
+   * a world with no controller, which then taxes nothing.
+   */
+  foodUsedOf: ((player: number) => number) | null = null;
+
+  /**
+   * UPKEEP: the share of MINED gold that reaches this player's bank — "a tax on your Gold mining
+   * that is automatically deducted from all Gold you gather" (classic.battle.net/war3/basics/
+   * upkeep.shtml), by the band its food used is in (gameplayConstants `upkeepBands`: 100 %,
+   * 70 %, 40 %, or the map's own). Gold only, and only gold that is DUG: a bounty, a pawned item
+   * or a Transmute is not taxed. Neutral owners pay none.
+   */
+  private upkeepShare(player: number): number {
+    if (player < 0 || !this.foodUsedOf) return 1;
+    const bands = upkeepBands();
+    return bands[upkeepBandIndex(this.foodUsedOf(player), bands)].income / 100;
+  }
 
   /** Pay this player `factor` times what its workers actually carry home. See harvestBonus. */
   setHarvestBonus(player: number, factor: number): void {
@@ -4290,6 +4474,18 @@ export class SimWorld {
     return this.units.get(shopId)?.building?.stock?.get(wareId) ?? null;
   }
 
+  /** The UNITS on this building's shelves right now, in the order they were stocked — its
+   *  `Sellunits` and whatever a script put there with `AddUnitToStock`. The second kind is in no
+   *  object-data list at all: Test of Balance's hero pillar sells nothing by data, and its
+   *  draft is eight `AddUnitToStockBJ(heroType, pillar, 1, 1)` calls at the start of the match. */
+  stockedUnits(shopId: number): string[] {
+    const stock = this.units.get(shopId)?.building?.stock;
+    if (!stock) return [];
+    const out: string[] = [];
+    for (const [id, st] of stock) if (st.kind === "unit") out.push(id);
+    return out;
+  }
+
   /** Seed a shop's shelves. The restock schedule runs on the GAME clock, not on when the shop
    *  was raised, so a shop built (or captured) late already carries whatever has come due —
    *  otherwise an Arcane Vault put up at minute 10 would make you wait until 17:20 for a
@@ -4468,7 +4664,7 @@ export class SimWorld {
     // carried, so it has no slot to wait in and nothing to press. Handed to the inventory like
     // an ordinary item it sat there as a button, which is not a thing the game ever shows.
     if (def.powerup) {
-      this.notifyCreepsOfShopUse(shop, buyer, MISC_GAME.ItemSaleAggroRange);
+      this.notifyCreepsOfShopUse(shop, buyer, gameNum("ItemSaleAggroRange"));
       this.noteItem(buyer, { id: this.nextItemId++, itemId, charges: def.charges }, "sell", shop);
       this.applyPowerup(buyer, def);
       return "ok";
@@ -4478,7 +4674,7 @@ export class SimWorld {
     // (itemCooldownOn) — buying another is not a way round a cooldown group.
     const bought = { id: this.nextItemId++, itemId, charges: def.charges, cooldownLeft: this.itemCooldownOn(buyer, itemId) };
     buyer.inventory[slot] = bought;
-    this.notifyCreepsOfShopUse(shop, buyer, MISC_GAME.ItemSaleAggroRange);
+    this.notifyCreepsOfShopUse(shop, buyer, gameNum("ItemSaleAggroRange"));
     // EVENT_(PLAYER_)UNIT_SELL_ITEM. Blizzard.j listens for this on every neutral-passive
     // building and answers it with RemoveItemFromStock(GetSellingUnit(), …) — so a Marketplace
     // only ever clears a sold item off its shelf (and frees the slot for the next 30s update)
@@ -4530,7 +4726,7 @@ export class SimWorld {
   pawnPrice(itemId: string): { gold: number; lumber: number } {
     const def = this.itemReg?.get(itemId);
     if (!def?.pawnable) return { gold: 0, lumber: 0 };
-    return { gold: Math.floor(def.gold * MISC_GAME.PawnItemRate), lumber: Math.floor(def.lumber * MISC_GAME.PawnItemRate) };
+    return { gold: Math.floor(def.gold * gameNum("PawnItemRate")), lumber: Math.floor(def.lumber * gameNum("PawnItemRate")) };
   }
 
   /** Sell an item back to a shop. WC3 pays `PawnItemRate` of its gold value (0.50 in the
@@ -4589,7 +4785,7 @@ export class SimWorld {
     for (const c of this.units.values()) {
       if (!c.isCreep || c.hp <= 0 || c.building || !c.weapon || c.returning) continue;
       const d = Math.hypot(c.x - shop.x, c.y - shop.y) - shop.radius;
-      if (d > MISC_DATA.NeutralUseNotifyRadius) continue;
+      if (d > dataNum("NeutralUseNotifyRadius")) continue;
       c.asleep = false; // heard it — awake, but not necessarily coming
       if (d > saleAggroRange || !buyer || buyer.hp <= 0 || !this.hostile(c, buyer)) continue;
       c.campHelper = false; // roused in its own right, so it may call the rest of the camp
@@ -4780,6 +4976,7 @@ export class SimWorld {
    */
   private recordFallenHero(u: SimUnit): void {
     if (u.owner < 0 || u.isCreep || u.neutralPassive || u.isIllusion) return;
+    this.heroDeaths.set(u.owner, (this.heroDeaths.get(u.owner) ?? 0) + 1);
     this.fallen.set(u.id, {
       id: u.id, owner: u.owner, team: u.team, typeId: u.typeId, properName: u.properName,
       level: u.level, xp: u.xp, skillPoints: u.skillPoints,
@@ -4911,7 +5108,7 @@ export class SimWorld {
    * back whole (full life, its opening 100 mana), a tavern hands it back at half life with
    * nothing in the tank.
    */
-  reviveFallenHero(unitId: number, heroId: number, mode: ReviveMode): boolean {
+  reviveFallenHero(unitId: number, heroId: number, mode: ReviveMode, eyeCandy = true): boolean {
     const u = this.units.get(unitId);
     const f = this.fallen.get(heroId);
     if (!u || !f) return false;
@@ -4937,7 +5134,9 @@ export class SimWorld {
     const vitals = heroReviveVitals(mode, u.maxHp, u.maxMana, this.unitReg?.get(u.typeId)?.manaStart ?? 0);
     u.hp = Math.min(u.maxHp, vitals.hp);
     u.mana = vitals.mana;
-    this.emitReviveFx(u, mode);
+    // `eyeCandy` is `ReviveHero`'s own last argument ("Show/Hide revival graphics" in the editor);
+    // an altar and a tavern always show theirs.
+    if (eyeCandy) this.emitReviveFx(u, mode);
     return true;
   }
 
@@ -5945,7 +6144,7 @@ export class SimWorld {
   entangleTarget(caster: SimUnit, def?: AbilityDef): SimMine | null {
     if (!def) {
       const ab = caster.abilities.find((a) => a.code === "Aent" && a.level >= 1);
-      def = ab ? this.abilities?.get(ab.id) : undefined;
+      def = ab ? this.abilityDefOf(ab) : undefined;
       if (!def) return null;
     }
     const range = def.levelData[0]?.castRange || 500;
@@ -6011,7 +6210,7 @@ export class SimWorld {
     const mine = mineId ? this.mines.get(mineId) : undefined;
     if (mineId && !mine) return false;
     const ab = u.abilities.find((a) => a.code === "Aent" && a.level >= 1);
-    const def = ab && this.abilities.get(ab.id);
+    const def = ab && this.abilityDefOf(ab);
     if (!def) return false;
     return this.entangleMine(u, def, mine, true);
   }
@@ -6036,7 +6235,7 @@ export class SimWorld {
     const u = this.units.get(id);
     if (!u || u.hp <= 0 || !this.abilities) return false;
     const ab = u.abilities.find((a) => a.code === "Aent" && a.level >= 1);
-    const def = ab && this.abilities.get(ab.id);
+    const def = ab && this.abilityDefOf(ab);
     if (!def) return false;
     const range = def.levelData[0]?.castRange || 500;
     const body = this.entangleBody(u);
@@ -6183,7 +6382,7 @@ export class SimWorld {
     }
     u.entanglePending = 0;
     const ab = u.abilities.find((a) => a.code === "Aent" && a.level >= 1);
-    const def = ab && this.abilities?.get(ab.id);
+    const def = ab && this.abilityDefOf(ab);
     if (def) this.entangleMine(u, def, mine);
   }
 
@@ -6556,7 +6755,7 @@ export class SimWorld {
       if (u.hp <= 0 || !u.building || this.raising(u)) continue;
       const ab = u.abilities.find((a) => a.code === "Agyd" && a.level >= 1 && this.techMeets(u.owner, a.id));
       if (!ab) continue;
-      const def = this.abilities.get(ab.id);
+      const def = this.abilityDefOf(ab);
       const lvl = def?.levelData[0];
       if (!def || !lvl) continue;
       // A clock at exactly 0 has not been STARTED: the first body comes a full pulse after the
@@ -6623,10 +6822,12 @@ export class SimWorld {
       u.workT += rules.interval;
       const gold = Math.min(mine.gold, rules.gold);
       mine.gold -= gold;
-      this.stashOf(u.owner).gold += gold;
+      // The mine gives up the whole take; upkeep keeps back its share of what is banked.
+      const banked = Math.floor(gold * this.upkeepShare(u.owner));
+      this.stashOf(u.owner).gold += banked;
       // Paid where the gold is dug — the crewed mine IS the drop-off for both races that work
       // one, so the "+N" belongs on it and not on some hall the money never travels to.
-      this.floatCredit("gold", gold, u.owner, u);
+      this.floatCredit("gold", banked, u.owner, u);
       if (mine.gold <= 0) {
         this.mines.delete(mine.id);
         this.depleted.push(mine);
@@ -6639,7 +6840,7 @@ export class SimWorld {
         // (classic.battle.net/war3/undead/units/acolyte.shtml).
         this.unloadBurrow(u.id);
         this.removeUnit(u.id);
-      } else if (mine.gold < MISC_DATA.LowGoldAmount && !this.minesRunningLow.has(mine.id)) {
+      } else if (mine.gold < dataNum("LowGoldAmount") && !this.minesRunningLow.has(mine.id)) {
         this.minesRunningLow.add(mine.id);
         this.alerts.push({ kind: "minelow", player: u.owner, x: mine.x, y: mine.y });
       }
@@ -6965,7 +7166,7 @@ export class SimWorld {
     // ability that put the unit in it (morphToggle's `altFormAbil`).
     const chemicalRage = !!u.altFormAbil && this.abilities?.get(u.altFormAbil)?.code === "ANcr";
     if (windWalk || chemicalRage) return ENGINE_MAX_UNIT_SPEED;
-    return u.building ? MISC_GAME.MaxBldgSpeed : MISC_GAME.MaxUnitSpeed;
+    return u.building ? gameNum("MaxBldgSpeed") : gameNum("MaxUnitSpeed");
   }
 
   /**
@@ -7575,7 +7776,7 @@ export class SimWorld {
       u.nodeRetries = 0;
       if (u.order === "move") this.stop(u.id); // the errand's own walk is over
       const ab = u.abilities.find((a) => a.code === "Amil" && a.level >= 1);
-      const def = ab && this.abilities?.get(ab.id);
+      const def = ab && this.abilityDefOf(ab);
       if (def) this.morphToggle(u, def); // …and THIS is where the Peasant becomes a Militia
       return;
     }
@@ -7628,7 +7829,7 @@ export class SimWorld {
    */
   private toggleImmolation(u: SimUnit): void {
     const ab = u.abilities.find((a) => a.code === "AEim");
-    const def = ab && this.abilities?.get(ab.id);
+    const def = ab && this.abilityDefOf(ab);
     if (!ab || !def) return;
     if (u.immolation) {
       this.douseImmolation(u);
@@ -7777,7 +7978,7 @@ export class SimWorld {
     if (u.hp <= 0) return;
     const ab = u.abilities.find((a) => a.code === "Amin" && a.level >= 1);
     if (!ab) return;
-    const def = this.abilities?.get(ab.id);
+    const def = this.abilityDefOf(ab);
     const lvl = def?.levelData[Math.min(ab.level, def.levelData.length) - 1];
     if (!def || !lvl) return;
     // HIDE. Laid once and never refreshed — re-applying it every tick would restart the
@@ -7860,7 +8061,7 @@ export class SimWorld {
       u.exhumeLeft = 0;
       return;
     }
-    const def = this.abilities?.get(ab.id);
+    const def = this.abilityDefOf(ab);
     const lvl = def?.levelData[Math.max(0, Math.min(ab.level, def.levelData.length) - 1)];
     const interval = lvl?.duration || 15;
     const body = lvl?.summon || "";
@@ -7917,9 +8118,15 @@ export class SimWorld {
     // explicit cap outranks the rtma tech-availability — so the swap must override it here.
     this.tech.setMaxAllowed(owner, swap.to, -1);
     this.tech.setMaxAllowed(owner, swap.from, 0);
-    // Morph every existing unit of the withdrawn type in place.
+    // Morph every existing unit of the withdrawn type in place — and every one still in a
+    // QUEUE, which is a unit too: a Headhunter queued (or half-trained) before the upgrade
+    // finished walks out of the Barracks a Berserker. The job keeps its clock, its paid food
+    // and its refund; the two rows cost the same (UnitBalance: ohun and otbk are both
+    // 140/20, 2 food, 20 s), so a cancel after the swap still refunds what was paid.
     for (const u of this.units.values()) {
-      if (u.owner === owner && u.typeId === swap.from && u.hp > 0) this.morphUnit(u, swap.to);
+      if (u.owner !== owner || u.hp <= 0) continue;
+      if (u.typeId === swap.from) this.morphUnit(u, swap.to);
+      for (const job of u.building?.queue ?? []) if (job.kind === "unit" && job.unitId === swap.from) job.unitId = swap.to;
     }
   }
 
@@ -8289,6 +8496,8 @@ export class SimWorld {
       | "isSummon"
       | "spawning"
       | "summonLeft"
+      | "timedLifeBuff"
+      | "scriptAcquire"
       | "summonMax"
       | "summonerId"
       | "exhumeLeft"
@@ -8347,7 +8556,7 @@ export class SimWorld {
       | "baseSightNight"
     >,
     building?: BuildingState | null,
-    opts?: { hero?: HeroInit; abilities?: SimAbility[]; mechanical?: boolean; isPeon?: boolean; ward?: boolean; ancient?: boolean; manaRegen?: number; level?: number; baseInvulnerable?: boolean },
+    opts?: { hero?: HeroInit; abilities?: SimAbility[]; mechanical?: boolean; isPeon?: boolean; ward?: boolean; ancient?: boolean; manaRegen?: number; level?: number; baseInvulnerable?: boolean; backpacks?: Array<{ id: string; slots: number }> },
   ): SimUnit {
     const hero = opts?.hero;
     // The primary weapon is DERIVED, never passed in: it is the first slot `weapsOn` has
@@ -8567,6 +8776,8 @@ export class SimWorld {
       isSummon: false,
       spawning: 0,
       summonLeft: 0,
+      timedLifeBuff: "", // no script clock
+      scriptAcquire: -1, // its own range
       summonMax: 0,
       summonerId: 0,
       exhumeLeft: 0,
@@ -8617,9 +8828,13 @@ export class SimWorld {
       struckAt: -Infinity,
       returnBestDist: 0,
       returnStuckT: 0,
-      // Only heroes carry an inventory in melee WC3 (6 slots). Other units get an
-      // empty array (no inventory ability) so item logic simply skips them.
-      inventory: hero ? [null, null, null, null, null, null] : [],
+      // The slots are the type's INVENTORY abilities' "Item Capacity" (`AInv` DataA — 6 for a
+      // hero, 4 for the Pack Mule `Apak`, 2 for the racial backpacks), opened by `openBackpacks`
+      // once each one's `Requires` is met — recomputeStats below is the first time it asks. A
+      // hero whose row names no inventory still gets the six every stock hero has; anything
+      // else without an OPEN one has none, and item logic simply skips it.
+      inventory: new Array<null>(hero && !opts?.backpacks?.length ? 6 : 0).fill(null),
+      backpacks: opts?.backpacks?.length ? opts.backpacks.map((p) => ({ ...p })) : undefined,
       getItemId: 0,
       pendingGive: null,
       pendingUse: null,
@@ -9009,6 +9224,19 @@ export class SimWorld {
   }
 
   /** Sim ids of units that died since the last drain (renderer plays deaths). */
+  /** Deaths that EXPLODED (`SetUnitExploded`), for the renderer to retire without a death clip
+   *  or a corpse. Consumed by the one question. */
+  private readonly explodedDeaths = new Set<number>();
+  diedExploded(id: number): boolean {
+    return this.explodedDeaths.delete(id);
+  }
+
+  /** `SetUnitExploded` — this unit bursts when it dies instead of falling. */
+  setUnitExploded(id: number, exploded: boolean): void {
+    const u = this.units.get(id);
+    if (u) u.explodes = exploded || undefined;
+  }
+
   drainDeaths(): number[] {
     if (!this.deaths.length) return this.deaths;
     const out = this.deaths;
@@ -9155,6 +9383,43 @@ export class SimWorld {
     }
     if (!this.captureTrain) return;
     this.trainEvents.push({ building: eventInfo(b), unitTypeId: t.typeId, trained: eventInfo(t), phase: "finish" });
+  }
+
+  /**
+   * A summon has become a unit (`captureSummons`) — called when it EXISTS, which for a summon is
+   * after its model loads (the renderer's summon drain), because that is when it has an id a
+   * script could be handed. Every kind of summon counts: a Water Elemental, a ward, a Mirror Image
+   * copy (DotA spots illusions exactly this way, with `IsUnitIllusion` on `GetSummonedUnit`) and a
+   * TIMED raise; a Resurrection names no summoner and is not one.
+   */
+  noteSummon(summonerId: number, summonedId: number): void {
+    if (!this.captureSummons) return;
+    const a = this.units.get(summonerId);
+    const b = this.units.get(summonedId);
+    if (a && b) this.summonEvents.push({ summoner: eventInfo(a), summoned: eventInfo(b) });
+  }
+
+  drainSummonEvents(): SummonEvent[] {
+    if (!this.summonEvents.length) return this.summonEvents;
+    const out = this.summonEvents;
+    this.summonEvents = [];
+    return out;
+  }
+
+  /**
+   * `UnitApplyTimedLife(u, buffId, duration)` — put a unit on a clock that kills it when it runs
+   * out: the summon timer every Water Elemental wears, handed to any unit. It is the same clock
+   * (`summonLeft`, whose bar the info panel already draws), so the unit leaves the way a timed
+   * summon leaves. It does NOT make the unit a summon: that is `isSummon`, which Dispel and the
+   * summon XP factor read, and a map giving a dummy caster a two-second life is not asking for
+   * either. A second call replaces the clock.
+   */
+  applyTimedLife(unitId: number, seconds: number, buffId = ""): void {
+    const u = this.units.get(unitId);
+    if (!u || u.hp <= 0 || !(seconds > 0)) return;
+    u.summonLeft = seconds;
+    u.summonMax = seconds;
+    u.timedLifeBuff = buffId || "BTLF"; // the generic "Timed Life" when a map names nothing
   }
 
   /** Units bought from a shop since the last drain (`captureSellUnits`). */
@@ -11012,7 +11277,7 @@ export class SimWorld {
 
   /** True during daylight (06:00–18:00 game time). */
   get isDay(): boolean {
-    return this.timeOfDay >= DAY_START && this.timeOfDay < DAY_END;
+    return this.timeOfDay >= DAY_START() && this.timeOfDay < DAY_END();
   }
 
   /**
@@ -11258,7 +11523,7 @@ export class SimWorld {
    *  that column, but "can restore mana" fits it exactly as well, so the alias is the honest
    *  discriminator. See tickReplenish.) */
   private baseManaRegen(u: SimUnit): number {
-    if (u.isHero) return REGEN_PER_INT * u.int;
+    if (u.isHero) return REGEN_PER_INT() * u.int;
     if (u.baseMaxMana <= 0) return 0;
     const def = this.unitReg?.get(u.typeId);
     return def?.manaRegen || UNIT_MANA_REGEN;
@@ -11302,7 +11567,7 @@ export class SimWorld {
       const item = this.itemReg.get(held.itemId);
       if (!item) continue;
       for (const abilId of item.abilities) {
-        const def = this.abilities.get(abilId);
+        const def = this.itemAbilityDefOf(held.id, abilId);
         if (!def) continue;
         const d = def.levelData[0]?.data ?? [];
         const val = (i: number) => (d[i] === undefined || Number.isNaN(d[i]) ? 0 : d[i]);
@@ -11534,8 +11799,20 @@ export class SimWorld {
   /** Recompute a unit's effective stats from its base values, hero attribute
    *  growth, active buffs, items and the owner's researched upgrades. Called every
    *  tick (cheap, idempotent). */
+  /** Open the slots of every inventory ability whose `Requires` the owner now meets
+   *  (`SimUnit.backpacks`) — asked every tick, so researching Backpack hands every Footman
+   *  already on the field its two slots. Never fewer than it has: a requirement once met is
+   *  not taken back, and a hero's six are its own. */
+  private openBackpacks(u: SimUnit): void {
+    for (const p of u.backpacks!) {
+      if (p.slots <= u.inventory.length || !this.techMeets(u.owner, p.id)) continue;
+      while (u.inventory.length < p.slots) u.inventory.push(null);
+    }
+  }
+
   private recomputeStats(u: SimUnit): void {
     const wasInvulnerable = u.invulnerable; // for the rising edge — see clearStatusForInvulnerable
+    if (u.backpacks) this.openBackpacks(u);
     const item = this.itemBonuses(u);
     const upg = this.upgradeBonuses(u);
     // Buffed attributes (Robo-Goblin's Strength) count exactly as an item's do — same pool,
@@ -11551,7 +11828,9 @@ export class SimWorld {
     const dStr = u.isHero ? u.str - Math.floor(u.startStr) : 0;
     const dAgi = u.isHero ? u.agi - Math.floor(u.startAgi) : 0;
     const dInt = u.isHero ? u.int - Math.floor(u.startInt) : 0;
-    const primaryDelta = u.primaryAttr === PrimaryAttribute.Strength ? dStr : u.primaryAttr === PrimaryAttribute.Agility ? dAgi : u.primaryAttr === PrimaryAttribute.Intelligence ? dInt : 0;
+    // Damage per point of the primary gained since spawn — `StrAttackBonus`, 1.0 in the file and
+    // restated by a map (Extreme Candy War: 1.5).
+    const primaryDelta = (u.primaryAttr === PrimaryAttribute.Strength ? dStr : u.primaryAttr === PrimaryAttribute.Agility ? dAgi : u.primaryAttr === PrimaryAttribute.Intelligence ? dInt : 0) * gameNum("StrAttackBonus");
     let armorBonus = 0;
     let manaRegenBonus = 0;
     let damageBonus = 0;
@@ -11621,8 +11900,8 @@ export class SimWorld {
     // Masonry'd building stood a whole point above its own maximum at EVERY health it had
     // ("1651 / 1650"). Six decimals clears the noise and leaves a real fraction (the Arcane
     // Vault's 485 x 1.1 = 533.5) exactly where the data puts it.
-    const newMaxHp = snapPool((u.baseMaxHp + HP_PER_STR * dStr) * (1 + upg.hpPct) + upg.hp + item.maxHp + maxHpBonus);
-    const newMaxMana = snapPool(u.baseMaxMana + MANA_PER_INT * dInt + upg.mana + item.maxMana);
+    const newMaxHp = snapPool((u.baseMaxHp + HP_PER_STR() * dStr) * (1 + upg.hpPct) + upg.hp + item.maxHp + maxHpBonus);
+    const newMaxMana = snapPool(u.baseMaxMana + MANA_PER_INT() * dInt + upg.mana + item.maxMana);
     // Moving the ceiling keeps the unit's RELATIVE pool, in both directions: "Increasing the
     // maximum amount of Hit Points of a unit does not change its relative Hit Points"
     // (Liquipedia, Hit_Points). The page's own item-drop trick proves the ratio (not a flat
@@ -11668,7 +11947,7 @@ export class SimWorld {
     // not construction (see enqueueUpgrade), so it carries no `constructionLeft` and never
     // reaches this branch.
     const raising = !!u.building && u.building.constructionLeft > 0;
-    u.armor = raising ? 0 : u.baseArmor + ARMOR_PER_AGI * dAgi + armorBonus + carapaceArmor + item.armor + upg.armor;
+    u.armor = raising ? 0 : u.baseArmor + ARMOR_PER_AGI() * dAgi + armorBonus + carapaceArmor + item.armor + upg.armor;
     u.bonusArmor = raising ? 0 : armorBonus + carapaceArmor + item.armor + upg.armor; // the buff/aura/item/upgrade portion (shown green in the HUD)
     // The corner numbers on the info panel's two icons: the LEVEL researched, not the bonus.
     u.attackUpgrade = upg.attackLevel;
@@ -11682,7 +11961,7 @@ export class SimWorld {
     // of TOTAL agility — `cool1` is the raw Base Attack Time with no agility baked in
     // (Blademaster cool1=1.77, and Liquipedia's displayed 1.23 = 1.77/(1+0.02*22) at that
     // patch's 22 agi). Verified against MiscGame.txt AgiAttackSpeedBonus=0.02.
-    const agiAttackSpeed = u.isHero ? MISC_GAME.AgiAttackSpeedBonus * u.agi : 0;
+    const agiAttackSpeed = u.isHero ? gameNum("AgiAttackSpeedBonus") * u.agi : 0;
     const ias = Math.min(
       IAS_MAX,
       Math.max(IAS_MIN, agiAttackSpeed + hasteAttack + item.attackSpeed + upg.attackSpeed - slowAttack),
@@ -11697,6 +11976,9 @@ export class SimWorld {
       // rather than an OR with the old one, which is what lets Impaling Bolt take the Glaive
       // Thrower OFF its original weapon.
       if (upg.weaponMask >= 0) w.enabled = (upg.weaponMask & (1 << u.weapons.indexOf(w))) !== 0;
+      // A script's own mask for THIS unit (UNIT_WEAPON_BF_ATTACKS_ENABLED) replaces the data's, as
+      // `renw` does — and, like it, still yields to an orb waking a slot (below).
+      if (u.scriptWeaponsOn !== undefined) w.enabled = (u.scriptWeaponsOn & (1 << w.slot)) !== 0;
       // …and an ORB switches its "Enabled Attack Index" slot ON, which is the whole of "the
       // Hero's attacks also become ranged when attacking air": a hero's dormant slot 2 is a
       // 500-range homing missile that lists `air` (UnitWeapons.slk), and carrying the orb is
@@ -11775,6 +12057,15 @@ export class SimWorld {
     u.speed = Math.max(0, (u.baseSpeed + upg.speed + item.speed) * (1 - slowMove) * (1 + hasteMove));
     // …under the game's ceiling. Without it a Scroll of Speed's +200% walked a Footman at 810.
     u.speed = Math.min(u.speed, this.speedCeiling(u));
+    // …and over its FLOOR, `MinUnitSpeed` / `MinBldgSpeed` (150 / 25 in the file, 25/10 on Reign
+    // of Chaos; ten of the downloaded maps restate it). A slow never takes a walker under it —
+    // "If you have movement speed of 30, you probably hit the minimum limit in Gameplay Constants
+    // meaning it's set to something like 150 instead of 30" (hiveworkshop 335806) — and neither
+    // does its own type's speed, so a TFT critter's 100 walks at 150. Only a unit that MOVES at
+    // all: a pinned one (Ensnare is a 100% `root` slow) or a type with no speed stays at 0.
+    // An uprooted Ancient is still a STRUCTURE (Root is a building deciding to walk), so its
+    // UnitBalance 40 is held to the building floor, 25, and walks at 40.
+    if (u.baseSpeed > 0 && u.speed > 0) u.speed = Math.max(u.speed, u.building || root ? gameNum("MinBldgSpeed") : gameNum("MinUnitSpeed"));
     // A critter walks at exactly its own pace, whatever it was before (HEX_MOVE_SPEED) — and
     // the zeroing rules below still hold it, so an ensnared sheep stays put.
     if (hexed) u.speed = HEX_MOVE_SPEED;
@@ -11793,7 +12084,7 @@ export class SimWorld {
     u.manaRegen = this.manaRegenSuspended(u)
       ? 0
       : this.baseManaRegen(u) + manaRegenBonus + item.manaRegen + upg.manaRegen;
-    u.hpRegen = this.typeHpRegen(u) + (u.isHero ? REGEN_PER_STR * u.str : 0) + hpRegenBonus + item.hpRegen;
+    u.hpRegen = this.typeHpRegen(u) + (u.isHero ? REGEN_PER_STR() * u.str : 0) + hpRegenBonus + item.hpRegen;
     // Vampiric Aura only — the Mask of Death's life steal is an ORB (exclusive with every
     // other orb, and it works on a ranged attack), so it is applied at the blow instead.
     u.lifesteal = lifesteal;
@@ -11872,7 +12163,7 @@ export class SimWorld {
     for (const a of u.abilities) {
       if ((a.code !== "Atru" && a.code !== "Adet" && a.code !== "Adts") || a.level < 1) continue;
       if (!this.techMeets(u.owner, a.id)) continue;
-      const lvl = this.abilities?.get(a.id)?.levelData[Math.max(0, a.level - 1)];
+      const lvl = this.abilityDefOf(a)?.levelData[Math.max(0, a.level - 1)];
       const r = lvl?.castRange;
       if (r !== undefined && !Number.isNaN(r)) u.detectRadius = Math.max(u.detectRadius, r);
     }
@@ -12183,8 +12474,95 @@ export class SimWorld {
     const ab = u.abilities.find((a) => a.code === "Adef" && a.level >= 1 && a.autocastOn);
     if (!ab || !this.abilities) return null;
     if (this.tech && !this.tech.meets(u.owner, ab.id)) return null; // Rhde not researched
-    const def = this.abilities.get(ab.id);
+    const def = this.abilityDefOf(ab);
     return def?.levelData[0] ?? null;
+  }
+
+  // === ability INSTANCES (docs/map-compatibility.md — the 1.31 ability-field API) ============
+  //
+  // A WC3 ability is an INSTANCE: `BlzGetUnitAbility(u, 'A0PD')` hands back THIS unit's copy, and
+  // `BlzSetAbilityRealLevelField` on it changes that unit and no other; `BlzGetItemAbilityByIndex`
+  // does the same for one ITEM. Until a script writes, the instance simply IS the type's row — so
+  // nothing is copied up front, and every reader asks through one of these two.
+
+  /** The row a unit's ability entry answers with: its own copy if a script has written one. */
+  abilityDefOf(ab: { id: string; def?: AbilityDef }): AbilityDef | undefined {
+    return ab.def ?? this.abilities?.get(ab.id);
+  }
+
+  /** Per-ITEM ability rows a script has rewritten, keyed by the item's ENTITY id — which the item
+   *  keeps on the ground, in a pack and across a hand-over (HeldItem.id), so the change travels
+   *  with the item without any move having to carry it. Test of Balance's stacking items are
+   *  this: each charge rewrites the item's own Claws of Attack `Iatt`. */
+  private readonly itemAbilityDefs = new Map<number, Map<string, AbilityDef>>();
+
+  /** The row one item's ability answers with. */
+  itemAbilityDefOf(itemEntity: number, abilId: string): AbilityDef | undefined {
+    return this.itemAbilityDefs.get(itemEntity)?.get(abilId) ?? this.abilities?.get(abilId);
+  }
+
+  /** The ability ids an item carries, in its row's order (`BlzGetItemAbilityByIndex`), for an
+   *  item on the ground or in anybody's pack; [] for no such item. */
+  itemAbilityIds(itemEntity: number): string[] {
+    const type = this.items.get(itemEntity)?.itemId ?? this.heldItem(itemEntity)?.itemId;
+    return type ? [...(this.itemReg?.get(type)?.abilities ?? [])] : [];
+  }
+
+  /** A carried item by its entity id, wherever it is held. */
+  private heldItem(itemEntity: number): HeldItem | undefined {
+    for (const u of this.units.values()) for (const h of u.inventory) if (h?.id === itemEntity) return h;
+    return undefined;
+  }
+
+  /** The row an ability INSTANCE answers with — a unit's entry or an item's ability — or
+   *  undefined when the unit has no such ability / the item does not carry it. */
+  abilityInstanceDef(ref: AbilityRef): AbilityDef | undefined {
+    if (ref.kind === "unit") {
+      const ab = this.units.get(ref.owner)?.abilities.find((a) => a.id === ref.abilId);
+      return ab ? this.abilityDefOf(ab) : undefined;
+    }
+    return this.itemAbilityIds(ref.owner).includes(ref.abilId) ? this.itemAbilityDefOf(ref.owner, ref.abilId) : undefined;
+  }
+
+  /** The instance's OWN row, copied off the type the first time it is asked for — the one a
+   *  script's field write lands on. */
+  ownAbilityDef(ref: AbilityRef): AbilityDef | undefined {
+    const base = this.abilityInstanceDef(ref);
+    if (!base) return undefined;
+    if (ref.kind === "unit") {
+      const ab = this.units.get(ref.owner)!.abilities.find((a) => a.id === ref.abilId)!;
+      return (ab.def ??= cloneAbilityDef(base));
+    }
+    let byItem = this.itemAbilityDefs.get(ref.owner);
+    if (!byItem) this.itemAbilityDefs.set(ref.owner, (byItem = new Map()));
+    let own = byItem.get(ref.abilId);
+    if (!own) byItem.set(ref.abilId, (own = cloneAbilityDef(base)));
+    return own;
+  }
+
+  /** `BlzSetAbility…Field`: write one field (by its AbilityMetaData id) into the instance's own
+   *  row. `level` is 1-based. False when there is no such instance or no such field. A write to
+   *  a unit's ability re-derives the unit's stats, since an aura or an item bonus may have moved. */
+  setAbilityInstanceField(ref: AbilityRef, metaId: string, level: number, value: string | number): boolean {
+    const meta = this.abilities?.meta;
+    if (!meta) return false;
+    const own = this.ownAbilityDef(ref);
+    if (!own || !writeAbilityField(own, metaId, level, value, meta)) return false;
+    return true;
+  }
+
+  /** `BlzGetAbility…Field`: read one field of an instance, or undefined. */
+  abilityInstanceField(ref: AbilityRef, metaId: string, level: number): number | string | boolean | undefined {
+    const meta = this.abilities?.meta;
+    const def = this.abilityInstanceDef(ref);
+    return meta && def ? readAbilityField(def, metaId, level, meta) : undefined;
+  }
+
+  /** `BlzStartUnitAbilityCooldown` — this unit's ability goes down for `seconds`, whatever its row
+   *  says (a map's own cooldown rules — Test of Balance's on-hit items start theirs by hand). */
+  startAbilityCooldown(unitId: number, abilId: string, seconds: number): void {
+    const ab = this.units.get(unitId)?.abilities.find((a) => a.id === abilId);
+    if (ab) ab.cooldownLeft = Math.max(0, seconds);
   }
 
   /** The level-data for a passive ability the unit has learned (by base code), or
@@ -12201,7 +12579,7 @@ export class SimWorld {
     if (!this.abilities) return null;
     const ab = u.abilities.find((a) => a.code === code && a.level >= 1);
     if (!ab) return this.itemAbilityLevel(u, code);
-    const def = this.abilities.get(ab.id);
+    const def = this.abilityDefOf(ab);
     if (!def) return null;
     return def.levelData[Math.min(ab.level, def.levelData.length) - 1] ?? null;
   }
@@ -12220,7 +12598,7 @@ export class SimWorld {
       const item = this.itemReg.get(held.itemId);
       if (!item) continue;
       for (const abilId of item.abilities) {
-        const def = this.abilities.get(abilId);
+        const def = this.itemAbilityDefOf(held.id, abilId);
         const level = def?.levelData[0];
         if (def && def.code === code && level) return { def, level };
       }
@@ -12395,7 +12773,7 @@ export class SimWorld {
   /** This unit's Replenish row (`Ambt`), or undefined for everything that is not a battery. */
   private replenishAbility(u: SimUnit): AbilityDef | undefined {
     const ab = u.abilities.find((a) => a.code === "Ambt" && a.level >= 1);
-    return ab && this.abilities ? this.abilities.get(ab.id) : undefined;
+    return ab ? this.abilityDefOf(ab) : undefined;
   }
 
   /** How often ONE well may play its pour art, in seconds. OURS, not the game's: nothing in
@@ -12424,7 +12802,7 @@ export class SimWorld {
     // Ages before any of the pour's own early-outs, so the art cooldown runs on the clock
     // rather than on how often this well happened to find a drinker.
     if (u.replenishArtT > 0) u.replenishArtT = Math.max(0, u.replenishArtT - dt);
-    const def = this.abilities?.get(ab.id);
+    const def = this.abilityDefOf(ab);
     const lvl = def?.levelData[0];
     if (!def || !lvl) return;
     // A well still going up holds no mana and pours nothing (see recomputeStats' mana0 rule).
@@ -12600,7 +12978,7 @@ export class SimWorld {
     // No repair row on the type: nothing to check the target against, and nothing to do the
     // repairing. (Kept permissive for a bare test/sim world with no ability registry.)
     if (!ab || !this.abilities) return this.abilities ? "Cantrepair" : null;
-    const def = this.abilities.get(ab.id);
+    const def = this.abilityDefOf(ab);
     if (!def) return null;
     return this.targetError(w, b, def.targetFlags, def.code);
   }
@@ -12817,7 +13195,7 @@ export class SimWorld {
       for (const ab of this.auraSources(src)) {
         const make = AURA_BUFFS[ab.code];
         if (!make) continue;
-        const def = this.abilities.get(ab.id);
+        const def = this.abilityDefOf(ab);
         if (!def) continue;
         const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
         const radius = lvl.area || 900;
@@ -12944,7 +13322,7 @@ export class SimWorld {
     for (const held of u.inventory) {
       if (!held) continue;
       for (const abilId of this.itemReg.get(held.itemId)?.abilities ?? []) {
-        const def = this.abilities.get(abilId);
+        const def = this.itemAbilityDefOf(held.id, abilId);
         if (def && AURA_BUFFS[def.code]) yield { id: abilId, code: def.code, level: 1 };
       }
     }
@@ -13013,7 +13391,7 @@ export class SimWorld {
     // same columns (15% for 25 damage and a 2s stun), so it wants the same lookup and the
     // same buff art rather than a second copy of this method.
     const ab = this.findAbility(attacker, "AHbh");
-    const def = (ab && this.abilities.get(ab.id)) || this.itemAbility(attacker, "AHbh")?.def;
+    const def = (ab && this.abilityDefOf(ab)) || this.itemAbility(attacker, "AHbh")?.def;
     const lvl = this.passiveLevelData(attacker, "AHbh");
     if (!def || !lvl) return;
     // Dur1=2 / HeroDur1=1 — the game gives heroes their own, shorter stun rather than
@@ -13271,7 +13649,7 @@ export class SimWorld {
     if (!u || !this.abilities) return "Notthisunit";
     const ab = this.findAbility(u, code);
     if (!ab) return "Notthisunit";
-    const def = this.abilities.get(ab.id);
+    const def = this.abilityDefOf(ab);
     if (!def || def.target === "passive") return "Notthisunit";
     // Silenced/stunned has no string in the data because WC3 never needs one — it greys the
     // button out, so the click can't happen. We refuse with the error beep and no sentence
@@ -13280,6 +13658,14 @@ export class SimWorld {
     // …and neither does an ability whose upgrade is not researched (`[Aweb] Requires=Ruwb`).
     // Same shape, same silence: WC3 greys the button, so there is nothing to say.
     if (!this.techMeets(u.owner, ab.id)) return SILENT_REFUSAL;
+    // …nor one the map has made unavailable to this player (`SetPlayerAbilityAvailable`,
+    // TechState.abilityAvailable). Its button is not on the card at all, so this is only ever
+    // reached by a hotkey or a computer, and is silent for the same reason.
+    if (this.tech && !this.tech.abilityAvailable(u.owner, ab.id)) return SILENT_REFUSAL;
+    // …nor one a script has disabled or hidden on THIS unit (`BlzUnitDisableAbility`,
+    // `BlzUnitHideAbility`). Silent: a hidden button is not on the card, and a disabled one is
+    // drawn greyed, which is exactly what a silent refusal draws.
+    if (this.scriptDisabled(ab)) return SILENT_REFUSAL;
     // …nor a unit halfway through changing shape (SimUnit.morphT). `castLocked` already
     // refuses the order; this is the half that lets the CARD know, so Unburrow reads as
     // unpressable until the Crypt Fiend is actually underground.
@@ -13429,7 +13815,17 @@ export class SimWorld {
     // refuses the press (the button is drawn unavailable), but a gate that only the UI keeps
     // is not a gate: `[Aweb] Requires=Ruwb` has to mean the same thing to a trigger.
     if (!this.techMeets(u.owner, ab.id)) return false;
-    const def = this.abilities.get(ab.id);
+    // …and so does `SetPlayerAbilityAvailable`, at the same door and for the same reason — a
+    // trigger's order and an autocast included. That a disabled ability cannot be cast even
+    // by a trigger is INFERRED rather than stated: the whole "disabled spellbook" idiom exists
+    // to hide abilities that can still be cast (spellbook tutorial, hiveworkshop 228604: "In
+    // theory it also allows to cast hidden actives with triggers"), and that indirection would
+    // be pointless if disabling the ability itself left it castable. What is NOT refused here is
+    // anything already in flight — this is an order gate, so a cast underway finishes, as the
+    // tutorial says it does.
+    if (this.tech && !this.tech.abilityAvailable(u.owner, ab.id)) return false;
+    if (this.scriptDisabled(ab)) return false; // per UNIT, the same door (see SimAbility.disableCount)
+    const def = this.abilityDefOf(ab);
     if (!def || def.target === "passive") return false;
     // Already hidden by this ability: the press restarts nothing and pays for it (see
     // alreadyHidden). Refused at this door as well as at the button, so a trigger, a hotkey
@@ -14008,11 +14404,11 @@ export class SimWorld {
       // target off `Rng1 = 99999`, i.e. the whole map.
       if (ab.code === "Ambt") continue;
       // …and the ability's own Targets Allowed, read once: every branch below asks it.
-      const F = targetFlagSet(this.abilities.get(ab.id)?.targetFlags);
+      const F = targetFlagSet(this.abilityDefOf(ab)?.targetFlags);
       // Renew is not a cast either — it is the ordinary repair JOB under the wisp's own art
       // (see KNOWN_ABILITIES). tickRenew hands out the work.
       if (isRepairCode(ab.code)) continue;
-      const def = this.abilities.get(ab.id);
+      const def = this.abilityDefOf(ab);
       if (!def) continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
       if (u.mana < lvl.cost) continue;
@@ -14759,7 +15155,7 @@ export class SimWorld {
     // else pays GrantNormalXP. Both are indexed by the victim's own level.
     let base = grantedXp(victim.level || 0, victim.isHero);
     if (base <= 0) return;
-    if (victim.isSummon) base *= SUMMON_XP_FACTOR;
+    if (victim.isSummon) base *= SUMMON_XP_FACTOR();
     // Beneficiaries: enemy heroes of the victim within share range (else global).
     // NB max-level heroes are deliberately NOT excluded — MiscGame
     // MaxLevelHeroesDrainExp=1, so a level-10 hero standing in range still claims a
@@ -14784,12 +15180,12 @@ export class SimWorld {
     // max-level hero is simply not a sharer, and the heroes still levelling split the kill.
     const drains = !!miscGame("MaxLevelHeroesDrainExp");
     const sharer = (h: SimUnit): boolean =>
-      h.isHero && !h.isIllusion && !h.hexed && h.hp > 0 && (drains || h.level < MAX_HERO_LEVEL);
+      h.isHero && !h.isIllusion && !h.hexed && h.hp > 0 && (drains || h.level < MAX_HERO_LEVEL());
     const eligible: SimUnit[] = [];
     for (const h of this.units.values()) {
       if (!sharer(h) || h.team === victim.team) continue;
       if (killer && h.team !== killer.team) continue; // only the killer's side (team = alliance group)
-      if (Math.hypot(h.x - victim.x, h.y - victim.y) <= XP_SHARE_RANGE) eligible.push(h);
+      if (Math.hypot(h.x - victim.x, h.y - victim.y) <= XP_SHARE_RANGE()) eligible.push(h);
     }
     if (!eligible.length && miscGame("GlobalExperience")) {
       // No hero in range: GlobalExperience=1 (the expansion's; Reign of Chaos's is 0, and there a
@@ -14805,6 +15201,7 @@ export class SimWorld {
       let amount = share;
       const isCreep = victim.team === -1; // Neutral Hostile
       if (isCreep) amount *= creepXpFactor(h.level);
+      amount *= this.xpHandicap(h.owner); // SetPlayerHandicapXP — the player's experience rate
       const before = h.xp;
       this.gainXp(h, amount, isCreep);
       // What the hero ACTUALLY banked, floated over the hero (issue #116). Reading the pool
@@ -14837,8 +15234,11 @@ export class SimWorld {
     if (!killer || !this.hostile(killer, victim)) return; // unattributed, or your own doing
     const def = this.unitReg?.get(victim.typeId);
     if (!def) return;
-    const gold = this.rollBounty(def.bountyPlus, def.bountyDice, def.bountySides);
-    const lumber = this.rollBounty(def.lumberBountyPlus, def.lumberBountyDice, def.lumberBountySides);
+    // …the UNIT's own bounty where a script set one (BlzSetUnitIntegerField — both rebalance maps
+    // scale each wave's gold this way), else the type's.
+    const o = victim.fieldOverrides;
+    const gold = this.rollBounty(o?.goldBountyBase ?? def.bountyPlus, o?.goldBountyDice ?? def.bountyDice, o?.goldBountySides ?? def.bountySides);
+    const lumber = this.rollBounty(o?.lumberBountyBase ?? def.lumberBountyPlus, o?.lumberBountyDice ?? def.lumberBountyDice, o?.lumberBountySides ?? def.lumberBountySides);
     const stash = this.stashOf(killer.owner);
     stash.gold += gold;
     stash.lumber += lumber;
@@ -14866,9 +15266,9 @@ export class SimWorld {
     // An image never banks experience of its own — it is shown its hero's (mirrorXpToIllusions).
     // `SuspendHeroXP` is read HERE and nowhere else: it stops the crediting, not the levelling,
     // so `SetHeroLevel` on a suspended hero still works and the bar keeps what it had.
-    if (!hero.isHero || hero.isIllusion || hero.xpSuspended || hero.level >= MAX_HERO_LEVEL || amount <= 0) return;
+    if (!hero.isHero || hero.isIllusion || hero.xpSuspended || hero.level >= MAX_HERO_LEVEL() || amount <= 0) return;
     hero.xp += amount;
-    while (hero.level < MAX_HERO_LEVEL && hero.xp >= xpToReachLevel(hero.level + 1)) {
+    while (hero.level < MAX_HERO_LEVEL() && hero.xp >= xpToReachLevel(hero.level + 1)) {
       this.levelUp(hero, eyeCandy);
       // WC3: once a hero reaches a level where creeps grant no XP (HeroFactorXP=0 at
       // level 5+), any surplus that a creep kill pushed past the threshold is dropped
@@ -14986,14 +15386,26 @@ export class SimWorld {
    * Meld beside the four skills of her `heroAbilList`, and the Keeper of the Grove, the Priestess
    * of the Moon and the Demon Hunter all carry it too — an innate UNIT ability at rank 1, which
    * the learn page listed (and a skill point could "rank up") because it walked every ability
-   * on the sheet. The game's own word for the other kind is AbilityData.slk's `hero` column
-   * (`AbilityDef.research`, which a map's `aher` edit overrides too); the type's
-   * `heroAbilList` is asked as well, since that list is where a hero's skills come from
-   * (`buildAbilitiesFor` seeds them at rank 0) and a map may put anything in it.
+   * on the sheet.
+   *
+   * The TYPE's `heroAbilList` is the whole answer — that list is where a hero's skills come
+   * from (`buildAbilitiesFor` seeds them at rank 0), a map's `uhab` rewrites it, and every hero
+   * form carries its own copy of it (Edem/Edmm, Nalc…Nal3). It used to be OR'd with the
+   * ability row's `hero` flag, which let a hero-class ability a SCRIPT added onto the page too;
+   * the game does not: "Abilities added through triggers will not show up in the skill level
+   * list. Adding an ability to a hero always sets it to level 1" (hiveworkshop 257081). Test of
+   * Balance is built on that — its heroes list no skills, its reward dialog adds hero-class
+   * spells at rank 1 and levels them by trigger, and the flag clause gave every one of them a
+   * learn page and a skill-point badge the Reforged client does not show.
    */
   learnable(u: SimUnit, abilityId: string): boolean {
-    if (this.abilities?.get(abilityId)?.research) return true;
     return this.unitReg?.get(u.typeId)?.heroAbilities.includes(abilityId) ?? false;
+  }
+
+  /** A hero with no learnable row has no learn page and shows no unspent points — see the
+   *  Hero Abilities button in MapViewerScene.pushAbilityButtons. */
+  hasHeroSkills(u: SimUnit): boolean {
+    return u.isHero && u.abilities.some((a) => this.learnable(u, a.id));
   }
 
   /** Learn (or rank up) a hero ability by spending a skill point. Returns true on
@@ -15026,6 +15438,10 @@ export class SimWorld {
     if (!u || !def) return false;
     if (u.abilities.some((a) => a.id === abilityId)) return false;
     u.abilities.push({ id: abilityId, code: def.code, level: 1, cooldownLeft: 0, autocastOn: false });
+    // An INVENTORY given at run time opens its slots ("Item Capacity", DataA) — how a map
+    // hands a courier or a dummy a backpack — once its own `Requires` is met, like the type's
+    // own packs (recomputeStats → openBackpacks, just below).
+    if (def.code === "AInv") (u.backpacks ??= []).push({ id: abilityId, slots: inventoryCapacity(def.levelData[0]?.data[0]) });
     this.recomputeStats(u); // an ability can carry stat bonuses / an aura
     return true;
   }
@@ -15073,7 +15489,7 @@ export class SimWorld {
   setHeroLevel(unitId: number, level: number, eyeCandy = true): void {
     const h = this.units.get(unitId);
     if (!h?.isHero) return;
-    const target = Math.min(MAX_HERO_LEVEL, Math.trunc(level));
+    const target = Math.min(MAX_HERO_LEVEL(), Math.trunc(level));
     while (h.level < target) this.levelUp(h, eyeCandy);
     h.xp = Math.max(h.xp, xpToReachLevel(h.level));
     this.mirrorXpToIllusions(h); // the bar his images show is his (see gainXp)
@@ -15092,7 +15508,7 @@ export class SimWorld {
     const h = this.units.get(unitId);
     if (!h?.isHero) return;
     h.xp = Math.max(0, Math.trunc(xp));
-    while (h.level < MAX_HERO_LEVEL && h.xp >= xpToReachLevel(h.level + 1)) this.levelUp(h, eyeCandy);
+    while (h.level < MAX_HERO_LEVEL() && h.xp >= xpToReachLevel(h.level + 1)) this.levelUp(h, eyeCandy);
     this.mirrorXpToIllusions(h); // the bar his images show is his (see gainXp)
   }
 
@@ -15155,6 +15571,199 @@ export class SimWorld {
   }
 
   /**
+   * `UnitStripHeroLevel` — take levels OFF a hero, the one way down the ladder `SetHeroLevel`
+   * cannot go (blizzard.j's SetHeroLevelBJ calls this for a lower level). Every rule is
+   * jassbot's (UnitStripHeroLevel):
+   *   · false for a non-hero, for 0 levels, and for a hero already at level 1; "the level can be
+   *     reduced to 1 at most", and a NEGATIVE count reduces it to 1 (and, taking the
+   *     documentation literally, still answers false);
+   *   · the attributes fall by their per-level growth — here by construction, since
+   *     recomputeStats derives them from the level;
+   *   · the skill points fall by the levels stripped, floored at 0;
+   *   · a learned rank the new level no longer admits is unlearned, and so are ranks beyond
+   *     what the hero's remaining points can pay for, EARLIER abilities in the hero's list
+   *     first; and, per the documented bug, unlearning never GIVES points back beyond what the
+   *     hero had before the call.
+   * The experience bar is set to the new level's threshold.
+   */
+  stripHeroLevel(unitId: number, howManyLevels: number): boolean {
+    const h = this.units.get(unitId);
+    if (!h?.isHero || h.level <= 1 || howManyLevels === 0) return false;
+    const target = howManyLevels < 0 ? 1 : Math.max(1, h.level - Math.trunc(howManyLevels));
+    const stripped = h.level - target;
+    const learned = h.abilities.filter((a) => a.level > 0 && this.abilityDefOf(a)?.isHero);
+    const invested = (): number => learned.reduce((n, a) => n + a.level, 0);
+    const pointsBefore = h.skillPoints;
+    const total = invested() + h.skillPoints - stripped; // what the hero is still owed
+    h.level = target;
+    // Ranks the level no longer admits…
+    for (const a of learned) {
+      const def = this.abilityDefOf(a);
+      while (def && a.level > 0 && requiredHeroLevel(def, a.level) > h.level) a.level--;
+    }
+    // …then ranks the points no longer pay for, earliest in the list first.
+    for (const a of learned) {
+      while (a.level > 0 && invested() > Math.max(0, total)) a.level--;
+    }
+    h.skillPoints = Math.max(0, Math.min(pointsBefore, total - invested()));
+    h.xp = xpToReachLevel(h.level);
+    for (const im of this.units.values()) {
+      if (im.isIllusion && im.illusionOf === h.id && im.hp > 0) {
+        im.level = h.level;
+        im.xp = h.xp;
+        this.recomputeStats(im);
+      }
+    }
+    this.recomputeStats(h);
+    return howManyLevels > 0;
+  }
+
+  /** `SetPlayerHandicapXP` / `GetPlayerHandicapXP` — a player's EXPERIENCE RATE, 1 = 100 %.
+   *  Applied where a kill's share is paid, which is the experience a player EARNS; a script's
+   *  own AddHeroXP / SetHeroXP is the script's number and is left as written. Test of Balance
+   *  halves it for the player who takes its bonus-levelling reward. */
+  private xpRates = new Map<number, number>();
+  xpHandicap(player: number): number {
+    return this.xpRates.get(player) ?? 1;
+  }
+  setXpHandicap(player: number, rate: number): void {
+    this.xpRates.set(player, Math.max(0, rate));
+  }
+
+  /** `UnitPauseTimedLife` — stop (or restart) a unit's timed-life clock. */
+  pauseTimedLife(unitId: number, flag: boolean): void {
+    const u = this.units.get(unitId);
+    if (u) u.timedLifePaused = flag;
+  }
+
+  /**
+   * `UnitAddType` / `UnitRemoveType` — give one unit a classification, or take one away.
+   *
+   * Only TWELVE of common.j's twenty-seven `unittype`s can be changed, and which twelve was
+   * measured, not documented: "Looping through ConvertUnitType(i) from 0 to 26 … 0 - 8 can't be
+   * added, 9 - 20 can be added and removed, 21 - 26 can't be added" (KnnO, hiveworkshop 218444,
+   * confirming defskull's earlier test). Hero, dead, structure, flying, ground and the attack
+   * classes are the unit's body and weapons, not labels; poisoned, polymorphed, sleeping,
+   * resistant, ethereal and magic immune are STATES other systems own. So Test of Balance's
+   * wave creeps shed MECHANICAL and ANCIENT and stay whatever else they were — the map's
+   * `UnitRemoveTypeBJ(UNIT_TYPE_FLYING, …)` does nothing in the real game either.
+   * Answers whether the classification could be changed.
+   */
+  setUnitClassification(unitId: number, t: number, on: boolean): boolean {
+    const u = this.units.get(unitId);
+    if (!u || t < 9 || t > 20) return false;
+    switch (t) {
+      case 10: u.isSummon = on; break; // UNIT_TYPE_SUMMONED
+      case 15: u.mechanical = on; break; // UNIT_TYPE_MECHANICAL
+      case 16: u.isPeon = on; break; // UNIT_TYPE_PEON
+      case 19: u.ancient = on; break; // UNIT_TYPE_ANCIENT
+      default: (u.classOverrides ??= {})[t] = on;
+    }
+    return true;
+  }
+
+  /**
+   * `UnitRemoveBuffsEx` / `UnitCountBuffsEx` — the buffs on a unit that match a filter. The
+   * criteria are jassbot's, and the two natives read their POLARITY pair differently: to
+   * remove, `positive`/`negative` each ADD a class (both false removes nothing); to count,
+   * both false counts both.
+   *
+   *  · Polarity is who PUT the buff there — the bearer's own side is a buff it wanted, anyone
+   *    else's one it did not (the reading spells.ts `worthDispelling` makes, since
+   *    `AbilityBuffData.slk` records none). A buff whose source is gone falls back on its KIND:
+   *    a stun, a slow or a damage-over-time is negative whoever cast it.
+   *  · Magical vs physical is recorded on no buff here, so every buff counts as magical:
+   *    `magic` alone or neither matches them all, `physical` alone matches none, and both match
+   *    none ("Specifying both magic and physical as true will not include any buff").
+   *  · `timedLife`: a unit's timed life is not a buff in this sim (SimUnit.summonLeft), so the
+   *    flag has nothing to include and a summon keeps its clock.
+   *  · `aura`: an aura's buff has no clock (`timeLeft` Infinity) — left alone unless asked for.
+   *  · `autoDispel`: only what a dispel may take (never Doom's `undispellable`).
+   */
+  private buffsMatching(u: SimUnit, q: BuffQuery, counting: boolean): SimBuff[] {
+    if (q.physical) return []; // physical alone, or both: nothing here is physical
+    const anyPolarity = counting && !q.positive && !q.negative;
+    return u.buffs.filter((b) => {
+      if (!q.aura && !Number.isFinite(b.timeLeft)) return false;
+      if (q.autoDispel && b.undispellable) return false;
+      if (anyPolarity) return true;
+      return this.buffIsPositive(u, b) ? q.positive : q.negative;
+    });
+  }
+  private buffIsPositive(u: SimUnit, b: SimBuff): boolean {
+    const src = this.units.get(b.sourceId);
+    if (src) return src.team === u.team;
+    return !NEGATIVE_BUFF_KINDS.has(b.kind);
+  }
+  removeBuffs(unitId: number, q: BuffQuery): number {
+    const u = this.units.get(unitId);
+    if (!u) return 0;
+    const gone = new Set(this.buffsMatching(u, q, false));
+    if (!gone.size) return 0;
+    u.buffs = u.buffs.filter((b) => !gone.has(b));
+    this.recomputeStats(u); // the stats were derived off buffs that no longer exist
+    return gone.size;
+  }
+  countBuffs(unitId: number, q: BuffQuery): number {
+    const u = this.units.get(unitId);
+    return u ? this.buffsMatching(u, q, true).length : 0;
+  }
+
+  /**
+   * `UnitDamagePoint` — a script's blast: after `delay` seconds, `amount` to every unit within
+   * `radius` of (x, y), each blow landing through `damageTarget` exactly as `UnitDamageTarget`
+   * lands one (so a DAMAGING handler sees each). jassbot says nothing about WHO is hit; we hit
+   * what the source's side is not allied with, and never the source. That is our reading, and
+   * it is the one both corpus maps are written against: Test of Balance and Balanced Hero
+   * Survival are co-operative and set these off at a hero's own feet, beside the other players'
+   * heroes. False when there is no source to deal it.
+   */
+  damagePoint(sourceId: number, delay: number, radius: number, x: number, y: number, amount: number, opts: TriggerDamageOpts): boolean {
+    const src = this.units.get(sourceId);
+    if (!src) return false;
+    this.pointDamage.push({ sourceId, team: src.team, left: Math.max(0, delay), radius, x, y, amount, opts });
+    return true;
+  }
+  private pointDamage: Array<{ sourceId: number; team: number; left: number; radius: number; x: number; y: number; amount: number; opts: TriggerDamageOpts }> = [];
+  private tickPointDamage(dt: number): void {
+    if (!this.pointDamage.length) return;
+    const due = this.pointDamage.filter((p) => (p.left -= dt) <= 0);
+    if (!due.length) return;
+    this.pointDamage = this.pointDamage.filter((p) => p.left > 0);
+    for (const p of due) {
+      const r2 = p.radius * p.radius;
+      const hit: number[] = [];
+      for (const t of this.units.values()) {
+        if (t.id === p.sourceId || t.hp <= 0 || (t.team >= 0 && t.team === p.team)) continue;
+        if ((t.x - p.x) ** 2 + (t.y - p.y) ** 2 <= r2) hit.push(t.id);
+      }
+      for (const id of hit) this.damageTarget(p.sourceId, id, p.amount, p.opts);
+    }
+  }
+
+  /**
+   * `CreateCorpse` — "Creates the corpse of a specific unit … The unit will die upon spawning
+   * and play their decay animation … If the unit corresponding to the rawcode cannot have a
+   * corpse, then the returned value is null" (jassbot). A body on the ground here is a
+   * SimCorpse, the same one a Graveyard lays, so Raise Dead, Cannibalize and a Meat Wagon all
+   * find it and the renderer gives it its model. A BUILDING leaves no corpse. Answers whether
+   * one was laid.
+   */
+  createCorpse(unitId: string, x: number, y: number, owner: number, facingDeg: number): boolean {
+    const def = this.unitReg?.get(unitId);
+    if (!def || def.isBuilding) return false;
+    this.spawnCorpseOf(unitId, x, y, owner, 0, (facingDeg * Math.PI) / 180);
+    return true;
+  }
+
+  /** `GetTerrainCliffLevel` — the terrain's cliff LAYER at a point (the w3e's own number, so a
+   *  fresh map's ground reads the editor's default rather than 0). Walkable destructibles
+   *  adding their own level on top (jassbot) are not modelled. 0 with no terrain. */
+  terrainCliffLevel(x: number, y: number): number {
+    return this.cliffLevelAt ? Math.round(this.cliffLevelAt(x, y) / CLIFF_STEP) : 0;
+  }
+
+  /**
    * `UnitDamageTarget` — damage dealt by a TRIGGER rather than by a swing.
    *
    * The native is `UnitDamageTarget(source, target, amount, attack, ranged, attacktype,
@@ -15179,19 +15788,188 @@ export class SimWorld {
     sourceId: number,
     targetId: number,
     amount: number,
-    opts: { attack: boolean; ranged: boolean; attackType: AttackType; magic: boolean; universal: boolean },
+    opts: TriggerDamageOpts,
   ): number {
     const target = this.units.get(targetId);
     if (!target || target.hp <= 0 || amount <= 0) return 0;
     if (opts.magic && !opts.universal && target.magicImmune) return 0;
+    // The script's DAMAGING event, before the table and the armour (see applyDamage).
+    let blow: DamageBlow | null = null;
+    let attackType = opts.attackType;
+    if (this.damageHook) {
+      const src = this.units.get(sourceId);
+      blow = { target: eventInfo(target), source: src ? eventInfo(src) : null, amount, attackType, damageType: opts.damageType ?? 0, weaponSound: opts.weaponSound ?? "" };
+      if (!this.raiseDamage("damaging", blow)) return 0;
+      amount = blow.amount;
+      attackType = blow.attackType;
+      if (amount <= 0) return this.blockOrHeal(target, amount);
+    }
     let dealt = amount;
     if (!opts.universal) {
-      dealt *= damageMultiplier(opts.attackType, target.armorType);
+      dealt *= damageMultiplier(attackType, target.armorType);
       dealt *= 1 - armorDamageReduction(target.armor);
     }
     // `recordHit` is the native's own `attack` flag: a blow makes the weapon-on-armour clang
     // and a trigger's damage out of nowhere does not.
-    return this.landDamage(target, dealt, sourceId, opts.attack);
+    return this.landDamage(target, dealt, sourceId, opts.attack, blow?.weaponSound ?? "", blow);
+  }
+
+  /**
+   * The `BlzGetUnit…` / `BlzSetUnit…` stat accessors (docs/map-compatibility.md pass 3).
+   *
+   * These are 1.30.4 natives — they are in the install's own `common.j` — and they need no
+   * per-unit override table, because the unit already OWNS its bases: `baseMaxHp`, `baseArmor`,
+   * each weapon's `baseDamage`/`baseCooldown`/`baseDice` are seeded from the type at spawn and
+   * belong to the unit afterwards, and `recomputeStats` layers attributes, upgrades, items and
+   * buffs over them every tick. So a setter writes a base, exactly as a tome does, and what is
+   * worth writing down is WHICH base each one means:
+   *
+   *   * `maxHp`, `maxMana`, `armor` are TOTALS. The setter solves for the base that yields the
+   *     value with today's bonuses on top — for armour that is sourced ("only possible to
+   *     get/set total", ArmorUtils, hiveworkshop 319734: set 0 under a +100 aura and the base
+   *     becomes −100), and max hit points and mana are given the same reading. Solved by
+   *     re-asking `recomputeStats` rather than by restating its formula here, which would be a
+   *     second copy to drift.
+   *   * `baseDamage`, `attackCooldown`, `diceNumber`, `diceSides` are the weapon's own columns,
+   *     the object editor's "Attack N - Damage Base" etc. — bonuses stay on top. A hero's
+   *     `baseDamage` has its starting primary attribute folded in (data/units.ts adds it to
+   *     `dmgplus` at parse time), so it is taken back out here and the map sees the editor's
+   *     number; get and set are symmetric either way, so the corpus's read-modify-write idiom
+   *     (`BlzSetUnitBaseDamage(u, BlzGetUnitBaseDamage(u, i) + 15, i)`) is exact regardless.
+   *
+   * `slot` is the type's weapon SLOT, 0-based — the native's own index is translated into it by
+   * the caller, because whether a map counts from 0 or 1 is a fact about the MAP.
+   */
+  unitStat(unitId: number, stat: UnitStat, slot = 0): number | boolean | undefined {
+    const u = this.units.get(unitId);
+    if (!u) return undefined;
+    switch (stat) {
+      case "maxHp": return u.maxHp;
+      case "maxMana": return u.maxMana;
+      case "armor": return u.armor;
+      case "invulnerable": return u.invulnerable;
+    }
+    const w = u.weapons.find((x) => x.slot === slot);
+    if (!w) return undefined;
+    switch (stat) {
+      case "baseDamage": return w.baseDamage - this.foldedPrimary(u);
+      case "attackCooldown": return w.baseCooldown;
+      case "diceNumber": return w.baseDice;
+      case "diceSides": return w.sides;
+    }
+  }
+
+  /** Write one of `unitStat`'s values (see there for what each one means). False when there is
+   *  nothing to write it on — no such unit, or no such weapon slot. */
+  setUnitStat(unitId: number, stat: Exclude<UnitStat, "invulnerable">, value: number, slot = 0): boolean {
+    const u = this.units.get(unitId);
+    if (!u || !Number.isFinite(value)) return false;
+    if (stat === "maxHp" || stat === "maxMana" || stat === "armor") {
+      // `BlzSetUnitMaxHP` does NOT keep the life fraction — hiveworkshop 317026 tells a map to
+      // restore the percentage itself — while `recomputeStats` carries the pool up with any
+      // ceiling in proportion (its rule for items and levels). So the pool is held absolute
+      // across the solve, and only clamped to the new ceiling.
+      const keepHp = u.hp;
+      const keepMana = u.mana;
+      const read = (): number => (stat === "maxHp" ? u.maxHp : stat === "maxMana" ? u.maxMana : u.armor);
+      // A handful of passes: armour is linear in its base and settles on the first; a pool
+      // multiplied by an upgrade's percentage and snapped to whole points needs a second.
+      for (let pass = 0; pass < 4; pass++) {
+        const miss = value - read();
+        if (Math.abs(miss) < 1e-6) break;
+        if (stat === "maxHp") u.baseMaxHp += miss;
+        else if (stat === "maxMana") u.baseMaxMana += miss;
+        else u.baseArmor += miss;
+        this.recomputeStats(u);
+      }
+      u.hp = Math.min(keepHp, u.maxHp);
+      u.mana = Math.min(keepMana, u.maxMana);
+      return true;
+    }
+    const w = u.weapons.find((x) => x.slot === slot);
+    if (!w) return false;
+    if (stat === "baseDamage") w.baseDamage = Math.trunc(value) + this.foldedPrimary(u);
+    else if (stat === "attackCooldown") w.baseCooldown = Math.max(0.01, value);
+    else if (stat === "diceNumber") w.baseDice = Math.max(0, Math.trunc(value));
+    else w.sides = Math.max(0, Math.trunc(value));
+    this.recomputeStats(u);
+    return true;
+  }
+
+  /**
+   * `BlzUnitDisableAbility(u, abil, disable, hideUI)` / `BlzUnitHideAbility(u, abil, hide)` — the
+   * per-UNIT cousins of `SetPlayerAbilityAvailable` (TechState), and counters rather than flags:
+   * see SimAbility.disableCount for the source. `hideUI` moves the HIDE counter in the same
+   * direction as the disable, which is the reading every call in the corpus fits — they come in
+   * matched pairs with the same `hideUI` on both sides (34 × `false`, 7 × `true`), so a disable
+   * with it is exactly undone by the enable with it. (One Hive post reports an enable with
+   * `hideUI` FALSE also un-hiding; no map here does that, so it is not modelled.)
+   *
+   * Addressed by the ability's own id (the alias a map writes), not by its base code, and false
+   * when the unit does not have it — there is no counter to move on an ability that isn't there.
+   */
+  unitDisableAbility(unitId: number, abilityId: string, disable: boolean, hideUI: boolean): boolean {
+    const ab = this.units.get(unitId)?.abilities.find((a) => a.id === abilityId);
+    if (!ab) return false;
+    const step = disable ? 1 : -1;
+    ab.disableCount = (ab.disableCount ?? 0) + step;
+    if (hideUI) ab.hideCount = (ab.hideCount ?? 0) + step;
+    return true;
+  }
+
+  unitHideAbility(unitId: number, abilityId: string, hide: boolean): boolean {
+    const ab = this.units.get(unitId)?.abilities.find((a) => a.id === abilityId);
+    if (!ab) return false;
+    ab.hideCount = (ab.hideCount ?? 0) + (hide ? 1 : -1);
+    return true;
+  }
+
+  /** May this entry not be USED right now because a script said so? Disabled OR hidden — "hide
+   *  also disables abilities" (hiveworkshop 312477). Like `SetPlayerAbilityAvailable` this is
+   *  asked only where an ability is used, never by its passive effect or its cooldown. */
+  scriptDisabled(ab: SimAbility): boolean {
+    return (ab.disableCount ?? 0) > 0 || (ab.hideCount ?? 0) > 0;
+  }
+
+  /** Is this entry's BUTTON off the card (`BlzUnitHideAbility`, or a disable with `hideUI`)? */
+  scriptHidden(ab: SimAbility): boolean {
+    return (ab.hideCount ?? 0) > 0;
+  }
+
+  /** `BlzGetUnitAbilityCooldownRemaining` — the entry's own clock. 0 when the unit lacks it. */
+  unitAbilityCooldownLeft(unitId: number, abilityId: string): number {
+    return this.units.get(unitId)?.abilities.find((a) => a.id === abilityId)?.cooldownLeft ?? 0;
+  }
+
+  /** `BlzEndUnitAbilityCooldown` — ready now. Just the one ability, unlike `UnitResetCooldown`. */
+  endUnitAbilityCooldown(unitId: number, abilityId: string): void {
+    const ab = this.units.get(unitId)?.abilities.find((a) => a.id === abilityId);
+    if (ab) ab.cooldownLeft = 0;
+  }
+
+  /** One rank of an ability TYPE's data (`BlzGetAbilityManaCost`, `…Cooldown`), `rank` 0-based.
+   *  Undefined for an ability or rank the registry does not have. */
+  abilityRankData(abilityId: string, rank: number): { cost: number; cooldown: number } | undefined {
+    const lvl = this.abilities?.get(abilityId)?.levelData[rank];
+    return lvl ? { cost: lvl.cost, cooldown: lvl.cooldown } : undefined;
+  }
+
+  /** The same for ONE unit's ability — its own copy of the row if a script rewrote it, else the
+   *  type's (`BlzGetUnitAbilityCooldown` / `…ManaCost`). */
+  unitAbilityRankData(unitId: number, abilityId: string, rank: number): { cost: number; cooldown: number } | undefined {
+    const ab = this.units.get(unitId)?.abilities.find((a) => a.id === abilityId);
+    const lvl = ab ? this.abilityDefOf(ab)?.levelData[rank] : this.abilities?.get(abilityId)?.levelData[rank];
+    return lvl ? { cost: lvl.cost, cooldown: lvl.cooldown } : undefined;
+  }
+
+  /** The starting primary attribute data/units.ts folded into a hero's `dmgplus` (0 for
+   *  anybody else) — so `unitStat("baseDamage")` can hand back the editor's own column. */
+  private foldedPrimary(u: SimUnit): number {
+    if (!u.isHero) return 0;
+    return u.primaryAttr === PrimaryAttribute.Strength ? u.startStr
+      : u.primaryAttr === PrimaryAttribute.Agility ? u.startAgi
+      : u.primaryAttr === PrimaryAttribute.Intelligence ? u.startInt
+      : 0;
   }
 
   /**
@@ -15309,7 +16087,7 @@ export class SimWorld {
     if (!u) return false;
     if (stored.properName) u.properName = stored.properName;
     if (u.isHero) {
-      u.level = Math.max(1, Math.min(MAX_HERO_LEVEL, Math.trunc(stored.level)));
+      u.level = Math.max(1, Math.min(MAX_HERO_LEVEL(), Math.trunc(stored.level)));
       u.xp = Math.max(0, Math.trunc(stored.xp));
       u.skillPoints = Math.max(0, Math.trunc(stored.skillPoints));
     }
@@ -15319,7 +16097,7 @@ export class SimWorld {
     u.baseMaxHp += stored.tomes.hp;
     for (const a of stored.abilities) {
       const ab = u.abilities.find((x) => x.id === a.id);
-      const def = this.abilities?.get(a.id);
+      const def = this.abilityDefOf(a);
       // Only a rank the NEW map's version of the ability actually has. A chapter may retune a
       // spell, and a rank past its ceiling is the cache overruling the map (`setAbilityLevel`
       // clamps the same way; this is the same clamp without its recompute, which runs below).
@@ -15412,8 +16190,21 @@ export class SimWorld {
     const u = this.units.get(unitId);
     const ab = u ? this.findAbility(u, code) : undefined;
     if (!ab || !u) return false;
+    // A STANCE (an `Unorder` row riding this flag — Defend's `Order=defend / Unorder=undefend`)
+    // is not an autocast setting but the unit's state, and the renderer wears it: the button
+    // turns over to its `Unart`, the model takes its "defend" clips. So it may not be switched
+    // ON before its research is in (`[Adef] Requires=Rhde`) — defendStance ignores it then, but
+    // the Footman would still stand behind a shield that does nothing.
+    const def = this.abilityDefOf(ab);
+    const stance = !!def?.autocast && !!def.unOrder;
+    if (stance && !ab.autocastOn && this.tech && !this.tech.meets(u.owner, ab.id)) return false;
     ab.autocastOn = !ab.autocastOn;
     if (ab.autocastOn) for (const other of u.abilities) if (other !== ab) other.autocastOn = false;
+    // …and raising it is HEARD, once: `DefendCaster.wav`, reached the way every cast sound is —
+    // the row's `Casterart` (DefendCaster.mdl) carries an SND event `ADEF`, which AnimLookups
+    // files under "Defend" and AnimSounds sends to Abilities\Spells\Human\Defend\DefendCaster.wav.
+    // Sound only, like a no-wind-up cast: no castStarts, so no clip is held.
+    if (stance && ab.autocastOn) this.castFires.push({ casterId: u.id, code: ab.code, abilityId: ab.id });
     return ab.autocastOn;
   }
 
@@ -15666,7 +16457,7 @@ export class SimWorld {
     const caster = this.units.get(f.casterId);
     const team = caster?.team ?? 0;
     const ab = caster ? this.findAbility(caster, f.code) : undefined;
-    const flags = (ab && this.abilities?.get(ab.id)?.targetFlags) ?? [];
+    const flags = (ab && this.abilityDefOf(ab)?.targetFlags) ?? [];
     // timer counts down to the next wave; seeding it with `delay` (default 0) postpones the
     // FIRST wave without dropping any (Flame Strike's subsiding burn starts after the pillar).
     this.spellFields.push({ ...f, timer: f.delay ?? 0, done: 0, team, flags });
@@ -16030,7 +16821,7 @@ export class SimWorld {
       owner: u.owner,
       isHero: u.isHero,
       mechanical: u.mechanical,
-      decayLeft: CORPSE_TOTAL_TIME,
+      decayLeft: CORPSE_TOTAL_TIME(),
       raised: false,
       heldBy: 0,
       eatenBy: 0,
@@ -16151,7 +16942,7 @@ export class SimWorld {
       c.heldBy = 0;
       c.x = x;
       c.y = y;
-      c.decayLeft = CORPSE_TOTAL_TIME; // dropped bodies are fresh again — see above
+      c.decayLeft = CORPSE_TOTAL_TIME(); // dropped bodies are fresh again — see above
       dropped++;
     }
     return dropped;
@@ -16172,7 +16963,7 @@ export class SimWorld {
   private cargoCapacityOf(u: SimUnit): number {
     for (const ab of u.abilities) {
       if (ab.code !== "Amtc") continue;
-      const def = this.abilities?.get(ab.id);
+      const def = this.abilityDefOf(ab);
       const lvl = def?.levelData[Math.max(0, Math.min(ab.level, def.levelData.length) - 1)];
       const cap = lvl?.data[0];
       return cap === undefined || Number.isNaN(cap) ? 0 : cap;
@@ -16183,12 +16974,12 @@ export class SimWorld {
   /** Make a corpse from nothing, of a named type — Exhume Corpses, which is the only thing in
    *  the game that does it. `heldBy` puts it straight into a hold: the upgrade "generates a
    *  Crypt Fiend corpse WITHIN the Meat Wagon" (Liquipedia), not on the ground beside it. */
-  spawnCorpseOf(unitId: string, x: number, y: number, owner: number, heldBy = 0): void {
+  spawnCorpseOf(unitId: string, x: number, y: number, owner: number, heldBy = 0, facing = 0): void {
     const def = this.unitReg?.get(unitId);
     this.corpses.set(this.nextCorpseId, {
-      id: this.nextCorpseId, deadId: 0, unitId, x, y, facing: 0, owner,
+      id: this.nextCorpseId, deadId: 0, unitId, x, y, facing, owner,
       isHero: false, mechanical: !!def?.classification.includes("mechanical"),
-      decayLeft: CORPSE_TOTAL_TIME, raised: false, heldBy, eatenBy: 0,
+      decayLeft: CORPSE_TOTAL_TIME(), raised: false, heldBy, eatenBy: 0,
     });
     this.nextCorpseId++;
   }
@@ -16208,7 +16999,10 @@ export class SimWorld {
         stripped: (opts?.durationSec ?? 0) > 0, // a TIMED raise is a shell; Resurrection gives the unit back whole
         raisedBy: (opts?.durationSec ?? 0) > 0 ? opts?.raisedBy : undefined,
         invulnerable: opts?.invulnerable ?? false,
-        sourceId: 0, summonArt: opts?.art ?? "", unsummonArt: opts?.unsummonArt ?? "", atPoint: true,
+        // A TIMED raise has a summoner (`GetSummoningUnit`); a Resurrection gives units back and
+        // is not a summon at all, so it names nobody and raises no summon event.
+        sourceId: (opts?.durationSec ?? 0) > 0 ? opts?.summoner ?? 0 : 0,
+        summonArt: opts?.art ?? "", unsummonArt: opts?.unsummonArt ?? "", atPoint: true,
       });
     }
     return taken.length;
@@ -16244,7 +17038,7 @@ export class SimWorld {
     allows: (caster, def, t) => this.allegianceAdmits(caster, t, def.targetFlags),
     launchWave: (caster, def, rank, opts) => this.spawnWaveProjectile(caster, def, rank, opts),
     // Untyped ability damage ignores armor; a Banished (ethereal) target takes +66%
-    // (ETHEREAL_SPELL_BONUS — the file's Spells column), the flip side of its physical
+    // (etherealSpellBonus — the file's Spells column), the flip side of its physical
     // immunity (issue #49).
     // Magic Immunity stops spell damage as well as spell targeting — that is what makes a
     // Dryad walk through a Blizzard. It belongs on this seam and not in landDamage, because
@@ -16255,7 +17049,7 @@ export class SimWorld {
     // slowly. Ethereal's +66% is applied first for the same reason — it is a property of what
     // is being hit, not a second reduction to be netted off.
     spellDamage: (t, amount, src) =>
-      t.magicImmune ? 0 : this.landDamage(t, this.absorbSpellDamage(t, (t.ethereal ? amount * ETHEREAL_SPELL_BONUS : amount) * (1 - t.magicReduction)), src, false),
+      t.magicImmune ? 0 : this.landDamage(t, this.absorbSpellDamage(t, (t.ethereal ? amount * etherealSpellBonus() : amount) * (1 - t.magicReduction)), src, false),
     spellHeal: (t, amount) => {
       t.hp = Math.min(t.maxHp, t.hp + amount);
     },
@@ -16616,10 +17410,114 @@ export class SimWorld {
     const u = this.units.get(id);
     if (u) u.speed = u.baseSpeed = speed;
   }
+  /** JASS SetUnitAcquireRange. It used to have no implementation at all — the native was
+   *  registered and the hook was declared, so the coverage report counted it done while every
+   *  call did nothing. A creep's camp logic reads `aggroRange` directly, so it moves too. */
+  setUnitAcquireRange(id: number, range: number): void {
+    const u = this.units.get(id);
+    if (!u) return;
+    u.scriptAcquire = Math.max(0, range);
+    if (u.isCreep) u.aggroRange = u.scriptAcquire;
+  }
+  /** JASS GetUnitAcquireRange — the unit's range as SET, not as gated this instant: a worker's
+   *  is its weapon's even though `acquireRange` answers 0 for it on the way to the mine. */
+  getUnitAcquireRange(id: number): number | undefined {
+    const u = this.units.get(id);
+    if (!u) return undefined;
+    if (u.scriptAcquire >= 0) return u.scriptAcquire;
+    return u.isCreep ? u.aggroRange : u.weapon?.acquire ?? 0;
+  }
   /** JASS SetUnitTurnSpeed — same 0..1 scale as UnitData `turnRate`. */
   setUnitTurnSpeed(id: number, turn: number): void {
     const u = this.units.get(id);
     if (u) u.turnRate = turn;
+  }
+
+  // === the per-unit object FIELDS (`BlzGetUnit…Field` / `BlzSetUnit…Field`) ===================
+  //
+  // A 1.31+ map reads and writes ONE unit's object-data columns: both rebalance maps scale each
+  // wave's creeps (level, bounty, size, acquisition, targeting, weapon range) and their Damage
+  // Engine saves a unit's DEFENSE type, overrides it for one blow and writes it back. Each write
+  // lands where the engine already reads that value per unit — `armorType` for the damage table,
+  // `targClass` for targeting, `level` for XP, the weapon's own `baseRange` — and the few that
+  // have no such home live in `fieldOverrides`. Keys are the field layer's (compat/blzFields.ts),
+  // integers encoded as data/unitFieldCodes.ts says. `slot` is a weapon slot, 0-based.
+
+  /** One unit's LIVE value for a field, or undefined when it is simply its type's. */
+  unitField(id: number, key: string, slot = 0): number | boolean | string | undefined {
+    const u = this.units.get(id);
+    if (!u) return undefined;
+    const o = u.fieldOverrides;
+    const w = u.weapons.find((x) => x.slot === slot);
+    switch (key) {
+      case "defenseType": return defenseTypeCode(u.armorType);
+      case "armorType": return o?.armorSound;
+      case "targetedAs": return targetedAsCode(u.targClass);
+      case "level": return u.level;
+      case "castPoint": return u.castPoint;
+      case "strengthPerLevel": return u.isHero ? u.strPerLevel : undefined;
+      case "agilityPerLevel": return u.isHero ? u.agiPerLevel : undefined;
+      case "intelligencePerLevel": return u.isHero ? u.intPerLevel : undefined;
+      case "acquisitionRange": return this.getUnitAcquireRange(id);
+      case "weaponAttackRange": return w?.baseRange;
+      case "weaponAttacksEnabled": return w?.enabled;
+      case "weaponAttackType": return w ? ATTACK_TYPES.indexOf(w.attackType) : undefined;
+      default: return o?.[key];
+    }
+  }
+
+  /** `BlzSetUnit…Field` for one unit. False when the unit is gone, the key is not one we can
+   *  write, or the value names nothing (an integer outside a field's encoding). */
+  setUnitField(id: number, key: string, value: number, slot = 0): boolean {
+    const u = this.units.get(id);
+    if (!u) return false;
+    const w = u.weapons.find((x) => x.slot === slot);
+    const over = (k: string) => { (u.fieldOverrides ??= {})[k] = value; return true; };
+    switch (key) {
+      case "defenseType": {
+        const t = defenseTypeFrom(Math.round(value));
+        if (!t) return false;
+        u.armorType = t;
+        return true;
+      }
+      case "armorType": return over("armorSound");
+      case "targetedAs": u.targClass = targetedAsFrom(Math.round(value)); return true;
+      // A HERO's level is SetHeroLevel's — its attributes, skill points and XP all follow it —
+      // so this writes only a non-hero's, which is what XP-on-kill and GetUnitLevel read.
+      case "level": if (u.isHero) return false; u.level = Math.max(0, Math.round(value)); return true;
+      case "castPoint": u.castPoint = Math.max(0, value); return true;
+      case "strengthPerLevel": if (!u.isHero) return false; u.strPerLevel = value; return true;
+      case "agilityPerLevel": if (!u.isHero) return false; u.agiPerLevel = value; return true;
+      case "intelligencePerLevel": if (!u.isHero) return false; u.intPerLevel = value; return true;
+      case "acquisitionRange": this.setUnitAcquireRange(id, value); return true;
+      case "turnRate": this.setUnitTurnSpeed(id, value); return over("turnRate");
+      case "weaponAttackRange":
+        if (!w) return false;
+        w.baseRange = Math.max(0, value);
+        this.recomputeStats(u);
+        return true;
+      case "weaponAttacksEnabled": {
+        const bit = 1 << slot;
+        const now = u.scriptWeaponsOn ?? u.weapons.reduce((m, x) => (x.enabled ? m | (1 << x.slot) : m), 0);
+        u.scriptWeaponsOn = value ? now | bit : now & ~bit;
+        this.recomputeStats(u);
+        return true;
+      }
+      case "weaponAttackType": {
+        const t = ATTACK_TYPES[Math.round(value)];
+        if (!w || !t) return false;
+        w.attackType = t;
+        return true;
+      }
+      // Stored for the reads (and, for the four with a render half, handed to the renderer by
+      // the scene's dual writer — MapViewerScene's setUnitField).
+      case "goldBountyBase": case "goldBountyDice": case "goldBountySides":
+      case "lumberBountyBase": case "lumberBountyDice": case "lumberBountySides":
+      case "scalingValue": case "selectionScale": case "animationRunSpeed": case "deathTime":
+      case "minimumAttackRange":
+        return over(key);
+      default: return false;
+    }
   }
   /** JASS SetUnitFlyHeight — the sim altitude (missiles launch/land here); the render
    *  lift is kept in step by RtsController.setUnitFlyHeight. */
@@ -16778,7 +17676,7 @@ export class SimWorld {
   tick(dt: number): void {
     this.elapsed += dt;
     if (this.dawnDusk && !this.timeOfDaySuspended) {
-      this.timeOfDay = (this.timeOfDay + dt * GAME_HOURS_PER_SEC * this.timeOfDayScale) % MISC_DATA.DayHours;
+      this.timeOfDay = (this.timeOfDay + dt * gameHoursPerSec() * this.timeOfDayScale) % dataNum("DayHours");
     }
     // The tech census (who owns what, and so what each player may build) is invalidated
     // wholesale each tick rather than at every birth/death/morph/construction-finish. The
@@ -16799,6 +17697,7 @@ export class SimWorld {
     this.tickBuildSites(); // our own units walked off every silhouette that has been put down
     this.tickMineCrews(dt); // night elf and undead gold: no round trip, just a crew and a clock
     this.tickGraveyards(dt); // the Graveyard's hidden Create Corpse — Ghoul bodies for the Necromancers
+    this.tickPointDamage(dt); // UnitDamagePoint — a script's delayed blast
     this.tickShops(dt);
     this.tickShopBuyers(); // adopt a purchaser for whoever has just walked one up to a shop
     this.applyAuras(); // refresh aura buffs on in-range allies (before recompute)
@@ -16845,7 +17744,7 @@ export class SimWorld {
           else u.itemCooldowns.delete(group);
         }
       }
-      if (u.summonLeft > 0) {
+      if (u.summonLeft > 0 && !u.timedLifePaused) {
         u.summonLeft -= dt;
         if (u.summonLeft <= 0) {
           // Its time is up. A summon whose data declares an unsummon effect LEAVES via it
@@ -17208,6 +18107,7 @@ export class SimWorld {
     if (u.hidden) return 0; // a hidden unit picks no fights of its own — see SimUnit.hidden
     if (u.hexed) return 0; // a critter has no attack to pick a fight with (see tickAttack)
     if (u.isPeon || this.harvesting(u)) return 0;
+    if (u.scriptAcquire >= 0) return u.scriptAcquire; // SetUnitAcquireRange
     if (u.isCreep) return u.aggroRange;
     return u.weapon ? u.weapon.acquire : 0;
   }
@@ -18300,7 +19200,7 @@ export class SimWorld {
       if (gap >= bestGap) continue;
       if (gap > near) {
         if (!campTargets.has(t.id) && !this.fightsCamp(u, t)) continue;
-        if (Math.hypot(t.x - u.guardX, t.y - u.guardY) >= MAX_GUARD_DISTANCE) continue;
+        if (Math.hypot(t.x - u.guardX, t.y - u.guardY) >= MAX_GUARD_DISTANCE()) continue;
       }
       if (!this.hostile(u, t) || !this.canAttack(u, t) || !this.canSee(u, t)) continue;
       if (this.lowPriorityTarget(t) || this.poisonedBy(t, u)) continue;
@@ -19300,7 +20200,7 @@ export class SimWorld {
             // "A gold mine has collapsed." — told to whoever was working it, since they are
             // the one who has to go and find another (Goldminedestroyed + GoldMineCollapseSound).
             this.alerts.push({ kind: "minedestroyed", player: u.owner, x: mine.x, y: mine.y });
-          } else if (mine.gold < MISC_DATA.LowGoldAmount && !this.minesRunningLow.has(mine.id)) {
+          } else if (mine.gold < dataNum("LowGoldAmount") && !this.minesRunningLow.has(mine.id)) {
             // MiscData names the line itself: "this is the amount where a gold mine is
             // considered low" (LowGoldAmount=1500). Warned on the trip that crosses it, once.
             this.minesRunningLow.add(mine.id);
@@ -19645,7 +20545,8 @@ export class SimWorld {
     // insane computer (see harvestBonus). The floats below report what was banked, because
     // what the player is told is what the player got.
     const factor = this.harvestBonus.get(u.owner) ?? 1;
-    const gold = Math.floor(w.carryGold * factor);
+    // …less upkeep: a ten-gold load at Low Upkeep banks seven, at High four.
+    const gold = Math.floor(w.carryGold * factor * this.upkeepShare(u.owner));
     const lumber = Math.floor(w.carryLumber * factor);
     stash.gold += gold;
     stash.lumber += lumber;
@@ -19860,7 +20761,7 @@ export class SimWorld {
       if (isArrowOrb(ab.code)) {
         if (!ab.autocastOn && ab.code !== aimed) continue;
       } else if (!this.techMeets(attacker.owner, ab.id)) continue;
-      const def = this.abilities.get(ab.id);
+      const def = this.abilityDefOf(ab);
       if (!def) continue;
       // …and what this particular orb may strike is its own `targs1`, read by the same
       // predicate every cast uses: Searing Arrows lists `structure` and so fires at a
@@ -19878,7 +20779,7 @@ export class SimWorld {
         const codes: string[] = [];
         const parts: ResolvedOrb[] = [];
         for (const abilId of item.abilities) {
-          const def = this.abilities.get(abilId);
+          const def = held ? this.itemAbilityDefOf(held.id, abilId) : undefined;
           if (!def || !isOrbCode(def.code)) continue;
           codes.push(def.code);
           parts.push(this.orbOf(def, 1));
@@ -20046,14 +20947,14 @@ export class SimWorld {
         break;
       }
       // --- Orb of Frost: the generic Slowed buff (`Bfro`) for the row's own duration. The
-      // magnitudes are engine-internal — see SLOWED_MOVE/SLOWED_ATTACK in orbs.ts. Frost
+      // magnitudes are engine-internal — see slowedMove/slowedAttack in orbs.ts. Frost
       // Attack (Frost Wyrm, Nerubian Tower, the Blue Dragons) is the same buff, longer.
       case "AIob":
       case "Afra":
       case "Afrb":
         this.applyBuffInternal(target, {
           kind: "slow", group: "frostattack", timeLeft: dur || 3,
-          value: SLOWED_MOVE, value2: SLOWED_ATTACK, sourceId: attacker.id, ...this.buffArtOf(def),
+          value: slowedMove(), value2: slowedAttack(), sourceId: attacker.id, ...this.buffArtOf(def),
         });
         break;
       // --- Orb of Corruption. Its armour strip goes on BEFORE the blow that carried it, so
@@ -20197,7 +21098,7 @@ export class SimWorld {
       const item = this.itemReg.get(held.itemId);
       if (!item) continue;
       for (const abilId of item.abilities) {
-        const def = this.abilities.get(abilId);
+        const def = this.itemAbilityDefOf(held.id, abilId);
         if (!def || !isOrbCode(def.code) || !def.targetArt) continue;
         out.push({ path: def.targetArt, attach: def.targetAttach });
       }
@@ -20243,11 +21144,34 @@ export class SimWorld {
     // `Nsi2 "Chance To Miss (%)"` (0.45/0.65/0.8) is not a damage cut or a slow — the swing
     // is thrown and goes nowhere, which is why the buff has a kind of its own.
     if (attacker && this.rollMiss(attacker)) return 0;
+    // The script's DAMAGING event: the raw blow, before every reduction below — Defend, the
+    // Arcanite Shield, the damage table, armour. "Misses don't trigger any damage events", which
+    // is why it sits after the two rolls above. The attack TYPE it may change is the one the
+    // table below then reads.
+    let blow: DamageBlow | null = null;
+    if (this.damageHook) {
+      blow = { target: eventInfo(target), source: attacker ? eventInfo(attacker) : null, amount: rawDamage, attackType, damageType: DAMAGE_TYPE_NORMAL, weaponSound };
+      if (!this.raiseDamage("damaging", blow)) return 0;
+      rawDamage = blow.amount;
+      attackType = blow.attackType;
+      weaponSound = blow.weaponSound;
+      if (rawDamage <= 0) return this.blockOrHeal(target, rawDamage);
+    }
     // Defend (Adef, granted by the Rhde research): a Footman braced behind his shield turns
     // arrows aside. Straight off the ability's own Ubertip, which spells the whole thing out:
     // "Activate to have a <DataF1>% chance to reflect Piercing attacks upon the source, and to
     // take only <DataA1,%>% of the damage from attacks that are not reflected."
     const defend = attackType === AttackType.Pierce ? this.defendStance(target) : null;
+    // …and every PIERCING blow that reaches a braced Footman flashes off the shield — the blows
+    // Defend actually does something about, and so the only ones it shows: the row's own
+    // `Casterart` (DefendCaster.mdl), whose geometry is authored ~45 units FORWARD of its
+    // origin — so it is hung on the unit's `origin` bone and turns with him, which is what
+    // puts it in front rather than at his feet. Its Birth (0.5 s) is its whole life (life 0).
+    if (defend && !target.invulnerable) {
+      const ab = target.abilities.find((a) => a.code === "Adef" && a.autocastOn);
+      const art = ab ? this.abilityDefOf(ab)?.casterArt : "";
+      if (art) this.spellEffects.push({ art, x: target.x, y: target.y, targetId: target.id, z: 0, life: 0, attach: ["origin"] });
+    }
     if (defend) {
       if (this.rng() * 100 < this.dataOf(defend, 5, 30)) {
         // Reflected: the shot goes back down its own flight path. The defender takes nothing.
@@ -20284,7 +21208,7 @@ export class SimWorld {
     for (const b of target.buffs) if (b.kind === "vuln") vuln = Math.max(vuln, b.value);
     const reduction = armorDamageReduction(target.armor);
     const final = this.hardenedSkin(target, rawDamage * typeMult * (1 + vuln) * (1 - reduction), ranged);
-    return this.landDamage(target, this.spiritLinkSplit(target, final), attackerId, true, weaponSound);
+    return this.landDamage(target, this.spiritLinkSplit(target, final), attackerId, true, weaponSound, blow);
   }
 
   /**
@@ -20352,7 +21276,7 @@ export class SimWorld {
     if (!this.abilities) return null;
     for (const ab of u.abilities) {
       if (ab.level < 1 || !isCriticalStrikeCode(ab.code)) continue;
-      const def = this.abilities.get(ab.id);
+      const def = this.abilityDefOf(ab);
       const lvl = def?.levelData[Math.min(ab.level, def.levelData.length) - 1];
       if (lvl) return lvl;
     }
@@ -20396,7 +21320,7 @@ export class SimWorld {
     if (!this.abilities) return false;
     for (const ab of u.abilities) {
       if (ab.level < 1 || !isCriticalStrikeCode(ab.code)) continue;
-      const def = this.abilities.get(ab.id);
+      const def = this.abilityDefOf(ab);
       if (def) return this.targsAdmit(t, def.targetFlags); // the same "first one found" criticalStrikeLevel reads
     }
     return false;
@@ -20467,7 +21391,7 @@ export class SimWorld {
     this.attackReveals.set(key, {
       x: attacker.x,
       y: attacker.y,
-      radius: FOGGED_ATTACK_REVEAL_RADIUS,
+      radius: FOGGED_ATTACK_REVEAL_RADIUS(),
       team: target.team,
       flying: attacker.flying,
       timeLeft: FOGGED_ATTACK_REVEAL_TIME,
@@ -20505,7 +21429,7 @@ export class SimWorld {
     if (life <= 0) return;
     // A CAP, not a replacement, and read LIVE: a Footman (1400 day / 800 night) is cut back to
     // 500 either way, while a crab (350) dies seeing everything it saw in life.
-    const radius = Math.min(this.sightOf(u), DYING_REVEAL_RADIUS);
+    const radius = Math.min(this.sightOf(u), DYING_REVEAL_RADIUS());
     if (radius <= 0) return;
     this.deathReveals.push({ x: u.x, y: u.y, radius, team: u.team, owner: u.owner, flying: u.flying, timeLeft: life });
   }
@@ -20582,8 +21506,8 @@ export class SimWorld {
     // every hostile blow that lands anywhere on the map.
     const key = target.owner * 2 + (target.building ? 1 : 0);
     const last = this.attackNotify.get(key);
-    if (last && this.elapsed - last.t < MISC_DATA.AttackNotifyDelay &&
-        Math.hypot(target.x - last.x, target.y - last.y) <= MISC_DATA.AttackNotifyRange) return;
+    if (last && this.elapsed - last.t < dataNum("AttackNotifyDelay") &&
+        Math.hypot(target.x - last.x, target.y - last.y) <= dataNum("AttackNotifyRange")) return;
     this.attackNotify.set(key, { t: this.elapsed, x: target.x, y: target.y });
     this.alerts.push({ kind: target.building ? "townattack" : "attack", player: target.owner, x: target.x, y: target.y });
   }
@@ -20616,12 +21540,45 @@ export class SimWorld {
     this.recomputeStats(target); // the mana half is a stat bonus — drop it now, not next tick
   }
 
+  /** Hand a blow to the script's damage events (damageHook). False when the TARGET did not live
+   *  through the script — a trigger may kill or remove it mid-blow — so the caller lands nothing. */
+  private raiseDamage(phase: "damaging" | "damaged", blow: DamageBlow): boolean {
+    if (!this.damageHook || this.damageDepth >= MAX_DAMAGE_EVENT_DEPTH) return true;
+    this.damageDepth++;
+    try {
+      this.damageHook(phase, blow);
+    } finally {
+      this.damageDepth--;
+    }
+    const t = this.units.get(blow.target.id);
+    return !!t && t.hp > 0;
+  }
+
+  /** A blow the script took down to nothing, or below: "Set to 0.00 to completely block the
+   *  damage. Set to negative value to heal the target instead of damaging" (jassbot). */
+  private blockOrHeal(target: SimUnit, amount: number): number {
+    if (amount < 0) target.hp = Math.min(target.maxHp, target.hp - amount);
+    return 0;
+  }
+
   /** Apply FINAL (post-reduction) damage: death, return fire, and (for physical
    *  hits) the impact SFX. Spell damage calls this directly with recordHit=false —
    *  WC3 ability damage ignores the armor value and plays its own effects. Returns
    *  the HP removed (0 if the target was invulnerable). */
-  private landDamage(target: SimUnit, amount: number, attackerId: number, recordHit: boolean, weaponSound = ""): number {
+  private landDamage(target: SimUnit, amount: number, attackerId: number, recordHit: boolean, weaponSound = "", raised: DamageBlow | null = null): number {
     if (target.invulnerable) return 0; // Divine Shield / Avatar: immune to damage
+    // The script's DAMAGING event, for a blow that did not come through a path which already
+    // raised it before its own reductions (the attack, UnitDamageTarget): a spell's, a splash's,
+    // an orb's — damage the engine lands as it is, so its "before resistances" is this amount.
+    let blow = raised;
+    if (this.damageHook && !blow) {
+      const src = attackerId ? this.units.get(attackerId) : undefined;
+      blow = { target: eventInfo(target), source: src ? eventInfo(src) : null, amount, attackType: AttackType.Spells, damageType: 0, weaponSound };
+      if (!this.raiseDamage("damaging", blow)) return 0;
+      amount = blow.amount;
+      weaponSound = blow.weaponSound;
+      if (amount <= 0) return this.blockOrHeal(target, amount); // "then [DAMAGED] will never fire"
+    }
     // A Mirror Image illusion takes AOmi's DataC ("Damage Taken (%)") = 200%, which is why
     // one melts the moment somebody works out which is which. It belongs HERE and not in
     // applyDamage because that is only the ATTACK path: spellDamage lands straight here, and
@@ -20640,9 +21597,19 @@ export class SimWorld {
     if (recordHit) this.hits.push({ attackerId, targetId: target.id, weaponSound, x: target.x, y: target.y });
     this.noteAttacked(target, attackerId); // "The battle has been joined." / "Our town is under siege!"
     this.revealFoggedAttacker(attackerId, target);
+    // The script's DAMAGED event, synchronously: the amount about to come off, which it may change
+    // ("1 and 2 — modify the damage after any reduction", jassbot) — so it is raised BEFORE the
+    // hit points move, and the queued path below stays for every map that cannot change a blow.
+    if (blow) {
+      blow.amount = amount;
+      blow.target = eventInfo(target);
+      if (!this.raiseDamage("damaged", blow)) return 0;
+      amount = blow.amount;
+      if (amount <= 0) return this.blockOrHeal(target, amount);
+    }
     // EVENT_UNIT_DAMAGED: the amount that actually landed (after mana shield), with
     // the source. Captured before the hp subtraction so the target snapshot is live.
-    if (this.captureDamage) {
+    if (this.captureDamage && !this.damageHook) {
       const src = attackerId ? this.units.get(attackerId) : undefined;
       this.damageEvents.push({ target: eventInfo(target), source: src ? eventInfo(src) : null, amount });
     }
@@ -20776,7 +21743,7 @@ export class SimWorld {
     for (const h of this.units.values()) {
       if (h === victim || h.owner !== victim.owner || h.order !== "idle") continue;
       if (h.building || h.isCreep || h.hp <= 0 || !h.weapon || h.returning || isOffField(h)) continue;
-      if (distSkip(victim, h, CALL_FOR_HELP)) continue;
+      if (distSkip(victim, h, CALL_FOR_HELP())) continue;
       if (this.acquireRange(h) <= 0 || this.pinned(h)) continue;
       if (!this.hostile(h, attacker) || !this.canAttack(h, attacker) || this.fleesTower(h, attacker)) continue;
       this.setAutoGuardPost(h);
@@ -20819,7 +21786,7 @@ export class SimWorld {
     if (u.isHero && this.tryAnkh(u)) return true;
     const ab = u.abilities.find((a) => (a.code === "AOre" || a.code === "ACrn") && a.level >= 1 && a.cooldownLeft <= 0);
     if (!ab || !this.abilities) return false;
-    const def = this.abilities.get(ab.id);
+    const def = this.abilityDefOf(ab);
     if (!def) return false;
     const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
     ab.cooldownLeft = lvl.cooldown > 0 ? lvl.cooldown : 240;
@@ -20953,7 +21920,7 @@ export class SimWorld {
     if (this.exploded.has(u.id) || !this.abilities) return;
     const ab = u.abilities.find((a) => a.code === "Adda" && a.level >= 1);
     if (!ab) return;
-    const lvl = this.abilities.get(ab.id)?.levelData[Math.max(0, ab.level - 1)];
+    const lvl = this.abilityDefOf(ab)?.levelData[Math.max(0, ab.level - 1)];
     if (!lvl) return;
     this.exploded.add(u.id);
     const num = (i: number) => (lvl.data[i] === undefined || Number.isNaN(lvl.data[i]) ? 0 : lvl.data[i]);
@@ -21176,7 +22143,14 @@ export class SimWorld {
     // deleting them with it would destroy something that still belongs to the field. (The
     // same call covers a wagon removed outright; see removeUnit.)
     this.dropHeldCorpses(u.id, u.x, u.y);
-    this.spawnCorpse(u); // leave a decaying corpse (targetable by corpse spells)
+    // `SetUnitExploded`: the body does not fall, it BURSTS — "Art - Special" (UnitFunc
+    // `Specialart`, e.g. HumanLargeDeathExplode) where it stood, and nothing left to raise or
+    // eat. A hero is left out: it never leaves a body anyway, and dissipates to its altar.
+    if (u.explodes && !u.isHero) {
+      this.explodedDeaths.add(u.id);
+      const art = this.unitReg?.get(u.typeId)?.specialArt;
+      if (art) this.spellEffects.push({ art, x: u.x, y: u.y, targetId: 0, z: 0 });
+    } else this.spawnCorpse(u); // leave a decaying corpse (targetable by corpse spells)
     // A hero has fallen, and the whole army is told. Raised HERE rather than off the death
     // event stream because that one only runs when a script is listening (captureDeaths) —
     // and a melee match, which is exactly where this line matters, listens to nothing.
@@ -21368,7 +22342,7 @@ export class SimWorld {
     u.noCollision = false;
     this.cancelSwing(u);
     this.detachBuilder(unitId);
-    if (Math.hypot(it.x - u.x, it.y - u.y) <= u.radius + ITEM_PICKUP_RANGE) {
+    if (Math.hypot(it.x - u.x, it.y - u.y) <= u.radius + ITEM_PICKUP_RANGE()) {
       this.pickUpOrRefuse(u, it);
       this.stop(unitId);
     } else {
@@ -21435,7 +22409,7 @@ export class SimWorld {
   }
 
   private inPawnRange(u: SimUnit, shop: SimUnit): boolean {
-    return Math.hypot(u.x - shop.x, u.y - shop.y) <= MISC_GAME.PawnItemRange + shop.radius;
+    return Math.hypot(u.x - shop.x, u.y - shop.y) <= gameNum("PawnItemRange") + shop.radius;
   }
 
   /** A standing spot on the shop's near side, OUTSIDE its pathing footprint. A building's
@@ -21495,7 +22469,7 @@ export class SimWorld {
     u.inCombat = false;
     u.noCollision = false;
     this.cancelSwing(u);
-    if (Math.hypot(to.x - u.x, to.y - u.y) <= u.radius + to.radius + ITEM_GIVE_RANGE) {
+    if (Math.hypot(to.x - u.x, to.y - u.y) <= u.radius + to.radius + ITEM_GIVE_RANGE()) {
       this.transferItem(u, slot, to);
       this.stop(fromId);
     } else {
@@ -21510,7 +22484,7 @@ export class SimWorld {
     if (u.pendingDrop) {
       const { slot, x, y } = u.pendingDrop;
       if (!u.inventory[slot]) { this.stop(u.id); return; } // slot emptied meanwhile
-      if (Math.hypot(x - u.x, y - u.y) <= ITEM_DROP_RANGE + u.radius) {
+      if (Math.hypot(x - u.x, y - u.y) <= ITEM_DROP_RANGE() + u.radius) {
         this.doDropItem(u, slot, x, y);
         this.stop(u.id);
       } else if (!u.moving) {
@@ -21538,7 +22512,7 @@ export class SimWorld {
     if (u.pendingGive) {
       const to = this.units.get(u.pendingGive.toId);
       if (!to || to.hp <= 0 || !u.inventory[u.pendingGive.slot]) { this.stop(u.id); return; }
-      if (Math.hypot(to.x - u.x, to.y - u.y) <= u.radius + to.radius + ITEM_GIVE_RANGE) {
+      if (Math.hypot(to.x - u.x, to.y - u.y) <= u.radius + to.radius + ITEM_GIVE_RANGE()) {
         this.transferItem(u, u.pendingGive.slot, to);
         this.stop(u.id);
       } else if (!u.moving) {
@@ -21553,7 +22527,7 @@ export class SimWorld {
       if (!shop || shop.hp <= 0 || !u.inventory[u.pendingSell.slot]) { this.stop(u.id); return; }
       if (this.inPawnRange(u, shop)) {
         this.pawnItem(u.id, u.pendingSell.slot, shop.id);
-        this.notifyCreepsOfShopUse(shop, u, MISC_GAME.ItemSaleAggroRange); // using a neutral shop is loud
+        this.notifyCreepsOfShopUse(shop, u, gameNum("ItemSaleAggroRange")); // using a neutral shop is loud
         this.stop(u.id);
       } else if (!u.moving) {
         const [ax, ay] = this.shopApproach(u, shop);
@@ -21563,7 +22537,7 @@ export class SimWorld {
     }
     const it = this.items.get(u.getItemId);
     if (!it) { this.stop(u.id); return; } // item gone (someone else grabbed it)
-    if (Math.hypot(it.x - u.x, it.y - u.y) <= u.radius + ITEM_PICKUP_RANGE) {
+    if (Math.hypot(it.x - u.x, it.y - u.y) <= u.radius + ITEM_PICKUP_RANGE()) {
       this.pickUpOrRefuse(u, it);
       this.stop(u.id);
     } else if (!u.moving) {
@@ -21612,7 +22586,7 @@ export class SimWorld {
     if (!def) { this.removeGroundItem(it.id); return true; }
     if (def.powerup) {
       this.noteItem(u, it, "pickup");
-      this.applyPowerup(u, def);
+      this.applyPowerup(u, def, it.id);
       // A consumed powerup DIES where it lay — it doesn't just vanish. Playing the model's
       // Death clip is what gives the tome its little burst on the ground (the clip carries
       // the ToonBoom spawn event), and it is the reason `died` exists at all.
@@ -21668,7 +22642,7 @@ export class SimWorld {
     // up" (UI\TriggerStrings.txt) — refused at the ORDER, so the hero does not even walk over
     // to the spot to fail there. See setItemDroppable.
     if (!this.mayLeaveInventory(held)) return false;
-    if (Math.hypot(x - u.x, y - u.y) <= ITEM_DROP_RANGE + u.radius) {
+    if (Math.hypot(x - u.x, y - u.y) <= ITEM_DROP_RANGE() + u.radius) {
       this.doDropItem(u, slot, x, y);
       return true;
     }
@@ -21753,7 +22727,7 @@ export class SimWorld {
     const channel = this.holdsChannel(u.id) ? u.pendingCast : null;
     // The active behaviour is the first granted ability with a code we handle.
     for (const abilId of def.abilities) {
-      const ad = this.abilities.get(abilId);
+      const ad = this.itemAbilityDefOf(held.id, abilId);
       if (!ad) continue;
       const fired = this.applyItemAbility(u, ad, held, targetId, x, y);
       if (fired === "unhandled") continue; // ability we don't handle — try the next one
@@ -22181,7 +23155,7 @@ export class SimWorld {
     const def = this.itemReg!.get(u.inventory[slot]!.itemId)!;
     if (!this.abilities) return "Cantuseitem";
     for (const abilId of def.abilities) {
-      const ad = this.abilities.get(abilId);
+      const ad = this.itemAbilityDefOf(u.inventory[slot]!.id, abilId);
       if (!ad) continue;
       // The corpse items — the Rod of Necromancy and the two Runes of Resurrection — refuse
       // exactly as the spells they ARE do, and for the same reason: pressing one with nothing
@@ -22240,7 +23214,7 @@ export class SimWorld {
     if (!held) return;
     if (def.charges > 0) {
       held.charges -= 1;
-      if (held.charges <= 0 && def.perishable) { u.inventory[slot] = null; this.recomputeStats(u); }
+      if (held.charges <= 0 && def.perishable) { u.inventory[slot] = null; this.itemAbilityDefs.delete(held.id); this.recomputeStats(u); }
     }
     // "Even though the ability has a cooldown, it will be set to 0 when this is True"
     // (ItemDef.ignoreCooldown) — so such an item neither waits nor makes its group wait.
@@ -22334,7 +23308,7 @@ export class SimWorld {
     if (seconds <= 0) return false;
     const hour = this.dataOf(lvl, 0, 0) + this.dataOf(lvl, 1, 0) / 60;
     this.moonstone = { left: seconds, restore: this.timeOfDay };
-    this.timeOfDay = ((hour % MISC_DATA.DayHours) + MISC_DATA.DayHours) % MISC_DATA.DayHours;
+    this.timeOfDay = ((hour % dataNum("DayHours")) + dataNum("DayHours")) % dataNum("DayHours");
     return true;
   }
 
@@ -22345,7 +23319,7 @@ export class SimWorld {
     if (this.moonstone.left > 0) return;
     const owed = this.moonstone.restore;
     this.moonstone = null;
-    this.timeOfDay = owed % MISC_DATA.DayHours;
+    this.timeOfDay = owed % dataNum("DayHours");
   }
 
   /** SCROLL OF TOWN PORTAL (`AItp`) — "Teleports the Hero and any of its nearby troops to a
@@ -22762,9 +23736,9 @@ export class SimWorld {
    *  everything a level-up entails (the skill point, the stat growth, the nova, the
    *  HERO_LEVEL event, the images levelling with him) happens exactly once and in order. */
   private itemLevelGain(u: SimUnit, ad: AbilityDef): boolean {
-    if (!u.isHero || u.level >= MAX_HERO_LEVEL) return false;
+    if (!u.isHero || u.level >= MAX_HERO_LEVEL()) return false;
     const levels = Math.max(1, Math.round(this.dataOf(ad.levelData[0] ?? emptyAbilityLevel(), 0, 1)));
-    for (let i = 0; i < levels && u.level < MAX_HERO_LEVEL; i++) {
+    for (let i = 0; i < levels && u.level < MAX_HERO_LEVEL(); i++) {
       this.gainXp(u, Math.max(1, xpToReachLevel(u.level + 1) - u.xp));
     }
     return true;
@@ -22781,7 +23755,7 @@ export class SimWorld {
       // A LEARNABLE ability, which is the `hero` column on its own row — not "an ability a
       // hero has". A Demon Hunter's Evasion and his Immolation sit side by side on the same
       // unit and only one of them was ever paid for.
-      if (!this.abilities?.get(a.id)?.isHero || a.level < 1) continue;
+      if (!this.abilityDefOf(a)?.isHero || a.level < 1) continue;
       refunded += a.level;
       a.level = 0;
       a.cooldownLeft = 0;
@@ -22849,10 +23823,10 @@ export class SimWorld {
 
   /** Apply a powerup consumed on pickup (tomes, manuals, runes, gold/lumber),
    *  dispatched on its granted ability's base `code`. */
-  private applyPowerup(u: SimUnit, def: ItemDef): void {
+  private applyPowerup(u: SimUnit, def: ItemDef, itemEntity = 0): void {
     if (!this.abilities) return;
     for (const abilId of def.abilities) {
-      const ad = this.abilities.get(abilId);
+      const ad = this.itemAbilityDefOf(itemEntity, abilId); // a picked-up rune's own row, if a script wrote it
       if (!ad) continue;
       // The SAME dispatcher a pressed item goes through (see applyItemAbility). A rune and
       // the scroll beside it on the shop shelf are one ability with one set of numbers —
@@ -22928,6 +23902,7 @@ export class SimWorld {
 
   /** RemoveItem — destroy an item wherever it is (ground or inventory). */
   removeItemById(id: number): boolean {
+    this.itemAbilityDefs.delete(id); // its own ability rows go with it
     this.forgetItem(id);
     if (this.items.has(id)) { this.removeGroundItem(id); return true; }
     for (const u of this.units.values()) {
@@ -23442,11 +24417,11 @@ export class SimWorld {
           return true;
         }
       }
-      if (dist >= MAX_GUARD_DISTANCE) {
+      if (dist >= MAX_GUARD_DISTANCE()) {
         this.beginCreepReturn(u); // dragged out past the hard limit — always go home
         return true;
       }
-      if (dist >= GUARD_DISTANCE) {
+      if (dist >= GUARD_DISTANCE()) {
         // Past the soft limit: normally head home after chasing GUARD_RETURN_TIME
         // unattacked (each hit resets strayT in landDamage). But do NOT peel off
         // while a camp-mate is still in the fight — the camp commits as one and
@@ -23462,7 +24437,7 @@ export class SimWorld {
           u.strayT = 0;
         } else {
           u.strayT += dt;
-          if (u.strayT >= GUARD_RETURN_TIME) {
+          if (u.strayT >= GUARD_RETURN_TIME()) {
             this.beginCreepReturn(u);
             return true;
           }
@@ -23520,13 +24495,13 @@ export class SimWorld {
     // "If a CREEP goes beyond 'MaxGuardDistance' then it always returns home regardless of
     // who's attacking it" — the one sentence in MiscGame.txt that names creeps, so it holds
     // for the map's own units and not for a player's unit on a post it planted itself.
-    if (dist >= MAX_GUARD_DISTANCE && !u.guardAuto) {
+    if (dist >= MAX_GUARD_DISTANCE() && !u.guardAuto) {
       this.beginCreepReturn(u);
       return true;
     }
-    if (dist >= GUARD_DISTANCE) {
+    if (dist >= GUARD_DISTANCE()) {
       u.strayT += dt; // landDamage resets this — being shot at keeps it in the fight
-      if (u.strayT >= GUARD_RETURN_TIME) {
+      if (u.strayT >= GUARD_RETURN_TIME()) {
         this.beginCreepReturn(u);
         return true;
       }
@@ -23600,7 +24575,7 @@ export class SimWorld {
       u.returnStuckT = 0;
     } else {
       u.returnStuckT += dt;
-      if (u.returnStuckT >= GUARD_RETURN_TIME) {
+      if (u.returnStuckT >= GUARD_RETURN_TIME()) {
         u.returning = false; // can't get home — resume fighting from here
         u.returnStuckT = 0;
         u.order = "idle";
@@ -23646,7 +24621,7 @@ export class SimWorld {
     if (!ab) return;
     const fighting = this.creepInFight(u);
     if (fighting && !u.creepFighting) {
-      const def = this.abilities?.get(ab.id);
+      const def = this.abilityDefOf(ab);
       const reach = def?.levelData[Math.min(ab.level, def.levelData.length) - 1]?.castRange ?? 0;
       const seen = new Set<number>();
       for (const t of this.units.values()) {
@@ -23665,7 +24640,7 @@ export class SimWorld {
    *  NOT live positions — so a creep dragged out to the edge of its leash still
    *  counts as a camp-mate and can rally (or be rallied by) the ones back home. */
   private sameCamp(a: SimUnit, b: SimUnit): boolean {
-    return Math.hypot(a.guardX - b.guardX, a.guardY - b.guardY) <= CREEP_CALL_FOR_HELP;
+    return Math.hypot(a.guardX - b.guardX, a.guardY - b.guardY) <= CREEP_CALL_FOR_HELP();
   }
 
   /** Camp cohesion (MiscGame CreepCallForHelp): a creep that engages a target
@@ -23726,7 +24701,7 @@ export class SimWorld {
     for (const c of this.units.values()) {
       if (!c.isCreep || c.hp <= 0 || c.returning || c.campGuard || !c.weapon) continue;
       if (!this.hostile(c, b)) continue;
-      if (Math.hypot(b.x - c.x, b.y - c.y) - b.radius > BUILDING_PLACEMENT_NOTIFY_RADIUS) continue;
+      if (Math.hypot(b.x - c.x, b.y - c.y) - b.radius > BUILDING_PLACEMENT_NOTIFY_RADIUS()) continue;
       c.asleep = false;
       c.campHelper = false; // notified in its own right — it may shout for the rest of the camp
       this.issueAttack(c.id, b.id);
@@ -23764,8 +24739,8 @@ export class SimWorld {
       if (c.order !== "attack" || c.targetId === null) continue;
       const ax = c.campHelper ? c.campCallX : c.guardX;
       const ay = c.campHelper ? c.campCallY : c.guardY;
-      if (Math.hypot(u.guardX - ax, u.guardY - ay) > CREEP_CALL_FOR_HELP) continue;
-      if (atHome && Math.hypot(c.x - c.guardX, c.y - c.guardY) >= GUARD_DISTANCE) continue;
+      if (Math.hypot(u.guardX - ax, u.guardY - ay) > CREEP_CALL_FOR_HELP()) continue;
+      if (atHome && Math.hypot(c.x - c.guardX, c.y - c.guardY) >= GUARD_DISTANCE()) continue;
       const t = this.units.get(c.targetId);
       // …and a fight `u` could actually be in: an enemy of its own that it has a weapon for, and
       // not a tower it is too hurt to stand under (it would only walk out and break off again).

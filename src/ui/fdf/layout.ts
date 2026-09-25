@@ -304,7 +304,19 @@ export function layout(
         const opposedX = new Set(points.map((pt) => fx(pt.myPoint))).size > 1;
         const opposedY = new Set(points.map((pt) => fy(pt.myPoint))).size > 1;
         if (opposedX || opposedY || Number.isNaN(n.w) || Number.isNaN(n.h)) {
+          // A TEXT pinned across its WIDTH (TOPLEFT and TOPRIGHT) and given no Height is as tall
+          // as its lines — the engine shrink-wraps TEXT in whichever axis the file leaves out,
+          // exactly as for the single anchor below. Solved with no height it came out 0 tall,
+          // and a text box clips: the Hive's stock `BoxedText` tooltip (Test of Balance's)
+          // pins its title that way and drew an empty box.
+          const wrapHeight = isTextFrame(n.frame) && Number.isNaN(n.h) && opposedX && !opposedY;
           placeByTwoPoints(n, points, relOf);
+          if (wrapHeight) {
+            const lines = measureLines?.(n.frame, n.w) ?? 1;
+            n.h = textBoxHeight(n.frame, lines);
+            n.shrinkWrapped = lines <= 1;
+            placeByTwoPoints(n, points, relOf); // again, now that the height is the text's
+          }
           progressed = true;
           continue;
         }

@@ -13,17 +13,17 @@
 //     BoneDecayTime=43.0 (OrcX03b)     DayLength=1080.0 (UndeadX05)
 //     MinUnitSpeed=100.0 (HumanX03Secret)      FoodCeiling=30 (HumanX04)
 //
-// **Only `FoodCeiling` is applied today.** It is the one this module was written for: it has no
-// row in any shipped file (the base value is the engine's own 100 — see MISC_ENGINE) and it is
-// the supply ceiling a player's food cap is clamped to, so a map lowering it to 30 is stating
-// the whole shape of that mission's army. Custom maps use it the other way and say so twice
-// over: WTii's Unit Tester (issue #127) ships `[Misc] FoodCeiling=300` — the same two lines as
-// HumanX04, the other number — and then writes the ceiling AGAIN from its script before setting
-// the cap, so the two halves of this fix agree on that map by both routes at once.
+// **Every key the engine reads is applied** (docs/map-compatibility.md pass 11): the map door
+// hands `values` to `setMapMiscOverlay` (gameplayConstants.ts), which makes it the top layer of
+// every `miscGame`/`miscData` read, and re-folds the hero types when the attribute constants
+// move. `FoodCeiling` is the one with a path of its own, because its base value is the engine's
+// (MISC_ENGINE) rather than a file row: it is the supply ceiling a player's food cap is clamped
+// to, so a map lowering it to 30 is stating the whole shape of that mission's army. Custom maps
+// use it the other way and say so twice over: WTii's Unit Tester (issue #127) ships `[Misc]
+// FoodCeiling=300` and then writes the ceiling AGAIN from its script before setting the cap.
 //
-// The other six are parsed and reported all the same: each needs a use site that can take a
-// per-match value rather than a module constant, and naming them here is what makes adding one
-// a one-liner instead of a rediscovery.
+// A key the engine has no reader for (MISC_UNREAD, or no row at all) is logged at the map door
+// as "no system reads", rather than being claimed as applied.
 //
 // The values are kept as RAW STRINGS deliberately. `HeroFactorXP` is a comma list, `DayLength`
 // a real and `MaxHeroLevel` an int, and the base tables in gameplayConstants.ts already know

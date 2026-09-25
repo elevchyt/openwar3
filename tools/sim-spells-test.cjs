@@ -404,5 +404,34 @@ const round = (n) => Math.round(n * 1000) / 1000;
   }
 }
 
+// Frost Nova (AUfn) — its buff is the generic Slowed buff, `Bfro`, at every rank, and its Data
+// columns are the two damages and nothing else (AbilityData.slk: rank 3 DataA 150 nova, DataB
+// 100 target, Dur 8, HeroDur 4, Area 200). So the slow is the BUFF's, and the buff's magnitude is
+// Units\MiscGame.txt FrostMoveSpeedDecrease / FrostAttackSpeedDecrease = 0.5 / 0.25 — Liquipedia's
+// Frost Nova card says "Slowed … Movement Speed -50%, Attack Speed -25%" in as many words. It was
+// a hand-typed 0.4 / 0.4, agreeing with neither.
+{
+  const { setMapMiscOverlay } = require(join(REPO, ".sim-build", "src", "data", "gameplayConstants.js"));
+  const lich = unit({ id: 1, team: 0 });
+  const target = unit({ id: 2, team: 1 });
+  const hero = unit({ id: 3, team: 1, isHero: true });
+  const fn = def({ code: "AUfn", data: [150, 100], duration: 8, area: 200, targetFlags: ["ground", "enemy", "air", "neutral", "organic"] });
+  fn.levelData[0].heroDuration = 4;
+  const cast = () => {
+    const { api, log } = harness([lich, target, hero]);
+    SPELL_HANDLERS.AUfn(api, lich, fn, 1, { targetId: 2, x: 0, y: 0 });
+    return log;
+  };
+  const log = cast();
+  check("the target takes DataB and the nova's DataA", log.damage.filter((d) => d.id === 2).map((d) => d.amount), [100, 150]);
+  const slow = log.buffs.find((b) => b.id === 2);
+  check("the slow is the Slowed buff's 50% movement / 25% attack rate (MiscGame.txt)", [slow.kind, slow.value, slow.value2], ["slow", 0.5, 0.25]);
+  check("…for the rank's Dur on a unit and HeroDur on a hero", log.buffs.map((b) => [b.id, b.timeLeft]), [[2, 8], [3, 4]]);
+  setMapMiscOverlay(new Map([["FrostMoveSpeedDecrease", "0.3"], ["FrostAttackSpeedDecrease", "0.2"]])); // DotA's war3mapMisc.txt
+  const dota = cast().buffs.find((b) => b.id === 2);
+  check("a map restating the frost constants reaches Frost Nova too", [dota.value, dota.value2], [0.3, 0.2]);
+  setMapMiscOverlay(null);
+}
+
 console.log(`\n${failed ? `${failed} FAILED` : "all passed"}`);
 process.exit(failed ? 1 : 0);

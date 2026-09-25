@@ -183,9 +183,9 @@ console.log("\na hero leaves NO corpse — its body dissipates instead");
   // 1.5 death + 3 dissipate (the fade being the last second of the dissipate, not a fourth
   // phase after it — see HERO_FADE_TIME).
   check("…and its body has a clock of its own", f.bodyLeft, heroBodyTime(1.5));
-  check("which is death time + DissipateTime", heroBodyTime(1.5), 1.5 + HERO_DISSIPATE_TIME);
-  check("DissipateTime is the file's own", HERO_DISSIPATE_TIME, MISC_DATA.DissipateTime);
-  check("…and the fade is one second, inside it", [HERO_FADE_TIME, HERO_FADE_TIME <= HERO_DISSIPATE_TIME], [1, true]);
+  check("which is death time + DissipateTime", heroBodyTime(1.5), 1.5 + HERO_DISSIPATE_TIME());
+  check("DissipateTime is the file's own", HERO_DISSIPATE_TIME(), MISC_DATA.DissipateTime);
+  check("…and the fade is one second, inside it", [HERO_FADE_TIME, HERO_FADE_TIME <= HERO_DISSIPATE_TIME()], [1, true]);
 
   // The button is dead until the body is gone, then alive — and the record STAYS.
   w.tick(3);

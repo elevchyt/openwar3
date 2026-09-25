@@ -16,12 +16,34 @@
 
 import { playerStateHolds, ThreadAbort, unitStateHolds, type BoolExpr, type NativeCtx, type Runtime, type TimerObj, type TriggerObj, type TriggerReg } from "../runtime";
 import { asNum, jBool, jHandle, jInt, JNULL, jReal, type JassValue } from "../values";
+import { ATTACK_TYPES } from "../../data/unitFieldCodes";
+import type { AttackType } from "../../data/enums";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
 
 const trig = (c: NativeCtx, v: JassValue): TriggerObj | undefined => c.rt.data<TriggerObj>(v);
 const timer = (c: NativeCtx, v: JassValue): TimerObj | undefined => c.rt.data<TimerObj>(v);
+
+/** common.j's WEAPON_TYPE_* constants, read off the runtime's own globals, as data-spelled sound
+ *  names ("MetalMediumSlice") both ways. Built once per runtime. */
+const weaponTypeCache = new WeakMap<Runtime, { bySound: Map<string, number>; byIndex: Map<number, string> }>();
+export function weaponTypes(c: NativeCtx): { bySound: Map<string, number>; byIndex: Map<number, string> } {
+  let t = weaponTypeCache.get(c.rt);
+  if (!t) {
+    t = { bySound: new Map(), byIndex: new Map() };
+    for (const [name, v] of c.rt.globals) {
+      if (!name.startsWith("WEAPON_TYPE_") || v.k !== "handle") continue;
+      const sound = name.slice("WEAPON_TYPE_".length).toLowerCase().split("_").map((w) => w[0].toUpperCase() + w.slice(1)).join("");
+      const index = c.rt.enumIndex(v);
+      if (sound === "Whoknows") continue; // WEAPON_TYPE_WHOKNOWS — no sound at all
+      t.bySound.set(sound.toLowerCase(), index);
+      t.byIndex.set(index, sound);
+    }
+    weaponTypeCache.set(c.rt, t);
+  }
+  return t;
+}
 
 export function registerEventNatives(rt: Runtime): void {
   // --- triggers ---
@@ -47,7 +69,7 @@ export function registerEventNatives(rt: Runtime): void {
   def(rt, "TriggerAddAction", (c, a) => {
     const t = trig(c, a[0]);
     if (!t || a[1].k !== "code") return jHandle(0, "triggeraction");
-    const entry = { id: 0, fn: a[1].fn, owner: t.handleId };
+    const entry = { id: 0, fn: a[1].fn };
     entry.id = c.rt.handles.alloc(entry);
     t.actions.push(entry);
     return jHandle(entry.id, "triggeraction");
@@ -56,27 +78,24 @@ export function registerEventNatives(rt: Runtime): void {
     const t = trig(c, a[0]);
     const be = c.rt.data<BoolExpr>(a[1]);
     if (!t || !be) return jHandle(0, "triggercondition");
-    const entry = { id: 0, fn: be.fn, owner: t.handleId };
+    const entry = { id: 0, fn: be.fn };
     entry.id = c.rt.handles.alloc(entry);
     t.conditions.push(entry);
     return jHandle(entry.id, "triggercondition");
   });
-  // …and the removers they exist for. Removing by HANDLE rather than by function name is the
-  // point: a map that adds the same function twice and removes it once keeps the other copy.
-  // The native is handed only the ACTION's handle, never its trigger, so the entry carries the
-  // trigger it was added to. That back-pointer is why this is a lookup rather than a sweep of
-  // every handle in the match.
-  const removeEntry = (c: NativeCtx, v: JassValue, which: "actions" | "conditions"): void => {
-    const entry = c.rt.data<{ id: number; owner: number }>(v);
-    if (!entry) return;
-    const t = c.rt.handles.get(entry.owner) as TriggerObj | undefined;
-    if (!t) return;
-    const i = t[which].findIndex((e) => e.id === entry.id);
-    if (i >= 0) t[which].splice(i, 1);
-    c.rt.handles.free(entry.id);
+  // …and the removers they exist for. `TriggerRemoveAction(trigger, action)` / `TriggerRemoveCondition(trigger, condition)` —
+  // common.j passes BOTH, the trigger first. Removal is by the entry's HANDLE, so a map that
+  // added the same function twice and removes it once keeps the other copy.
+  const removeEntry = (c: NativeCtx, trigV: JassValue, v: JassValue, which: "actions" | "conditions"): void => {
+    const t = trig(c, trigV);
+    if (!t || v?.k !== "handle") return;
+    const i = t[which].findIndex((e) => e.id === v.h);
+    if (i < 0) return;
+    t[which].splice(i, 1);
+    c.rt.handles.free(v.h);
   };
-  def(rt, "TriggerRemoveAction", (c, a) => (removeEntry(c, a[0], "actions"), JNULL));
-  def(rt, "TriggerRemoveCondition", (c, a) => (removeEntry(c, a[0], "conditions"), JNULL));
+  def(rt, "TriggerRemoveAction", (c, a) => (removeEntry(c, a[0], a[1], "actions"), JNULL));
+  def(rt, "TriggerRemoveCondition", (c, a) => (removeEntry(c, a[0], a[1], "conditions"), JNULL));
   // `ResetTrigger` — zero the two counters. It does NOT clear actions or conditions
   // (`TriggerClearActions` is that), which is why it is here and not an alias of one.
   def(rt, "ResetTrigger", (c, a) => {
@@ -160,6 +179,19 @@ export function registerEventNatives(rt: Runtime): void {
     c.rt.triggerRegs.push(reg);
     return jHandle(0, "event");
   });
+  // TriggerRegisterVariableEvent — EVENT_GAME_VARIABLE_LIMIT, "Value Of Real Variable": raised
+  // by the write itself (Interpreter.fireVariableEvent says when). "This only works for
+  // non-array variables of type 'Real'" (UI\TriggerStrings.txt's own hint), so anything else —
+  // an integer, an array, a name no global has — registers nothing. Asked of the DECLARED type:
+  // a real global holds an int after the editor's own `set udg_X=0`.
+  def(rt, "TriggerRegisterVariableEvent", (c, a) => {
+    const t = trig(c, a[0]);
+    const name = a[1]?.k === "string" ? a[1].s : "";
+    if (!t || c.rt.globalTypes.get(name) !== "real") return jHandle(0, "event");
+    c.rt.triggerRegs.push({ kind: "variable", trigId: t.handleId, params: [a[1], a[2], a[3]] });
+    c.rt.watchedGlobals.add(name);
+    return jHandle(0, "event");
+  });
   // TriggerRegisterTimerEvent creates its OWN one-shot/periodic timer + a timerExpire
   // registration bound to it (common.j: takes trigger, real timeout, boolean periodic).
   def(rt, "TriggerRegisterTimerEvent", (c, a) => {
@@ -174,6 +206,10 @@ export function registerEventNatives(rt: Runtime): void {
   // --- event responses (read the current event's thread-local values) ---
   const resp = (c: NativeCtx, key: string): JassValue => c.rt.eventResponse(key);
   def(rt, "GetTriggeringTrigger", (c) => resp(c, "TriggeringTrigger"));
+  // `GetTriggerEventId` — the constant of the REGISTRATION that matched (Interpreter.eventIdOf),
+  // so a trigger registered on EVENT_UNIT_DEATH and EVENT_UNIT_DAMAGED can tell which one this
+  // is. Null when nothing fired it (a `TriggerExecute` has no event), as in the game.
+  def(rt, "GetTriggerEventId", (c) => resp(c, "TriggerEventId"));
   def(rt, "GetTriggerUnit", (c) => resp(c, "TriggerUnit"));
   def(rt, "GetEnteringUnit", (c) => resp(c, "EnteringUnit"));
   def(rt, "GetLeavingUnit", (c) => resp(c, "LeavingUnit"));
@@ -193,6 +229,9 @@ export function registerEventNatives(rt: Runtime): void {
   def(rt, "GetTransportUnit", (c) => resp(c, "TransportUnit"));
   def(rt, "GetFilterUnit", (c) => resp(c, "FilterUnit")); // set during enter/enum boolexpr filters
   def(rt, "GetEventDamageSource", (c) => resp(c, "EventDamageSource")); // EVENT_UNIT_DAMAGED
+  // EVENT_(PLAYER_)UNIT_SUMMON — the new unit, and the one that spawned it (Interpreter.pumpSummonEvents).
+  def(rt, "GetSummonedUnit", (c) => resp(c, "SummonedUnit"));
+  def(rt, "GetSummoningUnit", (c) => resp(c, "SummoningUnit"));
   // 1.31's other half of the same event (declared in src/compat/prelude.ts). The unit that was
   // HIT is already the triggering unit — a damage event is raised on it — so this is that same
   // response under the name a later map knows it by, and not a second thing to keep in step.
@@ -204,7 +243,60 @@ export function registerEventNatives(rt: Runtime): void {
   def(rt, "GetEventPlayerChatStringMatched", (c) => resp(c, "EventPlayerChatStringMatched"));
   def(rt, "GetEventDamage", (c) => {
     const v = resp(c, "EventDamage");
+    // Inside a damage event raised WHILE the blow is dealt (Interpreter.fireDamagePhase), the
+    // live amount — so a handler reads back what it (or one before it) set: "calling
+    // GetEventDamage after you set it with this function will return the value you set" (jassbot).
+    const live = c.rt.damageStack[c.rt.damageStack.length - 1];
+    if (live && v.k === "real") return jReal(live.blow.amount);
     return v.k === "real" ? v : jReal(0);
+  });
+
+  // --- changing the blow (1.29 BlzSetEventDamage, 1.31 the types) ---
+  // Only a blow still being dealt can be changed: the sim hands it over synchronously for a map
+  // that uses these (SimWorld.damageHook), and a handler past a wait has nothing left to change.
+  // The TYPES "can be only used … before armor reduction" (jassbot, BlzSetEventAttackType) — in
+  // the DAMAGING phase — and answer false otherwise.
+  const blow = (c: NativeCtx) => c.rt.damageStack[c.rt.damageStack.length - 1];
+  def(rt, "BlzSetEventDamage", (c, a) => {
+    const b = blow(c);
+    if (b) b.blow.amount = asNum(a[0] ?? JNULL);
+    return JNULL;
+  });
+  def(rt, "BlzGetEventAttackType", (c) => {
+    const b = blow(c);
+    return b ? c.rt.enumHandle("AttackType", Math.max(0, ATTACK_TYPES.indexOf(b.blow.attackType as AttackType))) : JNULL;
+  });
+  def(rt, "BlzSetEventAttackType", (c, a) => {
+    const b = blow(c);
+    const t = ATTACK_TYPES[c.rt.enumIndex(a[0] ?? JNULL)];
+    if (!b || b.phase !== "damaging" || !t) return jBool(false);
+    b.blow.attackType = t;
+    return jBool(true);
+  });
+  def(rt, "BlzGetEventDamageType", (c) => {
+    const b = blow(c);
+    return b ? c.rt.enumHandle("DamageType", b.blow.damageType) : JNULL;
+  });
+  def(rt, "BlzSetEventDamageType", (c, a) => {
+    const b = blow(c);
+    const i = c.rt.enumIndex(a[0] ?? JNULL);
+    if (!b || b.phase !== "damaging" || i < 0) return jBool(false);
+    b.blow.damageType = i;
+    return jBool(true);
+  });
+  // The weapon type is the SOUND of the blow ("Can be used to modify the sound of impact" —
+  // jassbot). Our blows carry it as the data spells it ("MetalMediumSlice"), and common.j's own
+  // constant for it is WEAPON_TYPE_METAL_MEDIUM_SLICE, so the two are joined by name, off the
+  // running common.j's globals rather than a table typed here.
+  def(rt, "BlzGetEventWeaponType", (c) => {
+    const b = blow(c);
+    return b ? c.rt.enumHandle("WeaponType", weaponTypes(c).bySound.get(b.blow.weaponSound.toLowerCase()) ?? 0) : JNULL;
+  });
+  def(rt, "BlzSetEventWeaponType", (c, a) => {
+    const b = blow(c);
+    if (!b || b.phase !== "damaging") return jBool(false);
+    b.blow.weaponSound = weaponTypes(c).byIndex.get(c.rt.enumIndex(a[0] ?? JNULL)) ?? "";
+    return jBool(true);
   });
   // Issued-order responses (EVENT_..._ISSUED_ORDER/POINT/TARGET — 7.14).
   def(rt, "GetIssuedOrderId", (c) => {

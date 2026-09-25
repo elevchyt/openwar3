@@ -1,7 +1,7 @@
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { layCustomKeys } from "./customKeys";
 import type { DataSource } from "../vfs/types";
-import { MISC_GAME } from "./gameplayConstants";
+import { gameNum } from "./gameplayConstants";
 
 // Ability data registry (plan §4, spells slice). Merges WC3's AbilityData.slk
 // (numbers), per-race AbilityFunc.txt (icon/effect art/buttonpos) and
@@ -995,6 +995,11 @@ export class AbilityRegistry {
      *  DataB is 0. */
     private buffs = new Map<string, BuffDef>(),
   ) {}
+  /** `Units\AbilityMetaData.slk` — what each 4-char FIELD id ('Iatt', 'acdn', 'Rej1') is: which
+   *  column, which Data slot. The routing a map's w3a edits go through (objectData.ts
+   *  applyAbilityMods), kept for the run-time twin of those edits: a script writing ONE unit's
+   *  or ONE item's ability field (`BlzSetAbility…Field`, objectData.ts writeAbilityField). */
+  meta: MappedData | null = null;
   /** The persistent models a given buff id hangs on its holder ([] if unknown). */
   buffFx(buffId: string): BuffFx[] {
     return this.buff(buffId)?.fx ?? [];
@@ -1046,6 +1051,16 @@ export class AbilityRegistry {
   all(): AbilityDef[] {
     return [...new Map([...this.defs, ...this.custom]).values()];
   }
+  /** `UI\TriggerData.txt`'s `UnitOrder…` strings — every order the GUI can issue by name. */
+  triggerOrders: string[] = [];
+  /** Every string that IS an order: each ability's `Order`/`Orderon`/`Orderoff`/`Unorder` (the
+   *  map's own rows included) and TriggerData's list — what `OrderId` answers for (jass/orders.ts
+   *  learnOrderStrings). */
+  orderVocabulary(): string[] {
+    const out = new Set(this.triggerOrders);
+    for (const d of this.all()) for (const o of [d.order, d.orderOn, d.orderOff, d.unOrder]) if (o) out.add(o.trim().toLowerCase());
+    return [...out];
+  }
   /** The base (install) def for `id`, ignoring the custom overlay — what a custom
    *  ability clones from. */
   base(id: string): AbilityDef | undefined {
@@ -1090,9 +1105,9 @@ const STRING_FILES = FUNC_FILES.map((f) => f.replace("Func", "Strings"));
  * tables on that name is the class → order map, with nothing typed here. Only a row that has no
  * `Order` of its own takes one: where the Func file speaks, it wins.
  */
-function fillIntrinsicOrders(defs: Map<string, AbilityDef>, vfs: DataSource): void {
+function fillIntrinsicOrders(defs: Map<string, AbilityDef>, vfs: DataSource): string[] {
   const bytes = vfs.rawBytes("UI\\TriggerData.txt");
-  if (!bytes) return;
+  if (!bytes) return [];
   const skillCode = new Map<string, string>(); // "fingerofdeath" (the NAME) → "ANfd"
   const orderOf = new Map<string, string>(); // "fingerofdeath" (the NAME) → "fingerofdeath"
   for (const line of new TextDecoder("windows-1252").decode(bytes).split(/\r?\n/)) {
@@ -1109,6 +1124,7 @@ function fillIntrinsicOrders(defs: Map<string, AbilityDef>, vfs: DataSource): vo
   for (const def of defs.values()) {
     if (!def.order) def.order = byCode.get(def.code) ?? "";
   }
+  return [...new Set(orderOf.values())];
 }
 
 export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
@@ -1236,7 +1252,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
     });
   }
   for (const id of UI_BUTTON_IDS) addUiButton(defs, id, func, strs);
-  fillIntrinsicOrders(defs, vfs);
+  const triggerOrders = fillIntrinsicOrders(defs, vfs);
 
   // Index every buff section — its models (so an ability that lists several buffs can pick
   // the one its numbers call for) AND its icon/name/tooltip (the info panel's Status row).
@@ -1266,7 +1282,11 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       suffix: s ? str(s, "EditorSuffix") : "",
     });
   }
-  return new AbilityRegistry(defs, new Map(), buffs);
+  const reg = new AbilityRegistry(defs, new Map(), buffs);
+  reg.triggerOrders = triggerOrders;
+  const metaBytes = vfs.rawBytes("Units\\AbilityMetaData.slk");
+  if (metaBytes) reg.meta = new MappedData(new TextDecoder("windows-1252").decode(metaBytes));
+  return reg;
 }
 
 /** Command buttons the ENGINE draws that are not abilities: they have a `[…]` section in
@@ -1382,7 +1402,7 @@ export function tipFieldValue(lvl: AbilityLevel, field: string): number | null {
  *  "baseReq + levelSkip*abilityLevel". Basics take the default 2-level skip (ranks
  *  at hero 1/3/5); ultimates carry reqLevel 6 directly. */
 export function requiredHeroLevel(def: AbilityDef, rank: number): number {
-  const skip = def.levelSkip > 0 ? def.levelSkip : MISC_GAME.HeroAbilityLevelSkip;
+  const skip = def.levelSkip > 0 ? def.levelSkip : gameNum("HeroAbilityLevelSkip");
   return Math.max(1, def.reqLevel) + skip * (rank - 1);
 }
 

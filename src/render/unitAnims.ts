@@ -292,6 +292,45 @@ export function applyAnimProps(seqs: Array<{ name: string }>, animProps: string[
  *  barely reaches it: with no plain "* Alternate" stand to match, its rooted stand falls back
  *  to the same "Stand" it used before this function existed, so only its attack clip can be
  *  affected. Left as-is rather than special-cased on a guess; wants a look at the real client. */
+/**
+ * What a SCRIPT's animation tags do to a unit's clip list — `AddUnitAnimationProperties`
+ * ("Add/Remove Unit Animation Tag", UI\TriggerStrings.txt). A tag is the same kind of word a
+ * unit type's `Animprops` line holds, and the GUI takes any string, so it comes in two kinds:
+ *
+ *   * a TIER/STATE word (`alternate`, `upgrade first` — TIER_PROPS) joins the unit's own props,
+ *     and applyAnimProps does with it exactly what it does with a morphed or upgraded type's;
+ *   * any other word (`work`, `gold`, `defend`) is a POSE: a clip that carries it takes the place
+ *     of the same clip without it. Test of Balance's pillar tags itself `work` near the end and
+ *     its Obelisk.mdx has "stand", "stand work" and "stand alternate" — so its stand becomes the
+ *     "stand work" one, which is what a tag on the plain action can only mean.
+ *
+ * Indices are kept (a replaced clip is blanked, never removed), because everything downstream
+ * of buildAnimSet is an index into the MODEL's own sequence list. Returns the list to hand
+ * buildAnimSet and the props to add to the type's.
+ */
+export function scriptAnimTags(seqs: Array<{ name: string }>, tags: readonly string[]): { seqs: Array<{ name: string }>; props: string[] } {
+  const words = [...new Set(tags.flatMap((t) => t.toLowerCase().split(/[\s,]+/)).filter(Boolean))];
+  const props = words.filter((w) => TIER_PROPS.has(w));
+  const poses = words.filter((w) => !TIER_PROPS.has(w));
+  if (!poses.length) return { seqs, props };
+  const tokens = (n: string) => n.toLowerCase().split(/[\s\-_]+/).filter(Boolean);
+  // The action a clip names, as an unordered set without its variant number (applyAnimProps'
+  // baseKey), so "Stand Work - 2" replaces "Stand - 2" and "Stand" alike.
+  const key = (ts: string[]) => ts.filter((t) => !/^\d+$/.test(t)).sort().join(" ");
+  const tagged = new Set<string>();
+  const out = seqs.map((s) => {
+    const ts = tokens(s.name);
+    if (!poses.every((w) => ts.includes(w))) return { name: s.name };
+    const rest = ts.filter((t) => !poses.includes(t));
+    tagged.add(key(rest));
+    return { name: rest.join(" ") };
+  });
+  return {
+    seqs: out.map((s, i) => (tagged.has(key(tokens(s.name))) && out[i].name === seqs[i].name ? { name: "(none)" } : s)),
+    props,
+  };
+}
+
 export function animPropsFor(def: { animProps?: string[] } | undefined, rooted: boolean): string[] | undefined {
   if (!rooted) return def?.animProps;
   return [...(def?.animProps ?? []), "alternate"];

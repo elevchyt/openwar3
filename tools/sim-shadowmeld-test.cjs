@@ -192,8 +192,11 @@ const stillMelded = (u) => u.buffs.some((b) => b.kind === "invisible");
     ["Ashm", { id: "Ashm", code: "Ashm", research: false, levels: 3, reqLevel: 1, levelSkip: 2, levelData: [{}, {}, {}] }],
     ["AEbl", { id: "AEbl", code: "AEbl", research: true, levels: 3, reqLevel: 1, levelSkip: 2, levelData: [{}, {}, {}] }],
   ]);
+  defs.set("AUdd", { id: "AUdd", code: "AUdd", research: true, levels: 3, reqLevel: 1, levelSkip: 2, levelData: [{}, {}, {}] });
   const w = new SimWorld({ width: 8, height: 8, cell: 128, blocked: new Uint8Array(64) }, 1);
   w.abilities = defs;
+  // The Warden's own UnitAbilities.slk row: heroAbilList AEbl,AEfk,AEsh,AEsv beside abilList AInv,Ashm.
+  w.unitReg = new Map([["Ewar", { id: "Ewar", heroAbilities: ["AEbl", "AEfk", "AEsh", "AEsv"] }]]);
   const hero = {
     id: 7, typeId: "Ewar", isHero: true, level: 1, skillPoints: 1, owner: 0,
     abilities: [{ id: "Ashm", code: "Ashm", level: 1 }, { id: "AEbl", code: "AEbl", level: 0 }],
@@ -201,6 +204,13 @@ const stillMelded = (u) => u.buffs.some((b) => b.kind === "invisible");
   w.units.set(hero.id, hero);
   check("a hero's innate Shadow Meld is not learnable", w.learnable(hero, "Ashm"), false);
   check("…her Blink is", w.learnable(hero, "AEbl"), true);
+  // A hero-class ability a SCRIPT added is not on the page either: "Abilities added through
+  // triggers will not show up in the skill level list" (hiveworkshop 257081) — the whole of
+  // Test of Balance's reward dialog, which adds hero spells at rank 1 and levels them by trigger.
+  hero.abilities.push({ id: "AUdd", code: "AUdd", level: 1 });
+  check("a trigger-added hero ability is not learnable, hero flag or no", w.learnable(hero, "AUdd"), false);
+  check("…so a hero with only those has no learn page", w.hasHeroSkills({ ...hero, abilities: [{ id: "AUdd", code: "AUdd", level: 1 }] }), false);
+  check("…while one with a skill of its own does", w.hasHeroSkills(hero), true);
   // (given three ranks here, so it is the learnable gate that refuses and not "already maxed")
   check("learnskill refuses Shadow Meld", w.learnAbility(7, "Ashm"), false);
   check("…and keeps the point", hero.skillPoints, 1);

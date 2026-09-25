@@ -49,6 +49,59 @@ export function orderStringToId(s: string): number {
   }
   return id;
 }
+// --- which strings ARE orders --------------------------------------------------------------
+// `OrderId("footman")` is 0 in the game: a unit's NAME is not an order string, and blizzard.j's
+// String2OrderIdBJ says so by falling back on `UnitId` when OrderId answers 0 ("Check to see if
+// it's a (train) unit order"). Minting an id for every string made that fallback unreachable.
+// So the OrderId NATIVE answers only for a string that is an order somewhere in the data — an
+// ability's `Order`/`Orderon`/`Orderoff`/`Unorder`, or one of `UI\TriggerData.txt`'s
+// `UnitOrder…` strings — and 0 for anything else. The ISSUE paths still mint (a script's order
+// must reach the unit whatever it spells), and a string one of them has already minted keeps
+// its id here too, so the two can never disagree about an order that was actually given.
+const VOCABULARY = new Set<string>();
+
+/**
+ * The ENGINE's orders that no data file names — real order strings (each has an order id and a
+ * string in the game) that are neither an ability's `Order` column nor a TriggerData `UnitOrder`:
+ * the Acolyte's `acolyteharvest`, the worker's `resumeharvesting`, the inventory's `getitem` /
+ * `dropitem`, a toggle's other half (`unwindwalk`, `barkskinoff`). The list is the difference
+ * between that vocabulary and the table of every order that HAS a string counterpart in
+ * WurstStdlib2's `_wurst/assets/Orders.wurst` (class `OrderIds`, credited there to cJass's
+ * cj_order.j) — names only. DotA's AI asks for `OrderId("acolyteharvest")`, the one corpus call
+ * the data alone would have answered 0.
+ */
+const ENGINE_ORDERS: ReadonlySet<string> = new Set([
+  "acolyteharvest", "ancestralspirittarget", "auraunholy", "auravampiric", "barkskin",
+  "barkskinoff", "barkskinon", "blight", "coupletarget", "detectaoe", "disassociate", "dropitem",
+  "ensnareoff", "ensnareon", "flamingarrowstarg", "getitem", "gold2lumber", "loadcorpseinstant",
+  "lumber2gold", "mechanicalcritter", "militiaconvert", "militiaunconvert", "moveai",
+  "neutraldetectaoe", "neutralinteract", "neutralspell", "phaseshiftinstant", "phoenixfire",
+  "phoenixmorph", "preservation", "rainofchaos", "request_hero", "resumebuild", "resumeharvesting",
+  "sanctuary", "shadowsight", "spellshield", "spellshieldaoe", "spies", "spirittroll", "steal",
+  "tankdroppilot", "tankloadpilot", "tankpilot", "unavatar", "unavengerform", "unloadallinstant",
+  "unwindwalk", "wispharvest",
+]);
+
+/** Teach the order vocabulary (the ability registry's order strings, TriggerData's list). */
+export function learnOrderStrings(strings: Iterable<string>): void {
+  for (const s of strings) {
+    const name = s.trim().toLowerCase();
+    if (name) VOCABULARY.add(name);
+  }
+}
+
+/** The `OrderId` / `String2OrderId` natives: a generic order's real id, an ability order's minted
+ *  one, and 0 for a string that is no order at all (see VOCABULARY). With no vocabulary taught
+ *  (a headless interpreter with no data behind it) every string is taken as an order, as before. */
+export function orderIdOf(s: string): number {
+  const name = s.trim().toLowerCase();
+  if (!name) return 0;
+  if (ORDER_IDS[name] !== undefined || MINTED.has(name) || !VOCABULARY.size || VOCABULARY.has(name) || ENGINE_ORDERS.has(name)) {
+    return orderStringToId(name);
+  }
+  return 0;
+}
+
 /** OrderId2String — integer id → name ("" if unknown). */
 export function orderIdToString(id: number): string {
   return ID_TO_STRING.get(id) ?? "";

@@ -14,6 +14,7 @@ import { applyVideoOptions, LOW_PERF_FORCED } from "../render/videoQuality";
 import { applyHealthBarOptions } from "../render/worldOverlays";
 import { applyHotkeyOptions } from "../data/hotkeys";
 import { applyScrollOptions } from "../render/scrollOptions";
+import { bindGamepadButton } from "./gamepad";
 
 // The IN-GAME Options panels — F10 → Options → Gameplay / Video / Sound — built from the game's
 // own `UI\FrameDef\UI\EscMenuOptionsPanel.fdf`. The panel STACK is ui/escMenu.ts's (this file's
@@ -165,6 +166,12 @@ export class EscOptions {
 
   /** The Gameplay panel's one readout: the speed the match runs at. */
   private fillGameplay(screen: FdfScreen, lib: FdfLibrary | null): void {
+    // "Detect Gamepad" / "Unpair Gamepad" (issue #162): its label for the state the pad is in,
+    // and its countdown while it is listening.
+    bindGamepadButton(screen, {
+      detect: lib?.string("DETECT_GAMEPAD") ?? "Detect Gamepad",
+      unpair: lib?.string("UNPAIR_GAMEPAD") ?? "Unpair Gamepad",
+    });
     const speed = screen.slider("GameSpeedSlider");
     if (speed) {
       speed.value = GAME_SPEED_FAST;

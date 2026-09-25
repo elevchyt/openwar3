@@ -4,8 +4,12 @@ import ModelViewer from "mdx-m3-viewer/dist/cjs/viewer/viewer";
 import type { DataSource } from "../vfs/types";
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { MpqDataSource } from "../vfs/mpq";
+import { LayeredDataSource } from "../vfs/layered";
 import { tilesetOverlay } from "../vfs/tileset";
-import { CAMERA_MARGIN, cameraBoundsOf, parseW3E, type TerrainData, type WorldRect } from "../world/terrain";
+import { createAssetSolver, type MapFileLayer, type Solver } from "./assetSolver";
+import { SkyDome, skyModelPath, type SkyViewer } from "./sky";
+import { CAMERA_MARGIN, CELL, cameraBoundsOf, parseW3E, type TerrainData, type WorldRect } from "../world/terrain";
+import { brushPoints, parseCellRarity, pickCell } from "./terrainBrush";
 import { parseDoo } from "../world/doodads";
 import { collectMapDestructibles, findDestructibleAt, type MapDestructible } from "../world/mapDestructibles";
 import { destructibleUnitDef } from "../data/units";
@@ -14,7 +18,10 @@ import { AllianceType } from "../sim/alliances";
 import { summonsBuildings, castCostOf, isOffField, type Alert, type EffectAnim, type RallyKind, type ShopResult, type ShopStock, type SimUnit, type SimWorld } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintBuildable, footprintCellsAt, footprintRadius, quarterTurns, rotateFootprint, type Footprint, type PlacedFootprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
-import { loadMapScript, type MapScriptEngine } from "../jass/index";
+import { frameModel, loadMapScript, type MapScriptEngine } from "../jass/index";
+import { learnOrderStrings } from "../jass/orders";
+import { setWidePlayerTable } from "../data/enums";
+import { ScriptFrameOverlay } from "../ui/scriptFrames";
 import { EVENT_PLAYER_END_CINEMATIC, EVENT_PLAYER_LEAVE } from "../jass/interpreter";
 import { MAP_CONTROL, type CinematicScene, type DestructableSnapshot, type DialogObj, type EngineHooks, type RectObj, type Runtime } from "../jass/runtime";
 import { makeHeightSampler, makeWaterSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type HeightSampler, type FootprintMaxSampler } from "../game/heightmap";
@@ -35,20 +42,21 @@ import type { MatchLinkSetup } from "../game/matchLink";
 import { unitSnapshot, unitSnapshots } from "../game/jassHooks";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
-import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData, applyMapTechData } from "../data/objectData";
-import { readMapFormat } from "../compat/mapFormat";
+import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData, applyMapTechData, heroFoldConstants, makeTrigStr, refoldHeroConstants } from "../data/objectData";
+import { readMapFormat, UNKNOWN_FORMAT, type MapFormatProfile } from "../compat/mapFormat";
 import { readW3i } from "../compat/w3i";
 import { preloadLuaHost } from "../compat/lua/index";
 import { MAP_MISC_FILE, NO_MAP_MISC, parseMapMisc, type MapMisc } from "../data/mapMisc";
-import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
+import { loadUberSplatRegistry, type UberSplatDef, type UberSplatRegistry } from "../data/ubersplats";
 import { loadLightningRegistry } from "../data/lightning";
 import { specialFxPhaseAt, type SpecialFxClips } from "./specialFxClock";
+import { pickEffectSequence, yawPitchRollQuat } from "./effectAnim";
 import { loadAbilityRegistry, mdlPath, type AbilityRegistry, type AbilityDef, type BuffFx, isRepairCode, KNOWN_ABILITIES, requiredHeroLevel, aoeCursorRadius, morphFlags, MORPH_FLAG_PERMANENT, MORPH_FLAG_REQUIRES_PAYMENT, type AbilityLevel } from "../data/abilities";
 import { isDesktopApp } from "../assets/nativeInstall";
 import { loadCommandStrings, disabledIconPath, type CommandStrings } from "../data/commandStrings";
 import { resolveTipRefs } from "../data/tipRefs";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
-import { CAMERA, MELEE, MINIMAP, MISC_DATA, TEXT_TAG, heroReviveCost, type ReviveMode } from "../data/gameplayConstants";
+import { CAMERA, MELEE, MINIMAP, MISC_DATA, TEXT_TAG, heroReviveCost, mapMiscEpoch, miscKeyIsRead, setMapMiscOverlay, type ReviveMode } from "../data/gameplayConstants";
 import { DayNightCycle, type DayNightLight } from "./dayNight";
 import { makeMapFog, type DistFog } from "./fog";
 import { TimeIndicatorClock, timeIndicatorPath } from "./timeIndicator";
@@ -74,6 +82,7 @@ import { cursorImageValue, cursorPx, cursorValue } from "../ui/cursor";
 import { perfLog } from "../dev/perfLog";
 import { animStride, renderSize, videoSettings } from "./videoQuality";
 import { edgeScrollScale, keyScrollScale } from "./scrollOptions";
+import { gamepadPan, setGamepadHost } from "../ui/gamepad";
 import { TerrainCull } from "./terrainCull";
 import type { PickVolume } from "./modelCollision";
 import { setSimProfiler } from "../sim/profile";
@@ -104,6 +113,7 @@ import { blpToCanvas, blpToDataUrl } from "./blputil";
 import { loadTechRegistry, type TechRegistry } from "../data/techtree";
 import { loadUpgradeRegistry, type UpgradeRegistry } from "../data/upgrades";
 import { parseWar3Skins, skinValue, WAR3SKINS } from "../data/war3skins";
+import { MAP_SKIN_FILE, mapSkinOverlay, parseMapSkin, setMapSkinOverlay, type MapSkin } from "../data/mapSkin";
 
 // Our race ids → the section names in the game's own skin table (UI\war3skins.txt), which
 // is what decorates a `DecorateFileNames` frame's textures. WC3 skins the in-game panels
@@ -184,6 +194,9 @@ const SKIP_FADE_IN = 0.5;
  *  Critically damped, so the lag it costs a group moving at speed `v` is `2·τ·v`: 45 ms
  *  trails a running hero by ~27 units, a fifth of a terrain tile. */
 const FOLLOW_TAU_MS = 45;
+/** The gamepad right stick's pan speed at full tilt, as a share of a held arrow key's. OURS
+ *  (issue #162 — WC3 has no controller): a bit slower than the key, not much. */
+const PAD_PAN_SCALE = 0.75;
 
 /** A match seed for a game nobody specified one for (single player). Math.random is fine
  *  HERE and nowhere near the sim: this picks the seed, it doesn't roll off it. The Park-
@@ -328,9 +341,11 @@ const CARRIED_ITEM_SCALE = 0.85;
 // and the carried gauntlet below. A DOM stand-in that skips it moves the aiming point out
 // from under the player mid-gesture, which is the whole complaint.
 const CURSOR_HOTSPOT: [number, number] = [cursorPx(3), cursorPx(3)];
-// The recoloured cursors' pulse (overlayCursor): brightness 1 → 1.85 → 1 over PULSE_MS, the
-// timing the old CSS `reticle-pulse` animation had. A cursor image cannot animate, so the cycle
-// is baked into PULSE_FRAMES stills — 100 ms apiece, which still reads as a glow, not a blink.
+// The hover hand's pulse (overlayCursor): brightness 1 → 1.85 → 1 over PULSE_MS, the timing the
+// old CSS `reticle-pulse` animation had. A cursor image cannot animate, so the cycle is baked into
+// PULSE_FRAMES stills — 100 ms apiece, which still reads as a glow, not a blink. The armed
+// RETICLE does not pulse: the model's "Target" sequence is one frame ([0, 33]) with no geoset
+// colour or alpha track (UI\Cursor\HumanCursor.mdx), so the real one is a steady picture.
 const PULSE_MS = 800;
 const PULSE_FRAMES = 8;
 // Where the carried item's icon sits against the gauntlet holding it, straight off
@@ -570,9 +585,6 @@ const RING_TEX_BUILDING = "ui\\Feedback\\selectioncircle\\SelectionCircleBuildin
 const RING_NATIVE = 38;
 
 // Minimal local typings (mdx-m3-viewer's exports drag in their own gl-matrix).
-// The viewer calls the solver as (src, solverParams) — params carry the map's
-// tileset letter once war3map.w3i is parsed.
-type Solver = (src: unknown, params?: { tileset?: string }) => unknown;
 interface Camera {
   perspective(fov: number, aspect: number, near: number, far: number): void;
   moveToAndFace(from: Float32Array, to: Float32Array, up: Float32Array): void;
@@ -646,6 +658,18 @@ interface W3xMap {
    *  changed since the last push. See src/sim/blight.ts for what drives it. */
   setBlight(column: number, row: number, on: boolean): boolean;
   flushBlight(): void;
+  // --- what a script's SetTerrainType reaches (docs/map-compatibility.md pass 10) ---
+  /** The viewer's own corner records, row-major — the tile each corner wears. */
+  corners: Array<Array<{ groundTexture: number; groundVariation: number }>>;
+  /** The patch's set of tiles waiting for `flushBlight` — a re-tiled corner joins it too. */
+  blightDirty?: Set<number>;
+  columns: number;
+  rows: number;
+  /** Terrain.slk rows by texture index, and the loaded textures — ground tiles, then the
+   *  blight texture, then whatever a script loaded. */
+  tilesets: unknown[];
+  tilesetTextures: unknown[];
+  load(path: string): Promise<unknown>;
   renderGround(): void;
   renderCliffs(): void;
   renderWater(): void;
@@ -736,6 +760,49 @@ interface DoodadActor {
   clipT: number;
 }
 
+/** A row of `TerrainArt\Terrain.slk`, as the viewer's MappedData hands it back. */
+interface TerrainRow {
+  string(key: string): string | undefined;
+}
+/** Stands in the viewer's row list at the BLIGHT texture's index, which has no Terrain.slk row
+ *  — only `cliffGroundIndex` walks that list, looking for a `tileID` this never matches. */
+const NO_TILE_ROW: TerrainRow = { string: () => "" };
+
+/** A SCRIPT's ubersplat (CreateUbersplat — docs/map-compatibility.md pass 10). */
+interface ScriptSplat {
+  key: string; // its entry in the splat overlay
+  def: UberSplatDef;
+  x: number;
+  y: number;
+  /** The script's own r,g,b,a (0..1), multiplied over the row's envelope. */
+  tint: [number, number, number, number];
+  forcePaused: boolean;
+  t: number; // seconds along the envelope
+  shown: boolean; // ShowUbersplat
+  always: boolean; // SetUbersplatRenderAlways
+  seen: boolean; // in live sight when it was created
+}
+
+/** A SCRIPT's image (CreateImage — pass 10): a texture laid on the ground. */
+interface ScriptImage {
+  key: string;
+  file: string;
+  x: number; // centre
+  y: number;
+  halfX: number;
+  halfY: number;
+  type: number;
+  shown: boolean; // ShowImage
+  always: boolean; // SetImageRenderAlways
+  color: [number, number, number, number]; // SetImageColor, 0..1
+  constZ: number | null; // SetImageConstantHeight
+}
+
+function lerp4(a: readonly number[], b: readonly number[], k: number): [number, number, number, number] {
+  const f = Math.max(0, Math.min(1, k));
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f, a[3] + (b[3] - a[3]) * f];
+}
+
 /** One live script `effect` (7.26 — issue #68): the model AddSpecialEffect* put in the
  *  world, held until the script's DestroyEffect. See MapViewerScene.specialFx. */
 interface SpecialFx {
@@ -768,6 +835,23 @@ interface SpecialFx {
   y: number;
   /** DestroyEffect landed before the model did — drop it the moment it loads. */
   doomed: boolean;
+  // --- what the BlzSetSpecialEffect… natives set (docs/map-compatibility.md pass 10) ---
+  /** An ABSOLUTE height the script put it at, or null to stand on the ground. */
+  z: number | null;
+  /** Radians — yaw about Z (like a unit's facing), pitch about Y, roll about X. */
+  yaw: number;
+  pitch: number;
+  roll: number;
+  scale: number;
+  /** Vertex colour and alpha, 0..1. */
+  color: [number, number, number, number];
+  /** A player colour index, or -1 for the model's own. */
+  teamColor: number;
+  /** Sub-animation tags ("second", "upgrade") qualifying the clip BlzPlaySpecialEffect picks. */
+  tags: string[];
+  /** The animation BlzPlaySpecialEffect asked for. From then on the SCRIPT owns the clip and
+   *  the Birth → Stand lifecycle stops driving it. null until then. */
+  played: string | null;
 }
 
 // A Blood Mage's orbiting spheres (issue #37). The Sphere ability (Asph) attaches
@@ -925,6 +1009,9 @@ export class MapViewerScene {
    *  map load from the terrain's boundary flags, and a map's own SetCameraBounds may then
    *  move it. Null = no map. */
   private mapBounds: WorldRect | null = null;
+  /** The open map's format, read once at the door (loadMapObjectData). Kept because one of its
+   *  answers outlives the read: the weapon-index convention the script runtime needs later. */
+  private mapFormat: MapFormatProfile = UNKNOWN_FORMAT;
   private distance = 4000;
   // Look from the south toward +Y (north up), matching WC3's default camera so
   // units/buildings (which default to facing 270° = south) face the viewer.
@@ -1221,6 +1308,9 @@ export class MapViewerScene {
   // a melee match, where `rt.textTags` stays empty for the whole game.
   private readonly combatText = new CombatTextTags();
   private leaderboard: LeaderboardOverlay | null = null; // CreateLeaderboard, top-right
+  private scriptFrames: ScriptFrameOverlay | null = null; // the map's own BlzCreateFrame UI
+  /** `BlzHideOriginFrames(true)` is in force (see syncHudVisible). */
+  private originHidden = false;
   private multiboard: MultiboardOverlay | null = null; // CreateMultiboard — the grid scoreboard (7.22)
   private timerDialogs: TimerDialogOverlay | null = null; // CreateTimerDialog — the countdown windows (7.21)
   private cinematic: CinematicPanelOverlay | null = null; // the letterbox + transmissions + the fade (7.24)
@@ -1335,6 +1425,12 @@ export class MapViewerScene {
   /** The FORM the bust was loaded for (SelectionInfo.altModel) — a morph keeps the unit id,
    *  so this is what says the bear's bust must replace the elf's. */
   private portraitAlt = false;
+  /** …and the MODEL it was shown for. A unit's model can arrive after the unit does: a hero
+   *  bought from a shop is in the sim a frame or two before its body has loaded, and
+   *  `selectedInfo` reports no model until then. Keyed on the id alone, the portrait took that
+   *  first frame's "no bust" as the answer for the unit and never looked again — and the canvas
+   *  kept the last bust it drew, which is how Test of Balance's heroes all wore the pillar. */
+  private portraitModel = "";
   private portraitLoading = false;
   // Background portrait-model warming (kills the first-select spike): types whose
   // bust is already parsed/cached, the pending decode queue, and the idle-drain guard.
@@ -1444,6 +1540,8 @@ export class MapViewerScene {
   // Its own GL pass, drawn after the world's translucent instances and before the fog; the
   // bolts are strung by the sim's `drainFxLightnings` events and follow their units.
   private lightning: LightningOverlay | null = null;
+  /** The engine ids a script's `lightning` handles carry (docs/map-compatibility.md pass 10). */
+  private nextScriptBoltId = 1;
   private rallyFlag: SpawnInstance | null = null; // shown at the selected building's rally
   private queueFlagModel: SpawnModel | null = null; // the (smaller) waypoint flag, pooled below
   private queueFlags: SpawnInstance[] = []; // pool: small flags at queued-order positions
@@ -1459,7 +1557,8 @@ export class MapViewerScene {
   private reticleImgs = new Map<string, HTMLCanvasElement>(); // tinted WC3 reticle by colour key
   private handImgs = new Map<string, HTMLCanvasElement>(); // tinted race hand cursor by colour key
   private overlayCursors = new Map<string, string>(); // `cursor:` values by kind:colour:pulse frame
-  private overlayCursorRule = ""; // the value --ow3-overlay-cursor holds now (see updateReticle)
+  private reticleCursorRule = ""; // the value --ow3-reticle-cursor holds on <body> now (see updateReticle)
+  private handCursorRule = ""; // the value --ow3-hand-cursor holds on the map canvas now (see updateReticle)
   private scrollStripUrl = ""; // the three "Scroll *" frames laid side by side (see applyRaceCursor)
   private lastMouse = { x: 0, y: 0 };
   // Transient harvest-/attack-order ring flashes: a colour + lifetime; the ring itself
@@ -1522,6 +1621,7 @@ export class MapViewerScene {
     private tech: TechRegistry,
     private upgrades: UpgradeRegistry,
     private solver: Solver,
+    private mapFiles: MapFileLayer,
     shared: SoundBoard | null,
   ) {
     // The menu already built a SoundBoard (and with it the page's one AudioContext) to play
@@ -1546,6 +1646,23 @@ export class MapViewerScene {
     this.warmIconCache();
   }
 
+  /**
+   * The install with the running map's archive laid over it — what a PORTRAIT's model and its
+   * textures are read from. The busts are drawn by their own little viewers (ModelViewerScene)
+   * with their own reader, so the map-first layer `create`'s solver gives the world
+   * (render/assetSolver.ts) does not reach them: a drafted hero with an imported model (Test of
+   * Balance's `Santa.mdx`, and the `Santa_Portrait.mdx` beside it) stood on the terrain with a
+   * black console bust. Built once per mount; the viewers themselves are made per match (and
+   * dropped with it).
+   */
+  private assetFiles(): DataSource {
+    const map = this.mapFiles.archive;
+    if (!map) return this.vfs;
+    if (this.assetLayer?.epoch !== this.mapFiles.epoch) this.assetLayer = { epoch: this.mapFiles.epoch, files: new LayeredDataSource([map, this.vfs]) };
+    return this.assetLayer.files;
+  }
+  private assetLayer: { epoch: number; files: DataSource } | null = null;
+
   /** Construct the viewer and wait for its base SLK tables (required before loadMap). */
   static async create(canvas: HTMLCanvasElement, vfs: DataSource, sounds: SoundBoard | null = null): Promise<MapViewerScene> {
     syncCanvasSize(canvas);
@@ -1559,39 +1676,10 @@ export class MapViewerScene {
       created.push(url);
     }
 
-    // Every model/texture path resolves to a STABLE, cached blob-url string —
-    // never a Promise<bytes>. This is the load-time win behind issue #14: the
-    // viewer only DEDUPES a resource when the path solver hands it a string it
-    // can key its promiseMap/resourceMap on. A Promise (what `vfs.read()`
-    // returns) sends the load down the viewer's __DIRECT_LOAD path, which mints a
-    // unique id and parses a *fresh* resource EVERY call — so a map with hundreds
-    // of trees all referencing one LordaeronTree.mdx re-read and re-parsed that
-    // model once per tree, the dominant cost of map init. One blob url per path
-    // (cached here, tracked in `created` for revocation on dispose) means each
-    // shared model/texture is fetched once and parsed exactly once.
-    const blobUrls = new Map<string, string | null>();
-    // The map's tileset archive, layered over the mount for the whole match (issue #152).
-    // Cliff faces, water frames and ubersplats are one path per set and one SET PER TILESET,
-    // told apart by the archive they sit in, so this has to go here — at the one place a
-    // logical path becomes bytes — rather than at any single asset's call site.
-    const overlay = tilesetOverlay(vfs);
-    const solver: Solver = (src, params) => {
-      if (typeof src !== "string") return src; // in-memory loads pass through
-      // The viewer hands the tileset letter down with every load the map handler makes,
-      // its own models and their textures included — which is exactly the reach the
-      // overlay wants, since the re-tinted creep skins ride in the same archive.
-      const { key, source, path } = overlay(src.replace(/\//g, "\\"), params?.tileset);
-      const cached = baseUrls.get(key);
-      if (cached) return cached; // preloaded base SLKs
-      let url = blobUrls.get(key);
-      if (url === undefined) {
-        const bytes = source.rawBytes(path); // MPQ decode is synchronous (mpq.ts)
-        url = bytes ? URL.createObjectURL(new Blob([bytes as BlobPart])) : null;
-        blobUrls.set(key, url);
-        if (url) created.push(url);
-      }
-      return url ?? src; // string ⇒ the viewer caches+dedupes by this url
-    };
+    // Map archive, then tileset archive, then the install — one stable blob URL per path
+    // (render/assetSolver.ts says why each layer is there).
+    const mapFiles: MapFileLayer = { archive: null, epoch: 0 };
+    const solver = createAssetSolver(vfs, mapFiles, baseUrls, created);
 
     const viewer = new ViewerClass(canvas, solver, false);
     viewer.terrainModelExists = (path) => vfs.exists(path);
@@ -1663,7 +1751,7 @@ export class MapViewerScene {
       baseUrls.delete(path);
     }
 
-    return new MapViewerScene(canvas, viewer, created, vfs, loadUnitRegistry(vfs), loadAbilityRegistry(vfs), loadItemRegistry(vfs), loadTechRegistry(vfs), loadUpgradeRegistry(vfs), solver, sounds);
+    return new MapViewerScene(canvas, viewer, created, vfs, loadUnitRegistry(vfs), loadAbilityRegistry(vfs), loadItemRegistry(vfs), loadTechRegistry(vfs), loadUpgradeRegistry(vfs), solver, mapFiles, sounds);
   }
 
   /**
@@ -1759,6 +1847,10 @@ export class MapViewerScene {
     // Stand up the simulation: terrain height + pathing from the map's own files.
     const archive = new MpqDataSource("map", bytes);
     this.mapArchive = archive; // kept so startCustom can read war3map.j (Phase 7 triggers)
+    // Laid over the install for every MODEL and texture the scene loads itself — the units a
+    // trigger creates, the effects it spawns (see `create`'s solver). Audio's twin is below.
+    this.mapFiles.archive = archive;
+    this.mapFiles.epoch++;
     // The map's own object data goes in FIRST — before anything reads the registries for this
     // map. It is the map's declaration of what its types ARE, so every question asked below
     // (a building's pathing footprint, its ground texture, whether it is a building at all)
@@ -1772,6 +1864,7 @@ export class MapViewerScene {
     // startCustom call meant melee maps were reading their own .w3u nowhere.
     this.loadMapObjectData();
     this.loadMapMisc();
+    this.loadMapSkin();
     // …and mounted over the install for AUDIO, so a map's imported clips resolve: the paths
     // its CreateSound calls name (`war3mapImported\HalloweenMusic.wav`) are inside this
     // archive and nowhere else. See SoundBoard.mountMap.
@@ -1791,6 +1884,9 @@ export class MapViewerScene {
     const wpm = archive.rawBytes("war3map.wpm");
     if (w3e && wpm) {
       const terrain = parseW3E(w3e);
+      this.terrainData = terrain; // GetTerrainType reads it, SetTerrainType writes it
+      this.mapTileCount = terrain.groundTilesets.length;
+      this.tileLoads.clear();
       this.fogTerrain = terrain; // corner grid for the fog overlay mesh
       // …and where the camera focus may go: the map's camera bounds, off the terrain's own
       // boundary flags (issue #117). A map's `main()` re-states this through SetCameraBounds
@@ -1817,6 +1913,7 @@ export class MapViewerScene {
       // overlays are, and consulted once a frame just before the ground and water passes.
       this.terrainCull = new TerrainCull(terrain);
       this.splats = new UberSplatOverlay(this.viewer.gl, terrain, splatLoader);
+      this.splatTexture = splatLoader; // a script's CreateImage asks it whether its file is there
       // Separate overlay for selection/hover rings: same terrain-tessellation, but drawn
       // as its OWN pass AFTER the building splats so a ring paints on top of a foundation
       // decal (issue #16) — while still under the units (issue #34).
@@ -2560,7 +2657,7 @@ export class MapViewerScene {
     // browser is free to paint through, so it is what the loading bar creeps on (see
     // `startGame` in src/main.ts).
     await this.waitForMapUnits(onProgress);
-    this.rts.seedModellessPlaced(); // …including the ones the renderer never delivers (dummy units)
+    this.rts.seedModellessPlaced((path) => this.assetFiles().exists(path)); // …including the ones the renderer never delivers (dummy units)
     await this.preloadScriptHost();
     const engine = this.runMapScript({ melee: true, races, slots: config.slots });
     // No script (or it created nothing for the local player — a script that leans on
@@ -2880,7 +2977,7 @@ export class MapViewerScene {
     // A dummy unit never arrives through the renderer at all, and on a custom map it is often
     // load-bearing — Extreme Candy War's cinematic vision pair is the whole reason its intro
     // is visible. Seed those from the .doo before the script runs, like everything else.
-    const dummies = this.rts.seedModellessPlaced();
+    const dummies = this.rts.seedModellessPlaced((path) => this.assetFiles().exists(path));
 
     // Run the map's own script (Phase 7). config() sets players/start-locations;
     // main() fires the map's initialization triggers, so its welcome text / quest
@@ -2953,6 +3050,15 @@ export class MapViewerScene {
    */
   private localViewHooks(): Partial<EngineHooks> {
     return {
+      // --- the selection (7.24) ---
+      // The SELECTION is the person at this machine's, like the camera: blizzard.j's
+      // `SelectUnitForPlayerSingle` is `if GetLocalPlayer() == whichPlayer then ClearSelection()
+      // SelectUnit(u, true)`, and in the per-recipient re-run of that block every OTHER seat's
+      // pass wrote this machine's selection too. Test of Balance calls it for each player's
+      // drafted hero, so the host ended the draft with the LAST seat's hero selected — somebody
+      // else's unit, and so an empty command card.
+      selectUnit: (id, select) => this.rts?.scriptSelect(id, select),
+      clearSelection: () => this.rts?.clearSelection(),
       // --- cameras + cinematics (7.24) ---
       // Every camera MOVE is one call: the script names fields and (maybe) a destination,
       // and ScriptCamera blends the live camera there. It used to say here that the …ForPlayer
@@ -3017,6 +3123,21 @@ export class MapViewerScene {
         this.noteSpacebarPoint(ping.x, ping.y);
       },
       setSpacebarPoint: (x, y) => this.noteSpacebarPoint(x, y),
+      // BlzChangeMinimapTerrainTex (compat/frames.ts): the minimap's terrain picture becomes the
+      // map's own art. A picture on THIS machine's screen, so a writer of the local view.
+      changeMinimapTerrainTex: (path) => {
+        const bytes = this.mapArchive?.rawBytes(path) ?? this.vfs.rawBytes(path);
+        let canvas: HTMLCanvasElement | null = null;
+        try {
+          canvas = bytes ? blpToCanvas(bytes) : null;
+        } catch {
+          canvas = null; // not a BLP we can read — the map keeps the picture it had
+        }
+        if (!canvas) return false;
+        this.minimap = canvas;
+        this.hud?.setMinimapImage(canvas);
+        return true;
+      },
       // A speaker's white blink (TransmissionFromUnitWithNameBJ → UnitAddIndicator). The
       // colour MULTIPLIES the white ring, alpha scaling all three — see tickFlashCircles.
       unitAddIndicator: (unitId, r, g, b, a) => {
@@ -3228,6 +3349,14 @@ export class MapViewerScene {
       setPlayerColor: (p, color) => this.rts?.setPlayerColor(p, color),
       setPlayerNeutral: (p, neutral) => this.rts?.setPlayerNeutral(p, neutral),
       setUnitScale: (id, scale) => this.rts?.setUnitScale(id, scale),
+      // BlzSetUnit…Field — DUAL-WRITER like setUnitFlyHeight: the sim keeps ONE unit's value (and
+      // does everything with it the world does), the renderer then wears the three that are
+      // pictures — scale, selection circle, run speed (RtsController.applyFieldOverrides).
+      setUnitField: (id, field, value, slot) => {
+        const ok = world.setUnitField?.(id, field, value, slot) ?? false;
+        if (ok) this.rts?.applyFieldOverrides(id);
+        return ok;
+      },
       setUnitVertexColor: (id, r, g, b, a) => this.rts?.setUnitVertexColor(id, r, g, b, a),
       // Fly height lives in two places: the sim (missile launch/land Z) and the render lift.
       // DUAL-WRITER, same shape as setUnitOwner above — `world` writes the sim, this adds the lift.
@@ -3237,8 +3366,7 @@ export class MapViewerScene {
       },
       setUnitTimeScale: (id, scale) => this.rts?.setUnitTimeScale(id, scale),
       selectedUnits: (player) => (player === this.localPlayer ? this.rts?.selectedUnitIds() ?? [] : []),
-      selectUnit: (id, select) => this.rts?.scriptSelect(id, select),
-      clearSelection: () => this.rts?.clearSelection(),
+      // (selectUnit / clearSelection are in localViewHooks — a selection is this screen's.)
       // IsUnitAlly/IsUnitEnemy: team-based, so neutral hostile (team -1) is nobody's ally.
       // --- the atmospheric distance haze — a DIFFERENT system (7.22) ---
       // Replaces the map's w3i fog on `scene.distFog` (read fresh each frame, so this
@@ -3273,6 +3401,23 @@ export class MapViewerScene {
       addSpecialEffect: (path, x, y) => this.addSpecialEffect(path, x, y),
       addSpecialEffectTarget: (path, unitId, attach) => this.addSpecialEffectTarget(path, unitId, attach),
       destroyEffect: (id) => this.destroySpecialFx(id),
+      ...this.specialFxHooks(),
+      ...this.imageryHooks(),
+      // --- lightning: a script's own bolts (docs/map-compatibility.md pass 10) ---
+      // The overlay spell bolts are drawn by, holding them until the script lets go.
+      addLightning: (code, checkVis, x1, y1, z1, x2, y2, z2, absZ) => {
+        if (!this.lightning) return -1;
+        const id = this.nextScriptBoltId++;
+        const ok = this.lightning.addScript(id, {
+          type: code, srcId: 0, dstId: 0, sx: x1, sy: y1, sz: z1, tx: x2, ty: y2, tz: z2, life: 0, delay: 0, absZ, checkVis,
+        });
+        return ok ? id : -1;
+      },
+      moveLightning: (id, checkVis, x1, y1, z1, x2, y2, z2, absZ) =>
+        this.lightning?.moveScript(id, { sx: x1, sy: y1, sz: z1, tx: x2, ty: y2, tz: z2, absZ, checkVis }) ?? false,
+      destroyLightning: (id) => this.lightning?.removeScript(id) ?? false,
+      setLightningColor: (id, r, g, b, a) => this.lightning?.setScriptColor(id, [r, g, b, a]) ?? false,
+      lightningColor: (id) => this.lightning?.scriptColor(id) ?? null,
       // --- cameras + cinematics (7.24) ---
       // The WRITERS live in `localViewHooks` — see there for why they are a set of their own.
       ...this.localViewHooks(),
@@ -3331,6 +3476,7 @@ export class MapViewerScene {
       getDefaultDifficulty: () => this.defaultDifficulty,
       // --- animation (7.17) — a model's, not the world's, so it stays with the renderer ---
       setUnitAnimation: (id, animation) => this.rts?.setUnitAnimation(id, animation),
+      addUnitAnimationProperties: (id, props, add) => this.rts?.addUnitAnimationProperties(id, props, add),
       // --- items (7.18) ---
       // The item natives themselves moved to jassHooks.ts (the sim owns the item system).
       // These two stayed: both read the ItemRegistry — a DATA table with the custom .w3t
@@ -3343,6 +3489,24 @@ export class MapViewerScene {
       // interpreter's seeded one, so the pick stays deterministic (replays / future MP).
       chooseRandomItem: (classType, level) => this.mapScript?.interp.rt.random
         ? this.items.chooseRandom(classType, level, this.mapScript.interp.rt.random)?.id ?? ""
+        : "",
+      // UnitId / UnitId2String: the unit table's internal `name`, which is also the train order.
+      // Base rows come first in `all()`, so a custom copy never shadows the stock type's name.
+      // BlzHideOriginFrames / the ConsoleUIBackdrop frame (compat/frames.ts): this screen's.
+      hideOriginFrames: (hide) => {
+        this.originHidden = hide;
+        this.syncHudVisible();
+      },
+      setConsoleBackdropVisible: (visible) => this.consoleUi?.setBackdropVisible(visible),
+      // BlzLoadTOCFile's .toc and .fdf files: the map's archive over the install, synchronously.
+      readMapFile: (path) => this.assetFiles().rawBytes(path.replace(/\//g, "\\")),
+      unitTypeByName: (name) => {
+        const want = name.trim().toLowerCase();
+        return want ? this.registry.all().find((d) => d.typeName.toLowerCase() === want)?.id ?? "" : "";
+      },
+      unitTypeName: (typeId) => this.registry.get(typeId)?.typeName || undefined,
+      chooseRandomCreep: (level) => this.mapScript?.interp.rt.random
+        ? this.registry.chooseRandomCreep(level, this.mapScript.interp.rt.random)?.id ?? ""
         : "",
     };
   }
@@ -3358,6 +3522,7 @@ export class MapViewerScene {
    *  into the registry overlays (Phase 7 — issue #33). Best-effort: a missing/bad file
    *  just means the map runs with base-game types only. Clears prior overlays first. */
   private loadMapObjectData(): void {
+    this.mapFormat = UNKNOWN_FORMAT; // before the early return below, or the last map's leaks in
     this.registry.clearCustom();
     this.abilities.clearCustom();
     this.items.clearCustom();
@@ -3368,6 +3533,10 @@ export class MapViewerScene {
     // rather than acted on: the versions are the first thing worth knowing about a map that
     // behaves oddly, and every branch that CARES about them is behind a parser.
     const format = readMapFormat(this.mapArchive);
+    this.mapFormat = format;
+    // A map a 1.31+ editor saved is on the 24-player table (data/enums.ts setWidePlayerTable):
+    // decided here, before its units are read or its script's constants evaluated.
+    setWidePlayerTable(format.editorBuild >= 131);
     console.info(`[map] format: w3i v${format.w3iVersion}, terrain v${format.terrainVersion}, object data v${format.objectVersion}, ${format.scriptLanguage} script`
       + (format.editorBuild ? `, editor build ${(format.editorBuild / 100).toFixed(2)}` : "")
       + (format.partialW3i ? ", w3i stops early (protected?)" : "")
@@ -3406,6 +3575,22 @@ export class MapViewerScene {
     } catch (err) {
       console.warn("[jass] custom upgrade data failed (non-fatal):", err);
     }
+    // …and the SKIN half of the same objects: a map saved by a 1.33+ editor keeps each object's
+    // art and words (model, icon, name, tooltips, sounds) in `war3mapSkin.w3u/.w3a/.w3t`, laid
+    // on the rows the files above just built (see ObjectLayer in data/objectData.ts). Same
+    // parsers, same field codes; the one difference is where each object starts from.
+    const skin = (name: string): Uint8Array | undefined => this.mapArchive?.rawBytes(name) ?? undefined;
+    const skinU = skin("war3mapSkin.w3u");
+    const skinA = skin("war3mapSkin.w3a");
+    const skinT = skin("war3mapSkin.w3t");
+    try {
+      if (skinU) console.info(`[jass] object skins: ${applyMapUnitData(this.registry, skinU, wts, { skin: true })} unit(s) (war3mapSkin.w3u).`);
+      const meta = this.vfs.rawBytes("Units\\AbilityMetaData.slk");
+      if (skinA && meta) console.info(`[jass] object skins: ${applyMapAbilityData(this.abilities, skinA, meta, wts, { skin: true })} abilit(ies) (war3mapSkin.w3a).`);
+      if (skinT) console.info(`[jass] object skins: ${applyMapItemData(this.items, skinT, wts, { skin: true })} item(s) (war3mapSkin.w3t).`);
+    } catch (err) {
+      console.warn("[jass] object skin data failed (non-fatal):", err);
+    }
     // …and the map's own TECH TREE, which is what a building's command card is BUILT from
     // (`Trains`, `Sellunits`, `Sellitems`, `Researches`, `Builds`, `Upgrade`, `Requires`).
     // One call over all four files because one graph covers all four id spaces — see
@@ -3421,8 +3606,12 @@ export class MapViewerScene {
    *  beside the object data because it is the same kind of thing: the map's overlay on the
    *  install's tables, cleared and re-read per map. Applied in `beginMatch`, which is the first
    *  moment there is a match to apply it to. */
+  /** The overlay generation this scene installed (gameplayConstants.ts), or -1. */
+  private miscEpoch = -1;
+
   private loadMapMisc(): void {
     this.mapMisc = NO_MAP_MISC;
+    setMapMiscOverlay(null); // never the last map's, whatever happens below
     const bytes = this.mapArchive?.rawBytes(MAP_MISC_FILE);
     if (!bytes) return;
     try {
@@ -3431,13 +3620,61 @@ export class MapViewerScene {
       console.warn(`[jass] ${MAP_MISC_FILE} failed (non-fatal):`, err);
       return;
     }
-    // Say what was read AND what was not: only FoodCeiling has a use site today, and a map
-    // whose MaxHeroLevel or DayLength we quietly ignored should be visible in the log rather
-    // than a puzzle later. See src/data/mapMisc.ts for the seven keys the stock maps use.
+    // The map's constants become the top layer of every Misc read (docs/map-compatibility.md
+    // pass 11). The hero TYPES were folded with the constants that stood before it — the stored
+    // vitals carry the attribute bonuses — so any fold constant the map moves is re-applied to
+    // them here, AFTER the map's object data (loadMapObjectData runs first) and before a unit
+    // is made.
+    const before = heroFoldConstants();
+    setMapMiscOverlay(this.mapMisc.values);
+    this.miscEpoch = mapMiscEpoch();
+    const refolded = refoldHeroConstants(this.registry, before, heroFoldConstants());
+    // Say what was read AND what nothing reads: a key this engine has no row for (the
+    // Illusions* toggles, UpkeepUsage …) or holds but never reads (MISC_UNREAD — the Trading*
+    // rates, ChanceToMiss …) names a system that does not exist yet, and a map leaning on it
+    // should be visible in the log rather than a puzzle.
     const stated = [...this.mapMisc.values].map(([k, v]) => `${k}=${v}`).join(", ");
-    const ignored = [...this.mapMisc.values.keys()].filter((k) => k !== "FoodCeiling");
+    const unread = [...this.mapMisc.values.keys()].filter((k) => !miscKeyIsRead(k));
     console.info(`[jass] map gameplay constants (${MAP_MISC_FILE}): ${stated}`
-      + (ignored.length ? ` — not applied yet: ${ignored.join(", ")}` : ""));
+      + (refolded ? ` — ${refolded} hero type(s) re-folded` : "")
+      + (unread.length ? ` — no system reads: ${unread.join(", ")}` : ""));
+  }
+
+  /** The script's sky (`SetSkyModel` — render/sky.ts), made on the first call. */
+  private sky: SkyDome | null = null;
+
+  /** SetSkyModel: the named sky around the eye from now on; "" takes it away. */
+  private setSky(path: string): void {
+    const world = this.viewer.map?.worldScene;
+    if (!world) return;
+    if (!this.sky) {
+      if (!skyModelPath(path)) return; // no sky asked for, and none up
+      this.sky = new SkyDome(this.viewer as unknown as SkyViewer, this.solver, world);
+    }
+    void this.sky.setModel(path);
+    this.sky.follow(world.camera as unknown as { location: Float32Array });
+  }
+
+  /** The map's own interface layer (`war3mapSkin.txt` — data/mapSkin.ts), or null. Kept so
+   *  dispose takes down only the layer THIS scene put up (see the misc overlay beside it). */
+  private mapSkin: MapSkin | null = null;
+
+  private loadMapSkin(): void {
+    this.mapSkin = null;
+    setMapSkinOverlay(null); // never the last map's
+    const bytes = this.mapArchive?.rawBytes(MAP_SKIN_FILE);
+    if (!bytes) return;
+    try {
+      // The World Editor writes this file as UTF-8, like war3map.wts beside it.
+      const wts = this.mapArchive?.rawBytes("war3map.wts") ?? undefined;
+      this.mapSkin = parseMapSkin(new TextDecoder("utf-8").decode(bytes), makeTrigStr(wts));
+    } catch (err) {
+      console.warn(`[jass] ${MAP_SKIN_FILE} failed (non-fatal):`, err);
+      return;
+    }
+    setMapSkinOverlay(this.mapSkin);
+    this.skins = undefined; // skinPath re-reads through the new layer
+    console.info(`[jass] map interface (${MAP_SKIN_FILE}): ${[...this.mapSkin.skins.keys()].join(", ") || "no"} skin key(s), ${this.mapSkin.strings.size} string(s).`);
   }
 
   /** Run the map's config() + main() through the JASS interpreter (Phase 7 — issue #33).
@@ -3497,6 +3734,9 @@ export class MapViewerScene {
         })),
         localPlayer: this.localPlayer,
       };
+      // Which strings are ORDERS, for `OrderId` (jass/orders.ts): the map's own abilities are
+      // loaded by now, so its custom order strings are in the list with the stock ones.
+      learnOrderStrings(this.abilities.orderVocabulary());
       const engine = loadMapScript(this.vfs, this.mapArchive, {
         melee: opts.melee,
         runMain: true,
@@ -3507,6 +3747,9 @@ export class MapViewerScene {
         // What `GetPlayerColor(Player(PLAYER_NEUTRAL_AGGRESSIVE))` answers — a campaign map
         // (UndeadX05) colours its sleeping guards off it so they read as creeps.
         neutralColor: neutralTeamColor(this.vfs),
+        // Whether this map's `Blz…` weapon natives count from 0 or 1 — its own editor build says
+        // which convention its author tested (MapFormatProfile.blzIndexBase).
+        blzIndexBase: this.mapFormat.blzIndexBase,
         // Publish the engine BEFORE config()/main() run: a hook fired during init may need
         // the interpreter itself (ChooseRandomItem draws from its seeded RNG — 7.18).
         onBoot: (e) => {
@@ -3572,6 +3815,14 @@ export class MapViewerScene {
     // of once per unit. The index is our own compat prelude's (src/compat/prelude.ts); without
     // it here the trigger registers and the sim never captures a blow to raise it with.
     sw.captureDamage = any("unitEvent", 52) || any("playerUnitEvent", 308);
+    // …and for a script that can CHANGE a blow (it registers a DAMAGING event, or calls
+    // BlzSetEventDamage / a BlzSetEvent…Type anywhere), the damage events are raised WHILE the blow
+    // is dealt, synchronously, so what the handlers set is what lands (SimWorld.damageHook). Every
+    // other map keeps the queued EVENT_UNIT_DAMAGED above, exactly as it was.
+    const damaging = any("unitEvent", 314) || any("playerUnitEvent", 315);
+    sw.damageHook = (damaging || (sw.captureDamage && engine.interp.scriptModifiesDamage()))
+      ? (phase, blow) => engine.interp.fireDamagePhase(phase, blow)
+      : null;
     sw.captureAttacks = any("unitEvent", 62) || any("playerUnitEvent", 18);
     sw.captureOrders = any("playerUnitEvent", 38, 40) || any("unitEvent", 75, 77);
     sw.captureConstruct = any("playerUnitEvent", 26, 28) || any("unitEvent", 64, 65);
@@ -3586,6 +3837,8 @@ export class MapViewerScene {
     // SELL_ITEM and a separate event. Every melee map registers it: MeleeGrantHeroItems
     // watches the neutral-passive shops so a Tavern hero gets the same starting scroll.
     sw.captureSellUnits = any("playerUnitEvent", 269) || any("unitEvent", 286);
+    // SUMMON — 47 player / 84 unit (common.j). The corpus reads `GetSummonedUnit` 92 times.
+    sw.captureSummons = any("playerUnitEvent", 47) || any("unitEvent", 84);
     // LOADED — 51 player / 88 unit. A campaign harbour scene is the case: the ship leaves the
     // moment its passenger is aboard, and it is a unit-scoped registration on the PASSENGER.
     sw.captureLoads = any("playerUnitEvent", 51) || any("unitEvent", 88);
@@ -3655,6 +3908,8 @@ export class MapViewerScene {
       if (trains.length) engine.interp.pumpTrainEvents(trains);
       const sales = sw.drainSellUnitEvents();
       if (sales.length) engine.interp.pumpSellUnitEvents(sales);
+      const summons = sw.drainSummonEvents();
+      if (summons.length) engine.interp.pumpSummonEvents(summons);
       const heroes = sw.drainHeroEvents();
       if (heroes.length) engine.interp.pumpHeroEvents(heroes);
       // 7.18: items picked up / dropped / used (a trigger's UnitAddItem and a hero walking
@@ -3727,6 +3982,7 @@ export class MapViewerScene {
   private mountScriptUi(ui: HTMLElement): void {
     this.textTags?.dispose();
     this.leaderboard?.dispose();
+    this.scriptFrames?.dispose();
     this.multiboard?.dispose();
     this.timerDialogs?.dispose();
     this.cinematic?.dispose();
@@ -3737,6 +3993,7 @@ export class MapViewerScene {
     this.interfaceShown = true;
     this.userUi = true;
     this.userControl = true;
+    this.originHidden = false; // a map's BlzHideOriginFrames is that map's
     document.body.classList.remove("cine-on", "dialog-on");
     this.gameSpeed = 2; // MAP_SPEED_NORMAL
     this.cinePortraitFor = "";
@@ -3782,6 +4039,11 @@ export class MapViewerScene {
     this.textTags = new TextTagOverlay(worldLayer());
     this.combatText.clear(); // last match's numbers are not this one's
     this.leaderboard = new LeaderboardOverlay(ui, this.vfs, skin, (p) => this.rts?.playerColor(p) ?? p);
+    // The map's own frames (BlzCreateFrame …), drawn out of its archive over the install, and
+    // the mouse on them raised as the frame events its triggers registered — on this machine,
+    // for the local player, as a dialog button's click is.
+    this.scriptFrames = new ScriptFrameOverlay(ui, () => this.assetFiles(), skin, (frame, event) =>
+      this.mapScript?.interp.fireFrameEvent(frame, event, this.localPlayer));
     this.multiboard = new MultiboardOverlay(ui, this.vfs, skin);
     this.timerDialogs = new TimerDialogOverlay(ui, this.vfs, skin);
     this.cinematic = new CinematicPanelOverlay(ui, this.vfs, skin);
@@ -3872,6 +4134,8 @@ export class MapViewerScene {
     // multiboard, then the countdown windows — each hangs below whatever the ones above it
     // are already using, so they never overlap.
     const underBoard = this.leaderboard?.occupiedHeight() ?? 0;
+    // …and the map's own panels are interface too.
+    this.scriptFrames?.update(cine ? null : frameModel(rt));
     this.multiboard?.update(rt.multiboards, cine || rt.multiboardSuppressed, underBoard ? underBoard + TIMER_STACK_GAP : 0);
     // Countdown windows stack below both (7.21). Their TIME isn't pushed — it's read live
     // off each dialog's timer, so this runs every frame, not just when something changed.
@@ -4327,8 +4591,7 @@ export class MapViewerScene {
 
     // A type with NO model is invisible, not absent — WC3's dummy-unit convention (see
     // `normModel`). It is still a unit in every other respect, so it gets a record and no
-    // body. Distinct from art we merely failed to FIND, which falls through to the load
-    // below and is still dropped: that is a broken asset, and it should look like one.
+    // body. A model path that names no file ends up the same way, after the load below.
     if (!def.model) {
       // A reserved id means the record already exists (the JASS CreateUnit path) and this
       // call was only here to hand it a body. There is none. Every other caller is asking
@@ -4338,7 +4601,14 @@ export class MapViewerScene {
         : this.rts.addSimUnit(def, x, y, facing, owner, team, constructionTime);
     }
     const model = await this.viewer.load(def.model, this.solver);
-    if (!model) return null;
+    // A model that is not there is an INVISIBLE unit, not an absent one — the standard dummy
+    // trick is a path to a file that does not exist (RtsController.seedModellessPlaced), and a
+    // trained or summoned dummy must still be made. Same as the no-model branch above.
+    if (!model) {
+      return reservedId !== undefined || !this.rts
+        ? null
+        : this.rts.addSimUnit(def, x, y, facing, owner, team, constructionTime);
+    }
     const instance = model.addInstance();
     instance.setScene(map.worldScene);
     instance.setTeamColor(this.rts.unitColor(owner)); // a slot's colour is not its index (and Ally Color Mode paints over both)
@@ -5079,6 +5349,21 @@ export class MapViewerScene {
     if (!overlay || !rts || overlay.count === 0) return;
     const units = rts.simView.units;
     overlay.render(camera.viewProjectionMatrix, camera.location, (b) => {
+      // A SCRIPT's bolt stands between two POINTS the script placed. Plain AddLightning's ends
+      // sit on the ground; the Ex form's z is absolute (see natives/lightning.ts). With
+      // `checkVisibility` it is withheld in the fog like a spell's bolt — seen when either end
+      // is in live sight — and without it, it shows through the fog and the black mask.
+      if (b.scriptId !== undefined) {
+        return {
+          sx: b.sx,
+          sy: b.sy,
+          sz: b.absZ ? b.sz : rts.groundHeightAt(b.sx, b.sy) + b.sz,
+          tx: b.tx,
+          ty: b.ty,
+          tz: b.absZ ? b.tz : rts.groundHeightAt(b.tx, b.ty) + b.tz,
+          visible: !b.checkVis || this.pointVisible(b.sx, b.sy) || this.pointVisible(b.tx, b.ty),
+        };
+      }
       const src = b.srcId ? units.get(b.srcId) : undefined;
       const dst = b.dstId ? units.get(b.dstId) : undefined;
       const sx = src ? src.x : b.sx;
@@ -5165,6 +5450,304 @@ export class MapViewerScene {
         this.splats?.setAlpha(s.key, Math.min(1, a));
       }
     }
+  }
+
+  // --- A SCRIPT's ubersplats and images (docs/map-compatibility.md pass 10) -----------
+  //
+  // Both are painted through the same overlay a building's foundation is, so they conform to
+  // the terrain and sit under the fog veil like the ground they lie on. See natives/imagery.ts
+  // for what each native is documented to do.
+  private scriptSplats = new Map<number, ScriptSplat>();
+  private nextScriptSplatId = 1;
+  private scriptImages = new Map<number, ScriptImage>();
+  private nextScriptImageId = 1;
+  // --- A script's terrain TILES (SetTerrainType — pass 10; render/terrainBrush.ts) ---------
+  private terrainData: TerrainData | null = null;
+  /** How many tiles the map's own palette has — the viewer puts the blight texture right
+   *  after them, so a tile a script loads sits one index further on in the viewer. */
+  private mapTileCount = 0;
+  /** Tiles a script loaded that are still on their way, by OUR index, with the corner writes
+   *  waiting for them: the viewer cannot draw an index it holds no texture for. */
+  private tileLoads = new Map<number, Array<[number, number, number]>>();
+  /** Loads run one after another, so the viewer's texture list never has a hole in it. */
+  private tileChain: Promise<void> = Promise.resolve();
+  private cellRarity: Array<[number, number]> | null | undefined;
+
+  /** The tile POINT nearest (x, y) — a terrain corner — or null off the map. */
+  private terrainCorner(x: number, y: number): [number, number] | null {
+    const t = this.terrainData;
+    if (!t) return null;
+    const col = Math.round((x - t.centerOffset[0]) / CELL);
+    const row = Math.round((y - t.centerOffset[1]) / CELL);
+    return col >= 0 && row >= 0 && col < t.width && row < t.height ? [col, row] : null;
+  }
+
+  private terrainTypeAt(x: number, y: number): string {
+    const t = this.terrainData;
+    const at = this.terrainCorner(x, y);
+    return t && at ? t.groundTilesets[t.corners[at[1] * t.width + at[0]].groundTexture] ?? "" : "";
+  }
+
+  private terrainVarianceAt(x: number, y: number): number {
+    const t = this.terrainData;
+    const at = this.terrainCorner(x, y);
+    return t && at ? t.corners[at[1] * t.width + at[0]].groundVariation : 0;
+  }
+
+  /** SetTerrainType. Changes land at once — nothing says a re-tiled patch waits for the
+   *  player to look, as blight's spreading does. */
+  private setTerrainType(x: number, y: number, tile: string, variation: number, area: number, shape: number): void {
+    const t = this.terrainData;
+    const at = this.terrainCorner(x, y);
+    const map = this.viewer.map as unknown as W3xMap | null;
+    if (!t || !at || !map) return;
+    let k = t.groundTilesets.findIndex((id) => id.toLowerCase() === tile.toLowerCase());
+    if (k < 0) {
+      const row = (this.viewer as unknown as { terrainData?: { getRow(id: string): TerrainRow | undefined } }).terrainData?.getRow(tile);
+      if (!row) return; // not a tile the game has at all
+      // "At most 16 terrain textures can be loaded … will result in the tiles being assigned one
+      // of the already existing 16 terrain textures" (hiveworkshop 339901), "likely the result of
+      // arithmetic overflow in the bitfield" — the 4-bit index wraps.
+      if (t.groundTilesets.length >= 16) k = t.groundTilesets.length & 15;
+      else {
+        k = t.groundTilesets.length;
+        t.groundTilesets.push(tile);
+        this.loadScriptTile(map, k, row);
+      }
+    }
+    if (this.cellRarity === undefined) {
+      const bytes = this.vfs.rawBytes("UI\\WorldEditData.txt");
+      this.cellRarity = bytes ? parseCellRarity(new TextDecoder("windows-1252").decode(bytes)) : null;
+    }
+    const rng = this.mapScript?.interp.rt.random ?? Math.random;
+    const pending = this.tileLoads.get(k);
+    for (const [dx, dy] of brushPoints(area, shape, Math.max(t.width, t.height))) {
+      const col = at[0] + dx;
+      const row = at[1] + dy;
+      if (col < 0 || row < 0 || col >= t.width || row >= t.height) continue;
+      // -1: "Use a variation of -1 to generate random variations across the area."
+      const v = variation >= 0 ? variation : this.cellRarity ? pickCell(this.cellRarity, rng()) : 0;
+      const c = t.corners[row * t.width + col];
+      c.groundTexture = k;
+      c.groundVariation = v;
+      if (pending) pending.push([col, row, v]);
+      else this.paintViewerCorner(map, col, row, k, v);
+    }
+    if (!pending) map.flushBlight();
+  }
+
+  /** Put one corner's new tile into the viewer and mark the four tiles it touches. */
+  private paintViewerCorner(map: W3xMap, col: number, row: number, k: number, variation: number): void {
+    const corner = map.corners[row]?.[col];
+    if (!corner) return;
+    corner.groundTexture = k < this.mapTileCount ? k : k + 1; // past the blight texture
+    corner.groundVariation = variation;
+    const dirty = (map.blightDirty ??= new Set<number>());
+    for (let y = row - 1; y <= row; y++) {
+      for (let x = col - 1; x <= col; x++) {
+        if (x >= 0 && y >= 0 && x < map.columns && y < map.rows) dirty.add(y * map.columns + x);
+      }
+    }
+  }
+
+  /** Load a tile the map's palette does not have — "A texture is loaded … the first time a
+   *  trigger places it in the world" (hiveworkshop 339901) — then paint what was waiting. */
+  private loadScriptTile(map: W3xMap, k: number, row: TerrainRow): void {
+    this.tileLoads.set(k, []);
+    const path = `${row.string("dir")}\\${row.string("file")}.blp`; // SD: see solverParams.reforged
+    this.tileChain = this.tileChain.then(async () => {
+      const tex = await map.load(path).catch(() => null);
+      const waiting = this.tileLoads.get(k) ?? [];
+      this.tileLoads.delete(k);
+      if (this.viewer.map !== (map as unknown) || !tex) return;
+      const at = k + 1; // the viewer's index: after the map's tiles and the blight texture
+      while (map.tilesets.length < at) map.tilesets.push(NO_TILE_ROW); // the blight slot has no row
+      map.tilesets[at] = row;
+      map.tilesetTextures[at] = tex;
+      for (const [col, r, v] of waiting) this.paintViewerCorner(map, col, r, k, v);
+      map.flushBlight();
+    });
+  }
+
+  /** The splat overlay's texture loader — a BLP decoded to a canvas, or null when absent. */
+  private splatTexture: ((path: string) => HTMLCanvasElement | null) | null = null;
+
+  private createScriptSplat(x: number, y: number, name: string, r: number, g: number, b: number, a: number, forcePaused: boolean, noBirthTime: boolean): number {
+    const def = this.uberSplatRegistry().get(name);
+    if (!def || !this.splats) return -1;
+    const id = this.nextScriptSplatId++;
+    const key = `usp:${id}`;
+    this.splats.add(key, x, y, def.scale, def.texture, { alpha: 0 });
+    this.scriptSplats.set(id, {
+      key, def, x, y, tint: [r / 255, g / 255, b / 255, a / 255], forcePaused,
+      t: noBirthTime ? def.birthTime : 0,
+      shown: true, always: false,
+      // A spell's splat "created in fog … is also invisible to you. Only if it was created in a
+      // visible area and then … the fog of war covers the ubersplat afterwards … are you able
+      // to see it" (hiveworkshop 235035) — so what counts is sight AT CREATION.
+      seen: this.pointVisible(x, y),
+    });
+    return id;
+  }
+
+  /** Walk every script splat along its row's envelope: Start → Middle over BirthTime, Middle
+   *  through PauseTime (for ever while `forcePaused`), Middle → End over Decay. A finished one
+   *  is invisible but still HELD — only DestroyUbersplat lets go of it. */
+  private updateScriptSplats(dt: number): void {
+    for (const s of this.scriptSplats.values()) {
+      const d = s.def;
+      s.t += dt;
+      let c: [number, number, number, number];
+      if (s.t < d.birthTime) c = lerp4(d.start, d.middle, s.t / d.birthTime);
+      else if (s.forcePaused || s.t < d.birthTime + d.pauseTime) c = d.middle;
+      else if (s.t < d.birthTime + d.pauseTime + d.decay) c = lerp4(d.middle, d.end, (s.t - d.birthTime - d.pauseTime) / d.decay);
+      else c = d.end;
+      this.splats?.setTint(s.key, [c[0] * s.tint[0], c[1] * s.tint[1], c[2] * s.tint[2]]);
+      this.splats?.setAlpha(s.key, c[3] * s.tint[3]);
+      this.splats?.setVisible(s.key, s.shown && (s.always || s.seen));
+    }
+  }
+
+  private createScriptImage(file: string, sizeX: number, sizeY: number, posX: number, posY: number, _posZ: number, originX: number, originY: number, _originZ: number, type: number): number {
+    // "If an invalid path is specified CreateImage returns image(-1)" (jassbot).
+    if (!this.splats || !this.splatTexture?.(file)) return -1;
+    const id = this.nextScriptImageId++;
+    const img: ScriptImage = {
+      key: `img:${id}`, file, halfX: sizeX / 2, halfY: sizeY / 2,
+      // (posX, posY) is the BOTTOM-LEFT corner, moved by -origin; the overlay wants the centre.
+      x: posX - originX + sizeX / 2, y: posY - originY + sizeY / 2,
+      type, shown: true, always: false, color: [1, 1, 1, 1], constZ: null,
+    };
+    this.scriptImages.set(id, img);
+    this.placeScriptImage(img);
+    return id;
+  }
+
+  /** (Re)lay an image's geometry — on the terrain, or flat at its constant height. */
+  private placeScriptImage(img: ScriptImage): void {
+    this.splats?.add(img.key, img.x, img.y, img.halfX, img.file, {
+      halfY: img.halfY,
+      floor: img.constZ ?? undefined,
+      tint: [img.color[0], img.color[1], img.color[2]],
+      alpha: img.color[3],
+    });
+    this.syncScriptImage(img);
+  }
+
+  /** Drawn only while BOTH switches are on and its type is one of the four that draw at all
+   *  ("Every other value will simply cause WC3 to not display the image" — jassbot). */
+  private syncScriptImage(img: ScriptImage): void {
+    this.splats?.setVisible(img.key, img.shown && img.always && img.type >= 1 && img.type <= 4);
+  }
+
+  /** The imagery hooks (natives/imagery.ts). */
+  private imageryHooks(): Partial<EngineHooks> {
+    const splat = (id: number) => this.scriptSplats.get(id);
+    const image = (id: number) => this.scriptImages.get(id);
+    return {
+      createUbersplat: (x, y, name, r, g, b, a, forcePaused, noBirthTime) => this.createScriptSplat(x, y, name, r, g, b, a, forcePaused, noBirthTime),
+      destroyUbersplat: (id) => {
+        const s = splat(id);
+        if (!s) return;
+        this.splats?.remove(s.key);
+        this.scriptSplats.delete(id);
+      },
+      showUbersplat: (id, show) => {
+        const s = splat(id);
+        if (s) s.shown = show;
+      },
+      setUbersplatRenderAlways: (id, always) => {
+        const s = splat(id);
+        if (s) s.always = always;
+      },
+      createImage: (file, sizeX, sizeY, posX, posY, posZ, originX, originY, originZ, type) =>
+        this.createScriptImage(file, sizeX, sizeY, posX, posY, posZ, originX, originY, originZ, type),
+      destroyImage: (id) => {
+        const img = image(id);
+        if (!img) return;
+        this.splats?.remove(img.key);
+        this.scriptImages.delete(id);
+      },
+      showImage: (id, show) => {
+        const img = image(id);
+        if (!img) return;
+        img.shown = show;
+        this.syncScriptImage(img);
+      },
+      setImageRenderAlways: (id, always) => {
+        const img = image(id);
+        if (!img) return;
+        img.always = always;
+        this.syncScriptImage(img);
+      },
+      setImageColor: (id, r, g, b, a) => {
+        const img = image(id);
+        if (!img) return;
+        img.color = [r / 255, g / 255, b / 255, a / 255];
+        this.splats?.setTint(img.key, [img.color[0], img.color[1], img.color[2]]);
+        this.splats?.setAlpha(img.key, img.color[3]);
+      },
+      setImageConstantHeight: (id, flag, height) => {
+        const img = image(id);
+        if (!img) return;
+        img.constZ = flag ? height : null;
+        this.placeScriptImage(img);
+      },
+      setImagePosition: (id, x, y) => {
+        const img = image(id);
+        if (!img) return;
+        // The same bottom-left convention as CreateImage (the origin offset is baked into the
+        // centre, so moving the corner moves the centre by as much).
+        const cornerX = img.x - img.halfX;
+        const cornerY = img.y - img.halfY;
+        img.x += x - cornerX;
+        img.y += y - cornerY;
+        this.placeScriptImage(img);
+      },
+      setImageType: (id, type) => {
+        const img = image(id);
+        if (!img) return;
+        img.type = type;
+        this.syncScriptImage(img);
+      },
+      setWaterBaseColor: (r, g, b, a) => this.setWaterTint([r / 255, g / 255, b / 255, a / 255]),
+      setSkyModel: (path) => this.setSky(path),
+      terrainTypeAt: (x, y) => this.terrainTypeAt(x, y),
+      terrainVarianceAt: (x, y) => this.terrainVarianceAt(x, y),
+      setTerrainType: (x, y, tile, variation, area, shape) => this.setTerrainType(x, y, tile, variation, area, shape),
+    };
+  }
+
+  /** The tileset's own water colours (Water.slk `<letter>Sha`), captured before the first tint
+   *  so a second SetWaterBaseColor tints the ORIGINAL rather than the last tint. */
+  private waterBase: { map: unknown; colors: Float32Array[] } | null = null;
+
+  /** The script's water tint, 0..1 — null while no script has set one. */
+  private waterTint: [number, number, number, number] | null = null;
+
+  /** SetWaterBaseColor — "Sets the tint of the water. The default is 255 for all parameters"
+   *  (jassbot): each of the four colours the viewer's water shader blends between, multiplied. */
+  private setWaterTint(tint: [number, number, number, number]): void {
+    this.waterTint = tint;
+    this.applyWaterTint();
+  }
+
+  /** Lay the tint over the tileset's colours. Also asked every frame while a tint is set,
+   *  because the viewer reads Water.slk ASYNCHRONOUSLY — a map setting its water in its init
+   *  can run before the colours exist, and the load would then overwrite the tint. */
+  private applyWaterTint(): void {
+    const tint = this.waterTint;
+    const map = this.viewer.map as unknown as Record<"maxDeepColor" | "minDeepColor" | "maxShallowColor" | "minShallowColor", Float32Array> | null;
+    if (!tint || !map) return;
+    const live = [map.maxDeepColor, map.minDeepColor, map.maxShallowColor, map.minShallowColor];
+    if (live.some((c) => !c)) return;
+    if (!this.waterBase || this.waterBase.map !== map) {
+      if (live.every((c) => c.every((v) => v === 0))) return; // Water.slk not read yet
+      this.waterBase = { map, colors: live.map((c) => Float32Array.from(c)) };
+    }
+    this.waterBase.colors.forEach((base, i) => {
+      for (let k = 0; k < 4; k++) live[i][k] = base[k] * tint[k];
+    });
   }
 
   // --- Mirror Image missiles ------------------------------------------------------
@@ -5849,6 +6432,7 @@ export class MapViewerScene {
       inst: null, age: 0, spent: false, standing: false, standIdx: -1,
       clips: { hasBirth: false, birthStart: 0, birthSecs: 0, hasStand: false },
       hidden: true, hostId, attach, parented: false, x, y, doomed: false,
+      z: null, yaw: 0, pitch: 0, roll: 0, scale: 1, color: [1, 1, 1, 1], teamColor: -1, tags: [], played: null,
     };
     this.specialFx.set(id, fx);
     void this.loadSpecialFx(id, model, fx);
@@ -5890,6 +6474,9 @@ export class MapViewerScene {
       fx.standing = true;
     }
     fx.inst = inst;
+    // Whatever the script already set while the model was loading lands now.
+    this.applySpecialFxLook(fx);
+    if (fx.played !== null) this.playSpecialFxClip(fx);
     this.placeSpecialFx(fx); // land it before its first frame is drawn
     // The model may have taken long enough to arrive that the effect is already over, or
     // it may be standing in fog: never show() blind — let the age/fog pass below decide.
@@ -5928,8 +6515,110 @@ export class MapViewerScene {
     }
     this.loc3[0] = fx.x;
     this.loc3[1] = fx.y;
-    this.loc3[2] = this.rts?.groundHeightAt(fx.x, fx.y) ?? 0;
+    this.loc3[2] = fx.z ?? this.rts?.groundHeightAt(fx.x, fx.y) ?? 0;
     inst.setLocation(this.loc3);
+  }
+
+  /** Scale, rotation, vertex colour and team colour onto the instance. The ROTATION is a
+   *  ground effect's only: one riding an attachment point is turned by the node it rides
+   *  ("does not apply if the effect is attached" — jassbot). */
+  private applySpecialFxLook(fx: SpecialFx): void {
+    const inst = fx.inst;
+    if (!inst) return;
+    inst.setUniformScale(fx.scale);
+    if (fx.hostId < 0) inst.setRotation(yawPitchRollQuat(fx.yaw, fx.pitch, fx.roll));
+    inst.setVertexColor(fx.color);
+    if (fx.teamColor >= 0) inst.setTeamColor(fx.teamColor);
+  }
+
+  /** BlzPlaySpecialEffect — the clip named by the animation and the effect's tags
+   *  (render/effectAnim.ts), played by its OWN looping flag: a Stand loops, a Death holds its
+   *  last frame. A model with no such clip is left as it is, and keeps its own lifecycle. */
+  private playSpecialFxClip(fx: SpecialFx): void {
+    const inst = fx.inst;
+    if (!inst || fx.played === null) return;
+    const seq = pickEffectSequence(inst.model.sequences.map((s) => s.name), fx.played, fx.tags);
+    if (seq < 0) {
+      fx.played = null;
+      return;
+    }
+    inst.setSequence(seq);
+    inst.setSequenceLoopMode(0); // model-defined: obey the clip's own nonLooping flag
+    fx.standing = true;
+  }
+
+  /** The BlzSetSpecialEffect… hooks (docs/map-compatibility.md pass 10). */
+  private specialFxHooks(): Partial<EngineHooks> {
+    const live = (id: number) => this.specialFx.get(id);
+    return {
+      setSpecialEffectPosition: (id, x, y, z) => {
+        const fx = live(id);
+        if (!fx || fx.hostId >= 0) return; // an attached effect goes where its node goes
+        if (x !== null) fx.x = x;
+        if (y !== null) fx.y = y;
+        if (z !== null) fx.z = z;
+        this.placeSpecialFx(fx);
+      },
+      setSpecialEffectOrientation: (id, yaw, pitch, roll) => {
+        const fx = live(id);
+        if (!fx || fx.hostId >= 0) return;
+        if (yaw !== null) fx.yaw = yaw;
+        if (pitch !== null) fx.pitch = pitch;
+        if (roll !== null) fx.roll = roll;
+        this.applySpecialFxLook(fx);
+      },
+      setSpecialEffectScale: (id, scale) => {
+        const fx = live(id);
+        if (!fx) return;
+        fx.scale = scale;
+        this.applySpecialFxLook(fx);
+      },
+      setSpecialEffectColor: (id, r, g, b) => {
+        const fx = live(id);
+        if (!fx) return;
+        fx.color = [r / 255, g / 255, b / 255, fx.color[3]];
+        this.applySpecialFxLook(fx);
+      },
+      // "If current effect is attached to something … this doesn't apply alpha" (jassbot).
+      setSpecialEffectAlpha: (id, alpha) => {
+        const fx = live(id);
+        if (!fx || fx.hostId >= 0) return;
+        fx.color = [fx.color[0], fx.color[1], fx.color[2], alpha / 255];
+        this.applySpecialFxLook(fx);
+      },
+      setSpecialEffectTeamColor: (id, color) => {
+        const fx = live(id);
+        if (!fx) return;
+        fx.teamColor = color;
+        this.applySpecialFxLook(fx);
+      },
+      playSpecialEffect: (id, anim) => {
+        const fx = live(id);
+        if (!fx) return;
+        fx.played = anim;
+        fx.spent = false; // a Birth-only model that had burned out is alive again
+        this.playSpecialFxClip(fx);
+      },
+      specialEffectSubAnim: (id, tag, add) => {
+        const fx = live(id);
+        if (!fx) return;
+        if (tag === null) fx.tags = [];
+        else if (add && !fx.tags.includes(tag)) fx.tags.push(tag);
+        else if (!add) fx.tags = fx.tags.filter((t) => t !== tag);
+      },
+      specialEffectPosition: (id) => {
+        const fx = live(id);
+        if (!fx) return null;
+        if (fx.hostId >= 0) return { x: 0, y: 0, z: 0 };
+        return { x: fx.x, y: fx.y, z: fx.z ?? this.rts?.groundHeightAt(fx.x, fx.y) ?? 0 };
+      },
+      surfaceZ: (x, y) => this.rts?.surfaceZ(x, y) ?? 0,
+      unitZ: (id) => {
+        const u = this.rts?.simView.units.get(id);
+        if (!u || !this.rts) return 0;
+        return this.rts.surfaceZ(u.x, u.y) + (this.registry.get(u.typeId)?.occlusionHeight ?? 0);
+      },
+    };
   }
 
   /** Age every live effect and reconcile what the player sees.
@@ -5957,7 +6646,9 @@ export class MapViewerScene {
   private updateSpecialFxOne(fx: SpecialFx): void {
     const inst = fx.inst;
     if (!inst) return; // still loading — age is already running, and the load will catch up
-    if (!fx.spent) {
+    if (!fx.spent && fx.played !== null) {
+      this.placeSpecialFx(fx); // the script owns the clip now (BlzPlaySpecialEffect)
+    } else if (!fx.spent) {
       this.placeSpecialFx(fx);
       const phase = specialFxPhaseAt(fx.age, fx.clips);
       if (phase.kind === "birth") {
@@ -7231,8 +7922,9 @@ export class MapViewerScene {
   // location of the last transmission. Repeatedly pressing the spacebar will move your screen
   // through the locations of the last eight transmissions." So it is a RING of eight, newest
   // first, and a press walks one step back through it; a new notification puts the walk back
-  // at the top. Two things arm it: a minimap ping (a transmission's own ping included) and
-  // the script's `SetCameraQuickPosition`, which is the World Editor's "Set Spacebar-Point".
+  // at the top. Three things arm it: a minimap ping (a transmission's own ping included — and
+  // so every raid on your base), the script's `SetCameraQuickPosition`, which is the World
+  // Editor's "Set Spacebar-Point", and a completion of yours (`noteCompletion`).
   private spacebarPoints: Array<[number, number]> = [];
   private spacebarStep = 0;
 
@@ -7245,6 +7937,17 @@ export class MapViewerScene {
     if (head && Math.abs(head[0] - x) < 1 && Math.abs(head[1] - y) < 1) return;
     this.spacebarPoints.unshift([x, y]);
     this.spacebarPoints.length = Math.min(this.spacebarPoints.length, 8);
+  }
+
+  /**
+   * A completion is a notification too: a building up, a unit trained, a research or a
+   * structure upgrade finished. Each announces itself (the chime and the "Completed:" line)
+   * without naming WHERE, and the whole point of the ring is to take you there — issue #162
+   * asked this of the gamepad (the right-stick press, which is Space), and Space walks the
+   * ring. Placed at the building, which is what finished.
+   */
+  private noteCompletion(u: { x: number; y: number } | undefined): void {
+    if (u) this.noteSpacebarPoint(u.x, u.y);
   }
 
   /** Space: centre on the next notification back. Nothing to go to — nothing has happened
@@ -7263,6 +7966,60 @@ export class MapViewerScene {
   /** Centre the camera on the current selection (control-group / hero jump) — on the
    *  group's LEADING unit, the one the portrait shows. See RtsController.selectionAnchor
    *  for why the point has to be on a body rather than in the middle of the group. */
+  /**
+   * The match's side of the gamepad (issue #162, ui/gamepad.ts): the pad actions that have no
+   * key to be pressed through. Everything a pad button CAN say as a key (Escape, Tab, "-",
+   * F8, F9, F10) or as a click is sent as one, and reaches this scene by its ordinary doors.
+   */
+  private installGamepad(): void {
+    setGamepadHost({
+      canAct: () => !!this.hud?.acceptsInput() && !this.hardPaused,
+      jumpToSelection: () => {
+        this.cameraLock = false; // a jump releases a follow, as every other one does
+        this.groupFollow = false;
+        this.releaseCameraRide();
+        this.jumpToSelection();
+      },
+      attackMoveAt: (clientX, clientY) => this.padAttackMove(clientX, clientY),
+      cycleBuilding: () => {
+        if (!this.rts?.cycleBuilding()) return;
+        const pos = this.rts.selectedPosition();
+        if (pos) {
+          this.target[0] = pos[0];
+          this.target[1] = pos[1];
+        }
+        this.cameraLock = false;
+        this.groupFollow = false;
+        this.releaseCameraRide();
+      },
+      cardMove: (dx, dy) => this.hud?.padCardMove(dx, dy),
+      cardPress: () => this.hud?.padCardPress() ?? false,
+      cardMode: (on) => this.hud?.padCardMode(on),
+      targeting: () => !!this.rts?.orderMode || !!this.placement,
+      inCinematic: () => !this.interfaceShown,
+      toggleChat: () => this.hud?.padToggleChat() ?? null,
+    });
+  }
+
+  /**
+   * Square: attack-move the selection to what is under the cursor, in one press — the Attack
+   * button's click and its aim at once, with no reticle in between (issue #162). It is the
+   * command card's own Attack, so it goes only where that button would: a selection whose card
+   * has no live Attack (a building, a worker-only Wisp) is left alone, and an aim the order
+   * refuses leaves nothing armed behind it. Over an enemy it is an attack on that unit, exactly
+   * as the reticle's click would be.
+   */
+  private padAttackMove(clientX: number, clientY: number): void {
+    const rts = this.rts;
+    if (!rts || this.placement) return;
+    if (!this.commandCard().some((c) => c.id === "attack" && !c.disabled)) return;
+    rts.orderMode = "attack";
+    rts.armedCast = null;
+    rts.orderClickAt(clientX - this.frame.left, clientY - this.frame.top, false);
+    rts.orderMode = null;
+    this.hud?.clearOrderMode();
+  }
+
   private jumpToSelection(): void {
     const c = this.rts?.selectionAnchor();
     if (c) {
@@ -7358,7 +8115,11 @@ export class MapViewerScene {
   }
 
   /** Command-card icon (BLP path) of the local race's worker, for the idle button. */
+  /** The idle-worker button's art: war3skins' own `IdlePeon` key for the local race (and the
+   *  map's war3mapSkin.txt over it), else — no install — the race's worker's icon. */
   private workerIcon(): string | null {
+    const skinned = this.skinPath("IdlePeon");
+    if (this.assetFiles().exists(skinned)) return skinned;
     const workerId = (STARTING_UNITS[this.localRace] ?? []).map((s) => s.id).find((id) => WORKERS[id]);
     return (workerId && this.registry.get(workerId)?.icon) || null;
   }
@@ -7846,6 +8607,7 @@ export class MapViewerScene {
         return gave;
       },
       commandCard: () => this.commandCard(),
+      cardPage: () => this.cardPage,
       runCommand: (id) => this.runCommand(id),
       unloadCargo: (hostId, passengerId) => !!this.rts?.unloadCargo(hostId, passengerId),
       inventory: () =>
@@ -7899,12 +8661,16 @@ export class MapViewerScene {
     this.consoleUi?.dispose();
     // Built BEFORE the HUD so the HUD's own layers (the day/night medallion that hangs in the
     // strip's gap, the message column) stack over the console chrome rather than under it.
-    this.consoleUi = new ConsoleUi(ui, this.vfs, SKIN_SECTION[this.localRace], {
+    // Its art is read through the map's archive too: a war3mapSkin.txt [CustomSkin] may name an
+    // icon the map imports for the resource bar (data/mapSkin.ts).
+    this.consoleUi = new ConsoleUi(ui, this.assetFiles(), SKIN_SECTION[this.localRace], {
       openPanel: (panel) => this.togglePanel(panel),
       disabledPanels: () => this.deadPanels(),
       mountClock: (slot) => this.mountClock(slot),
+      resourceHover: (kind) => this.hud?.showResourceTip(kind),
     });
     this.hud = new GameHud(ui, driver);
+    this.installGamepad();
     this.mountScriptUi(ui);
     this.gameMenu?.dispose();
     const endGame = (): void => {
@@ -8472,12 +9238,22 @@ export class MapViewerScene {
       }
       return;
     }
-    if ((sel.id === this.portraitFor && sel.altModel === this.portraitAlt) || this.portraitLoading || !sel.model) return;
+    if ((sel.id === this.portraitFor && sel.altModel === this.portraitAlt && sel.model === this.portraitModel) || this.portraitLoading) return;
+    if (!sel.model) {
+      // A unit with no model has no bust — the frame stands empty rather than keep showing
+      // whoever was selected before it (an invisible dummy, RtsController.infoFor).
+      this.portraitFor = sel.id;
+      this.portraitAlt = sel.altModel;
+      this.portraitModel = "";
+      this.portraitLabel = "";
+      this.portraitViewer?.stop();
+      return;
+    }
     // The sound-set of the unit now in the portrait — a voice line with this label
     // drives the bust's talk animation (see the onVoiceStart hook in the ctor).
     this.portraitLabel = this.registry.get(sel.typeId)?.soundSet ?? "";
     const canvas = this.hud.portraitCanvas();
-    if (!this.portraitViewer) this.portraitViewer = new ModelViewerScene(canvas, this.vfs);
+    if (!this.portraitViewer) this.portraitViewer = new ModelViewerScene(canvas, this.assetFiles());
     // The bust wears the same wash the unit wears on the terrain, so the panel and the
     // battlefield agree about what you have selected. Set on EVERY selection, not once at
     // load: one viewer is reused for every unit, and an illusion shares the hero's model —
@@ -8487,7 +9263,7 @@ export class MapViewerScene {
     this.portraitViewer.setTint(sel.isIllusion ? [ILLUSION_TINT[0], ILLUSION_TINT[1], ILLUSION_TINT[2], 1] : sel.isRaised ? [RAISED_TINT[0], RAISED_TINT[1], RAISED_TINT[2], 1] : [1, 1, 1, 1]);
     // WC3 ships dedicated talking-head models alongside most units.
     const portraitPath = sel.model.replace(/\.mdx$/i, "_Portrait.mdx");
-    const path = this.vfs.exists(portraitPath) ? portraitPath : sel.model;
+    const path = this.assetFiles().exists(portraitPath) ? portraitPath : sel.model;
     this.portraitLoading = true;
     const id = sel.id;
     // Team glow follows the owner's COLOUR, not their slot (see RtsController.playerColor) —
@@ -8506,12 +9282,14 @@ export class MapViewerScene {
     const panLeft = /paladin/i.test(sel.model) ? 0.14 : 0;
     // The half of a two-form bust this unit is in right now (ModelViewerScene.load).
     const alt = sel.altModel;
+    const model = sel.model;
     const props = animPropsFor(this.registry.get(sel.typeId), alt) ?? [];
     this.portraitViewer
       .load(path, this.rts.unitColor(sel.owner), true, panLeft, props)
       .then(() => {
         this.portraitFor = id;
         this.portraitAlt = alt;
+        this.portraitModel = model;
         this.portraitViewer!.start();
         // The selection voice ("What") likely started before this bust finished
         // loading — its onVoiceStart no-op'd because the instance wasn't ready yet.
@@ -8584,11 +9362,11 @@ export class MapViewerScene {
       this.portraitViewer?.stop();
       return;
     }
-    this.portraitViewer ??= new ModelViewerScene(this.hud.portraitCanvas(), this.vfs);
+    this.portraitViewer ??= new ModelViewerScene(this.hud.portraitCanvas(), this.assetFiles());
     const viewer = this.portraitViewer;
     viewer.setTint([1, 1, 1, 1]);
     const portraitPath = def.model.replace(/\.mdx$/i, "_Portrait.mdx");
-    const path = this.vfs.exists(portraitPath) ? portraitPath : def.model;
+    const path = this.assetFiles().exists(portraitPath) ? portraitPath : def.model;
     // The selection's voice lines must not work the speaker's mouth.
     this.portraitLabel = "";
     this.portraitFor = null;
@@ -8929,8 +9707,13 @@ export class MapViewerScene {
    *  duration of a cinematic; EnableUserUI hides everything for the duration of a fade. */
   private syncHudVisible(): void {
     const on = this.interfaceShown && this.userUi;
-    if (on) this.hud?.show();
+    // A map's `BlzHideOriginFrames(true)` takes the HUD's sockets away (the command card, the
+    // portrait, the minimap, the hero bar, the inventory) and the system buttons with them,
+    // while the console ART and the resource bar stay — a third owner beside the letterbox and
+    // the momentary blackout, which is why it is a flag of its own (compat/frames.ts).
+    if (on && !this.originHidden) this.hud?.show();
     else this.hud?.hide();
+    this.consoleUi?.setOriginHidden(this.originHidden);
     // **And the console CHROME, which is a different element.** `GameHud` owns what sits IN
     // the console's sockets — the minimap picture, the portrait, the command card, the
     // hero bar; the console art itself (the bottom band AND the top strip carrying the
@@ -9001,7 +9784,7 @@ export class MapViewerScene {
     const panel = this.cinematic;
     if (!panel || !typeId) return;
     const canvas = panel.portraitCanvas();
-    this.cinePortraitViewer ??= new ModelViewerScene(canvas, this.vfs);
+    this.cinePortraitViewer ??= new ModelViewerScene(canvas, this.assetFiles());
     if (this.cinePortraitLoading) return; // the running pump will pick the newer want up
     this.cinePortraitLoading = true;
     try {
@@ -9014,7 +9797,7 @@ export class MapViewerScene {
           continue;
         }
         const portraitPath = def.model.replace(/\.mdx$/i, "_Portrait.mdx");
-        const path = this.vfs.exists(portraitPath) ? portraitPath : def.model;
+        const path = this.assetFiles().exists(portraitPath) ? portraitPath : def.model;
         try {
           await this.cinePortraitViewer.load(path, Number(wantColor), true, 0);
           this.cinePortraitFor = want;
@@ -9050,7 +9833,7 @@ export class MapViewerScene {
       const def = this.registry.get(typeId);
       if (!def?.model) return;
       const portraitPath = def.model.replace(/\.mdx$/i, "_Portrait.mdx");
-      const path = this.vfs.exists(portraitPath) ? portraitPath : def.model; // mirror updatePortrait()
+      const path = this.assetFiles().exists(portraitPath) ? portraitPath : def.model; // mirror updatePortrait()
       if (this.warmedPortraits.has(path)) return;
       this.warmedPortraits.add(path);
       this.portraitWarmQueue.push(path);
@@ -9073,7 +9856,7 @@ export class MapViewerScene {
     const run = () => {
       this.portraitWarmScheduled = false;
       if (!this.hud) return; // match torn down
-      if (!this.portraitViewer) this.portraitViewer = new ModelViewerScene(this.hud.portraitCanvas(), this.vfs);
+      if (!this.portraitViewer) this.portraitViewer = new ModelViewerScene(this.hud.portraitCanvas(), this.assetFiles());
       if (this.portraitLoading) { this.schedulePortraitWarm(); return; } // let the real selection win
       const path = this.portraitWarmQueue.shift();
       if (!path) return;
@@ -9201,8 +9984,12 @@ export class MapViewerScene {
   private pushTrainButtons(sel: SelectionInfo, out: CommandButton[], reserved: string[] = []): void {
     const world = this.rts!.simWorld;
     const t = this.tech.get(sel.typeId);
-    const sold = new Set(t.sellunits);
-    const list = [...t.trains, ...t.sellunits];
+    // What it sells is its `Sellunits` AND whatever a script has stocked on its shelf
+    // (AddUnitToStock — SimWorld.stockedUnits): Test of Balance's hero pillar lists nothing in
+    // its data, and its whole draft arrives that way.
+    const scripted = world.stockedUnits(sel.id).filter((id) => !t.sellunits.includes(id) && !t.trains.includes(id));
+    const sold = new Set([...t.sellunits, ...scripted]);
+    const list = [...t.trains, ...t.sellunits, ...scripted];
     if (!list.length) return;
     const food = this.rts!.foodFor(this.localPlayer);
     const stash = this.rts!.stashFor(this.localPlayer);
@@ -9944,7 +10731,7 @@ export class MapViewerScene {
       const su = this.rts!.simView.units.get(sel.id);
       if (su) {
         for (const ab of su.abilities) {
-          const def = this.abilities.get(ab.id);
+          const def = ab.def ?? this.abilities.get(ab.id); // the unit's own instance, if a script rewrote it
           // Only the hero's SKILLS: an innate unit ability on a hero's sheet (the Warden's
           // Shadow Meld) is a command-card button and never a row here (SimWorld.learnable).
           if (!def || !this.rts!.simView.learnable(su, ab.id)) continue;
@@ -9993,18 +10780,23 @@ export class MapViewerScene {
     // (0,1); a worker's Build (or a hero's learn-skill) at (3,1); the bottom row
     // is reserved for learned skills/abilities.
     const active = this.activeCommandId();
+    // Move, Hold Position and Patrol are the MOVE ability's, and a unit that cannot move has none
+    // of them (RtsController.selectionCanMove); Stop goes with either that or a weapon. The
+    // slots stay where they are, so an immobile tower's Attack is still top-right.
+    const canMove = this.rts?.selectionCanMove() ?? true;
+    const canAttack = this.rts?.selectionCanAttack() ?? false;
     // Every one of these speaks from its own `Units\CommandStrings.txt` section — see cmdSection.
-    out.push(this.cmd({
+    if (canMove) out.push(this.cmd({
       id: "move", icon: btnIcon("BTNMove"), name: "Move", hotkey: "M", col: 0, row: 0, active: active === "move",
       ...this.cmdSection("CmdMove", "|cffffcc00M|rove",
         "Orders your units to move to the target area while ignoring enemy units and attacks. Issuing a move order onto a target unit will cause your unit to follow the target using move orders."),
     }));
-    out.push(this.cmd({
+    if (canMove || canAttack) out.push(this.cmd({
       id: "stop", icon: btnIcon("BTNStop"), name: "Stop", hotkey: "S", col: 1, row: 0, active: active === "stop",
       ...this.cmdSection("CmdStop", "|cffffcc00S|rtop",
         "Orders your units to stop whatever order they were previously given. Units that have been told to stop will attack enemy units and move to engage nearby enemies."),
     }));
-    out.push(this.cmd({
+    if (canMove) out.push(this.cmd({
       id: "hold", icon: btnIcon("BTNHoldPosition"), name: "Hold Position", hotkey: "H", col: 2, row: 0, active: active === "hold",
       ...this.cmdSection("CmdHoldPos", "|cffffcc00H|rold Position",
         "Orders your units to stand where they are and attack units that are within range. When on Hold Position your units will not chase down enemy units that run away, nor move to engage ranged attackers."),
@@ -10014,14 +10806,14 @@ export class MapViewerScene {
     // a press that can only be refused is not a button. Asked of the whole selection rather
     // than of the primary alone, as the game does: a Zeppelin grabbed together with the
     // Footmen it is about to carry still lets the group attack-move.
-    if (this.rts?.selectionCanAttack()) {
+    if (canAttack) {
       out.push(this.cmd({
         id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A", col: 3, row: 0, active: active === "attack",
         ...this.cmdSection("CmdAttack", "|cffffcc00A|rttack",
           "Orders your units to move to the target area and attack any enemy units they see on the way. If you order them to attack a specific unit, your units will ignore other enemy units and will attack the targeted unit until it is destroyed."),
       }));
     }
-    out.push(this.cmd({
+    if (canMove) out.push(this.cmd({
       id: "patrol", icon: btnIcon("BTNPatrol"), name: "Patrol", hotkey: "P", col: 0, row: 1, active: active === "patrol",
       ...this.cmdSection("CmdPatrol", "|cffffcc00P|ratrol",
         "Orders your units to continually move from their current position to the targeted area until given another command. Units on patrol will move to engage enemy units that come within range. Issuing a patrol order onto a target unit will cause your unit to imitate the targeted unit's behavior."),
@@ -10139,6 +10931,12 @@ export class MapViewerScene {
    *      autocast row whose `UnitID1` names a summon (Black Arrow's `ndr1`) can never match
    *      the caster's own type, so it stays untouched.
    *
+   *    • A STANCE — an `Unorder` row riding the autocast flag, Defend being the one stock
+   *      case (`[Adef] Order=defend / Unorder=undefend`, Art=BTNDefend /
+   *      Unart=BTNDefendStop) — is on when its toggle is. Its on/off is a STATE of the unit,
+   *      and the game says so the way it says it for Immolation: with the other icon, and
+   *      with no autocast border at all (see `modal` in pushAbilityButtons).
+   *
    *  Autocast toggles are NOT here: their on/off is the green autocast border, not a
    *  different icon, and both directions of those rows carry the same `Art`. */
   private toggleIsOn(su: SimUnit, code: string, def: AbilityDef): boolean {
@@ -10151,6 +10949,7 @@ export class MapViewerScene {
     if (code === "Aroo") return !su.uprooted;
     if (code === "AEim") return !!su.immolation;
     if (code === "ANms") return su.buffs.some((b) => b.kind === "manaShield");
+    if (def.autocast && def.unOrder) return su.abilities.some((a) => a.code === code && a.autocastOn);
     if (def.autocast) return false;
     const lvl = def.levelData[0];
     const alt = lvl ? lvl.summon || lvl.dataStr[1] || "" : "";
@@ -10237,8 +11036,25 @@ export class MapViewerScene {
       // deleted the generic Repair for. Build Structure is withheld the same way, one level up
       // (`sel.isWorker`).
       if (!su.worker && (isHarvestCode(ab.code) || isRepairCode(ab.code))) continue;
-      const def = this.abilities.get(ab.id);
+      // `SetPlayerAbilityAvailable(p, abil, false)` takes the button off the card for every
+      // unit that player owns — REMOVED, not greyed ("hide/disable an ability from the command
+      // card", hiveworkshop 225879). The unit keeps the ability; see TechState.abilityAvailable.
+      if (this.rts.simView.tech?.abilityAvailable(su.owner, ab.id) === false) continue;
+      // …and `BlzUnitHideAbility` (or a disable with `hideUI`) does the same for ONE unit, while
+      // a plain `BlzUnitDisableAbility` leaves the button on the card, drawn unavailable below.
+      if (this.rts.simView.scriptHidden(ab)) continue;
+      const scriptOff = this.rts.simView.scriptDisabled(ab);
+      const def = ab.def ?? this.abilities.get(ab.id); // the unit's own instance, if a script rewrote it
       if (!def) continue;
+      // An ITEM ability a unit carries directly draws no button — the whole Hive trick of
+      // hiding a bonus on a unit rests on it, and "Kelen's Daggers of Escape work just fine"
+      // while an item-flagged Defend DID show, "due to the fact that Defend is an order-based
+      // item … the on/off part" (hiveworkshop 134863). The item rows were never laid out for a
+      // unit's card: `ItemAbilityFunc.txt` gives five of its 234 abilities a Buttonpos. Test of
+      // Balance hangs a hero glow on every hero this way (`A03G`, an `AIgx` Regeneration Aura
+      // at 0 regen), and it showed as an aura button nobody could press. No stock unit carries
+      // an item ability in its abilList, so nothing stock is touched.
+      if (def.isItem && !def.orderOn && !def.orderOff) continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
       // A PERMANENT form has no second face at all: a Destroyer still lists `Aave` in its
       // abilList, but "Once morphed, the Destroyer cannot turn back into an Obsidian Statue"
@@ -10350,11 +11166,11 @@ export class MapViewerScene {
         // it just isn't a button you press (see `passive` below).
         noMana,
         // Unavailable: the button goes inert and wears the DIS* art with no frame, so it reads
-        // as unpressable at a glance. Six things say so — a silenced or stunned caster, a
+        // as unpressable at a glance. Seven things say so — a silenced or stunned caster, a
         // planted Ancient with a queue that cannot pull itself up, a unit mid-morph, an
-        // ability whose research is not in, one whose effect is already on the presser, and
-        // a night ability by day.
-        disabled: muted || rootBlocked || morphing || !techMet || hidden || daylight || holdGate,
+        // ability whose research is not in, one whose effect is already on the presser, a
+        // night ability by day, and a script's `BlzUnitDisableAbility` on this unit.
+        disabled: muted || rootBlocked || morphing || !techMet || hidden || daylight || holdGate || scriptOff,
         passive,
         // The green border marks the spell the unit is casting (or has armed) right
         // now — it is NOT the autocast toggle, which is a persistent setting and
@@ -10364,16 +11180,23 @@ export class MapViewerScene {
         // the toggle from birth (`[ucry] auto = Aweb`) while the upgrade is what unlocks the
         // row, so an un-researched Web read as "on" for an ability that could not fire. The
         // sim agrees from the other side — tickAutocast skips it (and issueCast refuses it).
-        modal: def.autocast && ab.autocastOn && techMet,
+        // …and none on a STANCE either: Defend switched on is shown by its `Unart`
+        // (BTNDefendStop, via toggleIsOn) — the border would be claiming an autocast it has not got.
+        modal: def.autocast && !def.unOrder && ab.autocastOn && techMet,
         cooldownLeft: onCd ? ready.ab.cooldownLeft : 0,
         cooldownFrac: onCd && ready.lvl.cooldown > 0 ? Math.max(0, Math.min(1, ready.ab.cooldownLeft / ready.lvl.cooldown)) : 0,
       }));
     }
-    if (su.isHero) {
+    // …for a hero that HAS skills to learn. A hero whose `Hero Abilities` list is empty has no
+    // learn page at all: its unspent points are neither shown nor spendable (the premise of
+    // hiveworkshop 139838, a map author asking how to show points on a hero with none). Test of
+    // Balance's heroes are all `uhab=` — their abilities come from the map's own reward dialog —
+    // and the Reforged client shows them no Hero Abilities button.
+    if (su.isHero && this.rts.simView.hasHeroSkills(su)) {
       // Hero Abilities (learn-skill): opens the skill list to spend unspent points.
       // WC3's canonical learn-abilities "Skillz" book art, default hotkey O, and a
       // corner badge showing the points available. The button is on the card for EVERY
-      // hero, points or not — the game never takes it away; with nothing to spend it simply
+      // hero with skills, points or not — the game never takes it away; with nothing to spend it simply
       // wears no badge, and the page it opens shows every row greyed. Take the
       // CommandButtons copy, not the CommandButtonsDisabled one — the button is live either
       // way, and DISBTN* is just the desaturated art the engine swaps in when a button is
@@ -10490,8 +11313,11 @@ export class MapViewerScene {
       // `AutoCastButtonClick` = Sound\Interface\AutoCastButtonClick1.wav. Read back off the
       // unit rather than predicted, because a multi-unit selection toggles each one to its
       // own new state and it is the primary's that the card is showing.
+      // A STANCE is not an autocast and has no sparkle to announce: raising Defend is heard as
+      // its own DefendCaster.wav instead (SimWorld.toggleAutocast), at the Footman.
       const su = this.rts.selectedSimUnit();
-      if (su?.abilities.some((a) => a.code === code && a.autocastOn)) this.sounds?.playUi("AutoCastButtonClick");
+      const ab = su?.abilities.find((a) => a.code === code && a.autocastOn);
+      if (ab && !(ab.def ?? this.abilities.get(ab.id))?.unOrder) this.sounds?.playUi("AutoCastButtonClick");
       return;
     }
     if (id === "learnpage") {
@@ -11270,9 +12096,9 @@ export class MapViewerScene {
       this.cursorStyleEl = document.createElement("style");
       document.head.appendChild(this.cursorStyleEl);
     }
-    // Normal = the WC3 arrow everywhere. The recoloured cursors and the carried item are REAL
-    // cursors too, swapped in through --ow3-overlay-cursor (updateReticle); the one DOM stand-in
-    // left, the scroll chevron, hides it instead.
+    // Normal = the WC3 arrow everywhere. The reticle and the recoloured hand are REAL cursors
+    // too, swapped in through --ow3-reticle-cursor / --ow3-hand-cursor (updateReticle); the DOM
+    // stand-ins left, the scroll chevron and the carried item, hide it instead.
     //  - `reticle-on` (the recoloured hover HAND) only ever happens over the map, so
     //    it's scoped to the canvas and HUD buttons keep the plain arrow.
     //  - `armed-on` (an armed order's target reticle) is body-wide: in WC3 the reticle
@@ -11292,8 +12118,8 @@ export class MapViewerScene {
     this.cursorStyleEl.textContent =
       `body.in-game, body.in-game * { cursor: ${rule} !important; }\n` +
       `body.in-game.carrying-item, body.in-game.carrying-item * { cursor: none !important; }\n` +
-      `body.in-game.reticle-on #map { cursor: var(--ow3-overlay-cursor) !important; }\n` +
-      `body.in-game.armed-on, body.in-game.armed-on * { cursor: var(--ow3-overlay-cursor) !important; }\n` +
+      `body.in-game.reticle-on #map { cursor: var(--ow3-hand-cursor) !important; }\n` +
+      `body.in-game.armed-on, body.in-game.armed-on * { cursor: var(--ow3-reticle-cursor) !important; }\n` +
       `body.in-game.scroll-on, body.in-game.scroll-on * { cursor: none !important; }\n` +
       `body.in-game.cine-on:not(.dialog-on), body.in-game.cine-on:not(.dialog-on) * { cursor: none !important; }`;
   }
@@ -11389,12 +12215,16 @@ export class MapViewerScene {
    *
    *  These used to be a DOM element moved to the pointer every frame, and so drew a frame or two
    *  behind it — the reticle you aim with visibly trailed the mouse. A real cursor is drawn by the
-   *  OS wherever the pointer IS. What that costs is the pulse: a cursor cannot run a CSS
+   *  OS wherever the pointer IS. What that costs is the hand's pulse: a cursor cannot run a CSS
    *  animation, so the old `reticle-pulse` (brightness 1 → 1.85 → 1 over 0.8 s, ease-in-out,
-   *  colour only) is baked into PULSE_FRAMES images and stepped on the wall clock. Empty until the
-   *  cursor sheet loads. */
+   *  colour only) is baked into PULSE_FRAMES images and stepped on the wall clock. The reticle is
+   *  always frame 0 — unfiltered — because the game's own does not pulse (see PULSE_MS), and
+   *  because a pulse is a NEW cursor ten times a second: while an order was armed that was a
+   *  style recalc of every element in the document per step (the rule is body-wide) and a fresh
+   *  OS cursor bitmap each time, measured at 5–6× the idle style time. Empty until the cursor
+   *  sheet loads. */
   private overlayCursor(kind: "reticle" | "hand", colorKey: "green" | "yellow" | "red"): string {
-    const frame = Math.floor((performance.now() % PULSE_MS) / (PULSE_MS / PULSE_FRAMES));
+    const frame = kind === "reticle" ? 0 : Math.floor((performance.now() % PULSE_MS) / (PULSE_MS / PULSE_FRAMES));
     const key = `${kind}:${colorKey}:${frame}`;
     const cached = this.overlayCursors.get(key);
     if (cached !== undefined) return cached;
@@ -11415,22 +12245,39 @@ export class MapViewerScene {
     return rule;
   }
 
-  /** Point --ow3-overlay-cursor at `rule`. Written only when it changes: this runs every frame,
-   *  and a custom property on <body> is inherited by the whole document, so every write is a
-   *  style recalc of all of it. The pulse changes it at its own step rate, not the frame rate. */
-  private setOverlayCursor(rule: string): void {
-    if (rule === this.overlayCursorRule) return;
-    this.overlayCursorRule = rule;
-    document.body.style.setProperty("--ow3-overlay-cursor", rule);
+  /** Point the reticle's or the hand's custom property at `rule`. Written only when it changes:
+   *  this runs every frame, and a custom property is inherited by everything under the element
+   *  that holds it, so every write is a style recalc of that whole subtree.
+   *
+   *  Which is why the two live on different elements. The RETICLE is body-wide (`armed-on`), so
+   *  its property has to sit on <body> — and it changes only with its colour. The HAND pulses,
+   *  ten writes a second for as long as a unit is hovered, and is only ever drawn over the map,
+   *  so its property sits on the map CANVAS, which has no children: a step restyles one element
+   *  instead of the ~940 in the document. */
+  private setOverlayCursor(kind: "reticle" | "hand", rule: string): void {
+    if (kind === "reticle") {
+      if (rule === this.reticleCursorRule) return;
+      this.reticleCursorRule = rule;
+      document.body.style.setProperty("--ow3-reticle-cursor", rule);
+    } else {
+      if (rule === this.handCursorRule) return;
+      this.handCursorRule = rule;
+      this.canvas.style.setProperty("--ow3-hand-cursor", rule);
+    }
   }
 
   /** Decode a BLP to a cached data URL for DOM use (icons). */
   private blpIcon(path: string): string | null {
-    let url = this.iconCache.get(path);
+    // The running map's archive first, as for every other asset (render/assetSolver.ts): a map's
+    // units and its war3mapSkin.txt name icons it imports. Such a path is cached under the MOUNT,
+    // so the next map's `war3mapImported\x.blp` is never the last one's picture.
+    const map = this.mapFiles.archive;
+    const key = map?.exists(path) ? `map${this.mapFiles.epoch}:${path}` : path;
+    let url = this.iconCache.get(key);
     if (url === undefined) {
-      const bytes = this.vfs.rawBytes(path);
+      const bytes = key === path ? this.vfs.rawBytes(path) : map!.rawBytes(path);
       url = bytes ? blpToDataUrl(bytes) : null;
-      this.iconCache.set(path, url);
+      this.iconCache.set(key, url);
       if (url) this.iconSource.set(url, path);
     }
     return url;
@@ -11674,7 +12521,10 @@ export class MapViewerScene {
       const rally = { kind: t.rallyKind, targetId: t.rallyTargetId, x: t.rallyX, y: t.rallyY };
       // "unit ready" voice on completion — YOUR unit, like the research chime below: on a
       // LAN host this drain completes other players' trainings too (Phase G item 5).
-      if (t.owner === this.localPlayer) this.sounds?.play(d.soundSet, "Ready");
+      if (t.owner === this.localPlayer) {
+        this.sounds?.play(d.soundSet, "Ready");
+        this.noteSpacebarPoint(t.x, t.y); // "unit trained" is a notification (see noteCompletion)
+      }
       const buildingId = t.buildingId;
       // The unit belongs to whoever owned the TRAINER, never to this machine's player —
       // `localPlayer` here was playtest bug 4: every peon a client trained came out
@@ -11787,6 +12637,10 @@ export class MapViewerScene {
         // level has to be applied and the stats rebuilt off it before hp/mana can be set
         // (see initIllusion), which is not something the renderer should be sequencing.
         if (su && s.illusion) world.initIllusion(su, s.sourceId, s.illusion);
+        // …and a unit has now SPAWNED a summoned unit (EVENT_(PLAYER_)UNIT_SUMMON). Raised here
+        // because this is the first moment the summon has an id to hand a script — after the
+        // illusion is set up, so `IsUnitIllusion(GetSummonedUnit())` already answers true.
+        if (su && s.sourceId) world.noteSummon(s.sourceId, simId);
         // …and a hidden ward starts the clock on its fade (Sentry Ward, Stasis Trap).
         if (su && s.cloakAfter !== undefined) world.cloakSummon(su, s.cloakAfter);
         this.rts!.beginSummonBirth(simId); // materialize (birth clip + spawn lock)
@@ -12159,6 +13013,8 @@ export class MapViewerScene {
       this.updateOrderArrows(wdt / 1000);
       this.updateEffects(wdt / 1000);
       this.updateSpellSplats(wdt / 1000); // Thunder Clap's scorch fading in/out on the ground
+      this.updateScriptSplats(wdt / 1000); // a script's CreateUbersplat, on its row's envelope
+      if (this.waterTint) this.applyWaterTint(); // SetWaterBaseColor, held against a late Water.slk
       this.lightning?.update(wdt / 1000); // age the live bolts; expired ones retire themselves
       this.updateMirrorMissiles(wdt / 1000);
       this.updateAuraEffects();
@@ -12212,6 +13068,7 @@ export class MapViewerScene {
           if (c.owner !== this.localPlayer) continue;
           this.sounds?.playUi(`JobDoneSound${UI_SOUND_RACE[this.localRace]}`);
           this.announceCompleted(this.registry.get(world.units.get(c.buildingId)?.typeId ?? "")?.name);
+          this.noteCompletion(world.units.get(c.buildingId));
         }
         // --- research + structure upgrades (issue #57) ---
         // WC3 keeps two DISTINCT completion cues, per race: ResearchComplete<Race> for an
@@ -12239,6 +13096,7 @@ export class MapViewerScene {
           // install doesn't ship a name for, and "Completed: Rhri" is worse than silence.
           const name = this.upgrades.name(r.upgradeId, r.level);
           this.announceCompleted(name === r.upgradeId ? "" : name);
+          this.noteCompletion(world.units.get(r.buildingId));
         }
         // A building became something else: swap its model in place. The sim kept the SAME
         // entity — rally point, queue, selection and damage all carried over — so this only
@@ -12263,6 +13121,7 @@ export class MapViewerScene {
             // that is news. Gated on the same `building` test as the chime, so a hero leaving
             // Metamorphosis announces nothing here either.
             this.announceCompleted(this.registry.get(m.to)?.name);
+            this.noteCompletion(u);
           }
           void this.remodelUnit(m.unitId, m.to);
         }
@@ -12575,6 +13434,7 @@ export class MapViewerScene {
       }
       if (map && fogScene && map.anyReady) {
         fogScene.startFrame();
+        this.sky?.renderBehind(); // FIRST: a sky neither tests nor writes depth (render/sky.ts)
         this.syncBlight(map); // the Undead's rot, painted onto the ground before it is drawn
         map.renderGround();
         map.renderCliffs();
@@ -12686,6 +13546,7 @@ export class MapViewerScene {
    *  `cine-on` still on the body so the menu had no cursor. */
   dispose(): void {
     this.disposed = true;
+    setGamepadHost(null); // the pad's match actions die with the match
     this.stop();
     // The listeners first: they are the only leak that would keep FIRING — every keydown
     // handler a dead match left on `window` still answers keys typed at the main menu.
@@ -12733,6 +13594,8 @@ export class MapViewerScene {
     this.textTags = null;
     this.combatText.clear();
     this.leaderboard?.dispose();
+    this.scriptFrames?.dispose();
+    this.scriptFrames = null;
     this.multiboard?.dispose();
     this.multiboard = null;
     this.weather?.dispose();
@@ -12758,6 +13621,7 @@ export class MapViewerScene {
     this.interfaceShown = true;
     this.userUi = true;
     this.userControl = true;
+    this.originHidden = false; // a map's BlzHideOriginFrames is that map's
     // A Lua map's front end goes with it: the state itself is GC'd with the interpreter, but
     // its host functions were registered in that interpreter's runtime, and dropping them
     // here is what keeps "nothing a match puts on the page outlives it" true of this too.
@@ -12766,6 +13630,7 @@ export class MapViewerScene {
     // The SoundBoard is shared with the menu, so this map's archive comes back off it with
     // everything else this map brought (see mountMap).
     this.sounds?.mountMap(null);
+    this.mapFiles.archive = null;
     this.registry.clearCustom(); // drop this map's custom object data
     this.abilities.clearCustom();
     this.items.clearCustom();
@@ -12807,6 +13672,20 @@ export class MapViewerScene {
     this.effectBirthing = [];
     this.effectModels.clear();
     this.lightning?.clear(); // bolts hold unit ids the next match will reuse
+    this.scriptSplats.clear(); // their geometry went with the overlay
+    this.scriptImages.clear();
+    this.waterBase = null; // the next map's tileset has its own water
+    this.waterTint = null;
+    this.sky?.dispose(); // …and starts with no sky at all (render/sky.ts)
+    this.sky = null;
+    // The menus and the next map read the install's constants — but only if the overlay is still
+    // THIS scene's: a ChangeLevel/RestartGame can load the next scene before this one is
+    // disposed, and taking down its constants would be the old map reaching into the new one.
+    if (this.miscEpoch >= 0 && mapMiscEpoch() === this.miscEpoch) {
+      setMapMiscOverlay(null);
+      setWidePlayerTable(false); // …and the 1.30.4 player table, under the same ownership rule
+    }
+    if (this.mapSkin && mapSkinOverlay() === this.mapSkin) setMapSkinOverlay(null);
     for (const inst of this.projectileInsts.values()) inst.detach();
     this.projectileInsts.clear();
     this.projectileLoading.clear();
@@ -12825,8 +13704,9 @@ export class MapViewerScene {
     this.scrollStripUrl = "";
     this.disposeFog(); // the veil mesh and its GL texture — loadMap dropped these, exit didn't
     document.body.classList.remove("reticle-on", "armed-on", "carrying-item", "scroll-on", "game-paused");
-    document.body.style.removeProperty("--ow3-overlay-cursor");
-    this.overlayCursorRule = "";
+    document.body.style.removeProperty("--ow3-reticle-cursor");
+    this.canvas.style.removeProperty("--ow3-hand-cursor");
+    this.reticleCursorRule = this.handCursorRule = "";
     this.pauseUiOn = this.pauseUiHard = false;
     this.dialogUp = false;
     this.deadPanelKey = "";
@@ -13575,7 +14455,16 @@ export class MapViewerScene {
       if (panLeft) this.pan(right, -keySpeed);
       // Driving the camera with the keys ends a Ctrl+C lock (as every other hand on the
       // camera does — see `rideLocked`).
-      if (panUp || panDown || panRight || panLeft) this.releaseCameraRide();
+      // The gamepad's RIGHT STICK is the same four keys in any direction and at any strength
+      // (issue #162): each axis scales the key speed, and a diagonal is a true diagonal.
+      // Stick-down is +y, the screen's down. Full tilt pans at `PAD_PAN_SCALE` of a held arrow
+      // key — ours, not the game's (WC3 has no pad): at the full key speed a thumb, which cannot
+      // tap a stick the way it taps a key, overshot what it was panning to.
+      const [padX, padY] = gamepadPan();
+      const padSpeed = keySpeed * PAD_PAN_SCALE;
+      if (padX) this.pan(right, padSpeed * padX);
+      if (padY) this.pan(fwd, -padSpeed * padY);
+      if (panUp || panDown || panRight || panLeft || padX || padY) this.releaseCameraRide();
       this.updateEdgeScroll(fwd, right, speed); // pan when the cursor rests at a screen edge
     } else {
       this.showScrollArrow(0, 0);
@@ -13631,6 +14520,7 @@ export class MapViewerScene {
     // FARZ 0 = "the game camera's own rule", which is 8× the focus distance.
     scene.camera.perspective(this.fov, this.aspect(), 16, this.farZ > 0 ? this.farZ : this.distance * 8);
     scene.camera.moveToAndFace(eye, this.target, this.upVector(eye));
+    this.sky?.follow(scene.camera); // the sky surrounds the EYE (render/sky.ts)
     // Drive positional (WANT3D) audio: listener at the ground focus, facing the
     // camera's look direction so on-screen battles pan + attenuate around center.
     this.sounds?.setListener(this.target, eye);
@@ -14061,12 +14951,12 @@ export class MapViewerScene {
 
   /** Pick the cursor for what the mouse is doing. While an order is ARMED (Move/Attack/
    *  Patrol/Rally/Repair) it is the WC3 **target reticle**; while merely hovering a
-   *  unit/mine it keeps the race **hand cursor** but recoloured. Both pulse (colour
-   *  only, constant size) — green friendly / yellow neutral / red enemy. While an item is
+   *  unit/mine it keeps the race **hand cursor** but recoloured — green friendly / yellow
+   *  neutral / red enemy; the hand pulses (colour only), the reticle holds still. While an item is
    *  being moved it is the gauntlet holding it (updateCarriedItem, DOM). The reticle and the
-   *  hand are real `cursor:` images, swapped in through --ow3-overlay-cursor under the
-   *  `armed-on` (screen-wide) or `reticle-on` (map-only) class — never DOM chasing the
-   *  pointer, which trails it by a frame or two however fast the game draws. */
+   *  hand are real `cursor:` images, swapped in through --ow3-reticle-cursor under the
+   *  `armed-on` (screen-wide) class or --ow3-hand-cursor under `reticle-on` (map-only) — never
+   *  DOM chasing the pointer, which trails it by a frame or two however fast the game draws. */
   private updateReticle(): void {
     if (!this.rts) return this.hideCursorOverlay();
     const mode = this.rts.orderMode;
@@ -14090,7 +14980,7 @@ export class MapViewerScene {
     }
     const rule = kind ? this.overlayCursor(kind, colorKey) : "";
     if (!kind || !rule) return this.hideCursorOverlay();
-    this.setOverlayCursor(rule);
+    this.setOverlayCursor(kind, rule);
     // The armed reticle owns the cursor screen-wide; the hover hand only over the map.
     document.body.classList.toggle("armed-on", kind === "reticle");
     document.body.classList.toggle("reticle-on", kind === "hand");

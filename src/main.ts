@@ -29,6 +29,7 @@ import type { AdvancedOptions } from "./net/advancedOptions";
 import { WebSocketTransport } from "./net/transport";
 import { onServersFound } from "./assets/nativeInstall";
 import { watchForUpdates } from "./ui/updatePrompt";
+import { startGamepad } from "./ui/gamepad";
 import { mountOptions } from "./ui/fdfOptions";
 import { applyAudioOptions, loadOptions } from "./data/options";
 import { profilePlayerName } from "./data/profiles";
@@ -1178,6 +1179,10 @@ function onFilesLoaded(load: GateLoad): void {
 // browser context menu — anywhere, on any surface: the 3D canvas, the HUD, the menus. The
 // individual canvases already swallowed it; this closes the rest of the page.
 window.addEventListener("contextmenu", (e) => e.preventDefault());
+
+// A gamepad (issue #162) may be paired from any screen — the menus as much as a match — so its
+// poll runs for the life of the page. See ui/gamepad.ts.
+startGamepad();
 
 // Boot. Normally the load gate: a human picks their Warcraft III folder, because that gesture
 // is also what opens the browser's autoplay gate. Under `?dev` on a DEV SERVER ONLY, a scripted

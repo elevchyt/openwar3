@@ -30,6 +30,8 @@ export interface HeadlessOptions {
    *  Defaults to the 2003 table's slot 12, which is what a headless run has no art to
    *  disagree with. */
   neutralColor?: number;
+  /** Runtime.blzIndexBase — 0 for a map saved by a 1.31+ editor, else 1 (the default). */
+  blzIndexBase?: number;
 }
 
 /** Parse + load the given sources (in order), register natives, and initialise
@@ -39,6 +41,7 @@ export function buildInterpreter(sources: string[], opts: HeadlessOptions = {}):
   rt.gameType = opts.gameType ?? 4;
   rt.hooks = opts.hooks ?? null;
   if (opts.neutralColor !== undefined) rt.neutralPlayerColor = opts.neutralColor;
+  if (opts.blzIndexBase !== undefined) rt.blzIndexBase = opts.blzIndexBase;
   if (opts.worldWritingHooks) rt.worldWritingHooks = new Set(opts.worldWritingHooks);
   if (opts.localViewHooks) rt.localViewHooks = new Set(opts.localViewHooks);
   if (opts.wts) for (const [id, text] of parseWts(opts.wts)) rt.trigStrings.set(id, text);

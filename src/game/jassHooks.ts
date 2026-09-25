@@ -1,11 +1,12 @@
-import { jassOwnerOf, type SimWorld, type SimMine, type SimUnit, type StoredUnitState } from "../sim/world";
+import { armorSoundCode, defenseTypeCode, targetedAsCode } from "../data/unitFieldCodes";
+import { jassOwnerOf, type SimWorld, type SimMine, type SimUnit, type StoredUnitState, type UnitStat } from "../sim/world";
 import type { EngineHooks, UnitSnapshot } from "../jass/runtime";
 import { MAIN_HALL_CHAINS } from "../data/races";
 import { AttackType, MoveType } from "../data/enums";
 import { MELEE } from "../data/gameplayConstants";
 import { fogStateOf, type FogState } from "../sim/vision";
 import type { FogArea } from "./fog";
-import { PrimaryAttribute } from "../data/enums";
+import { neutralSlot, PlayerSlot, PrimaryAttribute } from "../data/enums";
 import type { UnitDef } from "../data/units";
 
 /**
@@ -154,6 +155,8 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     isUnitPaused: (id) => sim.isUnitPaused(id),
     getUnitFlyHeight: (id) => sim.getUnitFlyHeight(id),
     setUnitMoveSpeed: (id, speed) => sim.setUnitMoveSpeed(id, speed),
+    setUnitAcquireRange: (id, range) => sim.setUnitAcquireRange(id, range),
+    getUnitAcquireRange: (id) => sim.getUnitAcquireRange(id),
     getUnitMoveSpeed: (id) => sim.getUnitMoveSpeed(id),
     setUnitTurnSpeed: (id, turn) => sim.setUnitTurnSpeed(id, turn),
     getUnitFacing: (id) => sim.getUnitFacing(id),
@@ -187,6 +190,38 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     playerTechCount: (player, tech) => sim.tech?.count(player, tech) ?? 0,
     setPlayerTechResearched: (player, tech, level) => sim.tech?.setResearchLevel(player, tech, level),
     setPlayerTechMaxAllowed: (player, tech, max) => sim.tech?.setMaxAllowed(player, tech, max),
+    setPlayerAbilityAvailable: (player, abil, available) => sim.tech?.setAbilityAvailable(player, abil, available),
+    // The Blz… stat accessors (pass 3). The stat name crosses as a string and is narrowed here;
+    // `invulnerable` is read-only, so the setter refuses it rather than inventing a write.
+    unitStat: (id, stat, slot) => sim.unitStat(id, stat as UnitStat, slot),
+    // Pass 9's world half: the per-unit counters and clocks, and the TYPE's rank data.
+    unitDisableAbility: (id, abil, disable, hideUI) => void sim.unitDisableAbility(id, abil, disable, hideUI),
+    unitHideAbility: (id, abil, hide) => void sim.unitHideAbility(id, abil, hide),
+    unitAbilityCooldownLeft: (id, abil) => sim.unitAbilityCooldownLeft(id, abil),
+    endUnitAbilityCooldown: (id, abil) => sim.endUnitAbilityCooldown(id, abil),
+    abilityRankData: (abil, rank) => sim.abilityRankData(abil, rank),
+    // The ability INSTANCES (the 1.31 ability-field API): a unit's own entry or an item's
+    // ability, read and rewritten through the same metadata routing a w3a edit takes.
+    setUnitExploded: (id, exploded) => sim.setUnitExploded(id, exploded),
+    // BlzSetUnit…Field — a WORLD write, so it lives in this table (whose names are the ones a
+    // per-viewer re-run of a GetLocalPlayer block refuses), not beside its reader unitTypeField.
+    setUnitField: (id, field, value, slot) => sim.setUnitField(id, field, value, slot ?? 0),
+    unitName: (id) => sim.units.get(id)?.nameOverride,
+    setUnitName: (id, name, proper) => {
+      const u = sim.units.get(id);
+      if (!u || !name) return; // "Setting to an empty string will crash the game" (jassbot) — we refuse it instead
+      if (proper) { if (u.isHero) u.properName = name; } else u.nameOverride = name;
+    },
+    unitHasAbility: (id, abil) => sim.units.get(id)?.abilities.some((a) => a.id === abil) ?? false,
+    unitAbilityAt: (id, index) => sim.units.get(id)?.abilities[index]?.id,
+    itemAbilityIds: (item) => sim.itemAbilityIds(item),
+    abilityField: (ref, metaId, level) => sim.abilityInstanceField(ref, metaId, level),
+    setAbilityField: (ref, metaId, level, value) => sim.setAbilityInstanceField(ref, metaId, level, value),
+    startUnitAbilityCooldown: (id, abil, seconds) => sim.startAbilityCooldown(id, abil, seconds),
+    unitAbilityRankData: (id, abil, rank) => sim.unitAbilityRankData(id, abil, rank),
+    applyTimedLife: (id, seconds, buffId) => sim.applyTimedLife(id, seconds, buffId),
+    setUnitStat: (id, stat, value, slot) =>
+      stat === "invulnerable" ? false : sim.setUnitStat(id, stat as Exclude<UnitStat, "invulnerable">, value, slot),
     // --- abilities + heroes (7.17): a trigger grants a spell / levels a hero ---
     unitAddAbility: (id, abilityId) => sim.addAbility(id, abilityId),
     unitRemoveAbility: (id, abilityId) => sim.removeAbility(id, abilityId),
@@ -208,6 +243,17 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     // native does the common.j-index → AttackType mapping and the sim is handed a column name.
     damageTarget: (sourceId, targetId, amount, opts) =>
       sim.damageTarget(sourceId, targetId, amount, { ...opts, attackType: opts.attackType as AttackType }),
+    damagePoint: (sourceId, delay, radius, x, y, amount, opts) =>
+      sim.damagePoint(sourceId, delay, radius, x, y, amount, { ...opts, attackType: opts.attackType as AttackType }),
+    stripHeroLevel: (id, n) => sim.stripHeroLevel(id, n),
+    xpHandicap: (player) => sim.xpHandicap(player),
+    setXpHandicap: (player, rate) => sim.setXpHandicap(player, rate),
+    pauseTimedLife: (id, flag) => sim.pauseTimedLife(id, flag),
+    setUnitClassification: (id, t, on) => sim.setUnitClassification(id, t, on),
+    removeBuffs: (id, q) => void sim.removeBuffs(id, q),
+    countBuffs: (id, q) => sim.countBuffs(id, q),
+    createCorpse: (typeId, x, y, owner, facingDeg) => sim.createCorpse(typeId, x, y, owner, facingDeg),
+    terrainCliffLevel: (x, y) => sim.terrainCliffLevel(x, y),
     // --- predicates (docs/map-compatibility.md pass 4) ---
     isUnitInRange: (id, otherId, distance) => sim.unitInRange(id, otherId, distance),
     isUnitInRangeXY: (id, x, y, distance) => sim.unitInRangeXY(id, x, y, distance),
@@ -259,7 +305,7 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     unitInventorySize: (unitId) => sim.inventorySizeOf(unitId),
     unitItemInSlot: (unitId, slot) => sim.itemInSlot(unitId, slot),
     enumItems: () =>
-      sim.groundItems().map((it) => ({ id: it.id, typeId: it.itemId, charges: it.charges, x: it.x, y: it.y, holder: 0, slot: -1, owner: 15 })),
+      sim.groundItems().map((it) => ({ id: it.id, typeId: it.itemId, charges: it.charges, x: it.x, y: it.y, holder: 0, slot: -1, owner: neutralSlot(PlayerSlot.NeutralPassive) })),
     // Neutral-building stock (issue #57): Blizzard.j stocks the Marketplace itself, off its own
     // 30s timer — these just hand its natives the shelves. See src/jass/natives/stock.ts.
     addToStock: (shopId, wareId, kind, count, max) => void sim.addToStock(shopId, wareId, kind, count, max),
@@ -287,6 +333,7 @@ export function authorityHooks(authority: {
   foodFor(owner: number): { used: number; made: number };
   setPlayerResource(player: number, resource: "gold" | "lumber", value: number): void;
   setFoodCap(player: number, value: number): void;
+  setFoodUsed(player: number, value: number): void;
   setFoodCapCeiling(player: number, value: number): void;
   foodCapCeilingOf(player: number): number;
   heroTokensFor(player: number): number;
@@ -355,13 +402,16 @@ export function authorityHooks(authority: {
     // FOOD_CAP (4) and FOOD_CAP_CEILING (6) are writes too (issue #127). Our cap is DERIVED from
     // the units — see Authority.foodFor — so the write used to be dropped on the floor, and
     // WTii's Unit Tester, which has no food-producing building and simply states the cap it
-    // wants, opened at 0/0 with nothing trainable. FOOD_USED (5) is the one that really is
-    // read-only: it counts units, and WC3 refuses that write too.
+    // wants, opened at 0/0 with nothing trainable. FOOD_USED (5) is the same accumulator
+    // (Authority.setFoodUsed): the write lands, and the units move it from there. It was once
+    // dropped here as "read-only", which left Test of Balance — whose wave difficulty IS the
+    // players' food used, written by its triggers — spawning empty waves.
     setPlayerState: (p, state, value) => {
       if (state === 1) authority.setPlayerResource(p, "gold", value);
       else if (state === 2) authority.setPlayerResource(p, "lumber", value);
       else if (state === 3) authority.setHeroTokens(p, value);
       else if (state === 4) authority.setFoodCap(p, value);
+      else if (state === 5) authority.setFoodUsed(p, value);
       else if (state === 6) authority.setFoodCapCeiling(p, value);
       // GIVES_BOUNTY (7): whether this player's units pay their bounty when killed — a flag, set
       // through `SetPlayerFlagBJ` (WarChasers turns it on for its dungeon, Player(11)).
@@ -400,7 +450,7 @@ export function unitSnapshots(sim: {
     snap.push({ id: u.id, typeId: u.typeId, owner: jassOwnerOf(u), x: u.x, y: u.y, facing: u.facing });
   }
   for (const m of sim.mines.values()) {
-    snap.push({ id: MINE_ID_BASE + m.id, typeId: "ngol", owner: 15, x: m.x, y: m.y, facing: 0 });
+    snap.push({ id: MINE_ID_BASE + m.id, typeId: "ngol", owner: neutralSlot(PlayerSlot.NeutralPassive), x: m.x, y: m.y, facing: 0 });
   }
   return snap;
 }
@@ -450,9 +500,16 @@ function unitTypeField(def: TypeDef, field: string): number | boolean | string |
         : def.primaryAttr === PrimaryAttribute.Agility ? 3
         : 0;
     case "level": return def.level;
-    case "defenseType": return def.armorType;
-    case "armorType": return def.armorType;
-    case "targetedAs": return def.targType.length;
+    // The three whose VALUE is an integer a map stores and compares (data/unitFieldCodes.ts says
+    // where each encoding is written down). These used to hand back the damage-class STRING for
+    // both type fields — which the native turned into 0 — and the LENGTH of the target list.
+    case "defenseType": return defenseTypeCode(def.armorType);
+    case "armorType": return armorSoundCode(def.armorSound);
+    case "targetedAs": return targetedAsCode(def.targType);
+    // UnitData `deathType`: 0 none, 1 raise, 2 decay, 3 both (UI\UnitEditorData.txt [deathType]).
+    case "raisable": return ((def.deathType ?? 3) & 1) !== 0;
+    case "decayable": return ((def.deathType ?? 3) & 2) !== 0;
+    case "minimumAttackRange": return def.minRange ?? 0;
     case "goldBountyBase": return def.bountyPlus;
     case "goldBountyDice": return def.bountyDice;
     case "goldBountySides": return def.bountySides;
@@ -562,7 +619,24 @@ export function rosterHooks(
     // Here because that is where the registry is: the key is the compatibility layer's own
     // (src/compat/blzFields.ts), and a key with no row here answers undefined, which the
     // native reports as the typed default rather than as a wrong number.
-    unitTypeField: (id, field) => {
+    // GetUnitDefault… — the TYPE's row, by type id (a dying unit is already out of `sim.units`).
+    // Turn speed is UnitData `turnRate`, the same 0..1 scale SetUnitTurnSpeed writes; fly
+    // height is UnitData `moveHeight`.
+    unitTypeDefault: (typeId, field) => {
+      const def = registry.get(typeId);
+      if (!def) return undefined;
+      switch (field) {
+        case "moveSpeed": return def.speed;
+        case "turnRate": return def.turnRate;
+        case "flyHeight": return def.moveHeight;
+        case "acquireRange": return def.acquireRange;
+      }
+    },
+    // THIS unit's value where it has one of its own (a script's BlzSetUnit…Field, or the per-unit
+    // state the engine already keeps — its damage class, its level), else its type's row.
+    unitTypeField: (id, field, slot) => {
+      const live = sim.unitField(id, field, slot ?? 0);
+      if (live !== undefined) return live;
       const u = sim.units.get(id);
       const def = u ? registry.get(u.typeId) : undefined;
       return def ? unitTypeField(def, field) : undefined;
@@ -578,6 +652,10 @@ export function rosterHooks(
       if (mineForScript(sim, id)) return t === 2 || t === 4; // STRUCTURE, GROUND
       const u = sim.units.get(id);
       if (!u) return deadTypeIs(t, typeId);
+      // A script's UnitAddType / UnitRemoveType on a classification with no flag of its own.
+      const own = u.classOverrides?.[t];
+      if (own !== undefined) return own;
+      const cls = registry.get(u.typeId)?.classification;
       switch (t) {
         case 0: return u.isHero;
         case 1: return u.hp <= 0;
@@ -591,6 +669,13 @@ export function rosterHooks(
         case 14: return u.race === "undead";
         case 15: return u.mechanical;
         case 16: return u.isPeon;
+        // The UnitBalance `type` words these four are named by (giant, sapper, townhall,
+        // tauren), and the ancients' flag the sim keeps for itself.
+        case 9: return !!cls?.includes("giant");
+        case 17: return !!cls?.includes("sapper");
+        case 18: return !!cls?.includes("townhall");
+        case 19: return u.ancient;
+        case 20: return !!cls?.includes("tauren");
         case 23: return u.asleep;
         default: return false;
       }

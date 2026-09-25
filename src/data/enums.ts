@@ -105,8 +105,48 @@ export enum PlayerSlot {
   NeutralPassive = 15,
 }
 
-/** The first neutral slot — anything at or above it is owned by a neutral player. */
+/** The first neutral slot. */
 export const FIRST_NEUTRAL_SLOT = PlayerSlot.NeutralHostile;
+
+/**
+ * Is slot `p` one of the four NEUTRAL players (12–15)?
+ *
+ * Not "is it 12 or more". 1.29 widened the player table to 24 (common.j's 24 player colours),
+ * and a map saved since can seat a real player on 16–23: Test of Balance and Balanced Hero
+ * Survival both put their whole enemy on `Player(20)` — a computer seat in a force of its own
+ * (their w3i) — and a "≥ 12" test turned it into Neutral Passive, so every wave came out
+ * passive, the wave-clear trigger counted no Player(20) units, and each wave ended the moment
+ * it began. The neutrals themselves stay at 12–15, where our PLAYER_NEUTRAL_* natives put them
+ * (natives/config.ts) and where the map door already folds the editor's 24–27 (world/mapUnits.ts).
+ */
+export function isNeutralSlot(p: number): boolean {
+  const first = neutralSlot(PlayerSlot.NeutralHostile);
+  return p >= first && p <= first + (PlayerSlot.NeutralPassive - PlayerSlot.NeutralHostile);
+}
+
+/**
+ * The 24-PLAYER TABLE (1.31+). A map a 1.31+ editor saved was written for a client with 24
+ * players, whose four neutrals sit at 24–27 — PLAYER_NEUTRAL_AGGRESSIVE is 24 there, and
+ * `Player(12)` … `Player(15)` are the 13th to 16th PLAYERS, colours and all. Our 1.30.4 table
+ * puts the neutrals on 12–15, so such a map's players 13–16 collided with them. On a map that is
+ * on the wide table the neutrals move up instead (`neutralSlot`), which is all the change is:
+ * a player keeps the number its map gave it, the `.doo` keeps the numbers the editor wrote
+ * (24–27 are its neutrals already, world/mapUnits.ts), and `GetBJMaxPlayers` /
+ * `GetPlayerNeutralAggressive` & co. answer 24 / 28 / 24–27 (jass/natives/config.ts). Set at the
+ * map door off the map's editor build (MapFormatProfile.editorBuild >= 131) and back to the
+ * 1.30.4 table when it closes.
+ */
+let widePlayers = false;
+export function setWidePlayerTable(on: boolean): void {
+  widePlayers = on;
+}
+export function widePlayerTable(): boolean {
+  return widePlayers;
+}
+/** Where neutral `slot` (a PlayerSlot) is on the table in force: itself, or twelve up. */
+export function neutralSlot(slot: PlayerSlot): number {
+  return widePlayers ? slot + 12 : slot;
+}
 
 // --- SLK-token parsers ------------------------------------------------------
 // The SLK cells are already lowercase in the stock tables, but custom object data

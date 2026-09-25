@@ -34,6 +34,8 @@ const ability = (id, code, over = {}) => ({
 const FRIENDLY_ORGANIC = ["air", "ground", "friend", "self", "organic", "vuln", "invu"];
 
 const ABILITIES = new Map([
+  // An INVENTORY ability: "Item Capacity" is its DataA (AbilityMetaData inv1). The Pack Mule's.
+  ["Apak", ability("Apak", "AInv", { isItem: false, levelData: [lvl({ data: D(4, 1, 1, 1, 1) })] })],
   // --- the AIrg family: one code, three aims (see SimWorld.applyItemAbility) --------------
   // AIsl  Scroll of Regeneration  Dur 45, Area 600, DataA 225
   ["AIsl", ability("AIsl", "AIrg", { targetFlags: FRIENDLY_ORGANIC, levelData: [lvl({ duration: 45, heroDuration: 45, area: 600, data: D(225) })] })],
@@ -432,6 +434,27 @@ console.log("\nan undroppable item cannot leave the inventory");
   world.dropInventory(cart);
   check("a dead carrier does not scatter it either", world.items.has(ledger), false);
   check("…it goes down with the body", cart.inventory[0] && cart.inventory[0].id, ledger);
+}
+
+console.log("\nan inventory is an ABILITY, sized by its Item Capacity");
+{
+  const mule = unit();
+  check("a unit with no inventory ability has no slots", mule.inventory.length, 0);
+  world.addAbility(mule.id, "Apak");
+  check("UnitAddAbility of an AInv-coded ability opens its DataA slots (the Pack Mule's four)", mule.inventory.length, 4);
+}
+{
+  // …and a GATED one: every stock Footman lists `Aihn` ([Aihn] Requires=Rhpm), so it has no
+  // inventory until the Backpack research is in — and gets its two slots the tick it is.
+  world = newWorld();
+  const researched = new Set();
+  world.techMeets = (_player, id) => id !== "Apak" || researched.has("Ropm");
+  const grunt = unit({ backpacks: [{ id: "Apak", slots: 2 }] });
+  world.recomputeStats(grunt);
+  check("a unit whose inventory ability's Requires is unmet has no slots", grunt.inventory.length, 0);
+  researched.add("Ropm");
+  world.recomputeStats(grunt);
+  check("…the research opens them", grunt.inventory.length, 2);
 }
 
 console.log(failed ? `\nitems: ${failed} check(s) FAILED` : "\nitems: all checks passed");

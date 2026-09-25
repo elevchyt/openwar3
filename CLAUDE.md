@@ -720,6 +720,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   `Blz*` natives are a DEGRADATION surface, not a blocker — an unknown native and an undefined
   global are each logged once and stepped over, so such a map runs before any of them exist —
   and their constants must come from a prelude of OUR OWN, never Blizzard's newer `common.j`.
+  The `war3mapSkin.w3u/.w3a/.w3t/…` files are NOT an HD extra to skip: they hold every object's
+  art and NAME, applied over the main files, and a map's triggers can find abilities by name.
+  And a map's imported art is found through `render/assetSolver.ts` (map archive first) for
+  every unit a SCRIPT makes — without it a sold hero has no body and an empty command card.
   A map's script may also be **LUA** (`war3map.lua`), and the reason that is a front end rather
   than a second engine is that the LANGUAGE is different and the API is not: every name such a
   script calls is an engine native, a BJ out of the install's own `blizzard.j` (Test of Faith
@@ -815,6 +819,18 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   creep that pulled the camp stopped. A creep's meld takes its Hold with it however the meld
   ends (`breakInvisibility`) — a Hold that outlived one at dawn froze the Nightcrawler at its
   post for the rest of the game.
+- **Gamepad:** read [`docs/gamepad.md`](docs/gamepad.md) before touching
+  [`src/ui/gamepad.ts`](src/ui/gamepad.ts) or a `:hover` rule. WC3 has no controller support,
+  so the MAPPING is the developer's (issue #162), but what a button does is the game's: a
+  button with a key IS that key (O Escape, Triangle Space, L1 "-", R2 F8, Start F10 — Escape
+  during a cinematic, which skips it — Select F9), and the stick and X/R1 are a drawn cursor dispatching real pointer events with
+  `pointerId: 1`, so every existing gate applies unchanged. `:hover` cannot see that cursor:
+  ask `isHovered(el)`, and give a hover glow a `.pad-hover` twin. The OS pointer is hidden by
+  a transparent `#gamepad-veil` over the page, never by a global `cursor: none`: the drawn cursor
+  READS the page's `cursor:` values, so a global rule would hide it too. The D-pad walks every
+  MENU with a gold box (`FOCUSABLE`, read off the page: visible, enabled, on top at its centre —
+  a new kind of clickable control needs adding there) and drives the command card only in a
+  match with no menu or dialog up.
 - **Never edit the install's UI files.** `UI\FrameDef\` is the player's. A control OpenWar3 needs
   that the 2003 UI has no frame for goes in [`src/overrides/`](src/overrides/) — our own FrameDef
   files, layered onto the screen at mount through `mountFdfScreen`'s `overrides` option — and its

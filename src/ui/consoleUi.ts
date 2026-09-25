@@ -38,6 +38,7 @@ import type { Arg, FdfFrame, FdfProp } from "./fdf/parser";
 import { type FdfLibrary } from "./fdf/library";
 import { UI_HEIGHT, UI_WIDTH } from "./fdf/layout";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
+import type { ResourceKind } from "./hud";
 import { setGameTip } from "./gameTip";
 
 const CONSOLE_FDF = "UI\\FrameDef\\UI\\ConsoleUI.fdf";
@@ -153,6 +154,9 @@ export interface ConsoleUiActions {
    * mid-match and a resize rebuilds every frame from the FDF.
    */
   disabledPanels?(): ReadonlySet<ConsolePanel>;
+  /** The mouse is over one of the resource bar's four readouts (null: it has left the bar) —
+   *  the HUD raises that readout's slab (GameHud.showResourceTip). */
+  resourceHover?(kind: ResourceKind | null): void;
   /** Put the day/night medallion in the slot the strip leaves for it (render/timeIndicator.ts).
    *  Returns false when there is no install to render the model from. */
   mountClock(slot: HTMLElement): boolean;
@@ -163,9 +167,8 @@ export interface ConsoleResources {
   gold: string;
   lumber: string;
   supply: string;
+  /** The upkeep label, with its own colour code (hud.ts UPKEEP_KEY). */
   upkeep: string;
-  /** Upkeep's colour band (WC3 turns the label orange at low, red at high upkeep). */
-  upkeepColor: string;
 }
 
 export class ConsoleUi {
@@ -188,6 +191,36 @@ export class ConsoleUi {
   /** The element the strip is drawn into, so the host can hang the clock in its gap. */
   element(): HTMLElement | null {
     return this.screen?.element ?? null;
+  }
+
+  /**
+   * The two halves of the strip a MAP's script may take away (compat/frames.ts):
+   *
+   *  · `BlzHideOriginFrames(true)` hides the game's ORIGIN frames, and of those this strip holds
+   *    the system buttons (ORIGIN_FRAME_SYSTEM_BUTTON — Quests/Menu/Allies/Chat). The console art
+   *    and the resource bar are not origin frames and stay (Tasyen, "UI: OriginFrames",
+   *    hiveworkshop 316034).
+   *  · `ConsoleUIBackdrop` is "additional BACKDROP Blizzard added for the Bottom UI … not hidden
+   *    by BlzHideOriginFrames" (same thread) — our flat black behind the bottom console
+   *    (`backing`), which a map hides by name: Test of Balance does, around its intro.
+   *
+   * Both re-applied on every build, since a resize rebuilds the strip.
+   */
+  setOriginHidden(hidden: boolean): void {
+    this.originHidden = hidden;
+    this.applyScriptHides();
+  }
+  setBackdropVisible(on: boolean): void {
+    this.backdropShown = on;
+    this.applyScriptHides();
+  }
+  private originHidden = false;
+  private backdropShown = true;
+  private applyScriptHides(screen: FdfScreen | null = this.screen): void {
+    if (!screen) return;
+    const buttons = screen.frame("UpperButtonBarFrame");
+    if (buttons) buttons.style.visibility = this.originHidden ? "hidden" : "";
+    for (const el of screen.element.querySelectorAll<HTMLElement>(".console-backing")) el.style.visibility = this.backdropShown ? "" : "hidden";
   }
 
   setVisible(on: boolean): void {
@@ -216,10 +249,40 @@ export class ConsoleUi {
   update(next: ConsoleResources): void {
     const prev = this.last;
     if (prev && prev.gold === next.gold && prev.lumber === next.lumber
-      && prev.supply === next.supply && prev.upkeep === next.upkeep
-      && prev.upkeepColor === next.upkeepColor) return;
+      && prev.supply === next.supply && prev.upkeep === next.upkeep) return;
     this.last = next;
     this.paint();
+  }
+
+  /**
+   * The four readouts answer the mouse, as the game's own do (hovering one raises its slab).
+   *
+   * The bar is a SIMPLEFRAME whose icons and strings take no pointer, so each readout gets a
+   * zone of its own laid over it: from where the previous one ends to the right edge of its own
+   * number — the icon and the figure together, in the file's own positions (read off the frames
+   * the renderer just placed, never retyped). Rebuilt with the strip, like everything else here.
+   */
+  private hoverZones(screen: FdfScreen): void {
+    const bar = screen.frame("ResourceBarFrame");
+    if (!bar || !this.actions.resourceHover) return;
+    const texts: Array<[ResourceKind, string]> = [
+      ["gold", "ResourceBarGoldText"], ["lumber", "ResourceBarLumberText"],
+      ["supply", "ResourceBarSupplyText"], ["upkeep", "ResourceBarUpkeepText"],
+    ];
+    let left = 0;
+    for (const [kind, name] of texts) {
+      const el = screen.frame(name);
+      if (!el) continue;
+      const right = parseFloat(el.style.left) + parseFloat(el.style.width);
+      const zone = document.createElement("div");
+      zone.className = "console-resource-hover";
+      zone.style.left = `${left}px`;
+      zone.style.width = `${Math.max(0, right - left)}px`;
+      zone.addEventListener("pointerenter", () => this.actions.resourceHover?.(kind));
+      zone.addEventListener("pointerleave", () => this.actions.resourceHover?.(null));
+      bar.appendChild(zone);
+      left = right;
+    }
   }
 
   /** `screen` is passed in rather than read off `this`, because the build hook fires from
@@ -230,9 +293,7 @@ export class ConsoleUi {
     screen.setText("ResourceBarGoldText", r.gold);
     screen.setText("ResourceBarLumberText", r.lumber);
     screen.setText("ResourceBarSupplyText", r.supply);
-    screen.setText("ResourceBarUpkeepText", r.upkeep);
-    const upkeep = screen.frame("ResourceBarUpkeepText")?.querySelector("span");
-    if (upkeep) upkeep.style.color = r.upkeepColor;
+    screen.setText("ResourceBarUpkeepText", r.upkeep); // its colour is in the string
   }
 
   /**
@@ -335,7 +396,9 @@ export class ConsoleUi {
         // that runs on EVERY build instead of only the first.
         onBuild: (built) => {
           this.backing(built);
+          this.applyScriptHides(built);
           this.paint(built);
+          this.hoverZones(built);
           this.mountClock(built);
           this.applyEnabled(built);
         },

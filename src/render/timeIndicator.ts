@@ -5,7 +5,7 @@ import MdlxModel from "mdx-m3-viewer/dist/cjs/parsers/mdlx/model";
 import type { DataSource } from "../vfs/types";
 import { CanvasSize } from "./canvasSize";
 import type { PlayableRace } from "../data/races";
-import { MISC_DATA } from "../data/gameplayConstants";
+import { dataNum } from "../data/gameplayConstants";
 
 // The top-bar day/night clock (issue #47). WC3 doesn't draw this widget out of a
 // texture — it is a little MDX scene, one per race, named by UI\war3skins.txt's
@@ -152,7 +152,7 @@ export class TimeIndicatorClock {
     if (!this.instance) return;
     this.syncCanvasSize();
     const [start, end] = this.interval;
-    const target = start + (hour / MISC_DATA.DayHours) * (end - start);
+    const target = start + (hour / dataNum("DayHours")) * (end - start);
     // updateAnimations() adds dt to `frame` before it samples; pre-subtract so we
     // land exactly on `target` and never trip the loop-around at the interval end.
     this.instance.frame = target - dtMs;

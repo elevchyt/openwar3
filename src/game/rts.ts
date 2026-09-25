@@ -1,5 +1,5 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
-import { SimWorld, weaponsFromDef, isOffField, CREEP_CAMP_ACQUIRE_RANGE, BUILD_START_HP_FRAC, ANIM_FOR_DURATION, HERO_FADE_TIME, HERO_DISSIPATE_TIME, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText, type FallenHero, type SimSpellEffect, type StoredUnitState } from "../sim/world";
+import { SimWorld, weaponsFromDef, inventoryCapacity, isOffField, CREEP_CAMP_ACQUIRE_RANGE, BUILD_START_HP_FRAC, ANIM_FOR_DURATION, HERO_FADE_TIME, HERO_DISSIPATE_TIME, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText, type FallenHero, type SimSpellEffect, type StoredUnitState } from "../sim/world";
 import { KNOWN_ABILITIES, NO_AOE_CURSOR, aoeCursorRadius } from "../data/abilities";
 import type { Command } from "./commands";
 import { PATHING_CELL, footprintCells, type PathingGrid } from "../sim/pathing";
@@ -8,12 +8,14 @@ import { PlacedIndex, type PlacedRef } from "./placement";
 import { Authority } from "./authority";
 import { simHooks, authorityHooks, visionHooks, rosterHooks, mineForScript } from "./jassHooks";
 import type { EngineHooks } from "../jass/runtime";
+import { armorSoundFrom } from "../data/unitFieldCodes";
 import type { SimView } from "./simView";
 export type { PlacedRef };
 import {
   type AnimSet,
   animPropsFor,
   buildAnimSet,
+  scriptAnimTags,
   findBirthFields,
   setAnimRate,
   attackAnimRate,
@@ -43,8 +45,8 @@ import { AllianceTable, AllianceType } from "../sim/alliances";
 import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
 import { modelPickVolumes, rayVolume, type CollisionShapeNode, type PickVolume } from "../render/modelCollision";
 import { autoArmed, type UnitRegistry, type UnitDef } from "../data/units";
-import { ArmorType, AttackType, MoveType, PlayerSlot, PrimaryAttribute } from "../data/enums";
-import { MELEE, MISC_GAME, xpToReachLevel } from "../data/gameplayConstants";
+import { ArmorType, AttackType, isNeutralSlot, MoveType, neutralSlot, PlayerSlot, PrimaryAttribute } from "../data/enums";
+import { MELEE, gameNum, xpToReachLevel } from "../data/gameplayConstants";
 import { type AbilityRegistry, type AbilityDef } from "../data/abilities";
 import { resolveTipRefs } from "../data/tipRefs";
 import { disabledIconPath } from "../data/commandStrings";
@@ -704,10 +706,35 @@ export interface SelectionEvent {
   selected: boolean;
 }
 
+/** A type's INVENTORY abilities — every one of them is base code `AInv` (the hero's own `AInv`,
+ *  the Pack Mule's `Apak`, the four racial `Ai?n` backpacks) — with the slots each opens. The
+ *  sim opens them only once each one's `Requires` is met (`SimUnit.backpacks`): a Footman lists
+ *  `Aihn` from the start, and has no inventory until the Backpack research is in. */
+function inventoryAbilities(innate: ReadonlyArray<{ id: string; code: string; data: ReadonlyArray<unknown> }>): Array<{ id: string; slots: number }> {
+  return innate.filter((a) => a.code === "AInv").map((a) => ({ id: a.id, slots: inventoryCapacity(a.data[0]) }));
+}
+
 export class RtsController {
   private sim: SimWorld;
   private entries: Entry[] = [];
   private byId = new Map<number, Entry>();
+  /** A script's animation tags per unit (`AddUnitAnimationProperties`), kept by SIM id rather
+   *  than on the entry: a script tags the unit it has just created, a line after `CreateUnit`,
+   *  while its model is still loading — the tag has to be there when the body arrives. */
+  private readonly animTags = new Map<number, string[]>();
+  /** Units braced in Defend (`Adef` switched on), which wear the model's "defend" clips — see
+   *  applyStanceAnims. By sim id beside `animTags`, because it is the same kind of word. */
+  private readonly stancePoses = new Set<number>();
+
+  /** The clip set for a unit: its type's props, plus whatever its script has tagged it with
+   *  (unitAnims.scriptAnimTags). Every rebuild of a unit's clips goes through here. */
+  private animSetFor(simId: number, seqs: Array<{ name: string }>, props: string[] | undefined): AnimSet {
+    const scripted = this.animTags.get(simId);
+    const tags = this.stancePoses.has(simId) ? [...(scripted ?? []), "defend"] : scripted;
+    if (!tags?.length) return buildAnimSet(seqs, props);
+    const tagged = scriptAnimTags(seqs, tags);
+    return buildAnimSet(tagged.seqs, [...(props ?? []), ...tagged.props]);
+  }
   /**
    * Defs for the sim units the unit REGISTRY does not hold: the map's destructibles, whose
    * type codes come out of `DestructableData.slk` rather than `UnitData.slk`. Combat reads a
@@ -720,6 +747,10 @@ export class RtsController {
    * exist. The sim id is what a hit event actually carries.
    */
   private destructibleDefs = new Map<number, UnitDef>();
+  /** `BlzSetItemExtendedTooltip` — one item's own long description, by item ENTITY id (the
+   *  inventory entry and the ground item share it). Presentation, so it lives here beside the
+   *  slot view that reads it rather than in the sim; a new map is a new controller. */
+  private itemTooltips = new Map<number, string>();
   // Multi-unit selection: `selected` holds the whole group, `primary` is the
   // leader that drives the HUD (portrait, info panel, command card).
   private selected = new Set<number>();
@@ -739,6 +770,8 @@ export class RtsController {
   private lastVoiceId: number | null = null; // last single unit that spoke (for What→Pissed escalation)
   private voiceStreak = 0; // consecutive re-clicks of that same unit
   private lastIdleWorker: number | null = null; // last idle worker selected via the badge/F8/~ cycle
+  private lastCycledBuilding: number | null = null; // last building the gamepad's L2 cycle picked (issue #162)
+  private buildingTiers = new Map<string, number>(); // type id → its tech tier, for that cycle (`techTier`)
   private groups = new Map<string, number[]>(); // control groups "0".."9" → ordered member sim ids
   private localPlayer = 0; // owner whose units a drag-box selects
   private localTeam = 0; // team whose combined sight reveals the fog of war
@@ -825,7 +858,7 @@ export class RtsController {
   // A HERO's body is the same list and a different ending (issue #126): Death → Dissipate,
   // whose last second fades the body away → gone. It never has a `corpseId`, because a hero
   // leaves no remains for anything to raise, eat or carry — see SimWorld.spawnCorpse.
-  private corpses: Array<{ instance: Instance; corpseId: number; anims: AnimSet; phaseT: number; phase: CorpsePhase; hero?: boolean; held?: boolean; fadeFrom?: Float32Array }> = [];
+  private corpses: Array<{ instance: Instance; corpseId: number; anims: AnimSet; phaseT: number; phase: CorpsePhase; hero?: boolean; heroId?: number; held?: boolean; fadeFrom?: Float32Array }> = [];
   private flashRequests: Array<{ x: number; y: number; z: number; radius: number; color: [number, number, number]; sizeToRadius: boolean }> = [];
   private treePulses: Array<{ x: number; y: number }> = []; // trees to flash yellow on harvest
   // scratch buffers to avoid per-frame allocation
@@ -899,6 +932,8 @@ export class RtsController {
     // wants one side to hold its fire writes one direction only. See SimWorld.hostile.
     this.sim.passivePlayers = (a, b) => this.alliances.get(a, b, AllianceType.Passive);
     this.authority = new Authority(this.sim, registry, abilities, tech, upgrades);
+    // Upkeep taxes mined gold by the FOOD a player uses, which the authority derives.
+    this.sim.foodUsedOf = (player) => this.authority.foodFor(player).used;
     this.overlays = new WorldOverlays(host);
   }
 
@@ -1983,11 +2018,11 @@ export class RtsController {
     e.altModel = alt;
     const seqs = e.unit.instance.model?.sequences;
     if (!seqs) return;
-    e.anims = buildAnimSet(seqs, animPropsFor(def, alt));
+    e.anims = this.animSetFor(e.simId, seqs, animPropsFor(def, alt));
     if (first) return; // baseline only — no transition to play
     // The clip belongs to the form being LEFT, so it is read out of that form's set. One
     // extra buildAnimSet, only on a form change (twice in an Ancient's life, usually).
-    const morph = buildAnimSet(seqs, animPropsFor(def, !alt)).morph;
+    const morph = this.animSetFor(e.simId, seqs, animPropsFor(def, !alt)).morph;
     // Hold the morph clip for its own length: castAnimT keeps the ordinary stand/walk picker
     // off this unit until the Ancient has finished hauling itself up or settling down.
     //
@@ -2007,6 +2042,27 @@ export class RtsController {
     e.unit.state = WidgetState.WALK; // hold it against the idle picker, as a cast clip does
     e.castAnimT = seqDuration(inst, morph, CAST_ANIM_HOLD);
     e.castAnimSticky = true;
+  }
+
+  /**
+   * Defend is a POSE as well as a stance. Footman.mdx authors "Stand Defend", "Walk Defend" and
+   * "Attack Defend" beside its plain "Stand - 1/2/4", "Walk" and "Attack - 1/2", and while the
+   * shield is up those three ARE the unit's stand, walk and swing — the engine's own "defend"
+   * animation tag, the same word a script may hand AddUnitAnimationProperties. So it rides the
+   * tag path (unitAnims.scriptAnimTags): a tagged clip replaces every variant of the same action,
+   * which is what keeps the idle fidget and the swing roll from drawing a plain clip while braced
+   * (both pools shrink to the one defend clip; "Stand Victory" is a different action and stays).
+   *
+   * No re-seat is needed: the picker compares the playing clip against the new set on the very
+   * next line and moves the unit onto it — stand, walk or the next swing. */
+  private applyStanceAnims(e: Entry, u: RenderUnit): void {
+    const on = u.abilities.some((a) => a.code === "Adef" && a.autocastOn);
+    if (on === this.stancePoses.has(e.simId)) return;
+    if (on) this.stancePoses.add(e.simId);
+    else this.stancePoses.delete(e.simId);
+    const seqs = e.unit.instance.model?.sequences;
+    if (!seqs) return; // no body yet — attachInstance builds the set through animSetFor
+    e.anims = this.animSetFor(e.simId, seqs, animPropsFor(this.registry.get(e.typeId), u.altModel));
   }
 
   /**
@@ -2227,8 +2283,11 @@ export class RtsController {
       // while its arrow was still in the air, and a dead shooter has no def to ask. Both
       // halves are normalised to "" when the row names none (units.ts soundBase), so absence
       // is falsy rather than the SLK's literal "_".
-      if (h.weaponSound && tgt?.armorSound) {
-        this.sounds.playImpact(h.weaponSound, tgt.armorSound, at); // melee: material clang
+      // …the struck UNIT's own material where a script set one (UNIT_IF_ARMOR_TYPE), else its type's.
+      const armorCode = this.sim.units.get(h.targetId)?.fieldOverrides?.armorSound;
+      const armorSound = armorCode !== undefined ? armorSoundFrom(armorCode) : tgt?.armorSound;
+      if (h.weaponSound && armorSound) {
+        this.sounds.playImpact(h.weaponSound, armorSound, at); // melee: material clang
         continue;
       }
       // No weapon sound: a missile's own impact noise instead, which only the def records.
@@ -2338,6 +2397,58 @@ export class RtsController {
    * `createUnit(): number` can only carry an id back, not the resolved position the renderer needs
    * to put a model at. A queue carries both.
    */
+  /**
+   * `ReviveHero(h, x, y, doEyecandy)` / `ReviveHeroLoc` — a trigger brings a fallen hero back,
+   * instantly, where it says (docs/map-compatibility.md pass 7). 72 call sites across the
+   * corpus, in eight of its eleven maps: every arena and hero-survival map revives this way.
+   *
+   * It is the ALTAR's revival with the altar taken out, not a new one: the hero comes back under
+   * the id it died with, so the handle a script kept is the living hero again (see the altar path
+   * in mapViewer's train drain), with its level, ranks, items and name, and the ALTAR's vitals —
+   * MiscGame's `HeroRevive*` set, full life and starting mana. The game has exactly two sets,
+   * Revive and Awaken, and a trigger's is the former: the standard advice for a full-mana revive
+   * is "instantly revive… followed by Set mana to max" (hiveworkshop 115134).
+   *
+   * Three things it has to get right that the altar never faces:
+   *
+   *   * FOOD gates it. "It doesn't work if the food cost of the hero is higher than how much food
+   *     you have" (hiveworkshop 263960; 241073 — "another reason why the campaign heroes cost 0
+   *     food"). A dead hero no longer counts toward food used, so it needs room again — asked of
+   *     the same `foodRefusal` training asks.
+   *   * A hero QUEUED at an altar is revived by the trigger, not twice: its altar job is cancelled
+   *     through the player's own `canceltrain` command, refund and all, before the hero stands
+   *     up — or the altar would later spawn it again under the id it now lives under.
+   *   * The altar waits for the body to finish (`FallenHero.bodyLeft`); a trigger does not, and
+   *     "revive on death" maps depend on that. So a body still dissipating is taken off the field.
+   *
+   * False when there is no fallen hero behind the handle (it is alive, or was never a hero), or
+   * when food refuses — which is the native's own boolean.
+   */
+  reviveHeroByScript(heroId: number, x: number, y: number, eyeCandy: boolean): boolean {
+    const f = this.sim.fallen.get(heroId);
+    if (!f) return false;
+    const def = this.registry.get(f.typeId);
+    if (!def) return false;
+    if (this.foodRefusal(f.owner, def.foodUsed) !== "") return false;
+    if (f.revivingAt) {
+      const b = this.sim.units.get(f.revivingAt);
+      const queue = b?.building?.queue ?? [];
+      const index = queue.findIndex((j) => j.kind === "revive" && j.heroId === heroId);
+      const slot = queue[index];
+      if (b && slot) this.execute(slot.kind === "revive" && slot.buyer !== undefined ? slot.buyer : b.owner, { c: "canceltrain", buildingId: b.id, index });
+    }
+    for (let i = this.corpses.length - 1; i >= 0; i--) {
+      if (this.corpses[i].heroId !== heroId) continue;
+      this.corpses[i].instance.hide();
+      this.corpses.splice(i, 1);
+    }
+    const facing = (MELEE.UNIT_FACING * Math.PI) / 180; // Blizzard.j's bj_UNIT_FACING
+    this.addSimUnit(def, x, y, facing, f.owner, f.team, 0, heroId); // under the id it died with
+    this.sim.reviveFallenHero(heroId, heroId, "altar", eyeCandy);
+    this.scriptSpawns.push({ typeId: f.typeId, x, y, facing, player: f.owner, team: f.team, simId: heroId }); // …a body later
+    return true;
+  }
+
   createScriptUnit(player: number, typeId: string, x: number, y: number, facingDeg: number, teamOf: (p: number) => number): number {
     const def = this.registry.get(typeId);
     if (!def) return -1;
@@ -2373,8 +2484,10 @@ export class RtsController {
     // sim; the guard AI that pair implies is applied in addSimUnit. Neutral Passive (15) is
     // the other half — shops, critters, fountains a script creates — and takes the passive
     // pair, which is what makes them non-hostile with a yellow ring.
-    const creep = player === PlayerSlot.NeutralHostile;
-    const passive = player >= PlayerSlot.NeutralVictim; // 13/14/15 — never a fighting slot
+    const creep = player === neutralSlot(PlayerSlot.NeutralHostile);
+    // 13/14/15 — never a fighting slot. And ONLY those: 16–23 are real players on a map saved
+    // for the 24-player table (enums.ts isNeutralSlot).
+    const passive = isNeutralSlot(player) && !creep;
     const owner = creep ? NEUTRAL_HOSTILE_OWNER : passive ? NEUTRAL_PASSIVE_OWNER : player;
     const team = creep ? NEUTRAL_HOSTILE_TEAM : passive ? NEUTRAL_PASSIVE_TEAM : teamOf(player);
     const simId = this.reserveUnitId();
@@ -2927,6 +3040,94 @@ export class RtsController {
     return true;
   }
 
+  // --- the building cycle (the gamepad's L2, issue #162) ----------------------
+
+  /**
+   * Where a building of this type falls in the L2 cycle, or null when it is not in it at all.
+   *
+   * The ORDER is issue #162's: the main hall, the altar, the unit producers tier by tier, the
+   * upgrade buildings, and the shops. WC3 has no such key and so no table saying what these
+   * are; every rung is read off the data the rest of the engine already reads them off:
+   *
+   *  - **hall** — UnitBalance `type` carries `TownHall` (`classification`), the flag that folds
+   *    a Castle into "a Town Hall" for the melee AIs as well;
+   *  - **altar** — the profile's `Revive=1`, the one thing every race's altar and nothing
+   *    else of a player's has (`TechRegistry.revives`);
+   *  - **producer** — `Trains` (`producesUnits`, the same test the rally point is given by);
+   *  - **upgrade building** — `Researches` and nothing trained (Blacksmith, Lumber Mill, War
+   *    Mill, Graveyard, Hunter's Hall…);
+   *  - **shop** — `Makeitems` or `Sellitems` (Arcane Vault, Voodoo Lounge, Tomb of Relics,
+   *    Ancient of Wonders).
+   *
+   * Farms, towers, Moon Wells and burrows fall in none of them and are not visited — the
+   * issue's list is of the buildings a player has something to DO at.
+   */
+  private buildingRank(typeId: string): [number, number] | null {
+    const def = this.registry.get(typeId);
+    if (!def?.isBuilding) return null;
+    const tech = this.tech.get(typeId);
+    if (def.classification.includes("townhall")) return [0, 0];
+    if (tech.revive) return [1, 0];
+    if (tech.trains.length) return [2, this.techTier(typeId)];
+    if (tech.researches.length) return [3, this.techTier(typeId)];
+    if (tech.makeitems.length || tech.sellitems.length) return [4, this.techTier(typeId)];
+    return null;
+  }
+
+  /**
+   * A building's TIER — 1, 2 or 3 — read off what it `Requires`: a hall counts for the step of
+   * its upgrade chain it is (a Keep is the second hall its own `satisfies` reaches, a Castle the
+   * third), the pseudo-techs `TWN2`/`TWN3` say theirs in their names, and a building required
+   * in turn counts for its own tier (the Gryphon Aviary sits behind the Lumber Mill and a
+   * Castle). Nothing required is tier 1.
+   */
+  private techTier(typeId: string, depth = 0): number {
+    const hit = this.buildingTiers.get(typeId);
+    if (hit !== undefined) return hit;
+    let tier = 1;
+    if (this.registry.get(typeId)?.classification.includes("townhall")) {
+      tier = Math.max(1, this.tech.satisfies(typeId).filter((id) => this.registry.get(id)?.classification.includes("townhall")).length);
+    } else if (depth < 6) {
+      for (const { tech } of this.tech.requirements(typeId)) {
+        const twn = /^TWN(\d)$/i.exec(tech);
+        tier = Math.max(tier, twn ? Number(twn[1]) : this.registry.get(tech)?.isBuilding ? this.techTier(tech, depth + 1) : 1);
+      }
+    }
+    this.buildingTiers.set(typeId, tier);
+    return tier;
+  }
+
+  /** L2: select the NEXT of the player's buildings in `buildingRank` order — one at a time,
+   *  wrapping round — replacing the current selection. False when there is none to select
+   *  (the host then leaves the camera where it is). */
+  cycleBuilding(): boolean {
+    const ranked: Array<{ id: number; rank: [number, number] }> = [];
+    for (const e of this.entries) {
+      const u = this.sim.units.get(e.simId);
+      if (!u || u.owner !== this.localPlayer || !u.building || isOffField(u)) continue;
+      const rank = this.buildingRank(u.typeId);
+      if (rank) ranked.push({ id: u.id, rank });
+    }
+    if (!ranked.length) return false;
+    // Within one rung, the order the buildings went up in — sim ids are handed out in order.
+    ranked.sort((a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1] || a.id - b.id);
+    const ids = ranked.map((r) => r.id);
+    // Carry on from what the last press picked, or from the building selected now if the
+    // player has clicked one since — so the cycle always moves on from what is on screen.
+    const only = this.selected.size === 1 ? [...this.selected][0] : null;
+    const from = only !== null && ids.includes(only) ? only : this.lastCycledBuilding;
+    const at = from !== null ? ids.indexOf(from) : -1;
+    const id = ids[(at + 1) % ids.length];
+    this.lastCycledBuilding = id;
+    this.selected.clear();
+    this.selected.add(id);
+    this.selectedMine = null;
+    this.selectedItem = null;
+    this.refocus();
+    this.announceSelection();
+    return true;
+  }
+
   // --- control groups (keys 1-0) --------------------------------------------
 
   /** Own selection members, partitioned units-vs-buildings; units WIN a mixed pick
@@ -3051,7 +3252,8 @@ export class RtsController {
         icon: this.registry.get(u.typeId)?.icon ?? "",
         hpFrac: u.maxHp > 0 ? u.hp / u.maxHp : 1,
         manaFrac: u.maxMana > 0 ? u.mana / u.maxMana : -1, // -1: no pool, so no mana bar
-        skillPoints: u.skillPoints,
+        // No badge on a hero with nothing to learn — its points have nowhere to go (hasHeroSkills).
+        skillPoints: this.sim.hasHeroSkills(u) ? u.skillPoints : 0,
         dead: false, disabledIcon: null, reviveSecondsLeft: 0, reviveFrac: 0,
       });
     }
@@ -3598,7 +3800,7 @@ export class RtsController {
     const entry: Entry = {
       simId,
       unit,
-      anims: buildAnimSet(unit.instance.model.sequences, def?.animProps),
+      anims: this.animSetFor(simId, unit.instance.model.sequences, def?.animProps),
       altModel: false, // the form baseline, stated — see the note on the creep seed above
       // A static neutral keeps its map-placed Z (tick() does not drive it); a mobile one is
       // drawn like any unit, so it needs the same flight lift its sim unit carries.
@@ -3670,11 +3872,16 @@ export class RtsController {
    * Called once adoption has settled (`waitForMapUnits`) — before then, "unclaimed" only means
    * "still streaming".
    */
-  seedModellessPlaced(): number {
+  seedModellessPlaced(modelExists: (path: string) => boolean = () => true): number {
     let seeded = 0;
     for (const p of this.placed.unclaimedPlaced()) {
       const def = this.registry.get(p.typeId);
-      if (!def || def.model) continue;
+      // "No model" is also a model FILE that is not there: pointing Art - Model File at a path
+      // that does not exist ("NONE.mdx", "Whatever.mdx") is the community's standard way to
+      // make an invisible dummy, and the unit still works (hiveworkshop 165420). The viewer
+      // cannot deliver such a unit — it has nothing to load — so it is seeded here or lost:
+      // Test of Balance's four `umdl=none` Dummies, carrying the player's starting items.
+      if (!def || (def.model && modelExists(def.model))) continue;
       // Owner by the same three-way split trySeed uses; a dummy has no aggro post, no drop
       // table and no footprint to inherit, so `addSimUnit` alone is the whole seed.
       const seed = this.placed.playerSeedAt(p.x, p.y);
@@ -3832,7 +4039,7 @@ export class RtsController {
       // harvests lumber but is NOT Peon-classified — it fights like any other unit.
       // "Ward" classification = a planted gadget (Serpent/Healing/Sentry Ward, Stasis Trap,
       // …): like a worker, it is the last thing a creep camp turns on (SimUnit.ward).
-      { hero, abilities: this.buildInitialAbilities(def), mechanical: def.classification.includes("mechanical"), isPeon: def.classification.includes("peon"), ward: def.classification.includes("ward"), ancient: def.classification.includes("ancient"), level: def.level, baseInvulnerable: def.abilities.includes("Avul") },
+      { hero, abilities: this.buildInitialAbilities(def), mechanical: def.classification.includes("mechanical"), isPeon: def.classification.includes("peon"), ward: def.classification.includes("ward"), ancient: def.classification.includes("ancient"), level: def.level, baseInvulnerable: def.abilities.includes("Avul"), backpacks: inventoryAbilities(innate) },
     );
     // A structure spawned WITH a build time is a foundation just laid — that's the
     // moment EVENT_(PLAYER_)UNIT_CONSTRUCT_START fires (7.17). A pre-placed/instant
@@ -3906,7 +4113,7 @@ export class RtsController {
     // Everything else starts on the plain half and only the sim can move it off (a Crypt
     // Fiend that burrows). See animPropsFor / applyFormAnims.
     const alt = this.sim.units.get(simId)?.altModel ?? false;
-    const anims = buildAnimSet(instance.model.sequences, animPropsFor(def, alt));
+    const anims = this.animSetFor(simId, instance.model.sequences, animPropsFor(def, alt));
     // Per-unit animation blending: cross-fade between sequences over this unit's
     // own UnitUI `blend` time (0.15s for most WC3 units) so walk↔stand↔attack
     // transitions ease instead of hard-cutting (issue #8).
@@ -3976,6 +4183,7 @@ export class RtsController {
       prevDrawnY: NaN,
     };
     this.entries.push(entry);
+    this.applyFieldOverrides(entry); // a script's scale / selection / run speed, set before the body loaded
     this.byId.set(simId, entry);
     // A borrowed .doo body arrives tinted with its SLOT; a slot's colour is not its index once
     // `SetPlayerColor` has moved it (see playerColor), and the ally-colour filter paints over
@@ -4023,7 +4231,7 @@ export class RtsController {
     // still the same unit underneath.
     const props = skin ? animPropsFor(skin, false) : animPropsFor(def, this.sim.units.get(simId)?.altModel ?? false);
     const seqs = entry.unit.instance.model.sequences;
-    entry.anims = buildAnimSet(seqs, props);
+    entry.anims = this.animSetFor(simId, seqs, props);
     Object.assign(entry, findBirthFields(seqs, props));
     // A form that moved it between the ground and the air: from here on the SIM says how high.
     const was = this.registry.get(entry.typeId);
@@ -4124,6 +4332,19 @@ export class RtsController {
     const e = this.byId.get(simId);
     if (e) e.baseScale = scale > 0 ? scale : 1;
   }
+  /** The render half of a script's per-unit FIELDS (`BlzSetUnitRealField` — SimWorld.setUnitField
+   *  keeps the values): the model scale, the selection circle and the run-animation speed. Asked
+   *  when a body arrives, because a script sets these on the line after CreateUnit, while the
+   *  model is still loading, and again by the scene's writer each time one changes. */
+  applyFieldOverrides(entryOrId: Entry | number): void {
+    const e = typeof entryOrId === "number" ? this.byId.get(entryOrId) : entryOrId;
+    const o = e ? this.sim.units.get(e.simId)?.fieldOverrides : undefined;
+    if (!e || !o) return;
+    if (o.scalingValue !== undefined) e.baseScale = o.scalingValue > 0 ? o.scalingValue : 1;
+    if (o.selectionScale !== undefined) e.selRadius = (o.selectionScale || 1) * SEL_RADIUS_PER_SCALE;
+    if (o.animationRunSpeed !== undefined) e.animRunSpeed = o.animationRunSpeed;
+  }
+
   /** JASS SetUnitVertexColor — the model's own tint (0–1), which fog dimming then
    *  multiplies. Reset fogTintB so applyFogTint re-emits with the new base. */
   setUnitVertexColor(simId: number, r: number, g: number, b: number, a: number): void {
@@ -4167,6 +4388,30 @@ export class RtsController {
    *  unit's stand). WC3 matches on the model's own sequence names, so this is a name
    *  test over `anims.seqNames`, not a fixed table. The clip is held like a cast
    *  animation so the idle picker doesn't stomp it on the next frame. */
+  /**
+   * JASS AddUnitAnimationProperties — add (or take back) an animation TAG on one unit
+   * (unitAnims.scriptAnimTags says what a tag does to its clips). Presentation, like
+   * SetUnitAnimation: the tag is the model's business, not the world's.
+   *
+   * The new set is worn AT ONCE — the stand re-seated, as ResetUnitAnimation does — because a
+   * map-placed neutral is not re-posed every frame (the tick skips static neutrals), and that
+   * is exactly what Test of Balance tags: its Sacred Pillar, "alternate" between rounds.
+   */
+  addUnitAnimationProperties(simId: number, props: string, add: boolean): void {
+    const tag = props.trim().toLowerCase();
+    if (!tag) return;
+    const tags = (this.animTags.get(simId) ?? []).filter((t) => t !== tag);
+    if (add) tags.push(tag);
+    if (tags.length) this.animTags.set(simId, tags);
+    else this.animTags.delete(simId);
+    const e = this.byId.get(simId);
+    const seqs = e?.unit.instance.model?.sequences;
+    if (!e || !seqs) return; // no body yet — attachInstance reads the tags when it comes
+    const def = this.registry.get(e.typeId);
+    e.anims = this.animSetFor(simId, seqs, animPropsFor(def, this.sim.units.get(simId)?.altModel ?? false));
+    this.setUnitAnimation(simId, "");
+  }
+
   setUnitAnimation(simId: number, animation: string): void {
     const e = this.byId.get(simId);
     if (!e) return;
@@ -4521,6 +4766,7 @@ export class RtsController {
       // A unit that has changed FORM wears the other half of its model — a rooted Ancient, a
       // burrowed Crypt Fiend. Skipped entirely for the vast majority, which have only one.
       if (u.altModel || e.altModel !== undefined) this.applyFormAnims(e, u, this.registry.get(e.typeId));
+      this.applyStanceAnims(e, u);
       // A building under construction: play its own "Birth" animation, scrubbed
       // to the construction progress so it assembles in sync with the timer.
       // Models without a Birth clip fall back to scaling up from ~40% to full.
@@ -4842,6 +5088,14 @@ export class RtsController {
    *  (flesh → bone) in place until it's fully removed (see tickCorpses). */
   private onDeath(simId: number): void {
     const e = this.byId.get(simId);
+    // An EXPLODED death (SetUnitExploded) leaves nothing to animate: the sim has already put the
+    // unit's "Art - Special" burst where it stood, and the body simply goes.
+    if (this.sim.diedExploded(simId)) {
+      if (e) this.dropEntry(e);
+      this.animTags.delete(simId);
+      this.stancePoses.delete(simId);
+      return;
+    }
     if (!e) return;
     // A destructible does not die like a unit, and its body is not ours to bury (see
     // Entry.borrowedBody). mapViewer's `killDestructible` is already playing the model's own
@@ -4885,6 +5139,8 @@ export class RtsController {
     // silenced by this: a viewpoint always has live sight of what it owns.
     if (def?.soundSet && !this.local.fogBlocksAt({ x: loc[0], y: loc[1] })) this.sounds?.play(def.soundSet, "Death", { x: loc[0], y: loc[1], z: loc[2] });
     this.byId.delete(simId);
+    this.animTags.delete(simId);
+    this.stancePoses.delete(simId);
     this.entries.splice(this.entries.indexOf(e), 1);
     this.deselect(simId);
     e.unit.state = WidgetState.WALK; // keep mdx-m3-viewer from overriding the death sequence
@@ -4901,7 +5157,10 @@ export class RtsController {
       // A hero has no sim corpse to find (spawnCorpse declines one) and does not want the
       // "no corpse → blink out when the Death clip ends" ending either: it dissipates and
       // fades. See tickCorpses.
-      this.corpses.push({ instance: e.unit.instance, corpseId: corpse?.id ?? -1, anims: e.anims, phaseT: 0, phase: "death", hero: def?.isHero });
+      // A hero's body remembers WHOSE it is, so a script that revives the hero before the body has
+      // dissipated can take it off the field (reviveHeroByScript) instead of leaving it fading
+      // beside the hero standing up.
+      this.corpses.push({ instance: e.unit.instance, corpseId: corpse?.id ?? -1, anims: e.anims, phaseT: 0, phase: "death", hero: def?.isHero, heroId: def?.isHero ? simId : undefined });
     } else {
       e.unit.instance.hide();
     }
@@ -5044,7 +5303,7 @@ export class RtsController {
         // The fade is the LAST HERO_FADE_TIME of that window, not an extra phase after it —
         // see the constants' own note. HeroPaladin's Dissipate is 2.0s and the window is 3, so
         // for it the two line up exactly: the clip ends, the second of fade begins.
-        if (c.phaseT < HERO_DISSIPATE_TIME - HERO_FADE_TIME) continue;
+        if (c.phaseT < HERO_DISSIPATE_TIME() - HERO_FADE_TIME) continue;
         this.enterCorpsePhase(c, "fade");
       } else if (c.phase === "fade") {
         // …and out. A plain alpha ramp on the instance's tint — nothing else writes a corpse's
@@ -5822,7 +6081,29 @@ export class RtsController {
    *  game's card has no Attack for them, while a Zeppelin grabbed with the Footmen it is about
    *  to carry still lets the group attack-move. */
   selectionCanAttack(): boolean {
-    for (const id of this.selected) if ((this.sim.units.get(id)?.weapons.length ?? 0) > 0) return true;
+    // An ENABLED weapon, as the building card asks: a unit type whose `Attacks Enabled`
+    // (`uaen`) is none still carries its base's weapon rows, switched off — Test of Balance's
+    // invisible Dummy is a Peasant with both of the Peasant's attacks disabled.
+    // A WARD is armed and still has no Attack (nor the Stop beside it): UnitBalance `type` =
+    // "Ward" is the classification whose units take no orders from the card — the Serpent Ward
+    // (osp1..4, showUI1 = 1 like any tower) only ever acquires its own targets in the game.
+    for (const id of this.selected) {
+      const u = this.sim.units.get(id);
+      if (u && !u.ward && u.weapons.some((w) => w.enabled && w.showUI)) return true;
+    }
+    return false;
+  }
+
+  /** Can any selected unit MOVE — does it carry the move ability's buttons (Move, Hold Position,
+   *  Patrol)? The engine grants that ability to a unit with a movement type and a speed, and to
+   *  nothing else: a ward, or Test of Balance's Dummy (no `umvt`, speed 0), has no Move on its
+   *  card, and a press there could only be refused. Asked of the whole selection, like Attack. */
+  selectionCanMove(): boolean {
+    for (const id of this.selected) {
+      const u = this.sim.units.get(id);
+      if (!u || u.building || u.baseSpeed <= 0) continue;
+      if (this.registry.get(u.typeId)?.moveType !== MoveType.None) return true;
+    }
     return false;
   }
 
@@ -6532,7 +6813,7 @@ export class RtsController {
         name: def?.name ?? held.itemId,
         // The item's own Ubertip, with its <ID,Field> value references filled in — the
         // same text the HUD shows for the item lying on the ground.
-        desc: def ? this.tipText(def.description) : "",
+        desc: def ? this.tipText(this.itemTooltips.get(held.id) ?? def.description) : "",
         charges: held.charges,
         cooldownLeft: held.cooldownLeft,
         cooldownFrac: total > 0 ? Math.max(0, Math.min(1, held.cooldownLeft / total)) : 0,
@@ -6915,14 +7196,21 @@ export class RtsController {
     // a client must not answer for itself, and now it does not. The panel steps at the
     // snapshot's 10 Hz rather than the frame's 60; that IS the rate at which the host knows.
     const u = this.frameUnit(id);
+    if (!u) return null;
+    // A unit with NO model has no render entry — no body to draw — but it is still a unit you
+    // can select (a script's SelectUnit, a control group, the idle-worker button), and WC3
+    // gives it a panel and a card like any other: the standard invisible dummy is exactly such
+    // a unit (RtsController.seedModellessPlaced). Everything the panel wants from the entry is
+    // the TYPE's, so without one it reads the type row instead.
     const e = this.byId.get(id);
-    if (!u || !e) return null;
+    const typeId = e?.typeId ?? this.sim.units.get(id)?.typeId;
+    if (!typeId) return null;
     const w = u.weapon;
     const b = u.building;
     const q = b?.queue ?? [];
-    const def = this.registry.get(e.typeId);
-    const upgradeBoxes = this.upgradeBoxes(e.typeId);
-    const builderId = b && b.constructionLeft > 0 ? this.builderInside(e.simId) : 0;
+    const def = this.registry.get(typeId);
+    const upgradeBoxes = this.upgradeBoxes(typeId);
+    const builderId = b && b.constructionLeft > 0 ? this.builderInside(id) : 0;
     const form = u.altFormLeft > 0 ? this.timedFormOf(id) : null;
     const hex = this.hexBarOf(u);
     /**
@@ -6949,12 +7237,12 @@ export class RtsController {
     // (Widened: the constant is `as const` 0, so TypeScript would call the comparison dead.
     //  It is read rather than folded away because it is the game's switch, not our policy —
     //  a mod that turns it on turns this on.)
-    const status = (MISC_GAME.DisplayBuildingStatus as number) !== 0 || this.readsSideOf(u.owner);
+    const status = gameNum("DisplayBuildingStatus") !== 0 || this.readsSideOf(u.owner);
     return {
-      id: e.simId,
-      typeId: e.typeId,
-      race: e.race,
-      name: e.name,
+      id,
+      typeId,
+      race: e?.race ?? def?.race ?? "",
+      name: this.sim.units.get(id)?.nameOverride ?? e?.name ?? def?.name ?? typeId, // BlzSetUnitName first
       owner: u.owner,
       hp: u.hp,
       maxHp: u.maxHp,
@@ -6998,7 +7286,7 @@ export class RtsController {
       agilityBonus: u.isHero ? u.bonusAgi : 0,
       intelligenceBonus: u.isHero ? u.bonusInt : 0,
       primaryAttr: def?.primaryAttr ?? PrimaryAttribute.None,
-      model: e.modelPath,
+      model: e?.modelPath ?? "", // no body, no bust
       altModel: u.altModel,
       isWorker: !!u.worker,
       isBuilding: !!b,
@@ -7016,7 +7304,7 @@ export class RtsController {
         // shape needs no cast back to the union it came from.
         icon: (j.kind === "research" ? this.upgrades.icon(j.unitId, j.level ?? 0) : this.registry.get(j.unitId)?.icon) ?? "",
       })),
-      icon: this.registry.get(e.typeId)?.icon ?? "",
+      icon: def?.icon ?? "",
       builderId,
       builderIcon: builderId ? (this.registry.get(this.byId.get(builderId)?.typeId ?? "")?.icon ?? "") : "",
       carryGold: u.worker?.carryGold ?? 0,
@@ -7034,11 +7322,15 @@ export class RtsController {
       // summon triple with it, so an enemy's payload reports an ordinary hero with no expiry.
       // A client re-applying the viewpoint here would be a client deciding for itself which
       // units are illusions; on the sim path the local viewpoint is still what knows.
-      isSummon: u.isSummon && u.summonLeft > 0 && (!u.isIllusion || this.snapshot.active || this.readsSideOf(u.owner)),
+      // …and a unit a SCRIPT put on a clock (`UnitApplyTimedLife`) shows the same bar without
+      // being a summon — `isSummon` is what Dispel and the XP factor read, and that stays false.
+      isSummon: (u.isSummon || u.timedLifeBuff !== "") && u.summonLeft > 0 && (!u.isIllusion || this.snapshot.active || this.readsSideOf(u.owner)),
       isIllusion: u.isIllusion && (this.snapshot.active || this.readsSideOf(u.owner)), // same viewpoint rule as the tint
 
       summonSecondsLeft: Math.max(0, Math.ceil(u.summonLeft)),
-      summonLabel: (u.raisedBy && this.abilities.get(u.raisedBy)?.name) || "Summoned Unit",
+      // A script's clock is labelled with the buff it named — `[Btlf] Bufftip=Timed Life`
+      // (NeutralAbilityStrings.txt) for the generic one — read from the table, not typed here.
+      summonLabel: (u.raisedBy && this.abilities.get(u.raisedBy)?.name) || (u.timedLifeBuff && this.abilities.buff(u.timedLifeBuff)?.name) || "Summoned Unit",
       isRaised: u.raisedBy !== "",
       summonFrac: u.summonMax > 0 ? Math.max(0, Math.min(1, u.summonLeft / u.summonMax)) : 0,
       // …and the same bar for a TIMED ALTERNATE FORM, which is the same fact about the unit:
@@ -7164,6 +7456,13 @@ export class RtsController {
 
   groundHeightAt(x: number, y: number): number {
     return this.heightAt(x, y);
+  }
+
+  /** `GetLocationZ`'s SURFACE: the highest of the terrain, a walkable destructable's deck and
+   *  the water — "the current surface elevation … This includes the terrain (hills or water)
+   *  and walkable destructables" (jassbot, GetLocationZ). */
+  surfaceZ(x: number, y: number): number {
+    return Math.max(this.groundOrDeck(x, y), this.waterAt(x, y));
   }
 
   /** Convert a CSS click to a world ground point (for build placement). */
@@ -8140,6 +8439,7 @@ export class RtsController {
         // PLAYER_STATE_RESOURCE_FOOD_CAP / _FOOD_CAP_CEILING — a custom map states its own
         // supply cap the same way it states its gold (issue #127). See Authority.foodCapAdjust.
         setFoodCap: (p, v) => this.authority.setFoodCap(p, v),
+        setFoodUsed: (p, v) => this.authority.setFoodUsed(p, v),
         setFoodCapCeiling: (p, v) => this.authority.setFoodCapCeiling(p, v),
         foodCapCeilingOf: (p) => this.authority.foodCapCeilingOf(p),
         // PLAYER_STATE_RESOURCE_HERO_TOKENS — the free-hero allowance, which the melee opening
@@ -8170,6 +8470,41 @@ export class RtsController {
       // Here rather than in a sub-module because the brains are the CONTROLLER's: they issue
       // their orders through `execute`, the same door a click goes through.
       startMeleeAI: (player, script) => this.startMeleeAIFor(player, script),
+      pauseCompAi: (player, pause) => {
+        this.meleeAi?.setPaused(player, pause);
+        this.computerPlus?.setPaused(player, pause);
+      },
+      // The `BlzSetAbility…` / `BlzSetItemExtendedTooltip` words and art (docs/map-compatibility.md
+      // pass 9). PRESENTATION, and composed here rather than in `simHooks` on purpose: a map sets a
+      // tooltip for one player inside a `GetLocalPlayer` block (Test of Faith Reborn rewrites its
+      // draft buttons per player), and the world-writing guard refuses every `simHooks` entry
+      // there. An ability's words are written into the registry's per-MAP overlay — a clone, not
+      // the row, so nothing leaks into the next map (`clearCustom`) or into the install's table.
+      abilityText: (abilId, rank, extended) => {
+        const def = this.abilities.get(abilId);
+        return def ? (extended ? def.uberTips : def.tips)[rank] ?? "" : "";
+      },
+      setAbilityText: (abilId, rank, text, extended) => {
+        const def = this.abilities.get(abilId);
+        if (!def || rank < 0) return;
+        const clone = { ...def, tips: [...def.tips], uberTips: [...def.uberTips] };
+        (extended ? clone.uberTips : clone.tips)[rank] = text;
+        this.abilities.setCustom(abilId, clone);
+      },
+      // Any object with an Art field answers, not only an ability: Test of Balance fills its
+      // scoreboard's hero column with `BlzGetAbilityIcon(GetUnitTypeId(u))` (AddHero), and a
+      // unit TYPE id is what it hands over.
+      abilityIcon: (id) => this.abilities.get(id)?.icon || this.registry.get(id)?.icon || this.items.get(id)?.icon || "",
+      setAbilityIcon: (abilId, path) => {
+        const def = this.abilities.get(abilId);
+        if (def) this.abilities.setCustom(abilId, { ...def, icon: path });
+      },
+      // …and ONE item's long description, which is not the type's: two Claws of Attack can say
+      // different things. Keyed on the item's entity id, like `SetItemDroppable`'s override.
+      setItemExtendedTooltip: (itemId, text) => void this.itemTooltips.set(itemId, text),
+      // ReviveHero — the controller's, because a revival needs a body spawned and, for a hero
+      // queued at an altar, the player's own cancel command (reviveHeroByScript).
+      reviveHero: (heroId, x, y, eyeCandy) => this.reviveHeroByScript(heroId, x, y, eyeCandy),
     };
   }
 

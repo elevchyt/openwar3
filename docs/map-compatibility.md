@@ -41,8 +41,10 @@ learn about it. Four constraints, and they are the point of the feature rather t
    would be a second, disagreeing copy. Those go in the viewer patch as small version branches —
    and are the only part of this work that is not contained in one directory.
 
-What this layer is NOT: a Reforged mode. We draw SD art out of an SD install. The HD object set
-a Reforged map ships (`war3mapSkin.w3u` and friends) is ignored on purpose, as is `conversation.json`.
+What this layer is NOT: a Reforged mode. We draw SD art out of an SD install, and
+`conversation.json` is ignored on purpose. `war3mapSkin.w3u` and friends looked like an HD object
+set to ignore as well, and are NOT: they carry the art and the NAMES of every object for SD too,
+and a map can depend on them (see "Test of Balance" below).
 
 ## What was measured
 
@@ -57,7 +59,7 @@ Three maps the developer named, run through the repo's own parsers:
 | `.w3u/.w3t/.w3a/.w3d/.w3h/.w3q` | **v3** | **v3** | **v3** |
 | script | **`war3map.lua`**, 1.8 MB, minified | `war3map.j`, 1.1 MB | `war3map.j`, 850 KB |
 | art | 23 BLP, 2 MDX, 4 FLAC, 2 TGA | 71 BLP, 47 MDX, 22 FLAC | 70 BLP, 59 MDX, 23 FLAC |
-| MDX that fail to parse | 0 of 2 | 0 of 47 | 1 of 59 (v1100) |
+| MDX that fail to parse | 0 of 2 | 0 of 47 | 1 of 59 (v1100 — now read, see the long tail) |
 
 We read w3i ≤ v31 (partially), w3e v11, object data v2, JASS. Everything in bold is unread.
 
@@ -195,9 +197,16 @@ binding the existing `registerNatives` table into a Lua VM, not a second engine.
   Not in any SLK or txt in the install. A custom row whose base is missing cannot be built and
   must be skipped — but **visibly**, because a guess at a "near equivalent" is exactly the kind
   of invention the prime directive forbids.
-* **MDX v1100** — one model of 108 across the three maps fails to parse. Left alone; one missing
-  doodad is not worth a parser fork.
-* `war3mapSkin.txt` (the map's own war3skins overlay) is unread. Noted, not scheduled.
+* **MDX v1100** — one model of 108 across the three maps failed to parse, and it was not a
+  doodad: it was Test of Balance's Sacred Pillar (`Obelisk.mdx`), the building the whole draft
+  happens at. Fixed in the viewer patch (`parsers/mdlx/material.js`, `layer.js`): a v1100
+  material has no 80-byte shader name, and a layer carries a texture LIST after a shader-type id
+  — `uint32 shaderTypeId, uint32 count`, then per texture `int32 id, uint32 slot` and an optional
+  KMTF — of which an SD renderer draws slot 0 (war3-model's `parseMaterials`, checked byte for
+  byte against the file). Alongside it, the model handler no longer turns a v1000+ file into a
+  `.dds` request or writes `reforged` into the SHARED solver params — the model-side twin of
+  blocker 4. Pinned by `tools/render-mdx-v1100-test.cjs`.
+* `war3mapSkin.txt` (the map's own war3skins and FrameDef-string overlay) is read — see "Test of Balance" below.
 
 ## Where each fix belongs
 
@@ -279,7 +288,8 @@ guessed.** Three things changed the design, all of them findings:
   per-unit override table into the sim to bridge that is exactly the intrusion this layer must
   not make, so the family is still a logged default. The 1.30.4-declared setters
   (`BlzSetUnitMaxHP`, `BlzSetUnitArmor`, `BlzSetUnitBaseDamage`, …) are the per-unit half that
-  already has hooks, and are the natural next tranche.
+  already has hooks, and are the natural next tranche. *(Superseded: the setters write one unit
+  now — see "Test of Balance — the engine under the waves" below.)*
 
 What landed beside the hashtables: our own **prelude** (`src/compat/prelude.ts`) declaring only
 what 1.30.4 lacks — the 1.31 damage events, the three local camera fields, the start-location
@@ -291,7 +301,7 @@ found by (name, create context), remember their points, text, texture, visibilit
 enabled-ness, and hand back stable handles. It does not DRAW yet, and that split is the point:
 before it, `BlzGetFrameByName` answered null and every following call in the map's UI code was a
 null dereference dressed up as a no-op, which is how a script silently skips the rest of the
-function it is in.
+function it is in. *(It draws now — see "Test of Balance — the map's own frames".)*
 
 The result, measured by running `config()` and `main()` against the install's own libraries: both
 JASS maps in the corpus **run to completion**, with six and eight distinct "safe default" notes
@@ -390,7 +400,8 @@ same field, which corroborates the set without disambiguating it.
 `war3map.w3u` edit is in the answer by construction. **A setter is refused**, once and in one
 place: `BlzSetUnitRealField` changes ONE unit while our object-data routing writes the TYPE
 (`UNIT_SETTERS`), and bridging that wants a per-unit override table in the sim, which is a
-change to the standard build rather than to this layer. A field we declare and cannot answer
+change to the standard build rather than to this layer. *(Superseded — the table exists now,
+`SimUnit.fieldOverrides`; see "Test of Balance — the engine under the waves".)* A field we declare and cannot answer
 logs once and returns the typed default — better declared than missing, because an undefined
 global is a hard error in Lua and a silent null in JASS.
 
@@ -427,8 +438,17 @@ The work is going in passes, largest first, each with its own test and each re-m
 | 1 | hero attributes — `Get`/`SetHeroStr\|Agi\|Int`, `SuspendHeroXP` | 452 | ✓ |
 | 2 | `Get`/`SetWidgetLife`, `GetWidgetX/Y`, `UnitDamageTarget` | 196 | ✓ |
 | 4 | the `Is…` predicates, `GetWorldBounds` | 1199 | ✓ |
+| 5 | `GetTriggerEventId`, eval/exec counts, `TriggerRemoveAction/Condition` | 562 | ✓ |
+| 8 | `SetPlayerAbilityAvailable` | 420 | ✓ |
+| 3 | the `BlzGet/SetUnit…` stat accessors | 687 | ✓ |
+| 9 | the `Blz…` ability natives — per-unit disable/hide, clocks, costs, words, icons | 576 | ✓ |
+| 6 | the summon event, `GetSummonedUnit`/`GetSummoningUnit`, `UnitApplyTimedLife` | 200 | ✓ |
+| 7 | `ReviveHero`, `ReviveHeroLoc` | 72 | ✓ |
+| 10 | what a script paints — its own lightning, the `BlzSetSpecialEffect…` transforms, ubersplats, images, terrain tiles, water tint; and `GetLocationZ` | 127 | ✓ (`SetSkyModel` since, below) |
+| — | the `GetUnitDefault…` family, `GetUnitAcquireRange`, and `SetUnitAcquireRange` actually doing something | 303 | ✓ |
+| 11 | a map's own `war3mapMisc.txt` applied (no natives — the constants every system reads) | — | ✓ |
 
-5019 → 4371 → **3172** call sites.
+5019 → 4371 → 3172 → 2610 → 2190 → 1503 → 927 → 655 → 528 → **225** call sites (36 natives).
 
 Two findings from those two that are worth more than the code:
 
@@ -498,10 +518,176 @@ different questions about a unit (visible / fogged / masked / invisible / detect
 about a point, and they are five and three questions rather than one with variations — a unit
 in the BLACK is masked, not fogged, and the natives exist to tell those apart.
 
+### Pass 5 — the event id belongs to the REGISTRATION
+
+Maps register one trigger on several events and branch on `GetTriggerEventId()` — the corpus's
+commonest comparisons are `EVENT_UNIT_DEATH` (114) and `EVENT_UNIT_DAMAGED` (72), typically on
+the same trigger — so the id is taken from the registration that matched, and hands back the very
+handle the map registered with. Implicit registrars (a timer, a region, a chat line, a dialog)
+carry no constant, and are named by looking the `common.j` constant up BY NAME in the runtime's
+own globals (`IMPLIED_EVENT`), so no index is retyped.
+
+### Pass 8 — `SetPlayerAbilityAvailable` takes the button, not the ability
+
+Two Hive tutorials agree (hiveworkshop 225879, 120518): per PLAYER, the button leaves the card and
+the ability cannot be used, but the unit KEEPS it — its cooldown keeps running, a cast underway is
+not interrupted, a passive keeps working. So it is asked only where an ability is used
+(`castUseError`, `issueCast`) and where its button is drawn — REMOVED there, not greyed, which is
+what an unresearched ability looks like. Most of DotA's 420 calls are the "disabled spellbook"
+trick, which also needs `Aspb` spellbooks, a separate item.
+
+### Pass 3 — the stat accessors are 1.30.4's, and the index is the map's
+
+`BlzSetUnitBaseDamage` and its family are in the install's OWN `common.j`: they are not later-format
+natives, just unimplemented ones, and they need no per-unit override table because the unit
+already owns its bases (`baseMaxHp`, `baseArmor`, `weapon.baseDamage/baseCooldown/baseDice`,
+layered on by `recomputeStats`). What each setter means is on `SimWorld.unitStat`: max life,
+max mana and armour are TOTALS with the base solved under today's bonuses (sourced for armour —
+hiveworkshop 319734), the life pool is held ABSOLUTE across a new ceiling (317026), and a hero's
+"Damage Base" has its starting primary attribute taken back out of the sim's copy.
+
+**The weapon index is counted from 0 or 1 depending on the MAP**: "in 1.30 or lower, the function
+is 1-indexed, but in 1.31 and newer, it is 0-indexed" (hiveworkshop 319334). Our 1.30.4 counts
+from 1; the two rebalance maps, saved by 1.36 and 2.0 editors, pass index 0 in 81 of 108 calls. A
+map a 1.31+ editor wrote only ever ran on a 1.31+ client, so `MapFormatProfile.blzIndexBase`
+is `editorBuild >= 131 ? 0 : 1`, and it reaches the runtime as a plain number so no native
+imports `src/compat/`. The sim also records each weapon's real SLOT: both the SLK parser and the
+sim skip undeclared or unarmed slots, so list position is not the slot.
+
+The generic `BlzSetUnit*Field` setters were looked at and deliberately LEFT REFUSED — the reasons
+are at the refusal in `natives/blzFields.ts`: they are the editor's BASE columns rather than
+totals, which cannot be recovered for a hero; the corpus sets the routable ones zero times; and
+the two it does set (armor/defense TYPE, all Bribe's Damage Engine) are a save/restore round-trip
+whose getter currently answers 0, so routing them would corrupt the armour class.
+
+### Pass 9 — levels count like weapons, disable and hide are counters
+
+An ability LEVEL is counted from 0 or 1 by the map, like a weapon: 1.31's `BlzSetAbility…` family
+"require 0-indexed levels instead of 1-indexed" (hiveworkshop 316163), in the same patch that moved
+weapons, and every later-format map here passes `GetUnitAbilityLevel(u, a) - 1`. So pass 3's flag
+became `blzIndexBase` and serves both.
+
+`BlzUnitDisableAbility` / `BlzUnitHideAbility` are COUNTERS: "increase/decrease counters on each
+usage … switches … state only when moving over the 0 even line" (312477), so a map that disables
+twice must enable twice (312184), and "the counters reset when the ability is lost" — which is free
+when they live on the unit's own ability entry. A disabled button stays on the card, greyed; a
+hidden one (or a disable with `hideUI`) leaves it, and "hide also disables". `hideUI` moves the hide
+counter with the disable, which fits every call in the corpus (they come in matched pairs).
+
+Words and icons are PRESENTATION and are composed on `RtsController`, not in `simHooks`, because a
+map rewrites them inside `GetLocalPlayer` blocks and the world-writing guard refuses `simHooks`
+there. They go into the ability registry's per-map overlay as a CLONE, so nothing leaks into the
+next map. Doing this found a HUD bug: the command card redraws only when a per-button key changes,
+and that key had never needed an icon or a title — they could not change mid-match before. The
+titles are now in it; the icon (a data URL, rebuilt every frame) is compared per slot instead.
+
+Not done, deliberately: `BlzSetUnitAbilityCooldown`/`…ManaCost` (per-unit overrides of a per-type
+value, called zero times), so their unit-level getters answer the type — exact while nothing can
+have changed it.
+
+### Passes 6 and 7 — a unit's lifecycle
+
+The summon event's SUBJECT is the summoner: the install words it "'Spawns A Summoned Unit'" with the
+spawner as the "A unit" (`UI\TriggerStrings.txt`; hiveworkshop 264641), so `GetTriggerUnit` is the
+summoner and the player event is filed under the summoner's owner. It is raised when the summon
+EXISTS — after its model loads, the first moment it has an id — and after an illusion is set up, so
+DotA's `IsUnitIllusion(GetSummonedUnit())` answers true. A TIMED raise now names its caster; a
+Resurrection names nobody and is not a summon. `UnitApplyTimedLife` is the summon clock handed to any
+unit, without making it a summon (Dispel and the summon XP factor read `isSummon`).
+
+`ReviveHero` is the ALTAR's revival with the altar taken out: the hero comes back under the id it died
+with (so the handle a map kept is the hero again), with its level, ranks, items and name, and the
+altar's vitals — MiscGame has exactly two sets, Revive and Awaken, and a trigger's is Revive (the
+standard advice for a full-mana revive is to set the mana yourself afterwards, hiveworkshop 115134).
+Three things the altar never faces: FOOD gates it ("doesn't work if the food cost of the hero is
+higher than how much food you have", hiveworkshop 263960 / 241073); a hero QUEUED at an altar has its
+altar job cancelled through the player's own `canceltrain` command, refund included, or the altar
+would later spawn it again under the id it now lives under; and a trigger does not wait for the body
+to dissipate, so a body still on the field is taken off it.
+
+### Pass 10 — what a script paints on the world
+
+Four families, one idea: presentation that the SCRIPT owns, on the host's screen, the way
+`AddSpecialEffect` already was (none of it is relayed to a remote client). Every rule below is
+from one page of lep.nrw/jassbot or a Hive thread, cited at the code.
+
+* **Lightning** (`natives/lightning.ts`, 70 sites) is the Chain Lightning ribbon with no lifetime
+  and no fade, strung between POINTS the script moves. Plain `AddLightning` "attaches to the
+  ground" (hiveworkshop 278746); the Ex form's z is ABSOLUTE — blizzard.j's own
+  `AddLightningLoc` passes `GetLocationZ` straight in. `checkVisibility` true hides it in the fog.
+* **`GetLocationZ` answered 0 everywhere**, which is the trap this pass nearly shipped over: a GUI
+  bolt on raised ground (Echo Isles' base is at z ≈ 590) was drawn underground. It now asks the
+  SURFACE — terrain, a walkable deck, the water — and `BlzGetUnitZ` is that plus the unit's
+  occluder height (unitUI `occH`), not its fly height.
+* **Effect transforms** (`natives/effects.ts`): every position is absolute and each of X/Y/Z
+  moves only its own axis (jassbot records a "1.29-??" bug that reset the other two; the maps
+  that call these were written for a client without it). None applies to an attached effect.
+  `BlzPlaySpecialEffect` picks a clip by NAME — the animation word first, then the most of the
+  effect's sub-animation tags (`render/effectAnim.ts`); `ConvertAnimType`/`ConvertSubAnimType`
+  had never been registered, so every `ANIM_TYPE_`/`SUBANIM_TYPE_` constant was null.
+  TimeScale/Time are left out: the documentation does not settle whether normal is 1.0 or 100.
+* **Ubersplats, images, tiles, water** (`natives/imagery.ts`). A script's ubersplat plays its
+  row's Start → Middle → End colour envelope; `SetUbersplatRenderAlways` lifts the fog rule. An
+  image needs BOTH `SetImageRenderAlways` and `ShowImage`, and `SetImageRender` does nothing.
+  `SetTerrainType`'s area is the World Editor's BRUSH, read off the install's own brush icons
+  (`render/terrainBrush.ts`: a circle of size 1–5 covers 1, 5, 21, 37, 61 points); a tile the
+  map's palette lacks is LOADED, up to 16 (hiveworkshop 339901), and the viewer puts it after the
+  blight texture. `SetWaterBaseColor` multiplies the tileset's four water colours, held against
+  the viewer reading Water.slk asynchronously.
+
+Not done, on purpose: `SetUbersplatRender` and `SetImageAboveWater` (nothing says what they do).
+`SetSkyModel` was held back here because nothing drew a sky; it is done now (`render/sky.ts`, the
+Test of Balance section below). Tests: `tools/jass-lightning-test.cjs`, `tools/jass-effect-blz-test.cjs`,
+`tools/jass-imagery-test.cjs`, `tools/sim-effect-anim-test.cjs`, `tools/sim-terrain-brush-test.cjs`.
+
+### `GetUnitDefault…` — the type, even after the unit is gone
+
+`GetUnitDefaultMoveSpeed` alone was 284 call sites, 268 of them Test of Faith's "can this move"
+filter. The family answers the TYPE's row (`unitTypeDefault`, keyed on the handle's type id —
+the one `GetUnitTypeId` answers with), because Test of Faith asks it of `GetDyingUnit()` and a
+dying unit is out of `sim.units` before its trigger runs. `SetUnitAcquireRange` had been
+registered with no engine behind it at all — counted as done by the coverage tool while every
+call did nothing — and now replaces the range (never the worker/cloak/hidden gates).
+
+### Pass 11 — a map's own gameplay constants
+
+`war3mapMisc.txt` is the World Editor's Gameplay Constants dialog, written under the SAME keys the
+install's `MiscGame.txt`/`MiscData.txt` use, so it is simply the top layer of the chain
+`miscGame()` already walked (map → custom-map copy → Reign of Chaos → file) — `setMapMiscOverlay`
+at the map door, taken down by the scene that put it up. Across the install's maps it is ~115
+distinct keys. Making it reach anything took three things:
+
+* **Every read goes through the accessor.** ~65 sites read `MISC_GAME.X`/`MISC_DATA.X` directly,
+  23 of them as module-level constants in `world.ts` captured once at import, which no map could
+  ever move. They are `gameNum`/`gameList`/`dataNum` now, parsed once per match into each row's
+  own shape.
+* **Derived tables follow.** The damage table (Balanced Hero Survival rewrites all five rows), the
+  XP curves, the day length (DotA: 450 s), the ethereal bonuses, the revive costs, and the frost
+  slow — whose "engine-internal" 0.5/0.25 were `FrostMoveSpeedDecrease`/`FrostAttackSpeedDecrease`
+  all along (DotA: 0.3/0.2).
+* **Hero types are re-folded.** A hero type's vitals are stored ALREADY FOLDED (`realHP` includes
+  strength × 25), and the sim adds only the attributes gained since spawn, so a map's 15 hp per
+  strength moved only the strength gained later. `refoldHeroConstants` applies the difference per
+  type into the registry's per-map overlay: on Angel Arena a Paladin is 430 hp, not 650.
+
+Two rules were missing from the engine outright and had to exist for the map's value to mean
+anything: the **`MinUnitSpeed` floor** ("If you have movement speed of 30, you probably hit the
+minimum limit … set to something like 150 instead of 30" — hiveworkshop 335806; a pinned unit
+and a type with no speed stay 0, and an uprooted Ancient is a structure, floored at
+`MinBldgSpeed`), and **`StrAttackBonus`** (damage per point of primary attribute, an implied 1).
+
+`MISC_UNREAD` lists the 32 rows this engine declares but no system reads (trading, a miss chance,
+the follow ranges, decay after death …); the map door logs a map's restatement of one as "no
+system reads" rather than applying it, and `tools/sim-map-misc-test.cjs` re-derives the list from
+the source so it cannot drift. Frost Nova now reads them too: its `BuffID` is `Bfro` at every rank and its
+Data columns are only its two damages, so its slow is the buff's — 0.5/0.25, which is also what
+Liquipedia's Frost Nova card states. It had been a hand-typed 0.4/0.4.
+
 One thing was deliberately **not** done: `BlzSetEventDamage` (6 sites). `pumpDamageEvents` fires
 after the sim has applied the damage, so there is nothing left to modify, and making it work
 means first settling whether 1.31's `EVENT_PLAYER_UNIT_DAMAGED` is pre- or post-application and
-how it differs from `_DAMAGING` (315) — a question for the sources, not a guess.
+how it differs from `_DAMAGING` (315) — a question for the sources, not a guess. *(Settled and
+done — see "Test of Balance — the engine under the waves".)*
 
 Tests: `tools/sim-hero-attr-test.cjs` and `tools/sim-trigger-damage-test.cjs` (the sim
 arithmetic — the damage multipliers computed from the game's own table rather than transcribed,
@@ -511,6 +697,236 @@ against the install's own `common.j`; the predicate stubs answer each hook DIFFE
 native wired to the wrong one of five vision questions cannot pass by accident).
 `tools/sim-jass-hooks-test.cjs` pins the exact hook roster on both tables, so every pass that
 adds a hook adds its name there too.
+
+### Test of Balance — skin object files, imported art, and the shelf a script stocks
+
+One map, seven reports, five root causes. Every one of them is general.
+
+* **`war3mapSkin.w3u/.w3a/.w3t/.w3b/.w3d`** (1.33+) hold the ART and the WORDS of each object —
+  `umdl`, `unam`, `uico`, `usca`, `utub` — under the same ids and field codes as the main files,
+  and are applied AFTER them. The main `war3map.w3u` says what a type IS; its skin twin says what
+  it LOOKS like and is called. Unread, Test of Balance's invisible hero pickers were Peasants,
+  its Sacred Pillar a Marketplace, and every ability carried its base name — which broke the
+  map outright, because the dialog picks find the ability by NAME (`GetAbilityName(a) ==
+  udg_Abilities[n] + " Q"`). A skin pass starts each object from the row the main file built,
+  never from the install's (`ObjectLayer.skin` in `objectData.ts`), and the viewer patch
+  applies the same files to the rows it keeps for PRE-PLACED units, which it reads for itself.
+* **A map's imported models were found only for what the map PLACES.** The viewer's map handler
+  asks the map archive first; the scene's own solver, which loads every unit a trigger creates
+  or a shop sells and every script effect, asked only the install — so a drafted hero wearing
+  `war3mapImported\Santa.mdx` got no model, no body (`rts.byId`), no `selectedInfo()` and so an
+  EMPTY command card. `render/assetSolver.ts` layers the map over the tileset over the install,
+  keyed per mount; the console portraits read the same layering (`assetFiles()`), and the audio
+  had it already (`SoundBoard.mountMap`).
+* **`BlzChangeMinimapTerrainTex`** is real: a Reforged-era map's `war3mapMap.blp` is often its
+  lobby SPLASH, and the map puts the real minimap back from its script.
+* **A shop's shelf is what the SCRIPT stocked too.** The draft is `AddUnitToStockBJ(hero,
+  pillar, 1, 1)`, which no `Sellunits` column names; the card and the authority's "does this
+  building sell that" read the live shelf as well as the data (`World.stockedUnits`).
+* **A hero with no Hero Abilities has no Learn button**, and a hero-class ability a TRIGGER added
+  is not learnable ("Abilities added through triggers will not show up in the skill level
+  list" — hiveworkshop 257081; hiveworkshop 139838), so `learnable()` asks the type's own `heroAbilities`
+  alone. And an ITEM ability on a unit gets no card button unless it has an on/off order
+  (hiveworkshop 134863) — Test of Balance hangs `GeneralHeroGlow.mdx` on its heroes through a
+  zero-regeneration `AIgx`, which had drawn as a dead "Glow" button.
+
+Tests: `tools/sim-object-skin-test.cjs` (the skin layer, against the real map when it is in the
+install), `tools/render-asset-solver-test.cjs` (map first, per mount), the minimap checks in
+`tools/jass-imagery-test.cjs`, and the trigger-added-ability checks in
+`tools/sim-shadowmeld-test.cjs`.
+
+The three natives the map logged as missing, done after it:
+
+* **`TriggerRegisterVariableEvent`** — "Value Of Real Variable", "only … non-array variables of
+  type 'Real'" (`UI\TriggerStrings.txt`). Raised by the WRITE, synchronously, through one door
+  (`Runtime.assignGlobal` — the JASS `set` and a Lua map's `_G` write alike), and asked of the
+  DECLARED type (`Runtime.globalTypes`), because the editor's own `InitGlobals` writes integer
+  literals into real globals. A write that leaves the value where it was raises nothing ("you set
+  variable with value 1 to 1 again which doesn't trigger the event" — hiveworkshop 201641), which
+  is why every library resets its variable to 0 between events. NOT settled by any source: a write
+  that changes the value while the condition already held (1 → 2 under "greater than 0") — we
+  raise it; every call in the corpus is `EQUAL`, where the readings agree. On THIS map it matters
+  less than it looks: Damage Engine 5 hooks the native and dispatches its 20 registrations
+  itself, so what it needs is the native to exist.
+* **`ConvertMouseButtonType`** was never this map's: the install's own `common.j` initialises
+  `MOUSE_BUTTON_TYPE_*` with it (lines 299–301), so every map logged it. It was the one
+  `Convert*` of common.j's 47 missing from `CONVERT_NATIVES`, and the test now asks for all 47.
+* **`AddUnitAnimationProperties`** — "Add/Remove Unit Animation Tag": the same word a type's
+  `Animprops` holds, on one unit (`unitAnims.scriptAnimTags`). A tier/state word (`alternate`)
+  joins the unit's props; any other (`work`) makes the clip carrying it stand in for the same clip
+  without it. Kept per SIM id so a tag set before the model has loaded is there when it does, and
+  worn at once, since a map-placed neutral is not re-posed every frame. The pillar's three stands
+  (`stand`, `stand work`, `stand alternate`) are its three states.
+
+Tests: `tools/jass-variable-event-test.cjs`, `tools/sim-anim-tags-test.cjs`.
+
+And the map's interface layer, with the four bugs found standing on it:
+
+* **`war3mapSkin.txt`** (`src/data/mapSkin.ts`) — the World Editor's "Game Interface" dialog. Its
+  `[CustomSkin]` is a layer over `UI\war3skins.txt` for EVERY race, read inside `skinValue`, so the
+  FDF `DecorateFileNames` art, the console's own widgets and the music playlists all see it; its
+  `[FrameDef]` is a layer over the FrameDef string tables with `TRIGSTR_` resolved, read inside
+  `FdfLibrary.strings` (an `OverlaidStrings`). Both belong to the map: put up at the map door, taken
+  down only by the scene that put them up. Test of Balance renames the food counter "Difficulty
+  Level:", the upkeep label Balanced / Average / Not Balanced and the idle-worker button "Traits".
+  For any of that to reach the HUD, the HUD had to read those words and icons BY KEY: the upkeep
+  label is `UPKEEP_NONE`/`_LOW`/`_HIGH` now, with the string's own colour (the game's "low" is
+  `ffff00`, where our hand-picked one was orange), and the idle-worker button is `IdlePeon` art under
+  `IDLE_PEON`/`IDLE_PEON_DESC`, all three of which 1.30.4's own data carries. The resource bar's
+  four readouts answer the mouse too (`ConsoleUi.hoverZones` → `GameHud.showResourceTip`): the
+  `RESOURCE_UBERTIP_*` bodies by key, and the upkeep slab's one `RESOURCE_UBERTIP_UPKEEP_INFO`
+  line per band, off the bands this match is on (`gameplayConstants upkeepBands` — the official
+  basics page's 50/80 at 70 %/40 %, Reign of Chaos's 40/70, or the map's own `UpkeepUsage` /
+  `UpkeepGoldTax`) — so the map's "This map is Balanced." and its three renamed bands show there.
+  The SIM taxes mined gold by the same bands (`SimWorld.upkeepShare`), which it never did before;
+  Test of Balance's `UpkeepGoldTax=0.00` turns the tax off, and its tooltip says 100 % at every band. The slab TITLES are ours
+  (GlobalStrings has `GOLD`/`LUMBER` and nothing for supply); `COLON_FOOD` is the info panel's
+  "Food:" and never the bar's.
+* **A model file that is not there is an INVISIBLE unit, not an absent one.** Pointing Art - Model
+  File at a path that does not exist is the standard way to make a dummy ("NONE.mdx",
+  "Whatever.mdx" — hiveworkshop 165420), and the viewer cannot deliver such a unit, so
+  `seedModellessPlaced` now seeds any placed unit whose model does not EXIST, not only one with an
+  empty path; and `spawnUnit` makes a trained or summoned one bodiless instead of dropping it. Test
+  of Balance's four `umdl=none` Dummies had vanished with their starting items — and once they
+  existed they still held nothing, because only a HERO was given slots. An inventory is an
+  ABILITY: every one is base code `AInv`, and its `DataA` is the "Item Capacity" (`inv1` — 6 for
+  the hero's, 4 for the Pack Mule's `Apak`, 2 for the racial backpacks), so a unit's slots come
+  off the inventory ability it carries (and `UnitAddAbility` of one opens them at run time) —
+  once that ability's own `Requires` is met. Every stock Footman, Grunt, Archer and Ghoul lists
+  a racial backpack gated on the Backpack research (`[Aihn] Requires=Rhpm`, and the Kodo's `Apak`
+  on `Ropm`), so sizing off the row alone handed every melee soldier two slots from the start
+  (`SimUnit.backpacks` / `openBackpacks`, asked every tick so the research opens them live). The
+  last starting item, `sxpl`, is a stock item from AFTER 1.30.4 that the map edits in its
+  ORIGINAL table; with no row to edit it was dropped. An item edit (a row setting an `i…` field)
+  whose base this install lacks is now the map's fields over an EMPTY row (`blankItemDef`): the
+  map restates what makes it work — class, charges, price, ability, name — and only the art it
+  never restated (the icon) is missing, drawn as the plain slot.
+* **A unit with no body still has a panel and a card** (`RtsController.infoFor` reads the type row
+  when there is no render entry), with an empty portrait rather than the last unit's bust; and the
+  Attack button asks for an ENABLED weapon, as the building card already did — a unit type whose
+  `uaen` is none still carries its base's weapon rows, switched off.
+* **A selection is this screen's.** `selectUnit`/`clearSelection` are local-view hooks now: in the
+  per-recipient re-run of blizzard.j's `SelectUnitForPlayerSingle` (`if GetLocalPlayer() ==
+  whichPlayer`), every OTHER seat's pass wrote this machine's selection, so Test of Balance's draft
+  ended with the last seat's hero selected — somebody else's unit, and an empty card.
+* Map-imported ICONS (`blpIcon`) and the console strip read only the install; both read the map
+  first now, for the same reason `assetSolver.ts` does.
+
+Tests: `tools/sim-map-skin-test.cjs`, the selection case in `tools/jass-audience-test.cjs`.
+
+**`SetSkyModel`** ("Environment - Set Sky") — `render/sky.ts`. There is no sky unless a script sets
+one: the GUI's default is `SkyModelNone`, a null string (`UI\TriggerData.txt`), and Test of Balance's
+black horizon is right. A sky is an ordinary MDX — the editor offers 14, `Environment\Sky\<Name>`,
+spheres 3–4 thousand units across — whose layers mostly neither test nor write depth, so it is drawn
+FIRST, in a scene of its own that shares the world's camera, centred on the EYE (moved after the
+camera, before the scene update, so it never trails a frame). The depth buffer is cleared after it,
+because `SkyLight.mdl`'s streak layers DO write depth, and a sphere around the eye is nearer than the
+far terrain. Human01's own call (`LordaeronSummerSky`) reaches it. Tests: the sky checks in
+`tools/jass-imagery-test.cjs`.
+
+### Test of Balance — the engine under the waves
+
+Test of Balance and Balanced Hero Survival now reference nothing the engine lacks — every call and
+constant in their scripts, and (since the gap walker learned to follow a call INTO blizzard.j)
+every native a BJ they call reaches. That last clause found eleven more natives, one of which
+was the reason no wave had ever spawned. In the order the work landed:
+
+* **Ability instances** (`BlzGetUnitAbility`, `BlzGetItemAbility(ByIndex)`, the eight
+  `Blz{Get,Set}Ability{Integer,Real,Boolean,String}[Level]Field` families). A write gives THAT
+  unit or item its own copy of the row (`SimAbility.def`, `SimWorld.itemAbilityDefs`) and every
+  reader goes through `abilityDefOf` / `itemAbilityDefOf`. A field constant carries its
+  `AbilityMetaData.slk` id, so a script's write and an object-editor edit share one routing
+  (`writeAbilityField` → `applyAbilityMods`). Levels count the map's way (`blzIndexBase`).
+  `tools/jass-ability-fields-test.cjs`, `tools/sim-ability-instance-test.cjs`.
+* **Per-unit unit fields** (`BlzSetUnit{Integer,Real,Boolean}Field`, the weapon fields). ONE unit
+  (`SimUnit.fieldOverrides`, `scriptWeaponsOn`, `nameOverride`), with the integer encodings the
+  maps compare as literals in `data/unitFieldCodes.ts`, each cited where it is written down.
+  `tools/sim-unit-fields-test.cjs`.
+* **Damage events a script can change.** For a script that registers DAMAGING or writes a blow
+  (`Interpreter.scriptModifiesDamage`), the blow is handed over synchronously, twice: DAMAGING
+  "before any armor, armor type and other resistances", DAMAGED just before the hit points move
+  (jassbot, `BlzSetEventDamage`). ≤ 0 in DAMAGING skips DAMAGED; negative heals; nesting is capped.
+  Every other map keeps the queued `EVENT_UNIT_DAMAGED`. `tools/sim-damage-hook-test.cjs`,
+  `tools/jass-damage-event-test.cjs`.
+* **`GetHandleId` on a `Convert…` constant is its INDEX.** The Damage Engine reads
+  `GetHandleId(BlzGetEventAttackType())` and tests `== 0` (a spell) and `== udg_DAMAGE_TYPE_NORMAL`,
+  which its own config sets to the literal 4. Our interned ids (49, 55, 76) made every blow a
+  non-spell of no known type.
+* **`ChooseRandomCreep`** — every wave creep is `CreateNUnitsAtLoc(1, ChooseRandomCreepBJ(n), …)`,
+  so a wave was a round of type-0 creates. The pool is the World Editor's own random-creep one
+  (`UnitRegistry.chooseRandomCreep`): Neutral Hostile palette, not `special`, not campaign-only,
+  not a building or a hero.
+* **`SetPlayerState(p, FOOD_USED, n)` lands.** It was dropped as "read-only", but the map keeps its
+  wave DIFFICULTY on the food bar (its heroes cost no food; its triggers write `wave × 2` and add
+  2 a wave), and a unit that dies afterwards "will decrease its food from player" (hiveworkshop
+  252550) — the same accumulator the cap already was (`Authority.setFoodUsed`).
+* **Players 16–23 are players.** 1.29 widened the table to 24, and both maps seat their entire
+  enemy on `Player(20)` — a computer in a force of its own (their w3i). Three "≥ 12 is neutral"
+  tests (the script's spawn owner, the `.doo` reader, a player's default colour) turned it into
+  Neutral Passive: the waves came out passive, the wave-clear trigger counted no Player(20) units,
+  and every wave ended as it began. `isNeutralSlot` is the one test now. And a map a 1.31+
+  editor saved is ON the 24-player table (`setWidePlayerTable`, off `editorBuild >= 131` at the
+  map door): its neutrals are 24–27 — to its script (`GetPlayerNeutralAggressive` & co., 24
+  players, 28 slots), to the `.doo` (which already writes them there) and to every place the
+  sim's neutral owner is handed back to JASS (`jassOwnerOf`) — so `Player(12)`–`Player(15)` are
+  the 13th–16th players there instead of colliding with ours. A 1.30 map keeps 12–15.
+* **The rest of what the BJs reach**: `UnitStripHeroLevel` (SetHeroLevelBJ going DOWN — the wave
+  bosses are levelled to half the players' food), `Get/SetPlayerHandicapXP`, `UnitPauseTimedLife`,
+  `UnitAddType`/`UnitRemoveType` (only 9–20 are changeable — "0 - 8 can't be added, 9 - 20 can be
+  added and removed, 21 - 26 can't be added", KnnO, hiveworkshop 218444 — so the waves' own
+  `UnitRemoveTypeBJ(UNIT_TYPE_FLYING, …)` does nothing, as in the game), `UnitRemoveBuffs(Ex)` /
+  `UnitCountBuffsEx` (jassbot's criteria; polarity is who put the buff there),
+  `UnitDamagePoint` (who it reaches is OUR reading — enemies of the source — and says so),
+  `CreateCorpse`, `GetTerrainCliffLevel`, `PauseCompAI`, `UnitId`/`UnitId2String`.
+  `UnitDamageTarget` now hands its damage and weapon types on too, so a DAMAGING handler sees them.
+
+Verified live: wave 1 spawns as Player(20), fights the heroes, and the Damage Engine reads Pierce
+/ Normal / Hero off the blow. Tests: `tools/sim-script-natives-test.cjs` (what each does),
+`tools/jass-script-natives-test.cjs` (every argument through the real blizzard.j BJ), the food
+write in `tools/sim-jass-hooks-test.cjs`.
+
+### Test of Balance — the map's own frames
+
+The frame model DRAWS now (`ui/scriptFrames.ts`), and it is drawn by the code that draws the
+game's own panels rather than by a second renderer: `ui/scriptFrameTree.ts` turns the model
+into ONE FDF tree — a size is `Width`/`Height`, an anchor is `SetPoint`, a script texture is
+`BackdropBackground` — and `mountFdfScreen` lays it out and paints it, out of the map's archive
+over the install.
+
+* **Templates are stamped, children and all.** `BlzLoadTOCFile` reads the `.toc` and its
+  `.fdf`s out of the map WHILE THE SCRIPT WAITS (`readMapFile`, synchronous), so the
+  `BlzCreateFrame("BoxedText", …)` on the next line finds the template, and every NAMED frame
+  inside it becomes a frame the script can find — Test of Balance fetches the tooltip's title
+  with `BlzGetFrameByName("BoxedTextTitle", 0)` right after creating it. The drawing clones the
+  template per instance (`cloneNamespaced`) and lays the script's changes over it.
+* **Where things land.** An ABSOLUTE point is measured from the bottom-left of the 0.8 × 0.6
+  box centred on the screen and may leave it (the panel runs to x 0.936 on a wide screen, hung on
+  `ConsoleUIBackdrop` — the frame a map uses to get out of 4:3, per Tasyen's UI tutorial);
+  `BlzFrameSetScale` scales size, font and point offsets, and children with it; `SetAllPoints`
+  covers a frame WITHOUT reparenting it (it used to reparent).
+* **Text is patched, everything else rebuilds.** The map rewrites a player's damage total on
+  every blow; a text change is written into the frames on screen, and only a change that moves
+  or reveals something rebuilds the screen (throttled, swapped when the new one is up).
+* **The mouse.** A BUTTON raises `FRAMEEVENT_CONTROL_CLICK` through `Interpreter.fireFrameEvent`
+  (`BlzGetTriggerFrame`, `GetTriggerPlayer` in scope) — the Info toggle; a frame with a tooltip
+  shows it only while hovered; mouse enter/leave fire where a trigger registered them.
+* **Two general fixes it surfaced.** The layout solver gave a TEXT pinned at two horizontal
+  points (TOPLEFT + TOPRIGHT) with no Height a height of ZERO, and a text box clips, so every
+  tooltip title was blank — it now shrink-wraps to its lines as a singly-anchored TEXT already
+  did (the stock screens that had the same shape already declared a Height of their own, which
+  is why none of them changed). And `BlzGetAbilityIcon` answers any object with an Art field:
+  the map fills its hero column with `BlzGetAbilityIcon(GetUnitTypeId(u))`.
+* **The game's own frames.** `BlzHideOriginFrames(true)` takes the ORIGIN frames away — the
+  HUD's sockets and the system buttons — and leaves the console art, the resource bar and the
+  black `ConsoleUIBackdrop`, which a map hides by name (`BlzFrameSetVisible` on it reaches
+  `ConsoleUi.setBackdropVisible`); both per Tasyen's "UI: OriginFrames" (hiveworkshop 316034).
+  A frame of the FRAME group on any parent but `ConsoleUIBackdrop`/Leaderboard/Multiboard is
+  held to the 4:3 box ("If a part of them leave it, they become malformed"), drawn clipped to
+  it; SIMPLE frames are free, and a script texture on one's `Texture` block is its `File`.
+
+Tests: `tools/jass-frames-test.cjs` (the model through the real interpreter, and the tree it
+becomes). Verified live: the Info toggle opens the panel, hovering a learned skill shows its
+`BoxedText`.
 
 ## Traps
 
