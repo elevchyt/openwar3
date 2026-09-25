@@ -13,6 +13,9 @@
 // One slab for the whole page, since only one element can be under the pointer.
 
 import { isHovered } from "./gamepad";
+import { dressAsGameTip, onGameTipSkinChange } from "./gameTipSkin";
+
+export { setGameTipSkin } from "./gameTipSkin";
 
 /** The gap between the element's top edge and the slab's bottom edge, in CSS pixels. */
 const GAP_PX = 6;
@@ -25,30 +28,9 @@ let watching = false;
 const texts = new WeakMap<HTMLElement, string>();
 const bound = new WeakSet<HTMLElement>();
 
-/** The slab's dress when no HUD has put it on `:root` — see `setGameTipSkin`. */
-let menuSkin: Record<string, string> | null = null;
-
-/**
- * Dress the slab in the game's tooltip art outside a match (issue #156). In a match the HUD lifts
- * the art to `:root` and `body.hud-tooltip-skinned` does this; the menus have no HUD, so the
- * properties (ui/hud.ts `tooltipSkinVars`) go on the slab itself, under `.skinned`.
- */
-export function setGameTipSkin(vars: Record<string, string> | null): void {
-  menuSkin = vars;
-  if (slab) dress(slab);
-}
-
-function dress(el: HTMLElement): void {
-  el.classList.toggle("skinned", !!menuSkin);
-  for (const [k, v] of Object.entries(menuSkin ?? {})) el.style.setProperty(k, v);
-}
-
-/** Put the same dress on another of our own slabs (the gamepad's on-screen keyboard,
- *  ui/padKeyboard.ts): `.skinned` and the art's properties outside a match, nothing in one —
- *  there `body.hud-tooltip-skinned` already carries it. */
-export function dressAsGameTip(el: HTMLElement): void {
-  dress(el);
-}
+onGameTipSkinChange(() => {
+  if (slab) dressAsGameTip(slab);
+});
 
 /**
  * Give `el` a hover hint (or take it away with null). Safe to call every frame — the XP bar
@@ -78,7 +60,7 @@ function show(el: HTMLElement): void {
   if (!slab) {
     slab = document.createElement("div");
     slab.className = "game-tip";
-    dress(slab);
+    dressAsGameTip(slab);
     document.body.appendChild(slab);
   }
   anchor = el;

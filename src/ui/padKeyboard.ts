@@ -1,4 +1,4 @@
-import { dressAsGameTip } from "./gameTip";
+import { dressAsGameTip } from "./gameTipSkin";
 
 // The gamepad's on-screen keyboard (issue #162).
 //
