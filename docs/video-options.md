@@ -35,6 +35,7 @@ carry a `SpellFilterValue` — see below — but as a READOUT, not a control.)
 |---|---|
 | **Gamma** | An SVG `feComponentTransfer type="gamma"` over `#map`. Installed only off the middle. |
 | **Resolution** | The size of the buffer the world is drawn into. |
+| **Low Performance Mode** | Ours. One switch: every row below it at its cheapest rung. |
 | **Model Detail** | *Nothing* — see below. |
 | **Animation Quality** | Strides the map's widget stand-scan (1 / 2 / 4 frames). |
 | **Texture Quality** | Drops 0 / 1 / 2 mip levels off the top of every BLP as it uploads. |
@@ -114,6 +115,263 @@ it. We leave that 2 where it is and scale it, which makes our High exactly what 
 always drawn and our Medium the game's own middle rung. Every other rung in the file is OURS and
 says so at its definition. Nothing in the install describes what a quality setting does — these
 were engine settings, not data — so there is nothing to check them against.
+
+## Low Performance Mode (issue #161)
+
+The row directly under Resolution, and the only one on this panel that is about the other rows.
+It is **ours** — the 2003 panel is nine independent settings and has nothing that says "all of
+it, as cheap as it goes" — and a machine that needs it should not have to find seven dropdowns
+and know which way each one is cheaper.
+
+### The shared pose cache — what the mode is actually for
+
+The rungs below are the small half of this mode. The large half is one change that has no row on
+the panel at all, and it comes straight off the profile: at 257 units and 6× CPU throttle the
+frame's biggest phase is `anim` (45 ms of 93), and inside it the **MDX node walk is ~41% of all
+CPU** — `recalculateTransformation`, `updateNodes` and the gl-matrix calls they make — against
+**~7% for the drawing** (`render` plus every GL call). Skinning is already on the GPU via the bone
+texture. What costs is sampling every node's tracks and composing its matrices, in JavaScript,
+per instance, per frame.
+
+And it is mostly the same answer. Probed in a real match, **317 visible instances were holding 60
+distinct** `(model, sequence, ~33 ms frame)` **poses** — 34 Footmen in one bucket — because an RTS
+draws crowds of one unit doing one thing. So the pose is sampled once per bucket and replayed:
+the fog cache's lesson (`SightStamps`, src/sim/vision.ts) in a second place.
+
+**What is shared is the LOCAL pose, not the bone matrices.** A bone matrix here is world-space
+(`worldMatrix = parent.worldMatrix * localMatrix`, and the root's parent is the instance), so two
+units standing apart can never share one. What is shareable is the per-node translation/rotation/
+scale the tracks are sampled into; every instance still composes its own world matrices, which is
+why billboarding, per-instance scale, emitters, attachments and click collision are all untouched.
+
+Two things make it work, both in `viewer/handlers/mdx/modelinstance.js` in the patch:
+
+- **`forced` means two different things** and they had to be told apart. A sequence change must
+  rewrite every node's locals, including the ones the new clip says nothing about. A MOVE —
+  `recalculateTransformation` on the instance, which the sim does to every walking unit every
+  frame — forces the node walk for a reason that has nothing to do with the tracks: the world
+  matrices hang off the instance's, so they must be recomposed while the local pose is untouched.
+  Without that split nothing shares, because *the units worth sharing are the ones that are
+  moving*. `ow3PoseReset` is the first kind.
+- **Entries outlive the frame**, because a walk cycle loops: after one lap every bucket of it is
+  already sampled and a crowd samples nothing at all.
+
+The cost is **animation time quantized to 30 Hz** — clips step at the bucket rate — which is the
+trade this mode exists to make, and why it is off at full quality. A model whose TRS tracks are
+driven by a GLOBAL SEQUENCE is excluded: those are sampled against the instance's own elapsed-time
+counter, so two instances genuinely differ and no key on (sequence, frame) can say so.
+
+Measured, same scene, interleaved: **38.9 → 34.2 ms** median, **−12%**, where the rungs alone had
+been worth −2%.
+
+### …and the shared SKELETON, which is where the big number is
+
+Sharing the sampled pose still left every instance composing its own matrices — the other half of
+that 41%. That half goes away when the matrices stop being world-space, and the change that makes
+them stop is one line: **a root bone's parent is the instance itself, so hanging it off an
+identity instead (`ow3LocalPose`, viewer/skeletalnode.js) composes the whole skeleton in the
+INSTANCE's own space.** A pose with no position in it is a pose a crowd can share — one
+`Float32Array`, one bone texture, filled once per bucket — and the vertex shader multiplies each
+body's own matrix back in (`u_instance`, sd.vert.js and hd.vert.js). An instance wearing one does
+**no node work at all**: no sampling, no composing, no texture upload.
+
+Three things still belong to the instance and are done for it:
+
+- **Nodes that act on the world** — a particle emitter, an event object (a footstep sound, a
+  blood splat), an attached model — get `instance.worldMatrix × local` composed into them, and
+  only them. A Footman has two or three against fifty-seven bones. The list is rebuilt every
+  frame rather than cached, because OpenWar3 PARENTS a buff or spell model onto a bone at
+  runtime (`inst.setParent(node)`), and a cached list would leave that model at the world origin.
+- **The click ray** (`src/render/modelCollision.ts`) composes the same product for the two or
+  three collision shapes it tests, or a click lands on a body standing at the origin.
+- **The flip itself.** Turning the mode on or off changes what the matrices MEAN, so the instance
+  forces a full pass on that frame and re-uploads its own texture.
+
+**BILLBOARDED nodes are redone per instance rather than shut out.** A billboarded node faces the
+CAMERA through the instance's own inverse world rotation, so at one frame of one clip two bodies
+facing different ways genuinely hold different matrices — and a shared skeleton has the wrong one
+in it. That was tried and photographed: every Footman grew a white halo around its shield, the
+quads turning with the body instead of facing the camera. Shutting those models out instead was
+also tried, and it left the bread-and-butter soldiers on the slow path: 21 of 69 unit models
+sampled have billboarding, Footman, grunt, Archer, Priest and the heroes among them.
+
+So `ow3FixBillboards` takes the bucket's pose as this body's own, recomposes the billboarded
+subtrees in TRUE WORLD space (the space the billboard maths is defined in) and converts just those
+back into instance space, where the rest of the skeleton already is. It costs a bone texture of
+this instance's own and the nodes in those subtrees — a Footman redoes **six of fifty-seven** and
+samples none. Measured interleaved in one match, handling them is worth **16–29%** of the
+low-performance frame against excluding them (62.6 / 61.7 → 42.6 / 45.5 ms on a mixed army;
+`__OW3_VIDEO__.noBillboardShare` shuts them out again so the claim can be re-measured rather than
+argued, as `TerrainCull.enabled` does for the cull).
+
+**OWN-CLOCK nodes are redone per instance the same way.** A translation, rotation or scale track
+driven by a GLOBAL SEQUENCE is sampled on the instance's own `counter`, not the clip's frame, so no
+shared pose can hold it for everybody — and it used to shut its whole model out. That was the
+Knight's case (not `dontInherit*`, as this page once said): **214 nodes** walked per instance every
+frame for three leaf attachment points with a global-sequence scale track, which was **80%** of
+every skeleton node composed in a 287-unit scene. The Town Hall's clock hands and flags are the
+same. `ow3Billboards` now puts own-clock nodes and everything under them in the per-instance plan,
+and `ow3FixBillboards` samples every node of that plan at the bucket's frame on the instance's own
+clock before recomposing it. Worth **61.5 → 43–44 ms** (−29%) on a standing mixed army at 6×;
+neutral in a heavy fight, where a clip change per swing starts a per-instance cross-fade anyway.
+`__OW3_VIDEO__.noOwnClockShare` shuts them out again for a re-measurement.
+
+**Only the WORLD shares.** The switch is a global every MDX viewer on the page can read, so
+`ow3SharePoses` also asks the model's viewer (`viewer.ow3SharePoses`, set by `MapViewerScene` on
+its own viewer alone). The menu's backdrop, the loading screen, the portraits and the HUD's clock
+have no crowd to share with and would get nothing but the 30 Hz stepping — which on the main menu
+read as judder, like vsync off.
+
+What is still excluded is `dontInheritTranslation/Rotation/Scaling` — a node that reaches past its
+parent to the INSTANCE's world scale. Those models keep the shared POSE and compose for
+themselves, and an own-clock node in one of them still shuts the pose out too (the pose-only path
+replays the composer's locals as they are).
+
+**Two traps on this path, both found by measurement rather than by reading.**
+
+- **`worldMatrices` is in NODE order, `sortedNodes` is in HIERARCHY order** (`sortedNodes[i] =
+  nodes[hierarchy[i]]`). Everything that indexes the skeleton — the capture, the object-node pass,
+  the click ray — has to use node order. Mixing them hands a node somebody else's matrix on every
+  model whose file does not happen to list its objects parents-first.
+- **A node's matrix is not always a pose.** `ow3ComposeObjectNodes` writes a WORLD matrix into the
+  nodes that act on the world, and a node whose clip says nothing is never rewritten — so the next
+  instance to compose a bucket captures that world matrix into a shared pose, and every body
+  wearing it draws that part of itself where the composer stood. The composer therefore redoes
+  every node that carries something now OR has ever had a world matrix composed into it
+  (`ow3WorldWritten`); the second half is not paranoia, it is OpenWar3 parenting a buff model onto
+  a bone and taking it away again. Forcing the composer's whole pass fixes it too and costs a
+  third of the saving.
+- **…and `ow3FixBillboards` writes world matrices too**, into the plan's PARENTS (the static nodes
+  just above each subtree) and the subtree itself. It never marked them, so a static parent — the
+  Priest's `Staff-hide`, the Town Hall's `Upgrade0 Townhall` — was captured into the next bucket
+  its instance composed, thousands of units off. The composer's walk also read `written` by the
+  HIERARCHY index (`written[i]` beside `sortedNodes[i]`), which is the first trap again: object
+  nodes survived it only because the clause after it looks at the node itself. Both fixed
+  (docs/perf-research.md row 16); the Priest one predates the own-clock work.
+
+**How to verify a change here, because pixels cannot.** Two frames of a living match differ by
+6% of their pixels on their own (rain, idle clips, the fps readout), which is larger than the
+thing being checked. `scratch/matrices` compares the two paths NUMERICALLY instead: park an
+instance on a bucket boundary, read `instance.worldMatrix × local[i]` under the shared path, flip
+`sharedPoses` off, drive the same clip and frame, and compare against `nodes[i].worldMatrix`. Every
+model that takes the path agrees to **≤0.0011 world units**; both bugs above were found this way
+and neither was visible in a screenshot.
+
+Measured, 259 units at 6× CPU throttle, interleaved off/on. The ratio depends on how much of the
+frame is animation, so it is quoted as a range across runs (and the box was shared with other work
+for the later ones):
+
+| Army | Off | On | |
+|---|---|---|---|
+| Every model shareable (Riflemen) | 54–74 ms | 18–30 ms | **2.4–3.1×** |
+| A mixed human army (Footmen, Riflemen, Knights, Priests) | 63–79 ms | 33–45 ms | **1.8–2.0×** |
+| All Footmen — billboarded, so nothing shared before this pass | 50–52 ms | 30–32 ms | **1.6×** |
+
+### One that was tried at FULL quality and taken back out
+
+The `forced`-means-two-things insight looks like it should pay off outside this mode as well. At
+every quality setting, the sim writes a walking unit's position onto its instance, which calls
+`recalculateTransformation` and so sets `forced` every frame for everything that moves — and
+`forced` then walks past the `variants` test, so every node re-samples all three channels
+including the ones whose clip says nothing about them. Recomposing the world matrices is what a
+move genuinely needs; re-reading tracks that cannot have changed is not.
+
+Asking a separate `resample` (the sequence-change kind of forced) instead was built and measured.
+It is **exact** — the node world matrices come out bit-for-bit identical across 19 models, both
+for a moving body and across a sequence change — and it is worth **nothing measurable**:
+interleaved at 6× throttle with 257 units, old 66.8 / 66.1 / 72.2 ms against new 64.5 / 68.1 /
+67.1, and the sign of the difference flips between runs.
+
+The reason is worth keeping, because the estimate that motivated it (8–12% of CPU, read off
+`getValue` and `slerp` in a profile) was wrong about WHICH nodes those samples belong to. Sampling
+a node whose clip is silent is cheap — the lookup misses or the track is constant, and a default
+is written. The expensive samples in that profile belong to the nodes that really are animated,
+and those sample every frame either way. And the instances `forced` by a move are precisely the
+UNITS, whose clips animate most of their skeleton; nothing that stands still (a building, a
+doodad) is forced at all. So there was little to skip.
+
+It was reverted rather than kept: the viewer patch is load-bearing, and a hunk that buys nothing
+is a hunk somebody has to reason about later.
+
+### The rungs
+
+What it forces is `LOW_PERF_FORCED` in [`src/render/videoQuality.ts`](../src/render/videoQuality.ts):
+
+| Row | Forced to |
+|---|---|
+| Model Detail | Low *(no backend — see below)* |
+| Animation Quality | Low (widget scan strided 4) |
+| Texture Quality | Low (2 mips dropped; reaches the NEXT map) |
+| Particles | Low (×0.25) |
+| Lights | Low (no omni lights) |
+| Unit Shadows | Off |
+| Occlusion | Off *(no backend)* |
+
+**Two rows are deliberately not in that table.** **Resolution** is the one rung that changes how
+many pixels are drawn, and so the one a weak GPU cares most about — which is exactly why it stays
+the player's: how sharp the world is against how smooth it runs is the trade only they can make,
+and issue #161 asks for it in as many words. **Gamma** is the brightness of the picture rather
+than a cheaper drawing of the same one; a full-screen filter pass is not free, but a player on a
+dim panel needs it wherever they set it.
+
+**It is forced at APPLY time and never written to the store.** `applyVideoOptions` lays the table
+over the options it is handed; the player's own seven values sit untouched in localStorage, so
+unticking the box gives every one of them back with nothing having to be remembered. That is also
+why `VideoSettings` carries `lowPerf` beside the rungs it forces: the mode is a fact of its own,
+not something to infer from a rung the player might equally have chosen by hand.
+
+**Both screens grey the rows it owns AND show the rung it puts them at.** Half of that rule is not
+enough: a live dropdown over a setting the applier overrides is a control that does nothing, and a
+dead one still reading "High" while the renderer draws Low is the panel lying about the game. The
+forced label is painted onto the WIDGET only — the working copy keeps the player's value. On the
+in-game panel the same applies to its four pulldowns, and its three read-only rows (Model Detail,
+Animation Quality, Texture Quality) print the forced rung for the same reason: a readout says what
+the renderer is doing.
+
+The row is on the **in-game panel** too, where it closes the panel rather than sitting under
+Resolution — that file's Video panel puts its pulldowns first and its read-only values after, so
+"under Resolution" there would drop a live control into a block of readouts. It has to be
+reachable there at all because the two panels are one store: a mode turned on from the menus would
+otherwise be unreachable until the match ended.
+
+**Launch flag.** `?lowperf` turns it on for the session, applied inside `loadOptions` so that the
+boot applier, the glue screen and the F10 panel all agree. The box then shows ticked, which is
+true, and OK persists it like any other choice. Not DEV-gated, unlike `?dev`: this one is for the
+machine that needs it.
+
+**Where the row sits, and what it cost to put there.** The shipped 1.30.4 file has a checkbox row
+commented out in exactly this slot — `FixedAspectRatioCheckboxLabel` / `FixedAspectRatioCheckBox`,
+"Disabled for 1.29, needs some work" — and left behind both its anchors and the two re-anchorings
+Model Detail wears when a row stands between it and Resolution. What is ours is the arrangement
+(box then label, like the panel's other four checkbox rows) and the SPACING: the game paid 0.0105
+for this insertion, and at that price the panel overran, because this panel carries a row the 2003
+one never did ("Vertical Sync") and the last row landed on the frame's bottom rail. The box tucks
+into the 0.042 of empty label column the pulldowns' own chrome already leaves, the row costs
+**0.005**, and both of this panel's checkbox rows tuck **0.0115** under their labels so the last
+row lands where it always did. Measured in the running screen at 16:9 and at 4:3.
+
+**What it is worth, measured.** Echo Isles, 6× CPU throttle in headless Chrome, interleaved
+off/on/off/on, median frame time:
+
+| Scene | Off | On | |
+|---|---|---|---|
+| Early game, 110 units — rungs only | 7.7 / 7.7 ms | 7.0 / 7.5 ms | −3…9 % |
+| An army standing on it, 259 units — rungs only | 40.1 / 40.0 ms | 39.2 / 39.3 ms | −2 % |
+| …the same army, with the shared POSE | 38.8 / 39.0 ms | 34.1 / 34.3 ms | −12 % |
+| A mixed human army of 259, with the shared SKELETON | 63–79 ms | 33–45 ms | **1.8–2.0×** |
+| …an army whose every model is shareable (Riflemen) | 54–74 ms | 18–30 ms | **2.4–3.1×** |
+
+The first two rows are the panel's own rungs, and they are worth a few per cent: most of them are
+idle bookkeeping and one shadow pass, and the texture rung does not reach a map that is already
+loaded. The 259-unit row says it sharply — with the CPU throttled 6×, taking the unit and building
+shadow passes away is worth under a millisecond of a 40 ms frame, so that is not where a weak
+machine's time goes. Everything below the second row is the animation path, and that is where
+this mode's value is: the pose cache first, then the shared skeleton, which is what turns a
+weak-machine frame from 63 ms into 29. **The substance of issue #161 is still the renderer work behind the flag**
+— particles and ribbons off rather than quartered, the fog overlay and the baked shadow layer
+taking terrain-cull's runs (docs/terrain-culling.md), skinning off the main thread, single-pass
+terrain, batching by texture — each of which the issue gates on its own Step 0 profile. The flag
+is where they land; `VideoSettings.lowPerf` is what they ask.
 
 ## The two rows with no backend, and why they stay that way
 
@@ -213,6 +471,9 @@ edge reading comes out wrong by exactly that.
 
 `tools/sim-options-test.cjs` (run by `pnpm sim:test`) pins the applier: every rung's number,
 including that an unknown value from an older or hand-edited store falls back to the default
-rather than putting a junk string into a ladder. Everything else here is visible, so screenshot
+rather than putting a junk string into a ladder — and, for Low Performance Mode, that it forces
+every row in its table, leaves resolution and gamma alone, does not touch the options it is handed
+(so unticking restores them), and names only keys the Video panel has with values those rows
+actually offer. Everything else here is visible, so screenshot
 it — `?dev&map=EchoIsles&ai=easy` with the options seeded into `localStorage` before the boot
 navigation is the whole test.

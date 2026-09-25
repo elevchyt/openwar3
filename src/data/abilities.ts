@@ -77,6 +77,54 @@ export function morphFlags(lvl: { summon: string; data: number[] } | undefined):
   return v === undefined || Number.isNaN(v) ? 0 : v;
 }
 
+/**
+ * The same list as a SET, normalised once and kept.
+ *
+ * Every legality question a spell asks — may this ability touch that body — is a handful of
+ * membership tests against an ability row's Targets Allowed, and the row is a CONSTANT: the SLK
+ * boundary normalises it as the def is built (`targetFlags` above), and a map's edit REPLACES the
+ * array rather than editing it (data/objectData.ts). Yet the hot path was rebuilding it per call —
+ * `new Set(normalizeTargetFlags(flags))`, which trims, lower-cases, alias-maps and de-duplicates
+ * with `includes` into a fresh array, then allocates a Set — and `targetAllowed` did it TWICE,
+ * once for itself and once inside `targsKindError`. Profiled in a 287-unit fight at 6× CPU
+ * throttle, that path was ~24% of the whole frame, because an autocast scan asks it for every
+ * unit against every candidate several times a second.
+ *
+ * So it is asked once per ARRAY and remembered against that array's identity. A WeakMap is what
+ * makes that safe without a lifetime: the entry dies with the def. It is EXACT — the same words
+ * in the same order produce the same set — which matters more here than the speed, because this
+ * sits under the sim and the sim must stay deterministic.
+ *
+ * `TargetFlagCache.enabled` turns it off so the claim can be measured in a real match rather than
+ * argued, as `SightStamps.enabled` and `TerrainCull.enabled` do for theirs.
+ */
+export const TargetFlagCache = { enabled: true };
+const EMPTY_FLAGS: ReadonlySet<string> = new Set<string>();
+const FLAG_SETS = new WeakMap<readonly string[], ReadonlySet<string>>();
+/** Rows handed in as raw text rather than as a def's array — a small, closed vocabulary. */
+const FLAG_SETS_BY_TEXT = new Map<string, ReadonlySet<string>>();
+
+export function targetFlagSet(list: string | readonly string[] | undefined | null): ReadonlySet<string> {
+  if (list === undefined || list === null) return EMPTY_FLAGS;
+  if (typeof list === "string") {
+    if (!TargetFlagCache.enabled) return new Set(normalizeTargetFlags(list));
+    let hit = FLAG_SETS_BY_TEXT.get(list);
+    if (hit === undefined) {
+      hit = new Set(normalizeTargetFlags(list));
+      FLAG_SETS_BY_TEXT.set(list, hit);
+    }
+    return hit;
+  }
+  if (list.length === 0) return EMPTY_FLAGS;
+  if (!TargetFlagCache.enabled) return new Set(normalizeTargetFlags(list));
+  let hit = FLAG_SETS.get(list);
+  if (hit === undefined) {
+    hit = new Set(normalizeTargetFlags(list));
+    FLAG_SETS.set(list, hit);
+  }
+  return hit;
+}
+
 export function normalizeTargetFlags(list: string | readonly string[]): string[] {
   const words = typeof list === "string" ? list.split(",") : list;
   const out: string[] = [];

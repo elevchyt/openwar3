@@ -914,6 +914,53 @@ class LoaderProgress {
   }
 }
 
+/** The fog pass's doodad table (MapViewerScene.fogWidgets). On, unless a live A/B turns it off to
+ *  walk every doodad OBJECT every pass as it used to — it changes what the pass COSTS and never
+ *  what it draws (docs/perf-research.md). */
+export const FogWidgetTable = { enabled: true };
+
+/**
+ * What the fog pass knows about each of the map's own doodads, in `map.doodads` order, held in
+ * flat typed arrays rather than read back off the widgets.
+ *
+ * That is the whole of the saving, and it is a MEMORY saving: the pass used to open every one of
+ * ~2,500 doodads ten times a second — its widget, its instance, the instance's `localLocation`
+ * and `vertexColor`, a WeakSet, a Set and two Maps per widget — and between two passes all of
+ * that falls out of the CPU cache. Measured live at 6× throttle, a pass cost 7.9 ms, against
+ * ~1.8 ms for the very same work run back to back; the difference is cache misses. Here the
+ * pass reads a few typed arrays and the vision grid, and opens a doodad's OBJECTS only when its
+ * fog state has moved since the tint it last put on.
+ */
+interface FogDoodadTable {
+  /** The `map.doodads` array, and the sizes of everything the rows were read out of — a change
+   *  in any of them rebuilds the table (the array grows as doodads stream in; the radius maps
+   *  are filled during load). */
+  doodads: readonly unknown[];
+  n: number;
+  treeN: number;
+  propN: number;
+  /** removedWidgets.size / doodadActors.size when `retired` was last read. Both only ever GROW
+   *  within a match (clear() comes with a new map), so a size that moved is a membership that
+   *  moved. */
+  removedN: number;
+  actorsN: number;
+  /** The origin a row's fog is sampled at, and the footprint half-extent it is sampled over —
+   *  the tree's blocker radius, else the prop's body, else 0 (fogWidgets). NaN = the instance
+   *  had no location yet when the row was read; it is re-read until it does. A static doodad
+   *  never moves once placed (nothing writes its location), so the row stays good. */
+  x: Float64Array;
+  y: Float64Array;
+  r: Float64Array;
+  /** The FogState the pass last put on this doodad, or -1 = unknown (never tinted, skipped
+   *  while something else owned its colour, or marked by `fogRecheck`): ask the object. */
+  state: Int8Array;
+  /** 1 = a felled tree, an opened gate, a mined-out mine, a hidden destructible, or a doodad
+   *  drawn by its stand-in — the fog pass never shows it again. */
+  retired: Uint8Array;
+  /** instance → row, for `fogRecheck`. */
+  row: Map<object, number>;
+}
+
 export class MapViewerScene {
   // The game camera's shape — what the view opens at and what ResetToGameCamera returns to
   // (7.24).
@@ -1124,6 +1171,13 @@ export class MapViewerScene {
   private entangledMines = new Map<number, { widget: HideableWidget; mineId: number }>();
   private baseColors = new WeakMap<object, Float32Array>(); // each widget's tint before fog dimming
   private tintScratch = new Float32Array(4); // reused fog tint, avoids per-widget allocation
+  /** See FogDoodadTable. Dropped with the fog (disposeFog). */
+  private fogTable: FogDoodadTable | null = null;
+  /** Doodad instances whose COLOUR something other than the fog pass has written since its last
+   *  pass — the harvest blink and the AoE highlight, the only two there are. The pass forgets
+   *  what it last put on each, so it looks at the object again and re-tints it once the effect
+   *  lets go, exactly as it did when it read every doodad's colour back every pass. */
+  private readonly fogRecheck = new Set<object>();
   private cheatBuf = ""; // rolling buffer of typed letters, for WC3 chat cheat codes
   private footprints = new Map<string, Footprint | null>();
   private metrics = new MetricsOverlay();
@@ -1299,6 +1353,12 @@ export class MapViewerScene {
   private world3 = new Float32Array(3);
   private minimap: HTMLCanvasElement | null = null;
   private iconCache = new Map<string, string | null>();
+  /** The icon warmer's two queues and its restart hook — see warmIconCache. */
+  private iconWarmFirst: string[] = [];
+  private iconWarmRest: string[] = [];
+  private iconWarmRestAt = 0;
+  private iconWarmIdle = false;
+  private iconWarmKick: (() => void) | null = null;
   /** Every icon URL blpIcon() has handed out, mapped back to the BLP it was decoded from.
    *  A greyed command button needs its icon's DIS* twin, and by the time the card is
    *  assembled the call site has long since thrown the path away — this is how `cmd()`
@@ -1623,6 +1683,12 @@ export class MapViewerScene {
 
     const viewer = new ViewerClass(canvas, solver, false);
     viewer.terrainModelExists = (path) => vfs.exists(path);
+    // Low Performance Mode's shared poses are for THIS viewer — the world, where a crowd of one
+    // model stands at the same point of the same clip. Every other viewer on the page (the menu's
+    // backdrop, the loading screen, the portraits, the HUD's clock) keeps sampling for itself at
+    // full rate: it has nothing to share with, and a 30 Hz pose on the menu read as judder. See
+    // `ow3SharePoses` in the viewer patch.
+    (viewer as unknown as { ow3SharePoses?: boolean }).ow3SharePoses = true;
     viewer.on("error", (e) => console.error("[mapviewer]", e));
 
     // Blob-url lifetime. Every model/texture path resolves to one stable blob URL (the
@@ -2773,6 +2839,10 @@ export class MapViewerScene {
       (p) => onProgress(DRAIN_SHARE * p),
     );
     const roster = this.producibleRoster();
+    // The rest of what this roster can put on a card goes to the FRONT of the icon warmer:
+    // the preload below decodes the units' own icons, and their abilities, their shops'
+    // items and the greyed twins follow in the background (see warmIconCache).
+    this.prioritizeIcons(roster);
     let done = 0;
     await Promise.all(roster.map(async (id) => {
       const def = this.registry.get(id);
@@ -6909,6 +6979,7 @@ export class MapViewerScene {
       // OVER-BRIGHT, fully-saturated yellow when on (heavy red so a green canopy
       // reads as yellow; zero blue; RGB >1 glows).
       tp.inst.setVertexColor(on ? [3.2, 1.5, 0, 1] : [1, 1, 1, 1]);
+      this.fogRecheck.add(tp.inst); // the fog pass must look at it again (see fogRecheck)
       if (tp.t <= 0) {
         tp.inst.setVertexColor([1, 1, 1, 1]); // restore
         this.treePulses.splice(i, 1);
@@ -7540,6 +7611,7 @@ export class MapViewerScene {
         if (inst) {
           next.add(inst as object);
           inst.setVertexColor(AOE_TREE_TINT);
+          this.fogRecheck.add(inst as object); // the fog pass must look at it again (see fogRecheck)
         }
       }
     }
@@ -8409,6 +8481,11 @@ export class MapViewerScene {
         return [ox, oy, (cols - 1) * 128, (rows - 1) * 128];
       },
       fogAt: (wx, wy) => this.rts?.getVision().stateAt(wx, wy) ?? 2, // 2 = visible (no fog before a match)
+      fogStates: (xs, ys, out) => {
+        const vision = this.rts?.getVision();
+        if (vision) vision.statesAtGrid(xs, ys, out);
+        else out.fill(2); // as fogAt: no fog before a match
+      },
       cameraRect: () => this.viewRect(),
       panTo: (wx, wy) => {
         this.releaseCameraRide(); // a minimap click/drag is the player taking the camera back
@@ -12235,44 +12312,105 @@ export class MapViewerScene {
    *  selection of a unit/building type stalls a frame — the visible "first select"
    *  FPS spike. The unit/ability registries are fixed for the session, so we warm
    *  the cache once during idle time; blpIcon()'s lazy decode stays as the fallback
-   *  for anything selected before warming reaches it. */
+   *  for anything selected before warming reaches it.
+   *
+   *  **Two queues, because not every icon is worth a frame.** That list is every unit,
+   *  ability and item in the game and each one's greyed twin — ~1,750 icons at ~1 ms apiece
+   *  (0.37 decode + 0.62 PNG encode, measured), and on a machine with no idle time at all the
+   *  browser forces the callback in on its timeout, so the warmer took a batch out of a frame
+   *  every second for about five minutes: ~3.4% of all CPU at 6× throttle, and most of it art
+   *  of races nobody in the match is playing (docs/perf-research.md). So:
+   *
+   *   • `iconWarmFirst` — the card's own fixed buttons, and (from `prioritizeIcons`, at match
+   *     start) what the LOCAL player's roster can put on a card: its abilities, the items its
+   *     shops make, and the greyed twins. This is what the first-select stall is about, so it
+   *     keeps making progress whether or not the browser is idle, as the whole list used to.
+   *   • `iconWarmRest` — everything else, decoded ONLY in real idle time. A fast machine still
+   *     warms all of it, as before; a machine without the idle time stops spending frames on it,
+   *     and the lazy decode is what it always was for an icon warming had not reached. */
   private warmIconCache(): void {
-    const paths = new Set<string>();
-    for (const n of FIXED_CARD_ICONS) paths.add(`ReplaceableTextures\\CommandButtons\\${n}.blp`);
+    const first = new Set<string>();
+    for (const n of FIXED_CARD_ICONS) first.add(`ReplaceableTextures\\CommandButtons\\${n}.blp`);
     // The hero "Hero Abilities" learn-skill book uses the Skillz art (see
     // pushAbilityButtons) — not a registry icon, so warm it explicitly.
-    paths.add("ReplaceableTextures\\CommandButtons\\BTNSkillz.blp");
-    for (const d of this.registry.all()) if (d.icon) paths.add(d.icon);
-    for (const a of this.abilities.all()) if (a.icon) paths.add(a.icon);
-    for (const it of this.items.all()) if (it.icon) paths.add(it.icon);
+    first.add("ReplaceableTextures\\CommandButtons\\BTNSkillz.blp");
+    const rest = new Set<string>();
+    for (const d of this.registry.all()) if (d.icon) rest.add(d.icon);
+    for (const a of this.abilities.all()) if (a.icon) rest.add(a.icon);
+    for (const it of this.items.all()) if (it.icon) rest.add(it.icon);
     // …and each icon's greyed twin, which a card reaches for the moment a building's
     // prerequisite is missing — i.e. on the FIRST worker selected, for most of the build
     // card. Queued strictly behind the live art: a twin nobody has greyed yet must never
     // delay the icon that is on screen right now.
-    const queue = [...paths, ...[...paths].map(disabledIconPath).filter((p): p is string => !!p)].filter(
-      (p) => !this.iconCache.has(p),
-    );
+    this.iconWarmFirst.push(...this.withTwins(first));
+    this.iconWarmRest.push(...this.withTwins(rest));
 
-    let i = 0;
     const ric = typeof window.requestIdleCallback === "function" ? window.requestIdleCallback.bind(window) : null;
+    const next = (): string | undefined => {
+      let p: string | undefined;
+      while ((p = this.iconWarmFirst.shift()) !== undefined && this.iconCache.has(p));
+      return p;
+    };
     const step = (deadline?: IdleDeadline) => {
       // The match may have been left while this was still draining. Every icon it decodes
       // mints a blob URL onto `blobUrls`, and dispose() has already revoked that list —
       // anything added after it would never be released.
       if (this.disposed) return;
-      // With real idle time, drain until the budget runs low. When the browser
-      // forced us in on the timeout (or there's no idle API) decode a small fixed
-      // batch instead, so we make steady progress without stealing a whole frame.
+      // With real idle time, drain until the budget runs low — the player's own icons first,
+      // then the rest. When the browser forced us in on the timeout (or there's no idle API)
+      // decode a small fixed batch of the player's own instead, so they make steady progress
+      // without stealing a whole frame, and leave the rest for an idle moment.
       const hasIdle = !!deadline && !deadline.didTimeout;
       let n = 0;
-      while (i < queue.length && (hasIdle ? deadline!.timeRemaining() > 1 : n < 6)) {
-        this.blpIcon(queue[i++]); // decode + cache (a miss caches null, so no retry)
+      while (hasIdle ? deadline!.timeRemaining() > 1 : n < 6) {
+        let p = next();
+        if (p === undefined && hasIdle) {
+          while ((p = this.iconWarmRest[this.iconWarmRestAt++]) !== undefined && this.iconCache.has(p));
+        }
+        if (p === undefined) break;
+        this.blpIcon(p); // decode + cache (a miss caches null, so no retry)
         n++;
       }
-      if (i < queue.length) schedule();
+      if (this.iconWarmFirst.length || this.iconWarmRestAt < this.iconWarmRest.length) schedule();
+      else this.iconWarmIdle = true;
     };
-    const schedule = () => (ric ? ric(step, { timeout: 1000 }) : setTimeout(step, 32));
+    const schedule = () => {
+      this.iconWarmIdle = false;
+      if (ric) ric(step, { timeout: 1000 });
+      else setTimeout(step, 32);
+    };
+    this.iconWarmKick = schedule;
     schedule();
+  }
+
+  /** Paths plus each one's greyed twin, live art first. */
+  private withTwins(paths: Set<string>): string[] {
+    return [...paths, ...[...paths].map(disabledIconPath).filter((p): p is string => !!p)];
+  }
+
+  /** Move what `roster` can put on the LOCAL player's command card to the front of the icon
+   *  warmer (see warmIconCache): each unit's own icon (the start preload has usually decoded
+   *  it already), its abilities and hero abilities, the items its buildings make or sell, and
+   *  every one's greyed twin. */
+  private prioritizeIcons(roster: string[]): void {
+    const paths = new Set<string>();
+    for (const id of roster) {
+      const def = this.registry.get(id);
+      if (def?.icon) paths.add(def.icon);
+      for (const aid of [...(def?.abilities ?? []), ...(def?.heroAbilities ?? [])]) {
+        const icon = this.abilities.get(aid)?.icon;
+        if (icon) paths.add(icon);
+      }
+      const node = this.tech.get(id);
+      for (const iid of [...(node?.makeitems ?? []), ...(node?.sellitems ?? [])]) {
+        const icon = this.items.get(iid)?.icon;
+        if (icon) paths.add(icon);
+      }
+    }
+    const fresh = this.withTwins(paths).filter((p) => !this.iconCache.has(p));
+    if (!fresh.length) return;
+    this.iconWarmFirst.unshift(...fresh);
+    if (this.iconWarmIdle) this.iconWarmKick?.();
   }
 
   /** The decoded pathing footprint for `texPath`, turned to `angle` if one is given (a
@@ -13742,24 +13880,27 @@ export class MapViewerScene {
     const pulsing = this.treePulses.length
       ? new Set(this.treePulses.map((p) => p.inst as unknown as HideableWidget["instance"]))
       : null;
-    const tintInstance = (inst: HideableWidget["instance"]): void => {
-      if (pulsing && pulsing.has(inst)) return;
-      if (this.aoeTreeInsts.has(inst)) return; // green AoE-target tree owns its colour this frame
-      const loc = inst.localLocation;
-      if (!loc) return; // nothing placed yet — the same guard fogSpawnedInstances keeps
-      // Light a prop from the BRIGHTEST cell of its footprint, not the one cell holding
-      // its origin. A tree blocks sight on every cell it covers, so a 4×4 tree shadows
-      // its own back half — and its origin sits exactly where its four cells meet, so
-      // the floor() in worldToCell often landed on a self-shadowed one and drew a
-      // front-line tree as explored-grey (#43). Props with no footprint use their cell.
-      const key = fogKey(loc[0], loc[1]);
-      // A tree's own blocker radius first (it is the number that also shadows the ground
-      // behind it), then the prop's body — see propFogRadius for why a bridge needs one.
-      const state = vision.bestStateAt(loc[0], loc[1], this.treeFogRadius.get(key) ?? this.propFogRadius.get(key) ?? 0);
+    // Light a prop from the BRIGHTEST cell of its footprint, not the one cell holding
+    // its origin. A tree blocks sight on every cell it covers, so a 4×4 tree shadows
+    // its own back half — and its origin sits exactly where its four cells meet, so
+    // the floor() in worldToCell often landed on a self-shadowed one and drew a
+    // front-line tree as explored-grey (#43). Props with no footprint use their cell.
+    // A tree's own blocker radius first (it is the number that also shadows the ground
+    // behind it), then the prop's body — see propFogRadius for why a bridge needs one.
+    const fogRadius = (x: number, y: number): number => {
+      const key = fogKey(x, y);
+      return this.treeFogRadius.get(key) ?? this.propFogRadius.get(key) ?? 0;
+    };
+    /** Put `state`'s tint on `inst`. False = it was not this pass's to tint (something else
+     *  owns its colour this frame, or it has no location yet) — the doodad table then keeps
+     *  asking. */
+    const tintState = (inst: HideableWidget["instance"], state: FogState): boolean => {
+      if (pulsing && pulsing.has(inst)) return false;
+      if (this.aoeTreeInsts.has(inst)) return false; // green AoE-target tree owns its colour this frame
       if (state === FogState.Unexplored) {
-        if (inst.rendered === false) return; // already dark — nothing to do
+        if (inst.rendered === false) return true; // already dark — nothing to do
         inst.hide(); // never seen — don't even hint at what's there
-        return;
+        return true;
       }
       const b = state === FogState.Visible ? 1 : MapViewerScene.FOG_EXPLORED_BRIGHT;
       const base = this.widgetBase(inst);
@@ -13778,14 +13919,48 @@ export class MapViewerScene {
       // above — but only while they are running), and it must be re-tinted when it comes back
       // rather than left wearing the effect's colour forever.
       const cur = inst.vertexColor;
-      if (inst.rendered !== false && cur && cur[0] === r && cur[1] === g && cur[2] === bl && cur[3] === a) return;
+      if (inst.rendered !== false && cur && cur[0] === r && cur[1] === g && cur[2] === bl && cur[3] === a) return true;
       const s = this.tintScratch;
       s[0] = r; s[1] = g; s[2] = bl; s[3] = a;
       inst.setVertexColor?.(s);
       inst.show();
+      return true;
+    };
+    const tintInstance = (inst: HideableWidget["instance"]): void => {
+      const loc = inst.localLocation;
+      if (!loc) return; // nothing placed yet — the same guard fogSpawnedInstances keeps
+      tintState(inst, vision.bestStateAt(loc[0], loc[1], fogRadius(loc[0], loc[1])));
     };
     const tint = (w: HideableWidget): void => tintInstance(w.instance);
-    for (const w of map.doodads) {
+    if (FogWidgetTable.enabled) {
+      // The same walk as the loop below, answered out of the table (FogDoodadTable): a doodad
+      // whose fog state has not moved since the tint the pass last put on it is wearing that
+      // tint still — the only other writers of a doodad's colour mark it in `fogRecheck` —
+      // so there is nothing to open it for.
+      const t = this.fogDoodadTable(map.doodads as unknown as HideableWidget[]);
+      if (this.fogRecheck.size) {
+        for (const inst of this.fogRecheck) {
+          const i = t.row.get(inst);
+          if (i !== undefined) t.state[i] = -1;
+        }
+        this.fogRecheck.clear();
+      }
+      const doodads = map.doodads as unknown as HideableWidget[];
+      const { x, y, r, state, retired } = t;
+      for (let i = 0; i < t.n; i++) {
+        if (retired[i]) continue;
+        if (x[i] !== x[i]) { // NaN: not placed when the row was read — try again
+          const loc = doodads[i].instance.localLocation;
+          if (!loc) continue;
+          x[i] = loc[0];
+          y[i] = loc[1];
+          r[i] = fogRadius(loc[0], loc[1]);
+        }
+        const s = vision.bestStateAt(x[i], y[i], r[i]);
+        if (s === state[i]) continue;
+        state[i] = tintState(doodads[i].instance, s) ? s : -1;
+      }
+    } else for (const w of map.doodads) {
       this.mapProps.add(w.instance); // …and claimed, so the sweep below leaves it to us
       // A doodad that has a STAND-IN is drawn by the stand-in, full stop.
       //
@@ -13821,6 +13996,47 @@ export class MapViewerScene {
       tint(w);
     }
     this.fogSpawnedInstances(vision);
+  }
+
+  /** fogWidgets' doodad table, brought up to date with the map: rebuilt when a doodad streams
+   *  in or a fog radius is filled, and its `retired` column re-read when a doodad is retired.
+   *  Every row's instance is claimed for `mapProps` here, as the plain walk claims it. */
+  private fogDoodadTable(doodads: HideableWidget[]): FogDoodadTable {
+    let t = this.fogTable;
+    if (!t || t.doodads !== doodads || t.n !== doodads.length
+      || t.treeN !== this.treeFogRadius.size || t.propN !== this.propFogRadius.size) {
+      const n = doodads.length;
+      t = {
+        doodads, n, treeN: this.treeFogRadius.size, propN: this.propFogRadius.size, removedN: -1, actorsN: -1,
+        x: new Float64Array(n), y: new Float64Array(n), r: new Float64Array(n),
+        state: new Int8Array(n).fill(-1), retired: new Uint8Array(n), row: new Map(),
+      };
+      for (let i = 0; i < n; i++) {
+        const inst = doodads[i].instance;
+        this.mapProps.add(inst);
+        t.row.set(inst, i);
+        const loc = inst.localLocation;
+        if (loc) {
+          t.x[i] = loc[0];
+          t.y[i] = loc[1];
+          const key = fogKey(loc[0], loc[1]);
+          t.r[i] = this.treeFogRadius.get(key) ?? this.propFogRadius.get(key) ?? 0;
+        } else {
+          t.x[i] = t.y[i] = t.r[i] = NaN;
+        }
+      }
+      this.fogTable = t;
+    }
+    if (t.removedN !== this.removedWidgets.size || t.actorsN !== this.doodadActors.size) {
+      // See the plain walk in fogWidgets for why `doodadActors` is asked as well.
+      for (let i = 0; i < t.n; i++) {
+        const w = doodads[i];
+        t.retired[i] = this.removedWidgets.has(w) || this.doodadActors.has(w) ? 1 : 0;
+      }
+      t.removedN = this.removedWidgets.size;
+      t.actorsN = this.doodadActors.size;
+    }
+    return t;
   }
 
   /** Instances the two loops above have claimed — the map's own props and units. Everything
@@ -14180,6 +14396,8 @@ export class MapViewerScene {
     this.fogTerrain = null;
     this.removedWidgets.clear();
     this.baseColors = new WeakMap();
+    this.fogTable = null;
+    this.fogRecheck.clear();
     this.fogAccum = 0;
     // Everything the fog was holding back goes with it — both queues are answers about a map
     // and a viewpoint that no longer exist (see syncBlight / flushPendingFells).
@@ -14438,16 +14656,54 @@ export class MapViewerScene {
     this.showScrollArrow(dx, dy);
   }
 
-  /** The game frame's box in viewport coords. Read once a frame: the pointer handlers and the
-   *  edge-scroll both need it, and `getBoundingClientRect` on every mouse move would force a
-   *  layout against a HUD that mutates the DOM each frame. */
+  /**
+   * The game frame's box in viewport coords — read when it CHANGES, not once a frame.
+   *
+   * The pointer handlers and the edge-scroll both convert against it, and
+   * `getBoundingClientRect` on every mouse move would force a layout against a HUD that mutates
+   * the DOM every frame. Reading it once a frame was the first answer and it is the same trap one
+   * step further out: the read still lands AFTER that frame's HUD writes, so it still forces the
+   * layout — profiled in a 287-unit fight at 6× throttle, `getBoundingClientRect` was 4.0% of all
+   * CPU, none of it arithmetic (render/worldOverlays.ts `clientSize` is the same lesson on the
+   * canvas's CSS box).
+   *
+   * What actually moves this box is the WINDOW: a resize, the stage re-boxing itself between 4:3
+   * and 16:9 (ui/stage.ts), a scroll, or the canvas being swapped out from under us when a map
+   * loads (`freshMapCanvas`). So those mark it stale and the next frame re-reads — where the read
+   * is the cheap kind, because nothing has written since the browser last laid out.
+   */
+  private frameBoxDirty = true;
+  private frameBoxEl: HTMLCanvasElement | null = null;
+  private frameBoxObserver: ResizeObserver | null = null;
+
   private syncFrame(): void {
-    const r = this.canvas.getBoundingClientRect();
+    const canvas = this.canvas;
+    if (this.frameBoxEl !== canvas) {
+      this.frameBoxEl = canvas;
+      this.frameBoxDirty = true;
+      if (typeof ResizeObserver !== "undefined") {
+        this.frameBoxObserver?.disconnect();
+        this.frameBoxObserver = new ResizeObserver(() => { this.frameBoxDirty = true; });
+        this.frameBoxObserver.observe(canvas);
+      }
+      if (!this.frameBoxListening && typeof window !== "undefined") {
+        this.frameBoxListening = true;
+        // A resize the observer sees as well; a SCROLL it does not, and the box is in viewport
+        // coordinates. Passive, and they only set a flag.
+        window.addEventListener("resize", () => { this.frameBoxDirty = true; }, { passive: true });
+        window.addEventListener("scroll", () => { this.frameBoxDirty = true; }, { passive: true, capture: true });
+      }
+    }
+    // No observer to keep it fresh (an old browser, a headless test) — behave as it used to.
+    if (!this.frameBoxDirty && this.frameBoxObserver !== null) return;
+    this.frameBoxDirty = false;
+    const r = canvas.getBoundingClientRect();
     this.frame.left = r.left;
     this.frame.top = r.top;
     this.frame.right = r.right;
     this.frame.bottom = r.bottom;
   }
+  private frameBoxListening = false;
 
   /** The edge-pan cursor: the game's OWN three-frame chevron (row 3, cols 5-7 of the race
    *  cursor sheet), spun to point the way the camera is going. `<race>Cursor.mdx` plays those

@@ -42,6 +42,10 @@ export interface VideoSettings {
   occlusion: boolean;
   /** 0–100, 50 = unchanged. */
   gamma: number;
+  /** "Low Performance Mode" — every rung above is already the one this mode forces (see
+   *  `LOW_PERF_FORCED`). Carried so the renderer can ask the MODE rather than infer it from a
+   *  rung a player might equally have chosen by hand. */
+  lowPerf: boolean;
 }
 
 /**
@@ -58,12 +62,44 @@ export interface VideoBridge {
   particleScale: number;
   /** Mipmap levels to drop from the top of a BLP's chain as it is uploaded. 0 = full size. */
   textureMipDrop: number;
+  /**
+   * Low Performance Mode's animation path: may an MDX instance take a pose another instance of
+   * the same model already sampled, at the same clip and the same 1/30 s of it?
+   *
+   * This is the largest thing the mode does, and the only one that is not a rung of the panel —
+   * see `LOW_PERF_FORCED` for why it is here rather than there. Profiled at 257 units and 6x CPU
+   * throttle, the MDX node walk is ~41% of all CPU against ~7% for the drawing, and 317 visible
+   * instances were holding 60 distinct poses. The cache and the reasoning live at the top of
+   * `viewer/handlers/mdx/modelinstance.js` in the patch; what it costs is animation time
+   * quantized to 30 Hz, which is why it is off at full quality.
+   */
+  sharedPoses: boolean;
+  /**
+   * How coarse a shared pose bucket is, in ms of ANIMATION time. Default 1000/30, which is about
+   * the rate an MDX's tracks are authored at and so the rate at which stepping stops being
+   * visible. A knob rather than a constant because it is the one dial on the animation path with
+   * two effects at once — fewer buckets means fewer poses SAMPLED and more instances sharing each
+   * one — and its cost is purely how the clips read, which is a judgement to be measured and
+   * looked at rather than argued (docs/perf-research.md).
+   */
+  poseBucket: number;
 }
 
 const bridge = (): VideoBridge => {
   const g = globalThis as { __OW3_VIDEO__?: VideoBridge };
-  return (g.__OW3_VIDEO__ ??= { particleScale: 1, textureMipDrop: 0 });
+  return (g.__OW3_VIDEO__ ??= { particleScale: 1, textureMipDrop: 0, sharedPoses: false, poseBucket: POSE_BUCKET_MS });
 };
+
+/**
+ * The shared pose bucket, in ms of animation time — Low Performance Mode's one animation dial.
+ *
+ * OURS, and it is the trade the mode makes: clips step at this rate rather than per frame. 1000/30
+ * is where it sits because MDX tracks are authored at about that, so the stepping is hard to see;
+ * a coarser bucket samples fewer poses AND puts more instances in each one, so it pays twice.
+ * Measured interleaved at 287 units and 6× throttle, 15 Hz was worth ~4% of the frame — see
+ * docs/perf-research.md for why that was not enough to spend the smoothness on.
+ */
+const POSE_BUCKET_MS = 1000 / 30;
 
 /** What OpenWar3 has always rendered at, and what `ui/stage.ts` calls the game frame. */
 const DEFAULT_WIDTH = 1920;
@@ -80,6 +116,7 @@ const DEFAULTS: VideoSettings = {
   unitShadows: true,
   occlusion: true,
   gamma: 50,
+  lowPerf: false,
 };
 
 let current: VideoSettings = { ...DEFAULTS };
@@ -145,6 +182,47 @@ const ANIM_STRIDE: Record<Quality, number> = { high: 1, medium: 2, low: 4 };
  * the screen's, and drops the points.
  */
 const MAX_LIGHTS: Record<Quality, number> = { high: 8, medium: 4, low: 0 };
+
+/**
+ * What "Low Performance Mode" means (issue #161) — the Video panel's own rows, at the cheapest
+ * rung each one has.
+ *
+ * It is ONE SWITCH over the settings this panel already has, not a second renderer: a machine
+ * that needs it should not have to find seven dropdowns and know which way is cheaper. The
+ * renderer work issue #161 also asks for — particles off rather than quartered, the fog and
+ * shadow layers taking terrain-cull's runs, skinning off the main thread, single-pass terrain —
+ * is behind this flag when it lands, which is why `VideoSettings.lowPerf` is carried separately
+ * from the rungs it forces.
+ *
+ * TWO ROWS ARE DELIBERATELY NOT HERE.
+ *
+ *   · **Resolution.** It is the one rung that changes how many PIXELS are drawn and so the one a
+ *     weak GPU cares most about (see `renderSize`) — which is exactly why it stays the player's:
+ *     how sharp the world is against how smooth it runs is the trade only they can make. Issue
+ *     #161 asks for it in as many words ("keep the one chosen by the player").
+ *   · **Gamma.** A non-default gamma is a full-screen filter pass per frame, so there is a case
+ *     for forcing it to 50 — but it is the BRIGHTNESS of the picture, not a cheaper drawing of
+ *     the same one, and a player on a dim panel needs it wherever they set it. Left live.
+ *
+ * FORCED AT APPLY TIME, NEVER WRITTEN TO THE STORE. `applyVideoOptions` lays this over the
+ * options it is handed; the player's own seven values sit untouched underneath, so unticking the
+ * box gives every one of them back. The two Options screens grey these rows while the mode is on
+ * and show the forced rung in them, so what the panel says and what the renderer does agree.
+ */
+export const LOW_PERF_FORCED: Readonly<Record<string, string>> = {
+  modelDetail: "low",
+  animQuality: "low",
+  textureQuality: "low",
+  particles: "low",
+  lights: "low",
+  shadows: "off",
+  occlusion: "off",
+};
+
+/** True while the mode is on — used by both Options screens to grey the rows it forces. */
+export function lowPerfMode(): boolean {
+  return current.lowPerf;
+}
 
 const quality = (v: unknown, fallback: Quality): Quality =>
   v === "low" || v === "medium" || v === "high" ? v : fallback;
@@ -215,7 +293,12 @@ export function maxOmniLights(): number {
  * Three of the five reach their destination through this call; `textureQuality` is read by the
  * loader as textures arrive, and `particles` by the emitters as they emit.
  */
-export function applyVideoOptions(opts: Options): void {
+export function applyVideoOptions(options: Options): void {
+  // Low Performance Mode lays its rungs OVER the stored ones (LOW_PERF_FORCED) — the store keeps
+  // the player's own choices, so unticking the box restores them without anything having to be
+  // remembered. Resolution and gamma are read from `options` either way: they are not in the table.
+  const lowPerf = options.lowPerf === true;
+  const opts = lowPerf ? { ...options, ...LOW_PERF_FORCED } : options;
   const [renderWidth, renderHeight] = resolution(opts.resolution);
   current = {
     renderWidth,
@@ -228,10 +311,16 @@ export function applyVideoOptions(opts: Options): void {
     unitShadows: opts.shadows !== "off",
     occlusion: opts.occlusion !== "off",
     gamma: typeof opts.gamma === "number" ? opts.gamma : DEFAULTS.gamma,
+    lowPerf,
   };
   const b = bridge();
   b.particleScale = PARTICLE_SCALE[current.particles];
   b.textureMipDrop = MIP_DROP[current.textureQuality];
+  // The mode's own switch rather than a rung's: the pose cache is what Low Performance Mode is
+  // actually FOR (see `VideoBridge.sharedPoses`), and it is live — a tick takes effect on the
+  // next frame, and unticking has every instance sampling for itself again.
+  b.sharedPoses = current.lowPerf;
+  b.poseBucket = POSE_BUCKET_MS;
   applyGamma(current.gamma);
 }
 

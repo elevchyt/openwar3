@@ -80,6 +80,15 @@ export interface Instance {
   sequenceEnded: boolean; // mdx-m3-viewer: true once a non-looping clip finishes (drives the idle fidget re-roll)
   setLocation(v: ArrayLike<number>): unknown;
   setRotation(q: ArrayLike<number>): unknown;
+  /** Location, rotation and scale in one write and ONE recalculation (placeInstance). Optional,
+   *  with the local scale, because a test's stub instance need not carry them. */
+  setTransformation?(loc: ArrayLike<number>, rot: ArrayLike<number>, scale: ArrayLike<number>): unknown;
+  localScale?: Float32Array;
+  /** mdx-m3-viewer's "re-sample every channel on the next update" flag, which its
+   *  `recalculateTransformation` raises (placeInstance keeps raising it). */
+  forced?: boolean;
+  /** Instances parented to THIS one (not to one of its bones). */
+  children?: ArrayLike<unknown>;
   setSequence(i: number): unknown;
   setSequenceLoopMode(m: number): unknown;
   setUniformScale(s: number): unknown;
@@ -4747,9 +4756,8 @@ export class RtsController {
         (e.footHalfW > 0 ? this.footMaxHeight(u.x, u.y, e.footHalfW, e.footHalfH) : this.groundOrDeck(u.x, u.y));
       if (e.floats) this.loc[2] = Math.max(this.loc[2], this.waterAt(u.x, u.y)); // a hull rides the surface, not the sea floor
       this.loc[2] += e.moveHeight;
-      e.unit.instance.setLocation(this.loc);
       setZQuat(this.quat, u.facing);
-      e.unit.instance.setRotation(this.quat);
+      placeInstance(e.unit.instance, this.loc, this.quat);
       // Workers inside a gold mine vanish; enemy units vanish in the fog of war.
       this.applyVisibility(e, u, this.modelHidden(e.simId), dt);
       // A building the fog has swallowed is a STILL PICTURE: no construction scrub, no
@@ -9887,6 +9895,55 @@ function upgradeProgress(job: RenderBuildJob): number {
 
 // A unit's weapon from its registry stats; null when it can't attack.
 // Quaternion for a rotation `angle` about +Z, written into `out`.
+/** The per-frame placement switch (placeInstance). On, unless a live A/B turns it off to go back
+ *  to `setLocation` + `setRotation` — it changes what drawing a unit COSTS and never where it is
+ *  drawn (docs/perf-research.md). */
+export const PlaceInstance = { skipUnchanged: true };
+
+/**
+ * Put a unit's model at `loc`, turned to `quat` — the placement syncEntries makes for every unit
+ * every frame.
+ *
+ * It was `setLocation` then `setRotation`, and in mdx-m3-viewer each of those runs the whole of
+ * `recalculateTransformation`: a matrix compose, the same recursion into every instance attached
+ * to this one (buff art, a carried flag) and a re-file in the scene grid. So every unit paid it
+ * TWICE a frame, and a building or a unit standing still paid it for a transform that had not
+ * changed at all.
+ *
+ * Both halves are exact. ONE `setTransformation` ends in the same state as the two calls: the
+ * rotation moves neither a root instance's world location nor its world scale, which are all the
+ * grid re-file reads, so the first call's re-file already put it where the second would. And an
+ * UNCHANGED transform recalculates to exactly what is there: everything the recalculation writes
+ * is a function of the local location, rotation and scale (a unit's instance has no parent), and
+ * every writer of those in the viewer and in our code goes through a setter that recalculates —
+ * so "the local vectors hold these numbers" means "the matrices were computed from them". The
+ * compare is Float32 against Float32, the precision the vectors are stored in, so a value that
+ * rounds to what is stored is what the setter would have stored.
+ */
+function placeInstance(inst: Instance, loc: Float32Array, quat: Float32Array): void {
+  const l = inst.localLocation, r = inst.localRotation, sc = inst.localScale;
+  // An instance with instances parented to IT is recalculated in full whatever happened: the
+  // recursion into them raises their `forced` too. (A unit's buff art and attachments hang off
+  // its BONES, so in practice this is nobody — none in a 287-unit fight.)
+  if (!inst.setTransformation || !sc || !PlaceInstance.skipUnchanged || inst.children?.length) {
+    inst.setLocation(loc);
+    inst.setRotation(quat);
+    return;
+  }
+  if (l[0] === loc[0] && l[1] === loc[1] && l[2] === loc[2] &&
+      r[0] === quat[0] && r[1] === quat[1] && r[2] === quat[2] && r[3] === quat[3]) {
+    // …but the recalculation had a SIDE EFFECT that is not a transform, and it has to be kept:
+    // the viewer's override raises `forced`, so every unit re-sampled every animation channel
+    // every frame. Leaving a still unit unforced is NOT the same picture — at the end of one of
+    // the patch's cross-fades, a channel the new clip holds constant keeps the last BLENDED
+    // value unless a forced pass rewrites it (measured: 1.2 units on a Priest's root, 8 in world
+    // space; see docs/perf-research.md row 14). The recalculation is skipped; the flag is not.
+    inst.forced = true;
+    return;
+  }
+  inst.setTransformation(loc, quat, sc);
+}
+
 function setZQuat(out: Float32Array, angle: number): void {
   const half = angle / 2;
   out[0] = 0;

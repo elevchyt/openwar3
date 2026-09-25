@@ -90,12 +90,20 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   outside our loop*. The recorder is dev-server-only in both halves (`apply: "serve"` +
   `import.meta.env.DEV`), and phases must PARTITION the frame — nesting two `perfLog.begin`
   spans makes the report's `(unaccounted)` row meaningless.
+  A hot predicate that takes a DATA ROW as an argument is the standing trap there: an ability's
+  Targets Allowed is a CONSTANT (normalised at the SLK boundary, and a map edit REPLACES the
+  array), yet `targetAllowed` and `targsKindError` each rebuilt `new Set(normalizeTargetFlags(…))`
+  per call — ~24% of a 287-unit frame, more than the whole renderer cost by then. `targetFlagSet`
+  (data/abilities.ts) normalises once per array and keeps it in a WeakMap: **−23% in Low
+  Performance Mode and −26% at full quality**, exact, with `TargetFlagCache.enabled` to re-measure.
 - **Fog rebuild:** the per-seat vision rebuild (`sim.fog`) is the largest sub-phase of the sim
   after the world step in a team game, and `SightStamps` in [`src/sim/vision.ts`](src/sim/vision.ts)
   is why it is no longer. A sight's footprint is a fact about the TERRAIN, not about who is
   looking — every viewpoint gets the same height field and every felled tree — so the ray cast is
   cast ONCE and replayed into each viewpoint's own three layers, keyed on the UNIT (one entry per
-  unit; a position key would mint a new one every 64 world units a unit walks). Invalidated by the
+  unit; a position key would mint a new one every 64 world units a unit walks) — and, behind that,
+  on (cell, sight) in a least-recently-used layer CAPPED by cells held, because in a fight two
+  thirds of all casts repeat a footprint another unit cast moments before. Invalidated by the
   tree that comes down and by the sight radius changing (day/night is a different `R`, so it
   re-keys itself). It must stay EXACT — fog gates what an AI knows and what a client may see, so a
   footprint that is even slightly wrong is a desync and a cheat at once; `tools/sim-vision-cache-test.cjs`
@@ -136,6 +144,53 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   `settings.json` owns it and OK offers to RELAUNCH the game to apply it (nothing in Electron
   changes it on a running window); with it off the page caps itself
   at 300 fps (`src/render/frameCap.ts`), and in a browser tab the box is greyed.
+  **LOW PERFORMANCE MODE** (issue #161, the row under Resolution, also `?lowperf`) is ONE SWITCH
+  over the rows below it — `LOW_PERF_FORCED` — and is FORCED AT APPLY TIME, never written to the
+  store, which is the whole of why unticking it gives the player their seven values back.
+  Resolution and Gamma are deliberately NOT in it (the pixels and the brightness are the
+  player's), both screens GREY the rows it owns *and* show them the rung it forces (a dead
+  dropdown still reading "High" is the panel lying about the game), and it is worth only a few
+  per cent as it stands: it composes the rungs this panel already had, and the renderer work the
+  issue actually asks for lands BEHIND the flag, which is why `VideoSettings.lowPerf` is carried
+  beside the rungs it forces. The FIRST of that work is the **shared pose cache**
+  (`VideoBridge.sharedPoses`, the cache at the top of the patch's `mdx/modelinstance.js`):
+  profiled, the MDX NODE WALK is ~41% of all CPU and the DRAWING is ~7%, so a second renderer is
+  aimed at the wrong number — and 317 visible instances were found holding **60** distinct
+  `(model, sequence, 1/30 s)` poses, so the pose is sampled once and replayed (SightStamps'
+  lesson in a second place). What is shared is the LOCAL pose, never the bone matrices, which
+  are WORLD space here. The trap that makes or breaks it: **`forced` means two different
+  things** — a sequence change (rewrite every local) and a MOVE (recompose every world matrix,
+  tracks untouched) — and since the units worth sharing are the ones that are moving, folding
+  them into one flag means nothing ever shares (`ow3PoseReset` is the first kind). The SECOND
+  half is the shared **SKELETON**, and it is where the big number is: a root bone's parent is
+  the INSTANCE, so hanging it off an identity (`ow3LocalPose`) composes the pose in instance
+  space, a whole bucket then shares ONE bone texture, and the vertex shader multiplies each
+  body's own matrix back in (`u_instance`). **2.1× on a mixed human army, 3.1× where every model
+  qualifies**, 259 units at 6× CPU throttle. Three things stay the instance's and are composed
+  for it: the nodes that act on the WORLD (emitters, event objects, attached models — listed
+  fresh every frame, because a buff model is PARENTED to a bone at runtime), the click ray's
+  collision shapes (`src/render/modelCollision.ts`), and the frame the mode flips on. A
+  BILLBOARDED node cannot be IN a shared pose — it faces the camera through the instance's own
+  rotation, and putting it there drew a white halo around every Footman's shield — so those
+  SUBTREES are redone per instance in world space and converted back (`ow3FixBillboards`: six of
+  a Footman's 57 nodes, worth 16–29% of the frame against shutting those 21-of-69 models out).
+  A node with its OWN CLOCK (a global-sequence TRS track, sampled on the instance's `counter`) is
+  redone the same way — it used to shut its whole model out, which was the Knight's 214 nodes for
+  three leaf attachments and 80% of all skeleton work in a 287-unit scene — and only
+  `dontInherit*` still disqualifies a model. **Verify a change here NUMERICALLY,
+  never in pixels** — two frames of a living match differ by 6% of their pixels on their own, and
+  both bugs this path had were invisible in a screenshot: compare `instance.worldMatrix ×
+  local[i]` against the per-instance path's `nodes[i].worldMatrix` at the same clip and frame
+  (they agree to ≤0.0011 world units). Those two were that `worldMatrices` is in NODE order while
+  `sortedNodes` is in HIERARCHY order, and that a node which ACTS ON THE WORLD holds a world
+  matrix the next composer captures into a shared pose unless it is redone (`ow3WorldWritten`,
+  which must include nodes that merely USED to carry something — a buff model is parented to a
+  bone and taken away again). The `forced` insight looks like it should pay at FULL quality too —
+  a moving unit re-samples every channel of every node, including the ones its clip is silent
+  about — and that was built, proved EXACT (bit-for-bit across 19 models) and **taken back out**,
+  because interleaved it is worth nothing and the sign flips between runs: a silent node's sample
+  is a miss or a constant, and the instances a move forces are the UNITS, whose clips animate most
+  of their skeleton. See docs/video-options.md before reaching for it again.
 - **Windows:** read [`docs/windows.md`](docs/windows.md) before touching the NSIS include
   ([`packaging/windows-installer.nsh`](packaging/windows-installer.nsh)), the `win`/`nsis` build
   blocks or [`electron/locate.mjs`](electron/locate.mjs). ONE installer carries the 64- and the

@@ -4,7 +4,7 @@ import { targsKindError } from "./targeting";
 import { corpseAdmits, corpseMissingError, corpseNeed, corpseReach, spawnsFromCorpse, type CorpseNeed, type CorpseOrder } from "./corpses";
 import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, type Footprint } from "./destructibles";
 import { BlightGrid } from "./blight";
-import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isCriticalStrikeCode, isRepairCode, normalizeTargetFlags, requiredHeroLevel, KNOWN_ABILITIES, morphFlags, MORPH_FLAG_PERMANENT, MORPH_FLAG_REQUIRES_PAYMENT } from "../data/abilities";
+import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isCriticalStrikeCode, isRepairCode, targetFlagSet, requiredHeroLevel, KNOWN_ABILITIES, morphFlags, MORPH_FLAG_PERMANENT, MORPH_FLAG_REQUIRES_PAYMENT } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
 import { cloneAbilityDef, readAbilityField, writeAbilityField } from "../data/objectData";
 import { ATTACK_TYPES, defenseTypeCode, defenseTypeFrom, targetedAsCode, targetedAsFrom } from "../data/unitFieldCodes";
@@ -2638,6 +2638,21 @@ const BODY_GAP_CELLS = 4;
  *  turns it off to run the all-pairs loop it replaced — it changes what the pass COSTS and never
  *  what it does (tools/sim-collision-grid-test.cjs). */
 export const CollisionGrid = { enabled: true };
+/** The autocast search's flat scan (SimWorld.autocastTarget / dispelAutocastTarget). On, unless a
+ *  test or a live A/B turns it off to run the Map-iterator-and-hypot loop it replaced — it changes
+ *  what the search COSTS and never what it FINDS (tools/sim-autocast-scan-test.cjs). */
+export const AutocastScan = { fast: true };
+/** The upgrade-bonus cache (SimWorld.upgradeBonuses). On, unless a test or a live A/B turns it
+ *  off to recompute the sum for every unit every step — it changes what recomputeStats COSTS and
+ *  never what it computes (tools/sim-upgrade-cache-test.cjs). */
+export const UpgradeBonusCache = { enabled: true };
+/** What the owner's researched upgrades add to one unit type (SimWorld.upgradeBonuses). */
+interface UpgradeBonuses {
+  dice: number; armor: number; hp: number; hpPct: number; mana: number; manaRegen: number;
+  range: number; sight: number; speed: number; attackSpeed: number; damage: number;
+  lumber: number; spillDist: number; spillRadius: number; weaponMask: number;
+  attackLevel: number; armorLevel: number;
+}
 /** The grid's cell, in world units. Ours, and free to be anything: the reach a body is offered is
  *  computed from the radii, so the size only decides how many cells a query walks and how many
  *  bodies each one holds — four footman-sized bodies a side at 128. */
@@ -3353,8 +3368,60 @@ function distSkip(
   return strict ? d2 > reach * reach : d2 >= reach * reach;
 }
 
+/**
+ * Is `t` out of an autocast's reach from `u` — hull to hull, `hypot(dx, dy) − u.radius − t.radius
+ * > range`, which is the test the search always made?
+ *
+ * The fast path rejects on ONE AXIS first, and that is what makes it cheap: a body across the map
+ * is apart along x or y by far more than the reach, and a subtraction and two compares say so
+ * without the square root — where `Math.hypot` was most of the search's own time, called for every
+ * unit on the map by every idle caster every step. It rejects EXACTLY what the full test would:
+ * `hypot` is never less than either leg, and the one-world-unit margin keeps a body anywhere near
+ * the boundary away from the axis test altogether, so rounding can never be what decides it — that
+ * body falls through to the original expression, word for word. A non-finite position compares
+ * false both ways and falls through too, exactly as it did.
+ */
+function autocastOutOfReach(u: SimUnit, t: SimUnit, range: number): boolean {
+  if (AutocastScan.fast) {
+    const lim = range + u.radius + t.radius + 1;
+    const dx = t.x - u.x;
+    if (dx > lim || dx < -lim) return true;
+    const dy = t.y - u.y;
+    if (dy > lim || dy < -lim) return true;
+  }
+  return Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > range;
+}
+
 export class SimWorld {
   readonly units = new Map<number, SimUnit>();
+  /**
+   * `units.values()` as a flat array, in the Map's OWN order, for the one scan too hot for an
+   * iterator: the autocast search, which every idle caster with autocast on runs every step
+   * against every unit on the map. Profiled in a 287-unit fight at 6× CPU throttle it was 7.1% of
+   * ALL CPU and about 40% of the whole simulation step (docs/perf-research.md).
+   *
+   * The ORDER is the load-bearing part, not the array. A friendly buff ranks allies by a fraction
+   * of health, every full-health ally in the fight scores the same, and the tie goes to whichever
+   * the scan met FIRST — so a list in any other order would put the Inner Fire on a different
+   * Footman, which is a different game. Rebuilt from the Map itself whenever the set of units
+   * changes (`unitsVersion`, bumped at the one insert and the three deletes), so it is always the
+   * Map's order exactly.
+   */
+  private unitList: SimUnit[] = [];
+  private unitListVersion = -1;
+  private unitsVersion = 0;
+  /** upgradeBonuses' cache: owner → unit type → the sum, the research version it was taken at
+   *  and the def it was taken from. */
+  private upgradeCache = new Map<number, Map<string, { version: number; def: unknown; bonuses: UpgradeBonuses }>>();
+  private unitsInOrder(): readonly SimUnit[] {
+    // The size test is a second net under the version: a unit added or taken out by a path that
+    // somehow bypassed the four bumped sites still forces a rebuild.
+    if (this.unitListVersion !== this.unitsVersion || this.unitList.length !== this.units.size) {
+      this.unitList = Array.from(this.units.values());
+      this.unitListVersion = this.unitsVersion;
+    }
+    return this.unitList;
+  }
   /** Every hero of every player that is currently dead and revivable (see FallenHero). */
   readonly fallen = new Map<number, FallenHero>();
   /** How many times each player's heroes have died this match — every filing on `fallen`,
@@ -8141,6 +8208,7 @@ export class SimWorld {
     // closed to every worker and every later haunting for the rest of the match.
     this.releaseEntangled(u);
     this.units.delete(u.id);
+    this.unitsVersion++; // see unitsInOrder
     this.teleportChannels.delete(u.id); // a caster that leaves mid-teleport takes its channel with it
     this.teleportedFrom.delete(u.id); // a missile at a unit that is gone fizzles; nothing reads these again
     this.boardedFrom.delete(u.id);
@@ -8171,6 +8239,7 @@ export class SimWorld {
     }
     this.releaseEntangled(u); // an Entangled Gold Mine leaving hands the mine back
     this.units.delete(u.id);
+    this.unitsVersion++; // see unitsInOrder
     this.teleportChannels.delete(u.id); // a caster that leaves mid-teleport takes its channel with it
     this.teleportedFrom.delete(u.id); // a missile at a unit that is gone fizzles; nothing reads these again
     this.boardedFrom.delete(u.id);
@@ -8773,6 +8842,7 @@ export class SimWorld {
       pendingDrop: null,
     };
     this.units.set(u.id, u);
+    this.unitsVersion++; // see unitsInOrder
     this.settle(u);
     if (u.worker) this.applyHarvestData(u.worker); // rates come off the harvest ability's row
     this.tech?.invalidate(); // a new unit may unlock (or, for a shop, be) something
@@ -11577,12 +11647,27 @@ export class SimWorld {
    *  Reinforced Defenses), `ratc` (attack target count — Moon Glaive's bounce), `rrai`,
    *  `rent`, `rspi`, `rlev`, `raud`, `rmin`, `radl`. `rtma` is not a stat at all — it flips a
    *  unit's availability and is handled by TechState.maxAllowed. */
-  private upgradeBonuses(u: SimUnit): {
-    dice: number; armor: number; hp: number; hpPct: number; mana: number; manaRegen: number;
-    range: number; sight: number; speed: number; attackSpeed: number; damage: number;
-    lumber: number; spillDist: number; spillRadius: number; weaponMask: number;
-    attackLevel: number; armorLevel: number;
-  } {
+  private upgradeBonuses(u: SimUnit): Readonly<UpgradeBonuses> {
+    // The sum depends on three things only — the owner's research levels, the unit's TYPE (its
+    // `upgradesUsed` list and `defUp`) and the upgrade rows — so every unit of one type under
+    // one owner gets the same answer, and it was being rebuilt for every unit every step
+    // (recomputeStats). Cached per (owner, type) and dropped when TechState.researchVersion
+    // moves; the def is kept beside it so a registry that handed back a different row would
+    // miss rather than serve a stale one. The result is SHARED, so it is read-only to callers.
+    if (!UpgradeBonusCache.enabled || !this.tech || !this.unitReg) return this.sumUpgradeBonuses(u);
+    let byType = this.upgradeCache.get(u.owner);
+    if (!byType) this.upgradeCache.set(u.owner, (byType = new Map()));
+    const def = this.unitReg.get(u.typeId);
+    const version = this.tech.researchVersion;
+    const hit = byType.get(u.typeId);
+    if (hit && hit.version === version && hit.def === def) return hit.bonuses;
+    const bonuses = this.sumUpgradeBonuses(u);
+    byType.set(u.typeId, { version, def, bonuses });
+    return bonuses;
+  }
+
+  /** upgradeBonuses without the cache: the sum itself. */
+  private sumUpgradeBonuses(u: SimUnit): UpgradeBonuses {
     const b = {
       dice: 0, armor: 0, hp: 0, hpPct: 0, mana: 0, manaRegen: 0, range: 0, sight: 0, speed: 0,
       attackSpeed: 0, damage: 0, lumber: 0, spillDist: 0, spillRadius: 0,
@@ -13211,7 +13296,7 @@ export class SimWorld {
   private auraSide(abilityId: string, targetFlags: readonly string[]): { hostileAura: boolean; alliedAura: boolean } {
     let side = this.auraSides.get(abilityId);
     if (!side) {
-      const F = new Set(targetFlags.map((f) => f.toLowerCase()));
+      const F = targetFlagSet(targetFlags);
       side = { hostileAura: F.has("enemy") && !F.has("friend"), alliedAura: F.has("friend") && !F.has("enemy") };
       this.auraSides.set(abilityId, side);
     }
@@ -13461,8 +13546,11 @@ export class SimWorld {
    *  Codes with no allegiance flag (Banish) stay unrestricted.
    *  Returns an [Errors] key, or null when allowed. */
   private targetAllowed(caster: SimUnit, target: SimUnit, flags: string[]): string | null {
-    // One vocabulary — `enemies` IS `enemy` (see normalizeTargetFlags).
-    const F = new Set(normalizeTargetFlags(flags));
+    // One vocabulary — `enemies` IS `enemy` (see normalizeTargetFlags) — and one SET per row,
+    // kept rather than rebuilt per question (`targetFlagSet`, data/abilities.ts). This function
+    // and `targsKindError` under it were each building their own, on a path an autocast scan
+    // walks for every unit against every candidate.
+    const F = targetFlagSet(flags);
     const kindError = targsKindError(target, flags);
     if (kindError !== null) return kindError;
     const enemy = F.has("enemy");
@@ -13504,7 +13592,7 @@ export class SimWorld {
    */
   allegianceAdmits(caster: SimUnit, target: SimUnit, flags: string[]): boolean {
     if (target.id !== caster.id) return this.targetAllowed(caster, target, flags) === null;
-    const F = new Set(normalizeTargetFlags(flags));
+    const F = targetFlagSet(flags);
     const named = ["enemy", "friend", "player", "allies", "self", "neutral", "notself"].some((w) => F.has(w));
     return !named || F.has("self") || F.has("friend") || F.has("player");
   }
@@ -14316,7 +14404,7 @@ export class SimWorld {
       // target off `Rng1 = 99999`, i.e. the whole map.
       if (ab.code === "Ambt") continue;
       // …and the ability's own Targets Allowed, read once: every branch below asks it.
-      const F = new Set(this.abilityDefOf(ab)?.targetFlags.map((f) => f.toLowerCase()) ?? []);
+      const F = targetFlagSet(this.abilityDefOf(ab)?.targetFlags);
       // Renew is not a cast either — it is the ordinary repair JOB under the wisp's own art
       // (see KNOWN_ABILITIES). tickRenew hands out the work.
       if (isRepairCode(ab.code)) continue;
@@ -14493,6 +14581,12 @@ export class SimWorld {
     return Math.max(castRange, u.weapon?.acquire ?? 0);
   }
 
+  /** What an autocast search walks: the flat list in the Map's own order (`unitsInOrder`), or the
+   *  Map itself with `AutocastScan.fast` off — the same units in the same order either way. */
+  private autocastPool(): Iterable<SimUnit> {
+    return AutocastScan.fast ? this.unitsInOrder() : this.units.values();
+  }
+
   private autocastTarget(u: SimUnit, range: number, friendly: boolean, code: string, selfOk: boolean, flags: string[] = [], buffs: string[] = []): SimUnit | null {
     let best: SimUnit | null = null;
     let bestScore = friendly ? 1.999 : Infinity;
@@ -14522,8 +14616,8 @@ export class SimWorld {
     // all. Outside the fight it is the most hurt, as before. A HEAL keeps its own reading: the
     // most wounded, whoever is on it.
     const fight = friendly && !HEAL_SPELLS.has(code) ? this.fightSides() : null;
-    for (const t of this.units.values()) {
-      if (Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > range) continue;
+    for (const t of this.autocastPool()) {
+      if (autocastOutOfReach(u, t, range)) continue;
       if (!this.autocastWants(u, t, friendly, code, selfOk, flags, buffs)) continue;
       if (friendly) {
         // heal the most-hurt ally; a buff, the one in the fight (then the most hurt)
@@ -14577,9 +14671,9 @@ export class SimWorld {
   private dispelAutocastTarget(u: SimUnit, range: number, def: AbilityDef): SimUnit | null {
     let best: SimUnit | null = null;
     let bestScore = -Infinity;
-    for (const t of this.units.values()) {
+    for (const t of this.autocastPool()) {
       if (t.hp <= 0 || t.building) continue;
-      if (Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > range) continue;
+      if (autocastOutOfReach(u, t, range)) continue;
       if (this.targetError(u, t, def.targetFlags, def.code) !== null) continue;
       const ours = !this.hostile(u, t);
       if (!worthDispelling(t, this.units, ours, true)) continue;
@@ -14644,7 +14738,7 @@ export class SimWorld {
     // …and the dispel family re-asks its own question: somebody else's Dryad may have taken the
     // buff off while this one was walking, and then there is nothing here to spend mana on.
     if (DISPEL_CODES.has(def.code)) return worthDispelling(t, this.units, !this.hostile(u, t), true);
-    const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
+    const F = targetFlagSet(def.targetFlags);
     const friendly = !F.has("enemy") && (F.has("friend") || F.has("self") || F.has("player"));
     // The buff ids are read off level 1: no stock ability changes WHICH buff it applies
     // between ranks (see abilities.ts buffIdOf), and the walk does not know the rank.
@@ -22084,6 +22178,7 @@ export class SimWorld {
     // stops existing (issue #126; see revealDyingUnit).
     this.revealDyingUnit(u);
     this.units.delete(u.id); // Map delete during values() iteration is safe
+    this.unitsVersion++; // see unitsInOrder
     this.teleportChannels.delete(u.id); // a caster that leaves mid-teleport takes its channel with it
     this.teleportedFrom.delete(u.id); // a missile at a unit that is gone fizzles; nothing reads these again
     this.boardedFrom.delete(u.id);

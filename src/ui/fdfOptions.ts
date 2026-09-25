@@ -12,7 +12,7 @@ import {
   type Options,
   type OptionDef,
 } from "../data/options";
-import { applyVideoOptions } from "../render/videoQuality";
+import { applyVideoOptions, LOW_PERF_FORCED } from "../render/videoQuality";
 import { applyHealthBarOptions } from "../render/worldOverlays";
 import { applyHotkeyOptions } from "../data/hotkeys";
 import { applyScrollOptions } from "../render/scrollOptions";
@@ -227,6 +227,33 @@ export async function mountOptions(
       detect: lib?.string("DETECT_GAMEPAD") ?? "Detect Gamepad",
       unpair: lib?.string("UNPAIR_GAMEPAD") ?? "Unpair Gamepad",
     });
+    syncVideoRows(s);
+  }
+
+  /**
+   * "Low Performance Mode" (issue #161) owns the rows under it while it is ticked.
+   *
+   * Each row it forces is DEAD and SHOWS THE RUNG THE MODE PUTS IT AT (`LOW_PERF_FORCED` in
+   * render/videoQuality.ts). Both halves matter: a live dropdown over a setting the applier
+   * overrides is a control that does nothing, and a dead one still reading "High" while the
+   * renderer draws Low is the panel lying about the game. The forced label is painted onto the
+   * WIDGET only — the working copy keeps the player's own value, so unticking the box gives all
+   * seven of them back with nothing having to be remembered.
+   *
+   * Resolution and Gamma are not in that table and stay live: the pixels and the brightness are
+   * the player's (videoQuality.ts says why), which is the whole shape of this row.
+   */
+  function syncVideoRows(s: FdfScreen): void {
+    const on = working.lowPerf === true;
+    for (const d of OPTION_DEFS) {
+      if (d.panel !== "video" || d.kind !== "choice") continue;
+      const forced = LOW_PERF_FORCED[d.key];
+      if (forced === undefined) continue;
+      const c = s.popup(d.frame);
+      if (!c) continue;
+      c.setEnabled(!on);
+      c.value = on ? forced : str(working[d.key], String(d.def));
+    }
   }
 
   /** The editor's button stands beside "Hotkeys:" only while it says Custom — the one rung with
@@ -260,6 +287,7 @@ export async function mountOptions(
       if (d.panel === "video") applyVideo(working); // …and seen the instant it changes
       if (d.panel === "gameplay") applyGameplay(working); // …so are the health-bar rows
       if (d.key === "hotkeys") syncEditorButton(s);
+      if (d.key === "lowPerf") syncVideoRows(s);
     };
     if (d.kind === "bool") {
       const c = s.checkBox(d.frame);

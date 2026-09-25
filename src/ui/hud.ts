@@ -272,6 +272,9 @@ export interface HudDriver {
   mapBounds(): [number, number, number, number];
   /** Fog-of-war state at a world point: 0 unexplored, 1 explored, 2 visible. */
   fogAt(wx: number, wy: number): number;
+  /** `fogAt` for every point of a lattice at once — `out[j * xs.length + i]` for
+   *  (`xs[i]`, `ys[j]`). Optional: a driver without it is asked point by point. */
+  fogStates?(xs: Float64Array, ys: Float64Array, out: Uint8Array): void;
   /** The ground the viewport is looking at, as a world rect: the minimap's white camera
    *  box (issue #112). Origin + size, so it shrinks as the view zooms in. */
   cameraRect(): { x: number; y: number; w: number; h: number };
@@ -1242,6 +1245,11 @@ const MINIMAP_SIZE = 168; // px along the minimap canvas's LONGEST side
 const MINIMAP_PX_PER_UNIT = MINIMAP_SIZE / CONSOLE_ZONES.minimap.w;
 const DOTS_PERIOD = 100; // ms between minimap dot redraws
 const TEXT_PERIOD = 250; // ms between resource/info text refreshes
+
+/** The minimap fog's one-call lattice read (GameHud.paintFog). On, unless a live A/B turns it off
+ *  to ask the driver pixel by pixel as it used to — it changes what a redraw COSTS and never
+ *  what it paints (docs/perf-research.md). */
+export const MinimapFogGrid = { enabled: true };
 
 export class GameHud {
   private root: HTMLDivElement;
@@ -4303,6 +4311,8 @@ export class GameHud {
   }
 
   private fogImage: ImageData | null = null; // reused fog-of-war mask (mmW × mmH)
+  /** paintFog's sample points and the states it last read there — see paintFog. */
+  private fogLattice: { key: string; xs: Float64Array; ys: Float64Array; states: Uint8Array } | null = null;
   private mapGlyphs = new Map<string, HTMLImageElement>(); // BLP path → lazy-loaded glyph
   private mapGlyphRims = new Map<string, HTMLCanvasElement>(); // …→ its black silhouette (outline)
 
@@ -4556,6 +4566,27 @@ export class GameHud {
   private paintFog(ctx: CanvasRenderingContext2D, ox: number, oy: number, w: number, h: number): void {
     const img = (this.fogImage ??= ctx.createImageData(this.mmW, this.mmH));
     const px = img.data;
+    if (MinimapFogGrid.enabled && this.driver.fogStates) {
+      // The whole lattice in one ask (HudDriver.fogStates), at the very points the loop below
+      // samples — each pixel's world point is a fact about the map and the minimap's size, so
+      // it is worked out once per shape rather than per pixel per redraw.
+      const key = `${ox},${oy},${w},${h},${this.mmW},${this.mmH}`;
+      let g = this.fogLattice;
+      if (!g || g.key !== key) {
+        const xs = new Float64Array(this.mmW), ys = new Float64Array(this.mmH);
+        for (let x = 0; x < this.mmW; x++) xs[x] = ox + (x / this.mmW) * w;
+        for (let py = 0; py < this.mmH; py++) ys[py] = oy + (1 - py / this.mmH) * h; // minimap is north-up (v inverted)
+        g = this.fogLattice = { key, xs, ys, states: new Uint8Array(this.mmW * this.mmH) };
+      }
+      this.driver.fogStates(g.xs, g.ys, g.states);
+      const states = g.states;
+      for (let i = 0, n = states.length; i < n; i++) {
+        const state = states[i];
+        px[i * 4 + 3] = state === 0 ? 255 : state === 1 ? 140 : 0; // black / grey veil / clear
+      }
+      ctx.putImageData(img, 0, 0);
+      return;
+    }
     for (let py = 0; py < this.mmH; py++) {
       const wy = oy + (1 - py / this.mmH) * h; // minimap is north-up (v inverted)
       for (let x = 0; x < this.mmW; x++) {

@@ -34,6 +34,7 @@ const {
 } = require(join(REPO, ".sim-build", "src", "data", "options.js"));
 const {
   applyVideoOptions, videoSettings, animStride, maxOmniLights, renderSize, renderScale,
+  lowPerfMode, LOW_PERF_FORCED,
 } = require(join(REPO, ".sim-build", "src", "render", "videoQuality.js"));
 const {
   applyHealthBarOptions, healthBarsAlways, healthBarStyle,
@@ -204,6 +205,80 @@ console.log("\nResolution picks the size of the buffer the world is drawn into")
   delete stale.resolution;
   applyVideoOptions(stale);
   check("…and so does a store that predates it", renderSize(), { width: 1920, height: 1080 });
+}
+
+console.log("\nLow Performance Mode forces every rung but the pixels and the brightness (issue #161)");
+{
+  const bridge = () => globalThis.__OW3_VIDEO__;
+
+  // Off by default — nobody's current picture changes.
+  applyVideoOptions(defaultOptions());
+  check("off by default", [defaultOptions().lowPerf, lowPerfMode()], [false, false]);
+
+  // …and ON it is every rung at its cheapest, whatever the seven stored values say. The store
+  // here is the OPPOSITE of what the mode wants, so anything that reached the renderer unforced
+  // would show up.
+  const maxed = {
+    ...defaultOptions(),
+    lowPerf: true,
+    modelDetail: "high", animQuality: "high", textureQuality: "high",
+    particles: "high", lights: "high", shadows: "on", occlusion: "on",
+  };
+  applyVideoOptions(maxed);
+  const v = videoSettings();
+  check("the mode is carried, not just its rungs", lowPerfMode(), true);
+  check("every quality rung is low", [v.modelDetail, v.animQuality, v.textureQuality, v.particles, v.lights],
+    ["low", "low", "low", "low", "low"]);
+  check("unit shadows off", v.unitShadows, false);
+  check("occlusion off", v.occlusion, false);
+  check("the viewer sees the low rungs too", [bridge().particleScale, bridge().textureMipDrop], [0.25, 2]);
+  check("…and so do the two ladders", [animStride(), maxOmniLights()], [4, 0]);
+
+  // The two rows NOT in the table. Resolution is the one rung that changes how many pixels are
+  // drawn and is the player's to trade; gamma is the brightness of the picture, not a cheaper
+  // drawing of it (render/videoQuality.ts LOW_PERF_FORCED says so at length).
+  applyVideoOptions({ ...maxed, resolution: "2560x1440", gamma: 80 });
+  check("resolution is untouched by the mode", renderSize(), { width: 2560, height: 1440 });
+  check("…and so is gamma", videoSettings().gamma, 80);
+  check("neither is in the forced table", [LOW_PERF_FORCED.resolution, LOW_PERF_FORCED.gamma], [undefined, undefined]);
+
+  // THE POINT OF FORCING AT APPLY TIME: the store is never rewritten, so unticking the box gives
+  // the player back the seven values they chose. A mode that wrote its rungs into the options
+  // would have eaten them.
+  check("the options handed in are not mutated", [maxed.particles, maxed.shadows], ["high", "on"]);
+  applyVideoOptions({ ...maxed, lowPerf: false });
+  const back = videoSettings();
+  check("unticking restores every stored rung", [back.particles, back.lights, back.unitShadows, back.occlusion],
+    ["high", "high", true, true]);
+  check("…and the mode is off again", lowPerfMode(), false);
+
+  // The LAUNCH FLAG, at both doors: an empty store and a full one. `?lowperf` reaching only the
+  // second is the bug this pins — a fresh profile has no stored options, which is exactly the
+  // machine the flag is for.
+  const withSearch = (search, fn) => {
+    const had = Object.prototype.hasOwnProperty.call(global, "location");
+    const prev = global.location;
+    global.location = { search };
+    try { return fn(); } finally { if (had) global.location = prev; else delete global.location; }
+  };
+  store.clear();
+  check("the flag reaches an EMPTY store", withSearch("?dev&lowperf", () => loadOptions().lowPerf), true);
+  saveOptions({ ...defaultOptions(), lowPerf: false });
+  check("…and a stored one", withSearch("?lowperf", () => loadOptions().lowPerf), true);
+  check("…and without it the store stands", withSearch("?dev", () => loadOptions().lowPerf), false);
+  store.clear();
+
+  // Every key the table names has to BE a video row, or the Options screens would grey a row that
+  // does not exist and the applier would force a setting nothing reads.
+  const videoKeys = OPTION_DEFS.filter((d) => d.panel === "video").map((d) => d.key);
+  check("every forced key is a video row", Object.keys(LOW_PERF_FORCED).filter((k) => !videoKeys.includes(k)), []);
+  // …and each forced value has to be one that row OFFERS, or the greyed pulldown would show a
+  // rung it has no entry for and the applier's own fallback would quietly ignore it.
+  const notOffered = Object.entries(LOW_PERF_FORCED).filter(([k, val]) => {
+    const def = OPTION_DEFS.find((d) => d.key === k);
+    return !(def?.choices ?? []).some((c) => c.value === val);
+  });
+  check("every forced value is one the row offers", notOffered.map(([k]) => k), []);
 }
 
 console.log("\nthe Gameplay panel's two health-bar rows (issue #141)");
