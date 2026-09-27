@@ -126,8 +126,9 @@ export interface CommandButton {
   cooldownLeft?: number; // seconds remaining on the ability's cooldown (0/undefined = ready)
   cooldownFrac?: number; // remaining fraction 0..1 (drives the radial sweep)
   count?: number; // corner badge (0/undefined = none) — e.g. a hero's unspent skill points
-  /** The count is drawn at the printed KEY's size rather than a count's (the learn-skill
-   *  button's unspent points), still in the bottom-right corner. */
+  /** The count is drawn smaller than a command button's half-button count, at the size an
+   *  item's charges are (the learn-skill button's unspent points; `.key-size` in style.css),
+   *  still in the bottom-right corner. */
   countKeySize?: boolean;
 }
 

@@ -1554,11 +1554,21 @@ body.hud-number-skinned .hud-count-badge:not(.plain) {
 /* The command button's KEY (Options → Gameplay → "Show hotkeys on command buttons"): the very
    same framed box, in the TOP-LEFT corner and smaller than a count's, so it never shares a
    corner with a quantity. A named key ("Esc") is set smaller so its three glyphs stay inside
-   the frame a single letter fills. The learn-skill button's unspent points are drawn at the
-   key's size too (`.key-size`, from `countKeySize`), in the ordinary bottom-right corner. */
-.hud-count-badge.hud-hotkey-badge,
-.hud-count-badge.key-size {
+   the frame a single letter fills. */
+.hud-count-badge.hud-hotkey-badge {
   --count-box: 32%;
+}
+/* An item's charges and the learn-skill button's unspent points are drawn at ONE size, asked
+   for by eye so the two corners read as the same badge: 27px at 1920×1080, between the 31 a
+   half-slot box gave the charges and the 22 the key's size gave the points. The two hosts are
+   different sizes (an inventory slot is 0.89 of a command button, at every stage size), so the
+   one box is two percentages — 44% of a slot, 39% of a button — and the numeral is the
+   count's own 55cqw in both. */
+.hud-inv-slot .hud-count-badge {
+  --count-box: 44%;
+}
+.hud-count-badge.key-size {
+  --count-box: 39%;
 }
 .hud-count-badge.hud-hotkey-badge {
   top: 0;
@@ -1566,8 +1576,7 @@ body.hud-number-skinned .hud-count-badge:not(.plain) {
   right: auto;
   bottom: auto;
 }
-.hud-count-badge.hud-hotkey-badge > span,
-.hud-count-badge.key-size > span {
+.hud-count-badge.hud-hotkey-badge > span {
   font-size: max(8px, 58cqw);
 }
 .hud-count-badge.hud-hotkey-badge.long > span {
