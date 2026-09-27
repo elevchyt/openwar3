@@ -6739,8 +6739,7 @@ export class MapViewerScene {
   private static readonly SPHERE_MODEL = "Units\\Human\\HeroBloodElf\\BloodElfBall.mdx"; // Asph Targetart (.mdl → compiled .mdx)
   private static readonly SPHERE_ABILITY = "Asph"; // the ability that grants the spheres
   private static readonly SPHERE_THROW_CODES = new Set(["AHfs", "AHbn"]); // Flame Strike, Banish
-  private static readonly SPHERE_SPEED = 1400; // Asph Missilespeed
-  private static readonly SPHERE_ARC = 0.05; // Asph Missilearc (fraction of range → apex)
+  private static readonly SPHERE_SPEED = 1400; // Asph Missilespeed — the fallback for a row that names none
   private static readonly SPHERE_REGROW = 1.6; // seconds a thrown ball stays gone after impact
 
   /** Index of the first sequence whose name matches `re` (-1 if none). */
@@ -6943,15 +6942,18 @@ export class MapViewerScene {
     const dty = t ? t.y : ty;
     const dtz = this.rts!.groundHeightAt(dtx, dty) + (t ? 60 : 30); // aim at the body, or just off the ground
     const dist = Math.hypot(dtx - sx, dty - sy);
+    const sphere = this.abilities.get(MapViewerScene.SPHERE_ABILITY);
     rig.thrown.push({
       ballIdx,
       phase: "fly",
       t: 0,
-      flyDur: dist > 0 ? dist / MapViewerScene.SPHERE_SPEED : 0.001,
+      // The row's own pace and lob (`[Asph] Missilespeed=1400`, `Missilearc=0.05`), the same
+      // curve the sim flies every other missile on (sim/missile.ts: peak = arc × distance).
+      flyDur: dist > 0 ? dist / (sphere?.missileSpeed || MapViewerScene.SPHERE_SPEED) : 0.001,
       regrowLeft: 0,
       sx, sy, sz,
       tx: dtx, ty: dty, tz: dtz,
-      peak: MapViewerScene.SPHERE_ARC * dist,
+      peak: (sphere?.missileArc ?? 0) * dist,
     });
   }
 

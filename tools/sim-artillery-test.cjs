@@ -108,6 +108,26 @@ console.log("\nthe LOB: the peak is Missilearc × distance above the launch→im
   check("…in the time its horizontal speed takes (the arc costs no time)", Math.abs(secs - want) < 0.1, `${secs.toFixed(2)} s vs ${want.toFixed(2)} s`);
 }
 
+console.log("\nSPELL MISSILES lob by their own row's Missilearc too");
+function spellPeak(missileArc) {
+  const w = new SimWorld(grid(), 2);
+  const c = addUnit(w, 1, 0, 1000, 1000, []);
+  const t = addUnit(w, 2, 1, 1800, 1000, []);
+  // The door resolveCast uses for a unit-target spell with a Missileart (Storm Bolt, Acid Bomb).
+  // A code with no handler, so landing it does nothing but land.
+  const def = { id: "Xtst", code: "Xtst", missileArt: "m.mdx", missileSpeed: 900, missileArc, levelData: [] };
+  w.spawnSpellProjectile(c, t.id, def, 1);
+  let peak = 0;
+  run(w, 300, (w) => w.projectiles.size === 0, (w) => { for (const p of w.projectiles.values()) peak = Math.max(peak, p.z); });
+  return peak;
+}
+{
+  const acid = spellPeak(0.4); // [ANab] Acid Bomb: Missilearc=0.4
+  const bolt = spellPeak(0); // [AHtb] Storm Bolt states none
+  check("a 0.4 spell missile thrown ~800 peaks ~0.4 × 784 above its 60-unit line", Math.abs(acid - 60 - 0.4 * 784) < 20, `peak ${acid.toFixed(0)}`);
+  check("a row that states no arc flies level", bolt < 80, `peak ${bolt.toFixed(0)}`);
+}
+
 console.log("\nFRIENDLY FIRE: a burst with no allegiance word in its splashTargs catches both sides");
 function burst(splashTargets, ally = true) {
   const w = new SimWorld(grid(), 2);

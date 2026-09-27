@@ -42,8 +42,18 @@ so if the real client is ever measured, that file is where the answer goes.
 
 It applies to EVERY attack missile, not just siege: the arrows arc too, because the data says
 they do. The renderer tilts the model along the curve (`SimProjectile.pitch`,
-`yawPitchQuat` in mapViewer). Spell missiles still fly straight — `AbilityData` has its own
-`Missilearc`, not yet read.
+`yawPitchQuat` in mapViewer).
+
+SPELL missiles take their own row's `Missilearc` (`AbilityDef.missileArc`, `amac` for a map's
+edit; the key is spelled `MissileArc` on five rows and read case-insensitively) — every
+unit-target spell that flies one (`spawnSpellProjectile`) and the picture missiles
+(`spawnVisualMissile`): Acid Bomb 0.4, Hurl Boulder 0.3, Drunken Haze 0.15, and the Blood Mage's
+spheres 0.05 (the renderer's sphere throw reads the row now too). Storm Bolt and Death Coil state
+none and fly straight. Healing Spray (0.4) and Cluster Rockets (0.2) state one too, but those
+point spells throw no sim missile yet, so there is nothing for it to bend. Two exceptions, both deliberate: a WAVE (Shock
+Wave, Carrion Swarm) sweeps the ground and stays flat, and Mirror Image's renderer-only spread
+keeps its small hand-drawn hop, because `[AOmi]` states no arc and a literal 0 would slide the art
+along the floor.
 
 ## The burst catches BOTH sides
 
@@ -97,5 +107,5 @@ without it); `GetUnitCurrentOrder` answers `attackground` (851984).
 
 ## Tests
 
-`tools/sim-artillery-test.cjs` pins the arc, friendly fire, the `enemy` exception, splatter,
+`tools/sim-artillery-test.cjs` pins the arc (a spell missile's too), friendly fire, the `enemy` exception, splatter,
 dodging, Attack Ground (at a spot, from out of range, at a tree) and the dead zone.

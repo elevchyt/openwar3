@@ -14934,6 +14934,7 @@ export class SimWorld {
       startZ: lz,
       impactZ: impactBase + (t?.flyHeight ?? 0),
       startDist: t ? Math.hypot(t.x - lx, t.y - ly) : 0,
+      arc: def.missileArc, // the ROW's own lob — an Acid Bomb is thrown (0.4), a Storm Bolt is not
       // "Abilities with missiles follow the same behaviour as the Missile weapon type"
       // (Liquipedia, Weapon Types) — a Storm Bolt is disjointed by a Blink exactly as an
       // arrow is, so a spell missile carries the same two stamps an attack's does.
@@ -14960,6 +14961,7 @@ export class SimWorld {
       startZ: z,
       impactZ: DEFAULT_MISSILE_HEIGHT + to.flyHeight,
       startDist: Math.hypot(to.x - from.x, to.y - from.y),
+      arc: def.missileArc,
       visual: true,
     };
     this.projectiles.set(id, proj);

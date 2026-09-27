@@ -829,8 +829,8 @@ function cloneAbility(base: AbilityDef, id: string): AbilityDef {
  *  · Every field the loader reads is routed here too: the summon (`UnitID`), the buffs
  *    (`BuffID`, with the buff's art re-resolved), level gates, button and learn positions, the
  *    Research/Un- tooltips and hotkeys, orders, lightning, animation names and attachment points.
- *    What is left in `default` has no `AbilityDef` field at all (editor suffix, race, `checkDep`,
- *    missile arc); requirements are the tech graph's (applyMapTechData).
+ *    What is left in `default` has no `AbilityDef` field at all (editor suffix, race, `checkDep`);
+ *    requirements are the tech graph's (applyMapTechData).
  */
 function applyAbilityMods(def: AbilityDef, mods: AbilMod[], meta: MappedData, trigStr: (v: string) => string, registry?: AbilityRegistry): void {
   // Grow levelData to cover the highest rank any override touches (+ an `alev` bump).
@@ -877,6 +877,7 @@ function applyAbilityMods(def: AbilityDef, mods: AbilMod[], meta: MappedData, tr
       case "unubertip": def.unUberTip = trigStr(s(m.value)); break;
       case "missileart": def.missileArt = mdlPath(s(m.value)); break;
       case "missilespeed": def.missileSpeed = n(m.value); break;
+      case "missilearc": def.missileArc = n(m.value); break; // `amac` — see AbilityDef.missileArc
       case "casterart": def.casterArt = mdlPath(s(m.value)); break;
       case "targetart":
         def.targetArts = list(m.value, false).map(mdlPath);
@@ -926,7 +927,7 @@ function applyAbilityMods(def: AbilityDef, mods: AbilMod[], meta: MappedData, tr
         } else lvl.data[slot] = n(m.value);
         break;
       }
-      default: break; // no AbilityDef field (editor suffix, race, checkDep, missile arc, …)
+      default: break; // no AbilityDef field (editor suffix, race, checkDep, …)
     }
   }
   // A new buff brings its own worn art — re-resolved off the registry's buff rows, and only when

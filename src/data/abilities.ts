@@ -286,6 +286,15 @@ export interface AbilityDef {
    *  sweep and therefore when each unit along it is struck. 0 when the row names none. */
   missileSpeed: number;
   /**
+   * `Missilearc` — how high that projectile is thrown, as a FRACTION of the distance (the peak
+   * above the straight line is `arc × distance`; see sim/missile.ts, which flies attack and
+   * spell missiles alike). Real data again: Acid Bomb and Healing Spray 0.4, Hurl Boulder 0.3,
+   * Cluster Rockets 0.2, Drunken Haze 0.15, the Blood Mage's spheres 0.05; Storm Bolt and Death
+   * Coil state none and fly straight. The file writes it as a per-level-looking list on a few
+   * rows ("0.0,0.15"); the first entry is the missile's. 0 when the row names none.
+   */
+  missileArc: number;
+  /**
    * EVERY model in `Targetart`, in the file's own order — `targetArt` is this list's first
    * entry and nothing else changed.
    *
@@ -1216,6 +1225,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       levelData,
       missileArt: mdlPath(f ? str(f, "Missileart") : ""),
       missileSpeed: f ? Number(str(f, "Missilespeed")) || 0 : 0,
+      missileArc: f ? parseFloat(str(f, "Missilearc").split(",")[0]) || 0 : 0,
       targetArts: mdlPathList(f ? str(f, "TargetArt") : ""),
       targetArt: mdlPath(f ? str(f, "TargetArt") : ""),
       targetAttach: (f ? str(f, "Targetattach") : "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
@@ -1342,6 +1352,7 @@ function addUiButton(defs: Map<string, AbilityDef>, id: string, func: MappedData
     levelData: [],
     missileArt: "",
     missileSpeed: 0,
+    missileArc: 0,
     targetArts: [],
     targetArt: "",
     targetAttach: [],

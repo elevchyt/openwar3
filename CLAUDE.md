@@ -306,7 +306,8 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   `applyAreaSplash`, `minRange` or anything that sets a missile's height. A shell flies at the
   GROUND and can be walked out from under; its height is the weapon's `Missilearc` (a FRACTION of
   the distance thrown — 0.35 on a Mortar Team, 0.05 on the Glaive Thrower — computed in ONE place,
-  `src/sim/missile.ts`, for every missile the sim flies and for a client's display copy). The
+  `src/sim/missile.ts`, for every missile the sim flies — attacks off the unit's slot, spells
+  off the ABILITY row's own `Missilearc` — and for a client's display copy). The
   burst's `splashTargs` is also its ALLEGIANCE, and the siege rows name none, so a shell hits the
   thrower's own army ("Mortar Teams will damage your own units", Liquipedia); what it kills
   SPLATTERS (no corpse). `minRange` is a dead zone the unit STANDS in, never a retreat, and only a
