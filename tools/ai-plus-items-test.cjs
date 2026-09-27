@@ -892,6 +892,7 @@ function shopped(units, profile, opts = {}) {
     itemUseError: () => null,
     holdsChannel: () => false,
     shopReaches: () => opts.inRange ?? true,
+    shopBuyer: () => null,
     // -1 is "not stock-limited"; 0 is "sold out" — the sim's own distinction.
     shopStock: (_id, ware) => (opts.soldOut?.includes(ware) ? 0 : -1),
     missingForShop: (_id, ware) => (opts.needsTech?.includes(ware) ? ["TWN2"] : []),
@@ -912,7 +913,7 @@ function shopped(units, profile, opts = {}) {
     // WHOSE list this is: `RACE_FIRST` gives the orc two Healing Salves before anything else,
     // and every other race shops off `LIST` alone.
   }, profile, opts.race ?? "human");
-  const ctx = { home: { x: 0, y: 0 }, losing: false, mayShop: opts.mayShop ?? true, portalWorthIt: true };
+  const ctx = { home: { x: 0, y: 0 }, losing: false, mayShop: opts.mayShop ?? true, mayDetour: opts.mayDetour ?? false, portalWorthIt: true };
   items.pass(opts.now ?? 500, ctx);
   // A SECOND pass on the SAME belt, for the rules that are about what this player has already
   // had rather than about what it is holding — `PlusItems.hadPortal` is the only one today.
@@ -926,6 +927,8 @@ function shopped(units, profile, opts = {}) {
   return {
     buy: orders.find((c) => c.c === "buyitem") ?? null,
     move: orders.find((c) => c.c === "order") ?? null,
+    pick: orders.find((c) => c.c === "shopbuyer") ?? null,
+    errand: items.errand,
   };
 }
 
@@ -986,6 +989,56 @@ const spend = (h, id) => { const i = h.inventory.findIndex((s) => s?.itemId === 
   const h = hero();
   const r = shopped([h, MERCHANT], PLUS_INSANE, { inRange: false, mayShop: false });
   check("…and not while there is a wave in the field", !r.move && !r.buy, true);
+}
+// A MISSING TOWN PORTAL IS BOUGHT WHEREVER THE CHANCE COMES (`PlusItems.portalChance`).
+// Reported: the AI "seems to not want to re-buy Scroll of Town Portal if it doesn't have one".
+{
+  // A hero standing at a Goblin Merchant far from home, with a wave out: it buys the scroll there.
+  const far = { ...MERCHANT, id: nextId++, x: 9000, y: 9000 };
+  const h = hero({ x: 9000, y: 9100 });
+  const r = shopped([h, far], PLUS_NORMAL, { mayShop: false, race: "nightelf" }); // no opening buys ahead of the first scroll
+  check("a hero already AT a far-off shop buys the missing scroll, wave out or not", r.buy?.itemId, "stwp");
+  check("…delivered to that hero (the Select Hero pick)", r.pick?.unitId, h.id);
+}
+{
+  // Mustering in the field with a shop a screen away: the hero steps off for it.
+  const near = { ...MERCHANT, id: nextId++, x: 1500, y: 0 };
+  const h = hero({ x: 0, y: 0 });
+  const r = shopped([h, near], PLUS_INSANE, { inRange: false, mayShop: false, mayDetour: true, race: "nightelf" });
+  check("mustering in the field, it detours to a shop within reach for a missing scroll",
+    !!r.move && r.move.order.x === 1500 && r.errand === h.id, true);
+  const away = { ...MERCHANT, id: nextId++, x: 6000, y: 0 };
+  const r2 = shopped([hero({ x: 0, y: 0 }), away], PLUS_INSANE, { inRange: false, mayShop: false, mayDetour: true, race: "nightelf" });
+  check("…but not across the map", !r2.move && !r2.buy, true);
+}
+// Once it has carried one, a missing scroll it cannot yet afford is SAVED for rather than
+// spent past on a cheaper row.
+{
+  const h = belt(hero(), "stwp");
+  let g = 5000;
+  const orders = [];
+  const shelf = ["stwp", "phea", "shea", "pnvl", "spro", "bspd"];
+  const world = {
+    units: new Map([[h.id, h], [MERCHANT.id, MERCHANT]]), items: new Map(),
+    itemReadyError: () => null, itemUseError: () => null, holdsChannel: () => false,
+    shopReaches: () => true, shopBuyer: () => null, shopStock: () => -1, missingForShop: () => [],
+    isShopUnit: () => true, canUseShop: () => true, canPawnAt: () => false,
+  };
+  const items = new PlusItems({
+    world, player: 0, def: (id) => ABILS[id], hostile: (u) => u.owner !== 0 && u.owner !== 12,
+    order: (cmd) => { orders.push(cmd); return true; }, item: (id) => ITEMS[id], wares: () => shelf, gold: () => g,
+  }, PLUS_INSANE, "human");
+  const ctx = { home: { x: 0, y: 0 }, losing: false, mayShop: true, portalWorthIt: true };
+  items.pass(500, ctx); // it carries one: the latch is set
+  spend(h, "stwp"); // …and reads it
+  g = 300; // …with less in hand than a new one costs
+  orders.length = 0;
+  items.pass(600, ctx);
+  check("a missing scroll it cannot yet afford is saved for, not spent past on a potion", orders.find((c) => c.c === "buyitem") ?? null, null);
+  g = 400;
+  orders.length = 0;
+  items.pass(700, ctx);
+  check("…and bought once the purse reaches it", orders.find((c) => c.c === "buyitem")?.itemId, "stwp");
 }
 {
   // A full belt has nothing to put anything in.
@@ -1203,7 +1256,7 @@ const spend = (h, id) => { const i = h.inventory.findIndex((s) => s?.itemId === 
     items: new Map(), // no drops on the grass — see `pressed`
     itemReadyError: () => null, itemUseError: () => null,
     holdsChannel: () => false,
-    shopReaches: () => false, shopStock: () => -1, missingForShop: () => [],
+    shopReaches: () => false, shopStock: () => -1, missingForShop: () => [], shopBuyer: () => null,
     isShopUnit: (id) => id === MERCHANT.id,
     canUseShop: (id) => id === MERCHANT.id,
     canPawnAt: () => false,
@@ -1264,7 +1317,7 @@ function pawned(units, opts = {}) {
     items: new Map(),
     itemReadyError: () => null, itemUseError: () => null,
     holdsChannel: () => false,
-    shopReaches: () => true, shopStock: () => 0, missingForShop: () => [],
+    shopReaches: () => true, shopStock: () => 0, missingForShop: () => [], shopBuyer: () => null,
     isShopUnit: (id) => id === PAWNSHOP.id,
     canUseShop: (id) => id === PAWNSHOP.id,
     // The `Apit` question, which is what makes a Marketplace or a Goblin Merchant a place you

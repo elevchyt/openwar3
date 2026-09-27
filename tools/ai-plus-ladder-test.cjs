@@ -220,6 +220,49 @@ console.log("\n--- an air enemy is answered on top of the build ---");
   check("an easy computer does not transition to anti-air", easy.build.some((x) => x.item === "hgyr"), false);
 }
 
+// --- SIEGE later in the game --------------------------------------------------------------
+//
+// "We must make Computer+ AI (Normal and Insane only) build more siege units to grow its army.
+// Two demolishers or mortar teams or meat wagons or glaive throwers later into the game would
+// make a lot of sense." — `plan.ts` `siegeLine`, on top of whatever build was rolled.
+console.log("\n--- siege joins the army at tier 2 ---");
+{
+  for (const [race, table] of Object.entries(PLUS_RACES)) {
+    // A build that names no siege, so the row under test is the only thing that could ask.
+    const s = table.strategies.find((st) => !Object.keys(st.mix).includes(table.siegeUnit));
+    const unit = table.units[table.siegeUnit];
+    const base = {
+      [table.halls[0]]: 1, [table.halls[1]]: 1, [table.barracks]: 1, [table.altar]: 1,
+      ...Object.fromEntries((unit.needs ?? []).map((n) => [n, 1])),
+    };
+    const opts = { standing: base, tier: 2, armyFood: 20 };
+    if (unit.from !== table.barracks && !base[unit.from]) {
+      const r = recorder(table, s, PLUS_NORMAL, opts);
+      buildPlan(r.ctx);
+      check(`${race} puts up a ${unit.from} for its siege`, r.build.some((x) => x.item === unit.from), true);
+    }
+    const withIt = { ...opts, standing: { ...base, [unit.from]: 1 } };
+    for (const [name, profile] of [["normal", PLUS_NORMAL], ["insane", PLUS_INSANE]]) {
+      const r = recorder(table, s, profile, withIt);
+      buildPlan(r.ctx);
+      const row = r.build.find((x) => x.item === table.siegeUnit);
+      check(`${race} (${name}) keeps two ${table.siegeUnit} at tier 2`, row?.qty, 2);
+    }
+    const early = recorder(table, s, PLUS_INSANE, { ...withIt, tier: 1 });
+    buildPlan(early.ctx);
+    check(`${race}: no siege row at tier 1`, early.build.some((x) => x.item === table.siegeUnit), false);
+    const thin = recorder(table, s, PLUS_INSANE, { ...withIt, armyFood: 6 });
+    buildPlan(thin.ctx);
+    check(`${race}: no siege row before there is an army to add it to`, thin.build.some((x) => x.item === table.siegeUnit), false);
+  }
+  const human = PLUS_RACES.human;
+  const easy = recorder(human, human.strategies[0], PLUS_EASY, {
+    standing: { [human.halls[0]]: 1, [human.halls[1]]: 1, [human.barracks]: 1, hbla: 1, harm: 1 }, tier: 2, armyFood: 20,
+  });
+  buildPlan(easy.ctx);
+  check("an easy computer builds no siege", easy.build.some((x) => x.item === human.siegeUnit), false);
+}
+
 // --- a build that names its SECOND producer ------------------------------------------------
 //
 // "On tier 2 get two Ancient of Lores", "it must build TWO Arcane Sanctums", "usually requires
@@ -731,6 +774,8 @@ function runEconomy() {
       clearHarvestAI: () => {}, harvestGold: () => {}, harvestWood: () => {},
       townHasMine: () => true, townHasHall: () => true, townThreatened: () => false,
       townGuarded: () => null,
+      // The id's own `Requires`, off this edition's Func.txt — a Keep met by a Castle.
+      techMeets: (id) => editionTech.requires(id).every((r) => townCountDone(r) > 0),
     };
     const ctx = {
       ai, profile, table, strategy,
@@ -927,6 +972,8 @@ function runEconomy() {
       // same reason the raze half counts an ordered building: the DECISION is what is under
       // test, and an altar's queue is 55 seconds long.
       heroes: [ctx.ai.heroId, ctx.ai.heroId2].filter((id) => id && ai.count(id) > 0).length,
+      // The race's artillery, asked for or standing (plus/plan.ts `siegeLine`).
+      siege: table.siegeUnit ? ai.count(table.siegeUnit) : 0,
       tierHaltShare: S.tierHaltsEarly / Math.max(1, S.passesEarly),
       tier2At: Math.round(S.tier2At), spike, spikeAt: Math.round(S.spikeAt),
       back,
@@ -970,6 +1017,7 @@ function runEconomy() {
           + ` gold=${String(r.gold).padStart(4)} lumber=${String(r.lumber).padStart(4)}`
           + ` tier2@${String(r.tier2At).padStart(3)}s`
           + (r.spike ? ` ${r.spike}@${String(r.spikeAt).padStart(3)}s` : "")
+          + ` siege=${r.siege}`
           + ` openingStuckOnTier=${Math.round(r.tierHaltShare * 100)}%`);
         check(`${EDITION} ${name} ${race}/${s.id} asks for nothing this edition lacks`, r.foreign.join(","), "");
         if (name !== "NORM") continue;

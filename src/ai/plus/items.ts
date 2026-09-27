@@ -581,6 +581,17 @@ const LOOT_DANGER = 700;
  * back from, and it is still well short of "across the map" on anything four players fit on.
  */
 const SHOP_REACH = 5000;
+/**
+ * How far off its way a hero will walk to REPLACE a missing Town Portal while its party musters —
+ * at home or out between two creep camps (`ItemCtx.mayDetour`). OURS. Reported: the AI "seems to
+ * not want to re-buy Scroll of Town Portal if it doesn't have one" — it should buy one "when it
+ * gets the chance (e.g. near goblin merchant or has shop at home)". The ordinary shopping trip is
+ * only ever started from the muster point AT HOME, and a Computer+ army spends most of a game in
+ * the field, so a Goblin Merchant a screen away from the camp it had just cleared was walked past
+ * every time. A screen or two is a walk a player takes for the one item that decides how a lost
+ * fight ends; across the map is not.
+ */
+const PORTAL_DETOUR = 2000;
 
 /**
  * Gold above `itemReserve` at which the shopping stops being careful — see `RICH`.
@@ -701,6 +712,10 @@ export interface ItemCtx {
   /** May a hero walk off to a shop right now? False while there is a wave in the field, so the
    *  trip never pulls the captain out of a fight. */
   mayShop: boolean;
+  /** May a hero step off to a shop NEAR it for a missing Town Portal (`PORTAL_DETOUR`)? True
+   *  whenever the party is mustering, in the field as much as at home — a wider door than
+   *  `mayShop`, for the one item worth it. Absent means no. */
+  mayDetour?: boolean;
 }
 
 /** One computer player's inventory: what it buys, and when it presses it. */
@@ -719,6 +734,8 @@ export class PlusItems {
   /** Has a Scroll of Town Portal ever been in this player's belt? Latched true and never
    *  cleared — spending one does not stop being a player who carries one. See `list`. */
   private hadPortal = false;
+  /** When a hero was last sent off on a Town Portal detour — throttled like a shopping trip. */
+  private lastDetour = -Infinity;
 
   constructor(
     private readonly view: ItemView,
@@ -751,6 +768,9 @@ export class PlusItems {
     // shopper skips (`shopper` wants a free slot), so clearing the duplicate is what lets the
     // next row of the list be bought at all — and the sale pays a third of it.
     this.pawn(now, own, ctx);
+    // A missing Town Portal first, and on the BELT's clock rather than the shop's: a hero walking
+    // past a Goblin Merchant is in its range for a second or two, and a five-second look misses it.
+    if (this.portalChance(now, own, ctx)) return;
     this.shop(now, own, ctx);
   }
 
@@ -1607,6 +1627,82 @@ export class PlusItems {
   }
 
   /**
+   * REPLACE A MISSING TOWN PORTAL WHEREVER THE CHANCE COMES.
+   *
+   * Reported: the AI "seems to not want to re-buy Scroll of Town Portal if it doesn't have one" —
+   * it should buy one on one of its heroes, ideally the first, "when it gets the chance (e.g. near
+   * goblin merchant or has shop at home)". `shop` could not: its trip only starts from the muster
+   * point at home (`mayShop`), and only looks at shops within `SHOP_REACH` of home, so a hero
+   * STANDING at a Goblin Merchant between two creep camps walked on without a scroll. Two chances,
+   * in order:
+   *
+   *  1. A hero with a free slot is already IN RANGE of any shop that will sell us one — anywhere
+   *     on the map, in any mode, a fight included (the purchase is instant): buy it.
+   *  2. The party is mustering (`mayDetour`) and a shop that sells one is within `PORTAL_DETOUR`
+   *     of our best hero: send that hero, as an errand the army manager leaves alone.
+   *
+   * Only for a player that PLANS around a scroll (`keepPortal` — Normal and Insane; Easy shops for
+   * nothing at all), and out of the whole purse, for `list`'s reason: a replacement is not
+   * shopping. Answers whether it acted, so the ordinary shopping pass stands aside that pass — it
+   * would otherwise clear the errand (a field muster is not `mayShop`) and the two would argue.
+   */
+  private portalChance(now: number, own: SimUnit[], ctx: ItemCtx): boolean {
+    if (!this.profile.keepPortal || this.profile.shopping <= 0) return false;
+    if (this.carried(own, PORTAL.id) > 0) return false;
+    // The race's OPENING buys still come ahead of the FIRST scroll (`list`): the orc's two
+    // salves are what hold the first creep camps together. Once a scroll has been carried, a
+    // missing one outranks everything.
+    if (!this.hadPortal && (RACE_FIRST[this.race] ?? []).some((w) => this.carried(own, w.id) < w.want)) return false;
+    const def = this.view.item(PORTAL.id);
+    if (!def || def.gold > this.view.gold()) return false;
+    // The FIRST hero where it can be: the highest level (which is nearly always the first one
+    // trained), the older of two at the same level. A full belt cannot take it.
+    const heroes = own
+      .filter((u) => u.isHero && !u.isIllusion && u.inventory.length && u.inventory.indexOf(null) >= 0 && u.order !== "getitem" && this.canAct(u))
+      .sort((a, b) => b.level - a.level || a.id - b.id);
+    if (!heroes.length) return false;
+    const shops: SimUnit[] = [];
+    for (const u of this.view.world.units.values()) {
+      if (u.hp <= 0 || !u.building || u.building.constructionLeft > 0 || this.view.hostile(u)) continue;
+      if (this.view.world.canUseShop(u.id, this.view.player) && this.stocks(u, PORTAL.id)) shops.push(u);
+    }
+    if (!shops.length) return false;
+    for (const hero of heroes) {
+      const at = shops.find((shop) => this.view.world.shopReaches(shop.id, hero.id));
+      if (!at) continue;
+      if (this.onErrand === hero.id) this.onErrand = 0; // arrived — the army may have it back
+      // Delivered to THIS hero, not to whichever unit of ours the shop adopted first (which may
+      // be a hero with a full belt, whose purchase is refused every pass): the "Select Hero"
+      // pick a player makes, refused harmlessly by a shop that does not offer one.
+      if (this.view.world.shopBuyer(at.id, this.view.player)?.id !== hero.id) {
+        this.view.order({ c: "shopbuyer", shopId: at.id, unitId: hero.id });
+      }
+      this.view.order({ c: "buyitem", shopId: at.id, itemId: PORTAL.id });
+      return true;
+    }
+    if (!ctx.mayDetour) return false;
+    const hero = heroes[0];
+    // Already on its way: leave it walking (re-ordered on the throttle, in case it was bumped).
+    if (this.onErrand && this.onErrand !== hero.id) return false;
+    if (hero.inCombat) return false;
+    let near: SimUnit | null = null;
+    let best = PORTAL_DETOUR;
+    for (const shop of shops) {
+      const d = Math.hypot(shop.x - hero.x, shop.y - hero.y);
+      if (d <= best) {
+        best = d;
+        near = shop;
+      }
+    }
+    if (!near) return false;
+    this.onErrand = hero.id;
+    if (now - this.lastDetour < SHOP_PERIOD) return true;
+    this.lastDetour = now;
+    this.view.order({ c: "order", unitId: hero.id, order: { kind: "move", x: near.x, y: near.y }, queued: false });
+    return true;
+  }
+
+  /**
    * Spend the Scroll of Town Portal on ARRIVING somewhere, rather than on leaving.
    *
    * The belt's own `escape` rung is a retreat: the aim is left at the hero's own feet, which is
@@ -1720,8 +1816,16 @@ export class PlusItems {
     for (const want of this.list(rich)) {
       const purse = want.opening ? gold : gold - this.profile.itemReserve;
       const def = this.view.item(want.id);
-      if (!def || def.gold > purse) continue;
+      if (!def) continue;
       if (this.carried(own, want.id) >= want.want) continue;
+      if (def.gold > purse) {
+        // SAVE for a missing Town Portal rather than spend the gold on the next row down. With
+        // the scroll first on the list (`hadPortal`) but 350 gold, every pass it could not be
+        // paid for bought a 100-gold salve instead, and the purse never reached it — or the belt
+        // filled first. Only when some shop here would actually sell one.
+        if (want.id === PORTAL.id && this.profile.keepPortal && this.hadPortal && shops.some((sh) => this.stocks(sh, want.id))) return null;
+        continue;
+      }
       for (const shop of shops) {
         // Stock is the whole gate at a neutral shop and half of it at a race one, and both are
         // the sim's answer rather than ours: `-1` is "not stock-limited", `0` is "sold out".
@@ -1845,6 +1949,12 @@ export class PlusItems {
         Math.hypot(a.x - ctx.home.x, a.y - ctx.home.y) - Math.hypot(b.x - ctx.home.x, b.y - ctx.home.y),
     );
     return out;
+  }
+
+  /** Would this shop sell us this item right now — on its shelf, in stock, its tech met? */
+  private stocks(shop: SimUnit, itemId: string): boolean {
+    return this.view.world.shopStock(shop.id, itemId) !== 0 && this.sells(shop, itemId)
+      && !this.view.world.missingForShop(shop.id, itemId, this.view.player).length;
   }
 
   /** Is this ware on this shop's shelf? The catalogue from the tech row, plus whatever a

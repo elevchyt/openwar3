@@ -462,7 +462,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   scripts a value there is OURS unless a comment cites something. Its army ceiling is enforced at
   PRODUCTION rather than at the wave, which is the whole of "must not mass"; and its concession
   leaves through `EVENT_PLAYER_LEAVE` so Blizzard's own `MeleeTriggerActionPlayerLeft` hands the
-  units over instead of the AI demolishing its own base. A race is a TABLE of named builds, one
+  units over instead of the AI demolishing its own base. SIEGE is a race row beside `antiAir`
+  (`siegeUnit` / `siegeLine`): `PlusProfile.siegeUnits` of the race's artillery on top of the mix
+  once tier 2 stands; and a missing Town Portal is bought at ANY shop a hero stands at, or
+  detoured to while the party musters (`PlusItems.portalChance`). A race is a TABLE of named builds, one
   rolled per match, and **expanding belongs to the build order** (`PlusStrategy.expandAt`) rather
   than to the difficulty — a fast expand is a build, not a setting. A build names UNITS and its
   buildings are derived, with two clauses that go further and no third: `factories` (the second
@@ -836,7 +839,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   what it DOES is ours (issue #167) and every number says so. The two rules that make it usable:
   it HOLDS `MIN_HOLD` seconds after a pan whatever starts elsewhere, and it notices the observer's
   own hand by the focus not being where it left it (`confirm` runs after the map clamp, or the edge
-  of the map reads as a hand). `?dev&map=…&observe` boots straight into an observed match.
+  of the map reads as a hand). A MELEE opening is a timed TOUR of every base (at 0:00 nothing
+  weighs anything, so it used to fix on whichever base trained the first hero), and a target past
+  `SNAP_DISTANCE` is CUT to rather than panned. `?dev&map=…&observe` boots straight into an
+  observed match.
 - **Gamepad:** read [`docs/gamepad.md`](docs/gamepad.md) before touching
   [`src/ui/gamepad.ts`](src/ui/gamepad.ts) or a `:hover` rule. WC3 has no controller support,
   so the MAPPING is the developer's (issue #162), but what a button does is the game's: a

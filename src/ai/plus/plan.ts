@@ -405,6 +405,9 @@ export function buildPlan(c: PlusCtx): void {
   // (or, here, did not know it would need), above the expansion and below the buildings that
   // make the army.
   antiAir(c);
+  // …and SIEGE, the same kind of row for the other thing a build may not have planned for: the
+  // towers at the end of the march. Bounded to two bodies, so its reservation ends.
+  siegeLine(c);
   expand(c);
   extraHeroes(c);
   tierUp(c);
@@ -1153,6 +1156,53 @@ function antiAir(c: PlusCtx): void {
   }
   ai.setBuildNext(answer.count, answer.unit);
 }
+
+/**
+ * SIEGE — `PlusProfile.siegeUnits` of the race's artillery (`PlusRaceTable.siegeUnit`), on top of
+ * whatever build is being played, once the second tier is standing.
+ *
+ * The developer's brief: Computer+ "must build more siege units to grow its army — two
+ * demolishers or mortar teams or meat wagons or glaive throwers later into the game would make a
+ * lot of sense". Four of the twenty-one builds name a siege unit at all, so most armies reached
+ * the mid-game with nothing that out-ranges a tower, and the attack ladder already knows what to
+ * do with one when it has it (a siege unit is aimed at the buildings — plus/index.ts
+ * `siegeTarget`). Its own row, rather than a weight in the mix, because `army` spends a SHARE of
+ * a food budget and two bodies of a 3–4-food unit is a share no mix states the same way twice.
+ *
+ * "Later into the game" is two gates: a tier-2 hall STANDING (the Glaive Thrower is tier 1 on
+ * the tables, but a tier-1 army is an army that should be creeping, not besieging) and
+ * `SIEGE_AFTER` food of army already fielded, so the siege joins an army rather than replacing
+ * one. `setBuildUnit` (absolute — "have two"): a lost Mortar Team is replaced, and once both
+ * stand the row reserves nothing, so it cannot halt the ladder under it for longer than two
+ * trainings take.
+ *
+ * Nothing is asked for that cannot be built (rule 1): the producer is put up only if the build
+ * order does not already have it and its own `Requires` are met (a Workshop wants a Keep and a
+ * Blacksmith, a Slaughterhouse a Halls of the Dead and a Graveyard), and a missing smith is the
+ * `support` row's to put up rather than this one's.
+ */
+function siegeLine(c: PlusCtx): void {
+  const { ai, profile, table, tier } = c;
+  const unit = table.siegeUnit;
+  if (!unit || profile.siegeUnits <= 0) return;
+  if (tier < SIEGE_TIER || c.armyFood < SIEGE_AFTER) return;
+  const row = table.units[unit];
+  if (!row || row.tier > Math.min(profile.techTier, tier)) return;
+  for (const need of row.needs ?? []) if (ai.countDone(need) < 1) return;
+  if (ai.countDone(row.from) < 1) {
+    if (!mixBuildings(c).some((b) => b.build === row.from) && ai.techMeets(row.from)) ai.setBuildUnit(1, row.from);
+    return;
+  }
+  if (!ai.techMeets(unit)) return;
+  ai.setBuildUnit(profile.siegeUnits, unit);
+}
+
+/** The hall tier `siegeLine` waits for — the Keep, the Stronghold, the Halls of the Dead, the
+ *  Tree of Ages. OURS. */
+const SIEGE_TIER = 2;
+/** …and the army food it waits for on top: the siege is added to an army, never in place of
+ *  one. OURS — a Normal computer's army is 30 food at most, so this is about half of it. */
+const SIEGE_AFTER = 16;
 
 /**
  * The units this race wants WHATEVER build it rolled — `PlusRaceTable.always`.

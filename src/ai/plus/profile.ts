@@ -134,6 +134,16 @@ export interface PlusProfile {
   readonly armyFood: number;
   /** Towers it will ever put up. Easy builds none at all. */
   readonly towers: number;
+  /**
+   * SIEGE it keeps on the field once its second tier is standing — the race's own artillery
+   * (`PlusRaceTable.siegeUnit`: Mortar Team, Demolisher, Meat Wagon, Glaive Thrower), ON TOP of
+   * whatever the build order's mix asks for (plus/plan.ts `siegeLine`). OURS, and the number is
+   * the developer's: "two demolishers or mortar teams or meat wagons or glaive throwers later
+   * into the game would make a lot of sense" — only a few builds name a siege unit, so most
+   * armies walked into a base full of towers with nothing that out-ranges them. Normal and
+   * Insane only; Easy stays on its tier-1 soldiers.
+   */
+  readonly siegeUnits: number;
   /** How many heroes it fields. */
   readonly heroes: number;
   /** The highest hall tier it will build (1 Town Hall / 2 Keep / 3 Castle). Capping this is
@@ -285,7 +295,7 @@ export const PLUS_EASY: PlusProfile = {
   // opening Footmen a rifle build falls back on stay standing when the Riflemen come online
   // beside them, and twelve food of each was a two-dozen-food army facing somebody's first
   // game. Eight is four Footmen or two Riflemen, and still clears the Blacksmith's `after` (6).
-  armyFood: 8, towers: 0, heroes: 1, techTier: 1, upgradeRank: 1,
+  armyFood: 8, towers: 0, siegeUnits: 0, heroes: 1, techTier: 1, upgradeRank: 1,
   firstAttack: 420, waveGap: 150, attackFood: 6, retreatHp: 0,
   // It never creeps and never shops, so neither clock nor purse below ever matters — the two
   // booleans are the switch. They are still stated rather than left to a default, because a
@@ -327,7 +337,7 @@ export const PLUS_NORMAL: PlusProfile = {
   // no Tauren — and left it playing two or three openings for ever. A Normal player reaches
   // tier 3; they just take longer over it and stop short of the whole tree, which is what
   // `upgradeRank` and the clocks above already say.
-  armyFood: 30, towers: 2, heroes: 2, techTier: 3, upgradeRank: 2,
+  armyFood: 30, towers: 2, siegeUnits: 2, heroes: 2, techTier: 3, upgradeRank: 2,
   firstAttack: 300, waveGap: 90, attackFood: 14, retreatHp: 0.35,
   // Creeps from two and a half minutes with the hero and ten food behind it — about a hero, a
   // couple of soldiers and whatever else is standing around, which is what clears a green camp.
@@ -370,7 +380,7 @@ export const PLUS_INSANE: PlusProfile = {
   // Full countering, off a small sample and a long memory: six units and a quarter of them one
   // type is enough to start shifting, and it remembers what it saw four minutes ago.
   counterWeight: 1, counterSample: 6, counterShare: 0.25, counterMemory: 240,
-  armyFood: UPKEEP_TIER2, towers: 4, heroes: 3, techTier: 3, upgradeRank: 3,
+  armyFood: UPKEEP_TIER2, towers: 4, siegeUnits: 2, heroes: 3, techTier: 3, upgradeRank: 3,
   firstAttack: 150, waveGap: 30, attackFood: 16, retreatHp: 0.4,
   // Creeping starts at ninety seconds with the hero and eight food — the ladder's own answer,
   // which is "as soon as the hero walks out of the altar".

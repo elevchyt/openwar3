@@ -1288,6 +1288,26 @@ at a difficulty that does not counter at all — an Easy computer builds what it
 whatever is flying over its base. The "the enemy went air" bar is `counter.ts`'s own `AIR_HEAVY`,
 shared rather than re-stated so the row and the re-weighting cannot disagree about it.
 
+### SIEGE joins the army at tier 2
+
+`PlusRaceTable.siegeUnit` and `plan.ts`'s `siegeLine` — the Mortar Team, the Demolisher, the Meat
+Wagon, the Glaive Thrower. The developer's brief: *"make Computer+ AI (Normal and Insane only)
+build more siege units to grow its army — two demolishers or mortar teams or meat wagons or glaive
+throwers later into the game would make a lot of sense."* Only four of the twenty-one builds name
+a siege unit, so most armies reached the mid-game with nothing that out-ranges a tower — and the
+attack ladder already knows what to do with one (a siege unit is aimed at the buildings,
+`siegeTarget`).
+
+The row sits beside `antiAir` and is shaped like it: `PlusProfile.siegeUnits` (0 / **2** / **2**)
+bodies ON TOP of the mix — `army` asks per unit type, so these are added, never taken out of the
+soldiers — and the producer only if the build does not already have it and its own `Requires` are
+met (`ai.techMeets`; a Workshop wants a Keep and a Blacksmith). "Later into the game" is two gates:
+a TIER-2 hall standing (the Glaive Thrower is tier 1 on the tables, but a tier-1 army should be
+creeping) and `SIEGE_AFTER` (16) army food already fielded. `setBuildUnit` is absolute, so a lost
+Mortar Team is replaced and two standing reserve nothing. Measured over ten headless minutes
+(tools/ai-plus-ladder-test.cjs): the tier-2 clocks are unchanged to the second, and about half the
+builds already field 2–4 more army food by then, the siege (the rest reach it after ten minutes).
+
 ## Countering: the damage table, read off what it has scouted
 
 > In a TEAM game the "what it has scouted" is the **team's**, not this player's alone — see
@@ -2994,6 +3014,21 @@ neither was `keepPortal`:
   What is left is the game's own: `[stwp] stockMax` is 2 against a `stockStart` of **440**, so no
   shelf in the game carries one before 7:20 whatever the AI wants, and it restocks one per 120
   seconds. `pick` asks `shopStock` and waits, which is the same wait a player has.
+* **…and it was only ever bought from HOME.** Reported once more: the AI *"seems to not want to
+  re-buy Scroll of Town Portal if it doesn't have one"* — it should buy one, ideally on its first
+  hero, *"when it gets the chance (e.g. near goblin merchant or has shop at home)"*. The trip in
+  `shop` starts only from the muster point at home (`mayShop`) and only looks at shops within
+  `SHOP_REACH` of home, and a Computer+ army spends most of a game in the field — so a hero
+  STANDING at a Goblin Merchant between two creep camps walked on without one. `portalChance` runs
+  on the belt's clock (a hero walking past a shop is in range for a second or two) and takes two
+  chances, in order: a hero with a free slot already IN RANGE of any shop that sells us one —
+  anywhere, in any mode — buys it on the spot, with a `shopbuyer` pick so the scroll lands on
+  that hero rather than on a full-belted one the shop adopted first; and while the party musters
+  (`ItemCtx.mayDetour`, the field as much as home) the best hero steps off to a shop within
+  `PORTAL_DETOUR` (2000). The race's opening buys still come ahead of the FIRST scroll. And once
+  a scroll has been carried, a missing one it cannot yet pay for is SAVED for: `pick` stops at the
+  portal row rather than spending the gold on the salve under it, whenever a shop here would sell
+  one.
 
 Neither of those changes the opening: `pick` does not *save*, it skips a row it cannot afford and
 buys the next one down, so at two minutes there is no 350 gold above the reserve and the salve is

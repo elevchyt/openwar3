@@ -2339,6 +2339,9 @@ export class ComputerPlusAi {
       // shop is behind it, and sending the captain back to it walks the army's anchor off the
       // map while the rest of the party stands on a cleared camp waiting for it.
       mayShop: b.mode === "massing" && !b.afield,
+      // …and the wider door for a missing Town Portal (`PlusItems.portalChance`): any muster,
+      // the field's included, since that is where the Goblin Merchants are.
+      mayDetour: b.mode === "massing",
     };
   }
 

@@ -264,6 +264,13 @@ export interface PlusRaceTable {
    */
   readonly antiAir?: { readonly unit: string; readonly count: number };
   /**
+   * The race's ARTILLERY — the Mortar Team, the Demolisher, the Meat Wagon, the Glaive Thrower —
+   * which `plan.ts` (`siegeLine`) keeps `PlusProfile.siegeUnits` of once the second tier is
+   * standing, whatever build was rolled. A RACE row for `antiAir`'s reason: a build that names
+   * no siege still meets towers, and the answer does not depend on which build it is.
+   */
+  readonly siegeUnit?: string;
+  /**
    * The building this race raises ON a gold mine to make it a mine at all — the undead's
    * **Haunted Gold Mine** (`ugol`), and nobody else's anything.
    *
@@ -373,6 +380,7 @@ const HUMAN: PlusRaceTable = {
   // (`PlusRaceTable.antiAir`). It is the human's dedicated answer: `hgyr` shoots air and nothing
   // else, so four of them are worth bolting onto a Knight build and cost it no plan.
   antiAir: { unit: COPTER, count: 4 },
+  siegeUnit: MORTAR,
   tower: WATCH_TOWER,
   // As human.ai takes them: ONE Arcane Tower per town (178–180, 195–198, 240–243) and every
   // other Scout Tower a Guard Tower (284: `countDone(WATCH_TOWER) − count(ARCANE_TOWER)`). The
@@ -493,6 +501,7 @@ const ORC: PlusRaceTable = {
   // THE BATS. `[otbr] Requires=ovln` — the Voodoo Lounge, which is also `shop` and is going up
   // for the hero's belt anyway, so the orc's anti-air costs it a Beastiary it may not have had.
   antiAir: { unit: BATRIDER, count: 4 },
+  siegeUnit: CATAPULT,
   tower: ORC_WATCH_TOWER,
   units: {
     [GRUNT]: { from: ORC_BARRACKS, tier: 1 },
@@ -640,6 +649,7 @@ const UNDEAD: PlusRaceTable = {
   // THE GARGOYLE — out of the CRYPT, which every undead build already owns, so this is the one
   // race whose answer to air is a unit row and no building at all (`[ugar] Requires=ugrv,unp1`).
   antiAir: { unit: GARGOYLE, count: 4 },
+  siegeUnit: MEAT_WAGON,
   tower: ZIGGURAT_2,
   // THE GHOUL IS THE UNDEAD'S LUMBERJACK, and it is the only such row in the file. An Acolyte
   // cannot chop (`uaco` `lumber: false` — docs/undead.md), so an undead player who builds only
@@ -774,6 +784,7 @@ const NIGHT_ELF: PlusRaceTable = {
   // THE HIPPOGRYPH, off an Ancient of Wind. Like the Flying Machine it is a dedicated anti-air
   // unit, which is what makes it safe to bolt onto a Dryad or a Huntress build.
   antiAir: { unit: HIPPO, count: 4 },
+  siegeUnit: BALLISTA,
   tower: ANCIENT_PROTECT,
   units: {
     [ARCHER]: { from: ANCIENT_WAR, tier: 1 },
@@ -950,6 +961,7 @@ export function tableForEdition(table: PlusRaceTable, tech: EditionTech): PlusRa
     shop: has(table.shop) ? table.shop : "",
     towerUpgrades: table.towerUpgrades?.filter((r) => has(r.id)),
     antiAir: table.antiAir && known(table.antiAir.unit) ? table.antiAir : undefined,
+    siegeUnit: table.siegeUnit && known(table.siegeUnit) ? table.siegeUnit : undefined,
     always: table.always?.filter((r) => known(r.unit)),
   };
 }
