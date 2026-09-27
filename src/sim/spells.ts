@@ -449,6 +449,23 @@ export interface SpellFieldInit {
    *  wave for a little over one interval, so its model holds its Stand while the unit stays in
    *  and plays its Death once the waves stop coming (Tranquility's `[AEtr]` TranquilityTarget). */
   healBuff?: { group: string; art: string; fx: BuffFx[]; buffId: string };
+  /** A model played on every unit a HEALING wave reaches, once per wave — Healing Spray's
+   *  `[XNhs] Specialart = HealTarget.mdl`, the flash of the bottle breaking over it. */
+  healArt?: string;
+  /** "Max Damage" read as a HEALING budget: the most one wave may restore across everybody it
+   *  reaches, split evenly past that — the same rule `maxDamagePerWave` is for a hurting wave. */
+  maxHealPerWave?: number;
+  /**
+   * The wave is THROWN by the caster rather than falling out of the sky: each of its
+   * `artPerWave` copies of `art` is a real missile flown from the caster to its spot in the
+   * circle, at the row's own `Missilespeed` and lobbed by its own `Missilearc` (sim/missile.ts),
+   * and the wave's damage or healing lands when the missiles do — its distance over the speed
+   * after the throw. Healing Spray's bottles and Cluster Rockets' rockets: both rows name a
+   * `Missileart` and no art field that falls, and both Ubertips describe a THROW ("Sprays …",
+   * "Fires a salvo of rockets"). The caster's own spot at the throw is `ox`/`oy`, kept for a
+   * wave thrown after he has died or wandered — it still leaves from where he stood.
+   */
+  thrown?: { speed: number; arc: number };
 }
 
 /** Play a field's art ONCE, at its centre, held for the whole run — for the effects that are
@@ -2040,30 +2057,32 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   //   DataC "Missile Count"    6          bottles per wave
   //   DataD "Max Damage"       280/385/490  the cap over the whole spray
   //   DataF "Wave Count"       3/4/5
-  // So it is a heal-over-time, not the single 40-hp splash this used to be.
+  // Its Ubertip says what a wave IS: "Sprays <DataF> waves of healing mist; each wave heals
+  // <DataA> damage to all friendly units in an area." So it heals WAVE BY WAVE, whoever is in
+  // the circle when the bottles land (healPerWave) — not a heal-over-time handed out at the
+  // press to whoever happened to be standing there. "Max Damage" is the budget, a wave's share
+  // of it (maxHealPerWave), split past that as a hurting wave's cap is.
   //
-  // The bottle is `Missileart = …\Other\HealingSpray\HealBottleMissile.mdl` and the burst
-  // on each healed unit is on the EFFECT OBJECT (`[XNhs] Specialart = …\Human\Heal\
-  // HealTarget.mdl`) — the ability row has no Casterart, Targetart or Areaeffectart at all.
+  // The bottles are THROWN (SpellFieldInit.thrown): `Missileart = …\Other\HealingSpray\
+  // HealBottleMissile.mdl` at the row's own `Missilespeed` 700 and `Missilearc` 0.4, six to a
+  // wave. The flash on each healed unit is on the EFFECT OBJECT (`[XNhs] Specialart = …\Human\
+  // Heal\HealTarget.mdl`) — the ability row has no Casterart, Targetart or Areaeffectart at all
+  // — and `BNhs` "This unit is being healed by Healing Spray" is worn while the waves reach it.
   ANhs: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
     const interval = d(lvl, 1, 1) || 1;
     const waves = Math.max(1, d(lvl, 5, 3));
     const cap = d(lvl, 3, 0);
-    const total = Math.min(cap > 0 ? cap : Infinity, d(lvl, 0, 30) * waves);
-    const time = waves * interval;
-    const area = lvl.area || 250;
-    // The bottles raining in, as a damage-less field so they arrive wave by wave.
+    const worn = fx(def);
     api.addSpellField({
-      code: def.code, x: ctx.x, y: ctx.y, area, damagePerWave: 0,
+      code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 250, damagePerWave: 0,
       waves, interval, casterId: caster.id,
-      art: def.missileArt, artPerWave: Math.max(1, d(lvl, 2, 6)), scatter: area * 0.7, waveSound: true,
+      art: def.missileArt, artPerWave: Math.max(1, d(lvl, 2, 6)),
+      thrown: { speed: def.missileSpeed, arc: def.missileArc },
+      healPerWave: d(lvl, 0, 30), maxHealPerWave: cap > 0 ? cap / waves : 0,
+      healArt: def.fxSpecialArt || undefined,
+      healBuff: { group: "healingspray", art: worn.art, fx: worn.fx, buffId: worn.buffId },
     });
-    for (const t of alliesInArea(api, caster, def, ctx.x, ctx.y, area, { self: true })) {
-      if (t.mechanical) continue;
-      api.applyBuff(t, { kind: "hot", group: "healingspray", timeLeft: time, sourceId: caster.id, value: total / time, ...fx(def) });
-      if (def.fxSpecialArt) api.emitEffect(def.fxSpecialArt, t.x, t.y, t.id);
-    }
   },
 
   // --- disables / debuffs ---
@@ -2394,7 +2413,9 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   //   DataD "Max Damage"         105/195/300        the cap over the whole salvo
   //   DataF "Effect Duration"    1.01               how long the salvo takes to land
   // The rockets are the ability's own Missileart (TinkerRocketMissile.mdl) — nothing is on
-  // an area art field, which is why the salvo used to be an invisible tick of damage.
+  // an area art field, which is why the salvo used to be an invisible tick of damage. They are
+  // FIRED from the Tinker (SpellFieldInit.thrown), at the row's own `Missilespeed` 700 and
+  // `Missilearc` 0.2, and each wave of the salvo hurts when its rockets come down.
   ANcs: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
     const interval = d(lvl, 1, 0.25) || 0.25;
@@ -2406,7 +2427,9 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
       damagePerWave: d(lvl, 0, 11.25) * perWave, waves, interval,
       maxDamagePerWave: d(lvl, 3, 0) / waves,
       casterId: caster.id, art: def.missileArt || fieldArt(def),
-      artPerWave: Math.max(1, Math.round(perWave)), waveSound: true,
+      artPerWave: Math.max(1, Math.round(perWave)),
+      // Thrown only when there IS a missile: a map that strips the art keeps the old ground burst.
+      ...(def.missileArt ? { thrown: { speed: def.missileSpeed, arc: def.missileArc } } : { waveSound: true }),
     });
   },
 

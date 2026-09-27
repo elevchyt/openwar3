@@ -14968,6 +14968,36 @@ export class SimWorld {
     this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y, z: proj.z });
   }
 
+  /** A missile that carries nothing, from a thrower to a SPOT on the ground — one bottle or
+   *  rocket of a thrown field wave (SpellFieldInit.thrown). The field lands the wave itself; this
+   *  is its picture, flown on the same curve every missile is (sim/missile.ts) and bursting at
+   *  the spot with its own Death clip. Aimed at a spot from the start, so it rides the `lost`
+   *  path — the one that already means "fly to this point and burst there, delivering nothing" —
+   *  and a client is sent the spot (snapshot.ts) exactly as for a missile that lost its target. */
+  private spawnSpotMissile(from: SimUnit | undefined, fx: number, fy: number, x: number, y: number, art: string, speed: number, arc: number): void {
+    const id = this.nextProjectileId++;
+    const w = from?.weapon;
+    const lzLocal = w && w.launchZ !== 0 ? w.launchZ : DEFAULT_MISSILE_HEIGHT;
+    const [lx, ly, lz0] = from ? launchPoint(from, w?.launchX ?? 0, w?.launchY ?? 0, lzLocal) : [fx, fy, lzLocal];
+    const lz = lz0 + (from?.flyHeight ?? 0);
+    const proj: SimProjectile = {
+      id, x: lx, y: ly, z: lz,
+      sourceId: from?.id ?? 0,
+      targetId: 0,
+      speed: speed || 900,
+      damage: 0,
+      art,
+      startZ: lz,
+      impactZ: 0, // the ground at the spot
+      startDist: Math.hypot(x - lx, y - ly),
+      arc,
+      visual: true,
+      lost: { x, y },
+    };
+    this.projectiles.set(id, proj);
+    this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y, z: proj.z });
+  }
+
   /**
    * Launch a travelling WAVE (see SimProjectile.wave, and SpellApi.launchWave for the
    * contract). False when the ability has NEITHER a `Missileart` to carry nor a trail to
@@ -16363,13 +16393,13 @@ export class SimWorld {
 
   // === spell fields (Blizzard-style repeating area effects) =================
 
-  private spellFields: Array<SpellFieldInit & { timer: number; done: number; team: number; flags: string[] }> = [];
+  private spellFields: LiveSpellField[] = [];
 
   /** Waves that have been thrown but haven't hit the ground yet (see SHARD_FALL).
    *  They live OUTSIDE their field on purpose: shards already in the air still land
    *  when the channel is broken, so a Blizzard cancelled the instant before impact
    *  still deals that last wave. */
-  private waveImpacts: Array<{ code: string; t: number; x: number; y: number; area: number; damage: number; casterId: number; team: number; flags: string[]; maxDamage: number; buildingReduction: number; dot: SpellFieldInit["dot"]; pctOfMax: boolean; buildingsOnly: boolean; fellsTrees: boolean; skipEthereal?: boolean; hitArt?: string; hitAttach?: string[] }> = [];
+  private waveImpacts: Array<{ code: string; t: number; x: number; y: number; area: number; damage: number; casterId: number; team: number; flags: string[]; maxDamage: number; buildingReduction: number; dot: SpellFieldInit["dot"]; pctOfMax: boolean; buildingsOnly: boolean; fellsTrees: boolean; skipEthereal?: boolean; hitArt?: string; hitAttach?: string[]; healField?: LiveSpellField }> = [];
 
   // --- Mirror Image (AOmi) ------------------------------------------------------------
   //
@@ -16613,7 +16643,7 @@ export class SimWorld {
     const flags = (ab && this.abilityDefOf(ab)?.targetFlags) ?? [];
     // timer counts down to the next wave; seeding it with `delay` (default 0) postpones the
     // FIRST wave without dropping any (Flame Strike's subsiding burn starts after the pillar).
-    this.spellFields.push({ ...f, timer: f.delay ?? 0, done: 0, team, flags });
+    this.spellFields.push({ ...f, timer: f.delay ?? 0, done: 0, team, flags, ox: caster?.x ?? f.x, oy: caster?.y ?? f.y });
   }
 
   /** Would an area effect with `flags` (the ability's targs1), cast by unit `casterId`
@@ -16707,9 +16737,15 @@ export class SimWorld {
           wx += Math.cos(a) * r;
           wy += Math.sin(a) * r;
         }
+        // A THROWN wave (SpellFieldInit.thrown) lands when its missiles do: from wherever the
+        // caster stands now — where he stood at the press, if he is gone — to the wave's spot.
+        const thrower = f.thrown ? this.units.get(f.casterId) : undefined;
+        const fromX = thrower && thrower.hp > 0 ? thrower.x : f.ox;
+        const fromY = thrower && thrower.hp > 0 ? thrower.y : f.oy;
+        const flight = f.thrown ? Math.hypot(wx - fromX, wy - fromY) / (f.thrown.speed || 900) : 0;
         const impact = {
           code: f.code,
-          t: f.impactDelay ?? 0,
+          t: f.thrown ? flight : f.impactDelay ?? 0,
           x: wx,
           y: wy,
           area: f.area,
@@ -16726,17 +16762,27 @@ export class SimWorld {
           skipEthereal: f.skipEthereal ?? false,
           hitArt: f.hitArt,
           hitAttach: f.hitAttach,
+          // A healing wave heals where and when it LANDS, like the damage beside it.
+          healField: f.healPerWave ? f : undefined,
         };
         if (impact.t > 0) this.waveImpacts.push(impact);
         else this.landWave(impact);
-        if (f.healPerWave) this.healWave(f, wx, wy);
         // Scatter the wave effect over the area (WC3 drops the ice shards across the
         // whole circle each wave, not just the centre). `artPerWave` copies land per
         // wave — Blizzard rains a cluster of 6, most fields just one. Each shard gets
         // its own sqrt-weighted radius so hits spread evenly over the disc, and the
         // angles are spaced one-per-sector (with jitter inside the sector) so a wave
         // never bunches all six shards on one side of the circle.
-        if (f.art) {
+        if (f.art && f.thrown) {
+          // The wave's copies as MISSILES, each to its own spot in the circle — see thrown.
+          const n = f.artPerWave ?? 1;
+          const base = this.rng() * Math.PI * 2;
+          for (let s = 0; s < n; s++) {
+            const ang = base + ((s + this.rng()) * Math.PI * 2) / n;
+            const r = f.area * Math.sqrt(this.rng());
+            this.spawnSpotMissile(thrower && thrower.hp > 0 ? thrower : undefined, fromX, fromY, wx + Math.cos(ang) * r, wy + Math.sin(ang) * r, f.art, f.thrown.speed, f.thrown.arc);
+          }
+        } else if (f.art) {
           const n = f.artPerWave ?? 1;
           const base = this.rng() * Math.PI * 2;
           // Art spreads over whichever circle is bigger: the damage area, or the ground a
@@ -16858,11 +16904,15 @@ export class SimWorld {
   private healWave(f: (typeof this.spellFields)[number], x: number, y: number): void {
     const caster = this.units.get(f.casterId);
     if (!caster) return;
-    for (const t of this.unitsInAreaInternal(x, y, f.area)) {
-      if (t.hp <= 0 || t.mechanical) continue;
-      if (!this.allied(caster, t) || !this.targsAdmit(t, f.flags) || !this.allegianceAdmits(caster, t, f.flags)) continue;
+    const reached = this.unitsInAreaInternal(x, y, f.area).filter((t) =>
+      t.hp > 0 && !t.mechanical && this.allied(caster, t) && this.targsAdmit(t, f.flags) && this.allegianceAdmits(caster, t, f.flags));
+    const per = f.healPerWave ?? 0;
+    const cap = f.maxHealPerWave ?? 0;
+    const each = cap > 0 && reached.length * per > cap ? cap / reached.length : per;
+    for (const t of reached) {
       const share = t.building && (f.buildingReduction ?? 0) > 0 ? f.buildingReduction! : 1;
-      t.hp = Math.min(t.maxHp, t.hp + (f.healPerWave ?? 0) * share);
+      t.hp = Math.min(t.maxHp, t.hp + each * share);
+      if (f.healArt) this.spellEffects.push({ art: f.healArt, x: t.x, y: t.y, targetId: t.id, z: 0 });
       // The worn model, kept alive a beat past the next wave so it does not blink between two.
       if (f.healBuff) this.applyBuffInternal(t, { kind: "mark", group: f.healBuff.group, timeLeft: f.interval + 0.25, sourceId: caster.id, art: f.healBuff.art, fx: f.healBuff.fx, buffId: f.healBuff.buffId });
     }
@@ -16870,6 +16920,7 @@ export class SimWorld {
 
   /** One wave of a repeating area field hitting the ground. */
   private landWave(w: (typeof this.waveImpacts)[number]): void {
+    if (w.healField) this.healWave(w.healField, w.x, w.y);
     // Hit whoever the ability's targs1 allows — enemy-only for Starfall/Stampede,
     // but everyone (incl. your own units) for Flame Strike/Blizzard/Death&Decay.
     const hit = this.unitsInAreaInternal(w.x, w.y, w.area).filter((t) => this.areaEffectAffects(w.casterId, w.team, w.flags, t));
@@ -26740,6 +26791,10 @@ function launchPoint(u: SimUnit, lx: number, ly: number, lz: number): [number, n
   // forward = (c, s); right = (s, -c).
   return [u.x + ly * c + lx * s, u.y + ly * s - lx * c, lz];
 }
+
+/** A spell field while it runs: its init, the wave clock, the side and Targets Allowed captured
+ *  at the press, and where the caster stood then (a thrown wave's fallback origin). */
+type LiveSpellField = SpellFieldInit & { timer: number; done: number; team: number; flags: string[]; ox: number; oy: number };
 
 /** An ARTILLERY slot — `weapTp` artillery or aline, the two kinds Liquipedia's Weapon Types
  *  page files under Artillery: the shot is thrown at an AREA rather than a unit ("they do not

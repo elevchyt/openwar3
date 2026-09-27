@@ -49,8 +49,12 @@ edit; the key is spelled `MissileArc` on five rows and read case-insensitively) 
 unit-target spell that flies one (`spawnSpellProjectile`) and the picture missiles
 (`spawnVisualMissile`): Acid Bomb 0.4, Hurl Boulder 0.3, Drunken Haze 0.15, and the Blood Mage's
 spheres 0.05 (the renderer's sphere throw reads the row now too). Storm Bolt and Death Coil state
-none and fly straight. Healing Spray (0.4) and Cluster Rockets (0.2) state one too, but those
-point spells throw no sim missile yet, so there is nothing for it to bend. Two exceptions, both deliberate: a WAVE (Shock
+none and fly straight. Healing Spray (0.4) and Cluster Rockets (0.2) are THROWN FIELDS
+(`SpellFieldInit.thrown`, `spawnSpotMissile`): each wave's bottles or rockets are real missiles
+from the caster to spots in the circle, and the wave heals or hurts when they land — its
+distance over the row's `Missilespeed` after the throw — so a rocket wave can be walked out from
+under. Healing Spray heals per wave (its Ubertip: "each wave heals <DataA> … to all friendly units
+in an area"), with DataD as the spray's budget, a wave's share of it split past that. Two exceptions, both deliberate: a WAVE (Shock
 Wave, Carrion Swarm) sweeps the ground and stays flat, and Mirror Image's renderer-only spread
 keeps its small hand-drawn hop, because `[AOmi]` states no arc and a literal 0 would slide the art
 along the floor.
@@ -107,5 +111,5 @@ without it); `GetUnitCurrentOrder` answers `attackground` (851984).
 
 ## Tests
 
-`tools/sim-artillery-test.cjs` pins the arc (a spell missile's too), friendly fire, the `enemy` exception, splatter,
+`tools/sim-artillery-test.cjs` pins the arc (a spell missile's too), the thrown fields, friendly fire, the `enemy` exception, splatter,
 dodging, Attack Ground (at a spot, from out of range, at a tree) and the dead zone.

@@ -238,5 +238,46 @@ console.log("\nMINIMUM RANGE: nothing inside 250 is shot at");
   check("with one enemy too close and one in range, it acquires the one it can hit", m2.targetId === f2.id, `target ${m2.targetId}`);
 }
 
+console.log("\nTHROWN FIELDS: Healing Spray's bottles and Cluster Rockets' rockets are real missiles");
+{
+  // A heal wave (Healing Spray's shape): 3 waves 1 s apart, 6 bottles each, 30 a wave.
+  const w = new SimWorld(grid(), 2);
+  const alc = addUnit(w, 1, 0, 1000, 1000, []);
+  const ally = addUnit(w, 2, 0, 1700, 1000, []);
+  ally.hp = 500;
+  w.addSpellFieldInternal({
+    code: "ANhs", x: 1700, y: 1000, area: 250, damagePerWave: 0, waves: 3, interval: 1, casterId: 1,
+    art: "HealBottleMissile.mdx", artPerWave: 6, thrown: { speed: 700, arc: 0.4 }, healPerWave: 30,
+  });
+  const spawned = [];
+  let healedAt = -1, peak = 0;
+  for (let i = 0; i < 60 * 5; i++) {
+    w.tick(SIM_DT);
+    spawned.push(...w.drainSpawnedProjectiles());
+    for (const p of w.projectiles.values()) peak = Math.max(peak, p.z);
+    w.drainProjectileImpacts(); w.drainRemovedProjectiles();
+    if (healedAt < 0 && ally.hp > 500) healedAt = i * SIM_DT;
+  }
+  check("each wave throws its six bottles as missiles", spawned.length === 18, `${spawned.length} missiles`);
+  check("…lobbed by the row's arc (0.4 of ~700)", peak > 200, `peak ${peak.toFixed(0)}`);
+  const flight = 700 / 700;
+  check("the heal lands when the bottles do, not at the throw", Math.abs(healedAt - flight) < 0.15, `healed at ${healedAt.toFixed(2)} s, flight ${flight.toFixed(2)} s`);
+  check("…one wave's worth each, three waves", Math.abs(ally.hp - 590) < 1e-6, `hp ${ally.hp}`);
+}
+{
+  // A hurting thrown wave (Cluster Rockets' shape) lands on whoever is THERE when it lands.
+  const w = new SimWorld(grid(), 2);
+  addUnit(w, 1, 0, 1000, 1000, []);
+  const foe = addUnit(w, 2, 1, 1700, 1000, []);
+  w.addSpellFieldInternal({
+    code: "ANcs", x: 1700, y: 1000, area: 200, damagePerWave: 40, waves: 1, interval: 0.25, casterId: 1,
+    art: "TinkerRocketMissile.mdx", artPerWave: 2, thrown: { speed: 700, arc: 0.2 },
+  });
+  w.tick(SIM_DT);
+  foe.x = 2400; // walks out of the circle while the rockets are up
+  run(w, 60 * 2);
+  check("a rocket wave can be walked out from under", foe.hp === 1000, `hp ${foe.hp}`);
+}
+
 console.log(failures ? `\nartillery: ${failures} FAILED` : "\nartillery: all checks passed");
 process.exit(failures ? 1 : 0);
