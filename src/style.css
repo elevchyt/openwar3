@@ -1489,7 +1489,10 @@ body.hud-tooltip-skinned .unit-crew-count::after {
   box-shadow: inset 0 0 0 3px #fcd312, inset 0 0 14px 4px rgba(252, 211, 18, 0.85);
 }
 .hud-cmd-label { pointer-events: none; }
-/* Radial cooldown sweep (clockwise dark wedge) + seconds count over an ability. */
+/* Radial cooldown sweep (clockwise dark wedge) + seconds count over an ability. The count's
+   size is the developer's pick, chosen by eye in a live match between 15 and 28 px: at 28 a
+   three-digit wait (an Avatar's 117) still fits the button and reads at a glance. The same
+   rule serves the inventory, so an item's cooldown is printed at the same size. */
 .hud-cmd-cd {
   position: absolute;
   inset: 0;
@@ -1502,7 +1505,7 @@ body.hud-tooltip-skinned .unit-crew-count::after {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 15px;
+  font-size: 28px;
   font-weight: 700;
   color: #fff;
   text-shadow: 0 1px 2px #000, 0 0 4px #000;
