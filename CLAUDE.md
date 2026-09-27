@@ -830,6 +830,13 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   creep that pulled the camp stopped. A creep's meld takes its Hold with it however the meld
   ends (`breakInvisibility`) — a Hold that outlived one at dawn froze the Nightcrawler at its
   post for the rest of the game.
+- **Auto Camera (observers):** read [`docs/auto-camera.md`](docs/auto-camera.md) before touching
+  [`src/game/autoCamera.ts`](src/game/autoCamera.ts) or the observer's checkbox. The CONTROL is the
+  game's (`ObserverPanel.fdf` `ObserverCameraCheckBox`, label `REPLAY_CAMERA` = "Auto Camera");
+  what it DOES is ours (issue #167) and every number says so. The two rules that make it usable:
+  it HOLDS `MIN_HOLD` seconds after a pan whatever starts elsewhere, and it notices the observer's
+  own hand by the focus not being where it left it (`confirm` runs after the map clamp, or the edge
+  of the map reads as a hand). `?dev&map=…&observe` boots straight into an observed match.
 - **Gamepad:** read [`docs/gamepad.md`](docs/gamepad.md) before touching
   [`src/ui/gamepad.ts`](src/ui/gamepad.ts) or a `:hover` rule. WC3 has no controller support,
   so the MAPPING is the developer's (issue #162), but what a button does is the game's: a

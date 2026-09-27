@@ -106,6 +106,7 @@ import { MultiboardOverlay } from "../ui/multiboard";
 import { TimerDialogOverlay } from "../ui/timerDialog";
 import { CinematicPanelOverlay } from "../ui/cinematicPanel";
 import { ScriptCamera, type CameraState } from "./scriptCamera";
+import { AutoCamera } from "../game/autoCamera";
 import { BOUNTY_TEXT_STYLE, CombatTextTags, GOLD_TEXT_STYLE, LUMBER_TEXT_STYLE, TextTagOverlay, XP_TEXT_STYLE, type CombatTextStyle, type TextTagContext } from "./textTags";
 import { FdfLibrary } from "../ui/fdf/library";
 import { playFdfClick } from "../ui/fdf/render";
@@ -1378,6 +1379,9 @@ export class MapViewerScene {
    * matrix is nobody's ally, and read that way the whole field comes back hostile.
    */
   private observer = false;
+  /** An observer's Auto Camera (issue #167; game/autoCamera.ts) — the HUD's checkbox is its
+   *  switch, `updateAutoCamera` its hands. Off until the observer ticks it. */
+  private readonly autoCam = new AutoCamera();
   /**
    * A LAN game's OBSERVERS BENCH (`MeleeConfig.observers`): every watcher's player number, this
    * machine's included if it is one. The host seats each with reveal-all eyes and addresses it
@@ -8478,6 +8482,9 @@ export class MapViewerScene {
       allyColorButtonEnabled: () => this.allyColorButtonOn,
       creepButtonEnabled: () => this.creepButtonOn,
       uiString: (key, fallback) => this.globalStrings?.strings.get(key) ?? fallback,
+      isObserver: () => this.observer,
+      autoCamera: () => this.autoCam.enabled,
+      setAutoCamera: (on) => this.autoCam.setEnabled(on),
       creepCamps: () => this.rts?.creepCamps() ?? [],
       minimapIcons: () => this.rts?.minimapIcons() ?? [],
       mapBounds: () => {
@@ -14524,6 +14531,10 @@ export class MapViewerScene {
     // camera's shape. Before the script block, so a cinematic still wins.
     this.updatePlayerCamera(Math.min(dtMs, 100) / 1000);
 
+    // An observer's Auto Camera — after the observer's own hand (which it yields to) and
+    // before the script's camera (which it never fights).
+    const autoCamOn = this.updateAutoCamera(Math.min(dtMs, 100) / 1000);
+
     // The map's script drives the same camera (7.24) — a camera setup, a timed pan, a unit
     // to ride, a shake. It runs AFTER the player's input so a cinematic wins, and it lets go
     // of each field the moment that field's blend lands. `dtMs` is MILLISECONDS (the frame
@@ -14552,6 +14563,7 @@ export class MapViewerScene {
     }
 
     this.clampTarget(); // keep the focus on the map, whatever moved it (pan/edge-scroll/minimap/follow)
+    if (autoCamOn) this.autoCam.confirm({ x: this.target[0], y: this.target[1] });
     this.followGround(dtMs); // …and on the GROUND, so the view keeps its distance to the terrain
     const cp = Math.cos(this.pitch);
     const eye = new Float32Array([
@@ -14574,6 +14586,24 @@ export class MapViewerScene {
     // Drive positional (WANT3D) audio: listener at the ground focus, facing the
     // camera's look direction so on-screen battles pan + attenuate around center.
     this.sounds?.setListener(this.target, eye);
+  }
+
+  /**
+   * Run the observer's Auto Camera for one frame (game/autoCamera.ts) and write the focus it
+   * wants. Only for a WATCHER with the box ticked, and never while the map's script has the
+   * camera (a cinematic, a scripted pan) or has taken control away — the auto camera is the
+   * observer's hand, and a script outranks that. Answers whether it ran, so the focus can be
+   * confirmed after the map clamp.
+   */
+  private updateAutoCamera(dt: number): boolean {
+    if (!this.observer || !this.autoCam.enabled || !this.rts) return false;
+    if (!this.userControl || this.scriptCam.active) return false;
+    const want = this.autoCam.update(dt, { x: this.target[0], y: this.target[1] }, this.rts.simView.units.values());
+    if (want) {
+      this.target[0] = want.x;
+      this.target[1] = want.y;
+    }
+    return true;
   }
 
   /** The camera's up axis. World-up, unless CAMERA_FIELD_ROLL has tilted the shot — then it

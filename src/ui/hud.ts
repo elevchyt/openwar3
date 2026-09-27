@@ -262,6 +262,12 @@ export interface HudDriver {
   /** A `UI\FrameDef\GlobalStrings.fdf` string by key, with a literal to fall back on when
    *  no install is mounted. (The game writes the minimap buttons' tooltips in it.) */
   uiString(key: string, fallback: string): string;
+  /** Is this machine WATCHING the match rather than playing in it (MeleeConfig.observer)? The
+   *  Auto Camera checkbox is an observer's alone. */
+  isObserver(): boolean;
+  /** The observer's Auto Camera (game/autoCamera.ts): whether it is on, and the switch. */
+  autoCamera(): boolean;
+  setAutoCamera(on: boolean): void;
   /** Creep-camp difficulty markers: camp centre + combined creep level (the HUD
    *  colours and sizes it per `UI\MiscData.txt` [Minimap]). Fixed map data. */
   creepCamps(): Array<{ x: number; y: number; level: number }>;
@@ -686,6 +692,11 @@ const HERO_BAR = {
   slot: 76 * HERO_PX, // icon width = bars width = the slot; everything else scales off it
   max: 7, // the most buttons the real bar holds
 } as const;
+
+/** The Auto Camera checkbox's sizes, all `ObserverPanel.fdf`'s own: the SIMPLECHECKBOX is
+ *  0.02 square, its string sits 0.005 to its right, and `ObserverPanelStringTemplate` sets
+ *  MasterFont at 0.008. */
+const AUTO_CAMERA_BOX = { box: 0.02, gap: 0.005, font: 0.008 } as const;
 
 /** The one texture `UI\Feedback\Autocast\UI-ModalButtonOn.mdx` draws — the spark its four
  *  corner emitters chase around a button that is standing ON. See ui/modalButtonFx.ts, which
@@ -1441,6 +1452,7 @@ export class GameHud {
     this.root.append(
       this.buildConsole(skin),
       this.buildHeroBar(),
+      this.buildAutoCameraBox(),
       // The cheat panel is DEVELOPMENT ONLY, and it is gated the way every other dev-only
       // thing in the app is (src/dev/devBoot.ts): `import.meta.env.DEV` is a compile-time
       // constant that Vite folds to `false` in a build, so a packaged OpenWar3 has no
@@ -1639,6 +1651,7 @@ export class GameHud {
     this.syncPadCard();
     this.refreshInventory();
     this.refreshHeroBar();
+    this.refreshAutoCameraBox();
     this.updateIdleWorkers();
     // Last: the two refreshes above are what say which buttons are lit, and the effect is
     // simulated once for all of them (see ModalButtonFx).
@@ -2749,6 +2762,73 @@ export class GameHud {
     };
     refresh();
     return { btn, refresh };
+  }
+
+  /**
+   * AUTO CAMERA (issue #167) — an observer's checkbox, under the upper button bar in the
+   * top-left corner, where a player's hero bar would hang (an observer has no heroes).
+   *
+   * Everything about it is the game's own observer panel (`UI\FrameDef\UI\ObserverPanel.fdf`
+   * `ObserverCameraCheckBox`): a SIMPLECHECKBOX 0.02 square wearing `ReplayCheckBoxNormal` /
+   * `…Pressed` / `…Check` (war3skins — the EscMenu checkbox art, per race), its label the
+   * `REPLAY_CAMERA` string, which GlobalStrings spells "Auto Camera", in
+   * `ObserverPanelStringTemplate` (MasterFont 0.008, gold 0.99/0.827/0.0705, a black drop
+   * shadow), 0.005 to the right of the box. Only its PLACE is the issue's rather than the file's
+   * (which parks the panel low, beside the console). What it does is game/autoCamera.ts.
+   */
+  private autoCamBox: { root: HTMLElement; box: HTMLElement; check: HTMLElement; paint: (pressed: boolean) => void } | null = null;
+  private buildAutoCameraBox(): HTMLElement {
+    const root = document.createElement("div");
+    root.className = "hud-autocam";
+    root.hidden = true;
+    root.style.setProperty("--autocam-left", uiPx(HERO_BAR.left));
+    root.style.setProperty("--autocam-top", uiPx(HERO_BAR.top));
+    root.style.setProperty("--autocam-box", uiPx(AUTO_CAMERA_BOX.box));
+    root.style.setProperty("--autocam-gap", uiPx(AUTO_CAMERA_BOX.gap));
+    root.style.setProperty("--autocam-font", uiPx(AUTO_CAMERA_BOX.font));
+    const box = document.createElement("button");
+    box.className = "hud-autocam-box hud-iconbtn";
+    const check = document.createElement("div");
+    check.className = "hud-autocam-check";
+    box.appendChild(check);
+    const label = document.createElement("span");
+    label.className = "hud-autocam-label";
+    label.textContent = this.driver.uiString("REPLAY_CAMERA", "Auto Camera");
+    root.append(box, label);
+    const paint = (pressed: boolean): void => {
+      const face = this.driver.blpUrl(this.driver.skinPath(pressed ? "ReplayCheckBoxPressed" : "ReplayCheckBoxNormal"));
+      box.style.backgroundImage = face ? `url(${face})` : "";
+      const tick = this.driver.blpUrl(this.driver.skinPath("ReplayCheckBoxCheck"));
+      check.style.backgroundImage = tick ? `url(${tick})` : "";
+      check.hidden = !this.driver.autoCamera();
+    };
+    // The LABEL is part of the control, as a checkbox's text is in the game's own panels.
+    const toggle = (): void => {
+      this.driver.setAutoCamera(!this.driver.autoCamera());
+      paint(false);
+    };
+    onPress(box, toggle);
+    label.addEventListener("pointerdown", (e) => { if (e.button === 0) { e.preventDefault(); toggle(); } });
+    box.addEventListener("pointerdown", (e) => { if (e.button === 0) paint(true); });
+    box.addEventListener("pointerup", () => paint(false));
+    box.onpointerleave = () => paint(false);
+    box.oncontextmenu = (e) => e.preventDefault();
+    this.autoCamBox = { root, box, check, paint };
+    paint(false);
+    return root;
+  }
+
+  /** Shown only to an observer, and kept in step with the switch (a hotkey or a script may
+   *  have moved it since the last click). */
+  private refreshAutoCameraBox(): void {
+    const a = this.autoCamBox;
+    if (!a) return;
+    const show = this.driver.isObserver();
+    if (a.root.hidden === show) a.root.hidden = !show;
+    if (show) {
+      const on = this.driver.autoCamera();
+      if (a.check.hidden === on) a.check.hidden = !on;
+    }
   }
 
   /**

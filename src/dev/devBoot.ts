@@ -5,7 +5,7 @@ import {
   fetchCasc, fetchInstallAnsi, fetchInstallFile, type FileUrl, type InstallManifest,
 } from "../assets/remoteInstall";
 import type { GateLoad } from "../ui/gate";
-import type { FogMode, MeleeConfig, SlotConfig } from "../ui/lobby";
+import { OBSERVER_PLAYER, type FogMode, type MeleeConfig, type SlotConfig } from "../ui/lobby";
 import { parseMapInfo, type MapInfo } from "../world/mapInfo";
 import { startsExplored } from "../world/mapKind";
 import { RACES, type Race } from "../data/races";
@@ -41,6 +41,8 @@ import { edition, setEdition, type Edition } from "../data/edition";
  *   ?dev&map=EchoIsles&ai=insane            …with every OTHER seat a computer at that difficulty
  *   ?dev&map=EchoIsles&ai=plus-easy         …played by Computer+ instead (src/ai/plus/)
  *   ?dev&map=EchoIsles&airace=orc           …with every OTHER seat seated as that race
+ *   ?dev&map=EchoIsles&observe              …WATCHED: every seat a computer (at &ai=, Normal
+ *                                            by default) and this machine an observer
  *   ?dev&chapter=NightElfX01                start a CAMPAIGN chapter (&difficulty=easy|normal|hard)
  *   ?dev&edition=roc                        boot the Reign of Chaos client (`tft` for the expansion)
  *
@@ -120,6 +122,21 @@ function meleeConfigFor(
   return { slots, fog, seed, localPlayer: player, forces: info.forces.map((f) => ({ allied: f.allied, sharedVision: f.sharedVision })) };
 }
 
+/**
+ * `&observe` — the Custom Game screen's OBSERVER MODE without the screen: this machine gets up
+ * from its seat and watches (MeleeConfig.observer, `localPlayer` = OBSERVER_PLAYER), and every
+ * seat a person could have taken is a computer, so there is a match to watch. The only way to
+ * reach anything an observer alone has — the Auto Camera (issue #167) first — in one URL.
+ */
+function observeConfig(cfg: MeleeConfig, ai: number | null, aiPlus: boolean): MeleeConfig {
+  return {
+    ...cfg,
+    slots: cfg.slots.map((s) => (s.controller === "user" ? { ...s, controller: "computer", aiDifficulty: ai ?? MELEE_NORMAL, aiPlus } : s)),
+    localPlayer: OBSERVER_PLAYER,
+    observer: true,
+  };
+}
+
 /** Ceiling on `?maps=`. Each map is a fetch and a mount; twenty is plenty to fill a list and
  *  still boots in seconds, where the install's full Maps\ folder would take minutes. Applies to
  *  the named form too — twenty deliberate choices is already more than a test needs. */
@@ -163,6 +180,7 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   const aiParam = params.get("ai") ?? "";
   const aiPlus = aiParam.startsWith("plus-") || aiParam === "plus";
   const ai = AI_DIFFICULTIES[aiPlus ? aiParam.slice(5) || "normal" : aiParam] ?? null;
+  const observe = params.has("observe"); // see observeConfig
 
   log("fetching manifest…");
   const res = await fetch("/wc3/manifest.json");
@@ -256,7 +274,7 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
     const mapFile = path ? load.maps.get(path) : undefined;
     if (!mapFile) throw new Error(`no mounted map matching "${name}" — mount it with ?maps=`);
     const info = parseMapInfo(new Uint8Array(await mapFile.arrayBuffer()), path!);
-    await hooks.startGame(mapFile, info, meleeConfigFor(info, player, seed, fog, race, aiRace, ai, aiPlus));
+    await hooks.startGame(mapFile, info, (observe ? observeConfig(meleeConfigFor(info, player, seed, fog, race, aiRace, ai, aiPlus), ai, aiPlus) : meleeConfigFor(info, player, seed, fog, race, aiRace, ai, aiPlus)));
   };
 
   // A campaign chapter comes out of the archives we just mounted, so it needs no map file and
@@ -287,7 +305,7 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   }
 
   log(`starting ${info.name} as player ${player}, seed ${seed}`);
-  await hooks.startGame(file, info, meleeConfigFor(info, player, seed, fog, race, aiRace, ai, aiPlus));
+  await hooks.startGame(file, info, (observe ? observeConfig(meleeConfigFor(info, player, seed, fog, race, aiRace, ai, aiPlus), ai, aiPlus) : meleeConfigFor(info, player, seed, fog, race, aiRace, ai, aiPlus)));
 }
 
 /** Resolve once the lobby's state satisfies `ready`, or reject after `timeoutMs`. */

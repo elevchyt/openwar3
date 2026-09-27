@@ -1080,6 +1080,48 @@ body.hud-tooltip-skinned .hud-chatbar::after {
    16:9 stage box and carries a transform, so .hud's `position: fixed` resolves against that
    box rather than the window. The bar therefore sits in the picture's corner and never
    drifts out into the letterbox. */
+/* AUTO CAMERA (issue #167) — the observer panel's own checkbox, moved to where a player's hero
+   bar hangs. Every size is ObserverPanel.fdf's, handed over by hud.ts in UI space: the 0.02
+   SIMPLECHECKBOX, the 0.005 gap to its string, and `ObserverPanelStringTemplate`'s MasterFont
+   0.008 in gold (0.99 0.827 0.0705) with a black 0.001 drop shadow. The box and the tick are
+   the game's textures (ReplayCheckBoxNormal/Pressed/Check), laid one over the other exactly as
+   a SIMPLECHECKBOX draws its CheckedTexture over its NormalTexture. */
+.hud-autocam {
+  position: absolute;
+  left: var(--autocam-left);
+  top: var(--autocam-top);
+  display: flex;
+  align-items: center;
+  gap: var(--autocam-gap);
+  z-index: 4;
+  pointer-events: none; /* the HUD root takes no mouse; the box and its label opt back in */
+}
+.hud-autocam-box,
+.hud-autocam-label { pointer-events: auto; }
+.hud-autocam[hidden] { display: none; }
+.hud-autocam-box {
+  position: relative;
+  width: var(--autocam-box);
+  height: var(--autocam-box);
+  padding: 0;
+  border: none;
+  background: transparent center / 100% 100% no-repeat;
+}
+.hud-autocam-check {
+  position: absolute;
+  inset: 0;
+  background: center / 100% 100% no-repeat;
+  pointer-events: none;
+}
+.hud-autocam-check[hidden] { display: none; }
+.hud-autocam-label {
+  font-family: var(--game-font);
+  font-size: var(--autocam-font);
+  color: rgb(252, 211, 18);
+  text-shadow: calc(var(--stage-h) * 0.001 / 0.6) calc(var(--stage-h) * 0.001 / 0.6) 0 rgba(0, 0, 0, 0.9);
+  white-space: nowrap;
+  user-select: none;
+}
 .hud-herobar {
   position: absolute;
   left: var(--hero-left);
