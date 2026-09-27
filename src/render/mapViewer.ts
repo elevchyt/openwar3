@@ -7821,10 +7821,15 @@ export class MapViewerScene {
       // Facing it down the line it sweeps is what makes the art read as the spell; without
       // it every wave pointed at world +x, so a Breath of Fire cast southward laid its
       // flame out sideways across the caster and looked like no model at all.
-      // A missile that lost its target to invisibility points at the spot it is dying at.
-      const aim = p.lost ?? t;
+      // A missile that lost its target to invisibility points at the spot it is dying at, and an
+      // ARTILLERY shell at the spot it was thrown at — the unit it was aimed at may be long gone
+      // from under it, and an Attack Ground shell never had one (a client knows that spot only
+      // from the payload: projectileAim).
+      const aim = p.lost ?? (p.area ? { x: p.area.aimX, y: p.area.aimY } : undefined) ?? t ?? this.rts!.projectileAim(id);
       const ang = p.wave ? Math.atan2(p.wave.dirY, p.wave.dirX) : aim ? Math.atan2(aim.y - p.y, aim.x - p.x) : 0;
-      zQuat(this.mq, ang);
+      // …and TILTED down its own curve (sim/missile.ts `pitch`): a lobbed shell leaves nose up
+      // and comes down nose first, an arrow dips into its target. A wave sweeps the ground flat.
+      yawPitchQuat(this.mq, ang, p.wave ? 0 : p.pitch ?? 0);
       inst.setRotation(this.mq);
     }
   }
@@ -10814,6 +10819,15 @@ export class MapViewerScene {
           "Orders your units to move to the target area and attack any enemy units they see on the way. If you order them to attack a specific unit, your units will ignore other enemy units and will attack the targeted unit until it is destroyed."),
       }));
     }
+    // ATTACK GROUND — the artillery weapon's own command (Liquipedia, Weapon Types: "Artillery
+    // attacks add the Attack Ground button to the unit"). Its art, words, key and cell are all
+    // the data's: [CmdAttackGround] Art=CommandAttackGround (war3skins [Default] →
+    // BTNAttackGround.blp — the four race twins are commented out) Buttonpos=3,1, Hotkey=G.
+    if (canMove && this.rts?.selectionCanAttackGround()) out.push(this.cmd({
+      id: "attackground", icon: btnIcon("BTNAttackGround"), name: "Attack Ground", hotkey: "G", col: 3, row: 1, active: active === "attackground",
+      ...this.cmdSection("CmdAttackGround", "Attack |cffffcc00G|rround",
+        "Orders your units to fire at the targeted area of ground until they are told to stop or are given another order."),
+    }));
     if (canMove) out.push(this.cmd({
       id: "patrol", icon: btnIcon("BTNPatrol"), name: "Patrol", hotkey: "P", col: 0, row: 1, active: active === "patrol",
       ...this.cmdSection("CmdPatrol", "|cffffcc00P|ratrol",
@@ -10881,6 +10895,7 @@ export class MapViewerScene {
       // Attack-move and a forced attack share the Attack button, as in the game.
       case "attackmove":
       case "attack": return "attack";
+      case "attackground": return "attackground";
       case "patrol": return "patrol";
       case "hold": return "hold";
       case "repair": return repairButton;
@@ -11231,7 +11246,7 @@ export class MapViewerScene {
     if (id === "noop") return;
     this.sounds?.playUi("InterfaceClick"); // WC3 command-card button click
     this.sounds?.unlock(); // keyboard hotkeys are a gesture too
-    if (id === "move" || id === "attack" || id === "patrol" || id === "rally" || id === "repair") {
+    if (id === "move" || id === "attack" || id === "attackground" || id === "patrol" || id === "rally" || id === "repair") {
       this.rts.orderMode = id;
       this.hud?.setArmed(true);
       return;
@@ -15005,7 +15020,7 @@ export class MapViewerScene {
       kind = "reticle";
       // The Attack order shows a RED reticle (WC3), the other armed orders green
       // (yellow while hovering a unit for a move-type order).
-      if (mode === "attack") colorKey = "red";
+      if (mode === "attack" || mode === "attackground") colorKey = "red";
       else colorKey = hover.has ? "yellow" : "green";
     } else if (hover.has) {
       kind = "hand";
@@ -15542,6 +15557,19 @@ function standSequence(seqs: Array<{ name: string }>): number {
  */
 function fogKey(x: number, y: number): number {
   return Math.round(x) * 131072 + Math.round(y);
+}
+
+/** A heading about +Z, then a PITCH about the model's own sideways axis — nose up for a
+ *  positive `pitch`, since a missile model faces +X (qz(yaw) · qy(−pitch)). */
+function yawPitchQuat(out: Float32Array, yaw: number, pitch: number): void {
+  const sz = Math.sin(yaw / 2);
+  const cz = Math.cos(yaw / 2);
+  const sy = Math.sin(-pitch / 2);
+  const cy = Math.cos(pitch / 2);
+  out[0] = -sz * sy;
+  out[1] = cz * sy;
+  out[2] = sz * cy;
+  out[3] = cz * cy;
 }
 
 function zQuat(out: Float32Array, angle: number): void {

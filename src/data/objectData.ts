@@ -248,6 +248,10 @@ export const UNIT_SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   ua2m: w2((v) => mdlPath(s(v)), (w, v) => { w.missileArt = v; }),
   ua1z: w1(n, (w, v) => { w.missileSpeed = v; }),
   ua2z: w2(n, (w, v) => { w.missileSpeed = v; }),
+  // `Missilearc` — how high the shot is thrown, as a fraction of the distance (see
+  // WeaponSlotDef.missileArc). A custom siege unit is mostly this number.
+  uma1: w1(n, (w, v) => { w.missileArc = v; }),
+  uma2: w2(n, (w, v) => { w.missileArc = v; }),
   // "Attack N - Weapon Sound" (`weapType1/2`) — the clang, per slot. Named one letter apart
   // from `ua1w` above and meaning something else entirely; see WeaponSlotDef.weaponSound.
   ucs1: w1((v) => soundName(s(v)), (w, v) => { w.weaponSound = v; }),
@@ -288,6 +292,9 @@ export const UNIT_SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   // slot is primary, which is the other reason the summary is re-derived rather than patched.
   uaen: (d, v) => { d.weapons.forEach((w, i) => { w.enabled = (n(v) & (1 << i)) !== 0; }); },
   uacq: (d, v) => { d.acquireRange = n(v); },
+  // `minRange` — the dead zone inside which the unit cannot fire at all (the siege four's
+  // 250). A UNIT column, not a slot one, so it is the def's; weaponsFromDef hands it on.
+  uamn: (d, v) => { d.minRange = n(v); },
   udty: (d, v) => { d.armorType = toArmorType(s(v)); },
   // "Combat - Armor Sound Type" (unitUI `armor`) — the MATERIAL struck (Flesh/Metal/Wood),
   // which pairs with the attacker's weapon sound to name a UnitCombatSounds row. Not the
@@ -469,8 +476,6 @@ export const UNIT_FIELD_NOTES: Record<string, string> = {
   // its own citation in world.ts — so wiring this in means replacing that rule wholesale
   // rather than adding a field. Left for that change, not for this one.
   udu1: "dmgUp1 — every one of the 837 stock rows leaves it empty", udu2: "dmgUp2 — likewise empty on every stock row",
-  uamn: "minRange — no minimum attack range; 6 stock rows carry one (the mortar/siege pair)",
-  uma1: "no missile arc (Missilearc)", uma2: "no missile arc (Missilearc)",
   umh1: "missiles always home (MissileHoming)", umh2: "missiles always home (MissileHoming)",
   utc1: "no multi-target attacks (targCount1)", utc2: "no multi-target attacks (targCount2)",
 

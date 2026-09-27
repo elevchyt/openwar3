@@ -481,6 +481,8 @@ export interface ProjectileSnapshot {
   startZ: number;
   impactZ: number;
   startDist: number;
+  /** `Missilearc` — the lob, so a client flies the same curve between payloads (sim/missile.ts). */
+  arc: number;
 }
 
 /** One frame of world, addressed to one player. */
@@ -912,13 +914,18 @@ export function snapshotFor(
     // payloads instead of sweeping it (tickClientProjectiles).
     // A missile that LOST its target to invisibility is headed for where the target was last
     // seen — and its `targetId` is already 0, so the client cannot home on the (hidden) unit.
+    // An ARTILLERY shell is headed for the SPOT it was thrown at, not the unit — which has
+    // every chance of having walked away (that is the point of artillery) — and an Attack
+    // Ground shell has no unit at all.
     const w = p.wave;
     const l = p.lost;
+    const a = p.area;
     projectiles.push({
-      id: p.id, x: p.x, y: p.y, z: p.z, targetId: p.targetId,
-      tx: w ? w.ox + w.dirX * w.dist : l ? l.x : (t?.x ?? p.x),
-      ty: w ? w.oy + w.dirY * w.dist : l ? l.y : (t?.y ?? p.y),
+      id: p.id, x: p.x, y: p.y, z: p.z, targetId: a ? 0 : p.targetId,
+      tx: w ? w.ox + w.dirX * w.dist : l ? l.x : a ? a.aimX : (t?.x ?? p.x),
+      ty: w ? w.oy + w.dirY * w.dist : l ? l.y : a ? a.aimY : (t?.y ?? p.y),
       speed: p.speed, art: p.art, startZ: p.startZ, impactZ: p.impactZ, startDist: p.startDist,
+      arc: p.arc ?? 0,
     });
   }
 

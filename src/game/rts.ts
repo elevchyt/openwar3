@@ -3,6 +3,7 @@ import { SimWorld, weaponsFromDef, inventoryCapacity, isOffField, CREEP_CAMP_ACQ
 import { KNOWN_ABILITIES, NO_AOE_CURSOR, aoeCursorRadius } from "../data/abilities";
 import type { Command } from "./commands";
 import { PATHING_CELL, footprintCells, type PathingGrid } from "../sim/pathing";
+import { flyHeight } from "../sim/missile";
 import type { PlacedFootprint, Footprint } from "../sim/destructibles";
 import { PlacedIndex, type PlacedRef } from "./placement";
 import { Authority } from "./authority";
@@ -5930,7 +5931,7 @@ export class RtsController {
   /** Armed command-card order; the next left-click executes it instead of
    *  selecting. "rally" sets a building's rally point; "repair" targets a
    *  damaged friendly building; "cast" targets a spell (see armedCast). */
-  orderMode: "move" | "attack" | "patrol" | "rally" | "repair" | "harvest" | "cast" | "item" | "selectuser" | "load" | "unload" | "signal" | null = null;
+  orderMode: "move" | "attack" | "attackground" | "patrol" | "rally" | "repair" | "harvest" | "cast" | "item" | "selectuser" | "load" | "unload" | "signal" | null = null;
   /**
    * The Minimap Signal was aimed and spent: a point on the ground or on the minimap. Not an
    * ORDER — it needs no selection and names no unit, which is why `orderClickAt` and
@@ -6096,6 +6097,36 @@ export class RtsController {
     return false;
   }
 
+  /** Does any selected unit carry ATTACK GROUND — an artillery slot that is the player's to
+   *  aim (SimWorld.groundWeapon)? Asked of the whole selection, like Attack, and only of what
+   *  can walk: the button is a mobile unit's (UnitFunc gives the command to the siege units,
+   *  and the Cannon Tower's card has none). */
+  selectionCanAttackGround(): boolean {
+    for (const id of this.selected) {
+      const u = this.sim.units.get(id);
+      if (u && !u.ward && !u.building && this.sim.groundWeapon(u)) return true;
+    }
+    return false;
+  }
+
+  /** ATTACK GROUND at a world point for every orderee that has the command
+   *  (SimWorld.issueAttackGround); the rest of a mixed group are not addressed by it and go on
+   *  with what they were doing. Returns whether anybody took it — the red arrow, the attack
+   *  acknowledgement and the rearm all hang on that. `treeId` when the spot is a tree the
+   *  Attack command was pointed at (attackTreeAt). */
+  private groundAttackAt(wx: number, wy: number, queued: boolean, treeId?: number): boolean {
+    let any = false;
+    for (const id of this.orderees) {
+      const u = this.sim.units.get(id);
+      if (!u || !this.sim.groundWeapon(u)) continue;
+      if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attackground", x: wx, y: wy, treeId }, queued })) any = true;
+    }
+    if (!any) return false;
+    this.ack(true);
+    if (!treeId) this.queueArrow(wx, wy, ATTACK_ARROW); // red, as an attack-move's
+    return true;
+  }
+
   /** Can any selected unit MOVE — does it carry the move ability's buttons (Move, Hold Position,
    *  Patrol)? The engine grants that ability to a unit with a movement type and a speed, and to
    *  nothing else: a ward, or Test of Balance's Dummy (no `umvt`, speed 0), has no Move on its
@@ -6133,7 +6164,7 @@ export class RtsController {
    * purchaser, a cargo pick, Unload All and an aimed item are each one-of-a-kind acts the sim
    * never queues, so holding shift over one must still spend it.
    */
-  private static readonly REARM_ON_SHIFT = new Set(["move", "attack", "patrol", "repair", "harvest"]);
+  private static readonly REARM_ON_SHIFT = new Set(["move", "attack", "attackground", "patrol", "repair", "harvest"]);
 
   /**
    * A click that aims the armed command. Answers whether the command was SPENT — the caller
@@ -6297,6 +6328,18 @@ export class RtsController {
       });
       return true;
     }
+    // ATTACK GROUND is aimed at the GROUND, whatever is standing on it — that is the command's
+    // whole point (a shell dropped where the enemy will be, or into fog nobody can see into),
+    // so the click is never a unit pick. A point the ray finds no ground for, or one past the
+    // map's edge, is refused and stays armed, as a point spell's is.
+    if (mode === "attackground") {
+      const hit = this.groundHitAt(cssX, cssY);
+      if (!hit) return this.refuseOrder("Canttargetloc"); // "Unable to target there."
+      if (!this.sim.inPlayableArea(hit[0], hit[1])) return this.refuseOrder("Outofbounds");
+      if (!this.groundAttackAt(hit[0], hit[1], queued)) return this.refuseOrder("Notinrange");
+      this.orderMode = null;
+      return true;
+    }
     // An aimed ATTACK at a THING refuses like a cast, and for the same reason: a tower cannot
     // walk to what you point it at, so a target outside its weapon range is an order it can
     // never carry out. WC3 answers with [Errors] `Notinrange` — "Target is outside range." —
@@ -6432,7 +6475,11 @@ export class RtsController {
   /** The ground-point form of an armed order: patrol / attack-move / move to a world
    *  point. Shared by a click in the world (orderClickAt, once the ray has hit the
    *  terrain) and a click on the MINIMAP, which resolves straight to a world point. */
-  private groundOrder(mode: "move" | "attack" | "patrol", wx: number, wy: number, queued: boolean): void {
+  private groundOrder(mode: "move" | "attack" | "attackground" | "patrol", wx: number, wy: number, queued: boolean): void {
+    if (mode === "attackground") {
+      this.groundAttackAt(wx, wy, queued);
+      return;
+    }
     // Every arrow here is gated on the order having been TAKEN by somebody. A ground marker is
     // a promise that something is on its way to that spot, and a selection with nothing in it
     // that can walk — a tower, a rooted Ancient — must not leave one behind (issueMove /
@@ -6525,7 +6572,7 @@ export class RtsController {
       // highlight up, which is what an armed command looks like.
       const rearm = queued && RtsController.REARM_ON_SHIFT.has(mode);
       this.orderMode = null;
-      this.ack(mode === "attack");
+      if (mode !== "attackground") this.ack(mode === "attack"); // groundAttackAt voices its own, if anybody took it
       this.groundOrder(mode, wx, wy, queued);
       if (rearm) {
         this.orderMode = mode;
@@ -7771,6 +7818,7 @@ export class RtsController {
     switch (o.kind) {
       case "move":
       case "attackmove":
+      case "attackground":
       case "patrol":
       case "buildnew":
         return { x: o.x, y: o.y, z: this.heightAt(o.x, o.y) };
@@ -8123,6 +8171,13 @@ export class RtsController {
   private snapshotProjSpawns: ProjectileSnapshot[] = [];
   private snapshotProjImpacts: Array<{ id: number; x: number; y: number; z: number }> = [];
   private readonly projAim = new Map<number, { x: number; y: number }>();
+
+  /** Where a missile is headed as a frozen client knows it — the payload's aim (`projAim`) —
+   *  for the renderer to point a shell with no unit at the end of it. Undefined on the host,
+   *  whose sim record says so itself. */
+  projectileAim(id: number): { x: number; y: number } | undefined {
+    return this.projAim.get(id);
+  }
   drainSnapshotProjSpawns(): ProjectileSnapshot[] {
     if (!this.snapshotProjSpawns.length) return this.snapshotProjSpawns;
     const out = this.snapshotProjSpawns;
@@ -8248,8 +8303,8 @@ export class RtsController {
 
   /** Advance a frozen client's missiles between payloads with the sim's own homing step
    *  (`tickProjectiles`, minus everything that deals damage): straight at the target's
-   *  record — or the payload's aim fallback when the target was not sent — height lerping
-   *  launch→impact by horizontal progress. The next payload overwrites with the host's
+   *  record — or the payload's aim fallback when the target was not sent — height taken
+   *  from the same curve the host flies (sim/missile.ts). The next payload overwrites with the host's
    *  truth, so this is display, not simulation: it exists so an arrow flies at the frame
    *  rate instead of hopping at the wire's cadence. Holds at the aim point when it gets
    *  there early — the payload, never the client, says when a missile is done. */
@@ -8264,8 +8319,7 @@ export class RtsController {
       if (dist <= step) continue; // arrived (as far as we know) — hold for the payload's verdict
       p.x += (dx / dist) * step;
       p.y += (dy / dist) * step;
-      const prog = p.startDist > 1 ? Math.max(0, Math.min(1, (p.startDist - dist) / p.startDist)) : 1;
-      p.z = p.startZ + (p.impactZ - p.startZ) * prog;
+      flyHeight(p, dist - step); // the host's own arithmetic (sim/missile.ts), arc and all
     }
   }
 
@@ -9069,6 +9123,10 @@ export class RtsController {
     for (const id of this.orderees) {
       const u = this.sim.units.get(id);
       if (u && this.sim.weaponVsTree(u) && this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attacktree", treeId: tree.id }, queued })) any = true;
+      // …or SHELLS it: a Mortar Team, a Demolisher and a Meat Wagon name `tree` in the Targets
+      // Allowed of their ARTILLERY slot, and a shot at a tree is a shot at the ground it
+      // stands on — Attack Ground at the trunk, over when the tree is (issueAttackGround).
+      else if (u && this.sim.groundWeapon(u)?.targets.includes("tree") && this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attackground", x: tree.x, y: tree.y, treeId: tree.id }, queued })) any = true;
       else rest.push(id);
     }
     if (!any) return false;

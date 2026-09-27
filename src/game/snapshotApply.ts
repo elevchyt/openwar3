@@ -333,11 +333,12 @@ export function applyWorldSnapshot(world: ApplyWorld, snap: WorldSnapshot, creat
         rec.startZ = p.startZ;
         rec.impactZ = p.impactZ;
         rec.startDist = p.startDist;
+        rec.arc = p.arc;
       } else {
         world.projectiles.set(p.id, {
           id: p.id, x: p.x, y: p.y, z: p.z, sourceId: 0, targetId: p.targetId,
           speed: p.speed, damage: 0, art: p.art,
-          startZ: p.startZ, impactZ: p.impactZ, startDist: p.startDist,
+          startZ: p.startZ, impactZ: p.impactZ, startDist: p.startDist, arc: p.arc,
         });
         createdProjectiles.push(p);
       }

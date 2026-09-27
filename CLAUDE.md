@@ -302,6 +302,16 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   ladder — so adding one in isolation is always wrong. Two things it does NOT gate: the flat damage bonus (a
   carried stat, it stacks) and the air attack (`DataE` = "Enabled Attack Index", waking the hero's dormant second
   weapon). And an orb's `Targetart` is not a hit effect: it is the LOOPING model worn on the carrier's weapon bone.
+- **Artillery:** read [`docs/artillery.md`](docs/artillery.md) before touching a siege weapon,
+  `applyAreaSplash`, `minRange` or anything that sets a missile's height. A shell flies at the
+  GROUND and can be walked out from under; its height is the weapon's `Missilearc` (a FRACTION of
+  the distance thrown — 0.35 on a Mortar Team, 0.05 on the Glaive Thrower — computed in ONE place,
+  `src/sim/missile.ts`, for every missile the sim flies and for a client's display copy). The
+  burst's `splashTargs` is also its ALLEGIANCE, and the siege rows name none, so a shell hits the
+  thrower's own army ("Mortar Teams will damage your own units", Liquipedia); what it kills
+  SPLATTERS (no corpse). `minRange` is a dead zone the unit STANDS in, never a retreat, and only a
+  ranged slot has one. Attack Ground (`attackground`, [CmdAttackGround] 3,1/G) fires at a spot
+  until the order is replaced.
 - **Campaigns:** read [`docs/campaigns.md`](docs/campaigns.md) before touching the campaign screen, its data, or the
   chapter-start path. The whole campaign is ONE text file (`UI\CampaignStrings_exp.txt`) that documents itself, and
   three of its rows break the obvious parse (a comma inside quotes, a fourth field, a "mission" that is a `.mdl`).

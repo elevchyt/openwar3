@@ -79,6 +79,16 @@ export interface WeaponSlotDef {
    *  this field, or you re-open the melee-hero bug it exists to close. */
   missileArt: string;
   missileSpeed: number; // ...and so is `Missilespeed` (Flying Machine: 2000 air, 900 bombs)
+  /**
+   * `Missilearc` — the Profile's, per slot like the two above: how high the shot is THROWN,
+   * as a fraction of the distance it is thrown. Not a height and not an angle: the peak of the
+   * flight above the straight launch→impact line is `arc × distance` (sim/missile.ts), so the
+   * same Mortar Team lobs a shell four times as high at 1150 as at 290. The stock rows are
+   * 0.35 on the Mortar Team, the Demolisher and the Cannon Tower, 0.3 on the Meat Wagon, 0.15
+   * on every bow, and 0.05 on the Glaive Thrower — whose bolt is the one siege shot that is
+   * FIRED rather than lobbed, and that number is the whole difference.
+   */
+  missileArc: number;
   /** Line-splash ("spill") — `spillDist1/2` + `spillRadius1/2` + `damageLoss1/2`. The
    *  Gryphon Rider's hammer already carries a 50-unit spill RADIUS and a 0.2 falloff, but a
    *  spill DISTANCE of 0, so it hits one unit; Storm Hammers (`Rhhb`, `rasd` = 200) opens the
@@ -928,6 +938,8 @@ function weaponSlots(w: Row | undefined, fn: Row | undefined, primaryVal: number
   // fires the same hammer at ground and air).
   const arts = (fn ? str(fn, "missileart") : "").split(",").map((s) => s.trim()).filter(Boolean);
   const speeds = (fn ? str(fn, "missilespeed") : "").split(",").map((s) => parseFloat(s.trim())).filter((n) => !Number.isNaN(n));
+  // …and `Missilearc` the same way: the Guard Tower's is "0.0,0.15" (its bolt, then its arrow).
+  const arcs = (fn ? str(fn, "missilearc") : "").split(",").map((s) => parseFloat(s.trim())).filter((n) => !Number.isNaN(n));
   const out: WeaponSlotDef[] = [];
   for (const n of [1, 2]) {
     const targets = list(str(w, `targs${n}`));
@@ -955,6 +967,7 @@ function weaponSlots(w: Row | undefined, fn: Row | undefined, primaryVal: number
       // (`ua1w`) on this very slot afterwards and clearing the art now would lose it.
       missileArt: mdxPath(arts[n - 1] ?? arts[0] ?? ""),
       missileSpeed: speeds[n - 1] ?? speeds[0] ?? 900,
+      missileArc: arcs[n - 1] ?? arcs[0] ?? 0,
       spillDist: num(w, `spillDist${n}`, 0),
       spillRadius: num(w, `spillRadius${n}`, 0),
       damageLoss: num(w, `damageLoss${n}`, 0),

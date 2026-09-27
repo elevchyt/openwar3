@@ -45,6 +45,7 @@ import {
   type ReviveMode,
 } from "../data/gameplayConstants";
 import { perfNow, simProfile } from "./profile";
+import { flyHeight, type MissileFlight } from "./missile";
 import { SPELL_HANDLERS, ITEM_INVULN_GROUP, AURA_BUFFS, SELF_INVIS_GROUP, BLADESTORM_GROUP, FIELD_PIERCES_SPELL_IMMUNITY, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, NO_SUMMON_TARGET, DISPEL_CODES, REPLENISH_BAR, replenishRefusal,worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, CANNIBALIZE_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
@@ -124,6 +125,13 @@ export interface SimWeapon {
   ranged: boolean; // fires a travelling projectile instead of hitting instantly
   missileArt: string; // projectile model path (renderer), "" = invisible
   missileSpeed: number; // projectile travel speed (world units/sec)
+  missileArc: number; // `Missilearc` — how high it is thrown, × distance (see sim/missile.ts)
+  /** UnitWeapons `minRange` — the DEAD ZONE: nothing nearer than this (hull to hull, like
+   *  `range`) may be fired at. A UNIT column (the siege four's 250), carried on every slot as
+   *  `acquire` is. Liquipedia's Demolisher and Meat Wagon pages: they "cannot attack melee units
+   *  or any units right next to them. You will have to move them away" — so the unit does NOT
+   *  back off by itself, it just cannot shoot (see engage / acquireTarget). */
+  minRange: number;
   /** This slot's weapon-impact base, paired with the TARGET's material to name the clang
    *  (`weapType1/2` — see WeaponSlotDef.weaponSound). It rides the SLOT rather than being
    *  read off the def at the blow, because which slot is swinging is a RUNTIME fact: an orb
@@ -144,7 +152,7 @@ export interface SimWeapon {
 
 /** An in-flight projectile: homes on its target's current position, dealing its
  *  pre-rolled damage on arrival (the renderer draws + moves the missile model). */
-export interface SimProjectile {
+export interface SimProjectile extends MissileFlight {
   id: number;
   x: number;
   y: number;
@@ -154,11 +162,15 @@ export interface SimProjectile {
   speed: number;
   damage: number; // pre-armor damage rolled at launch (armor applied on impact)
   art: string; // missile model path
-  // Straight-line height interpolation launch→impact (all above-ground): z lerps from
-  // startZ (the launch height) to impactZ across the horizontal flight (startDist).
+  // Height launch→impact (all above-ground): the straight line from startZ (the launch
+  // height) to impactZ across the horizontal flight (startDist), bowed up by the weapon's
+  // `Missilearc` — see sim/missile.ts, which is the one place z is computed.
   startZ: number;
   impactZ: number;
   startDist: number;
+  /** The shooter's OWNER at the loosing — an artillery shell bursts as whoever threw it, dead
+   *  or alive, and the owner is what decides who its burst is an enemy of (applyAreaSplash). */
+  sourceOwner?: number;
   /** The shooter's TEAM at the loosing, carried for the same reason `attackType` is — the
    *  shooter may be dead by the time the arrow has to ask whether its target has gone
    *  invisible, and "invisible" is a question with a side (see missileDisjointed). */
@@ -375,6 +387,8 @@ export function weaponsFromDef(def: UnitDef): SimWeapon[] {
       missileArt: slotMissileArt(s),
       weaponSound: s.weaponSound,
       missileSpeed: s.missileSpeed,
+      missileArc: s.missileArc ?? 0,
+      minRange: def.minRange ?? 0,
       attackType: s.attackType,
       launchX: def.launchX,
       launchY: def.launchY,
@@ -401,7 +415,7 @@ export interface HeroKill {
 /** How many hero deaths `SimWorld.heroKills` keeps — far more than a pass can miss. */
 const HERO_KILL_LOG = 32;
 
-export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "hold" | "attack" | "attacktree" | "follow" | "harvest" | "return" | "repair" | "cast" | "getitem" | "garrison" | "load" | "unload";
+export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "hold" | "attack" | "attacktree" | "attackground" | "follow" | "harvest" | "return" | "repair" | "cast" | "getitem" | "garrison" | "load" | "unload";
 
 /** A learned/innate ability on a unit. `code` is the base ability code (dispatch
  *  key — see data/abilities). `level` 0 = a hero ability not yet learned. */
@@ -1122,6 +1136,10 @@ export type QueuedOrder =
   // The Attack command aimed at a TREE (issueAttackTree). A tree is not a unit, so it has its
   // own order rather than a `targetId` every attack path would look up and fail to find.
   | { kind: "attacktree"; treeId: number }
+  // ATTACK GROUND — an artillery unit's shells at a SPOT, "until they are told to stop or are
+  // given another order" (Units\CommandStrings.txt [CmdAttackGround]). `treeId` when the spot is
+  // a tree the unit was pointed at: the order then ends with the tree (issueAttackGround).
+  | { kind: "attackground"; x: number; y: number; treeId?: number }
   // offX/offY: optional formation offset from the leader's centre, so a group told
   // to follow one unit fans into distinct slots instead of stacking on its centre.
   | { kind: "follow"; targetId: number; offX?: number; offY?: number }
@@ -1493,8 +1511,14 @@ export interface SimUnit {
   /** The TREE the in-flight swing is aimed at, or 0 when it is aimed at a unit
    *  (`swingTargetId`). Set only by tickAttackTree; tickSwing strikes the trunk with it. */
   swingTreeId: number;
+  /** The SPOT the in-flight swing is aimed at — an Attack Ground shot (tickAttackGround). Set
+   *  only there, cleared with the swing; tickSwing throws a shell at it instead of at a unit. */
+  swingGround?: { x: number; y: number } | null;
   /** The tree an `attacktree` order is swinging at (issueAttackTree), or 0. */
   treeTargetId: number;
+  /** Where an `attackground` order is shelling (issueAttackGround), and the tree it was aimed
+   *  at when it was aimed at one (0 otherwise). */
+  groundAim?: { x: number; y: number; treeId: number } | null;
   // Ability cast animation timing (UnitWeapons.slk castpt/castbsw), per-unit — not
   // per-weapon, so a weaponless pure caster still has them. castPoint = wind-up
   // before a spell's effect fires (added to the ability's Casting Time); castBackswing
@@ -9740,6 +9764,7 @@ export class SimWorld {
     u.swingFollowThrough = false;
     u.swingTargetId = 0;
     u.swingTreeId = tree.id;
+    u.swingGround = null;
     u.swingWeapon = w;
     u.swingCrit = false; // crit, bash and backstab are all blows on a UNIT
     u.swingBash = false;
@@ -9763,6 +9788,131 @@ export class SimWorld {
     }
     this.trees.delete(tree.id);
     this.felled.push(tree);
+  }
+
+  /**
+   * The weapon an ATTACK GROUND order fires — the first enabled ARTILLERY slot (`isArtillery`)
+   * whose attack is the player's to aim (`showUI`), or null. That is the whole of who has the
+   * command: Liquipedia's Weapon Types, "Artillery attacks add the Attack Ground button to the
+   * unit", and nothing else in the data grants it — the Mortar Team, the Demolisher, the Meat
+   * Wagon and the Glaive Thrower, and the creep catapults.
+   */
+  groundWeapon(u: SimUnit): SimWeapon | null {
+    if (this.raising(u)) return null;
+    for (const w of u.weapons) if (w.enabled && w.showUI && isArtillery(w)) return w;
+    return null;
+  }
+
+  /** How far inside its own reach a weapon may NOT fire — UnitWeapons `minRange`, the siege
+   *  four's 250 (see SimWeapon.minRange). Only a weapon that THROWS something has one: the
+   *  Corrupted Ancient Protector (`ncap`) states 200 beside a 128-reach melee slot and a 700
+   *  boulder, and read against the melee slot the row would describe a unit that can never
+   *  strike at all, so the dead zone is the boulder's. */
+  private deadZone(w: SimWeapon): number {
+    return w.ranged ? w.minRange : 0;
+  }
+
+  /**
+   * ATTACK GROUND — "Orders your units to fire at the targeted area of ground until they are
+   * told to stop or are given another order." (Units\CommandStrings.txt [CmdAttackGround]).
+   * Liquipedia's Weapon Types names the reason the command exists: an artillery shot is aimed
+   * at an AREA, so it can be dropped where the enemy is going to be, or into fog nobody can see
+   * into — and it lands on whatever is there, the thrower's own army included (applyAreaSplash).
+   *
+   * The unit walks into range of the spot, turns, and shells it on its weapon's own cooldown
+   * until the order is replaced; it never acquires a target of its own meanwhile. Inside its
+   * MINIMUM range it stands and does not fire, exactly as against a unit (deadZone). A unit that
+   * cannot walk (a tower, a rooted Ancient) takes the order only for a spot it already reaches.
+   *
+   * `treeId`: the spot IS a tree — the Attack command pointed at a trunk by a unit whose only
+   * weapon that names `tree` is its artillery (a Mortar Team's `targs1` lists it). The shells
+   * go at the tree, and the order ends when the tree does, which is what "attack that tree"
+   * means; the burst fells it through its own `splashTargs` (shellTrees).
+   */
+  issueAttackGround(id: number, x: number, y: number, treeId = 0): boolean {
+    const u = this.units.get(id);
+    if (!u || u.ethereal || u.hexed || this.castLocked(u)) return false;
+    const w = this.groundWeapon(u);
+    if (!w) return false;
+    if (treeId && !this.trees.has(treeId)) return false;
+    const far = Math.hypot(x - u.x, y - u.y) - u.radius > w.range;
+    if (far && !this.canPursue(u)) return false; // a tower cannot walk to it ([Errors] Notinrange)
+    // The same order twice is one order: a repeat must not throw away the shot already coming.
+    const g = u.groundAim;
+    if (u.order === "attackground" && g && g.x === x && g.y === y && g.treeId === treeId) return true;
+    this.clearGuardPost(u);
+    u.order = "attackground";
+    u.groundAim = { x, y, treeId };
+    u.targetId = null;
+    u.inCombat = false;
+    u.resKind = null;
+    u.working = false;
+    u.atNode = false;
+    u.noCollision = false; // manual control restores collision
+    u.stuckT = 0;
+    u.stuckRetries = 0;
+    u.waitT = 0;
+    u.nodeRetries = 0;
+    this.cancelSwing(u);
+    this.detachBuilder(id);
+    if (far) this.pathTo(u, x, y); // arriveAtNode stops the walk the moment the spot is in reach
+    else this.settle(u);
+    return true;
+  }
+
+  /** Walk into range of an `attackground` spot, then shell it on the weapon's cooldown — the
+   *  rhythm of engage (face, commit, fire at the damage point in tickSwing), aimed at a point. */
+  private tickAttackGround(u: SimUnit): void {
+    const g = u.groundAim;
+    const w = g ? this.groundWeapon(u) : null;
+    if (!g || !w || u.ethereal || u.hexed || (g.treeId && !this.trees.has(g.treeId))) {
+      this.stop(u.id);
+      return;
+    }
+    // Committed to a shot: stand through the wind-up, exactly as engage does.
+    if (u.swingLeft >= 0) {
+      if (u.moving) this.settle(u);
+      u.inCombat = true;
+      return;
+    }
+    const reach = u.radius + w.range; // hull to a point, as `range` is measured everywhere else
+    if (this.pinned(u) && Math.hypot(g.x - u.x, g.y - u.y) > reach) {
+      this.settle(u); // netted: the order stands, and is carried out once the net comes off
+      u.atNode = false;
+      return;
+    }
+    if (!this.arriveAtNode(u, g.x, g.y, reach)) {
+      u.inCombat = false;
+      return;
+    }
+    const dist = Math.hypot(g.x - u.x, g.y - u.y);
+    // Parked as near as the ground allows and still out of reach — across water, up a cliff it
+    // has no ramp to: the order cannot be carried out, and a unit does not stand on it for ever.
+    if (dist > reach + ATTACK_LEASH) {
+      this.stop(u.id);
+      return;
+    }
+    // Inside the dead zone: nothing to do but stand there (see deadZone).
+    if (dist - u.radius < this.deadZone(w)) {
+      u.inCombat = false;
+      return;
+    }
+    u.inCombat = true;
+    if (u.cooldownLeft <= 0) u.desiredFacing = Math.atan2(g.y - u.y, g.x - u.x);
+    if (!this.facesTarget(u, FACING_EPS) || u.cooldownLeft > 0 || this.fading(u)) return;
+    u.cooldownLeft = w.cooldown;
+    u.swingLeft = Math.max(0, w.damagePoint);
+    u.swingBroken = false;
+    u.swingFollowThrough = false;
+    u.swingTargetId = 0;
+    u.swingTreeId = 0;
+    u.swingGround = { x: g.x, y: g.y };
+    u.swingWeapon = w;
+    u.swingCrit = false; // crit, bash and backstab are all blows on a UNIT
+    u.swingBash = false;
+    u.swingSlam = false;
+    u.desiredFacing = u.facing;
+    u.swingSeq++; // renderer restarts the attack clip so the shot lines up
   }
 
   /** Order a unit to attack another. Normally requires the target to be hostile;
@@ -10812,6 +10962,7 @@ export class SimWorld {
       case "stop": this.stop(id); return true;
       case "attack": return this.issueAttack(id, o.targetId, o.force, true, o.solo); // a QueuedOrder is always a commanded attack (issue #83)
       case "attacktree": return this.issueAttackTree(id, o.treeId);
+      case "attackground": return this.issueAttackGround(id, o.x, o.y, o.treeId);
       case "follow": return this.issueFollow(id, o.targetId, o.offX, o.offY);
       case "harvest": return this.issueHarvest(id, o.res, o.nodeId, o.ax, o.ay);
       case "returnresources": return this.issueReturnResources(id, o.depotId);
@@ -17813,6 +17964,9 @@ export class SimWorld {
         case "attacktree":
           this.tickAttackTree(u);
           break;
+        case "attackground":
+          this.tickAttackGround(u);
+          break;
         case "cast":
           this.tickCast(u, dt); // walk into range, then fire the spell effect
           break;
@@ -18653,6 +18807,19 @@ export class SimWorld {
       this.chaseToAttack(u, t);
       return;
     }
+    // In range — but INSIDE the weapon's minimum range, where a siege unit cannot fire at all.
+    // It does not back off by itself: Liquipedia's Demolisher and Meat Wagon pages, "they
+    // cannot attack melee units or any units right next to them. You will have to move them
+    // away." So it stands. A fight it picked up itself is dropped, so it looks for something it
+    // CAN hit (acquireTarget skips the dead zone); an ORDERED target is waited on — the player
+    // said that one, and it may yet step back out.
+    if (gap < this.deadZone(w)) {
+      this.settle(u);
+      u.inCombat = false;
+      u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
+      if (!u.attackOrdered) u.targetId = null;
+      return;
+    }
     // In range: halt onto a distinct tile (spread, don't cluster — settleSpread), face
     // the target, swing when ready (rotation itself is applied by the shared turning pass).
     //
@@ -18692,6 +18859,7 @@ export class SimWorld {
     u.desiredFacing = u.facing;
     u.swingWeapon = w; // the strike lands with the slot it was launched from
     u.swingTreeId = 0; // …at a unit, not a trunk
+    u.swingGround = null; // …nor a spot on the ground
     // Roll this swing's procs now, before the clip is picked (see swingCrit/swingSlam).
     // Critical Strike is only ever applied by dealDamage, so only a melee swing rolls it —
     // a ranged shooter must not slam for a crit it would never deal. And only against
@@ -19130,6 +19298,7 @@ export class SimWorld {
   private bestCreepTarget(u: SimUnit, range: number, idle = false): SimUnit | null {
     let best: SimUnit | null = null;
     let bestScore = -Infinity;
+    const dz = u.weapon ? this.deadZone(u.weapon) : 0; // a creep catapult cannot shoot what is on top of it
     for (const t of this.units.values()) {
       if (t === u) continue;
       // `gap > range` skips, so the bound is `range` itself and it never shrinks — the tier
@@ -19141,6 +19310,7 @@ export class SimWorld {
       if (!this.canSee(u, t)) continue; // a creep aggroes only what it can see (issue #45)
       if (idle && t.flying && t.moving && t.order !== "attackmove" && t.order !== "attack") continue;
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+      if (dz > 0 && gap < dz) continue;
       const score = this.creepScore(u, t, gap);
       if (score > bestScore) {
         bestScore = score;
@@ -19260,6 +19430,16 @@ export class SimWorld {
       this.strikeTree(u, w, treeId);
       return;
     }
+    // An Attack Ground shot: the shell goes at the spot the swing was committed to, with the
+    // same fire-frame noise and the same reveal as a shot at anybody.
+    if (u.swingGround) {
+      const g = u.swingGround;
+      u.swingGround = null;
+      this.attackSwings.push(u.id);
+      this.breakInvisibility(u);
+      this.spawnGroundShell(u, g.x, g.y, w);
+      return;
+    }
     const t = this.units.get(u.swingTargetId);
     if (!t) return; // target gone before impact — the swing whiffs
     // The swing reached its fire frame: play the attacker's own weapon sound (its
@@ -19305,6 +19485,7 @@ export class SimWorld {
   private cancelSwing(u: SimUnit): void {
     u.swingLeft = -1;
     u.swingTreeId = 0;
+    u.swingGround = null;
   }
 
   /**
@@ -19636,6 +19817,8 @@ export class SimWorld {
       startZ: lz,
       impactZ: impactBase + t.flyHeight,
       startDist: Math.hypot(t.x - lx, t.y - ly),
+      arc: w.missileArc, // `Missilearc` — the lob (sim/missile.ts)
+      sourceOwner: u.owner,
       sourceTeam: u.team,
       // The stamp is the ATTACK INSTANCE's, not the fire frame's: `tickSwing` hands over the
       // count read when the swing began. A target that left WITHOUT WALKING during the wind-up
@@ -19651,14 +19834,56 @@ export class SimWorld {
       // data states rather than on "has an area", because those are two different claims and
       // only `weapTp` is the one the engine sorts missiles by: the Cannon Tower's slot 1 is
       // `artillery` with 50/100/125 rings, its slot 2 is a plain homing `missile` at buildings.
-      area: w.weaponType === WeaponType.Artillery || w.weaponType === WeaponType.ArtilleryLine
-        ? {
-            aimX: t.x, aimY: t.y,
-            full: w.areaFull, half: w.areaHalf, quarter: w.areaQuarter,
-            halfFactor: w.areaHalfFactor, quarterFactor: w.areaQuarterFactor,
-            targets: w.splashTargets,
-          }
+      area: isArtillery(w) ? this.shellArea(w, t.x, t.y) : undefined,
+    };
+    this.projectiles.set(id, proj);
+    this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y, z: proj.z });
+  }
+
+  /** Where an artillery shell bursts and what its rings are — the SLOT's, carried on the shell
+   *  so it bursts as loosed whatever becomes of the shooter. */
+  private shellArea(w: SimWeapon, x: number, y: number): NonNullable<SimProjectile["area"]> {
+    return {
+      aimX: x, aimY: y,
+      full: w.areaFull, half: w.areaHalf, quarter: w.areaQuarter,
+      halfFactor: w.areaHalfFactor, quarterFactor: w.areaQuarterFactor,
+      targets: w.splashTargets,
+    };
+  }
+
+  /**
+   * A shell thrown at a SPOT rather than at anybody — the ATTACK GROUND command's shot
+   * (`issueAttackGround`). Everything an artillery shot aimed at a unit is, minus the unit: it
+   * is already flying at the ground (SimProjectile.area), so the only thing that changes is
+   * where that ground is. No orb rides it — an orb is a blow ON A UNIT (`resolveOrb` asks the
+   * target), and there is none — and there is nothing to disjoint from, so no teleport stamp.
+   */
+  private spawnGroundShell(u: SimUnit, x: number, y: number, w: SimWeapon): void {
+    const id = this.nextProjectileId++;
+    const [lx, ly, lz0] = launchPoint(u, w.launchX, w.launchY, w.launchZ);
+    const lz = lz0 + u.flyHeight;
+    const proj: SimProjectile = {
+      id,
+      x: lx,
+      y: ly,
+      z: lz,
+      sourceId: u.id,
+      targetId: 0, // aimed at nobody — a client's copy flies at the snapshot's tx/ty
+      speed: w.missileSpeed > 0 ? w.missileSpeed : 900,
+      damage: this.rollDamage(w),
+      art: w.missileArt,
+      attackType: w.attackType,
+      weaponSound: w.weaponSound,
+      startZ: lz,
+      impactZ: w.impactZ, // the GROUND at the spot — no body there to land on
+      startDist: Math.hypot(x - lx, y - ly),
+      arc: w.missileArc,
+      sourceOwner: u.owner,
+      sourceTeam: u.team,
+      spill: w.spillDist > 0 && w.spillRadius > 0
+        ? { dist: w.spillDist, radius: w.spillRadius, loss: w.damageLoss, ox: lx, oy: ly }
         : undefined,
+      area: this.shellArea(w, x, y),
     };
     this.projectiles.set(id, proj);
     this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y, z: proj.z });
@@ -19873,9 +20098,8 @@ export class SimWorld {
       } else {
         p.x += (dx / dist) * step;
         p.y += (dy / dist) * step;
-        // Straight-line 3D flight: height lerps launch→impact by horizontal progress.
-        const prog = p.startDist > 1 ? Math.max(0, Math.min(1, (p.startDist - dist) / p.startDist)) : 1;
-        p.z = p.startZ + (p.impactZ - p.startZ) * prog;
+        // Height by horizontal progress: the launch→impact line, bowed by the arc.
+        flyHeight(p, dist - step);
       }
     }
   }
@@ -19893,8 +20117,7 @@ export class SimWorld {
     if (dist > step) {
       p.x += (dx / dist) * step;
       p.y += (dy / dist) * step;
-      const prog = p.startDist > 1 ? Math.max(0, Math.min(1, (p.startDist - dist) / p.startDist)) : 1;
-      p.z = p.startZ + (p.impactZ - p.startZ) * prog;
+      flyHeight(p, dist - step);
       return;
     }
     p.x = l.x;
@@ -19915,8 +20138,7 @@ export class SimWorld {
     if (dist > step) {
       p.x += (dx / dist) * step;
       p.y += (dy / dist) * step;
-      const prog = p.startDist > 1 ? Math.max(0, Math.min(1, (p.startDist - dist) / p.startDist)) : 1;
-      p.z = p.startZ + (p.impactZ - p.startZ) * prog;
+      flyHeight(p, dist - step);
       return;
     }
     p.x = a.aimX;
@@ -19927,41 +20149,110 @@ export class SimWorld {
   }
 
   /**
-   * The burst: full damage inside `Farea`, half out to `Harea`, a quarter out to `Qarea`
-   * (the three "Area of Effect (Full/Medium/Small Damage)" rings the SLK carries per weapon
-   * slot). Distance is measured to the unit's HULL, as every other range in the sim is, so a
-   * big building standing at the edge is still caught by the ring its edge is in.
+   * The burst: full damage inside `Farea`, the slot's `Hfact` share out to `Harea`, its `Qfact`
+   * share out to `Qarea` (the three "Area of Effect (Full/Medium/Small Damage)" rings the SLK
+   * carries per weapon slot). Distance is measured to the unit's HULL, as every other range in
+   * the sim is, so a big building standing at the edge is still caught by the ring its edge is
+   * in.
    *
    * Who it may catch is `splashTargs` — a list distinct from `targs`, and pointedly narrower:
    * the Cannon Tower may AIM at `ground,debris,tree,wall,ward,item` but its burst is
    * `ground,structure,debris,tree,wall,notself`, which is how a shell aimed at a footman also
-   * knocks the wall behind him down. Restricted to hostiles on top of that, which is the same
-   * call applySpill already makes and for the same reason: the one splash list in the data
-   * that names an allegiance at all (the Gryphon's `enemy`) names that one.
+   * knocks the wall behind him down.
+   *
+   * …and that list is ALSO the burst's allegiance, and on the siege roster it names none: the
+   * Mortar Team, the Demolisher, the Meat Wagon and the Glaive Thrower all splash
+   * `ground,structure,debris,tree,wall` — no `enemy` — while the rows that DO mean enemies say
+   * so (`enemy,neutral` on the Flame Strike-style bursts, `enemy` on the Gryphon's line). A
+   * shell does not know whose Footman it lands on. Liquipedia's Mortar Team page in as many
+   * words: "Mortar Teams will damage your own units so be careful to prevent them from killing
+   * your own army." (`splashAdmits`; the burst used to be enemies-only, which made every
+   * siege weapon in the game safe to fire into a melee it was not.)
+   *
+   * `tree` in the list is TREES: the burst takes its ring's share off every trunk in it, which
+   * is how a Mortar Team shelling a treeline opens it (and what Attack Ground is for).
+   *
+   * And what it kills SPLATTERS — Liquipedia's Weapon Types, under Artillery: "Units killed by
+   * Artillery attacks splatter and do not leave corpses behind." The same death `SetUnitExploded`
+   * asks for (Art - Special, no body), so there is nothing for a Necromancer to raise off a
+   * Mortar Team's work.
    */
   private applyAreaSplash(p: SimProjectile): void {
     const a = p.area!;
-    const source = this.units.get(p.sourceId);
+    // The shooter may be dead by now — the shell is in the air either way, and it still bursts
+    // as whoever loosed it (its owner decides who is an enemy, exactly as `attackType` rides
+    // the shell for the damage table). A stand-in carries the three fields that question reads.
+    const source = this.units.get(p.sourceId)
+      ?? (p.sourceOwner !== undefined
+        ? ({ id: p.sourceId, owner: p.sourceOwner, team: p.sourceTeam ?? p.sourceOwner, neutralPassive: false } as SimUnit)
+        : undefined);
     const outer = Math.max(a.quarter, a.half, a.full);
-    if (outer <= 0) return; // an artillery row with no rings — nothing to burst
+    if (outer <= 0 || !source) return; // an artillery row with no rings — nothing to burst
+    const ring = (gap: number): number => gap <= a.full ? 1 : gap <= a.half ? a.halfFactor : gap <= a.quarter ? a.quarterFactor : 0;
     let nearest: SimUnit | undefined; // for an `aline` shot, whoever the line starts at
     for (const t of this.units.values()) {
-      if (t.hp <= 0 || t.invulnerable) continue;
-      if (t.id === p.sourceId) continue; // `notself`
-      if (!source || !this.hostile(source, t)) continue;
+      if (t.hp <= 0 || t.invulnerable || t.hidden || isOffField(t)) continue; // nobody there to hit
       if (a.targets.length && !a.targets.includes(targetKeyOf(t))) continue;
+      if (!this.splashAdmits(source, t, a.targets)) continue;
       const gap = Math.hypot(t.x - a.aimX, t.y - a.aimY) - t.radius;
       // The outer rings' shares are the SLOT's own — a Mortar Team's "half" ring is 0.4 and
       // its "quarter" ring 0.1. Only a row that states neither takes the names literally.
-      const frac = gap <= a.full ? 1 : gap <= a.half ? a.halfFactor : gap <= a.quarter ? a.quarterFactor : 0;
+      const frac = ring(gap);
       if (frac <= 0) continue;
+      this.splatterId = t.id;
       const dealt = this.applyDamage(t, p.damage * frac, p.sourceId, p.attackType ?? AttackType.None, p.weaponSound ?? "", true);
-      if (source) this.applyPillage(source, t, dealt); // a Demolisher with Pillage loots what it shells
-      if (frac === 1 && !nearest) nearest = t;
+      this.splatterId = 0;
+      const shooter = this.units.get(p.sourceId);
+      if (shooter) this.applyPillage(shooter, t, dealt); // a Demolisher with Pillage loots what it shells
+      if (frac === 1 && !nearest && this.hostile(source, t)) nearest = t;
     }
+    if (a.targets.includes("tree")) this.shellTrees(a.aimX, a.aimY, outer, (gap) => p.damage * ring(gap));
     // Artillery (Line) — the Glaive Thrower — is BOTH: it bursts, and with Impaling Bolt
     // researched the bolt carries on down the line from whoever it hit (see applySpill).
     if (p.spill && nearest) this.applySpill(p, nearest);
+  }
+
+  /** The unit a burst is striking this instant, so `kill` can make the death a splatter
+   *  (applyAreaSplash). 0 the rest of the time. */
+  private splatterId = 0;
+
+  /** May a burst whose `splashTargs` is `flags` catch `t`, by ALLEGIANCE? No allegiance word
+   *  at all — the whole siege roster — is everybody, the shooter's own side included; the
+   *  words, where a row states them, mean what they mean for a spell (`targetAllowed`), with
+   *  `notself` sparing only the shooter. */
+  private splashAdmits(source: SimUnit, t: SimUnit, flags: string[]): boolean {
+    const F = targetFlagSet(flags);
+    const enemy = F.has("enemy");
+    const friend = F.has("friend") || F.has("player") || F.has("allies");
+    const self = F.has("self");
+    const neutral = F.has("neutral");
+    const notself = F.has("notself");
+    if (t.id === source.id) return self || (!notself && !enemy && !friend && !neutral);
+    if (!(enemy || friend || neutral)) return true; // no allegiance named, or only `notself`
+    if (this.hostile(source, t)) return enemy;
+    if (t.neutralPassive) return neutral || friend;
+    return friend;
+  }
+
+  /** A burst's share off every tree in its rings — `share(gap)` is the damage at a trunk whose
+   *  edge is `gap` from the aim. Through the same `felled` queue a Flame Strike's burning uses
+   *  (damageTreesInArea), so the renderer unstamps the pathing and clears the sight blocker. */
+  private shellTrees(x: number, y: number, radius: number, share: (gap: number) => number): void {
+    let fell: SimTree[] | null = null;
+    for (const t of this.trees.values()) {
+      const gap = Math.hypot(t.x - x, t.y - y) - TREE_RADIUS;
+      if (gap > radius) continue;
+      const dmg = share(gap);
+      if (dmg <= 0) continue;
+      t.hp -= dmg;
+      if (t.hp <= 0) (fell ??= []).push(t);
+      else this.treeHits.push({ x: t.x, y: t.y }); // still standing → the "stand hit" wobble
+    }
+    if (!fell) return;
+    for (const t of fell) {
+      this.trees.delete(t.id);
+      this.felled.push(t);
+    }
   }
 
   private removeProjectile(id: number): void {
@@ -22146,7 +22437,10 @@ export class SimWorld {
     // `SetUnitExploded`: the body does not fall, it BURSTS — "Art - Special" (UnitFunc
     // `Specialart`, e.g. HumanLargeDeathExplode) where it stood, and nothing left to raise or
     // eat. A hero is left out: it never leaves a body anyway, and dissipates to its altar.
-    if (u.explodes && !u.isHero) {
+    // …and so does a body an ARTILLERY burst killed (applyAreaSplash — "Units killed by
+    // Artillery attacks splatter and do not leave corpses behind", Liquipedia's Weapon Types).
+    // Not a building: a shelled Town Hall still collapses through its own Death clip.
+    if ((u.explodes || (this.splatterId === u.id && !u.building)) && !u.isHero) {
       this.explodedDeaths.add(u.id);
       const art = this.unitReg?.get(u.typeId)?.specialArt;
       if (art) this.spellEffects.push({ art, x: u.x, y: u.y, targetId: 0, z: 0 });
@@ -24187,6 +24481,10 @@ export class SimWorld {
   private acquireTarget(u: SimUnit, range: number, strikeOnly = false): SimUnit | null {
     let best: SimUnit | null = null;
     let bestGap = range;
+    // A siege unit does not pick what it cannot shoot: an enemy inside its minimum range is
+    // not a target of its own choosing (deadZone). Read off the primary slot — `minRange` is
+    // the unit's, and every slot of the siege four is a thrown one.
+    const dz = u.weapon ? this.deadZone(u.weapon) : 0;
     for (const t of this.units.values()) {
       if (t === u) continue;
       if (distSkip(u, t, bestGap)) continue; // the cheapest thing there is to know — see nearestEnemy
@@ -24198,7 +24496,9 @@ export class SimWorld {
       // A unit that may not step toward what it picks (Hold Position, pinned) takes only what it
       // can strike from where it stands — never a target on the ledge above it (cliffApart).
       if (strikeOnly && this.cliffApart(u, t)) continue;
-      bestGap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+      const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+      if (dz > 0 && gap < dz) continue;
+      bestGap = gap;
       best = t;
     }
     return best;
@@ -26437,6 +26737,16 @@ function launchPoint(u: SimUnit, lx: number, ly: number, lz: number): [number, n
   const s = Math.sin(u.facing);
   // forward = (c, s); right = (s, -c).
   return [u.x + ly * c + lx * s, u.y + ly * s - lx * c, lz];
+}
+
+/** An ARTILLERY slot — `weapTp` artillery or aline, the two kinds Liquipedia's Weapon Types
+ *  page files under Artillery: the shot is thrown at an AREA rather than a unit ("they do not
+ *  target units, but areas"), so it can be walked out from under, and the weapon brings the
+ *  Attack Ground command with it. Keyed on the weapon type the data states rather than on
+ *  "has an area": the Cannon Tower's slot 1 is `artillery` with 50/100/125 rings, its slot 2
+ *  a plain homing `missile` at buildings. */
+export function isArtillery(w: { weaponType: WeaponType }): boolean {
+  return w.weaponType === WeaponType.Artillery || w.weaponType === WeaponType.ArtilleryLine;
 }
 
 // Angular speed in rad/sec from a unit's UnitData turnrate (WC3 semantics).

@@ -255,7 +255,10 @@ export class Authority {
     }
     let ok = false;
     if (kind === "point") {
-      if (s === "attack" || s === "attackground") ok = this.sim.issueAttackMove(unitId, x, y);
+      if (s === "attack") ok = this.sim.issueAttackMove(unitId, x, y);
+      // Attack Ground is its own order (SimWorld.issueAttackGround), and a unit with no
+      // artillery slot does not have it: the call fails, as IssuePointOrder does in the game.
+      else if (s === "attackground") ok = this.sim.issueAttackGround(unitId, x, y);
       else if (s === "patrol") ok = this.sim.issuePatrol(unitId, x, y);
       else ok = this.sim.issueMove(unitId, x, y); // move / smart / unknown-point → move
     } else if (kind === "target") {
@@ -516,6 +519,9 @@ export class Authority {
       case "attackmove":
         this.sim.noteOrder(id, ORDER_IDS.attack, "point", o.x, o.y, 0);
         break;
+      case "attackground":
+        this.sim.noteOrder(id, ORDER_IDS.attackground, "point", o.x, o.y, 0);
+        break;
       case "patrol":
         this.sim.noteOrder(id, ORDER_IDS.patrol, "point", o.x, o.y, 0);
         break;
@@ -611,6 +617,8 @@ export class Authority {
         return ORDER_IDS.attack;
       case "patrol":
         return ORDER_IDS.patrol;
+      case "attackground":
+        return ORDER_IDS.attackground;
       case "hold":
         return ORDER_IDS.holdposition;
       default:

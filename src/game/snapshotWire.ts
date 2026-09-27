@@ -50,7 +50,7 @@ export type WireSnapshot = Omit<WorldSnapshot, "units" | "projectiles"> & { hot:
 /** Bumped when the binary layout changes. Carried in the blob so a mismatched decode fails
  *  loudly at the header rather than as garbage fields three units in. The relay's
  *  `PROTOCOL_VERSION` still gates the SESSION; this gates the blob. */
-const CODEC_VERSION = 6; // 6: a buff carries the duration it started at (the denominator of an expiry bar) (5: a unit carries its Hex critter skin; 4: a buff's art carries its SIZE variant; 3: a pending build's `paid` flag; 2: buffs carry their `B….` row id)
+const CODEC_VERSION = 7; // 7: a projectile carries its `Missilearc` (6: a buff carries the duration it started at (the denominator of an expiry bar) (5: a unit carries its Hex critter skin; 4: a buff's art carries its SIZE variant; 3: a pending build's `paid` flag; 2: buffs carry their `B….` row id)
 
 const TWO_PI = Math.PI * 2;
 
@@ -695,6 +695,7 @@ function writeProjectile(w: Writer, p: ProjectileSnapshot): void {
   w.f32(p.startZ);
   w.f32(p.impactZ);
   w.f32(p.startDist);
+  w.f32(p.arc);
   w.u16(quantU16(p.speed));
   w.u16(w.intern(p.art));
 }
@@ -711,6 +712,7 @@ function readProjectile(r: Reader): ProjectileSnapshot {
     startZ: 0,
     impactZ: 0,
     startDist: 0,
+    arc: 0,
     speed: 0,
     art: "",
   };
@@ -718,6 +720,7 @@ function readProjectile(r: Reader): ProjectileSnapshot {
   p.startZ = r.f32();
   p.impactZ = r.f32();
   p.startDist = r.f32();
+  p.arc = r.f32();
   p.speed = r.u16();
   p.art = r.str();
   return p;

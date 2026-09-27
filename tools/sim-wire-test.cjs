@@ -160,9 +160,9 @@ const peon = () => ({
 
 const projectiles = () => [
   { id: 9001, x: -1200, y: 880, z: 60.5, targetId: 1042, tx: -1100, ty: 900, speed: 900,
-    art: "Abilities\\Weapons\\Arrow\\ArrowMissile.mdx", startZ: 45.5, impactZ: 60, startDist: 512 },
+    art: "Abilities\\Weapons\\Arrow\\ArrowMissile.mdx", startZ: 45.5, impactZ: 60, startDist: 512, arc: 0.375 },
   { id: 9002, x: 0, y: 0, z: 0, targetId: 0, tx: 128, ty: -128, speed: 1300,
-    art: "chainlightning.mdx", startZ: 0, impactZ: 0, startDist: 0 },
+    art: "chainlightning.mdx", startZ: 0, impactZ: 0, startDist: 0, arc: 0 },
 ];
 
 /** The whole payload: three live shapes + a remembered image, both hot arrays, every cold
