@@ -126,10 +126,6 @@ export interface CommandButton {
   cooldownLeft?: number; // seconds remaining on the ability's cooldown (0/undefined = ready)
   cooldownFrac?: number; // remaining fraction 0..1 (drives the radial sweep)
   count?: number; // corner badge (0/undefined = none) — e.g. a hero's unspent skill points
-  /** The count is drawn smaller than a command button's half-button count, at the size an
-   *  item's charges are (the learn-skill button's unspent points; `.key-size` in style.css),
-   *  still in the bottom-right corner. */
-  countKeySize?: boolean;
 }
 
 /** One hero inventory slot (null = empty). */
@@ -3517,7 +3513,7 @@ export class GameHud {
     // it Storm Bolt's. The titles are short and go in the key; the icon is a DATA URL, kilobytes
     // per button on a key rebuilt every frame, so it is compared per slot instead — the cached
     // string for an unchanged icon is the same string, and that comparison costs nothing.
-    const key = `${printKeys ? hotkeyMode() : "-"}#` + cmds.map((c) => `${c.id}:${c.hotkey}:${c.disabled}:${!!c.cantAfford}:${!!c.noMana}:${c.active}:${c.modal}:${c.count ?? 0}:${!!c.countKeySize}:${c.name}:${c.tip ?? ""}:${c.desc}`).join("|");
+    const key = `${printKeys ? hotkeyMode() : "-"}#` + cmds.map((c) => `${c.id}:${c.hotkey}:${c.disabled}:${!!c.cantAfford}:${!!c.noMana}:${c.active}:${c.modal}:${c.count ?? 0}:${c.name}:${c.tip ?? ""}:${c.desc}`).join("|");
     const iconsSame = cmds.length === this.cmdIcons.length && cmds.every((c, i) => c.icon === this.cmdIcons[i]);
     if (key === this.cmdKey && iconsSame) {
       this.refreshCmdTooltip(cmds); // every frame: the stash moves without the card changing
@@ -3534,7 +3530,6 @@ export class GameHud {
       this.cmdLabels[i].textContent = "";
       setCount(this.cmdCount[i], "");
       setCount(this.cmdHotkey[i], "");
-      this.cmdCount[i].classList.remove("key-size");
       onPress(btn, null);
       btn.onpointerenter = null;
       btn.onpointerleave = null;
@@ -3575,7 +3570,6 @@ export class GameHud {
       else this.cmdLabels[idx].textContent = wc3StripMarkup(c.name).slice(0, 4); // 4 chars of NAME, not of "|cff…"
 
       if (c.count && c.count > 0) setCount(this.cmdCount[idx], String(c.count));
-      this.cmdCount[idx].classList.toggle("key-size", !!c.countKeySize);
       // The key that presses it. A passive takes no press and neither does a greyed-out
       // (`disabled`) button, so neither has a key to print — the key handler skips both for the
       // same reason. A button you merely cannot AFFORD does answer its key, so it keeps it. The

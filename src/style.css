@@ -1558,16 +1558,17 @@ body.hud-number-skinned .hud-count-badge:not(.plain) {
 .hud-count-badge.hud-hotkey-badge {
   --count-box: 32%;
 }
-/* An item's charges and the learn-skill button's unspent points are drawn at ONE size, asked
-   for by eye so the two corners read as the same badge: 27px at 1920×1080, between the 31 a
-   half-slot box gave the charges and the 22 the key's size gave the points. The two hosts are
-   different sizes (an inventory slot is 0.89 of a command button, at every stage size), so the
-   one box is two percentages — 44% of a slot, 39% of a button — and the numeral is the
-   count's own 55cqw in both. */
+/* Every count on the console's buttons — an item's charges, a shop's or a mercenary camp's
+   stock, the learn-skill button's unspent points — is drawn at ONE size, asked for by eye so
+   they read as the same badge: 27px at 1920×1080, down from the 31 a half-slot box gave the
+   charges (and the 35 a half-button box gave the stock), up from the 22 the points had at the
+   key's size. The two hosts are different sizes (an inventory slot is 0.89 of a command button,
+   at every stage size), so the one box is two percentages — 44% of a slot, 39% of a button —
+   and the numeral is the count's own 55cqw in both. The key keeps its own smaller box. */
 .hud-inv-slot .hud-count-badge {
   --count-box: 44%;
 }
-.hud-count-badge.key-size {
+.hud-cmd .hud-count-badge:not(.hud-hotkey-badge) {
   --count-box: 39%;
 }
 .hud-count-badge.hud-hotkey-badge {
