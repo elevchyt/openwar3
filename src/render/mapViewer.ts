@@ -10141,7 +10141,7 @@ export class MapViewerScene {
       // — same as the item wares in pushShopButtons, which is where this was already right.
       const st = sold.has(uid) ? world.shopStockInfo(sel.id, uid) : null;
       const stock = st?.count ?? -1;
-      const restocking = !!st && st.count <= 0 && Number.isFinite(st.timer) && st.period > 0;
+      const restockDue = !!st && st.count <= 0 && Number.isFinite(st.timer) && st.period > 0;
       // The badge counts a shelf DOWN. An `unlimited` ware (`stockRegen` 0 — a Tavern's heroes,
       // and every unit WTii's Unit Tester sells) has no level to report: it is back the instant
       // it is taken, so a permanent "1" in the corner would be stating the opposite of the truth.
@@ -10158,6 +10158,10 @@ export class MapViewerScene {
       const afford = stash.gold >= gold && stash.lumber >= lumber
         && (d.foodUsed <= 0 || food.used + d.foodUsed <= food.made);
       const inStock = stock !== 0; // -1 = not stock-limited, 0 = sold out
+      const unavailable = !metTech || (d.isHero && atHeroCap);
+      // The restock sweep is only for a unit you could hire once it is back — one greyed out
+      // for a tech gate or the hero cap shows no countdown, as the item wares do.
+      const restocking = restockDue && !unavailable;
       const [col, row] = place(d.buttonX, d.buttonY);
       used.add(`${col},${row}`);
       out.push(this.cmd({
@@ -10174,7 +10178,7 @@ export class MapViewerScene {
         // requirement (or a fourth Hero) is a hard NO with no line to say it, so the
         // button goes inert; a price or an empty shelf keeps the button live so
         // trainUnit can answer the click with "Not enough gold." / "Out of stock".
-        disabled: !metTech || (d.isHero && atHeroCap),
+        disabled: unavailable,
         cantAfford: !afford || !inStock,
       }));
     }
@@ -10365,7 +10369,11 @@ export class MapViewerScene {
       // longer `stockStart` wait before its first ever arrival).
       const st = world.shopStockInfo(sel.id, itemId);
       const stock = st?.count ?? -1;
-      const restocking = !!st && st.count <= 0 && Number.isFinite(st.timer) && st.period > 0;
+      // …but only for a ware you could buy once it is back. One still behind a tech gate (a
+      // Keep, a Castle) is greyed for THAT, and a countdown over it would promise an arrival
+      // that does not make it buyable (developer, against the real client).
+      const restocking = missing.length === 0
+        && !!st && st.count <= 0 && Number.isFinite(st.timer) && st.period > 0;
       out.push(this.cmd({
         id: `buy:${itemId}`, icon: this.blpIcon(d.icon), name: d.name,
         hotkey: d.hotkey, tip: d.tip,

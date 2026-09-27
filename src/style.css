@@ -1178,9 +1178,10 @@ body.hud-tooltip-skinned .hud-chatbar::after {
 /* Sink under the press, exactly as a command-card button does. */
 .hud-hero-btn.pressed { transform: scale(0.98); }
 /* Unspent skill points: `HeroLevel.mdx` around the portrait (`.hud-herolevel-fx`, below),
-   plus the count itself in the bottom-right corner, which is what issue #95 asks for. The
-   count needs no rule of its own — now that the icon fills the button, this is an ordinary
-   icon button and `.hud-count-badge` puts the box in exactly the corner it puts every other. */
+   plus the count itself in the bottom-right corner, which is what issue #95 asks for. Now
+   that the icon fills the button, this is an ordinary icon button and `.hud-count-badge` puts
+   the box in exactly the corner it puts every other — at the size every other count on the
+   console is drawn (`.hud-hero-btn .hud-count-badge`, beside the count badge itself). */
 /* The two bars: one black block under the button, a 6/17 tall track each with a 2/17 gap,
    exactly as measured. The empty stretch of a bar IS the block showing through. */
 .hud-hero-bars {
@@ -1559,17 +1560,22 @@ body.hud-number-skinned .hud-count-badge:not(.plain) {
   --count-box: 32%;
 }
 /* Every count on the console's buttons — an item's charges, a shop's or a mercenary camp's
-   stock, the learn-skill button's unspent points — is drawn at ONE size, asked for by eye so
-   they read as the same badge: 27px at 1920×1080, down from the 31 a half-slot box gave the
-   charges (and the 35 a half-button box gave the stock), up from the 22 the points had at the
-   key's size. The two hosts are different sizes (an inventory slot is 0.89 of a command button,
-   at every stage size), so the one box is two percentages — 44% of a slot, 39% of a button —
-   and the numeral is the count's own 55cqw in both. The key keeps its own smaller box. */
-.hud-inv-slot .hud-count-badge {
-  --count-box: 44%;
+   stock, the unspent skill points on the learn-skill button and on the hero's portrait — is
+   drawn at ONE size, asked for by eye so they read as the same badge: 27px at 1920×1080, down
+   from the 31 a half-slot box gave the charges, the 35 a half-button box gave the stock and
+   the 38 the portrait's gave its points, up from the 22 the learn-skill points had at the
+   key's size. The three hosts are different sizes (a 76px portrait, a 69px command button, a
+   62px inventory slot, in that ratio at every stage size), so the one box is three
+   percentages, and the numeral is the count's own 55cqw in all of them. The key keeps its own
+   smaller box. */
+.hud-hero-btn .hud-count-badge {
+  --count-box: 35.5%;
 }
 .hud-cmd .hud-count-badge:not(.hud-hotkey-badge) {
   --count-box: 39%;
+}
+.hud-inv-slot .hud-count-badge {
+  --count-box: 44%;
 }
 .hud-count-badge.hud-hotkey-badge {
   top: 0;
