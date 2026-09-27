@@ -223,6 +223,21 @@ export class ConsoleUi {
     for (const el of screen.element.querySelectorAll<HTMLElement>(".console-backing")) el.style.visibility = this.backdropShown ? "" : "hidden";
   }
 
+  /**
+   * A WATCHER's strip (issue #168): nothing but the day/night medallion and the stone bridge it
+   * hangs in. The observer HUD (ui/observerHud.ts) has its own Menu and Chat buttons and its own
+   * scoreboard, and the bottom console is a player's instrument — so the rest of the art, the
+   * resource bar (which would read a watcher's empty bank) and the four buttons all go.
+   */
+  setObserver(on: boolean): void {
+    this.observer = on;
+    this.applyObserver();
+  }
+  private observer = false;
+  private applyObserver(screen: FdfScreen | null = this.screen): void {
+    screen?.element.classList.toggle("fdf-observer", this.observer);
+  }
+
   setVisible(on: boolean): void {
     this.shown = on;
     const el = this.screen?.element;
@@ -312,6 +327,7 @@ export class ConsoleUi {
     const overlay = screen?.element;
     const filler = this.gapFiller(screen);
     if (!overlay || !filler) return;
+    filler.classList.add("console-clock-bridge"); // the one piece a watcher's strip keeps
     const gap = filler.getBoundingClientRect();
     const host = overlay.getBoundingClientRect();
 
@@ -401,6 +417,7 @@ export class ConsoleUi {
           this.hoverZones(built);
           this.mountClock(built);
           this.applyEnabled(built);
+          this.applyObserver(built);
         },
       });
       prev?.dispose();

@@ -490,6 +490,17 @@ export interface ProjectileSnapshot {
  *  client never revives anything itself, and the authority holds the real record. What crosses
  *  is exactly what the client DRAWS: which hero, at what level (the button's price), and how
  *  far along its revival is. */
+/** One player, as a watcher's payload carries them (`WorldSnapshot.watched`). */
+export interface WatchedPlayer {
+  player: number;
+  gold: number;
+  lumber: number;
+  /** The HOST's reading of `Authority.actions` — only the authority sees every seat's commands. */
+  apm: number;
+  research: Record<string, number>;
+  fallen: FallenHeroSnapshot[];
+}
+
 export interface FallenHeroSnapshot {
   id: number;
   typeId: string;
@@ -540,6 +551,13 @@ export interface WorldSnapshot {
    *  second Archmage at full price. Only the recipient's own — WHICH of an opponent's heroes
    *  are dead, at what level, carrying what, is scouting information of the purest kind. */
   fallen: FallenHeroSnapshot[];
+  /** Only in a WATCHER's payload (issue #168): what the observer HUD prints about every player
+   *  that is not derivable from the unit records. `stash`, `research` and `fallen` above are the
+   *  recipient's own for the reason each spells out — another player's bank, research and dead
+   *  heroes are scouting information — and that reason is exactly what does not apply to
+   *  somebody who is not in the match. Food is absent on purpose: it is DERIVED from the units
+   *  (`Authority.foodFor`), and an observer's payload already carries every unit live. */
+  watched?: WatchedPlayer[];
   /** Creep-camp difficulty markers, as THIS recipient's minimap should paint them — computed
    *  on the authority with the same `CreepCamps.markers(viewpoint)` rule the host's own map
    *  uses (map-public at match start, yields to a visible member, gone once cleared). Carried

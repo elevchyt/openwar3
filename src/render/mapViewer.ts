@@ -1499,6 +1499,8 @@ export class MapViewerScene {
   // Workers waiting for their build site to clear of units → seconds waited so far.
   private buildWait = new Map<number, number>();
   private meleeTeams = new Map<number, number>(); // owner slot → team
+  /** The seats an observer watches, in seat order (see beginMatch). */
+  private watchedSeats: Array<{ id: number; race: string; team: number }> = [];
   /** Lobby labels by slot — the owner line, and the Allies dialog's player rows. */
   private playerNames = new Map<number, string>();
   /** Every chat line this player has heard, AS SAID — the F12 dialog's Chat History and the
@@ -2537,6 +2539,11 @@ export class MapViewerScene {
     const races = new Map(config.slots.map((s) => [s.id, resolveRace(s.race)]));
     this.localRace = races.get(this.localPlayer) ?? "human";
     this.meleeTeams = new Map(config.slots.map((s) => [s.id, s.team]));
+    // Who an observer watches (issue #168): every seat in the match, with the race it resolved
+    // to. Handed to the controller on BOTH sides of the wire — the host builds a watcher's lane
+    // from it and a watcher's own HUD reads it.
+    this.watchedSeats = config.slots.map((s) => ({ id: s.id, race: races.get(s.id) ?? "human", team: s.team }));
+    this.rts!.setObservedPlayers(this.watchedSeats.map((s) => s.id));
     this.rts!.setLocalTeam(this.teamOf(this.localPlayer)); // whose combined sight lifts the fog
     // Every seat gets its own eyes NOW, with the lobby's team, rather than a grid conjured
     // mid-match the first time something asks whether that side can see. Ordered before the
@@ -8563,6 +8570,34 @@ export class MapViewerScene {
       creepButtonEnabled: () => this.creepButtonOn,
       uiString: (key, fallback) => this.globalStrings?.strings.get(key) ?? fallback,
       isObserver: () => this.observer,
+      observerSeats: () => {
+        const rts = this.rts;
+        if (!rts || !this.observer) return [];
+        return this.watchedSeats.map((seat) => ({
+          ...rts.observerView(seat.id),
+          name: this.playerLabel(seat.id),
+          color: PLAYER_COLORS[rts.playerColor(seat.id) % PLAYER_COLORS.length],
+          race: seat.race,
+          team: this.teamOf(seat.id),
+        }));
+      },
+      matchSeconds: () => this.rts?.matchSeconds() ?? 0,
+      openConsolePanel: (panel) => this.togglePanelByKey(panel),
+      // A watcher's click on a hero, a unit type or a building at work in the observer HUD:
+      // select it and put the camera on it, the portrait's own click (focusSelected) without
+      // the lock.
+      observerFocus: (simId) => {
+        const rts = this.rts;
+        if (!rts || !rts.simView.units.has(simId)) return;
+        rts.selectSingle(simId);
+        const pos = rts.selectedPosition();
+        if (pos) {
+          this.releaseCameraRide();
+          this.cameraLock = false;
+          this.target[0] = pos[0];
+          this.target[1] = pos[1];
+        }
+      },
       autoCamera: () => this.autoCam.enabled,
       setAutoCamera: (on) => this.autoCam.setEnabled(on),
       creepCamps: () => this.rts?.creepCamps() ?? [],
@@ -8764,6 +8799,7 @@ export class MapViewerScene {
       mountClock: (slot) => this.mountClock(slot),
       resourceHover: (kind) => this.hud?.showResourceTip(kind),
     });
+    this.consoleUi.setObserver(this.observer);
     this.hud = new GameHud(ui, driver);
     this.installGamepad();
     this.mountScriptUi(ui);

@@ -354,7 +354,7 @@ html body.loading-screen * { cursor: none !important; }
 }
 .unit-hpbar-fill[data-state="yellow"] { background-color: #c8c800; }
 .unit-hpbar-fill[data-state="red"] { background-color: #c80000; }
-.unit-hpbar-mana { background-color: #0f0080; }
+.unit-hpbar-mana { background-color: #2a6cf0; }
 /* "Healthbars: Team Colored" (issue #141) — a flat player colour that does NOT slide towards
    red as the bar drains. There is no rule for the colour itself: it is written INLINE by
    render/worldOverlays.ts, one owner at a time, and inline beats every rule here (including
@@ -1122,6 +1122,382 @@ body.hud-tooltip-skinned .hud-chatbar::after {
   white-space: nowrap;
   user-select: none;
 }
+/* ── The OBSERVER HUD (issue #168, ui/observerHud.ts) ──────────────────────────────────────
+   A watcher's screen in place of the console: the console's zones are hidden (the minimap and
+   its buttons are ADOPTED into the observer's own panel, so they survive), and the FDF strip
+   keeps only the medallion and its bridge (`.fdf-observer`, ConsoleUi.setObserver). Every size
+   is a CSS variable the module sets from its OBS table, in the 0.6-tall UI space. */
+.hud.hud-observer .hud-console,
+.hud.hud-observer .hud-idle-worker { display: none !important; }
+.fdf-topbar.fdf-observer .fdf-frame,
+.fdf-topbar.fdf-observer .console-backing,
+.fdf-topbar.fdf-observer .console-backing-top { visibility: hidden !important; }
+.fdf-topbar.fdf-observer .console-clock-bridge,
+.fdf-topbar.fdf-observer .console-clock-bridge * { visibility: visible !important; }
+
+.obs-hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  font-family: var(--game-font);
+  color: #fff;
+  text-shadow: 1px 1px 0 #000;
+  z-index: 3;
+}
+.obs-hud [hidden] { display: none !important; }
+
+/* The PANEL: the tooltip frame, exactly as the command card's slab wears it — the fill is the
+   element, and the gold stroke rides on a pseudo-element pulled `--tt-bg-inset` OUTSIDE it, so
+   the slate sits BEHIND the stroke with no ring of map showing between them. */
+.obs-panel {
+  position: absolute;
+  box-sizing: border-box;
+  background: var(--hud-tooltip-fill, rgba(24, 34, 49, 0.76));
+  border-radius: calc(var(--tt-band, 10px) * 0.4);
+  pointer-events: auto;
+}
+.obs-panel::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--tt-bg-inset, 3px) * -1);
+  border: var(--tt-band, 10px) solid transparent;
+  border-image: var(--hud-tooltip-border) 16 / var(--tt-band, 10px) round;
+  pointer-events: none;
+}
+body:not(.hud-tooltip-skinned) .obs-panel { outline: 1px solid rgba(200, 160, 50, 0.7); }
+
+/* The Esc menu's backdrop (EscMenuButtonBackdropTemplate): the fill tiled BackdropBackgroundSize
+   inside BackdropBackgroundInsets, the edge file's nine-patch at BackdropCornerSize over the
+   whole frame — the FDF's own two layers, so the stroke meets the fill where the art meets it. */
+.obs-esc {
+  position: relative;
+  box-sizing: border-box;
+  border: none;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  color: #fff;
+  font-family: var(--game-font);
+  font-size: var(--obs-pull-font);
+  text-shadow: 1px 1px 0 #000;
+  pointer-events: auto;
+}
+.obs-esc::before {
+  content: "";
+  position: absolute;
+  inset: var(--obs-pull-inset);
+  background: var(--obs-esc-fill, none) 0 0 / calc(var(--stage-h) * 0.128 / 0.6) repeat, #0b0b0b;
+  pointer-events: none;
+}
+.obs-esc::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: var(--obs-pull-corner) solid transparent;
+  border-image-source: var(--obs-esc-border, none);
+  border-image-slice: var(--obs-esc-slice, 16);
+  border-image-width: var(--obs-pull-corner);
+  border-image-repeat: round;
+  pointer-events: none;
+}
+.obs-hud:not(.skinned) .obs-esc::after { border: 1px solid #8a7330; }
+
+.obs-buttons {
+  position: absolute;
+  left: var(--obs-edge);
+  top: var(--obs-edge);
+  display: flex;
+  gap: var(--obs-gap);
+}
+/* …below the scoreboard when a narrow screen puts the two in each other's way (clearScoreboard). */
+.obs-hud.stacked .obs-buttons { top: calc(var(--obs-score-bottom) + var(--tt-bg-inset, 3px) + var(--obs-gap) * 2); }
+.obs-hud.stacked .obs-prod { top: calc(var(--obs-score-bottom) + var(--tt-bg-inset, 3px) + var(--obs-gap) * 4 + var(--obs-pull-h)); }
+.obs-button {
+  width: var(--obs-button-w);
+  height: var(--obs-pull-h);
+}
+.obs-button > span { position: relative; z-index: 1; }
+.obs-button:active > span { top: 1px; left: 1px; }
+.obs-button:hover > span, .obs-button.pad-hover > span { filter: brightness(1.25); }
+
+.obs-pull-wrap { position: relative; pointer-events: auto; }
+.obs-pull {
+  display: block;
+  width: 100%;
+  height: var(--obs-pull-h);
+  text-align: left;
+}
+.obs-pull-title {
+  position: absolute;
+  inset: 0 calc(var(--obs-pull-button) + var(--obs-pull-arrow)) 0 var(--obs-pull-button);
+  line-height: var(--obs-pull-h);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  z-index: 1;
+}
+.obs-pull-title .obs-swatch { vertical-align: -0.05em; }
+.obs-pull-arrow {
+  position: absolute;
+  right: var(--obs-pull-button);
+  top: 50%;
+  width: var(--obs-pull-arrow);
+  height: var(--obs-pull-arrow);
+  transform: translate(50%, -50%);
+  background: var(--obs-esc-arrow, none) center / contain no-repeat;
+  z-index: 1;
+}
+.obs-pull-menu {
+  position: absolute;
+  left: 0;
+  min-width: 100%;
+  top: 100%;
+  padding: var(--obs-pull-border);
+  display: flex;
+  flex-direction: column;
+  z-index: 10;
+}
+.obs-pull-menu.up { top: auto; bottom: 100%; }
+.obs-pull-menu::before { background-image: var(--obs-esc-menu-fill, none); }
+.obs-pull-item {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  height: calc(var(--obs-pull-item) * 1.25);
+  padding: 0 calc(var(--obs-pull-button) * 0.4);
+  border: none;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-size: var(--obs-pull-font);
+  text-shadow: inherit;
+  white-space: nowrap;
+  text-align: left;
+}
+.obs-pull-item:hover, .obs-pull-item.pad-hover { color: rgb(252, 211, 18); background: rgba(255, 255, 255, 0.08); }
+.obs-swatch {
+  display: inline-block;
+  flex: none;
+  width: 0.75em;
+  height: 0.75em;
+  margin-right: 0.4em;
+  border: 1px solid #000;
+}
+
+/* An ICON: its art, the seconds of a job in hand printed in the middle as a cooldown's are,
+   and the console's own number box in the corner for a count, a rank or charges. */
+.obs-icon {
+  position: relative;
+  flex: none;
+  box-sizing: border-box;
+  container-type: size;
+  background: #000 center / 100% 100% no-repeat;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.9);
+  pointer-events: auto;
+}
+.obs-secs {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.3);
+  font: 700 46cqw / 1 var(--game-font);
+  color: #fff;
+  text-shadow: 0 1px 2px #000, 0 0 4px #000;
+  pointer-events: none;
+}
+.obs-secs:empty { display: none; }
+.obs-icon.empty { background: rgba(0, 0, 0, 0.35); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06); }
+
+.obs-prod {
+  position: absolute;
+  left: var(--obs-edge);
+  top: calc(var(--obs-edge) + var(--obs-pull-h) + var(--obs-gap) * 2);
+  width: var(--obs-prod-row);
+}
+.obs-prod > .obs-pull-wrap { width: var(--obs-prod-w); }
+.obs-prod-list { display: flex; flex-direction: column; gap: calc(var(--obs-gap) * 1.2); margin-top: calc(var(--obs-gap) * 1.5); }
+.obs-prod-label {
+  display: flex;
+  align-items: center;
+  font-size: var(--obs-label);
+  color: rgb(252, 211, 18);
+  margin-bottom: 2px;
+}
+.obs-prod-icons { display: flex; flex-wrap: wrap; gap: 2px; }
+.obs-prod-block.idle .obs-prod-icons { display: none; }
+.obs-prod-icon { width: var(--obs-prod-icon); height: var(--obs-prod-icon); }
+
+/* The scoreboard, one table either side of the medallion's bridge. */
+.obs-score {
+  top: var(--obs-e);
+  display: grid;
+  grid-template-columns:
+    calc(var(--obs-score-row) * 0.22) calc(var(--obs-score-icon) * 2) var(--obs-score-name)
+    var(--obs-score-icon) minmax(2.6em, auto) var(--obs-score-icon) minmax(2.4em, auto)
+    var(--obs-score-icon) minmax(2.9em, auto) auto minmax(1.8em, auto);
+  grid-auto-rows: var(--obs-score-row);
+  align-items: center;
+  column-gap: 0.35em;
+  padding: 0 0.5em;
+  font-size: var(--obs-score-font);
+  white-space: nowrap;
+}
+.obs-score.left { right: calc(50% + var(--obs-score-clock)); }
+.obs-score.right { left: calc(50% + var(--obs-score-clock)); }
+.obs-score-swatch { width: 100%; height: 75%; box-shadow: 0 0 0 1px #000; }
+.obs-score-img { display: block; width: var(--obs-score-icon); height: var(--obs-score-icon); object-fit: contain; }
+.obs-score-race { width: calc(var(--obs-score-icon) * 2); height: var(--obs-score-icon); background: center / 100% 200% no-repeat; }
+.obs-score-name { overflow: hidden; text-overflow: ellipsis; }
+.obs-score-apm { color: rgb(252, 211, 18); font-size: 0.7em; }
+.obs-time {
+  position: absolute;
+  left: 50%;
+  top: var(--obs-time-top);
+  transform: translateX(-50%);
+  font-size: var(--obs-score-font);
+  color: rgb(252, 211, 18);
+}
+
+/* The bottom row: minimap, heroes, selection — three frames on one baseline. */
+.obs-minimap {
+  left: var(--obs-e);
+  bottom: var(--obs-e);
+  width: var(--obs-mm-w);
+  height: var(--obs-bottom-h);
+  padding: var(--obs-bottom-pad);
+  display: flex;
+  gap: var(--obs-bottom-pad);
+}
+.obs-minimap-map { position: relative; width: var(--obs-mm); height: var(--obs-mm); flex: none; }
+.obs-minimap-map > .hud-minimap {
+  position: relative !important;
+  left: auto !important;
+  top: auto !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+.obs-minimap-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: var(--obs-bottom-pad);
+  width: var(--obs-mm-buttons);
+}
+.obs-minimap-buttons > button {
+  position: relative !important;
+  left: auto !important;
+  top: auto !important;
+  width: 100% !important;
+  height: auto !important;
+  aspect-ratio: 42 / 37; /* the console socket the button art is cut for (minimapButtonSocket) */
+}
+.obs-heroes {
+  left: var(--obs-heroes-left);
+  bottom: var(--obs-e);
+  height: var(--obs-bottom-h);
+  width: calc(var(--obs-cols) * var(--obs-column) + (var(--obs-cols) - 1) * var(--obs-gap) * 2 + var(--obs-bottom-pad) * 2);
+  max-width: calc(100% - var(--obs-heroes-room));
+  padding: var(--obs-bottom-pad);
+  display: grid;
+  grid-template-columns: repeat(var(--obs-cols), minmax(0, 1fr));
+  column-gap: calc(var(--obs-gap) * 2);
+}
+.obs-herocol { display: flex; flex-direction: column; gap: calc(var(--obs-gap) * 1.3); min-width: 0; }
+.obs-herorows { display: flex; flex-direction: column; gap: calc(var(--obs-gap) * 0.9); overflow: hidden; }
+.obs-hero { display: flex; gap: calc(var(--obs-gap) * 0.8); height: var(--obs-hero-row); }
+.obs-hero-left { width: var(--obs-portrait); flex: none; }
+.obs-portrait { width: var(--obs-portrait); height: var(--obs-portrait); }
+.obs-portrait .hud-count-badge { --count-box: 46%; }
+.obs-bars { display: flex; flex-direction: column; gap: 1px; margin-top: 2px; --track-w: var(--obs-portrait); }
+.obs-hero.dead .obs-bars { visibility: hidden; }
+.obs-bar { position: relative; height: var(--obs-bar); background: #000; overflow: hidden; }
+.obs-bar-fill {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  background-color: #00c800;
+}
+.obs-bar-fill[data-state="yellow"] { background-color: #c8c800; }
+.obs-bar-fill[data-state="red"] { background-color: #c80000; }
+.obs-bar-fill.mana { background-color: #2a6cf0; }
+/* The real slab, stretched across the whole TRACK and clipped by the fill's width, as the hero
+   bar's and the floating bars' are — so its shading stays put as the bar drains. */
+body.hud-statbar-skinned .obs-bar-fill { background: var(--statbar-green) 0 0 / var(--track-w) 100% no-repeat; }
+body.hud-statbar-skinned .obs-bar-fill[data-state="yellow"] { background-image: var(--statbar-yellow); }
+body.hud-statbar-skinned .obs-bar-fill[data-state="red"] { background-image: var(--statbar-red); }
+body.hud-statbar-skinned .obs-bar-fill.mana { background-image: var(--statbar-mana); }
+.obs-skills {
+  display: grid;
+  grid-template-columns: repeat(2, var(--obs-skill));
+  grid-auto-rows: var(--obs-skill);
+  gap: 1px;
+  align-content: start;
+}
+.obs-skill { width: var(--obs-skill); height: var(--obs-skill); }
+.obs-skill .hud-count-badge, .obs-item .hud-count-badge { --count-box: 62%; }
+.obs-belt {
+  display: grid;
+  grid-template-columns: repeat(3, var(--obs-item));
+  grid-auto-rows: var(--obs-item);
+  gap: 1px;
+  margin-left: auto;
+  align-content: start;
+}
+.obs-item { width: var(--obs-item); height: var(--obs-item); }
+
+.obs-sel {
+  right: var(--obs-e);
+  bottom: var(--obs-e);
+  width: var(--obs-sel-w);
+  height: var(--obs-sel-h);
+  padding: var(--obs-bottom-pad) calc(var(--obs-bottom-pad) * 1.5);
+  font-size: var(--obs-sel-font);
+  --track-w: calc(var(--obs-sel-w) * 0.88 - var(--obs-bottom-pad) * 3);
+}
+.obs-sel.empty > * { visibility: hidden; }
+.obs-sel-name { text-align: center; font-size: 1.15em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.obs-sel-sub { text-align: center; color: rgb(252, 211, 18); }
+.obs-sel-bar {
+  position: relative;
+  height: 1.3em;
+  margin: 2px 6% 0;
+  background: #000;
+  box-shadow: 0 0 0 1px #4a4a4a;
+  overflow: hidden;
+}
+.obs-sel-bar-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9em;
+}
+.obs-sel-row { display: flex; gap: calc(var(--obs-bottom-pad) * 1.5); align-items: flex-start; margin-top: calc(var(--obs-bottom-pad) * 1.2); }
+.obs-sel-icon { width: var(--obs-sel-icon); height: var(--obs-sel-icon); }
+.obs-sel-lines { flex: 1; min-width: 0; line-height: 1.4; }
+.obs-sel-key { color: rgb(252, 211, 18); }
+.obs-bonus { color: #00ff00; }
+.obs-malus { color: #ff0000; }
+.obs-attr { display: inline-flex; align-items: center; gap: 0.2em; margin-right: 0.7em; pointer-events: auto; }
+.obs-attr img { width: 1.5em; height: 1.5em; }
+.obs-sel-belt {
+  display: grid;
+  grid-template-columns: repeat(2, var(--obs-item));
+  grid-auto-rows: var(--obs-item);
+  gap: 1px;
+}
+/* Auto Camera: above the selection, on no panel — the replay panel it belongs to is for
+   replays, which there are none of yet. */
+.hud-autocam.obs-autocam {
+  left: auto;
+  top: auto;
+  right: calc(var(--obs-e) + var(--obs-bottom-pad));
+  bottom: calc(var(--obs-e) + var(--obs-sel-h) + var(--obs-autocam-lift));
+  pointer-events: none;
+}
+
 .hud-herobar {
   position: absolute;
   left: var(--hero-left);
@@ -1217,7 +1593,7 @@ body.hud-tooltip-skinned .hud-chatbar::after {
 }
 .hud-hero-fill[data-state="yellow"] { background-color: #c8c800; }
 .hud-hero-fill[data-state="red"] { background-color: #c80000; }
-.hud-hero-fill.mana { background-color: #0f0080; }
+.hud-hero-fill.mana { background-color: #2a6cf0; }
 /* The real slab, tinted per state by ui/hud.ts applyStatBarSkin — stretched across the
    whole track and clipped by the fill's width, so its shading stays put as the bar drains
    (the same rule the floating bars follow). */
@@ -2035,7 +2411,7 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
 }
 .hud-sel-icon-fill[data-state="yellow"] { background-color: #c8c800; }
 .hud-sel-icon-fill[data-state="red"] { background-color: #c80000; }
-.hud-sel-icon-fill.mana { background-color: #0f0080; }
+.hud-sel-icon-fill.mana { background-color: #2a6cf0; }
 /* The real thing: the slab ui/hud.ts baked per bar colour (applyStatBarSkin), stretched across
    the whole track. What varies with the pool is the CLIP, set inline — so the shading stays put
    as the bar drains instead of squashing along with it. */
@@ -2506,6 +2882,9 @@ body.hud-widget-skinned .hud-console.hud-console-skinned .hud-inventory .hud-inv
   align-items: center;
   gap: 6px;
 }
+/* A watcher's minimap panel stands where this strip does; lift it clear of the panel's top
+   (ui/observerHud.ts OBS.bottom.h, plus its frame). */
+body.observer-hud .metrics { bottom: calc((100vh - var(--stage-h)) / 2 + var(--stage-h) * 0.17 / 0.6); }
 /* Mute toggle is interactive even though the panel itself ignores pointer events. */
 .metrics-mute {
   pointer-events: auto;

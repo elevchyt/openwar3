@@ -843,6 +843,16 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   weighs anything, so it used to fix on whichever base trained the first hero), and a target past
   `SNAP_DISTANCE` is CUT to rather than panned. `?dev&map=…&observe` boots straight into an
   observed match.
+- **Observer HUD:** read [`docs/observer-hud.md`](docs/observer-hud.md) before touching
+  [`src/ui/observerHud.ts`](src/ui/observerHud.ts), [`src/game/observerView.ts`](src/game/observerView.ts)
+  or `WorldSnapshot.watched`. A watcher gets no console: production/army/upgrades top left, a
+  scoreboard either side of the medallion, minimap + a four-column hero panel + a minimal
+  selection along the bottom (issue #168; the LAYOUT is the developer's pick, the parts are the
+  game's). Every panel is the tooltip frame drawn the command tooltip's way (fill = element,
+  stroke pulled `--tt-bg-inset` OUTSIDE it); clipping the fill to the border box leaves a ring of
+  map between them. A player's payload carries only its OWN bank, research and dead heroes, so a
+  LAN watcher reads everyone's from its own lane (`watched`, built for bench seats alone). APM is
+  counted at `Authority.execute` and is ours (a one-minute window).
 - **Gamepad:** read [`docs/gamepad.md`](docs/gamepad.md) before touching
   [`src/ui/gamepad.ts`](src/ui/gamepad.ts) or a `:hover` rule. WC3 has no controller support,
   so the MAPPING is the developer's (issue #162), but what a button does is the game's: a

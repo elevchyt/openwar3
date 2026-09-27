@@ -1,4 +1,4 @@
-import { snapshotFor, type FxSnapshot, type SnapshotViewer, type SnapshotWorld, type UnitSnapshot, type WorldSnapshot } from "./snapshot";
+import { snapshotFor, type FxSnapshot, type SnapshotViewer, type SnapshotWorld, type UnitSnapshot, type WatchedPlayer, type WorldSnapshot } from "./snapshot";
 import { decodeSnapshot, encodeSnapshot, type WireSnapshot } from "./snapshotWire";
 import { divergence, describeDivergence, type Divergence } from "./divergence";
 import { commandMessage, isCommandMessage, type CommandMessage } from "../net/commandLink";
@@ -318,6 +318,9 @@ export interface HostSources {
    *  on EVERY send (see `WorldSnapshot.deaths` for why); the client's handling is idempotent
    *  so the repeat a later due broadcast may carry is ignored. */
   drainDeaths?(): Array<{ id: number; x: number; y: number }>;
+  /** The observer lane (`WorldSnapshot.watched`) for this recipient, or null when the
+   *  recipient is a player — a player is told nobody else's bank. Optional for the stub reason. */
+  watchedFor?(player: number): WatchedPlayer[] | null;
 }
 
 /** How often the host emits. 20 Hz.
@@ -673,6 +676,8 @@ export class MatchLink {
       if (peer === undefined) continue; // a computer slot: nobody is watching
       if (!due && !this.owed.has(peer)) continue; // off-cadence: only the returning peers
       const snap = snapshotFor(world, viewer, player, time, sources.ghostsFor(player), sources.commandsApplied(), sources.creepCampsFor?.(player) ?? []);
+      const watched = sources.watchedFor?.(player);
+      if (watched) snap.watched = watched;
       // Fx ride DUE broadcasts only: an expedited or rejoin catch-up send would otherwise
       // replay the same burst again at the next cadence. Filtered per recipient by
       // eyes-on-the-spot — the same "in your eyes or absent" rule items and missiles use.

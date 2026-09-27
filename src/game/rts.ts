@@ -35,7 +35,7 @@ import { PoseInterpolator, type PoseOut } from "./poseInterp";
 import type { ChatLine } from "./chat";
 import { applyWorldSnapshot } from "./snapshotApply";
 import { perfLog } from "../dev/perfLog";
-import type { WorldSnapshot, UnitSnapshot, GroundItemSnapshot, ProjectileSnapshot, FxSnapshot } from "./snapshot";
+import type { WorldSnapshot, UnitSnapshot, GroundItemSnapshot, ProjectileSnapshot, FxSnapshot, WatchedPlayer } from "./snapshot";
 import { CommandRouter, accepted } from "../net/commandLink";
 import { CreepCamps, hiddenFor, minimapDots, minimapIcons, dotsFromSnapshot, type MinimapDot } from "./minimapView";
 import { minimapDotTone, nextAllyColorMode, observerTeamColors, toAllyColorMode, worldFilterColor, type AllyColorMode, type ColorSide } from "./allyColor";
@@ -51,6 +51,7 @@ import { MELEE, gameNum, xpToReachLevel } from "../data/gameplayConstants";
 import { type AbilityRegistry, type AbilityDef } from "../data/abilities";
 import { resolveTipRefs } from "../data/tipRefs";
 import { disabledIconPath } from "../data/commandStrings";
+import { observePlayer, type ObserverPlayerView } from "./observerView";
 import { type ItemRegistry } from "../data/items";
 import { workerProfileFor, harvestAbilityOf, depotRoleFor, isHarvestCode, type PlayableRace } from "../data/races";
 import { MeleeAi, AI_SCRIPT_RACES } from "../ai";
@@ -1518,8 +1519,69 @@ export class RtsController {
    * rule (`setLocalRevealAll`), applied per bench seat.
    */
   seatObservers(players: readonly number[]): void {
+    for (const p of players) this.observerSeats.add(p);
     this.viewpoints.seat(players.map((player) => ({ player, team: player })));
     for (const player of players) this.viewpoints.viewpointFor(player).setRevealAll(true);
+  }
+
+  /** The Observers bench's seats (host side) — the recipients whose payload carries the
+   *  observer lane (`WorldSnapshot.watched`). */
+  private readonly observerSeats = new Set<number>();
+  /** The players an observer watches, in seat order: every seat in the match that is not on
+   *  the bench. Set by whoever seats the match, on both sides of the wire. */
+  private observedPlayers: number[] = [];
+  /** A LAN watcher's copy of the host's observer lane, by player (null on the host and on a
+   *  player's client — they read their own world). */
+  private watchedLane: Map<number, WatchedPlayer> | null = null;
+
+  setObservedPlayers(players: readonly number[]): void {
+    this.observedPlayers = [...players];
+  }
+
+  /**
+   * What the observer HUD shows about `player` (issue #168, game/observerView.ts). The unit
+   * records answer everything on both sides of the wire; the bank, the research and the dead
+   * heroes come from the watcher's lane on a LAN client, where the local ledgers only ever hold
+   * the recipient's own.
+   */
+  observerView(player: number): ObserverPlayerView {
+    const lane = this.watchedLane?.get(player) ?? null;
+    return observePlayer({
+      units: this.sim.units,
+      registry: this.registry,
+      abilities: this.abilities,
+      items: this.items,
+      upgrades: this.upgrades,
+      stash: (p) => lane ?? this.authority.stashFor(p),
+      food: (p) => this.authority.foodFor(p),
+      apm: (p) => lane?.apm ?? this.authority.actions.apm(p, this.sim.elapsed),
+      research: (p) => (lane ? Object.entries(lane.research) : this.sim.tech?.researchedBy(p) ?? []),
+      fallen: (p) => lane?.fallen ?? this.sim.fallenHeroesOf(p),
+      disabledIcon: (icon) => disabledIconPath(icon),
+    }, player);
+  }
+
+  /** Seconds of match played — the observer's clock. A LAN client's own sim never steps, so it
+   *  reads the host's time off the newest payload. */
+  matchSeconds(): number {
+    return this.frozenClient ? (this.lastApplied?.time ?? 0) : this.sim.elapsed;
+  }
+
+  /** The observer lane for one recipient (`HostSources.watchedFor`): every watched player's
+   *  bank, APM, research and fallen heroes — for a watcher on the bench, and nobody else. */
+  private watchedFor(recipient: number): WatchedPlayer[] | null {
+    if (!this.observerSeats.has(recipient)) return null;
+    return this.observedPlayers.map((player) => {
+      const stash = this.authority.stashFor(player);
+      return {
+        player,
+        gold: stash.gold,
+        lumber: stash.lumber,
+        apm: this.authority.actions.apm(player, this.sim.elapsed),
+        research: Object.fromEntries(this.sim.tech?.researchedBy(player) ?? []),
+        fallen: this.sim.fallenHeroesOf(player).map((f) => ({ id: f.id, typeId: f.typeId, properName: f.properName, level: f.level, revivingAt: f.revivingAt, bodyLeft: f.bodyLeft })),
+      };
+    });
   }
 
   /** Seed the alliance matrix from the lobby's teams (7.22). Called once start setup
@@ -8073,6 +8135,9 @@ export class RtsController {
    *  sim-internal fields the wire does not carry, and the reserved id is the whole point:
    *  a client allocates no ids of its own, so none can collide (playtest bugs 5/6). */
   private applySnapshot(snap: WorldSnapshot): void {
+    // A watcher's lane (issue #168): kept as sent, read by `observerView` — it describes other
+    // players' ledgers, which this client's own ledgers are not the place for.
+    if (snap.watched) this.watchedLane = new Map(snap.watched.map((w) => [w.player, w]));
     const res = applyWorldSnapshot(this.sim, snap, (s) => {
       const def = this.registry.get(s.typeId);
       if (!def) return null;
@@ -8470,6 +8535,7 @@ export class RtsController {
         creepCampsFor: (p) => this.creepCamps(this.viewpoints.viewpointFor(p)),
         drainFx: () => this.takeWireFx(),
         drainDeaths: () => this.takeWireDeaths(),
+        watchedFor: (p) => this.watchedFor(p),
       }, this.matchTime);
     } else if (link.latest()) {
       // Client: compare the authority's newest view against our own, for OUR seat — while that

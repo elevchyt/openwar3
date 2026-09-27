@@ -24,6 +24,7 @@ import { setGameTip } from "./gameTip";
 import { HERO_LEVEL_FX_OVERHANG, HeroLevelFx } from "./heroLevelFx";
 import { MODAL_FX_OVERHANG, ModalButtonFx } from "./modalButtonFx";
 import { anyModalOpen } from "./modal";
+import { ObserverHud, type ObserverSeat } from "./observerHud";
 import { gridCommandKey, gridCommandSlot, gridHotkeys, gridInventoryKey, gridInventorySlot, hotkeyMode, hotkeysOnButtons } from "../data/hotkeys";
 
 /** Which upkeep band a food count falls in: 0 none, 1 low, 2 high — at the bands of this match
@@ -265,6 +266,15 @@ export interface HudDriver {
   /** The observer's Auto Camera (game/autoCamera.ts): whether it is on, and the switch. */
   autoCamera(): boolean;
   setAutoCamera(on: boolean): void;
+  /** The observer HUD (issue #168, ui/observerHud.ts): every watched seat — its bank, food,
+   *  APM, heroes, production, army and upgrades — in seat order. Empty for a player. */
+  observerSeats(): ObserverSeat[];
+  /** Seconds of match played, for the observer's clock under the medallion. */
+  matchSeconds(): number;
+  /** The observer HUD's Menu and Chat buttons — the same doors F10 and F12 open. */
+  openConsolePanel(panel: "menu" | "chat"): void;
+  /** Select this unit (any player's — a watcher may look at anything) and centre on it. */
+  observerFocus(simId: number): void;
   /** Creep-camp difficulty markers: camp centre + combined creep level (the HUD
    *  colours and sizes it per `UI\MiscData.txt` [Minimap]). Fixed map data. */
   creepCamps(): Array<{ x: number; y: number; level: number }>;
@@ -754,13 +764,15 @@ const BIGBAR_TINT = {
 
 /** The colour each bar multiplies the fill texture by. Green is measured (see above), so
  *  yellow and red are the engine's matching primaries. WC3 floats no mana bar at all, so
- *  its blue has no measurement to match — this is the value the game's own mana art carries,
- *  ManaBarConsoleSmall.mdx's geoset colour (0.0627, 0, 0.9020). */
+ *  its blue has no measurement to match, and the one it wears is OURS: the developer's pick
+ *  off the observer HUD's mock-up (issue #168), a clear azure that reads as mana at a glance.
+ *  It replaced the game's own mana art colour, ManaBarConsoleSmall.mdx's geoset colour
+ *  (0.0627, 0, 0.9020) — a violet so deep that on the dark slab it read almost black. */
 const STATBAR_TINT = {
   green: [0, 255, 0],
   yellow: [255, 255, 0],
   red: [255, 0, 0],
-  mana: [16, 0, 230],
+  mana: [42, 108, 240], // #2a6cf0
   /** …and the slab UNTINTED, for the Team Colored bars (issue #141). A player's colour is not
    *  one of four fixed tints — it is whatever slot the body is wearing this frame — so that
    *  multiply cannot be baked here and is done by the stylesheet instead
@@ -1462,6 +1474,20 @@ export class GameHud {
     );
     parent.appendChild(this.root);
     this.applyWidgetSkin();
+    // A WATCHER gets the observer HUD in place of the console (issue #168). It adopts the three
+    // pieces of the console it keeps — the minimap, the option buttons beside it and the Auto
+    // Camera box — and the stylesheet hides the rest (`.hud-observer`).
+    if (driver.isObserver()) {
+      const minimap = this.root.querySelector<HTMLElement>(".hud-minimap");
+      if (minimap && this.autoCamBox) {
+        this.root.classList.add("hud-observer");
+        this.observerHud = new ObserverHud(this.root, driver, {
+          minimap,
+          minimapButtons: this.minimapButtonZones.map(([b]) => b),
+          autoCamera: this.autoCamBox.root,
+        });
+      }
+    }
     // A console button is PRESSED, never FOCUSED. The browser hands keyboard focus to any
     // button on mousedown and then answers Enter by clicking the focused one — so the Allies
     // button, clicked once, re-opened its panel every time the player pressed Enter to chat,
@@ -1579,6 +1605,7 @@ export class GameHud {
   }
 
   dispose(): void {
+    this.observerHud?.dispose();
     window.removeEventListener("keydown", this.onKey);
     window.removeEventListener("keyup", this.onKeyUp);
     window.removeEventListener("blur", this.endFollow);
@@ -1649,6 +1676,7 @@ export class GameHud {
     this.refreshInventory();
     this.refreshHeroBar();
     this.refreshAutoCameraBox();
+    this.observerHud?.frame(dtMs);
     this.updateIdleWorkers();
     // Last: the two refreshes above are what say which buttons are lit, and the effect is
     // simulated once for all of them (see ModalButtonFx).
@@ -2762,8 +2790,9 @@ export class GameHud {
   }
 
   /**
-   * AUTO CAMERA (issue #167) — an observer's checkbox, under the upper button bar in the
-   * top-left corner, where a player's hero bar would hang (an observer has no heroes).
+   * AUTO CAMERA (issue #167) — an observer's checkbox. Built here and ADOPTED by the observer
+   * HUD (issue #168, ui/observerHud.ts), which parks it above its selection panel; the place
+   * this sets is only where it stands if that HUD could not be built (no install mounted).
    *
    * Everything about it is the game's own observer panel (`UI\FrameDef\UI\ObserverPanel.fdf`
    * `ObserverCameraCheckBox`): a SIMPLECHECKBOX 0.02 square wearing `ReplayCheckBoxNormal` /
@@ -2773,6 +2802,8 @@ export class GameHud {
    * shadow), 0.005 to the right of the box. Only its PLACE is the issue's rather than the file's
    * (which parks the panel low, beside the console). What it does is game/autoCamera.ts.
    */
+  /** The observer HUD, for a watcher only (issue #168). */
+  private observerHud: ObserverHud | null = null;
   private autoCamBox: { root: HTMLElement; box: HTMLElement; check: HTMLElement; paint: (pressed: boolean) => void } | null = null;
   private buildAutoCameraBox(): HTMLElement {
     const root = document.createElement("div");

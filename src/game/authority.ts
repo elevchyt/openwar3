@@ -6,6 +6,7 @@ import { ORDER_IDS, orderIdToString } from "../jass/orders";
 import type { TechRegistry } from "../data/techtree";
 import type { UpgradeRegistry } from "../data/upgrades";
 import type { Command } from "./commands";
+import { ApmMeter } from "./apm";
 import { engineFoodCeiling, gameNum, heroReviveCost, type ReviveMode } from "../data/gameplayConstants";
 
 // The authority half of the bridge (docs/multiplayer.md Phase B): the questions whose
@@ -639,9 +640,17 @@ export class Authority {
    */
   execute(player: number, cmd: Command): boolean {
     const took = this.dispatch(player, cmd);
-    if (took) this.appliedCount++;
+    if (took) {
+      this.appliedCount++;
+      // The observer HUD's APM column (issue #168) — counted at the one door every seat's
+      // actions pass through, so a person and a computer are measured by the same rule.
+      this.actions.note(player, this.sim.elapsed);
+    }
     return took;
   }
+
+  /** Every seat's accepted actions, for the observer HUD's APM column (game/apm.ts). */
+  readonly actions = new ApmMeter();
 
   /**
    * How many commands this world has accepted.

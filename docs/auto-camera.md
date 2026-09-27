@@ -1,8 +1,9 @@
 # Auto Camera (observers)
 
 Issue #167. An observer — the Custom Game screen's Observer Mode, or a seat on a LAN game's
-Observers bench (`MeleeConfig.observer`) — gets an **Auto Camera** checkbox under the upper
-button bar, in the top-left corner where a player's hero bar hangs (an observer has no heroes).
+Observers bench (`MeleeConfig.observer`) — gets an **Auto Camera** checkbox, which the observer
+HUD (issue #168, [`docs/observer-hud.md`](observer-hud.md)) stands above its selection panel,
+on no panel of its own.
 Ticked, the camera pans by itself to the most interesting part of the match.
 
 ## The control is the game's
