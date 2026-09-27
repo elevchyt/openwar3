@@ -11249,7 +11249,8 @@ export class SimWorld {
     let depot: SimUnit | null = null;
     let bestD = Infinity;
     for (const d of this.units.values()) {
-      if (d.owner !== u.owner || !d.depotGold) continue;
+      if (d.owner !== u.owner || !d.depotGold || d.hp <= 0) continue;
+      if (d.building && d.building.constructionLeft > 0) continue; // a hall still going up is no anchor yet
       const dist = Math.hypot(d.x - u.x, d.y - u.y);
       if (dist < bestD) {
         bestD = dist;
@@ -11341,12 +11342,14 @@ export class SimWorld {
       if (picked && this.takesLoad(u, picked)) return picked;
       u.returnDepotId = 0;
     }
-    const wantGold = w.carryGold > 0;
     let depot: SimUnit | null = null;
     let bestD = Infinity;
     for (const d of this.units.values()) {
-      if (d.owner !== u.owner) continue;
-      if (wantGold ? !d.depotGold : !d.depotLumber) continue;
+      // takesLoad, not just the depot flag: a Graveyard (or a hall, a Lumber Mill) still under
+      // construction carries `depotLumber` from the moment it is placed, and Ghouls walked their
+      // lumber to the scaffold. A depot takes a load only once it is FINISHED — as in the game,
+      // where a worker walks past a building going up to the nearest one that is standing.
+      if (!this.takesLoad(u, d)) continue;
       const dist = Math.hypot(d.x - u.x, d.y - u.y);
       if (dist < bestD) {
         bestD = dist;

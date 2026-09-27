@@ -117,5 +117,21 @@ console.log("The same seed lays the same corpse on the same tile on every machin
   check("three pulses, identical positions", pa === pb && bodies(a).length === 3, pa);
 }
 
+console.log("A Graveyard still going up takes no lumber: the Ghoul walks on to a finished depot");
+{
+  const world = newWorld();
+  // A Graveyard is a lumber depot (`Arlm`) from the moment it is placed — but only a FINISHED
+  // one takes a load. Ghouls walked their lumber into the scaffold and banked it there.
+  world.add(base({ id: 1, typeId: "ugrv", x: 2000, y: 2000, hp: 200, maxHp: 800, speed: 0, radius: 96, isBuilding: true, depotLumber: true, name: "Graveyard" }), RISING(2000, 2000, 60));
+  world.add(base({ id: 2, typeId: "unpl", x: 5000, y: 2000, hp: 1500, maxHp: 1500, speed: 0, radius: 128, isBuilding: true, depotGold: true, depotLumber: true, name: "Necropolis" }), BUILT(5000, 2000));
+  const ghoul = world.add(base({ id: 3, typeId: "ugho", x: 1700, y: 2000, hp: 340, maxHp: 340, speed: 270, radius: 16, name: "Ghoul",
+    worker: { gold: false, lumber: true, lumberCapacity: 20, baseLumberCapacity: 20, lumberPerChop: 1, chopPeriod: 1, damagesTree: true, carryGold: 0, carryLumber: 20 } }));
+  check("a laden Ghoul takes a Return order", world.issueReturnResources(ghoul.id));
+  for (let t = 0; t < 30 / 0.05 && world.stashOf(0).lumber === 0; t++) world.tick(0.05);
+  const d = Math.hypot(ghoul.x - 5000, ghoul.y - 2000);
+  check("…and banks it", world.stashOf(0).lumber === 20, `${world.stashOf(0).lumber} lumber`);
+  check("…at the finished Necropolis, not the scaffold beside it", d < 400, `${d.toFixed(0)} from the Necropolis`);
+}
+
 console.log(failed ? `\n${failed} check(s) FAILED` : "\ngraveyard: all checks passed");
 process.exit(failed ? 1 : 0);
