@@ -56,6 +56,12 @@ export interface AnimSet {
    *  Never left to hold the attack clip's last frame — see the attacking branch of
    *  RtsController's tick, where a swing clip that has ENDED hands over to this. */
   standReady: number;
+  /** "Stand Ready Gold" / "Stand Ready Lumber" — the same alert stance with the load still in
+   *  hand. Ghoul.mdx authors "Stand Ready Lumber" beside its "Attack Lumber", and a loaded Ghoul
+   *  in a fight is ONE pose set: swing with the log, stand between swings with the log. Falls
+   *  back to `standReady` for a model with no carry stance. */
+  standReadyGold: number;
+  standReadyLumber: number;
   death: number;
   standGold: number;
   walkGold: number;
@@ -260,12 +266,35 @@ export function applyAnimProps(seqs: Array<{ name: string }>, animProps: string[
       return ownActions.has(baseKey(s.name)) ? { name: BLANK } : s;
     });
   }
+  // …and the mirror of that: a clip carrying my STATE and NO tier token is the half I am in,
+  // shared by every tier. A tier's clips routinely have no per-tier variant (the header's
+  // "Death and Decay"), and a two-state model's alternate half is no different — TreeofLife.mdx
+  // is one file for all three trees and authors the planted tree's
+  //
+  //     "ATTACK ALTERNATE" · "Morph Alternate" · "Death Alternate" · "Birth Alternate" · "Decay Alternate"
+  //
+  // with no tier tokens at all, because the Tree of Ages and of Eternity plant, swing, uproot
+  // and die exactly as the Tree of Life does. The superset test above cannot see them for a
+  // Tree of Ages (it asks for `upgrade`+`first` as well), so they were blanked and a planted
+  // Tree of Ages swung its WALKING "Attack", uprooted with the walker's "Morph" and died its
+  // walking death. So they rank between a fully-mine clip and an untokened one: kept (and
+  // renamed) unless a clip carrying my tier as well names the same action, and overriding the
+  // untokened clip for it.
+  const wantTier = tier.filter((t) => !STATE_PROPS.has(t));
+  const stateShared = (n: string) => {
+    if (!wantState.length || !wantTier.length || foreignState(n)) return false;
+    const p = propsOf(n);
+    return wantState.every((t) => p.includes(t)) && p.every((t) => STATE_PROPS.has(t));
+  };
+  const rank = (n: string) => (isMine(n) ? 2 : stateShared(n) ? 1 : propsOf(n).length ? -1 : 0);
+  const outranked = (n: string, r: number) => seqs.some((o) => rank(o.name) > r && baseKey(o.name) === baseKey(n));
   return seqs.map((s) => {
-    if (isMine(s.name)) return { name: baseOf(s.name).join(" "), mine: true };
-    if (propsOf(s.name).length) return { name: BLANK }; // some other tier's clip
-    // A tier-less clip: shared (Death/Decay) unless my tier overrides this same action.
-    const overridden = seqs.some((o) => isMine(o.name) && baseKey(o.name) === baseKey(s.name));
-    return overridden ? { name: BLANK } : s;
+    const r = rank(s.name);
+    if (r === 2) return { name: baseOf(s.name).join(" "), mine: true };
+    if (r < 0) return { name: BLANK }; // some other tier's clip
+    // A state-shared or tier-less clip: kept unless something closer to me names this same action.
+    if (outranked(s.name, r)) return { name: BLANK };
+    return r === 1 ? { name: baseOf(s.name).join(" "), mine: true } : s;
   });
 }
 
@@ -507,6 +536,11 @@ export function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] =
     standReady: (() => {
       const i = find(/^stand ready\s*$/i);
       return i >= 0 && alternateForm && !seqs[i].mine ? -1 : i;
+    })(),
+    ...(() => {
+      const ready = find(/^stand ready\s*$/i);
+      const own = ready >= 0 && alternateForm && !seqs[ready].mine ? -1 : ready;
+      return { standReadyGold: or(find(/^stand ready gold\s*$/i), own), standReadyLumber: or(find(/^stand ready lumber\s*$/i), own) };
     })(),
     death: find(/^death/i),
     standGold: or(find(/stand gold/i), stand),

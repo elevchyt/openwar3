@@ -889,7 +889,15 @@ function applyAbilityMods(def: AbilityDef, mods: AbilMod[], meta: MappedData, tr
       case "effectsound": def.effectSound = s(m.value).trim(); break; // a SLK label, not a path
       case "effectsoundlooped": def.effectSoundLooped = s(m.value).trim(); break;
       case "casterattach": def.casterAttach = list(m.value, true); break;
-      case "targetattach": def.targetAttach = list(m.value, true); break;
+      case "targetattach":
+        def.targetAttach = list(m.value, true);
+        def.targetAttaches = Object.assign([...(def.targetAttaches ?? [])], { 0: def.targetAttach });
+        break;
+      // Model i's spec (AbilityDef.targetAttaches). Copied, never written into: the array is the
+      // base row's until this map edits it.
+      case "targetattach1": case "targetattach2": case "targetattach3": case "targetattach4": case "targetattach5":
+        def.targetAttaches = Object.assign([...(def.targetAttaches ?? [])], { [Number(field.slice(-1))]: list(m.value, true) });
+        break;
       case "specialattach": def.specialAttach = list(m.value, true); break;
       case "lightningeffect": def.lightning = list(m.value, false).map((x) => x.toUpperCase()); break;
       case "animnames": def.animNames = list(m.value, true); break;

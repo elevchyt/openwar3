@@ -51,7 +51,7 @@ import { loadUberSplatRegistry, type UberSplatDef, type UberSplatRegistry } from
 import { loadLightningRegistry } from "../data/lightning";
 import { specialFxPhaseAt, type SpecialFxClips } from "./specialFxClock";
 import { pickEffectSequence, yawPitchRollQuat } from "./effectAnim";
-import { loadAbilityRegistry, mdlPath, type AbilityRegistry, type AbilityDef, type BuffFx, isRepairCode, KNOWN_ABILITIES, requiredHeroLevel, aoeCursorRadius, morphFlags, MORPH_FLAG_PERMANENT, MORPH_FLAG_REQUIRES_PAYMENT, type AbilityLevel } from "../data/abilities";
+import { loadAbilityRegistry, mdlPath, type AbilityRegistry, type AbilityDef, type BuffFx, isRepairCode, KNOWN_ABILITIES, TREE_UPGRADE_ABILITY, requiredHeroLevel, aoeCursorRadius, morphFlags, MORPH_FLAG_PERMANENT, MORPH_FLAG_REQUIRES_PAYMENT, type AbilityLevel } from "../data/abilities";
 import { isDesktopApp } from "../assets/nativeInstall";
 import { loadCommandStrings, disabledIconPath, type CommandStrings } from "../data/commandStrings";
 import { resolveTipRefs } from "../data/tipRefs";
@@ -298,6 +298,11 @@ const MINE_CIRCLE_FX: BuffFx = { path: "Abilities\\Spells\\Undead\\UndeadMine\\U
  *  never carries `ACsp` on its command card — the engine hangs the presentation off the
  *  sleeping STATE — which is why this is a lookup by id rather than a walk of `u.abilities`. */
 const CREEP_SLEEP_ABILITY = "ACsp";
+/** The dust cloud a gold mine goes up in when it runs dry. `Splats\SpawnData.slk` row `DNBL`
+ *  ("NeutralBuildingExplosion", death-spawn of the neutral buildings), and what Blizzard's own
+ *  HumanX04 script throws on a dying neutral building (`AddSpecialEffectLocBJ(…, "…\
+ *  NeutralBuildingExplosion.mdl")`). One clip, Birth, 7.4 s. See collapseGoldMine. */
+const GOLD_MINE_COLLAPSE_ART = "Objects\\Spawnmodels\\Other\\NeutralBuildingExplosion\\NeutralBuildingExplosion.mdx";
 // Cast sounds for spells whose effect model doesn't sit next to a folder WAV
 // (e.g. Divine Shield has no target/caster art), by base ability code.
 const SPELL_SOUND_FALLBACK: Record<string, string> = {
@@ -2243,7 +2248,7 @@ export class MapViewerScene {
   }
 
   /** A tree fell or a mine ran dry: hide its widget and free its cells. */
-  private removeNodeVisual(nodeId: number, x: number, y: number, widgets: HideableWidget[]): void {
+  private removeNodeVisual(nodeId: number, x: number, y: number, widgets: HideableWidget[]): { widget: HideableWidget; wasShown: boolean } | null {
     const meta = this.nodeFootprints.get(nodeId);
     if (meta && this.grid) {
       unstampFootprint(this.grid, meta.fp, meta.x, meta.y);
@@ -2260,10 +2265,47 @@ export class MapViewerScene {
         best = w;
       }
     }
-    if (best) {
-      best.instance.hide();
-      this.removedWidgets.add(best); // gone for good — keep the fog pass from re-showing it
-    }
+    if (!best) return null;
+    const wasShown = best.instance.rendered !== false; // hidden already under an Entangled/Haunted mine
+    best.instance.hide();
+    this.removedWidgets.add(best); // gone for good — keep the fog pass from re-showing it
+    return { widget: best, wasShown };
+  }
+
+  /**
+   * A gold mine running dry, as the player sees it: the mine plays its Death and goes up in
+   * NeutralBuildingExplosion's dust (GOLD_MINE_COLLAPSE_ART, its Birth clip).
+   *
+   * GoldMine.mdx authors "Death" (1.2 s) and the placed mine is a viewer widget, whose static
+   * batch cannot play a clip — so, as a felled tree does (doodadActor), an animated stand-in of
+   * the same model takes its place and is reaped by updateDyingFx when the clip ends. A mine
+   * under an Entangled or Haunted Gold Mine is hidden there and stays hidden: the BUILDING is
+   * what the player sees, and RtsController.onMineCollapse plays ITS Death. The dust goes up
+   * over both kinds.
+   *
+   * Fog: only a mine somebody of ours is looking at is seen to go. In the fog its image is the
+   * last thing we saw, and a collapse is news we have no eyes to receive.
+   */
+  private collapseGoldMine(mine: { x: number; y: number }, node: { widget: HideableWidget; wasShown: boolean } | null): void {
+    const map = this.viewer.map;
+    if (!map || !this.rts?.spotSeen(mine.x, mine.y)) return;
+    const z = this.rts.groundHeightAt(mine.x, mine.y);
+    void this.spawnEffect(GOLD_MINE_COLLAPSE_ART, mine.x, mine.y, z, 0);
+    if (!node?.wasShown) return;
+    const src = node.widget.instance;
+    const model = (src as { model?: { addInstance?(): SpawnInstance } }).model;
+    if (!model || typeof model.addInstance !== "function") return;
+    const inst = model.addInstance();
+    const death = this.seqByName(inst.model.sequences, /^death/i);
+    if (death < 0) return;
+    inst.setScene(map.worldScene);
+    inst.setLocation(src.localLocation);
+    if (src.localRotation) inst.setRotation(src.localRotation);
+    if (src.localScale && src.localScale[0]) inst.setUniformScale(src.localScale[0]);
+    inst.setSequence(death);
+    inst.setSequenceLoopMode(0);
+    const iv = inst.model.sequences[death]?.interval;
+    this.dyingFx.push({ inst, ttl: (iv && iv[1] > iv[0] ? (iv[1] - iv[0]) / 1000 : 1) + 0.5 });
   }
 
   /** Stamp destructible (tree) AND building footprints onto the terrain grid so
@@ -5889,6 +5931,7 @@ export class MapViewerScene {
     this.collectMoonWellWater(active);
     this.collectMineCircles(active);
     this.collectSleepFx(active);
+    this.collectTreeUpgradeFx(active);
     for (const [key, inst] of this.buffFx) {
       if (!active.has(key)) this.dropBuffFx(key, inst);
     }
@@ -5978,6 +6021,41 @@ export class MapViewerScene {
         this.mq[3] = Math.cos(face / 2);
         inst.setRotation(this.mq);
       }
+    }
+  }
+
+  /**
+   * The art a Tree of Life wears while it grows into the next tree.
+   *
+   *     [Atol]  Targetart     = …\TreeofLifeUpgradeTargetArt.mdl,
+   *                             …\TreeofLifeUpgradeTargetArtHand.mdl, …\TreeofLifeUpgradeTargetArtHand.mdl
+   *             Targetattach  = origin
+   *             Targetattach1 = hand,left
+   *             Targetattach2 = hand,right
+   *
+   * Both models carry one Birth · Stand · Death set PER UPGRADE — "Birth Upgrade First" …
+   * "Death Upgrade Second" beside a plain set nothing uses — and the qualifier is the TARGET
+   * tree's own `Animprops` (`[etoa] Animprops=Upgrade,First`, `[etoe] Upgrade,Second`), so the
+   * set is read off the type being grown into rather than typed in here. It rides the ordinary
+   * persistent-FX pool, whose three acts are exactly the upgrade's: Birth as it starts, Stand
+   * looped while the job is at the head of the queue, and Death the frame it is not — finished
+   * or cancelled alike (dropBuffFx keeps the anim, so the Death is the same upgrade's). The
+   * tree's own body is held still underneath (RtsController.upgradePose).
+   */
+  private collectTreeUpgradeFx(active: Set<string>): void {
+    const world = this.rts?.simWorld;
+    if (!world) return;
+    for (const u of world.units.values()) {
+      const job = u.building?.queue[0];
+      if (u.hp <= 0 || job?.kind !== "upgrade") continue;
+      // The TYPE's `abilList`: a row with no behaviour is never seated on the sim unit.
+      const abil = this.registry.get(u.typeId)?.abilities.find((id) => this.abilities.get(id)?.code === TREE_UPGRADE_ABILITY);
+      const def = abil ? this.abilities.get(abil) : undefined;
+      if (!def?.targetArts.length) continue;
+      const anim = (this.registry.get(job.unitId)?.animProps ?? []).join(" ");
+      def.targetArts.forEach((path, i) =>
+        this.trackBuffFx(active, `tolup|${u.id}|${job.unitId}|${i}`, { path, attach: def.targetAttaches?.[i] ?? [], anim }, u.id),
+      );
     }
   }
 
@@ -13098,8 +13176,9 @@ export class MapViewerScene {
         // window is hidden; every queue is drain-once, so both callers are safe.
         this.drainWorldSpawns(world);
         for (const mine of world.drainDepletedMines()) {
-          this.removeNodeVisual(mine.id, mine.x, mine.y, map.units as unknown as HideableWidget[]);
+          const widget = this.removeNodeVisual(mine.id, mine.x, mine.y, map.units as unknown as HideableWidget[]);
           this.splats?.remove(`m${mine.id}`); // drop the mine's ground texture
+          this.collapseGoldMine(mine, widget);
         }
         // The news the engine announces by itself — a raid, a hero lost, a mine running out
         // (see SimWorld.Alert). Drained before the completion cues so that if a Town Hall

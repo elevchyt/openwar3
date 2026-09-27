@@ -264,6 +264,18 @@ console.log("…and a TIERED one does not fidget between its two forms");
   check("planted, it has the other ONE", ages(true).standVariants.map(name), ["Stand Alternate Upgrade First Second"]);
   check("…and still finds its work pose through the tier tokens",
     name(ages(true).standWork), "stand birth alternate work upgrade first second");
+  // The planted half's OTHER clips carry no tier tokens at all ("ATTACK ALTERNATE", "Morph
+  // Alternate", "Death Alternate") — one set shared by all three trees. A tiered tree must
+  // still take them over the walker's, or a planted Tree of Ages swings its walking Attack.
+  for (const [tier, props] of [["Ages", ["upgrade", "first"]], ["Eternity", ["upgrade", "second"]]]) {
+    const planted = buildAnimSet(seqs, animPropsFor({ animProps: props }, true));
+    const walking = buildAnimSet(seqs, animPropsFor({ animProps: props }, false));
+    check(`planted, a Tree of ${tier} swings "ATTACK ALTERNATE"`, planted.attackVariants.map(name), ["ATTACK ALTERNATE"]);
+    check("…uproots on \"Morph Alternate\"", name(planted.morph), "Morph Alternate");
+    check("…and dies its planted death", name(planted.death), "Death Alternate");
+    check("walking, it swings the plain Attack", walking.attackVariants.map(name), ["Attack"]);
+    check("…and plants on the plain Morph", name(walking.morph), "Morph");
+  }
 }
 
 console.log("a night elf building that is NOT an Ancient has one half and one work pose");

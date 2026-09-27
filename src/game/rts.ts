@@ -1,6 +1,6 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
 import { SimWorld, weaponsFromDef, inventoryCapacity, isOffField, CREEP_CAMP_ACQUIRE_RANGE, BUILD_START_HP_FRAC, ANIM_FOR_DURATION, HERO_FADE_TIME, HERO_DISSIPATE_TIME, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText, type FallenHero, type SimSpellEffect, type StoredUnitState } from "../sim/world";
-import { KNOWN_ABILITIES, NO_AOE_CURSOR, aoeCursorRadius } from "../data/abilities";
+import { KNOWN_ABILITIES, NO_AOE_CURSOR, TREE_UPGRADE_ABILITY, aoeCursorRadius } from "../data/abilities";
 import type { Command } from "./commands";
 import { PATHING_CELL, footprintCells, type PathingGrid } from "../sim/pathing";
 import { flyHeight } from "../sim/missile";
@@ -4643,6 +4643,7 @@ export class RtsController {
       // fog and retires the model silently. The set is per-payload and idempotent — an id
       // the drain never surfaces (a death in fog we never had a record for) just expires.
       if (this.pendingWireDeaths.delete(id)) this.onDeath(id);
+      else if (this.sim.takeMineCollapse(id)) this.onMineCollapse(id);
       else this.onRemove(id);
     }
     // Offer every dead structure to the ghost memory BEFORE the fog rebuilds below, so each
@@ -4809,16 +4810,16 @@ export class RtsController {
       // back to its ATTACK swing (see buildAnimSet's `build`).
       const upJob = u.building && u.building.queue[0]?.kind === "upgrade" ? u.building.queue[0] : null;
       if (upJob) {
-        const b = this.upgradeBirthFor(e, upJob.unitId);
-        if (b.seq >= 0) {
-          setAnimRate(e, 1); // scrubbed by progress, not played at a rate
-          if (e.curSeq !== b.seq) {
-            e.curSeq = b.seq;
+        const pose = this.upgradePose(e, upJob);
+        if (pose) {
+          setAnimRate(e, 1); // scrubbed by progress (or held), not played at a rate
+          if (e.curSeq !== pose.seq) {
+            e.curSeq = pose.seq;
             e.unit.state = WidgetState.WALK; // keep mdx-m3-viewer from auto-standing
-            e.unit.instance.setSequence(b.seq);
+            e.unit.instance.setSequence(pose.seq);
             e.unit.instance.setSequenceLoopMode(SequenceLoopMode.ModelDefined);
           }
-          e.unit.instance.frame = b.start + upgradeProgress(upJob) * (b.end - b.start);
+          e.unit.instance.frame = pose.frame;
           continue; // don't run the normal animation picker while it rises
         }
       }
@@ -4938,7 +4939,11 @@ export class RtsController {
           // stop beating mid-air, which is what reads as "the animation is stuck after an
           // attack". The swing-clip hold was also what a unit that had merely ARRIVED in
           // range showed, before its first blow; that is the ready stance too.
-          const ready = e.anims.standReady >= 0 ? e.anims.standReady : e.anims.stand;
+          // …and a LOADED worker stands ready with the load still in hand, the same carry
+          // rule the swing pool above follows ("Stand Ready Lumber" beside "Attack Lumber").
+          const readyClip =
+            w && w.carryGold > 0 ? e.anims.standReadyGold : w && w.carryLumber > 0 ? e.anims.standReadyLumber : e.anims.standReady;
+          const ready = readyClip >= 0 ? readyClip : e.anims.stand;
           if (u.swingSeq !== e.lastSwingSeq) {
             e.lastSwingSeq = u.swingSeq;
             const pick = vs.length > 1 ? vs[(Math.random() * vs.length) | 0] : (vs[0] ?? e.anims.attack);
@@ -5197,6 +5202,37 @@ export class RtsController {
    *  loads one — a corpse that died on screen adopted its own model and needs none.) */
   corpseBodied(corpseId: number): boolean {
     return this.corpses.some((c) => c.corpseId === corpseId);
+  }
+
+  /**
+   * An Entangled or Haunted Gold Mine taken away by its mine running dry. The sim retires it
+   * like a cancelled building (no corpse, no kill credit — SimWorld.takeMineCollapse), but on
+   * screen it goes down: all three mine models author a Death clip and it is what the real
+   * client plays as the gold runs out (EntangledGoldMine.mdx and HauntedMine.mdx alike, and
+   * GoldMine.mdx under them — mapViewer collapses that one, with the explosion). The body is
+   * adopted as a corpse with no sim corpse behind it, so tickCorpses plays the Death, fogs it
+   * as it fogs any body, and takes it away when the clip ends.
+   */
+  private onMineCollapse(simId: number): void {
+    const e = this.byId.get(simId);
+    if (!e) return;
+    if (e.anims.death < 0) {
+      this.dropEntry(e);
+      return;
+    }
+    this.dropEntry(e);
+    e.unit.instance.show(); // dropEntry hid it — this one goes on screen
+    e.unit.state = WidgetState.WALK; // keep mdx-m3-viewer from overriding the death sequence
+    e.unit.instance.timeScale = 1;
+    e.unit.instance.setSequence(e.anims.death);
+    e.unit.instance.setSequenceLoopMode(SequenceLoopMode.ModelDefined);
+    this.corpses.push({ instance: e.unit.instance, corpseId: -1, anims: e.anims, phaseT: 0, phase: "death" });
+  }
+
+  /** Is this spot in the local player's sight right now? What a renderer effect that is not
+   *  riding a sim event asks before it plays (a gold mine collapsing). */
+  spotSeen(x: number, y: number): boolean {
+    return !this.local.fogBlocksAt({ x, y });
   }
 
   /** The sim removed this unit WITHOUT a death (a cancelled building): drop it
@@ -7738,9 +7774,36 @@ export class RtsController {
       }
       const job = u.building.queue[0];
       if (job?.kind !== "upgrade") continue;
-      const b = this.upgradeBirthFor(e, job.unitId);
-      if (b.seq >= 0) e.unit.instance.frame = b.start + upgradeProgress(job) * (b.end - b.start);
+      const pose = this.upgradePose(e, job);
+      if (pose && e.curSeq === pose.seq) e.unit.instance.frame = pose.frame;
     }
+  }
+
+  /**
+   * What a building's body shows while it upgrades: the target tier's Birth scrubbed to the
+   * timer (upgradeBirthFor), or — for a Tree of Life — its work clip HELD on its first frame.
+   *
+   * TreeofLife.mdx is one file for all three trees and authors no per-tier Birth at all, so
+   * there is nothing of the tree itself to scrub. The upgrade is drawn by the `[Atol]` "tree of
+   * life upgrade ability" instead (Units\NightElfAbilityFunc.txt: TreeofLifeUpgradeTargetArt on
+   * the origin and TreeofLifeUpgradeTargetArtHand in each hand — worn by MapViewerScene's
+   * collectTreeUpgradeFx), and the tree stands still inside that art on frame 0 of
+   * "stand birth alternate work upgrade first second". The model says the two belong together:
+   * that clip spans 9000–12333, exactly the art's own "Birth Upgrade First".
+   *
+   * Keyed on the ABILITY in the type's `abilList`, never on the type id, so a map's own tree
+   * carrying an `Atol` clone upgrades the same way. Null keeps the ordinary picker ("queue is
+   * busy").
+   */
+  private upgradePose(e: Entry, job: RenderBuildJob): { seq: number; frame: number } | null {
+    const b = this.upgradeBirthFor(e, job.unitId);
+    if (b.seq >= 0) return { seq: b.seq, frame: b.start + upgradeProgress(job) * (b.end - b.start) };
+    const work = e.anims.standWork;
+    // The TYPE's list, not the unit's: `Atol` is presentation only, so the sim never seats it.
+    const own = this.registry.get(e.typeId)?.abilities ?? [];
+    if (work < 0 || !own.some((id) => this.abilities.get(id)?.code === TREE_UPGRADE_ABILITY)) return null;
+    const iv = e.unit.instance.model?.sequences?.[work]?.interval;
+    return { seq: work, frame: iv ? iv[0] : 0 };
   }
 
   /** Rally point of the primary selected UNIT-PRODUCING building (for the rally

@@ -4855,6 +4855,15 @@ export class SimWorld {
   }
 
   /** Mines that ran dry since the last drain. */
+  /** A building that went down WITH its gold mine (an Entangled or a Haunted Gold Mine, taken
+   *  away by the mine running dry). Every rule treats it as a cancelled building — no death, no
+   *  corpse, no kill credit — but the renderer does not: the model plays its own Death clip where
+   *  a cancelled one simply goes. Asked once per removal by whoever draws it. */
+  private mineCollapses = new Set<number>();
+  takeMineCollapse(id: number): boolean {
+    return this.mineCollapses.delete(id);
+  }
+
   drainDepletedMines(): SimMine[] {
     if (!this.depleted.length) return this.depleted;
     const out = this.depleted;
@@ -6863,6 +6872,7 @@ export class SimWorld {
         // "Acolytes automatically Unsummon Haunted Gold mines after they are empty"
         // (classic.battle.net/war3/undead/units/acolyte.shtml).
         this.unloadBurrow(u.id);
+        this.mineCollapses.add(u.id); // …though it is SEEN to go (takeMineCollapse)
         this.removeUnit(u.id);
       } else if (mine.gold < dataNum("LowGoldAmount") && !this.minesRunningLow.has(mine.id)) {
         this.minesRunningLow.add(mine.id);

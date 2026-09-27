@@ -320,6 +320,12 @@ export interface AbilityDef {
    *  `[AIfb] Targetattach = weapon` hangs the fire orb on the carrier's weapon hand, and
    *  those models are loops rather than bursts (src/sim/orbs.ts, World.orbAttachments). */
   targetAttach: string[];
+  /** One `Targetattach` spec PER `targetArts` model — `Targetattach` for model 0 and
+   *  `Targetattach<i>` for model i, exactly as a buff row pairs them (see buffFxOf). Only the
+   *  rows whose target art is several models WORN at once need it: `[Atol]`, the Tree of
+   *  Life's upgrade, hangs one model on the tree's origin and one in each hand
+   *  (`Targetattach1 = hand,left`, `Targetattach2 = hand,right`). */
+  targetAttaches?: string[][];
   casterArt: string; // effect attached to the caster (Thunder Clap ring)
   /** `Casterattach` — where `casterArt` rides, in the same token form as `targetAttach`.
    *  Most rows name nothing (a Thunder Clap ring erupts at the caster's feet), so this is
@@ -466,6 +472,12 @@ export function aoeCursorRadius(def: AbilityDef, level: AbilityLevel | undefined
   if (def.target !== "point" || NO_AOE_CURSOR.has(def.code)) return 0;
   return level?.area || 0;
 }
+
+/** `[Atol]` — "tree of life upgrade ability" (Units\NightElfAbilityFunc.txt). It has no button
+ *  and no data worth the name: it exists to say what a Tree of Life WEARS while it grows into
+ *  the next tree — three `Targetart` models, one on the origin and one in each hand. All three
+ *  trees carry it (UnitAbilities.slk). Asked by its code, so a map's clone counts. */
+export const TREE_UPGRADE_ABILITY = "Atol";
 
 /** Ability behaviours we implement, keyed by base `code`. `target` tells the UI/
  *  sim how to aim it; `autocast` marks abilities that can toggle autocasting.
@@ -1229,6 +1241,9 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       targetArts: mdlPathList(f ? str(f, "TargetArt") : ""),
       targetArt: mdlPath(f ? str(f, "TargetArt") : ""),
       targetAttach: (f ? str(f, "Targetattach") : "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
+      targetAttaches: mdlPathList(f ? str(f, "TargetArt") : "").map((_, i) =>
+        (f ? str(f, i === 0 ? "Targetattach" : `Targetattach${i}`) : "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
+      ),
       casterArt: mdlPath(f ? str(f, "Casterart") : ""),
       casterAttach: (f ? str(f, "Casterattach") : "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
       specialArt: mdlPath(f ? str(f, "SpecialArt") : ""),
