@@ -20,8 +20,11 @@ console.
 Nothing in the install says how the game's auto camera chooses, so every rule and number in
 [`src/game/autoCamera.ts`](../src/game/autoCamera.ts) is ours, and says so:
 
-- **Heroes and armies are the focus.** A hero counts `HERO_WEIGHT` (6) soldiers; workers,
-  buildings and creeps count for nothing until something happens to them.
+- **Heroes and armies are the focus, heroes first.** A hero counts `HERO_WEIGHT` (15) soldiers —
+  it was 6, and an army of seven standing in its base outranked a hero creeping on his own; the
+  developer asked for heroes to be followed rather than units. The same weight pulls an army's
+  framing onto the hero marching with it. Workers, buildings and creeps count for nothing until
+  something happens to them.
 - **Fights first.** A unit in a fight counts `FIGHT_WEIGHT` (3) times as much, and a spot where two
   or more PLAYERS are fighting `CLASH_BONUS` (1.5) times more again. "In a fight" is `inCombat`
   (it crosses the wire) OR having lost hit points in the last `HURT_MEMORY` (3) seconds —
@@ -32,7 +35,19 @@ Nothing in the install says how the game's auto camera chooses, so every rule an
   and a new spot must score `SWITCH_MARGIN` (1.35×) the one it is watching. Between pans it
   FOLLOWS the action it is on (a slow ease, `FOLLOW_TAU`), which is the same point of interest
   and not a new pan.
-- **Smooth.** A pan is a smoothstep ease over `PAN_MIN`..`PAN_MAX` (0.9–2.4 s) by distance.
+- **Brisk, and a CUT when far.** A pan is a smoothstep ease over `PAN_MIN`..`PAN_MAX`
+  (0.45–1.1 s at `PAN_SPEED` 4500/s) by distance — halved from the first cut (0.9–2.4 s), which
+  was too floaty — and following eases at `FOLLOW_TAU` 0.6 s. A target further than
+  `SNAP_DISTANCE` (3000, the developer's figure) is cut to outright: gliding across the whole map
+  shows nothing but empty ground.
+- **A melee opening is a TOUR of the bases.** At 0:00 nothing weighs anything — workers and
+  buildings count for nothing — so the camera stayed wherever it started and then fixed on the
+  first base to train a hero, never showing the other player's build order. For the first
+  `OPENING_TIME` (150) seconds of match time on a MELEE map (`meleeOpening`, set by
+  `beginMatch`) it cuts between each player's base every `OPENING_DWELL` (9) seconds, starting
+  with the one nearest the camera. A base is the centre of that player's buildings and workers,
+  found once — a hall, its mine and five workers frames the whole economy. Only a fight between two
+  PLAYERS (a clash) ends the tour early; a hero creeping does not. A custom map has no tour.
 - **The observer's hand wins.** Any other move of the camera (keys, edge, minimap, a hero key)
   is noticed by the focus not being where the auto camera left it; it stands aside
   `MANUAL_GRACE` (6) seconds, then looks round afresh. `confirm` is called after the map clamp,
@@ -46,8 +61,9 @@ neighbourhood tried as a centre, its weighted centroid returned. It looks round 
 
 ## Testing
 
-- `tools/auto-camera-test.cjs` (in `pnpm sim:test`) pins: heroes over a quiet base, a smooth
-  pan with an eased start, the hold between pans (a bigger fight elsewhere waits for it; a
+- `tools/auto-camera-test.cjs` (in `pnpm sim:test`) pins: heroes over a quiet base, a brisk
+  pan with an eased start, the cut past `SNAP_DISTANCE`, a lone hero over an idle army, the
+  opening tour (both bases turn about, a clash ends it, none on a custom map), the hold between pans (a bigger fight elsewhere waits for it; a
   flip-flopping pair of fights is not ping-ponged), following a marching army, standing aside for
   the observer's hand, and a hurt worker counting as a fight.
 - Live: `?dev&map=EchoIsles&observe` seats every playable slot as a computer (at `&ai=`, Normal

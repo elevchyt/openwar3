@@ -9,7 +9,7 @@ const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const AC = require(join(REPO, ".sim-build", "src", "game", "autoCamera.js"));
-const { AutoCamera, MIN_HOLD, MANUAL_GRACE, PAN_MAX } = AC;
+const { AutoCamera, MIN_HOLD, MANUAL_GRACE, PAN_MAX, SNAP_DISTANCE, OPENING_TIME, OPENING_DWELL } = AC;
 
 let failures = 0;
 const check = (label, cond, detail = "") => {
@@ -24,11 +24,11 @@ const unit = (x, y, over = {}) => ({
 const DT = 1 / 60;
 
 /** Drive the camera like the renderer does: write what it asks for, confirm, repeat. */
-function drive(cam, focus, units, seconds, each = () => {}) {
+function drive(cam, focus, units, seconds, each = () => {}, clock = null) {
   const trace = [];
   for (let t = 0; t < seconds; t += DT) {
     each(t, focus);
-    const want = cam.update(DT, focus, units);
+    const want = cam.update(DT, focus, units, clock ? (clock.t += DT) : undefined);
     if (want) { focus.x = want.x; focus.y = want.y; }
     cam.confirm(focus);
     trace.push({ t, x: focus.x, y: focus.y });
@@ -51,19 +51,46 @@ console.log("\nit goes to the HEROES and ARMIES, and does nothing while off");
   check("on, it goes to the hero and his army, not the base", Math.hypot(focus.x - 5017, focus.y - 5012) < 60, `(${focus.x.toFixed(0)}, ${focus.y.toFixed(0)})`);
 }
 
-console.log("\nthe pan is SMOOTH");
+console.log("\na near pan is SMOOTH and BRISK; a far one is a CUT");
 {
   const cam = new AutoCamera();
   cam.setEnabled(true);
   const focus = { x: 0, y: 0 };
-  const units = [unit(6000, 0, { isHero: true })];
+  const units = [unit(2500, 0, { isHero: true })];
   const trace = [{ t: -DT, x: 0, y: 0 }, ...drive(cam, focus, units, PAN_MAX + 1)];
   let maxStep = 0, first = trace.findIndex((p) => p.x > 1);
   for (let i = 1; i < trace.length; i++) maxStep = Math.max(maxStep, trace[i].x - trace[i - 1].x);
   const start = trace[first].x - trace[first - 1].x;
-  check("no frame jumps more than a small share of the way (no cut)", maxStep < 6000 * 0.03, `largest step ${maxStep.toFixed(0)}`);
+  const arrived = trace.find((p) => Math.abs(p.x - 2500) < 1);
+  check("no frame jumps more than a small share of the way (no cut)", maxStep < 2500 * 0.07, `largest step ${maxStep.toFixed(0)}`);
   check("it eases OUT of the old spot (the first step is small)", start < maxStep * 0.2, `first ${start.toFixed(1)}, largest ${maxStep.toFixed(0)}`);
-  check("and arrives", Math.abs(focus.x - 6000) < 1, `x ${focus.x.toFixed(0)}`);
+  check("and arrives within about a second", arrived && arrived.t < 1.2, `at ${arrived?.t.toFixed(2)} s`);
+}
+{
+  const cam = new AutoCamera();
+  cam.setEnabled(true);
+  const focus = { x: 0, y: 0 };
+  const units = [unit(SNAP_DISTANCE + 2000, 0, { isHero: true })];
+  const trace = drive(cam, focus, units, 1);
+  check(`past ${SNAP_DISTANCE} it cuts straight there`, Math.abs(trace[0].x - (SNAP_DISTANCE + 2000)) < 1, `first frame x ${trace[0].x.toFixed(0)}`);
+}
+
+console.log("\nit follows HEROES before armies");
+{
+  const cam = new AutoCamera();
+  cam.setEnabled(true);
+  const focus = { x: 0, y: 0 };
+  const army = [];
+  for (let i = 0; i < 9; i++) army.push(unit(-2000 + i * 30, 0)); // nine soldiers at home
+  const hero = unit(2000, 0, { isHero: true }); // a hero on his own
+  drive(cam, focus, [...army, hero], 3);
+  check("a hero on his own outranks an army standing about", Math.abs(focus.x - 2000) < 60, `x ${focus.x.toFixed(0)}`);
+  const march = [unit(0, 0, { isHero: true }), unit(300, 0), unit(300, 40), unit(300, -40), unit(340, 0)];
+  const f2 = { x: 0, y: 0 };
+  const c2 = new AutoCamera();
+  c2.setEnabled(true);
+  drive(c2, f2, march, 3);
+  check("an army's framing leans on the hero with it", f2.x < 150, `x ${f2.x.toFixed(0)} (hero 0, soldiers 300)`);
 }
 
 console.log("\nit does NOT pan often: a hold after every pan, however the action moves");
@@ -141,6 +168,52 @@ console.log("\nwhat counts as a fight: being HURT, not only swinging");
   const before = focus.x;
   drive(cam, focus, units, MIN_HOLD + 3, (t) => { if (t > 0.5) for (const p of raided) p.hp -= 5 * DT; });
   check("workers losing hit points outrank soldiers standing about", before > 0 && focus.x < -2000, `before ${before.toFixed(0)}, now ${focus.x.toFixed(0)}`);
+}
+
+console.log("\na MELEE opening is a tour of every base");
+{
+  const cam = new AutoCamera();
+  cam.setEnabled(true);
+  cam.meleeOpening = true;
+  const focus = { x: -4000, y: 0 };
+  const base = (x, owner) => [unit(x, 0, { owner, building: {} }), ...[0, 1, 2, 3, 4].map((i) => unit(x + 200, i * 40, { owner, isPeon: true }))];
+  const units = [...base(-4000, 0), ...base(4000, 1)];
+  const clock = { t: 0 };
+  let visits = [];
+  drive(cam, focus, units, 40, (t, f) => {
+    const side = f.x < 0 ? "A" : "B";
+    if (visits[visits.length - 1] !== side) visits.push(side);
+  }, clock);
+  // A hero out of base A partway through does not end the tour.
+  check("it shows BOTH bases, turn about", visits.length >= 4 && visits.join("").startsWith("ABAB"), visits.join(""));
+  units.push(unit(-3800, 300, { owner: 0, isHero: true }));
+  const seen = new Set();
+  drive(cam, focus, units, 3 * OPENING_DWELL, (t, f) => seen.add(f.x < 0 ? "A" : "B"), clock);
+  check("a hero in one base does not fix the camera on it", seen.has("A") && seen.has("B"));
+  // After the opening, the ordinary rules: the hero.
+  clock.t = OPENING_TIME;
+  drive(cam, focus, units, 3, () => {}, clock);
+  check("after the opening it goes to the hero", Math.hypot(focus.x + 3800, focus.y - 300) < 80, `(${focus.x.toFixed(0)}, ${focus.y.toFixed(0)})`);
+}
+{
+  // A clash between players cuts the tour short.
+  const cam = new AutoCamera();
+  cam.setEnabled(true);
+  cam.meleeOpening = true;
+  const focus = { x: -4000, y: 0 };
+  const units = [unit(-4000, 0, { owner: 0, building: {} }), unit(4000, 0, { owner: 1, building: {} }),
+    unit(0, 3000, { owner: 0, isHero: true, inCombat: true }), unit(40, 3000, { owner: 1, isHero: true, inCombat: true })];
+  drive(cam, focus, units, 2, () => {}, { t: 30 });
+  check("a fight between players outranks the tour", Math.hypot(focus.x - 20, focus.y - 3000) < 80, `(${focus.x.toFixed(0)}, ${focus.y.toFixed(0)})`);
+}
+{
+  // Not melee: no tour.
+  const cam = new AutoCamera();
+  cam.setEnabled(true);
+  const focus = { x: -4000, y: 0 };
+  const units = [unit(-4000, 0, { owner: 0, building: {} }), unit(4000, 0, { owner: 1, building: {} })];
+  drive(cam, focus, units, 30, () => {}, { t: 0 });
+  check("a custom map has no tour", focus.x === -4000);
 }
 
 console.log(failures ? `\nauto camera: ${failures} FAILED` : "\nauto camera: all checks passed");

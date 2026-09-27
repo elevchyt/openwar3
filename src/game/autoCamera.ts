@@ -6,8 +6,10 @@
  * key "Auto Camera". What it DOES is written down nowhere in the install, so the rules below
  * are OURS — the developer's brief in the issue, turned into numbers that say so:
  *
- *  • HEROES AND ARMIES are what it watches. A hero is worth `HERO_WEIGHT` soldiers; a worker,
- *    a building and a creep are worth nothing until something happens to them.
+ *  • HEROES AND ARMIES are what it watches, heroes FIRST. A hero is worth `HERO_WEIGHT`
+ *    soldiers — enough that a hero out creeping outranks an army standing at home, and that an
+ *    army's framing leans on the hero marching with it; a worker, a building and a creep are
+ *    worth nothing until something happens to them.
  *  • A FIGHT is worth more than a march (`FIGHT_WEIGHT`), and a fight between two PLAYERS more
  *    than a fight with creeps (`CLASH_BONUS`). "In a fight" is a unit swinging (`inCombat`, which
  *    crosses the wire) OR one that has lost hit points in the last `HURT_MEMORY` seconds —
@@ -17,8 +19,13 @@
  *    up, and a new spot must beat the one it is on by `SWITCH_MARGIN`. Between pans it may
  *    FOLLOW the action it is watching — a fight drifting across the screen, an army marching —
  *    with a slow ease (`FOLLOW_TAU`); that is the same point of interest, not a new pan.
- *  • A pan is SMOOTH — an ease-in-out over a time that grows with the distance
- *    (`PAN_MIN`..`PAN_MAX`) — never a cut.
+ *  • A pan is BRISK — an ease-in-out over a time that grows with the distance
+ *    (`PAN_MIN`..`PAN_MAX`) — and a target further than `SNAP_DISTANCE` is CUT to rather than
+ *    panned to: gliding across the whole map shows the observer nothing but empty ground.
+ *  • The OPENING of a melee game is a TOUR of the bases (`OPENING_TIME`, `OPENING_DWELL`):
+ *    nothing at 0:00 weighs anything (workers and buildings count for nothing), so left alone
+ *    the camera fixed on whichever base trained the first hero and never showed the other
+ *    player's build. Only a fight between two PLAYERS cuts the tour short.
  *  • The observer's own hand wins: the moment the camera is moved by anything else (the arrow
  *    keys, the screen edge, the minimap, a hero key) it stands aside for `MANUAL_GRACE` seconds.
  *
@@ -48,8 +55,10 @@ export interface AutoCamUnit {
 /** The radius one camera view is judged over — about half the ground a default-zoom WC3 view
  *  shows across. Units within it of a spot are "on screen" there. OURS. */
 export const VIEW_RADIUS = 800;
-/** How much a hero counts against one soldier. OURS: the issue says heroes first. */
-export const HERO_WEIGHT = 6;
+/** How much a hero counts against one soldier. OURS: the issue says heroes first, and the
+ *  developer asked for the camera to follow HEROES rather than units — at 6 an army of seven
+ *  standing in its base outranked a hero creeping on his own. */
+export const HERO_WEIGHT = 15;
 /** How much a unit in a fight counts against one that is only standing there. OURS. */
 export const FIGHT_WEIGHT = 3;
 /** The whole spot is worth this much more when two or more PLAYERS are in the fight there — a
@@ -66,12 +75,21 @@ export const SWITCH_MARGIN = 1.35;
  *  rarely enough that the scan is free. */
 export const SCAN_PERIOD = 0.5;
 /** Time constant of the ease that FOLLOWS the watched action between pans, in seconds. OURS. */
-export const FOLLOW_TAU = 1.4;
+export const FOLLOW_TAU = 0.6;
 /** Shortest and longest pan, seconds; in between the time grows with the distance at
- *  `PAN_SPEED` world units a second. OURS. */
-export const PAN_MIN = 0.9;
-export const PAN_MAX = 2.4;
-export const PAN_SPEED = 3000;
+ *  `PAN_SPEED` world units a second. OURS — halved from the first cut (0.9–2.4 s at 3000/s),
+ *  which the developer found too floaty. */
+export const PAN_MIN = 0.45;
+export const PAN_MAX = 1.1;
+export const PAN_SPEED = 4500;
+/** A target further than this (world units) is CUT to, not panned to. OURS (the developer's
+ *  figure). */
+export const SNAP_DISTANCE = 3000;
+/** Seconds of match time a MELEE game's opening tour of the bases lasts. OURS: long enough to
+ *  see each build order through its first hero, barracks and tier-up start. */
+export const OPENING_TIME = 150;
+/** Seconds the tour stays on each base before cutting to the next. OURS. */
+export const OPENING_DWELL = 9;
 /** Seconds the auto camera stands aside after the observer moves the camera by hand. OURS. */
 export const MANUAL_GRACE = 6;
 
@@ -79,11 +97,16 @@ interface Spot {
   x: number;
   y: number;
   score: number;
+  /** Two or more PLAYERS are fighting here (what `CLASH_BONUS` rewards). */
+  clash?: boolean;
 }
 
 export class AutoCamera {
   /** The checkbox. Off by default, as the game's own box is. */
   enabled = false;
+  /** This match is MELEE, so its opening is a tour of the bases (see the header). Set by the
+   *  renderer when the match begins; a custom map sets up its own game and has no "bases". */
+  meleeOpening = false;
 
   private pan: { fx: number; fy: number; tx: number; ty: number; t: number; dur: number } | null = null;
   /** Where the camera is WATCHING — the centre of the action it last chose, re-found each scan. */
@@ -97,6 +120,10 @@ export class AutoCamera {
   private clock = 0;
   private lastHp = new Map<number, number>();
   private hurtAt = new Map<number, number>();
+  /** The opening tour: each player's base, found once (their hall and workers), and the one
+   *  being shown. Null outside the tour. */
+  private bases: Spot[] | null = null;
+  private baseAt = -1;
 
   /** Turn it on or off. Turning it on looks round at once — a checkbox that does nothing for
    *  seven seconds reads as broken. */
@@ -109,13 +136,15 @@ export class AutoCamera {
     this.scanLeft = 0;
     this.graceLeft = 0;
     this.wrote = null;
+    this.baseAt = -1;
   }
 
   /**
    * One frame. `focus` is the camera's ground focus as it stands NOW (after the observer's own
    * input this frame); the answer is the focus the auto camera wants, or null to leave it be.
+   * `matchTime` is the match clock in seconds — what decides whether the opening tour is on.
    */
-  update(dt: number, focus: { x: number; y: number }, units: Iterable<AutoCamUnit>): { x: number; y: number } | null {
+  update(dt: number, focus: { x: number; y: number }, units: Iterable<AutoCamUnit>, matchTime = Infinity): { x: number; y: number } | null {
     this.clock += dt;
     if (!this.enabled) return null;
     // Moved by another hand since we last wrote: stand aside, and forget what we were doing —
@@ -143,13 +172,13 @@ export class AutoCamera {
     }
     if (this.scanLeft <= 0) {
       this.scanLeft = SCAN_PERIOD;
-      this.scan(focus, units);
+      this.scan(focus, units, matchTime);
     }
     let out: { x: number; y: number } | null = null;
     if (this.pan) {
       const p = this.pan;
       p.t = Math.min(p.dur, p.t + dt);
-      const k = p.t / p.dur;
+      const k = p.dur > 0 ? p.t / p.dur : 1; // a zero-length pan is a CUT (SNAP_DISTANCE)
       const e = k * k * (3 - 2 * k); // smoothstep: eases out of the old spot and into the new one
       out = { x: p.fx + (p.tx - p.fx) * e, y: p.fy + (p.ty - p.fy) * e };
       if (p.t >= p.dur) this.pan = null;
@@ -172,11 +201,18 @@ export class AutoCamera {
   }
 
   /** Look round: re-find what we are watching, and pan to something better if it is time. */
-  private scan(focus: { x: number; y: number }, units: Iterable<AutoCamUnit>): void {
-    const scored = this.weigh(units);
-    if (!scored.length) return;
-    const best = bestSpot(scored);
+  private scan(focus: { x: number; y: number }, units: Iterable<AutoCamUnit>, matchTime: number): void {
+    const list = [...units];
+    const scored = this.weigh(list);
+    const best = scored.length ? bestSpot(scored) : null;
+    if (this.meleeOpening && matchTime < OPENING_TIME && !best?.clash && this.tour(focus, list)) return;
+    this.bases = null;
     if (!best) return;
+    if (this.baseAt >= 0) {
+      // The tour is over (or a clash cut it short): whatever is going on now, go to it.
+      this.baseAt = -1;
+      this.watch = null;
+    }
     // What we are watching NOW: the action around the spot we chose (it moves as the fight
     // does), or, with nothing chosen yet, around wherever the camera happens to be.
     const here = this.watch ?? { x: focus.x, y: focus.y, score: 0 };
@@ -184,15 +220,45 @@ export class AutoCamera {
     const far = Math.hypot(best.x - (current?.x ?? here.x), best.y - (current?.y ?? here.y)) > VIEW_RADIUS;
     const better = best.score > (current?.score ?? 0) * SWITCH_MARGIN;
     if (!this.watch || (this.holdLeft <= 0 && far && better)) {
-      const from = this.pan ? { x: focus.x, y: focus.y } : focus;
-      const dist = Math.hypot(best.x - from.x, best.y - from.y);
-      this.pan = { fx: from.x, fy: from.y, tx: best.x, ty: best.y, t: 0, dur: Math.min(PAN_MAX, Math.max(PAN_MIN, dist / PAN_SPEED)) };
+      this.goTo(focus, best);
       this.watch = best;
       this.holdLeft = MIN_HOLD;
       return;
     }
     // Same action, followed where it has gone (or the camera stays put if it has ended).
     if (current) this.watch = current;
+  }
+
+  /** Start a pan from the focus to `to` — or a cut, past SNAP_DISTANCE. */
+  private goTo(focus: { x: number; y: number }, to: { x: number; y: number }): void {
+    const dist = Math.hypot(to.x - focus.x, to.y - focus.y);
+    const dur = dist > SNAP_DISTANCE ? 0 : Math.min(PAN_MAX, Math.max(PAN_MIN, dist / PAN_SPEED));
+    this.pan = { fx: focus.x, fy: focus.y, tx: to.x, ty: to.y, t: 0, dur };
+  }
+
+  /** The opening tour: stay on one player's base for OPENING_DWELL, then cut to the next.
+   *  Answers false when there is nothing to tour (fewer than two bases). */
+  private tour(focus: { x: number; y: number }, units: ReadonlyArray<AutoCamUnit>): boolean {
+    this.bases ??= findBases(units);
+    if (this.bases.length < 2) {
+      this.bases = null;
+      return false;
+    }
+    if (this.baseAt >= 0 && this.holdLeft > 0) return true;
+    // First stop: the base nearest the camera (the observer is usually looking at one already).
+    if (this.baseAt < 0) {
+      let near = 0;
+      this.bases.forEach((b, i) => {
+        const n = this.bases![near];
+        if (Math.hypot(b.x - focus.x, b.y - focus.y) < Math.hypot(n.x - focus.x, n.y - focus.y)) near = i;
+      });
+      this.baseAt = near;
+    } else this.baseAt = (this.baseAt + 1) % this.bases.length;
+    const base = this.bases[this.baseAt];
+    this.goTo(focus, base);
+    this.watch = base; // a fixed spot: the follow holds it rather than drifting after a worker
+    this.holdLeft = OPENING_DWELL;
+    return true;
   }
 
   /** Remember who has lost hit points, and when. */
@@ -208,8 +274,7 @@ export class AutoCamera {
   }
 
   /** Every unit worth watching, with what it is worth (see the header). */
-  private weigh(units: Iterable<AutoCamUnit>): Weighed[] {
-    const list = [...units];
+  private weigh(list: ReadonlyArray<AutoCamUnit>): Weighed[] {
     this.noteHurt(list);
     const out: Weighed[] = [];
     for (const u of list) {
@@ -249,7 +314,24 @@ export function spotAround(units: ReadonlyArray<Weighed>, x: number, y: number):
     if (u.owner >= 0) fighters.add(u.owner);
   }
   if (sw <= 0) return null;
-  return { x: sx / sw, y: sy / sw, score: sw * (fighters.size >= 2 ? CLASH_BONUS : 1) };
+  const clash = fighters.size >= 2;
+  return { x: sx / sw, y: sy / sw, score: sw * (clash ? CLASH_BONUS : 1), clash };
+}
+
+/** Each player's base, for the opening tour: the centre of their buildings and workers (at the
+ *  start of a melee game, a hall, its mine and five workers — which frames the whole economy),
+ *  in player order. */
+export function findBases(units: ReadonlyArray<AutoCamUnit>): Spot[] {
+  const sums = new Map<number, { x: number; y: number; n: number }>();
+  for (const u of units) {
+    if (u.owner < 0 || u.hp <= 0 || !(u.building || u.isPeon)) continue;
+    const s = sums.get(u.owner) ?? { x: 0, y: 0, n: 0 };
+    s.x += u.x;
+    s.y += u.y;
+    s.n++;
+    sums.set(u.owner, s);
+  }
+  return [...sums.entries()].sort((a, b) => a[0] - b[0]).map(([, s]) => ({ x: s.x / s.n, y: s.y / s.n, score: 0 }));
 }
 
 /** The best spot on the map: each unit's neighbourhood tried as a centre, the winner's

@@ -2426,6 +2426,8 @@ export class MapViewerScene {
    *
    *  `melee` says which of the two this is — the one thing `slotLabel` turns on. */
   private beginMatch(config: MeleeConfig, startGold: number, startLumber: number, melee = false): Map<number, PlayableRace> {
+    // A melee opening is a tour of the bases for the observer's Auto Camera (game/autoCamera.ts).
+    this.autoCam.meleeOpening = melee;
     // Seed the match's RNG before anything can roll. The world is built at map load, when
     // the lobby's choices aren't known yet, so the seed arrives here — still ahead of unit
     // seeding, the map script and the first tick, which is the last moment it is safe.
@@ -14598,7 +14600,7 @@ export class MapViewerScene {
   private updateAutoCamera(dt: number): boolean {
     if (!this.observer || !this.autoCam.enabled || !this.rts) return false;
     if (!this.userControl || this.scriptCam.active) return false;
-    const want = this.autoCam.update(dt, { x: this.target[0], y: this.target[1] }, this.rts.simView.units.values());
+    const want = this.autoCam.update(dt, { x: this.target[0], y: this.target[1] }, this.rts.simView.units.values(), this.simTick * SIM_DT);
     if (want) {
       this.target[0] = want.x;
       this.target[1] = want.y;
