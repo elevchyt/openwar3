@@ -1151,6 +1151,24 @@ is what keeps it cheap, since contact is asked of every unit in the world on eve
 almost everything fails it in O(1). `inContact` is pure and exported, and pinned by
 [`tools/ai-plus-army-test.cjs`](../tools/ai-plus-army-test.cjs) for the same reason `marching` is.
 
+### A base under attack with the army far away: the hero READS the scroll home
+
+`recallPass`, inside `defendPass`. When something is in one of our towns and the captain is more
+than `RECALL_FAR` (**2200**, the developer's number) from it, holding a Town Portal it can press,
+the army is not walked home — it is CARRIED. The rule that makes it worth the scroll is the
+gather: the scroll takes "the surviving units" inside its `Area1` (1100) at the END of its
+`Cast1` (5 s) wait, so every soldier not already defending is walked AT the hero (a MOVE, so it
+does not stop to trade blows on the way), the hero is stopped if it was walking, and the scroll is
+read as soon as every soldier is PREDICTED to be inside `RECALL_INNER` of the circle when the
+channel ends (`speed × wait × RECALL_PACE` of walking still to come) — at once, for a party that
+was marching together. Past `RECALL_PATIENCE` (4 s) `RECALL_QUORUM` (80 %) will do, and at
+`RECALL_DEADLINE` (9 s) it is read with whoever made it: the base is burning while it waits. The
+stragglers keep walking in through the channel. A soldier nearer the invader than the hero is
+sent at the invader instead — the scroll could only carry it AWAY from the fight. It is aimed AT
+the invader, so `nearestHall` lands the army at the besieged town, expansion or main. Every
+number but the 2200 is ours. Verified live on Echo Isles: a Paladin 5,300 units out gathered a
+scattered squad, read the scroll 2.6 s later and landed with it beside the raided Town Hall.
+
 ### A won fight is the start of a PUSH, not the end of a wave
 
 Reported: *"when the enemy heroes are dead, the Computer+ AI that won the fight must attack their
@@ -1333,6 +1351,14 @@ The halt is bounded in both directions besides: it is **one** purchase (nothing 
 hero is queued — `ai.count` counts a job in a queue), and `releaseStall` lets the ladder past a row
 that has stopped getting nearer its price. Only the second hero moves; the third is a luxury at any
 tier and stays where it was.
+
+### …and the undead's second hero is ALWAYS the Death Knight
+
+`PlusRaceTable.secondHero`, stated by one race: whatever an undead build opens with, the Death
+Knight is `heroId2` (`pickHeroes` moves him to the front of the rest AFTER the second/third coin
+flip, so the roll still picks the third). The developer's rule: Death Coil is the undead army's
+only field heal besides the statues and Unholy Aura is the speed it is played at, so a Crypt Lord
+or Dread Lord opening that flipped the Lich into second fielded a tier-2 army with no sustain.
 
 ### The army ceiling is enforced at PRODUCTION
 

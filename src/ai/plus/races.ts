@@ -317,6 +317,18 @@ export interface PlusRaceTable {
   readonly strategies: readonly PlusStrategy[];
   readonly heroes: readonly string[];
   /**
+   * The hero this race ALWAYS trains second when it did not open with him — `pickHeroes` pins
+   * him into `heroId2` after the strategy's order and the second/third coin flip have had their
+   * say, so no roll can push him to third (or, with a two-hero cap, out of the match).
+   *
+   * One race states one: the undead's **Death Knight**, the developer's own rule. He is the
+   * race's HEAL (Death Coil is the undead army's only way to mend in the field besides the
+   * statues) and Unholy Aura is the speed every undead army is played at, so a Crypt Lord or
+   * Dread Lord opening that coin-flipped the Lich into second was fielding a tier-2 army with no
+   * sustain at all.
+   */
+  readonly secondHero?: string;
+  /**
    * Each hero's SKILL BUILDS — a list of them, one rolled per match (`pickHeroes`).
    *
    * A build is the ten levels in the shape `AiPlayer.setSkillArray` reads: index 0 is hero
@@ -749,6 +761,8 @@ const UNDEAD: PlusRaceTable = {
       mix: { [GARGOYLE]: 2.5, [FROST_WYRM]: 1, [CRYPT_FIEND]: 1.5, [NECRO]: 0.8 } },
   ],
   heroes: [DEATH_KNIGHT, LICH, DREAD_LORD, CRYPT_LORD],
+  // …and whatever the build opened with, the Death Knight comes SECOND — see `secondHero`.
+  secondHero: DEATH_KNIGHT,
   skills: {
     [DEATH_KNIGHT]: [[DEATH_COIL, UNHOLY_AURA, DEATH_COIL, UNHOLY_AURA, DEATH_COIL, ANIM_DEAD,
       UNHOLY_AURA, DEATH_PACT, DEATH_PACT, DEATH_PACT]],

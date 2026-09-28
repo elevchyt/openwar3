@@ -2138,6 +2138,30 @@ export class PlusItems {
     return false;
   }
 
+  /**
+   * The READY scroll's own numbers — the circle of troops it takes along (`Area1`, 1100 on the
+   * stock `AItp`) and the wait before it does (`Cast1`, 5 s) — or null when this hero holds no
+   * Town Portal it could press now. Read off the ability row rather than restated, so a map
+   * that widened its scroll or shortened the channel is gathered for correctly
+   * (src/ai/plus/index.ts `recallPass`, the army's half of a scroll spent to defend the base).
+   */
+  portalReach(u: SimUnit): { area: number; wait: number } | null {
+    for (let slot = 0; slot < u.inventory.length; slot++) {
+      const held = u.inventory[slot];
+      if (!held) continue;
+      const def = this.view.item(held.itemId);
+      if (!def?.usable) continue;
+      for (const aid of def.abilities) {
+        const ad = this.view.def(aid);
+        if (ad?.code !== PORTAL_ABILITY) continue;
+        if (this.view.world.itemReadyError(u.id, slot) !== null) continue;
+        const lvl = ad.levelData[0];
+        return { area: lvl?.area ?? 0, wait: lvl?.castTime ?? 0 };
+      }
+    }
+    return null;
+  }
+
   /** The unit on a shopping errand, or 0 — see `onErrand`. */
   get errand(): number {
     return this.onErrand;

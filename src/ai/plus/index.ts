@@ -1856,6 +1856,37 @@ const REPLENISH_CODE = "Ambt";
 const STATUE_LIFE = "Arpl";
 const STATUE_MANA = "Arpm";
 
+/**
+ * THE RECALL — a Scroll of Town Portal spent to DEFEND the base (`recallPass`).
+ *
+ * The developer's own rule and the developer's own number: when one of our towns is under
+ * attack and the army's hero is "very far away (more than 2200 units away)", the hero reads the
+ * scroll home instead of walking, and the army is kept CLOSE to it first, so that every unit —
+ * or as many as can be got there — is standing in the circle when the channel ends. The scroll
+ * takes "the surviving units" at the END of its wait (SimWorld `resolveTeleport`), inside its
+ * own `Area1` (1100) of the hero, so the gather is a question about where each soldier WILL be
+ * in `Cast1` (5 s) of walking at the hero, not where it is now.
+ *
+ * Everything below `RECALL_FAR` is OURS and says so:
+ *  · `RECALL_FAR` — the developer's 2200, measured from the hero to the invader.
+ *  · `RECALL_INNER` — how deep inside the scroll's circle a unit must be predicted to finish, so
+ *    a soldier that arrives on the rim a frame late is not the one left behind.
+ *  · `RECALL_PACE` — the share of its speed a unit is credited with while it walks in: a column
+ *    closing on one point jams, and a path round a tree is longer than the straight line.
+ *  · `RECALL_PATIENCE` — after this long gathering, the scroll is read once `RECALL_QUORUM` of
+ *    the soldiers will make it; `RECALL_DEADLINE` reads it regardless. The base is burning while
+ *    the army gathers, and the channel is itself five more seconds of gathering.
+ *  · `RECALL_RETRY` — how long after a recall (read, refused, or abandoned) before another is
+ *    considered, so a refused press is not re-tried every army pass.
+ */
+const RECALL_FAR = 2200;
+const RECALL_INNER = 0.8;
+const RECALL_PACE = 0.75;
+const RECALL_PATIENCE = 4;
+const RECALL_QUORUM = 0.8;
+const RECALL_DEADLINE = 9;
+const RECALL_RETRY = 20;
+
 export type Mode = "massing" | "attacking" | "retreating" | "defending";
 
 interface Brain {
@@ -1979,6 +2010,12 @@ interface Brain {
    *  difficulty's `defendDelay` is measured off this: an easy computer lets you kill four
    *  workers before it looks up. */
   threatSince: number;
+  /** A Scroll of Town Portal being spent to come home and DEFEND (`recallPass`): the hero that
+   *  reads it, when the gather began, and when it was read (-1 = still gathering). Null while
+   *  no recall is under way. */
+  recall: { heroId: number; since: number; readAt: number } | null;
+  /** No new recall is considered before this `b.clock` — see `RECALL_RETRY`. */
+  recallNext: number;
   /** When an enemy PLAYER's army first came into contact with the wave in the FIELD (-1 = it
    *  hasn't). The same `defendDelay` is measured off it, so a difficulty is as slow to notice an
    *  army in front of it as it is to notice one in its base — see `contactPass`. */
@@ -2304,6 +2341,8 @@ export class ComputerPlusAi {
       reissueIn: 0,
       lastWaveEnd: 0,
       threatSince: -1,
+      recall: null,
+      recallNext: 0,
       contactSince: -1,
       battle: null,
       wonAt: -1,
@@ -2442,6 +2481,15 @@ export class ComputerPlusAi {
   private pickHeroes(ai: AiPlayer, table: PlusRaceTable, strategy: PlusStrategy): void {
     const [first, ...rest] = strategy.heroes ?? table.heroes;
     if (ai.randomInt(0, 1) === 1 && rest.length >= 2) [rest[0], rest[1]] = [rest[1], rest[0]];
+    // …EXCEPT the race's pinned second hero (`PlusRaceTable.secondHero` — the undead's Death
+    // Knight), who is moved to the front of the rest whenever he did not open. After the coin
+    // flip rather than instead of it, so the roll still decides the THIRD hero. Only if he is in
+    // the list at all: `tableForEdition` drops the heroes a data set lacks.
+    const pinned = table.secondHero;
+    if (pinned && first !== pinned) {
+      const at = rest.indexOf(pinned);
+      if (at > 0) rest.unshift(...rest.splice(at, 1));
+    }
     ai.heroId = first ?? "";
     ai.heroId2 = rest[0] ?? "";
     ai.heroId3 = rest[1] ?? "";
@@ -3598,6 +3646,9 @@ export class ComputerPlusAi {
     const threat = this.nearestThreat(b);
     if (!threat) {
       b.threatSince = -1;
+      // A scroll already being read cannot be taken back ("under no circumstances can the town
+      // portal be aborted once started"), so only a GATHER is called off with the threat.
+      if (b.recall) this.endRecall(b);
       return false;
     }
     if (b.threatSince < 0) b.threatSince = b.clock;
@@ -3606,8 +3657,123 @@ export class ComputerPlusAi {
       this.setMode(b, "defending"); // …which zeroes the re-issue clock, so the turn is immediate
       b.target = null;
     }
+    // …by SCROLL, when the army is too far away to walk — see `RECALL_FAR`.
+    if (this.recallPass(b, threat)) return true;
     this.recommit(b, threat.x, threat.y);
     return true;
+  }
+
+  /**
+   * COME HOME BY SCROLL — the base is under attack and the army is out on the map.
+   *
+   * Three phases, one per army pass, and the pass returns true for as long as it owns the army
+   * (so `defendPass` does not send the same soldiers WALKING home over the top of it):
+   *
+   *  1. **Decide.** The captain (`squadHero`) holds a Scroll of Town Portal it could press now
+   *     and is more than `RECALL_FAR` from the invader. Nothing else is asked: this is the one
+   *     trip the scroll is for (see `answerCall`, where the same scroll is spent on an ALLY's
+   *     base for the same reason).
+   *  2. **Gather.** Every soldier that is not already home is walked AT the hero, and the hero
+   *     is stopped where it is, so the circle closes on a point that is not moving. The scroll
+   *     is read as soon as every one of them will be inside `RECALL_INNER` of its `Area1` by the
+   *     time the channel ends (`recallComing`) — which on a party that was already marching
+   *     together is the very first pass — or at `RECALL_PATIENCE` with `RECALL_QUORUM` of them,
+   *     or at `RECALL_DEADLINE` with whoever made it.
+   *  3. **Channel.** The hero is rooted and invulnerable for `Cast1`; the stragglers keep
+   *     walking in, because the scroll counts the units standing in the circle at the END of the
+   *     wait. When the channel is over the recall is over, and `defendPass` takes the army —
+   *     now standing at the hall nearest the invader — straight at it.
+   *
+   * The units already defending are left to fight: a soldier within `TOWN_RADIUS` of the
+   * invader is attack-moved onto it rather than called out to the hero to be carried home.
+   *
+   * The scroll is AIMED at the invader, and `SimWorld.nearestHall` resolves that to our hall
+   * nearest it — so an expansion under siege is where the army lands, not the main.
+   */
+  private recallPass(b: Brain, threat: SimUnit): boolean {
+    const world = this.host.world;
+    if (!b.recall) {
+      if (b.clock < b.recallNext) return false;
+      const hero = this.squadHero(b);
+      if (!hero || isOffField(hero) || hero.portalLeft > 0) return false;
+      if (Math.hypot(hero.x - threat.x, hero.y - threat.y) <= RECALL_FAR) return false;
+      if (!b.items.portalReach(hero)) return false;
+      b.recall = { heroId: hero.id, since: b.clock, readAt: -1 };
+    }
+    const r = b.recall;
+    const hero = world.units.get(r.heroId);
+    if (!hero || hero.hp <= 0 || hero.owner !== b.ai.player) return this.endRecall(b);
+    if (r.readAt >= 0) {
+      // READ: gather for as long as the channel runs, then hand the army back to `defendPass`.
+      if (hero.portalLeft <= 0) return this.endRecall(b);
+      this.recallGather(b, hero, threat, Infinity);
+      return true;
+    }
+    const reach = b.items.portalReach(hero);
+    if (!reach) return this.endRecall(b); // spent, sold, dropped or on cooldown — walk instead
+    const { coming, total } = this.recallGather(b, hero, threat, reach.area * RECALL_INNER, reach.wait);
+    const waited = b.clock - r.since;
+    const ready = coming >= total
+      || (waited >= RECALL_PATIENCE && coming >= total * RECALL_QUORUM)
+      || waited >= RECALL_DEADLINE;
+    if (!ready) {
+      // Hold the hero still, so the circle closes on a point that is not moving — a hero that is
+      // WALKING is stopped; one that is swinging at something is left to swing where it stands.
+      if (hero.order === "move" || hero.order === "attackmove" || hero.order === "patrol" || hero.order === "follow") {
+        this.issue(b, { c: "order", unitId: hero.id, order: { kind: "stop" }, queued: false });
+      }
+      return true;
+    }
+    if (!b.items.portalTo(hero, threat.x, threat.y)) return this.endRecall(b);
+    r.readAt = b.clock;
+    return true;
+  }
+
+  /**
+   * Walk every soldier of this wave that is not already defending AT the hero, and count how
+   * many of them will be inside `reach` of it when a `wait`-second channel ends. The units
+   * within `TOWN_RADIUS` of the invader are the defence itself and are sent AT the invader
+   * instead — as is one that is simply NEARER the invader than the hero (a soldier left at home,
+   * a straggler already on the road back), which the scroll could only carry away from the
+   * fight. Neither is in the count, since the scroll has nothing to do for them.
+   */
+  private recallGather(
+    b: Brain, hero: SimUnit, threat: SimUnit, reach: number, wait = 0,
+  ): { coming: number; total: number } {
+    let coming = 0;
+    let total = 0;
+    for (const u of this.squadUnits(b)) {
+      if (u.id === hero.id || u.hp <= 0 || u.isPeon || isOffField(u)) continue;
+      const toThreat = Math.hypot(u.x - threat.x, u.y - threat.y);
+      const d = Math.hypot(u.x - hero.x, u.y - hero.y);
+      if (toThreat <= TOWN_RADIUS || toThreat < d) {
+        if (this.recovering(u)) continue; // healing in the base — `commit` leaves it alone too
+        if (u.order === "attackmove" && Math.hypot(u.amDestX - threat.x, u.amDestY - threat.y) <= REISSUE_SLACK) continue;
+        if (u.targetId) continue; // already swinging at somebody in the base
+        this.issue(b, { c: "order", unitId: u.id, order: { kind: "attackmove", x: threat.x, y: threat.y }, queued: false });
+        continue;
+      }
+      total++;
+      if (d - u.speed * wait * RECALL_PACE <= reach) coming++;
+      // Close enough to be taken whatever it does: left alone, so it is not jammed into the
+      // crowd at the hero's feet. Otherwise walked in — a MOVE, not an attack-move, because a
+      // soldier that stops to trade blows on the way is the one the scroll leaves behind.
+      if (d <= reach * 0.5) continue;
+      const goal = moveGoal(u);
+      if (goal && Math.hypot(goal.x - hero.x, goal.y - hero.y) <= REISSUE_SLACK) continue;
+      this.issue(b, { c: "order", unitId: u.id, order: { kind: "move", x: hero.x, y: hero.y }, queued: false });
+    }
+    return { coming, total };
+  }
+
+  /** The recall is over — read and landed, or abandoned. Always `false`, so a caller can hand
+   *  the army straight back to `defendPass` with `return this.endRecall(b)`; and the re-issue
+   *  clock is zeroed so the defence's first order goes out on this very pass. */
+  private endRecall(b: Brain): false {
+    b.recall = null;
+    b.recallNext = b.clock + RECALL_RETRY;
+    b.reissueIn = 0;
+    return false;
   }
 
   /**
