@@ -1229,6 +1229,9 @@ export class MapViewerScene {
   /** This machine has hung up (or is about to). Also what stops a `room-closed` arriving
    *  afterwards from putting "You were disconnected." over a perfectly good Victory screen. */
   private matchEnded = false;
+  /** The watchers have been handed their "Game over." screen (`observerGameOver`) — once a
+   *  match, so Continue Game is not answered with the same screen next frame. */
+  private observerOverRaised = false;
   /** The seat of the machine holding the authoritative sim, when this machine is a client of
    *  one — so a room that closes under us can say who left (`showMatchOver`). */
   private hostSeat: number | null = null;
@@ -4221,6 +4224,26 @@ export class MapViewerScene {
         // Remembered only when it actually went somewhere, so a player who has not been
         // seated yet is retried rather than silently written off.
         if (sent) this.relayedDialogs.set(p, stamp);
+      }
+    }
+    // **The watchers' ending.** Blizzard.j does mean to tell an observer the match is over —
+    // `MeleeRemoveObservers` hands each one `GameOverDialogBJ` ("Game over.") — but it finds them
+    // by walking `Player(0)`…`bj_MAX_PLAYERS - 1`, and an observer here sits one past the last
+    // slot there is (ui/lobby.ts `OBSERVER_PLAYER`), so the script never reaches one. The ENGINE
+    // raises it instead, once, the moment the match is decided: this machine's own screen when it
+    // is watching, and relayed to every watcher on the bench (the host alone relays — see above),
+    // before the wire below is hung up on them.
+    if (this.matchDecided && !this.observerOverRaised) {
+      this.observerOverRaised = true;
+      const over = this.observerGameOver();
+      for (const o of this.observers) {
+        this.rts?.relayDialog(o.id, {
+          k: "dlg", message: over.message, buttons: over.buttons.map((b) => ({ text: b.text, quit: b.quit })), over: true,
+        });
+      }
+      if (this.observer && !rt.dialogs.some((d) => d.visibleFor.has(this.localPlayer))) {
+        this.remoteDialog = over;
+        this.sounds?.playUi("QuestFailed"); // bj_defeatDialogSound, as GameOverDialogBJ plays it
       }
     }
     // A dialog the authority sent US wins over our own script's, which on a client is empty
@@ -9215,9 +9238,9 @@ export class MapViewerScene {
    * every other ending uses. It is not a pause: `MeleeVictoryDialogBJ` never calls `PauseGame`,
    * and Continue Game leaves the player in the world as it last stood.
    *
-   * An OBSERVER has nothing to win, and gets what `MeleeRemoveObservers` gives one when the
-   * match ends: `GameOverDialogBJ` — "Game over." and a single quit button. A screen that
-   * already ends this player's game (a defeat relayed a moment ago) is left where it is.
+   * An OBSERVER has nothing to win, and gets the watcher's ending (`observerGameOver`) —
+   * "Game over." over the same two buttons. A screen that already ends this player's game (a
+   * defeat relayed a moment ago) is left where it is.
    *
    * The words are the GAME'S (`UI\FrameDef\GlobalStrings.fdf`), not ours, so a localized
    * install says what it says; the literals are the fallback for a table that never loaded.
@@ -9239,12 +9262,9 @@ export class MapViewerScene {
     const quit = (text: string): DialogObj["buttons"][number] =>
       ({ handleId: -3, dialogId: -1, text, hotkey: 0, quit: true, doScoreScreen: false });
     if (this.observer) {
-      // GameOverDialogBJ, for a watcher: "Game over." + OK, to bj_defeatDialogSound.
-      this.remoteDialog = {
-        handleId: -1, message: s("GAMEOVER_GAME_OVER", "Game over."),
-        buttons: [quit(s("GAMEOVER_OK", "OK"))], visibleFor: new Set([this.localPlayer]), revision: 0,
-      };
-      this.sounds?.playUi("QuestFailed");
+      this.observerOverRaised = true;
+      this.remoteDialog = this.observerGameOver();
+      this.sounds?.playUi("QuestFailed"); // bj_defeatDialogSound
     } else {
       // MeleeVictoryDialogBJ: "%s was victorious." from the winner, then the screen, to
       // bj_victoryDialogSound ("QuestCompleted", blizzard.j InitBlizzardGlobals).
@@ -9261,6 +9281,26 @@ export class MapViewerScene {
     }
     // Shown now rather than on the next script-UI pass, which a match with no script never runs.
     this.showDialog(this.remoteDialog);
+  }
+
+  /**
+   * The screen a WATCHER is shown when the match ends: the victory screen's shape —
+   * `MeleeVictoryDialogBJ`'s Continue Game and Quit Game — under "Game over." rather than
+   * "Victory!" or a defeat, since an observer neither won nor lost. The message is the one
+   * blizzard.j's own `GameOverDialogBJ` gives an observer (`GAMEOVER_GAME_OVER`); the buttons
+   * are the developer's call over that function's lone OK, so a watcher may stay and look over
+   * the field the way a winner can. Continue closes it (any click does), Quit leaves.
+   */
+  private observerGameOver(): DialogObj {
+    const s = (key: string, fallback: string): string => this.globalStrings?.strings.get(key) ?? fallback;
+    return {
+      handleId: -1, message: s("GAMEOVER_GAME_OVER", "Game over."),
+      buttons: [
+        { handleId: -2, dialogId: -1, text: s("GAMEOVER_CONTINUE_GAME", "Continue Game"), hotkey: 0, quit: false, doScoreScreen: false },
+        { handleId: -3, dialogId: -1, text: s("GAMEOVER_QUIT_GAME", "Quit Game"), hotkey: 0, quit: true, doScoreScreen: false },
+      ],
+      visibleFor: new Set([this.localPlayer]), revision: 0,
+    };
   }
 
   /** Give the HUD's clock slot the local race's real TimeIndicator model, on its own
