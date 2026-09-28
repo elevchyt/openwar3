@@ -464,7 +464,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   leaves through `EVENT_PLAYER_LEAVE` so Blizzard's own `MeleeTriggerActionPlayerLeft` hands the
   units over instead of the AI demolishing its own base. SIEGE is a race row beside `antiAir`
   (`siegeUnit` / `siegeLine`): `PlusProfile.siegeUnits` of the race's artillery on top of the mix
-  once tier 2 stands; and a missing Town Portal is bought at ANY shop a hero stands at, or
+  once tier 2 stands, and a gun shells buildings EVEN MID-FIGHT (`siegeNear`). A base is RAZED FROM
+  THE OUTSIDE IN (`peelPass`/`razeCost`: distance from the army over a tower > production > rest
+  rung — the hall a wave is aimed at is only what names the base), and a soldier leaves a
+  building for an enemy body within `RAZE_CLOSE`; and a missing Town Portal is bought at ANY shop a hero stands at, or
   detoured to while the party musters (`PlusItems.portalChance`). A race is a TABLE of named builds, one
   rolled per match, and **expanding belongs to the build order** (`PlusStrategy.expandAt`) rather
   than to the difficulty — a fast expand is a build, not a setting. A build names UNITS and its

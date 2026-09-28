@@ -293,18 +293,48 @@ export function killValue(t: SimUnit, ctx: AimCtx): number {
 
 /**
  * …and what a BUILDING is worth knocking down, for the units that are there to knock buildings
- * down (`isSiege`). A separate ladder because it answers a different question: not "what is the
- * dangerous thing here" but "what does razing this base start with".
+ * down (`isSiege`) and for the wave once the defence is broken. A separate ladder because it
+ * answers a different question: not "what is the dangerous thing here" but "what does razing
+ * this base start with".
  *
- * A tower first, because it is the building that is shooting at the army while the army works;
- * then whatever is nearest and most nearly down. `killValue` deliberately cannot be reused —
- * it prices a Farm at a seventh of a soldier, which is right for a Grunt and meaningless for a
- * Demolisher, whose alternative is not a soldier but another building.
+ * Three rungs, the developer's own order (*"focus towers and production and upgrade buildings
+ * first"*): a TOWER, because it is shooting at the army while the army works; then a building
+ * that PRODUCES — trains units, researches upgrades or revives heroes (`producing`, read off the
+ * building's `Trains`/`Researches`/`Revive` by the caller, with the town hall left out: it is
+ * the middle of the base, and walking at it first is the dive this ladder exists to stop); then
+ * everything else. Within a rung, whatever is most nearly down. `killValue` deliberately cannot
+ * be reused — it prices a Farm at a seventh of a soldier, which is right for a Grunt and
+ * meaningless for a Demolisher, whose alternative is not a soldier but another building.
  */
-export function razeValue(t: SimUnit): number {
+export function razeValue(t: SimUnit, producing = false): number {
   const frac = t.hp / Math.max(1, t.maxHp);
-  return (isTower(t) ? TOWER : BUILDING) * (1 + (1 - frac));
+  const rung = isTower(t) ? RAZE_TOWER : producing ? RAZE_PRODUCTION : RAZE_OTHER;
+  return rung * (1 + (1 - frac) * 0.5);
 }
+
+const RAZE_TOWER = 2.2;
+const RAZE_PRODUCTION = 1.4;
+const RAZE_OTHER = 1;
+
+/**
+ * WHICH BUILDING NEXT, as a COST (lower first): the distance from the army, divided by what the
+ * building is worth (`razeValue`).
+ *
+ * This is the whole of *"start from the outside and slowly destroy outside buildings first
+ * instead of diving the enemy base"*. Distance DOMINATES — measured from where the army is
+ * standing, the nearest building of a base is the one on its OUTSIDE, on the army's side of it —
+ * and the rungs only bend it: a tower is taken before a Farm standing up to 2.2 times nearer, a
+ * Barracks before one up to 1.4 times nearer. So a Guard Tower one row in is the next thing hit,
+ * and the one beside the Town Hall waits until the army has eaten its way there. Pure, for the
+ * test.
+ */
+export function razeCost(t: SimUnit, distance: number, producing = false): number {
+  return Math.max(RAZE_NEAR, distance) / razeValue(t, producing);
+}
+
+/** Inside this every building counts as equally near: the one the army is already standing
+ *  against is not worth a second walk, and a tower two steps further off should still win. */
+const RAZE_NEAR = 200;
 
 /** The ability row's own aiming facts, for `spellValue`. `dur1`/`herodur1` are per RANK. */
 export function spellFacts(duration: number, heroDuration: number): SpellFacts {

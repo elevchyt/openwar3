@@ -3727,12 +3727,45 @@ BALLISTA (the Glaive Thrower) and CATAPULT (the Demolisher). Two columns name ex
 does a Troll Batrider. Keyed on the attack type, half the orc army would have walked past your
 Grunts to punch a Farm.
 
-`siegeTarget` picks **one** building for the whole wave off `razeValue` (a tower first — it is
-shooting at the army while the army works — then whatever is nearest the objective and closest to
-falling), because siege is slow and splashes: four Demolishers on one Barracks bring it down in
-the time one of them spends walking between four different ones. `commit` checks the sim's own
-`weaponVs` before ordering, so a gun with no slot that admits a structure falls through to the
-ordinary rules rather than being ordered at something it can only stand next to.
+**Siege keeps at it during a fight** — *"siege units should focus buildings more, because that's
+useful even during a fight"*. Nothing in the siege branch asks `hold` or whether an enemy is
+beside the gun: a gun is pointed at the wave's building (`razeAim`) when it is within the gun's
+own range and a few steps (`siegeReach`), otherwise at the best building it CAN reach from where
+it stands (`siegeNear`, by `razeValue` — a tower in range first), and only failing both does it
+walk to the wave's pick. All the guns on one building is still the point: four Demolishers on one
+Barracks bring it down in the time one of them spends walking between four different ones.
+`commit` checks the sim's own `weaponVs` before ordering, so a gun with no slot that admits a
+structure falls through to the ordinary rules rather than being ordered at something it can only
+stand next to.
+
+### Razing a base: from the outside in
+
+*"When Computer+ is sieging an enemy base, it should start from the outside and slowly destroy
+outside buildings first instead of diving the enemy base. It should also focus towers and
+production and upgrade buildings first."* A wave is AIMED at a hall — a hall is what names a base
+(`baseTarget`) — and walking at it was the dive: through every tower and past every Barracks to
+the one building in the middle. Three pieces undo that:
+
+* **The ladder** (plus/targeting.ts): `razeValue` has three rungs — a TOWER (2.2), a building that
+  PRODUCES (1.4: `Trains`, `Researches` or `Revive` in the tech registry, the town hall left out
+  because ranking it with the Barracks is ranking the dive), everything else (1) — and
+  `razeCost` is the distance FROM THE ARMY divided by it. Distance dominates, so the next building
+  is always one on the outside of what is left; the rungs only bend it, so a tower one row further
+  in goes before the Farm at the edge, and a Barracks before a Farm at about the same distance.
+* **The peel** (`peelPass`): once the army is within `PEEL_RANGE` (2600) of the hall it was sent
+  at, the objective is re-picked off `razeCost`, re-asked every pass as the outer ring comes into
+  SIGHT (`knows`), held still once the army is within `PEEL_LOCK` (700) of its pick, and only
+  replaced by one `PEEL_MARGIN` cheaper, so two buildings at the same cost cannot trade places.
+  Every building that falls hands on to the next the same way (`nextBuilding`, measured from the
+  army and no longer from the building that fell).
+* **The wave on one building** (`razePass`): once the defence is broken (`RAZE_EDGE`) every
+  soldier within `CLEARED_RADIUS` of the pick is ordered onto IT, rather than on whatever wall its
+  attack-move walked into — *except* that an enemy BODY within `RAZE_CLOSE` (500) of the soldier
+  comes first (*"it should focus the enemy units if they are close instead of focusing
+  buildings!"*), and one already swinging at a body or a tower is left to it. The same radius
+  now takes a unit off a building at ANY stage of the fight (`stuckOnBuilding`, which used to be
+  asked only while the defence held), with `SWAP_LOOK` still the reach while it holds. A healthy
+  hero is still not what anybody is taken off a building for — the anti-chase rule.
 
 ## Manners: glhf, gg, and leaving
 

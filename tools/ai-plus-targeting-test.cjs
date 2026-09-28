@@ -260,6 +260,20 @@ check("normal: …but the Shaman before the tower", pickKill([["tower", tower()]
 check("razeValue: the tower first", T.razeValue(tower()) > T.razeValue(farm()), true);
 check("razeValue: …then whatever is nearly down",
   T.razeValue(unit({ hp: 50, maxHp: 500, building: {} })) > T.razeValue(farm()), true);
+check("razeValue: a building that PRODUCES before a Farm", T.razeValue(farm(), true) > T.razeValue(farm()), true);
+check("razeValue: …and a tower before that", T.razeValue(tower()) > T.razeValue(farm(), true), true);
+
+// …and the ORDER a base comes down in: from the OUTSIDE in (`razeCost`, distance from the
+// army over that value). Distance dominates, so the Farm at the edge goes before the Barracks
+// in the middle; the rungs only bend it, so a tower one row further in still goes first.
+check("razeCost: the Farm at the edge before the Barracks in the middle",
+  T.razeCost(farm(), 400) < T.razeCost(farm(), 1400, true), true);
+check("razeCost: …a tower one row further in before the Farm",
+  T.razeCost(tower(), 700) < T.razeCost(farm(), 400), true);
+check("razeCost: …a Barracks before a Farm at the same distance",
+  T.razeCost(farm(), 600, true) < T.razeCost(farm(), 600), true);
+check("razeCost: …but not the tower beside the Town Hall across the base",
+  T.razeCost(tower(), 1600) < T.razeCost(farm(), 400), false);
 
 // ==========================================================================================
 console.log("\n-- …unless you are siege -----------------------------------------------------");

@@ -3,6 +3,8 @@ import { MELEE } from "../../data/gameplayConstants";
 import type { ChatLine, ChatScope } from "../../game/chat";
 import type { PlayableRace } from "../../data/races";
 import type { UnitDef } from "../../data/units";
+import type { TechRegistry } from "../../data/techtree";
+import { WeaponType } from "../../data/enums";
 import { ITEM_REGEN_GROUP, isOffField, pathDomain, type SimUnit } from "../../sim/world";
 import { simProfile, perfNow } from "../../sim/profile";
 import { AiPlayer, type AiHost, REGROUP_HP_FRACTION, TOWN_RADIUS } from "../aiPlayer";
@@ -28,7 +30,7 @@ import {
   type PlayerName, type SwitchReason,
 } from "./teamchat";
 import { plusProfile, type PlusProfile } from "./profile";
-import { aimCtx, HERO_KILL_HP, heroKillable, isSiege, isTower, killValue, razeValue } from "./targeting";
+import { aimCtx, HERO_KILL_HP, heroKillable, isSiege, isTower, killValue, razeCost, razeValue } from "./targeting";
 import { PLUS_RACES, rollStrategy, tableForEdition, type PlusRaceTable, type PlusStrategy } from "./races";
 import { isRoc } from "../../data/edition";
 import { CAMP_GREEN_MAX, armyPower, maxCampLevel, type CreepForce, type Fighter } from "./power";
@@ -1322,6 +1324,42 @@ const HERO_DOWN_SEEN = 3;
  * part of the same assault (`objectiveDone`/`nextBuilding`). About a base's width; ours.
  */
 const RAZE_SWEEP = 1600;
+
+/**
+ * TAKING A BASE APART FROM THE OUTSIDE — `peelPass`. The developer's *"when Computer+ is
+ * sieging an enemy base, it should start from the outside and slowly destroy outside buildings
+ * first instead of diving the enemy base"*. A wave is AIMED at a hall (`baseTarget` — a hall is
+ * what names a base), and walking at that hall is the dive: through every tower and past every
+ * Barracks, to the one building in the middle. So once the army is within `PEEL_RANGE` of the
+ * base, the objective is re-picked off `razeCost` measured from the ARMY — the nearest building
+ * on its side of the base, bent towards towers and production — and every building that falls
+ * hands on to the next one the same way (`nextBuilding`), which eats the base from the edge in.
+ *
+ *  · `PEEL_RANGE`: about a base's width beyond `CLEARED_RADIUS`, where the outer ring starts to
+ *    come into sight. Re-asked every pass while the army closes, because a base's outside is
+ *    only SEEN (`knows`) as the army walks up to it.
+ *  · `PEEL_LOCK`: …and no longer once the army is this near the one it picked: a target that
+ *    changes under an army already swinging at it is how it ends up walking between two.
+ *  · `PEEL_MARGIN`: a new pick has to be this much cheaper than the old one to replace it, so
+ *    two buildings at about the same cost cannot trade places every pass.
+ *
+ * All three OURS.
+ */
+const PEEL_RANGE = 2600;
+const PEEL_LOCK = 700;
+const PEEL_MARGIN = 0.8;
+
+/**
+ * THE ENEMY UNITS FIRST — *"of course, it should focus the enemy units if they are close
+ * instead of focusing buildings!"* A unit razing a building leaves it for a living enemy within
+ * this of itself (`razePass`): a Footman at the Farm next door is in this fight, one across the
+ * base is not worth turning round for. OURS; the same scale as `SWAP_LOOK`.
+ */
+const RAZE_CLOSE = 500;
+
+/** How much further than its own range a siege gun will look for a building of its own when
+ *  the wave's target is out of its reach (`siegeReach`). A few steps; OURS. */
+const SIEGE_STEP = 250;
 
 /**
  * A FIGHT BEING LOST, read off the two armies rather than off our own hit points alone
@@ -3859,23 +3897,73 @@ export class ComputerPlusAi {
   }
 
   /**
-   * The next building of `owner`'s to knock down near (x, y), or null — the one we can SEE
-   * (`knows`), nearest first, with a TOWER or a HALL preferred at equal footing because those
-   * are what the base rebuilds and shoots from. Within `RAZE_SWEEP`, which is a base's width:
-   * past it is somewhere else, and that is the press's decision rather than this one's.
+   * The next building of `owner`'s to knock down near (x, y), or null — one we can SEE
+   * (`knows`), within `RAZE_SWEEP` (a base's width: past it is somewhere else, and that is the
+   * press's decision rather than this one's), cheapest by `razeCost` measured from the ARMY.
+   *
+   * From the army and not from the building that just fell: the one nearest the army is the one
+   * on the OUTSIDE of what is left, so a base is eaten from the edge in (`PEEL_RANGE`) rather
+   * than walked through — and the cost's rungs put a tower, then a Barracks or a Blacksmith,
+   * ahead of a Farm at about the same distance.
    */
   private nextBuilding(b: Brain, owner: number, x: number, y: number): { id: number; x: number; y: number } | null {
+    const from = this.armyAnchor(b) ?? { x, y };
     let best: SimUnit | null = null;
-    let bestScore = Infinity;
+    let bestCost = Infinity;
     for (const u of this.host.world.units.values()) {
-      if (u.hp <= 0 || !u.building || u.owner !== owner) continue;
-      const d = Math.hypot(u.x - x, u.y - y);
-      if (d > RAZE_SWEEP || !b.ai.knows(u)) continue;
-      // A hall or a tower counts as standing a third nearer than it does.
-      const key = u.depotGold || u.weapons.length > 0 ? d * 0.67 : d;
-      if (key < bestScore) { bestScore = key; best = u; }
+      if (u.hp <= 0 || !u.building || u.owner !== owner || u.invulnerable) continue;
+      if (Math.hypot(u.x - x, u.y - y) > RAZE_SWEEP || !b.ai.knows(u)) continue;
+      const cost = razeCost(u, Math.hypot(u.x - from.x, u.y - from.y), this.producing(u));
+      if (cost < bestCost) { bestCost = cost; best = u; }
     }
     return best ? { id: best.id, x: best.x, y: best.y } : null;
+  }
+
+  /**
+   * Does this building PRODUCE — train units, research upgrades or revive heroes? The middle rung
+   * of the raze ladder (plus/targeting.ts `razeValue`), read off the building's own
+   * `Trains`/`Researches`/`Revive` (the tech registry, so a custom map's overlay answers too).
+   * A TOWN HALL is left out: it trains the workers and researches the tier, and it is also the
+   * middle of the base — ranking it with the Barracks is ranking the dive. A host with no
+   * registry (the headless stubs in tools/) says no.
+   */
+  private producing(u: SimUnit): boolean {
+    if (u.depotGold) return false;
+    const tech = this.host.tech as Partial<TechRegistry> | undefined;
+    if (typeof tech?.get !== "function") return false;
+    const def = tech.get(u.typeId);
+    return def.trains.length > 0 || def.researches.length > 0 || def.revive;
+  }
+
+  /**
+   * RE-AIM A BASE ASSAULT AT ITS OUTSIDE — see `PEEL_RANGE`. Called every attack pass while the
+   * objective is a building; changes `b.target` in place and says whether it did.
+   *
+   * Only for an objective the army has not reached yet (`PEEL_LOCK`), and only for a pick
+   * cheaper than the current objective by `PEEL_MARGIN` measured the same way — so it settles on
+   * the outer ring as that ring comes into sight, and then holds still while the army works.
+   */
+  private peelPass(b: Brain, target: { id: number; x: number; y: number }): boolean {
+    const cur = this.host.world.units.get(target.id);
+    if (!cur || !cur.building) return false;
+    const owner = this.ownerOf(cur.id);
+    if (owner < 0) return false;
+    const from = this.armyAnchor(b);
+    if (!from) return false;
+    const d = Math.hypot(cur.x - from.x, cur.y - from.y);
+    if (d > PEEL_RANGE || d <= PEEL_LOCK) return false;
+    const next = this.nextBuilding(b, owner, cur.x, cur.y);
+    if (!next || next.id === cur.id) return false;
+    const nu = this.host.world.units.get(next.id);
+    if (!nu) return false;
+    const was = razeCost(cur, d, this.producing(cur));
+    const now = razeCost(nu, Math.hypot(nu.x - from.x, nu.y - from.y), this.producing(nu));
+    if (now > was * PEEL_MARGIN) return false;
+    b.target = next;
+    b.push.gap = -1;
+    b.push.since = b.clock;
+    b.reissueIn = 0;
+    return true;
   }
 
   /**
@@ -4450,6 +4538,8 @@ export class ComputerPlusAi {
       if (!u || u.hp <= 0 || !b.ai.hostileTo(u)) return void this.objectiveDone(b);
       target.x = u.x;
       target.y = u.y;
+      // …and a BASE is taken apart from its outside, not dived — see `PEEL_RANGE`.
+      if (this.peelPass(b, target) && b.target) return void this.recommit(b, b.target.x, b.target.y);
     } else if (this.atGoal(b, target) && !this.enemyNear(b, target.x, target.y, CLEARED_RADIUS)) {
       return void this.objectiveDone(b);
     }
@@ -4770,9 +4860,16 @@ export class ComputerPlusAi {
     // Is the defence still worth killing before the buildings are? See `RAZE_EDGE`.
     const hold = this.holdTheLine(b, near.bodies);
     const focus = b.profile.focusFire ? this.focusTarget(b, near.bodies, x, y) : null;
-    // …and what the SIEGE is knocking down while everybody else fights. Null when there is
-    // nothing of the enemy's standing here, which is every fight that is not in a base.
-    const siegeAim = this.siegeTarget(near.buildings, x, y);
+    // WHICH BUILDING THIS WAVE IS TAKING DOWN (`razeAim`): the objective itself when it is one
+    // of a player's buildings — `peelPass`/`nextBuilding` have already picked it off the outside
+    // of the base — else the cheapest in sight of where the wave is standing. It is what the
+    // SIEGE is knocking down while everybody else fights, and what everybody else knocks down
+    // once the defence is broken (`razePass`). Null when there is nothing of the enemy's
+    // standing here, which is every fight that is not in a base.
+    const objective = !b.creeping && b.target?.id ? this.host.world.units.get(b.target.id) : undefined;
+    const razeAim = objective && objective.hp > 0 && near.buildings.includes(objective)
+      ? objective
+      : this.siegeTarget(b, near.buildings);
     // WHERE THE ARMY IS, for the cohesion rule below — and it is the CAPTAIN when there is one.
     //
     // "The army follows its hero" is the developer's own framing and it is a better anchor than
@@ -4927,11 +5024,24 @@ export class ComputerPlusAi {
       // Mortar Team's ground shot lists no `structure` and it is the SECOND slot that knocks
       // walls down, so a unit that has no such slot falls through to the ordinary rules rather
       // than being ordered at something it can only stand next to.
-      if (siegeAim && !u.isPeon && isSiege(u) && this.host.world.weaponVs(u, siegeAim)
-          && Math.hypot(u.x - siegeAim.x, u.y - siegeAim.y) <= CLEARED_RADIUS) {
-        if (u.order === "attack" && u.targetId === siegeAim.id) continue;
-        this.issue(b, { c: "order", unitId: u.id, order: { kind: "attack", targetId: siegeAim.id }, queued: false });
-        continue;
+      //
+      // …and it runs DURING a fight too, which is the developer's *"siege units should focus
+      // buildings more, because that's useful even during a fight"*: nothing here asks `hold`
+      // or whether there is an enemy beside the gun. A gun whose wave target is out of its
+      // reach takes the best building it CAN reach (`siegeNear`) rather than walking through
+      // the defence to the one the wave picked.
+      if (!u.isPeon && isSiege(u)) {
+        const aim = razeAim && this.host.world.weaponVs(u, razeAim)
+          && Math.hypot(u.x - razeAim.x, u.y - razeAim.y) <= this.siegeReach(u)
+          ? razeAim
+          : this.siegeNear(u, near.buildings)
+            ?? (razeAim && this.host.world.weaponVs(u, razeAim)
+              && Math.hypot(u.x - razeAim.x, u.y - razeAim.y) <= CLEARED_RADIUS ? razeAim : null);
+        if (aim) {
+          if (u.order === "attack" && u.targetId === aim.id) continue;
+          this.issue(b, { c: "order", unitId: u.id, order: { kind: "attack", targetId: aim.id }, queued: false });
+          continue;
+        }
       }
       if (focus && !u.isPeon && this.host.world.weaponVs(u, focus)) {
         if (u.order === "attack" && u.targetId === focus.id) continue;
@@ -4965,7 +5075,7 @@ export class ComputerPlusAi {
       // rule saw the army it was written for.
       if (u.targetId) {
         const swap = this.stuckOnHero(b, u) ? this.besideHero(b, u)
-          : hold && this.stuckOnBuilding(b, u) ? this.besideBuilding(b, u, near.bodies)
+          : this.stuckOnBuilding(b, u) ? this.besideBuilding(b, u, near.bodies, hold ? SWAP_LOOK : RAZE_CLOSE)
           : null;
         if (swap) {
           // Re-aimed at a BODY rather than merely released. An attack-move here would be
@@ -4976,11 +5086,15 @@ export class ComputerPlusAi {
           this.issue(b, { c: "order", unitId: u.id, order: { kind: "attack", targetId: swap.id }, queued: false });
           continue;
         }
-        // Nothing better to hit: a unit that was explicitly ORDERED onto something is left
-        // swinging at it, exactly as before. One merely auto-acquiring under an attack-move
-        // falls through to the re-issue guard below, which is where it always went.
-        if (u.order === "attack") continue;
       }
+      // THE DEFENCE IS BROKEN: take the base down, one building at a time and all together —
+      // see `razePass`. Asked before the "leave an explicit attack alone" rule below, because a
+      // unit left on the Farm it was ordered onto would never move on to the Barracks beside it.
+      if (razeAim && !hold && this.razePass(b, u, razeAim, near.bodies)) continue;
+      // Nothing better to hit: a unit that was explicitly ORDERED onto something is left
+      // swinging at it, exactly as before. One merely auto-acquiring under an attack-move
+      // falls through to the re-issue guard below, which is where it always went.
+      if (u.targetId && u.order === "attack") continue;
       // …and so is a unit already walking to this same spot. A re-issued attack-move
       // RESTARTS the search (SimWorld.issueAttackMove calls pathTo), so re-stating an order
       // nothing has changed about buys nothing and costs a full-map A* per soldier — the
@@ -5101,26 +5215,88 @@ export class ComputerPlusAi {
   }
 
   /**
-   * WHICH BUILDING THE SIEGE IS KNOCKING DOWN — one for the whole wave, by `razeValue`.
+   * WHICH BUILDING THE WAVE IS KNOCKING DOWN when its objective is not one — one for the whole
+   * wave, by `razeCost` measured from the army.
    *
    * One rather than each unit's own nearest, because siege is slow and splashes: four
    * Demolishers on one Barracks bring it down in the time one of them spends walking between
-   * four different ones. A tower first (it is shooting at the army while the army works), then
-   * whatever is nearest the objective and closest to falling.
-   *
-   * Distance is measured from the OBJECTIVE and not from each gun, for the same reason
-   * `focusTarget`'s is: this is the wave's target, and a per-unit tiebreak would scatter them.
-   * Whether a given gun can reach it, and whether it can hit it at all, is `commit`'s business.
+   * four different ones. From the ARMY, so the one picked is on the outside of the base
+   * (`PEEL_RANGE`); a tower, then a building that produces, ahead of one at about the same
+   * distance. Whether a given gun can reach it, and whether it can hit it at all, is `commit`'s
+   * business.
    */
-  private siegeTarget(buildings: readonly SimUnit[], x: number, y: number): SimUnit | null {
+  private siegeTarget(b: Brain, buildings: readonly SimUnit[]): SimUnit | null {
+    const from = this.armyAnchor(b);
+    if (!from) return null;
     let best: SimUnit | null = null;
-    let bestScore = -Infinity;
+    let bestCost = Infinity;
     for (const u of buildings) {
       if (u.hp <= 0) continue;
-      const s = razeValue(u) * 1000 - Math.hypot(u.x - x, u.y - y);
-      if (s > bestScore) { bestScore = s; best = u; }
+      const cost = razeCost(u, Math.hypot(u.x - from.x, u.y - from.y), this.producing(u));
+      if (cost < bestCost) { bestCost = cost; best = u; }
     }
     return best;
+  }
+
+  /** How far a siege gun will reach for a building without walking into the base for it: its
+   *  own longest structure-capable range, and a few steps more. */
+  private siegeReach(u: SimUnit): number {
+    let range = 0;
+    for (const w of u.weapons) {
+      if (!w.enabled || w.cooldown <= 0) continue;
+      if (w.targets.length && !w.targets.includes("structure") && w.weaponType !== WeaponType.Artillery
+          && w.weaponType !== WeaponType.ArtilleryLine) continue;
+      range = Math.max(range, w.range);
+    }
+    return range + SIEGE_STEP;
+  }
+
+  /** The best building a siege gun can hit from about where it stands (`siegeReach`) — for a gun
+   *  the wave's own target is out of reach of. By `razeValue` alone, distance only breaking
+   *  ties: a gun does not WALK to what is already in its range, so the nearer of two is not the
+   *  cheaper one, and a tower in range is the first thing it shells. */
+  private siegeNear(u: SimUnit, buildings: readonly SimUnit[]): SimUnit | null {
+    const reach = this.siegeReach(u);
+    let best: SimUnit | null = null;
+    let bestCost = Infinity;
+    for (const t of buildings) {
+      if (t.hp <= 0) continue;
+      const d = Math.hypot(t.x - u.x, t.y - u.y);
+      if (d > reach || !this.host.world.weaponVs(u, t)) continue;
+      const cost = d - razeValue(t, this.producing(t)) * 1000;
+      if (cost < bestCost) { bestCost = cost; best = t; }
+    }
+    return best;
+  }
+
+  /**
+   * ONE SOLDIER, ONCE THE DEFENCE IS BROKEN — does it raze, and at what? True when this pass
+   * has dealt with the unit (ordered it, or left it on the right target).
+   *
+   *  · an enemy BODY within `RAZE_CLOSE` comes first — *"it should focus the enemy units if they
+   *    are close instead of focusing buildings"* — and a unit already swinging at one, or at a
+   *    tower, is left to it;
+   *  · otherwise the WHOLE wave on `razeAim`, the one building on the outside of the base the
+   *    objective picked, rather than each soldier on whatever wall it walked into.
+   *
+   * Nothing is done (false) for a worker, for a unit that cannot hit the building, and for one
+   * further than `CLEARED_RADIUS` from it — that one is still walking in, under the attack-move.
+   */
+  private razePass(b: Brain, u: SimUnit, razeAim: SimUnit, bodies: readonly SimUnit[]): boolean {
+    if (u.isPeon) return false;
+    if (Math.hypot(u.x - razeAim.x, u.y - razeAim.y) > CLEARED_RADIUS) return false;
+    const on = u.targetId ? this.host.world.units.get(u.targetId) : undefined;
+    if (on && on.hp > 0 && on.id !== razeAim.id && (!on.building || isTower(on)) && b.ai.hostileTo(on)) return false;
+    const body = this.besideBuilding(b, u, bodies, RAZE_CLOSE, true);
+    if (body) {
+      if (u.order === "attack" && u.targetId === body.id) return true;
+      this.issue(b, { c: "order", unitId: u.id, order: { kind: "attack", targetId: body.id }, queued: false });
+      return true;
+    }
+    if (!this.host.world.weaponVs(u, razeAim)) return false;
+    if (u.order === "attack" && u.targetId === razeAim.id) return true;
+    this.issue(b, { c: "order", unitId: u.id, order: { kind: "attack", targetId: razeAim.id }, queued: false });
+    return true;
   }
 
   /**
@@ -5141,15 +5317,19 @@ export class ComputerPlusAi {
   /** Something with a pulse to hit instead: the best target near this unit off the same ladder
    *  the rest of the AI aims by (`killValue`), out of the list `enemiesNear` already built.
    *  Null — leave it punching the wall — when nothing it can actually reach and actually hit is
-   *  within `SWAP_LOOK`, because the alternative to a bad target is not "no target". */
-  private besideBuilding(b: Brain, u: SimUnit, bodies: readonly SimUnit[]): SimUnit | null {
+   *  within `look`, because the alternative to a bad target is not "no target". `bodiesOnly`
+   *  leaves the towers out, for a caller that is choosing between a body and a building. */
+  private besideBuilding(
+    b: Brain, u: SimUnit, bodies: readonly SimUnit[], look: number, bodiesOnly = false,
+  ): SimUnit | null {
     const ctx = aimCtx(b.profile);
     let best: SimUnit | null = null;
     let bestScore = -Infinity;
     for (const t of bodies) {
       if (t.hp <= 0 || t.id === u.targetId) continue;
+      if (bodiesOnly && t.building) continue;
       const d = Math.hypot(t.x - u.x, t.y - u.y);
-      if (d > SWAP_LOOK) continue;
+      if (d > look) continue;
       // The anti-chase rule again: a healthy hero is not what a unit is taken off a Farm for.
       if (t.isHero && !heroKillable(t)) continue;
       if (!this.host.world.weaponVs(u, t)) continue;
