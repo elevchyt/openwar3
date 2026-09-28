@@ -46,7 +46,7 @@ import {
 } from "../data/gameplayConstants";
 import { perfNow, simProfile } from "./profile";
 import { flyHeight, type MissileFlight } from "./missile";
-import { SPELL_HANDLERS, ITEM_INVULN_GROUP, AURA_BUFFS, SELF_INVIS_GROUP, BLADESTORM_GROUP, FIELD_PIERCES_SPELL_IMMUNITY, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, NO_SUMMON_TARGET, DISPEL_CODES, REPLENISH_BAR, replenishRefusal,worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, CANNIBALIZE_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
+import { SPELL_HANDLERS, ITEM_INVULN_GROUP, AURA_BUFFS, SELF_INVIS_GROUP, BLADESTORM_GROUP, FIELD_PIERCES_SPELL_IMMUNITY, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, NO_SUMMON_TARGET, DISPEL_CODES, REPLENISH_BAR, replenishRefusal, survivesDispel, worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, CANNIBALIZE_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -15966,14 +15966,14 @@ export class SimWorld {
    *  · `timedLife`: a unit's timed life is not a buff in this sim (SimUnit.summonLeft), so the
    *    flag has nothing to include and a summon keeps its clock.
    *  · `aura`: an aura's buff has no clock (`timeLeft` Infinity) — left alone unless asked for.
-   *  · `autoDispel`: only what a dispel may take (never Doom's `undispellable`).
+   *  · `autoDispel`: only what a dispel may take (never Doom, never a stun — `survivesDispel`).
    */
   private buffsMatching(u: SimUnit, q: BuffQuery, counting: boolean): SimBuff[] {
     if (q.physical) return []; // physical alone, or both: nothing here is physical
     const anyPolarity = counting && !q.positive && !q.negative;
     return u.buffs.filter((b) => {
       if (!q.aura && !Number.isFinite(b.timeLeft)) return false;
-      if (q.autoDispel && b.undispellable) return false;
+      if (q.autoDispel && survivesDispel(b)) return false;
       if (anyPolarity) return true;
       return this.buffIsPositive(u, b) ? q.positive : q.negative;
     });
@@ -16541,9 +16541,10 @@ export class SimWorld {
    *  timed ones actually go. Mirror Image is NOT this — it is a total wipe; see
    *  `wipeAllStatus`. */
   private dispelUnit(u: SimUnit): void {
-    // …except the ones no dispel may touch. Doom is the only one in 1.30 and it is the whole
-    // ability: "This spell cannot be dispelled" — a Doomed unit is going to die.
-    u.buffs = u.buffs.filter((b) => b.undispellable);
+    // …except the ones no dispel may touch (`survivesDispel`): Doom — the whole ability is that
+    // "This spell cannot be dispelled", a Doomed unit is going to die — and every STUN, which
+    // holds for its whole duration whatever lands on it.
+    u.buffs = u.buffs.filter(survivesDispel);
   }
 
   /**

@@ -959,8 +959,8 @@ export const DISPEL_CODES = new Set(["Aprg", "Adis", "Aadm", "Advm"]);
  * is read as a debuff on our Huntress by exactly the same line that reads Bloodlust as a buff
  * on their Grunt.
  *
- * Two exclusions, both because the cast would achieve nothing: an `undispellable` buff (Doom —
- * `dispelUnit` keeps exactly those), and an AURA, which is a buff with `timeLeft` Infinity and
+ * Two exclusions, both because the cast would achieve nothing: a buff that `survivesDispel` (Doom,
+ * and every stun — `dispelUnit` keeps exactly those), and an AURA, which is a buff with `timeLeft` Infinity and
  * is therefore back the tick after the dispel lands. A buff whose source is GONE — a Bloodlust
  * from a dead Shaman — cannot be placed and does not count; that is the safe direction, since
  * the cost of missing one is a dispel not cast.
@@ -978,10 +978,33 @@ export const DISPEL_CODES = new Set(["Aprg", "Adis", "Aadm", "Advm"]);
  * plain dispel and will take a summon off the field — so the flag is read through `miscGame`
  * rather than off `MISC_GAME`, and the data set underfoot answers it (docs/editions.md).
  */
+/**
+ * Does this buff SURVIVE a dispel? Two kinds do: the one flagged `undispellable` (Doom), and
+ * every STUN — the developer's rule, "stun cannot be removed via dispel": a Storm Bolt, a War
+ * Stomp or a Bash holds for its whole duration whatever Dispel Magic, Abolish Magic, Purge,
+ * Devour Magic or a scripted auto-dispel lands on it. The one stun that DOES go is the Staff of
+ * Sanctuary's (`untilHealed`), because it is half of a pair that ends together: its other half
+ * is the regeneration that is dispelled, and keeping the stun alone would pin the unit until
+ * something else happened to heal it.
+ *
+ * CYCLONE wears the stun kind and is the one exception (`NOT_A_STUN`): its row says so in its
+ * only Data column (`[Acyc] DataA "Can Be Dispelled"` = 1 — taking a cycloned ally down is what
+ * a dispel is famous for). POSSESSION's hold is NOT excepted — the developer's word, it cannot
+ * be dispelled either.
+ *
+ * One predicate for every door a dispel has — `dispelUnit`, Devour Magic's meal, the JASS
+ * `autoDispel` query and `worthDispelling` below — so the autocast never spends mana on an
+ * effect the cast would leave standing.
+ */
+export function survivesDispel(b: { kind: BuffKind; group?: string; undispellable?: boolean; untilHealed?: boolean }): boolean {
+  return !!b.undispellable || (b.kind === "stun" && !b.untilHealed && !NOT_A_STUN.has(b.group ?? ""));
+}
+const NOT_A_STUN: ReadonlySet<string> = new Set(["cyclone"]);
+
 export function worthDispelling(t: SimUnit, units: ReadonlyMap<number, SimUnit>, ours = false, auto = false): boolean {
   if (!ours && t.summonLeft > 0 && !(auto && miscGame("AbolishMagicDispelSmart"))) return true;
   return t.buffs.some((b) => {
-    if (b.undispellable || !Number.isFinite(b.timeLeft)) return false;
+    if (survivesDispel(b) || !Number.isFinite(b.timeLeft)) return false;
     const src = units.get(b.sourceId);
     if (!src) return false;
     const theirs = src.team === t.team; // hung by the bearer's OWN side
@@ -2838,7 +2861,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // "enemy buffs or allied debuffs"). A friendly buff is one the bearer's own side hung on a unit
   // of the caster's side, read the way worthDispelling reads polarity: by who put it there. They
   // are still EATEN — only the payment skips them. An aura (`timeLeft` Infinity, back next tick)
-  // and a Doom (undispellable) are nothing to eat and pay nothing either.
+  // and a Doom or a stun (`survivesDispel`) are nothing to eat and pay nothing either.
   //
   // `Specialart` DispelMagicTarget.mdl plays on each unit devoured, and the magic flies back to
   // the Destroyer as `Missileart` DevourMagicBirthMissile.mdl — one per unit that paid.
@@ -2855,13 +2878,13 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     for (const t of api.unitsInArea(ctx.x, ctx.y, lvl.area || 200)) {
       if (t.hp <= 0 || !api.admits(def, t)) continue;
       const eaten = t.buffs.filter((b) => {
-        if (b.undispellable || !Number.isFinite(b.timeLeft)) return false;
+        if (survivesDispel(b) || !Number.isFinite(b.timeLeft)) return false;
         if (!ignoreFriendly || api.hostile(caster, t)) return true;
         // On our side: a buff our side put there is a friendly buff, and pays nothing.
         const src = api.getUnit(b.sourceId);
         return !!src && api.hostile(caster, src);
       });
-      const hadAny = t.buffs.some((b) => !b.undispellable && Number.isFinite(b.timeLeft));
+      const hadAny = t.buffs.some((b) => !survivesDispel(b) && Number.isFinite(b.timeLeft));
       if (hadAny) {
         api.dispel(t);
         if (def.specialArt) api.emitEffect(def.specialArt, t.x, t.y, t.id);

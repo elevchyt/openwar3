@@ -146,7 +146,8 @@ console.log("\nthe buff filters");
   check("negative with auras: the slow, Doom, and a stun whose caster is gone", left(), ["bloodlust", "aura"]);
   t.buffs = buffs();
   world.removeBuffs(t.id, q({ negative: true, aura: true, autoDispel: true }));
-  check("…but only what a dispel may take: Doom stays", left(), ["bloodlust", "aura", "doom"]);
+  // …and so does the STUN: no dispel may take one (`survivesDispel`, sim/spells.ts).
+  check("…but only what a dispel may take: Doom and the stun stay", left(), ["bloodlust", "aura", "doom", "orphan stun"]);
   t.buffs = buffs();
   world.removeBuffs(t.id, q({}));
   check("to REMOVE, neither polarity removes nothing", left().length, 5);

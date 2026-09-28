@@ -1,6 +1,7 @@
 import { NO_AOE_CURSOR, isRepairCode, targetFlagSet, type AbilityDef, type AbilityLevel } from "../data/abilities";
 import { AttackType } from "../data/enums";
 import type { Command } from "../game/commands";
+import { survivesDispel } from "../sim/spells";
 import type { SimUnit, SimWorld } from "../sim/world";
 
 /**
@@ -809,7 +810,8 @@ export class AiCaster {
     }
     if (t.building) return false; // enemy buildings do not make a "group of units"
     if (rule?.prefer === "mana" && t.mana < SILENCE_MANA) return false; // Silence's own bar
-    if (rule?.dispellable && !t.isSummon && !t.buffs.some((b) => Number.isFinite(b.timeLeft))) return false;
+    // A stun (and Doom) is not something the dispel would take — `survivesDispel`.
+    if (rule?.dispellable && !t.isSummon && !t.buffs.some((b) => !survivesDispel(b) && Number.isFinite(b.timeLeft))) return false;
     return true;
   }
 

@@ -341,5 +341,39 @@ const from = (src, over = {}) => ({
   check("…aimed at it", d.pendingCast && d.pendingCast.targetId, wolf.id);
 }
 
+// ==========================================================================================
+// A STUN IS NOT DISPELLED — the developer's rule (`survivesDispel`, sim/spells.ts).
+// ==========================================================================================
+// A Storm Bolt holds for its whole duration whatever lands on it, so the autocast must not
+// spend mana on a stunned ally that has nothing else on it, and the dispel itself must leave the
+// stun standing while it takes everything around it.
+{
+  const w = world();
+  const d = dryad(w, { x: 0, y: 0 });
+  const mk = add(w, { owner: 1, team: 1, x: -400, y: 0 });
+  const bolted = add(w, { x: 300, y: 0 });
+  bolted.buffs = [from(mk, { kind: "stun", group: "", timeLeft: 5, buffId: "BHtb" })];
+  check("a STUNNED friendly unit is not autocast at", w.tickAutocast(d), false);
+  check("…and the Dryad keeps its mana", d.mana, 200);
+  // …but one that is stunned AND slowed is, because the slow is something to take.
+  bolted.buffs.push(from(mk, { kind: "slow", group: "slow", timeLeft: 9, buffId: "Bslo" }));
+  check("stunned and slowed: the slow is worth the cast", w.tickAutocast(d), true);
+}
+{
+  const w = world();
+  const mk = add(w, { owner: 1, team: 1, x: -400, y: 0 });
+  const u = add(w, { x: 300, y: 0 });
+  u.buffs = [
+    from(mk, { kind: "stun", group: "", timeLeft: 5, buffId: "BHtb" }),          // Storm Bolt
+    from(mk, { kind: "slow", group: "slow", timeLeft: 9, buffId: "Bslo" }),       // Slow
+    from(mk, { kind: "stun", group: "cyclone", timeLeft: 20, buffId: "Bcy2" }),  // Cyclone — [Acyc] "Can Be Dispelled" = 1
+    from(u, { kind: "stun", group: "ANsa", timeLeft: Infinity, untilHealed: true, buffId: "BNsa" }), // Sanctuary
+    from(mk, { kind: "stun", group: "possession", timeLeft: 1, buffId: "Bpos" }), // Possession's hold
+  ];
+  w.dispelUnit(u);
+  check("a dispel leaves exactly the stun and Possession's hold",
+    u.buffs.map((b) => `${b.kind}:${b.group}`).join(","), "stun:,stun:possession");
+}
+
 console.log(`\n${failed ? `${failed} FAILED` : "all passed"}`);
 process.exit(failed ? 1 : 0);
