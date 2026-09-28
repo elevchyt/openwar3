@@ -68,7 +68,8 @@ const OBS = {
    *  melee player may field; the minimap is a square as tall as the panel's inside. */
   bottom: { h: 0.156, pad: 0.004, mmButtons: 0.021, column: 0.118 },
   hero: { portrait: 0.031, skill: 0.0145, item: 0.0135, bar: 0.0026, row: 0.0385 },
-  sel: { w: 0.2, h: 0.118, icon: 0.03, font: 0.0082 },
+  /** `h` has room for the Status row under the stats (0.016 over the 0.118 it was). */
+  sel: { w: 0.2, h: 0.134, icon: 0.03, font: 0.0082 },
   /** Auto Camera: `ObserverPanel.fdf`'s 0.02 SIMPLECHECKBOX, parked above the selection. */
   autoCam: { lift: 0.006 },
   /** The match clock's top — just under the medallion's rim. */
@@ -245,6 +246,15 @@ class IconSlot {
   }
 }
 
+/** How many Status icons the selection panel's row holds — the console's own eight
+ *  (hud.ts `selStatusSlots`). */
+const STATUS_MAX = 8;
+
+/** A buff's name without its `|cffRRGGBB … |r` colour codes — the hover hint is plain text. */
+function stripColour(text: string): string {
+  return text.replace(/\|c[0-9a-fA-F]{8}|\|r/g, "");
+}
+
 /** Keep `host` holding exactly `n` slots made by `make`, re-using the ones already there. */
 function sync<T extends { el: HTMLElement }>(host: HTMLElement, pool: T[], n: number, make: () => T): T[] {
   while (pool.length < n) pool.push(make());
@@ -394,6 +404,7 @@ export class ObserverHud {
     icon: IconSlot; lines: HTMLDivElement; belt: HTMLDivElement; beltPool: IconSlot[];
     job: HTMLDivElement; jobIcon: IconSlot; jobFill: HTMLDivElement; jobText: HTMLSpanElement;
     jobQueue: HTMLDivElement; jobPool: Map<string, IconSlot>;
+    status: HTMLDivElement; statusIcons: HTMLDivElement; statusPool: IconSlot[];
   };
   private seats: ObserverSeat[] = [];
   private t = Infinity;
@@ -523,9 +534,18 @@ export class ObserverHud {
       beltPool.push(slot);
       belt.appendChild(slot.el);
     }
+    // THE STATUS LINE, as the console's info panel draws it: the game's own label
+    // (`InfoPanelStrings.fdf` COLON_STATUS "Status:", in the info panel's label gold) and then
+    // the buffs' own `Buffart` icons on one row, each naming itself on hover (hud.ts
+    // `renderStatus`, whose list this is — `HudSelection.buffs`).
+    const status = el("div", "obs-sel-status", selPanel);
+    const statusLabel = el("span", "obs-sel-key obs-sel-status-label", status);
+    statusLabel.textContent = driver.uiString("COLON_STATUS", "Status:");
+    const statusIcons = el("div", "obs-sel-status-icons", status);
     this.sel = {
       panel: selPanel, name, sub, hp, hpFill, hpText, mp, mpFill, mpText, xp, xpFill, xpText,
       icon, lines, belt, beltPool, job, jobIcon, jobFill, jobText, jobQueue, jobPool: new Map(),
+      status, statusIcons, statusPool: [],
     };
     // Auto Camera stands ABOVE the selection, on no panel of its own (the replay panel it
     // belongs to is for replays, which OpenWar3 does not have yet).
@@ -802,6 +822,13 @@ export class ObserverHud {
       s.lines.innerHTML = lines;
       for (const a of s.lines.querySelectorAll<HTMLElement>(".obs-attr")) setGameTip(a, a.dataset.tip ?? "");
     }
+    // The buffs, auras and debuffs — hidden with nothing on the unit, as the console hides its
+    // Status line. The row is always RESERVED in the panel, so a buff landing does not shove
+    // the belt up and down under the watcher's eye.
+    const buffs = sel.buffs;
+    s.status.classList.toggle("none", buffs.length === 0);
+    const slots = sync(s.statusIcons, s.statusPool, Math.min(buffs.length, STATUS_MAX), () => new IconSlot(d, "obs-buff", () => {}));
+    slots.forEach((slot, i) => slot.set(buffs[i].icon, stripColour(buffs[i].name), null, null));
     const inv = sel.isHero ? this.driver.inventory() : [];
     s.belt.hidden = inv.length === 0;
     for (let i = 0; i < 6; i++) {

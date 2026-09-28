@@ -1482,6 +1482,18 @@ body.hud-statbar-skinned .obs-bar-fill.mana { background-image: var(--statbar-ma
 .obs-malus { color: #ff0000; }
 .obs-attr { display: inline-flex; align-items: center; gap: 0.2em; margin-right: 0.7em; pointer-events: auto; }
 .obs-attr img { width: 1.5em; height: 1.5em; }
+/* The Status line: "Status:" then the buff icons on one row, as the console's info panel. */
+.obs-sel-status {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--obs-bottom-pad) * 1.2);
+  margin-top: calc(var(--obs-bottom-pad) * 1.2);
+  height: var(--obs-item);
+}
+.obs-sel-status.none { visibility: hidden; }
+.obs-sel-status-label { flex: none; }
+.obs-sel-status-icons { display: flex; gap: 2px; min-width: 0; overflow: hidden; }
+.obs-buff { width: var(--obs-item); height: var(--obs-item); flex: none; }
 .obs-sel-belt {
   display: grid;
   grid-template-columns: repeat(2, var(--obs-item));
