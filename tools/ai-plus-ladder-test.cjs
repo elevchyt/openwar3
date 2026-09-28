@@ -76,6 +76,7 @@ function recorder(table, strategy, profile, opts = {}) {
     setBuildNext: (qty, item) => { if (count(item) < qty) build.push({ kind: "unit", qty: count(item) + 1, item }) },
     setBuildUpgr: (level, item) => build.push({ kind: "upgrade", qty: level, item }),
     setBuildExpa: (qty, item) => build.push({ kind: "expand", qty, item }),
+    reserveGold: (gold) => { if (gold > 0) build.push({ kind: "reserve", qty: gold, item: "" }) },
     secondaryTown: (town, qty, item) => { if (qty > 0) build.push({ kind: "unit", qty, item, town }) },
     basicExpansion: (go, hall) => { if (go) ai.setBuildExpa(ai.townCount(hall) + 1, hall) },
     // Faithful to `AiPlayer.meleeTownHall`, because WHERE this row lands is now under test: a
@@ -131,6 +132,8 @@ function recorder(table, strategy, profile, opts = {}) {
     tier: opts.tier ?? 1,
     threatened: false,
     workerChops: opts.workerChops ?? true,
+    portalReserve: opts.portalReserve,
+    wonAt: opts.wonAt,
     foodOf: (id) => opts.foodOf?.(id) ?? 2,
     defOf: () => undefined,
   };
@@ -336,6 +339,82 @@ console.log("\n--- the undead's expansion is the MINE ---");
   check("…and never onto a mine the creeps are still standing on",
     guarded.build.some((x) => x.item === u.mineBuilding), false);
 }
+// --- a claimed expansion's HALL waits for its camp too -------------------------------------
+//
+// The same lesson for the other three races, and it was watched rather than reported: on Echo
+// Isles an Insane night elf claimed its troll-guarded expansion at 5:39 (`expand` registers the
+// town before `expansionFoe` is asked), and from that pass on `meleeTownHall(1, …)` — a row near
+// the TOP of the ladder — reserved a Tree of Life's 340/185 off every pass for the seven minutes
+// the trolls lived, with the second hero underneath it halted on 750 gold. The human beside it
+// walked a builder into its own camp and lost the Town Hall site.
+console.log("\n--- a claimed expansion's hall waits for its camp ---");
+for (const [race, table] of Object.entries(PLUS_RACES)) {
+  const standing = { [table.halls[0]]: 1, ...(table.mineBuilding ? { [table.mineBuilding]: 1 } : {}) };
+  const open = recorder(table, table.strategies[0], PLUS_NORMAL, { standing, towns: 2, hallless: [1] });
+  buildPlan(open.ctx);
+  check(`${race}: an unguarded claimed town gets its hall row`,
+    open.build.some((x) => x.item === table.halls[0] && x.town === 1), true);
+  const held = recorder(table, table.strategies[0], PLUS_NORMAL, { standing, towns: 2, hallless: [1], guarded: [1] });
+  buildPlan(held.ctx);
+  check(`${race}: …a guarded one does not`,
+    held.build.some((x) => x.item === table.halls[0] && x.town === 1), false);
+}
+
+// --- a WON FIGHT is when the next mine is taken -------------------------------------------
+//
+// Reported: the night elf "rarely expands", and the chance it most visibly missed was straight
+// after beating the other army. `ComputerPlusAi.victoryPass` notices (`PlusCtx.wonAt`); the plan
+// then lifts the build's expansion clock and moves the expansion row up under the core army for
+// `WON_EXPAND_WINDOW` — where the tech, the tier-up and the support rows can no longer starve it.
+console.log("\n--- a won fight is when the next mine is taken ---");
+for (const [race, table] of Object.entries(PLUS_RACES)) {
+  const strategy = table.strategies[0];
+  const standing = { [table.halls[0]]: 1, [table.altar]: 1, [table.barracks]: 1,
+    ...(table.mineBuilding ? { [table.mineBuilding]: 1 } : {}) };
+  const hall = table.mineBuilding ?? table.halls[0];
+  // Before the build's own clock, with no fight won: no expansion row at all.
+  const early = strategy.expandAt - 30;
+  const quiet = recorder(table, strategy, PLUS_INSANE, { standing, clock: early, armyFood: 20 });
+  buildPlan(quiet.ctx);
+  check(`${race}: no expansion before its clock`, quiet.build.some((x) => x.kind === "expand"), false);
+  // …the same moment, ten seconds after a won fight: the row is there, and HIGH.
+  const won = recorder(table, strategy, PLUS_INSANE, { standing, clock: early, armyFood: 20, wonAt: early - 10 });
+  buildPlan(won.ctx);
+  const at = won.build.findIndex((x) => x.kind === "expand");
+  check(`${race}: a won fight opens the expansion early`, at >= 0 && won.build[at].item === hall, true);
+  check(`${race}: …as ONE row`, won.build.filter((x) => x.kind === "expand").length, 1);
+  const tierAt = won.build.findIndex((x) => x.item === table.halls[1]);
+  check(`${race}: …above the tier-up and the tech`, tierAt < 0 || at < tierAt, true);
+  // …and not for ever: past the window the build's clock is back in charge.
+  const stale = recorder(table, strategy, PLUS_INSANE, { standing, clock: early, armyFood: 20, wonAt: early - 200 });
+  buildPlan(stale.ctx);
+  check(`${race}: …and the window closes`, stale.build.some((x) => x.kind === "expand"), false);
+  // …nor for a difficulty that never expands at all.
+  const easy = recorder(table, strategy, PLUS_EASY, { standing, clock: early, armyFood: 20, wonAt: early - 10 });
+  buildPlan(easy.ctx);
+  check(`${race}: …and Easy still never expands`, easy.build.some((x) => x.kind === "expand"), false);
+}
+
+// --- a missing Town Portal is saved for below the opening ---------------------------------
+//
+// `PlusItems.portalSaving` hands the plan the scroll's price; the plan spends it as a RESERVE row
+// (`AiPlayer.reserveGold`) — a row that builds nothing and never halts — directly under the core
+// army, so the crews, the hall, the hero, the Barracks and the first soldiers are never what waits.
+console.log("\n--- a missing Town Portal is saved for ---");
+for (const [race, table] of Object.entries(PLUS_RACES)) {
+  const standing = { [table.halls[0]]: 1, [table.altar]: 1, [table.barracks]: 1 };
+  const r = recorder(table, table.strategies[0], PLUS_NORMAL, { standing, clock: 300, armyFood: 6, portalReserve: 350 });
+  buildPlan(r.ctx);
+  const at = r.build.findIndex((x) => x.kind === "reserve");
+  check(`${race}: the scroll's price is held back`, at >= 0 && r.build[at].qty === 350, true);
+  const crewAt = r.build.findIndex((x) => x.item === table.worker);
+  check(`${race}: …below the crews and the barracks`,
+    crewAt < at && r.build.findIndex((x) => x.item === table.barracks) < at, true);
+  const none = recorder(table, table.strategies[0], PLUS_NORMAL, { standing, clock: 300, armyFood: 6 });
+  buildPlan(none.ctx);
+  check(`${race}: …and nothing held with nothing to save for`, none.build.some((x) => x.kind === "reserve"), false);
+}
+
 // Nobody else has one, and the night elf's absence is the load-bearing half: an Entangled Gold
 // Mine is what the `Aent` CAST creates, issued from the library layer both AIs share
 // (`AiPlayer.entangleMines`, docs/night-elf.md), never something a build order asks for.
@@ -720,6 +799,9 @@ function runEconomy() {
       // report is not that the human never tiers but that it tiers late, and late is only
       // visible on a clock.
       tier2At: Infinity, spikeAt: Infinity,
+      // …and when the FIRST expansion was founded (the row reached and paid for) — printed so a
+      // race that "rarely expands" shows up as a column rather than as a feeling.
+      expandAt: Infinity,
     };
     const alive = (id) => S.units[id] ?? 0;
     const of = (id) => S.bldgs.filter((b) => b.type === id);
@@ -789,6 +871,9 @@ function runEconomy() {
       },
       get tier() { const [a, b, c] = table.halls; return doneRaw(c) ? 3 : doneRaw(b) ? 2 : doneRaw(a) ? 1 : 0 },
       threatened: false, workerChops: race !== "undead",
+      // A fight WON at a fixed moment, when the fixture scripts one (`victoryPass` is the live
+      // reading; here it is simply stated).
+      wonAt: opts.wonAt,
       foodOf: (id) => def(id)?.foodUsed ?? 0,
       defOf: (id) => { const d = def(id); return d ? { goldCost: d.gold, lumberCost: d.lumber, foodUsed: d.foodUsed } : undefined },
     };
@@ -896,7 +981,10 @@ function runEconomy() {
         tg = Math.max(0, tg - c.gold * need);
         tw = Math.max(0, tw - c.lumber * need);
         if (row.type === "e") {
-          if (S.freeMines > 0 && setProduce(1, row.item)) { S.freeMines--; S.mines++ }
+          if (S.freeMines > 0 && setProduce(1, row.item)) {
+            S.freeMines--; S.mines++;
+            if (S.expandAt === Infinity) S.expandAt = S.t;
+          }
           continue;
         }
         setProduce(afford, row.item);
@@ -976,6 +1064,7 @@ function runEconomy() {
       siege: table.siegeUnit ? ai.count(table.siegeUnit) : 0,
       tierHaltShare: S.tierHaltsEarly / Math.max(1, S.passesEarly),
       tier2At: Math.round(S.tier2At), spike, spikeAt: Math.round(S.spikeAt),
+      expandAt: Math.round(S.expandAt),
       back,
       foodCap: ai.foodCap(), foodUsed: ai.foodUsed(),
       foreign: [...foreign],
@@ -1006,6 +1095,24 @@ function runEconomy() {
       + types.map((t) => `${t}=${r.back[t]}s`).join(" "));
   }
 
+  // --- …and a WON FIGHT at four minutes brings the first expansion forward ----------------
+  //
+  // The live reading (`victoryPass`) is stated here as a moment: a fight won at 4:00. Printed per
+  // race and build against the same run with no fight, which is the before/after of plan.ts
+  // `wonExpansion` — and pinned only as "never LATER than without it".
+  console.log("\n--- a fight won at 4:00 brings the first expansion forward ---");
+  for (const [race, table] of Object.entries(TABLES)) {
+    for (const s of table.strategies) {
+      const [name, profile] = ["NORM", PLUS_NORMAL];
+      if (s.tier > profile.techTier) continue;
+      const base = run(race, s.id, profile, 900);
+      const won = run(race, s.id, profile, 900, { wonAt: 240 });
+      console.log(`      ${name} ${(race + "/" + s.id).padEnd(22)} expand@${String(base.expandAt).padStart(4)}s`
+        + ` → won@240: expand@${String(won.expandAt).padStart(4)}s  tier2@${base.tier2At}→${won.tier2At}s`);
+      check(`${race}/${s.id}: a won fight never makes the expansion LATER`, won.expandAt <= base.expandAt, true);
+    }
+  }
+
   console.log("\n--- ten minutes of build ladder ---");
   for (const [race, table] of Object.entries(TABLES)) {
     for (const s of table.strategies) {
@@ -1018,6 +1125,7 @@ function runEconomy() {
           + ` tier2@${String(r.tier2At).padStart(3)}s`
           + (r.spike ? ` ${r.spike}@${String(r.spikeAt).padStart(3)}s` : "")
           + ` siege=${r.siege}`
+          + ` expand@${String(r.expandAt).padStart(3)}s`
           + ` openingStuckOnTier=${Math.round(r.tierHaltShare * 100)}%`);
         check(`${EDITION} ${name} ${race}/${s.id} asks for nothing this edition lacks`, r.foreign.join(","), "");
         if (name !== "NORM") continue;

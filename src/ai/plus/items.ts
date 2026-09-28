@@ -604,6 +604,20 @@ const LOOT_WALK = 2200;
  *  that walks into a live camp for a Ring of Protection is a hero that dies for one. */
 const LOOT_DANGER = 700;
 /**
+ * …EXCEPT A DROP AT THE HERO'S FEET, which is picked up whatever is going on — see `loot`.
+ *
+ * The developer's own number: an item "within 50 units of one of its heroes". That is less than a
+ * hero's own collision radius plus the item's, so the walk is a step, not a trip: the hero does
+ * not leave the fight, it bends down in it. Reported: a creep dies in the camp, drops its item
+ * beside the hero that killed it, and the hero fights on around it for the rest of the camp
+ * before walking back for it — or, when the camp is the one that ends the party, never does.
+ */
+const LOOT_GRAB = 50;
+/** How long a failed at-the-feet grab of one item is not tried again. OURS. The whole grab is a
+ *  step, so a second try inside this is a hero bending over the same item every loot pass while
+ *  the fight goes on around it — the see-saw the step exists to be too short for. */
+const LOOT_GRAB_RETRY = 10;
+/**
  * How far from home a shop has to be before it is not worth the walk. A Goblin Merchant across
  * the map is a hero out of the game for a minute, which is worse than having no potion.
  *
@@ -763,6 +777,9 @@ export class PlusItems {
   private onErrand = 0;
   /** When the ground was last looked at for drops — see `loot`. */
   private lastLoot = -Infinity;
+  /** Items an at-the-feet grab (`LOOT_GRAB`) was ordered on, and when — see `LOOT_GRAB_RETRY`.
+   *  Pruned every loot pass, so it holds at most the handful of drops on the floor. */
+  private grabbed = new Map<number, number>();
   /** …and when the belt was last looked over for duplicates worth pawning — see `pawn`. */
   private lastPawn = -Infinity;
   /** Has a Scroll of Town Portal ever been in this player's belt? Latched true and never
@@ -980,6 +997,11 @@ export class PlusItems {
    * (The camp's OWN drops are picked up after the camp is dead, which is when nothing is near
    * them any more — this needs no special case, it is just the same test.)
    *
+   * With ONE exception, and it is a distance rather than a situation: a drop within `LOOT_GRAB`
+   * (50) of a hero is picked up at once, mid-fight and live camp or not, because at that range
+   * there is no walk for either rule to be about. Everything further away still waits for the
+   * camp — the developer's own line: "otherwise it's fine to wait until the camp is finished".
+   *
    * It runs on the belt's own clock rather than a slower one because it is the same kind of
    * decision the belt makes and it is cheap — the ground-item table is a handful of entries on
    * a melee map.
@@ -999,13 +1021,42 @@ export class PlusItems {
     // fight that decides the match: `getitem` replaces whatever the hero was doing, so the one
     // unit the whole squad musters on walked out of the battle for a tome. `underFire` is the
     // same reading every press on this file's ladder calls "this fight", asked of the hero.
-    const heroes = own.filter((u) =>
-      u.isHero && u.inventory.length && !u.isIllusion && this.canAct(u) && !this.underFire(u, foes));
-    if (!heroes.length) return;
+    const able = own.filter((u) => u.isHero && u.inventory.length && !u.isIllusion && this.canAct(u));
+    const heroes = able.filter((u) => !this.underFire(u, foes));
+    // …AND THE ONE EXCEPTION: a drop lying AT a hero's feet (`LOOT_GRAB`). Both gates above and
+    // below are about the WALK — out of the fight, into a live camp — and a step of less than a
+    // body's width is neither, so it is taken mid-fight and with the camp still standing. A hero
+    // holding a channel is still left alone: the order would break a Starfall for a Ring.
+    const grabbers = able.filter((u) => !this.view.world.holdsChannel(u.id));
+    if (!heroes.length && !grabbers.length) return;
+    for (const [id, at] of this.grabbed) if (now - at >= LOOT_GRAB_RETRY || !this.view.world.items.has(id)) this.grabbed.delete(id);
     const taken = new Set<number>();
     for (const it of ground) {
       const def = this.view.item(it.itemId);
       if (!def) continue;
+      // At the feet first. The belt rule is the same one the walk obeys below — a powerup needs no
+      // slot, anything else does — so this can never send a full belt to an item it cannot hold.
+      if (!this.grabbed.has(it.id)) {
+        let feet: SimUnit | null = null;
+        let feetD = LOOT_GRAB;
+        for (const u of grabbers) {
+          if (taken.has(u.id)) continue;
+          if (!def.powerup && u.inventory.indexOf(null) < 0) continue;
+          const d = Math.hypot(u.x - it.x, u.y - it.y);
+          if (d <= feetD) { feetD = d; feet = u; }
+        }
+        if (feet) {
+          taken.add(feet.id);
+          if (feet.order === "getitem" && feet.getItemId === it.id) continue;
+          // Remembered, and NOT re-issued inside `LOOT_GRAB_RETRY` whatever happens to it: the
+          // order ends on its own (picked up, or `tickGetItem` gives up), after which the army's
+          // own passes put the hero back on the fight — the step is taken once, never argued over.
+          this.grabbed.set(it.id, now);
+          this.view.order({ c: "getitem", unitId: feet.id, itemId: it.id });
+          continue;
+        }
+      }
+      if (!heroes.length) continue;
       // Nothing is walked to while something hostile is standing over it. This is the whole of
       // "do not feed the hero to the camp for a drop", and it also means a camp's own loot is
       // simply collected once the camp is dead.
@@ -1745,6 +1796,55 @@ export class PlusItems {
     this.lastDetour = now;
     this.view.order({ c: "order", unitId: hero.id, order: { kind: "move", x: near.x, y: near.y }, queued: false });
     return true;
+  }
+
+  /**
+   * How much gold the BUILD LADDER must hold back so that a missing Town Portal can be bought —
+   * the scroll's price, or 0. Read by the plan (plus/plan.ts `portalSaving`) and turned into a
+   * `AiPlayer.reserveGold` row.
+   *
+   * Reported: the AI does not SAVE for a scroll it cannot afford. `pick` already refuses to spend
+   * the SHOP's gold on the next row down while a scroll is wanted, and `portalChance` buys one
+   * the moment the purse covers it — but the purse is emptied every build pass by a ladder that
+   * knows nothing about either, so the moment "the purse covers it" was one the build order
+   * almost never left standing. The shopping half was saving; the half that spends most of the
+   * gold was not. This is that half.
+   *
+   * Asked under exactly the conditions the buy itself is (`portalChance`), so gold is never
+   * held for a scroll nobody could fetch:
+   *  · a player that PLANS around one (`keepPortal`), and has not got one;
+   *  · past the race's opening buys, for the FIRST scroll (the orc's salves come first, as in
+   *    `portalChance` and `list`);
+   *  · a hero with a free slot to put it in;
+   *  · a shop that will sell one to us RIGHT NOW (stock on the shelf, its tech requirement met
+   *    — an Arcane Vault's scroll wants a Keep) that a hero will actually get to: within
+   *    `SHOP_REACH` of home, where the ordinary trip goes, or within `PORTAL_DETOUR` of a hero,
+   *    which is the field detour's own leash.
+   * Held for as long as the scroll is MISSING, and not merely while it is unaffordable. Letting
+   * go the moment the bank covered the price handed the whole of it straight back to the ladder
+   * on the same pass, so the bank see-sawed around 350 and was below it again by the time a
+   * hero stood at a shop — the saving would have been a pretence. Held until the hero HAS it,
+   * the gold is in the bank whenever `portalChance` looks. The price, never more — the reserve is
+   * not a halt (see `reserveGold`), so the worst a scroll that is never fetched costs the build
+   * order is 350 gold sitting in the bank.
+   */
+  portalSaving(ctx: ItemCtx): number {
+    if (!this.profile.keepPortal || this.profile.shopping <= 0) return 0;
+    const own: SimUnit[] = [];
+    for (const u of this.view.world.units.values()) if (u.hp > 0 && u.owner === this.view.player) own.push(u);
+    if (this.carried(own, PORTAL.id) > 0) return 0;
+    if (!this.hadPortal && (RACE_FIRST[this.race] ?? []).some((w) => this.carried(own, w.id) < w.want)) return 0;
+    const def = this.view.item(PORTAL.id);
+    if (!def || def.gold <= 0) return 0;
+    const heroes = own.filter((u) => u.isHero && !u.isIllusion && u.inventory.length && u.inventory.indexOf(null) >= 0);
+    if (!heroes.length) return 0;
+    for (const shop of this.view.world.units.values()) {
+      if (shop.hp <= 0 || !shop.building || shop.building.constructionLeft > 0 || this.view.hostile(shop)) continue;
+      if (!this.view.world.canUseShop(shop.id, this.view.player) || !this.stocks(shop, PORTAL.id)) continue;
+      const home = Math.hypot(shop.x - ctx.home.x, shop.y - ctx.home.y) <= SHOP_REACH;
+      if (home || heroes.some((h) => Math.hypot(shop.x - h.x, shop.y - h.y) <= PORTAL_DETOUR)) return def.gold;
+    }
+    return 0;
   }
 
   /**

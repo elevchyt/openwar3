@@ -1002,6 +1002,11 @@ const CREEP_FLOOR = 0;
  * army is big enough that the walk is affordable and the near camps are long gone.
  */
 const CREEP_REACH = [3000, 6000, Infinity];
+/** How near a creep camp's centre has to be to the body `expansionFoe` names for that camp to be
+ *  the one GUARDING our next mine — `creepTarget`'s first question. The same slack a party's
+ *  objective is matched to its camp with (`CAMP_MATCH`, one camp's radius plus drift), since the
+ *  foe is one member of the camp standing somewhere inside it. OURS. */
+const EXP_CAMP_REACH = 900;
 /**
  * Hit-point fraction a unit heals up to before it is asked to fight again.
  *
@@ -1276,6 +1281,26 @@ const REGROUP_PATIENCE = 45;
  */
 const CONTACT_LOOK = 1400;
 const CONTACT_ENGAGE = 0.9;
+
+/**
+ * WHAT A WON FIGHT IS — `victoryPass`. All three OURS.
+ *
+ *  · `WON_MIN_SHARE`: the enemy has to have brought at least this share of our own power
+ *    (`armyPower`, the same √Σ(dps × hp) every other comparison here is in) for the meeting to
+ *    be a fight at all. A quarter keeps a scouting Footman or a lone harass unit out of it
+ *    while a real army that we simply outnumbered is in — beating a smaller army IS winning.
+ *  · `WON_QUIET`: seconds with nothing of theirs in contact before the fight counts as over.
+ *    Long enough that a unit stepping in and out of sight at the edge of the frame does not end
+ *    it; short enough that the expansion goes down while their army is still walking home.
+ *  · `WON_KEEP`: …and at least this share of the POWER we brought into the fight must still be
+ *    standing. Trading two thirds of an army for theirs is a trade, not a window.
+ *  · `WON_HEALTH`: our army's own hit-point share has to be at least this. An army down to its
+ *    last third has won nothing it can protect a new hall with.
+ */
+const WON_MIN_SHARE = 0.25;
+const WON_QUIET = 6;
+const WON_KEEP = 0.5;
+const WON_HEALTH = 0.4;
 
 /**
  * THE SAFETY NET ON A MARCH — the army's own version of the arc the scout walks (`safeLeg`).
@@ -1761,6 +1786,17 @@ interface Brain {
    *  hasn't). The same `defendDelay` is measured off it, so a difficulty is as slow to notice an
    *  army in front of it as it is to notice one in its base — see `contactPass`. */
   contactSince: number;
+  /**
+   * A FIGHT WITH A PLAYER'S ARMY that is still being watched to see how it ENDS — see
+   * `victoryPass`. `peak` is the most power the enemy has shown in contact with us during it and
+   * `ours` the most WE had, `lastSeen` the last pass anything of theirs was there and (x, y)
+   * where it was — the field the fight was fought on. Null while there is no such fight.
+   */
+  battle: { peak: number; ours: number; lastSeen: number; x: number; y: number } | null;
+  /** When this player last WON a fight against a player's army (-1 = never) — the enemy army
+   *  left our contact (wiped, fled or teleported out) while ours stood. The expansion row reads
+   *  it (plus/plan.ts `expand`): a won fight is the moment a ladder player takes the next mine. */
+  wonAt: number;
   /** The march's own freeze watchdog, and the clock that switches the safety net off when it
    *  fires — see `MARCH_DIRECT`. */
   leg: { was: { x: number; y: number } | null; since: number };
@@ -2010,6 +2046,8 @@ export class ComputerPlusAi {
       lastWaveEnd: 0,
       threatSince: -1,
       contactSince: -1,
+      battle: null,
+      wonAt: -1,
       leg: { was: null, since: 0 },
       legOffUntil: 0,
       greeted: false,
@@ -2358,6 +2396,8 @@ export class ComputerPlusAi {
       tier: this.tier(b),
       threatened: b.ai.townThreatened(),
       workerChops: this.workerChops(b),
+      portalReserve: b.items.portalSaving(this.itemCtx(b)),
+      wonAt: b.wonAt,
       foodOf: (id) => this.host.registry.get(id)?.foodUsed ?? 0,
       defOf: (id) => this.host.registry.get(id),
     };
@@ -2459,6 +2499,10 @@ export class ComputerPlusAi {
     // errand is frozen whether or not something has walked into the base, and a defend order it
     // cannot execute is one more order stacked on a unit that is not moving.
     this.freezePass(b);
+    // …and HOW THE LAST FIGHT ENDED, above every mode for the reason `pullPass` is: a fight is
+    // won in the enemy's base, in the field and in our own town alike, and `defendPass` below
+    // returns early in exactly the last of those.
+    this.victoryPass(b);
     if (this.defendPass(b)) return;
     // …and the same decision taken OUT ON THE MAP: an enemy army in front of the wave is either
     // fought or walked away from, never walked past. Below `defendPass` because the base always
@@ -3278,6 +3322,85 @@ export class ComputerPlusAi {
   }
 
   /**
+   * DID WE JUST WIN A FIGHT? — the reading a won fight leaves behind (`Brain.wonAt`), for the
+   * expansion row (plus/plan.ts `expand`) to spend.
+   *
+   * Reported: the night elf "rarely expands", and the moment it most obviously should have was
+   * straight after beating the other army — the enemy wiped, fled or Town-Portalled out, and
+   * ours standing on the field with nothing in front of it. That is when a ladder player takes
+   * the next mine: the one army that could have punished a hall standing exposed at a rock has
+   * just been sent home, and it is minutes before it is back.
+   *
+   * What counts as a FIGHT is contact with a PLAYER's soldiers — the same filter and the same
+   * frame `contactPass` measures a meeting by (`armyFrame`/`inContact`: every body in the wave,
+   * not only the captain; no creeps, no workers, no buildings, no illusions, nothing the fog
+   * hides) — whose power was at least `WON_MIN_SHARE` of ours at some point. A lone scout
+   * wandering past is not a fight and walking it off is not a victory.
+   *
+   * What counts as WINNING is that fight ending with THEM gone and US not, and "us not" is three
+   * tests, each of which a live match failed without (Echo Isles, an Insane night elf against a
+   * human, seed 3 — both armies creeping the same camp, and BOTH read as having won it):
+   *
+   *  · WE HOLD THE FIELD: our anchor is still within `CONTACT_LOOK` of where their army was last
+   *    seen. Contact also ends when WE leave — the night elf's hero read its Scroll of Town
+   *    Portal out of that fight, the column lost contact from the other end of the map, and it
+   *    "won". Their army fleeing, teleporting out or dying all leave us standing there; ours
+   *    doing any of those does not.
+   *  · WE STILL HAVE AN ARMY: at least `WON_KEEP` of the power we brought into it (`ours`). The
+   *    same army walked into the human's base with twelve and came out with three healthy ones,
+   *    which the hit-point share alone scores as a fine day.
+   *  · …and what is left is not on its last legs: `WON_HEALTH` of its own hit points.
+   *
+   * A fight we broke off (`retreating`) ends the reading with no verdict — that is a loss, or at
+   * best a draw, and neither is a reason to expand. The camp fights are deliberately not in it:
+   * a creep camp is the routine, and the expansion clock already knows about those.
+   */
+  private victoryPass(b: Brain): void {
+    if (b.mode === "retreating") {
+      b.battle = null;
+      return;
+    }
+    const anchor = this.armyAnchor(b) ?? this.squadCentre(b);
+    if (!anchor) {
+      b.battle = null;
+      return;
+    }
+    const frame = this.armyFrame(b, anchor);
+    const foes: SimUnit[] = [];
+    let fx = 0;
+    let fy = 0;
+    for (const u of this.host.world.units.values()) {
+      if (u.hp <= 0 || u.building || u.isPeon || u.owner === b.ai.player) continue;
+      if (u.isCreep || u.owner < 0 || u.owner >= MELEE.MAX_PLAYERS) continue;
+      if (!inContact(frame, u.x, u.y)) continue;
+      if (isCopy(u) || !b.ai.hostileTo(u) || !b.ai.knows(u)) continue;
+      foes.push(u);
+      fx += u.x;
+      fy += u.y;
+    }
+    const mine = this.powerOf(this.squadUnits(b));
+    if (foes.length) {
+      const theirs = this.powerOf(foes);
+      if (!b.battle && theirs < WON_MIN_SHARE * mine) return; // a scout, not an army
+      b.battle = {
+        peak: Math.max(b.battle?.peak ?? 0, theirs),
+        ours: Math.max(b.battle?.ours ?? 0, mine),
+        lastSeen: b.clock,
+        x: fx / foes.length,
+        y: fy / foes.length,
+      };
+      return;
+    }
+    const battle = b.battle;
+    if (!battle || b.clock - battle.lastSeen < WON_QUIET) return;
+    b.battle = null;
+    if (Math.hypot(anchor.x - battle.x, anchor.y - battle.y) > CONTACT_LOOK) return; // WE left
+    if (mine < WON_KEEP * battle.ours) return; // it cost us the army
+    if (this.creepForce(b).health < WON_HEALTH) return; // …or what is left is on its last legs
+    b.wonAt = b.clock;
+  }
+
+  /**
    * A GROUP, PRICED — `armyPower` over the bodies that can actually fight (plus/power.ts).
    *
    * Symmetric, which is why it is not `creepForce`: that one holds the hero out of the fighters
@@ -3547,6 +3670,25 @@ export class ComputerPlusAi {
     const from = this.afieldAt(b) ?? b.ai.home();
     if (b.shunned.length) b.shunned = b.shunned.filter((s) => s.until > b.clock);
     const skip = (camp: { x: number; y: number }): boolean => isShunned(b.shunned, camp, b.clock);
+    // THE CAMP ON OUR NEXT MINE FIRST, wherever it is — see `EXP_CAMP_REACH`.
+    //
+    // Watched on Echo Isles, an Insane night elf against a human: the night elf's build claimed
+    // its expansion at 5:39 (`expand` registers the town, then `expansionFoe` holds the hall back
+    // for the Forest Trolls standing on it), and the trolls were still there at 12:36. The camp
+    // was well inside what the party could take and one route away; it simply was not the
+    // NEAREST camp, and every creep run in the first ten minutes starts HERE (`creepNext`),
+    // while the only rung that aims at an expansion's guards (`pickTarget` rung 0) is read when
+    // a WAVE is aimed — which the ten-minute creep window (`waveReady`) holds back for exactly
+    // that long. The human beside it expanded at 10:47 only because its own expansion camp
+    // happened to be nearest. A ladder player creeps the camp on the mine it means to take
+    // first; so does this, priced and reached like any other camp, and only a CREEP guard counts
+    // (an enemy army on the rock is a wave's business, not a creep run's).
+    const foe = b.ai.expansionFoe();
+    if (foe?.isCreep) {
+      const guard = b.ai.creepCamp(CREEP_FLOOR, ceiling, air, EXP_CAMP_REACH, foe, skip);
+      const aim = guard && this.campAim(b, guard);
+      if (guard && aim) return { x: aim.x, y: aim.y, level: guard.level };
+    }
     // NEAREST FIRST, and the search widens rather than being one sweep of the whole map.
     // `creepCamp` already answers with the nearest camp inside the level window, but "nearest"
     // over the whole map still walks a party clean across it when the two camps beside home are

@@ -186,6 +186,7 @@ const ITEMS = {
   clsd: { id: "clsd", gold: 150, usable: false, pawnable: true, charges: 0, abilities: ["Ashm"] }, // Cloak of Shadows
   rat3: { id: "rat3", gold: 100, usable: false, pawnable: true, charges: 0, abilities: ["AIat"] }, // Claws of Attack +3
   qbot: { id: "qbot", gold: 50, usable: false, pawnable: false, charges: 0, abilities: ["Ashm"] }, // a quest item: not pawnable
+  tdex: { id: "tdex", gold: 150, usable: false, powerup: true, abilities: [] }, // Tome of Agility — a POWERUP (consumed on contact)
 };
 // The ability rows: the `target` that is the whole of how an item is AIMED (items.ts `aim`), the
 // base `code` that decides what pressing it is FOR (items.ts `USE_OF`), and — for the one code
@@ -890,6 +891,30 @@ console.log("\n-- what is on the ground ----------------------------------------
   check("…and nothing is walked to that cannot be reached",
     looted([h], { ground: [drop({ x: 600 })], noPath: true }), null);
 }
+{
+  // THE ONE EXCEPTION (`LOOT_GRAB`): a drop at the hero's FEET is taken mid-fight, camp alive
+  // or not — the developer's own "within 50 units of one of its heroes". Reported: a creep dies
+  // in the camp beside the hero that killed it, and the hero fought round its item until the
+  // whole camp was down.
+  const h = hero();
+  const it = drop({ x: 40 });
+  check("a drop at a FIGHTING hero's feet is picked up now",
+    looted([h, enemy({ x: 200 })], { ground: [it] })?.itemId, it.id);
+  const h2 = hero();
+  check("…but one a few steps off still waits for the camp",
+    looted([h2, enemy({ x: 200 })], { ground: [drop({ x: 120 })] }), null);
+  // …and the belt rule is the walk's: a full belt cannot take an ordinary item, however close.
+  const full = belt(hero(), "phea", "phea", "phea", "phea", "phea", "phea");
+  check("…a full belt is not sent at one", looted([full, enemy({ x: 200 })], { ground: [drop({ x: 30 })] }), null);
+  // …while a POWERUP needs no slot at all.
+  const tome = drop({ x: 30, itemId: "tdex" });
+  check("…a tome at its feet is taken whatever the belt holds",
+    looted([belt(hero(), "phea", "phea", "phea", "phea", "phea", "phea"), enemy({ x: 200 })], { ground: [tome] })?.itemId, tome.id);
+  // …and a hero holding a channel is left alone: the order would break it.
+  const chan = hero();
+  check("…a channelling hero is not interrupted for it",
+    looted([chan, enemy({ x: 200 })], { ground: [drop({ x: 30 })], channelling: [chan.id] }), null);
+}
 
 // ==========================================================================================
 console.log("\n-- shopping ------------------------------------------------------------------");
@@ -1077,6 +1102,43 @@ const spend = (h, id) => { const i = h.inventory.findIndex((s) => s?.itemId === 
   orders.length = 0;
   items.pass(700, ctx);
   check("…and bought once the purse reaches it", orders.find((c) => c.c === "buyitem")?.itemId, "stwp");
+}
+// …AND THE BUILD LADDER SAVES FOR IT TOO (`PlusItems.portalSaving`, spent by plus/plan.ts
+// `portalSaving` as a `reserveGold` row). Reported: the shop half saved and the ladder spent
+// the bank down every pass, so "the purse reaches it" was a moment that almost never came.
+{
+  const saving = (units, profile = PLUS_INSANE, opts = {}) => {
+    const world = {
+      units: new Map(units.map((u) => [u.id, u])), items: new Map(),
+      itemReadyError: () => null, itemUseError: () => null, holdsChannel: () => false,
+      shopReaches: () => false, shopBuyer: () => null,
+      shopStock: (_id, ware) => (opts.soldOut?.includes(ware) ? 0 : -1),
+      missingForShop: (_id, ware) => (opts.needsTech?.includes(ware) ? ["TWN2"] : []),
+      isShopUnit: () => true, canUseShop: () => true, canPawnAt: () => false,
+    };
+    const items = new PlusItems({
+      world, player: 0, def: (id) => ABILS[id], hostile: (u) => u.owner !== 0 && u.owner !== 12,
+      order: () => true, item: (id) => ITEMS[id], wares: () => ["stwp", "phea"], gold: () => opts.gold ?? 100,
+    }, profile, opts.race ?? "nightelf");
+    return items.portalSaving({ home: { x: 0, y: 0 }, losing: false, mayShop: true, portalWorthIt: true });
+  };
+  const shop = { ...MERCHANT, id: nextId++, x: 1000, y: 0 };
+  check("no scroll, a hero to carry one and a shop that sells one: the ladder holds its price",
+    saving([hero(), shop]), 350);
+  check("…and goes on holding it once the bank covers it, until it is BOUGHT",
+    saving([hero(), shop], PLUS_INSANE, { gold: 900 }), 350);
+  check("…nothing once a hero carries one", saving([belt(hero(), "stwp"), shop]), 0);
+  check("…nothing with no hero to carry it", saving([shop]), 0);
+  check("…nor with every belt full",
+    saving([belt(hero(), "phea", "phea", "phea", "phea", "phea", "phea"), shop]), 0);
+  check("…nor with no shop that will sell one (sold out)", saving([hero(), shop], PLUS_INSANE, { soldOut: ["stwp"] }), 0);
+  check("…nor one whose tech is not met (an Arcane Vault before the Keep)",
+    saving([hero(), shop], PLUS_INSANE, { needsTech: ["stwp"] }), 0);
+  const far = { ...MERCHANT, id: nextId++, x: 20000, y: 0 };
+  check("…nor one nobody will ever walk to", saving([hero(), far]), 0);
+  check("…but a far shop a HERO is standing near counts",
+    saving([hero({ x: 19000, y: 0 }), far]), 350);
+  check("…and Easy, which does not plan around a scroll, saves nothing", saving([hero(), shop], PLUS_EASY), 0);
 }
 {
   // A full belt has nothing to put anything in.

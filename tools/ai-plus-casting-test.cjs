@@ -248,6 +248,24 @@ console.log("\n-- Holy Light and Death Coil are two spells on one button -------
   check("a body worth saving outbids a body worth hurting", cmd && cmd.targetId, dying.id);
 }
 {
+  // NEVER A SUMMON. Reported: the Death Knight coiling its own Skeleton Warriors back up — a
+  // raised Skeleton is undead, friendly and hurt, and it is leaving on its own clock anyway.
+  const dk = caster({ abilId: "AUdc", race: "undead" });
+  const skeleton = unit({ race: "undead", hp: 100, x: 200, isSummon: true, summonLeft: 30 });
+  check("a Death Knight never coils a friendly SUMMON back up", cast([dk, skeleton]), null);
+  // …nor anything else on a timed life (`UnitApplyTimedLife` — a clock without `isSummon`).
+  const timed = unit({ race: "undead", hp: 100, x: 200, summonLeft: 20 });
+  check("…nor a friendly unit on a timed life", cast([dk, timed]), null);
+  // …and with a summon AND a real body both dying, the coil goes to the body.
+  const ghoul = unit({ race: "undead", hp: 250, x: 300 });
+  const cmd = cast([dk, skeleton, ghoul]);
+  check("…the Ghoul beside it is coiled instead", cmd && cmd.targetId, ghoul.id);
+  // …and the NUKE half still reaches an enemy summon: it is only healing one that is wasted.
+  const foeSummon = unit({ owner: 1, hp: 400, x: 200, isSummon: true, summonLeft: 30 });
+  const hit = cast([dk, foeSummon]);
+  check("…while an enemy summon may still be coiled for damage", hit && hit.targetId, foeSummon.id);
+}
+{
   // …and with nobody to save, it is a nuke as it always was.
   const dk = caster({ abilId: "AUdc", race: "undead" });
   const foe = unit({ owner: 1, hp: 400, x: 200 });

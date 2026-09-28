@@ -79,9 +79,18 @@ export interface AiHost {
   foodCeiling(player: number): number;
 }
 
+/**
+ * A fourth kind of build-array row, and OURS — common.ai has three (`ids.ts`). A RESERVE row
+ * builds nothing: it takes `qty` gold off the running budget at its place in the ladder and
+ * never halts, so every row BELOW it sees that much less and every row above it is untouched.
+ * It is how Computer+ saves for something the build array cannot name — a Scroll of Town
+ * Portal is bought at a shop, not trained (`AiPlayer.reserveGold`).
+ */
+const BUILD_RESERVE = 4;
+
 /** One row of the build array — `build_qty`/`build_type`/`build_item`/`build_town`. */
 interface BuildRow {
-  type: number; // BUILD_UNIT | BUILD_UPGRADE | BUILD_EXPAND
+  type: number; // BUILD_UNIT | BUILD_UPGRADE | BUILD_EXPAND | BUILD_RESERVE
   qty: number;
   item: string;
   town: number; // -1 = "anywhere", else a town index (SecondaryTown)
@@ -134,10 +143,12 @@ const MINE_CLEAR = 320;
  *
  * Bounded from ABOVE by the NIGHT ELF and by nothing else: `Aent` Entangle has `Rng1` = 500
  * (`ENTANGLE_RANGE`), measured hull to hull (SimWorld.entangleBody) — the mine's 128 and the
- * tree's own blocked radius come off the centre distance first — so a Tree of Life can reach
- * the rock from about 820 out and no further (docs/night-elf.md). That ceiling is computed in
- * `siteFor` off the tree's real footprint rather than typed here, and it leaves the elf a band
- * of some fifty units, which is why a hall's rings are walked a PATHING CELL apart rather than
+ * tree's own body (the larger of its collision radius, 144, and its footprint's blocked
+ * radius, 128) come off the centre distance first — so a Tree of Life can reach the rock from
+ * 772 out and no further (docs/night-elf.md). That ceiling is computed in `siteFor` off the
+ * tree's real row rather than typed here, and it leaves the elf a band of FOUR units above
+ * the floor — twenty spots of the 64-unit build lattice round a mine, at 768 and 770.7 — which
+ * is why a hall's rings are walked a PATHING CELL apart rather than
  * the base's `SITE_RING_STEP` (768, 800, …): one ring is easily blocked outright, and a blocked
  * expansion hall is silent — `startUnit` has already reserved its gold by the time placement
  * fails, so the AI pays for a hall it never founds, every pass, and starves everything below
@@ -600,6 +611,20 @@ export class AiPlayer {
     if (this.difficulty !== MELEE_NEWBIE || level === 1) this.setBuildAll(BUILD_UPGRADE, level, item, -1);
   }
 
+  /**
+   * Hold `gold` back from every row BELOW this point in the ladder (`BUILD_RESERVE`). Not a
+   * Blizzard setter — the race scripts never save for anything the build array does not
+   * produce — but it is the build array's own mechanism: a row's price is reserved off
+   * `total_gold` whether or not it started, and this is a row with a price and nothing to start.
+   *
+   * It can never be the row that halts the loop. The rows under it may halt for want of the
+   * gold it holds, and that is the saving; but their shortfall SHRINKS with every coin mined,
+   * so `releaseStall` reads it as a player saving up rather than as a dead end.
+   */
+  reserveGold(gold: number): void {
+    if (gold > 0) this.buildList.push({ type: BUILD_RESERVE, qty: gold, item: "", town: -1 });
+  }
+
   /** `SetBuildExpa(qty, id)`. */
   setBuildExpa(qty: number, item: string): void {
     this.setBuildAll(BUILD_EXPAND, qty, item, -1);
@@ -654,6 +679,12 @@ export class AiPlayer {
     for (const row of this.buildList) {
       if (row.type === BUILD_UPGRADE) {
         this.startUpgrade(row.qty, row.item);
+        continue;
+      }
+      if (row.type === BUILD_RESERVE) {
+        // May run the budget below zero, which is the point: the next row that costs gold
+        // then halts until the bank has covered the reserve AND it — see `reserveGold`.
+        this.totalGold -= row.qty;
         continue;
       }
       const ok = row.type === BUILD_UNIT
@@ -741,7 +772,11 @@ export class AiPlayer {
    */
   private holdForUpgrades(): Set<number> {
     const held = new Set<number>();
+    // Gold a RESERVE row above this one is holding back (`reserveGold`): a tier row under it
+    // cannot be paid for out of that, so its hall must not be held idle for it.
+    let saved = 0;
     for (const row of this.buildList) {
+      if (row.type === BUILD_RESERVE) saved += row.qty;
       if (row.type !== BUILD_UNIT) continue;
       const def = this.host.registry.get(row.item);
       if (!def?.isBuilding) continue;
@@ -750,7 +785,7 @@ export class AiPlayer {
       const sources = [...this.upgradeSources(row.item, row.town)];
       if (sources.length === 0) continue;
       const cost = this.rowCost(def, row.item, row.town);
-      if (this.gold() < cost.gold || this.wood() < cost.lumber) continue;
+      if (this.gold() - saved < cost.gold || this.wood() < cost.lumber) continue;
       for (const b of sources) held.add(b.id);
     }
     return held;
@@ -1088,11 +1123,25 @@ export class AiPlayer {
       const mine = world.mines.get(t.mineId);
       if (mine) {
         // The elf's ceiling is Entangle's reach from the planted tree, hull to hull: the
-        // mine's radius and the tree's own blocked radius on top of `Rng1`. See
+        // mine's radius and the tree's own BODY on top of `Rng1`. See
         // EXPANSION_HALL_RANGE_WIDE for the band and why a hall walks its rings a cell apart.
+        //
+        // The body is the sim's own measure, `SimWorld.entangleBody`: the LARGER of the tree's
+        // collision radius and its footprint's blocked radius — and it has to be that one,
+        // because this ceiling is only worth anything if a tree planted under it then passes
+        // `entangleTarget`. It used to be the footprint alone, and on a Tree of Life the two
+        // differ where it matters: `12x12TreeOfLife` blocks an 8-cell span (radius 128) while
+        // `[etol] collision` is 144. So the ceiling read 500 + 128 + 128 = 756, BELOW the 768
+        // the hall rule starts at (`HALL_MINE_DISTANCE`) — the band was EMPTY, `siteFor`
+        // answered null for every mine on the map, and a night elf computer never founded an
+        // expansion at all (measured live on Echo Isles, both expansion mines: no site at 756,
+        // a site at 768 and 771 once the ceiling is the sim's 772). The band is a few units wide
+        // even so — the 64-unit build lattice puts 20 candidate spots in it round a mine — which
+        // is why a hall's rings are walked a pathing cell apart and every one of them is tried.
         const fp = def.pathTex ? this.host.footprintOf(def.pathTex) : null;
+        const body = Math.max(def.collision || 0, fp ? footprintRadius(fp) : 0);
         const reach = this.race === "nightelf"
-          ? ENTANGLE_RANGE + mine.radius + (fp ? footprintRadius(fp) : 0)
+          ? ENTANGLE_RANGE + mine.radius + body
           : EXPANSION_HALL_RANGE_WIDE;
         return this.spiral(def, mine.x, mine.y, HALL_MINE_DISTANCE, reach, t, PATHING_CELL);
       }
@@ -2055,7 +2104,9 @@ export class AiPlayer {
     for (const u of this.host.world.units.values()) {
       if (u.hp <= 0) continue;
       const town = this.townAt(u.x, u.y);
-      if (u.owner === this.player && u.typeId === id) {
+      // A HERO counts under its normal form (SimWorld.normalFormOf), or a Demon Hunter in
+      // Metamorphosis reads as no Demon Hunter and the hero row asks the altar for another.
+      if (u.owner === this.player && (u.typeId === id || (u.isHero && this.host.world.normalFormOf(u) === id))) {
         c.all++;
         bump(c.allAt, town);
         if (!u.building || u.building.constructionLeft <= 0) {

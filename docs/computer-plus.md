@@ -824,6 +824,60 @@ that goes up through `secondaryTown` from plus/plan.ts's `mineBuildings` rather 
 walked into the camp the Necropolis was being held back from, every build pass. Both doors now ask
 `townGuarded`, which is why it is public. Pinned in `tools/ai-plus-ladder-test.cjs`.
 
+**…and there was a THIRD door: `meleeTownHall(1, …)`,** near the top of the ladder, which asks for
+the hall of any town with a mine and no hall — which a claimed town is. Watched on Echo Isles (an
+Insane night elf against a human, seed 3): the night elf claimed its troll-guarded expansion at
+5:39 and that row reserved a Tree of Life's 340/185 off the top of every pass for the seven minutes
+the trolls lived, its second hero halted underneath on 750 gold; the human walked a builder into its
+own camp and lost the Town Hall site. It asks `townGuarded` too now.
+
+#### Why the night elf never expanded: its hall had nowhere to stand
+
+`AiPlayer.siteFor` holds a night elf's expansion Tree of Life inside Entangle's reach of its mine —
+`Rng1` 500 hull to hull, so 500 + the mine's 128 + the tree's own body — and above the hall rule's
+floor, `HALL_MINE_DISTANCE` 768. It took the tree's body off its FOOTPRINT alone, and
+`12x12TreeOfLife` blocks an 8-cell span: radius 128, ceiling 756, **below the floor**. The band was
+empty, `siteFor` answered null for every mine on the map, and a Computer+ night elf could not found
+an expansion at all — at any difficulty, on any map, however the rest of the ladder went (measured
+live on Echo Isles: no site at either expansion mine). The sim's own `entangleBody` takes the
+LARGER of the collision radius and the footprint's, and `[etol] collision` is 144, so the reach a
+planted tree actually has is 772; `siteFor` now uses exactly that measure, and both Echo Isles
+expansion mines have a site (768 and 771 out). The band is four units wide even so — twenty spots
+of the 64-unit build lattice round a mine — which is what walking the hall's rings a pathing cell
+apart is for.
+
+#### The camp on our next mine is the first camp we creep
+
+The same match showed a second, smaller reason, and it is not the night elf's alone. Its expansion was claimed at 5:39 and the trolls on it were still standing at 12:36, though
+the camp was one the party could take and one route away: every creep run in the first ten minutes
+starts from `creepNext`, which takes the NEAREST camp, and the only rung that aims at an expansion's
+guards (`pickTarget` rung 0) is read when a WAVE is aimed — which the ten-minute creep window
+(`waveReady`) holds back for exactly that long. The human beside it expanded at 10:47 only because
+its own expansion camp happened to be its nearest. So `creepTarget` now asks first for the camp
+within `EXP_CAMP_REACH` of whatever `expansionFoe` names — priced (`maxCampLevel`) and reached
+(`campAim`) like any other, and only when the foe is a CREEP (an enemy army on the rock is a wave's
+business) — and falls back to nearest-first when it cannot have it.
+
+#### …and a WON FIGHT is when the next mine is taken
+
+The developer's second half of the same report: expand *"when it gets the chance — notably after
+winning a fight (the enemy army teleported out, fled or was wiped)"*. `ComputerPlusAi.victoryPass`
+watches every army pass for contact with a PLAYER's army (the `contactPass` frame and filter —
+no creeps, workers, buildings, illusions or fogged bodies) whose power reached `WON_MIN_SHARE`
+(¼) of ours, and records `Brain.wonAt` when that contact has been gone `WON_QUIET` (6 s) while we
+are not retreating, our anchor still stands within `CONTACT_LOOK` of where their army was last
+seen (we HOLD THE FIELD — contact also ends when we leave, and the first live run had a night elf
+"win" a fight its hero had just Town-Portalled out of), at least `WON_KEEP` (½) of the power we
+brought into it is still standing (the same army came out of the human's base with three units of
+twelve, healthy ones) and what is left holds `WON_HEALTH` (40 %) of its hit points. For `WON_EXPAND_WINDOW`
+(90 s) after it, from `TIER2_CLOCK` on, plus/plan.ts `wonExpansion` lifts the build's expansion
+clock AND moves the expansion row up from the bottom of the ladder to just under the core army —
+a clock that opens does nothing for a row the loop never reaches. One row either way (a doubled row
+reserves twice), every race, and every other gate still stands (`expansions`, so Easy never; never
+while threatened; `startExpansion`'s mine, price and camp). On the ladder fixture a fight won at
+4:00 brings a Normal night elf's first expansion from 672–806 s to 246 s, at a cost of 28–46 s on
+its tier 2.
+
 ### The last resort: a captain that has stopped moving takes the party home
 
 Four watchdogs sit above this one — `stalled` asks whether the wave is closing on what it was
@@ -2074,6 +2128,16 @@ is therefore skipped outright while anything that can fight back is within `LOOK
 (`underFire`, the same reading every press on the belt's ladder calls "this fight"). The drop is
 still there in twenty seconds; the fight is not.
 
+**…except a drop at its FEET.** Both rules above are about the WALK — out of the fight, into a live
+camp — and a drop within `LOOT_GRAB` (**50**, the developer's own number) of a hero is no walk at
+all: it is less than a body's width, so it is picked up at once, mid-fight and with the camp still
+standing. Reported: a creep died in the camp beside the hero that killed it, and the hero fought
+round its item until the whole camp was down. The belt rule is the walk's (a powerup needs no slot,
+anything else does), a hero holding a channel is left alone, and each item is tried once per
+`LOOT_GRAB_RETRY` (10 s), so a grab that fails is not re-issued every loot pass while the fight
+goes on — the step is taken once and never argued over, which is what keeps it from see-sawing the
+hero. Everything further than 50 still waits for the camp.
+
 ### Obsidian Statues: one on life, one on mana
 
 The undead's only healer, and unlike a Moon Well it walks with the army — without one an undead
@@ -2672,6 +2736,13 @@ once `polarityOk` has vouched for the race. Three things fall out of it:
   enemy Undead) and keeps the ordinary bar.
 * **An illusion is never healed.** It deals no damage, arrives at full health and is meant to die
   ([`docs/illusions.md`](illusions.md)) — mana spent on one is mana spent on a picture.
+* **…and Death Coil never heals a SUMMON.** Reported: the Death Knight coiling its own Skeleton
+  Warriors back up. A raised Skeleton is undead, friendly and hurt, so it passed every rule the
+  heal half had — but it is leaving on its own clock, costs a corpse to replace, and the same coil
+  is the burst that finishes something on the other side. Both marks are asked (`isSummon`, and a
+  running `summonLeft` for anything on `UnitApplyTimedLife`). Death Coil's heal only: Holy Light's
+  competes with no nuke, and the ordinary heals already price a summon DOWN (`targeting.ts`
+  `SUMMON`) rather than ruling it out. The nuke half still reaches an ENEMY summon.
 
 ### A friendly spell reaches an ALLY's units
 
@@ -3038,6 +3109,23 @@ neither was `keepPortal`:
   a scroll has been carried, a missing one it cannot yet pay for is SAVED for: `pick` stops at the
   portal row rather than spending the gold on the salve under it, whenever a shop here would sell
   one.
+* **…and the BUILD LADDER spent what the shop was saving.** Reported: it *"must save gold toward
+  a Scroll of Town Portal when it cannot afford one"*. `pick` saved the SHOP's gold, but the build
+  pass empties the bank every few seconds and knows nothing about the belt, so "the purse covers
+  it" was a moment that almost never came. `PlusItems.portalSaving` answers the scroll's price
+  under exactly the conditions the buy itself runs under (`keepPortal`, no scroll carried, past
+  the race's opening buys, a hero with a free slot, a shop that will sell one NOW — stock on the
+  shelf and its tech met — within `SHOP_REACH` of home or `PORTAL_DETOUR` of a hero), and
+  plus/plan.ts `portalSaving` spends it as a **reserve row** (`AiPlayer.reserveGold`, a fourth row
+  kind that is ours: it takes `qty` off the running budget and builds nothing). A reserve row
+  never HALTS the loop, so it cannot be the row a ladder dies on; the rows under it may halt for
+  the gold it holds, and their shortfall shrinks with every coin mined, so `releaseStall` reads
+  them as saving rather than stuck. It sits **directly under the core army** — the crews, the
+  hall, the hero, the Barracks, the shop and `CORE_ARMY_FOOD` are never what waits — and it is
+  held until the scroll is BOUGHT rather than until it is affordable, because letting go at 350
+  handed the gold straight back to the ladder on the same pass. Measured on the ladder fixture
+  as a worst case (a scroll wanted from 2:30 and never fetched): tier 2 lands 34–48 s later and
+  the army at ten minutes is within a few food of the same.
 
 Neither of those changes the opening: `pick` does not *save*, it skips a row it cannot afford and
 buys the next one down, so at two minutes there is no 350 gold above the reserve and the salve is

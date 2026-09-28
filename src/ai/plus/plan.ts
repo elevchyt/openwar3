@@ -63,6 +63,14 @@ export interface PlusCtx {
    * races anywhere.
    */
   readonly workerChops: boolean;
+  /**
+   * Gold to hold back from the ladder below the opening for a missing Scroll of Town Portal —
+   * `PlusItems.portalSaving`, 0 or absent when there is nothing to save for. See `portalSaving`.
+   */
+  readonly portalReserve?: number;
+  /** When this player last WON a fight against a player's army, on `clock`'s scale (-1 or
+   *  absent = never) — `ComputerPlusAi.victoryPass`. What `expand` reads as "now is the time". */
+  readonly wonAt?: number;
   /** A unit type's food cost. */
   foodOf(id: string): number;
   /** A unit type's whole row — what `counterScore` reads its attack type and weapons off. */
@@ -353,7 +361,17 @@ export function buildPlan(c: PlusCtx): void {
   // no worker and no game. (Town 1 as well, because an expansion whose hall died is a town with
   // a mine and no hall. That is the row the crews used to sit underneath.)
   ai.meleeTownHall(0, table.halls[0]);
-  ai.meleeTownHall(1, table.halls[0]);
+  // …but NOT WHILE THE CAMP IS STILL STANDING ON TOWN 1 — `townGuarded`, the same question
+  // `startExpansion` (through `expansionFoe`) and `mineBuildings` already ask. `expand` CLAIMS
+  // the town before it asks about the camp (`nextExpansion` registers it first), and from that
+  // pass on this row — near the TOP of the ladder — asked for its hall with nobody asking about
+  // the camp at all. Watched on Echo Isles (Insane night elf against a human, both claiming the
+  // troll-guarded mine at five minutes): the human's builder walked into the camp and its Town
+  // Hall site went down with it, and the night elf's row reserved a Tree of Life's 340/185 off
+  // the top of every pass for as long as the trolls lived, starving the rows under it (its
+  // second hero halted with 750 gold in the bank). The army is what clears the camp
+  // (`pickTarget` rung 0, off `takeExp`); the hall follows it, from this same row.
+  if (!ai.townGuarded(1)) ai.meleeTownHall(1, table.halls[0]);
 
   supply(c);
   // The ALTAR, then the HERO, then somewhere to make a soldier. The order of those three is the
@@ -380,6 +398,11 @@ export function buildPlan(c: PlusCtx): void {
   // a row that is never reached at all.
   shop(c);
   army(c, coreArmy(c)); // enough not to die to the first raid, cheap enough not to block tech
+  // SAVING FOR A MISSING TOWN PORTAL — see `portalSaving` for why HERE.
+  portalSaving(c);
+  // …and JUST AFTER A WON FIGHT, the expansion comes up to here from the bottom of the ladder —
+  // see `wonExpansion`. Inert the rest of the time: the ordinary row is `expand` below.
+  expand(c, true);
   // THE RACE'S OWN SMITH — the Blacksmith, the Forge, the Graveyard, the Hunter's Hall — ABOVE
   // the tier-up, which is where this file's own header always said it belonged ("a Forge is two
   // hundred gold and makes the army you already have better; a Stronghold is three hundred and
@@ -413,6 +436,26 @@ export function buildPlan(c: PlusCtx): void {
   tierUp(c);
   towers(c);
   army(c, c.profile.armyFood); // …and the rest of it, with everything above already paid for
+}
+
+/**
+ * Hold the price of a missing Scroll of Town Portal back from everything below this row.
+ *
+ * Reported: a Computer+ player with no scroll and too little gold for one never came to have
+ * enough, because the build ladder spent the bank down every pass and the shop only ever looked
+ * at what was left (plus/items.ts `portalSaving`). A ladder player who has lost their scroll puts
+ * the next one ahead of the next building, and this row is that: a `reserveGold` row, which
+ * builds nothing and never halts, so the rows under it simply see 350 gold less.
+ *
+ * WHERE it sits is the whole design. Below the crews, the hall, the supply, the hero, the
+ * Barracks, the shop and the CORE army — the rows that keep the economy paying and an army on the
+ * field (the `CORE_ARMY_FOOD` floor is the thing "must keep an army while it saves" is stated in)
+ * — and above the tech, the tier-up, the expansion and the bulk of the army, which is what a
+ * player delays by one scroll. Above the crews it would stop the income that pays for it; below
+ * the bulk army it would never be reached, since `army` asks for one more soldier every pass.
+ */
+function portalSaving(c: PlusCtx): void {
+  if (c.portalReserve && c.portalReserve > 0) c.ai.reserveGold(c.portalReserve);
 }
 
 /**
@@ -1371,14 +1414,19 @@ function upgrades(c: PlusCtx): void {
  *  · IS IT SAFE? Never while something hostile is standing in one of its towns. Founding a
  *    second base during a raid is how an AI loses its first one.
  */
-function expand(c: PlusCtx): void {
+function expand(c: PlusCtx, early = false): void {
   const { ai, profile, table, strategy, clock, threatened } = c;
+  // ONE row, at one of two depths: high in the ladder in the window after a won fight, and at its
+  // ordinary place otherwise — never both, because a row that appears twice reserves its price
+  // twice (`OneBuildLoop`).
+  const won = wonExpansion(c);
+  if (early !== won) return;
   if (profile.expansions < 1 || threatened) return;
   const owned = Math.max(1, ai.minesOwned());
   if (owned >= 1 + profile.expansions) return;
   const planned = (owned === 1 ? strategy.expandAt : strategy.expandAgainAt) + profile.expandDelay;
   const needed = ai.goldOwned() < EXPAND_GOLD;
-  if (clock < planned && !needed) return;
+  if (clock < planned && !needed && !won) return;
   // WHAT AN EXPANSION *IS* is not the same building for all four races, and `undead.ai` says so
   // in as many words: every one of its four expansion sites reads
   // `ai.basicExpansion(mines < N, UNDEAD_MINE)` — the Haunted Gold Mine, never the Necropolis
@@ -1389,6 +1437,47 @@ function expand(c: PlusCtx): void {
   // the moment the haunt is ordered, so nothing can put the hall up first.
   ai.basicExpansion(true, table.mineBuilding ?? table.halls[0]);
 }
+
+/**
+ * IS THIS THE MOMENT A WON FIGHT HAS MADE — expand now, whatever the build's clock says?
+ *
+ * Reported: the night elf "rarely expands", and its clearest missed chance was straight after it
+ * had beaten the other army — theirs wiped, fled or Town-Portalled home, ours standing. A ladder
+ * player takes the next mine THEN, because the one thing that punishes a new hall standing
+ * exposed at a rock is the army that has just been sent away, and it will be minutes before it
+ * is back. `ComputerPlusAi.victoryPass` is what notices (`PlusCtx.wonAt`); this is the row
+ * spending it, for every race — nothing about the moment is the night elf's.
+ *
+ * It does two things for `WON_EXPAND_WINDOW` seconds, and each fixes a different half of "never
+ * gets round to it":
+ *
+ *  · the CLOCK is lifted — the build's `expandAt`/`expandAgainAt` and the difficulty's
+ *    `expandDelay` are a plan for an ordinary game, and a won fight is not one — down to a
+ *    floor of `WON_EXPAND_FLOOR`, before which a "won fight" is two openings bumping into each
+ *    other and the economy has nothing to spare for a second hall;
+ *  · and the ROW MOVES UP, from the bottom of the ladder to just under the core army
+ *    (`buildPlan`). Down there it is below the tech, the tier-up and every support row, and a
+ *    clock that is open does nothing for a row the loop never reaches.
+ *
+ * Everything else still applies: the difficulty's ceiling (`expansions`, so Easy never), never
+ * while our own base is under attack, and `startExpansion`'s own refusals — a free mine, the
+ * price, the camp on it (which the army is then sent at, `pickTarget` rung 0). The window is
+ * bounded, so the high row's reservation ends with it: a halt it causes is the ladder saving for
+ * one hall for a minute and a half, and the town the row CLAIMED keeps its hall row near the top
+ * afterwards anyway (`meleeTownHall(1, …)`, and the undead's `mineBuildings`).
+ */
+function wonExpansion(c: PlusCtx): boolean {
+  const at = c.wonAt ?? -1;
+  return at >= 0 && c.clock >= at && c.clock - at <= WON_EXPAND_WINDOW && c.clock >= WON_EXPAND_FLOOR;
+}
+
+/** How long after a won fight the expansion is pressed for — see `wonExpansion`. OURS: long
+ *  enough to bank one hall's price at an ordinary income, short enough that it is still the same
+ *  moment the enemy army is walking home in. */
+const WON_EXPAND_WINDOW = 90;
+/** …and not before this game clock. OURS: three minutes is `TIER2_CLOCK`, the point at which a
+ *  melee economy has anything past its opening to spend at all. */
+const WON_EXPAND_FLOOR = TIER2_CLOCK;
 
 /**
  * HAUNT THE MINE — the undead's expansion, and the row without which it is not one.

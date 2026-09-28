@@ -1274,6 +1274,17 @@ export class PlusCaster {
       // mana spent on a picture. Only the friendly half needs saying: hitting a copy is fine,
       // and is often the whole point of the enemy having made it.
       if (heals && t.isIllusion) continue;
+      // …NOR, FOR DEATH COIL, IS A SUMMON. Reported: the Death Knight coiling its own Skeleton
+      // Warriors back up. A raised Skeleton is undead, friendly and hurt, so it passes every rule
+      // the heal half has — and it is leaving on its own clock (Raise Dead's `Dur1`),
+      // costs nothing to replace, and is the one body in an undead army the NEXT corpse makes
+      // another of. The same coil is the 200/400/600 burst that finishes something on the other
+      // side. Both marks are asked: `isSummon` (the spell's own summons, and UNIT_TYPE_SUMMONED)
+      // and a running `summonLeft` (any unit on a timed life — `UnitApplyTimedLife` puts one on
+      // a unit that is not a summon, and it is leaving just the same). Death Coil's half only
+      // (`healsUndead`): Holy Light's heal competes with no nuke, and the ordinary heals already
+      // price a summon down (`targeting.ts` `SUMMON`) rather than ruling it out.
+      if (heals && polarity && POLARITY_SPELLS[code]?.healsUndead && (t.isSummon || t.summonLeft > 0)) continue;
       if (inferred && t === u) continue; // see `inferred`
 
       if (!near(u, t, lvl.castRange)) continue;
