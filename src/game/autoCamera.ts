@@ -102,8 +102,10 @@ interface Spot {
 }
 
 export class AutoCamera {
-  /** The checkbox. Off by default, as the game's own box is. */
-  enabled = false;
+  /** The checkbox. ON by default — the developer's call, not the game's (whose replay box
+   *  starts off): a watcher who has not touched it wants to be shown the match. Only an
+   *  OBSERVER's frame ever consults it (MapViewerScene.updateAutoCamera). */
+  enabled = true;
   /** This match is MELEE, so its opening is a tour of the bases (see the header). Set by the
    *  renderer when the match begins; a custom map sets up its own game and has no "bases". */
   meleeOpening = false;

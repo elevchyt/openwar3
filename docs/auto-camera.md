@@ -4,7 +4,9 @@ Issue #167. An observer — the Custom Game screen's Observer Mode, or a seat on
 Observers bench (`MeleeConfig.observer`) — gets an **Auto Camera** checkbox, which the observer
 HUD (issue #168, [`docs/observer-hud.md`](observer-hud.md)) stands above its selection panel,
 on no panel of its own.
-Ticked, the camera pans by itself to the most interesting part of the match.
+Ticked, the camera pans by itself to the most interesting part of the match. It starts TICKED
+(`AutoCamera.enabled`) — ours, not the game's: a watcher who has not touched it wants to be shown
+the match.
 
 ## The control is the game's
 
