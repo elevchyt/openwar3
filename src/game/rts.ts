@@ -1372,6 +1372,8 @@ export class RtsController {
    *  is an ally (see `observing`). `seats` is who is playing and on whose team. */
   observeMatch(seats: ReadonlyArray<{ player: number; team: number }>): void {
     this.observing = true;
+    // …an ally of everybody, so their invisible units are drawn to it faded, as to their own side.
+    this.local.setWatcher(true);
     this.observedColors = observerTeamColors(seats);
     this.retintUnits();
   }
@@ -1532,7 +1534,11 @@ export class RtsController {
   seatObservers(players: readonly number[]): void {
     for (const p of players) this.observerSeats.add(p);
     this.viewpoints.seat(players.map((player) => ({ player, team: player })));
-    for (const player of players) this.viewpoints.viewpointFor(player).setRevealAll(true);
+    for (const player of players) {
+      this.viewpoints.viewpointFor(player).setRevealAll(true);
+      // …and every player's invisible units reach its payload, drawn faded (`setWatcher`).
+      this.viewpoints.viewpointFor(player).setWatcher(true);
+    }
   }
 
   /** The Observers bench's seats (host side) — the recipients whose payload carries the

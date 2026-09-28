@@ -285,6 +285,9 @@ export class Viewpoint {
   invisHides(u: SimUnit): boolean {
     if (!u.invisible) return false;
     if (this.seesFor(u.owner)) return false; // ours/an ally's — drawn, faded
+    // A WATCHER is everybody's ally (`setWatcher`): every invisible unit is drawn to it the way
+    // it is drawn to its own side — faded, never gone.
+    if (this.watcher) return false;
     return !this.world.teamDetects(this.team, u.x, u.y);
   }
 
@@ -413,6 +416,17 @@ export class Viewpoint {
   setRevealAll(on: boolean): void {
     this.vision.setRevealAll(on);
   }
+  /**
+   * Is this an OBSERVER's viewpoint? A watcher is treated as an ally of every player on the
+   * field, so what invisibility does to it is what it does to a unit's own side: the unit is
+   * drawn half-faded rather than hidden (`invisHides`). Reveal-all is not the same thing — a
+   * PLAYER in a reveal-all lobby still may not see an enemy's Wind Walk — which is why it is a
+   * flag of its own, set by both watcher doors (`RtsController.observeMatch`, `seatObservers`).
+   */
+  setWatcher(on: boolean): void {
+    this.watcher = on;
+  }
+  private watcher = false;
   get revealed(): boolean {
     return this.vision.revealed;
   }
