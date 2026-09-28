@@ -3259,6 +3259,18 @@ neither was `keepPortal`:
   handed the gold straight back to the ladder on the same pass. Measured on the ladder fixture
   as a worst case (a scroll wanted from 2:30 and never fetched): tier 2 lands 34–48 s later and
   the army at ten minutes is within a few food of the same.
+* **…and the FIGHT items were never bought at all.** Reported: a Normal computer never bought a
+  Scroll of Healing or a Potion of Lesser Invulnerability, and a 17-minute observed Echo Isles
+  match agreed. Three reasons, one per door: they sat under the Potion of Healing, so Normal's
+  four-slot habit ceiling (creep drops count) closed first; they were paid out of the surplus
+  above `itemReserve`, while the bank stood at 17–298 whenever the pass looked; and they are
+  Goblin Merchant wares, and Echo Isles' Merchant is ~8000 from either start, past `SHOP_REACH`.
+  So they are `FIGHT` rows now — ESSENTIAL (past the ceiling), out of the purse (`opening`),
+  listed right behind the race's opening buys and ahead of its mana — and a missing one is
+  handled exactly like a missing scroll once the scroll is carried: bought wherever a hero stands
+  in a shop's range and fetched on the field detour (`fightChance`), and its price held back from
+  the ladder on the same reserve row (`PlusItems.fightSaving`). Measured after: the orc bought
+  both at 16:50 on the same match.
 
 Neither of those changes the opening: `pick` does not *save*, it skips a row it cannot afford and
 buys the next one down, so at two minutes there is no 350 gold above the reserve and the salve is

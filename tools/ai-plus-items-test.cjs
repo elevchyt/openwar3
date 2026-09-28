@@ -1021,24 +1021,25 @@ const spend = (h, id) => { const i = h.inventory.findIndex((s) => s?.itemId === 
 {
   // It does not buy what it already carries enough of. `stwp` wants 1.
   const h = belt(hero(), "stwp");
-  check("…and never a second Town Portal", shopped([h, MERCHANT], PLUS_INSANE).buy?.itemId, "phea");
+  // (What comes next is the first FIGHT item — the Scroll of Healing — see items.ts `FIGHT`.)
+  check("…and never a second Town Portal", shopped([h, MERCHANT], PLUS_INSANE).buy?.itemId, "shea");
 }
 {
   // Counted across ALL heroes — two heroes with a scroll each is one wasted slot.
   const a = belt(hero(), "stwp");
   const b = hero();
   check("a second hero does not buy the scroll the first is carrying",
-    shopped([a, b, MERCHANT], PLUS_INSANE).buy?.itemId, "phea");
+    shopped([a, b, MERCHANT], PLUS_INSANE).buy?.itemId, "shea");
 }
 {
   const h = hero();
-  check("a sold-out shelf is skipped", shopped([h, MERCHANT], PLUS_INSANE, { soldOut: ["stwp"] }).buy?.itemId, "phea");
+  check("a sold-out shelf is skipped", shopped([h, MERCHANT], PLUS_INSANE, { soldOut: ["stwp"] }).buy?.itemId, "shea");
 }
 {
   // A RACE shop's tech gate: an Arcane Vault's Town Portal wants a Keep. A neutral shelf has none.
   const h = hero();
   check("a race shop's unmet requirement is skipped",
-    shopped([h, MERCHANT], PLUS_INSANE, { needsTech: ["stwp"] }).buy?.itemId, "phea");
+    shopped([h, MERCHANT], PLUS_INSANE, { needsTech: ["stwp"] }).buy?.itemId, "shea");
 }
 {
   // The purse is gold ABOVE the reserve the build order keeps — see PlusProfile.itemReserve.
@@ -1046,7 +1047,7 @@ const spend = (h, id) => { const i = h.inventory.findIndex((s) => s?.itemId === 
   // (The Potion of Healing is bought out of the purse now — see below — so it is off the shelf
   // here, to leave an ordinary row as the next thing on the list.)
   check("it will not dip into the build order's gold",
-    shopped([h, MERCHANT], PLUS_INSANE, { gold: PLUS_INSANE.itemReserve + 10, soldOut: ["phea"] }).buy, null);
+    shopped([h, MERCHANT], PLUS_INSANE, { gold: PLUS_INSANE.itemReserve + 10, soldOut: ["phea", "shea", "pnvl"] }).buy, null);
 }
 {
   // THE HEALING POTION IS BOUGHT OUT OF THE PURSE, like the race's opening buys. Measured on Echo
@@ -1054,11 +1055,11 @@ const spend = (h, id) => { const i = h.inventory.findIndex((s) => s?.itemId === 
   // played twelve minutes without ever carrying one.
   const h = belt(hero(), "stwp");
   check("a Potion of Healing does not wait for the reserve",
-    shopped([h, MERCHANT], PLUS_NORMAL, { gold: 160 }).buy?.itemId, "phea");
+    shopped([h, MERCHANT], PLUS_NORMAL, { gold: 160, soldOut: ["shea", "pnvl"] }).buy?.itemId, "phea");
   // …and the habit ceiling does not stop it either: Normal's four slots, full of creep drops.
   const full = belt(hero(), "stwp", "prvt", "rde1", "cnob");
   check("…nor for a belt already at the habit's ceiling",
-    shopped([full, MERCHANT], PLUS_NORMAL, { gold: 160 }).buy?.itemId, "phea");
+    shopped([full, MERCHANT], PLUS_NORMAL, { gold: 160, soldOut: ["shea", "pnvl"] }).buy?.itemId, "phea");
   // …and an ordinary row ABOVE it that the ceiling refuses does not end the pass. An orc's
   // opening salve leads its list; at the ceiling the salve is refused, and the potion two rows
   // down was never reached (measured: 1258 gold banked at 15:00, no potion bought).
@@ -1066,7 +1067,23 @@ const spend = (h, id) => { const i = h.inventory.findIndex((s) => s?.itemId === 
   check("a refused salve above it does not hide the potion",
     shopped([belt(hero(), "stwp", "prvt", "rde1", "cnob"), MERCHANT], PLUS_NORMAL, { race: "orc", shelf: LOUNGE, gold: 600 }).buy?.itemId, "phea");
   check("…but two is still the habit",
-    shopped([belt(hero(), "stwp", "phea", "phea"), MERCHANT], PLUS_NORMAL, { gold: 160 }).buy, null);
+    shopped([belt(hero(), "stwp", "phea", "phea"), MERCHANT], PLUS_NORMAL, { gold: 160, soldOut: ["shea", "pnvl"] }).buy, null);
+}
+{
+  // THE FIGHT ITEMS (items.ts `FIGHT`). Reported: a Normal computer never bought a Scroll of
+  // Healing or a Potion of Lesser Invulnerability, and an observed 17-minute match agreed. They
+  // sat under the habit ceiling and were paid for out of the surplus; now they are neither.
+  const full = belt(hero(), "stwp", "prvt", "rde1", "cnob"); // Normal's four slots, creep drops
+  check("a Normal belt at its habit ceiling still takes a Scroll of Healing",
+    shopped([full, MERCHANT], PLUS_NORMAL, { gold: 260 }).buy?.itemId, "shea");
+  check("…out of the purse, not the surplus above the reserve (260 < 300 + 250)",
+    shopped([belt(hero(), "stwp"), MERCHANT], PLUS_NORMAL, { gold: 260 }).buy?.itemId, "shea");
+  check("…and then a Potion of Lesser Invulnerability",
+    shopped([belt(hero(), "stwp", "prvt", "rde1", "cnob", "shea"), MERCHANT], PLUS_NORMAL, { gold: 160 }).buy?.itemId, "pnvl");
+  check("…ahead of the race's mana", shopped([belt(hero(), "stwp", "shea"), MERCHANT], PLUS_NORMAL, { race: "orc", gold: 5000, soldOut: ["hslv"] }).buy?.itemId, "pnvl");
+  check("…and not while the shelf has none (before 7:20, or sold out)",
+    shopped([belt(hero(), "stwp"), MERCHANT], PLUS_NORMAL, { gold: 260, soldOut: ["shea", "pnvl"] }).buy?.itemId, "phea");
+  check("Easy still buys nothing", shopped([hero(), MERCHANT], PLUS_EASY).buy, null);
 }
 {
   const h = hero();
@@ -1099,6 +1116,41 @@ const spend = (h, id) => { const i = h.inventory.findIndex((s) => s?.itemId === 
   const away = { ...MERCHANT, id: nextId++, x: 6000, y: 0 };
   const r2 = shopped([hero({ x: 0, y: 0 }), away], PLUS_INSANE, { inRange: false, mayShop: false, mayDetour: true, race: "nightelf" });
   check("…but not across the map", !r2.move && !r2.buy, true);
+}
+// THE FIGHT ITEMS ARE FETCHED LIKE A MISSING SCROLL (`fightChance`) AND SAVED FOR LIKE ONE
+// (`fightSaving`). On Echo Isles the Goblin Merchant is ~8000 from either start — past
+// SHOP_REACH, so the trip from home never went there — and the Normal bank sat under 300.
+{
+  const far = { ...MERCHANT, id: nextId++, x: 9000, y: 0 };
+  const h = belt(hero({ x: 8950, y: 0 }), "stwp");
+  const r = shopped([h, far], PLUS_NORMAL, { mayShop: false, gold: 260 });
+  check("a hero standing at a far Merchant buys the missing Scroll of Healing, wave out or not", r.buy?.itemId, "shea");
+  const r2 = shopped([belt(hero({ x: 8950, y: 0 }), "stwp", "shea"), far], PLUS_NORMAL, { mayShop: false, gold: 160 });
+  check("…then the Potion of Lesser Invulnerability", r2.buy?.itemId, "pnvl");
+  const near = { ...MERCHANT, id: nextId++, x: 1500, y: 0 };
+  const r3 = shopped([belt(hero(), "stwp"), near], PLUS_NORMAL, { inRange: false, mayShop: false, mayDetour: true, gold: 260 });
+  check("…and a mustering hero detours for one a screen away", !!r3.move && r3.move.order.x === 1500, true);
+  const r4 = shopped([hero({ x: 8950, y: 0 }), far], PLUS_NORMAL, { mayShop: false, gold: 5000, race: "nightelf" });
+  check("…but never ahead of a missing Town Portal", r4.buy?.itemId, "stwp");
+  const fs = (units, gold = 100) => {
+    const world = {
+      units: new Map(units.map((u) => [u.id, u])), items: new Map(),
+      itemReadyError: () => null, itemUseError: () => null, holdsChannel: () => false,
+      shopReaches: () => false, shopBuyer: () => null, shopStock: () => -1, missingForShop: () => [],
+      isShopUnit: () => true, canUseShop: () => true, canPawnAt: () => false,
+    };
+    const items = new PlusItems({
+      world, player: 0, def: (id) => ABILS[id], hostile: (u) => u.owner !== 0 && u.owner !== 12,
+      order: () => true, item: (id) => ITEMS[id], wares: () => ["stwp", "phea", "shea", "pnvl"], gold: () => gold,
+    }, PLUS_NORMAL, "human");
+    return items.fightSaving({ home: { x: 0, y: 0 }, losing: false, mayShop: true, portalWorthIt: true });
+  };
+  const shop = { ...MERCHANT, id: nextId++, x: 1000, y: 0 };
+  check("the ladder holds a missing Scroll of Healing's price", fs([belt(hero(), "stwp"), shop]), 250);
+  check("…then the Potion's", fs([belt(hero(), "stwp", "shea"), shop]), 150);
+  check("…nothing once both are carried", fs([belt(hero(), "stwp", "shea", "pnvl"), shop]), 0);
+  check("…nor while the Town Portal is the thing missing (portalSaving holds that)", fs([hero(), shop]), 0);
+  check("…nor for a Merchant nobody will get to", fs([belt(hero(), "stwp"), { ...MERCHANT, id: nextId++, x: 9000, y: 0 }]), 0);
 }
 // Once it has carried one, a missing scroll it cannot yet afford is SAVED for rather than
 // spent past on a cheaper row.
@@ -1177,7 +1229,7 @@ const spend = (h, id) => { const i = h.inventory.findIndex((s) => s?.itemId === 
   // so it is measured against everything the hero is holding, drops included.
   // …and the belt holds a scroll already, so what is being measured is the ceiling rather than
   // the Town Portal's exemption from it (see `shopper`'s `essential`, pinned further down).
-  const h = belt(hero(), "stwp", "phea", "phea", "shea");
+  const h = belt(hero(), "stwp", "phea", "phea", "shea", "pnvl");
   const purse = PLUS_NORMAL.itemReserve + 200; // spare, but not SURPLUS spare
   check("Normal stops at its own four slots", shopped([h, MERCHANT], PLUS_NORMAL, { gold: purse }).buy, null);
 }
@@ -1368,7 +1420,7 @@ const spend = (h, id) => { const i = h.inventory.findIndex((s) => s?.itemId === 
   // exempt.
   const kept = belt(hero(), "stwp", "phea", "bspd", "spro");
   check("…while an ordinary row is still held to it",
-    shopped([kept, MERCHANT], PLUS_NORMAL, { gold: 700, soldOut: ["phea"] }).buy, null);
+    shopped([kept, MERCHANT], PLUS_NORMAL, { gold: 700, soldOut: ["phea", "shea", "pnvl"] }).buy, null);
 }
 
 // The errand latch — what stops the army manager dragging a shopping hero back to the muster

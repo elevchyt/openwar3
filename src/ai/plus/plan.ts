@@ -65,7 +65,9 @@ export interface PlusCtx {
   readonly workerChops: boolean;
   /**
    * Gold to hold back from the ladder below the opening for a missing Scroll of Town Portal —
-   * `PlusItems.portalSaving`, 0 or absent when there is nothing to save for. See `portalSaving`.
+   * `PlusItems.portalSaving` — and, once that is carried, a missing FIGHT item (Scroll of
+   * Healing, Potion of Lesser Invulnerability — `PlusItems.fightSaving`). 0 or absent when there
+   * is nothing to save for. See `portalSaving`.
    */
   readonly portalReserve?: number;
   /** When this player last WON a fight against a player's army, on `clock`'s scale (-1 or

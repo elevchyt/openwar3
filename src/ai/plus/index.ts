@@ -2625,7 +2625,7 @@ export class ComputerPlusAi {
       tier: this.tier(b),
       threatened: b.ai.townThreatened(),
       workerChops: this.workerChops(b),
-      portalReserve: b.items.portalSaving(this.itemCtx(b)),
+      portalReserve: b.items.portalSaving(this.itemCtx(b)) + b.items.fightSaving(this.itemCtx(b)),
       wonAt: b.wonAt,
       foodOf: (id) => this.host.registry.get(id)?.foodUsed ?? 0,
       defOf: (id) => this.host.registry.get(id),

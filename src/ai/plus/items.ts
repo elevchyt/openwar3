@@ -415,9 +415,31 @@ const RACE_MANA: Partial<Record<PlayableRace, readonly Want[]>> = {
   undead: [{ id: "pman", want: 1 }],
 };
 
-/** The buys `PlusProfile.shopping` does not cap: the Town Portal (see `shop`) and the Potion of
- *  Healing (see `LIST`). A free SLOT is still required — `shopper` asks for one. */
-const ESSENTIAL: ReadonlySet<string> = new Set(["stwp", "phea"]);
+/** The buys `PlusProfile.shopping` does not cap: the Town Portal (see `shop`), the Potion of
+ *  Healing (see `LIST`) and the two FIGHT items (`FIGHT`). A free SLOT is still required —
+ *  `shopper` asks for one. */
+const ESSENTIAL: ReadonlySet<string> = new Set(["stwp", "phea", "shea", "pnvl"]);
+
+/**
+ * The two items that decide a fight rather than the walk between two: the Scroll of Healing (the
+ * army's burst heal) and the Potion of Lesser Invulnerability (the hero that would have died does
+ * not). Both are on the Goblin Merchant's shelf (`[ngme] Sellitems`; the scroll is also the
+ * undead's, `[utom] Makeitems`), and both come into stock at 7:20 (`stockStart` 440, the same
+ * clock as the Potion of Healing and the Town Portal).
+ *
+ * Reported: a Normal computer NEVER bought either, and a 17-minute observed match agreed — two
+ * reasons, both in this file. They sat below the Potion of Healing in `LIST`, so a Normal belt had
+ * met `PlusProfile.shopping`'s four-slot habit ceiling (creep drops count) before the ladder got to
+ * them; and they were paid out of the surplus above `itemReserve` — 550 and 450 in hand at the
+ * instant the pass looked, a purse a Normal computer sees for seconds at a time. So they are
+ * ESSENTIAL (past the ceiling), bought out of the PURSE (`opening`, the Town Portal's argument:
+ * this is part of how the army fights, not shopping) and listed right behind the race's opening
+ * buys, ahead of its mana.
+ */
+const FIGHT: readonly Want[] = [
+  { id: "shea", want: 1, opening: true },
+  { id: "pnvl", want: 1, opening: true },
+];
 
 /** Where the Town Portal sits in that list. `keepPortal` puts it FIRST — a player who plans
  *  around having one buys it before the potions, because the potions are no use if the army
@@ -886,9 +908,16 @@ export class PlusItems {
     // shopper skips (`shopper` wants a free slot), so clearing the duplicate is what lets the
     // next row of the list be bought at all — and the sale pays a third of it.
     this.pawn(now, own, ctx);
+    // THE LATCH (`hadPortal`, see `list`) is read by every buying branch below, so it is set
+    // before any of them can return — `fightChance` acting first used to leave it unset.
+    if (!this.hadPortal && this.carried(own, PORTAL.id) > 0) this.hadPortal = true;
     // A missing Town Portal first, and on the BELT's clock rather than the shop's: a hero walking
     // past a Goblin Merchant is in its range for a second or two, and a five-second look misses it.
     if (this.portalChance(now, own, ctx)) return;
+    // …and the FIGHT items the same way, for the same reason: they are Goblin Merchant wares, and
+    // on a map whose Merchant is out in the contested ground (Echo Isles: ~8000 from either
+    // start, past `SHOP_REACH`) the ordinary trip from home never goes there at all.
+    if (this.fightChance(now, own, ctx)) return;
     this.shop(now, own, ctx);
   }
 
@@ -1902,7 +1931,31 @@ export class PlusItems {
     // salves are what hold the first creep camps together. Once a scroll has been carried, a
     // missing one outranks everything.
     if (!this.hadPortal && (RACE_FIRST[this.race] ?? []).some((w) => this.carried(own, w.id) < w.want)) return false;
-    const def = this.view.item(PORTAL.id);
+    return this.itemChance(now, own, ctx, PORTAL.id);
+  }
+
+  /**
+   * `portalChance` for the `FIGHT` items: a missing Scroll of Healing or Potion of Lesser
+   * Invulnerability is bought wherever a hero stands in a shop's range, and fetched on the field
+   * detour, exactly as a missing scroll is. Only once the portal is carried — the portal outranks
+   * them, and a pass that bought a potion with the scroll's gold would be `list`'s order upside
+   * down. The first missing one that some shop can sell us wins the pass.
+   */
+  private fightChance(now: number, own: SimUnit[], ctx: ItemCtx): boolean {
+    if (!this.profile.keepPortal || this.profile.shopping <= 0) return false;
+    if (this.carried(own, PORTAL.id) <= 0) return false;
+    for (const w of FIGHT) {
+      if (this.carried(own, w.id) >= w.want) continue;
+      if (this.itemChance(now, own, ctx, w.id)) return true;
+    }
+    return false;
+  }
+
+  /** Buy `itemId` for our first hero with room if one is standing in range of a shop that sells
+   *  it, else walk that hero there on the field detour (`PORTAL_DETOUR`, `ItemCtx.mayDetour`).
+   *  Out of the whole purse. Answers whether it acted. */
+  private itemChance(now: number, own: SimUnit[], ctx: ItemCtx, itemId: string): boolean {
+    const def = this.view.item(itemId);
     if (!def || def.gold > this.view.gold()) return false;
     // The FIRST hero where it can be: the highest level (which is nearly always the first one
     // trained), the older of two at the same level. A full belt cannot take it.
@@ -1913,7 +1966,7 @@ export class PlusItems {
     const shops: SimUnit[] = [];
     for (const u of this.view.world.units.values()) {
       if (u.hp <= 0 || !u.building || u.building.constructionLeft > 0 || this.view.hostile(u)) continue;
-      if (this.view.world.canUseShop(u.id, this.view.player) && this.stocks(u, PORTAL.id)) shops.push(u);
+      if (this.view.world.canUseShop(u.id, this.view.player) && this.stocks(u, itemId)) shops.push(u);
     }
     if (!shops.length) return false;
     for (const hero of heroes) {
@@ -1926,7 +1979,7 @@ export class PlusItems {
       if (this.view.world.shopBuyer(at.id, this.view.player)?.id !== hero.id) {
         this.view.order({ c: "shopbuyer", shopId: at.id, unitId: hero.id });
       }
-      this.view.order({ c: "buyitem", shopId: at.id, itemId: PORTAL.id });
+      this.view.order({ c: "buyitem", shopId: at.id, itemId });
       return true;
     }
     if (!ctx.mayDetour) return false;
@@ -1981,6 +2034,34 @@ export class PlusItems {
    * not a halt (see `reserveGold`), so the worst a scroll that is never fetched costs the build
    * order is 350 gold sitting in the bank.
    */
+  /**
+   * `portalSaving` for the `FIGHT` items: the price of the first missing one some shop will sell
+   * us and a hero will get to (the same two reaches), once the Town Portal is carried — or 0.
+   * Added to the same `reserveGold` row (plus/plan.ts `portalSaving`). Measured on an observed
+   * Normal match: the bank stood at 17–298 gold every time the shopping pass looked, so a
+   * 250-gold Scroll of Healing was never affordable however high it sat on the list.
+   */
+  fightSaving(ctx: ItemCtx): number {
+    if (!this.profile.keepPortal || this.profile.shopping <= 0) return 0;
+    const own: SimUnit[] = [];
+    for (const u of this.view.world.units.values()) if (u.hp > 0 && u.owner === this.view.player) own.push(u);
+    if (this.carried(own, PORTAL.id) <= 0) return 0;
+    const heroes = own.filter((u) => u.isHero && !u.isIllusion && u.inventory.length && u.inventory.indexOf(null) >= 0);
+    if (!heroes.length) return 0;
+    for (const w of FIGHT) {
+      if (this.carried(own, w.id) >= w.want) continue;
+      const def = this.view.item(w.id);
+      if (!def || def.gold <= 0) continue;
+      for (const shop of this.view.world.units.values()) {
+        if (shop.hp <= 0 || !shop.building || shop.building.constructionLeft > 0 || this.view.hostile(shop)) continue;
+        if (!this.view.world.canUseShop(shop.id, this.view.player) || !this.stocks(shop, w.id)) continue;
+        const home = Math.hypot(shop.x - ctx.home.x, shop.y - ctx.home.y) <= SHOP_REACH;
+        if (home || heroes.some((h) => Math.hypot(shop.x - h.x, shop.y - h.y) <= PORTAL_DETOUR)) return def.gold;
+      }
+    }
+    return 0;
+  }
+
   portalSaving(ctx: ItemCtx): number {
     if (!this.profile.keepPortal || this.profile.shopping <= 0) return 0;
     const own: SimUnit[] = [];
@@ -2159,7 +2240,8 @@ export class PlusItems {
     // place further down: BEHIND the scroll. A hero with an empty bar has lost its spells; a
     // hero with no Town Portal loses the army, and that is the bigger loss (`PORTAL`).
     const mana = (RACE_MANA[this.race] ?? []).map((w) => ({ ...w, opening: true }));
-    const seen = new Set([...first, ...mana].map((w) => w.id));
+    const fight = FIGHT;
+    const seen = new Set([...first, ...fight, ...mana].map((w) => w.id));
     const rest = LIST.filter((w) => !seen.has(w.id));
     // WHERE THE PORTAL SITS DEPENDS ON WHETHER THIS PLAYER HAS EVER HAD ONE.
     //
@@ -2197,10 +2279,10 @@ export class PlusItems {
     // it up merely with what is spare.
     const portal = this.profile.keepPortal ? { ...PORTAL, opening: true } : PORTAL;
     const core = this.profile.keepPortal && this.hadPortal
-      ? [portal, ...first, ...mana, ...rest]
+      ? [portal, ...first, ...fight, ...mana, ...rest]
       : this.profile.keepPortal
-        ? [...first, portal, ...mana, ...rest]
-        : [...first, ...mana, ...rest, portal];
+        ? [...first, portal, ...fight, ...mana, ...rest]
+        : [...first, ...fight, ...mana, ...rest, portal];
     if (!rich) return core;
     // The surplus rows go on the END, never in front: they are the same items wanted DEEPER
     // (`RICH`), so reaching them at all means every row above is already satisfied. The race's
