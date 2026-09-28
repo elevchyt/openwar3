@@ -391,6 +391,7 @@ Blizzard's unless a comment says otherwise) every value here is ours.
 | hall tier | **1** | 3 | 3 |
 | upgrade rank | 1 | 2 | 3 |
 | animation-cancels | no | no | **yes** |
+| stutter-steps its ranged units | no | no | **yes** |
 | first attack | 7 min | 5 min | 2½ min |
 | army food that makes a wave | 10 | 14 | 16 |
 | **first creep camp** | **never** | 2½ min | 1½ min |
@@ -416,6 +417,15 @@ its seat is in `SimWorld.cancelsBackswing` (set in `startMeleeAIFor`), so its un
 swing the moment the blow has gone out and take their next order the tick a spell goes off rather
 than standing out `castBackswing`. It is not a cheat — both are the click any player makes to cut
 a recovery short.
+
+It also **stutter-steps** its ranged soldiers (`PlusProfile.stutterStep`, `stutterPass` in
+plus/index.ts, the geometry in the pure `stutterAim`): a unit that has just fired spends the
+cooldown walking — AWAY from a melee unit attacking it from close by (the kite), or AFTER a
+target backing out of its range (never closer than half the range) — and is put back on its
+attack or attack-move `STUTTER_LEAD` before the weapon is ready, which is the turn back. No step
+with less than `STUTTER_MIN` of cooldown left, because then the turn costs the shot. It runs every
+AI step rather than on the army's clock, because it is timed to a cooldown. Heroes are left to the
+caster and the belt.
 
 **Normal reaches tier 3.** It used to stop at a Keep, which is a bigger handicap than it reads
 as: `techTier` is also the filter on which *builds* may be rolled (`rollStrategy`), so a tier-2

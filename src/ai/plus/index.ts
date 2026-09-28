@@ -1507,6 +1507,55 @@ const MARCH_GOAL_CAMP = CREEP_BERTH + 600;
  * STARTED, so the cooldown is the whole cycle rather than an extra wait bolted onto the hold.
  */
 const PULL_BACK_DIST = 900;
+
+/** One ranged soldier's step between shots (`stutterPass`). `order` is what it goes back to. */
+interface Stutter {
+  readonly targetId: number;
+  readonly order: { kind: "attack"; targetId: number } | { kind: "attackmove"; x: number; y: number };
+}
+/**
+ * STUTTER-STEP, all OURS (nothing in the install describes the micro, and it is Insane's alone).
+ *
+ * `STUTTER_MIN` — the cooldown that must be LEFT for a step to be worth taking: the unit has to
+ * walk, then turn back to face its target before it can swing (the sim's `facesTarget` gate),
+ * so a step squeezed into less than this costs the next shot instead of saving anything.
+ * `STUTTER_LEAD` — how long before the weapon is ready the attack is re-issued, which is the
+ * turn back. `STUTTER_KITE_GAP` — how close (hull to hull) a MELEE unit that is attacking this
+ * one has to be before the step goes AWAY from it. `STUTTER_STEP_MAX` caps one step, so a long
+ * cooldown (a Mortar Team's 3.5 s) is not a unit walking half a screen out of the fight.
+ */
+const STUTTER_MIN = 0.5;
+const STUTTER_LEAD = 0.25;
+const STUTTER_KITE_GAP = 160;
+const STUTTER_STEP_MAX = 200;
+const STUTTER_STEP_MIN = 40;
+
+type StutterUnit = Pick<SimUnit, "x" | "y" | "radius" | "speed" | "swingLeft" | "cooldownLeft" | "id" | "targetId" | "moving"> & {
+  readonly weapon: { readonly ranged: boolean; readonly range: number } | null;
+};
+
+/**
+ * Where a ranged unit that has just fired should step while its weapon cools, or null for "stay
+ * and shoot" (`stutterPass`). Pure, so the two steps and their gates are testable on their own.
+ */
+export function stutterAim(u: StutterUnit, t: StutterUnit): { x: number; y: number } | null {
+  const w = u.weapon;
+  if (!w?.ranged || u.swingLeft >= 0 || u.cooldownLeft < STUTTER_MIN || u.speed <= 0) return null;
+  const dx = t.x - u.x;
+  const dy = t.y - u.y;
+  const d = Math.hypot(dx, dy) || 1;
+  const gap = d - u.radius - t.radius;
+  let step = Math.min(STUTTER_STEP_MAX, u.speed * (u.cooldownLeft - STUTTER_LEAD));
+  let dir: number;
+  if (t.weapon && !t.weapon.ranged && t.targetId === u.id && gap < STUTTER_KITE_GAP) {
+    dir = -1; // the kite: out from under the melee unit that is hitting it
+  } else if (t.moving && gap > w.range * 0.6) {
+    dir = 1; // after a target backing off — but never closer than half the range
+    step = Math.min(step, gap - w.range * 0.5);
+  } else return null;
+  if (step < STUTTER_STEP_MIN) return null;
+  return { x: u.x + (dx / d) * step * dir, y: u.y + (dy / d) * step * dir };
+}
 const PULL_BACK_HOLD = 10;
 const PULL_BACK_AGAIN = 45;
 /** …and how close to the spot counts as arrived, so a unit that has got there is not re-ordered
@@ -1854,6 +1903,9 @@ interface Brain {
    * hold that soldier out of the next wave.
    */
   readonly pulls: Map<number, PullBack>;
+  /** Ranged soldiers mid STUTTER-STEP (`stutterPass`): unit → what to go back to when the
+   *  weapon is ready — the target it was shooting, and the order it was on. */
+  readonly stutters: Map<number, Stutter>;
   /** Who is standing still WAITING for the rest of the army to catch up (`strayed` → "wait"),
    *  and WHEN each of them was stopped.
    *
@@ -2193,6 +2245,7 @@ export class ComputerPlusAi {
       avoid: [],
       freeze: { was: null, since: 0 },
       pulls: new Map(),
+      stutters: new Map(),
       waiting: new Map(),
       afield: false,
       target: null,
@@ -2429,6 +2482,7 @@ export class ComputerPlusAi {
       b.clock += dt;
       this.drainOrders(b); // last step's leftovers go first, then this step's passes
       b.items.tickGrabs(b.clock); // a drop at a hero's feet, picked up once its pause is over
+      this.stutterPass(b); // Insane's ranged micro between shots — every step, it is timed to the cooldown
       if ((b.buildIn -= dt) <= 0) {
         b.buildIn = b.profile.buildPeriod;
         simProfile.begin("sim.ai.build");
@@ -5736,6 +5790,55 @@ export class ComputerPlusAi {
    * A general RETREAT supersedes all of it — `retreating` is already walking everybody home, and
    * a second destination for the same unit is two orders undoing each other.
    */
+  /**
+   * STUTTER-STEP: a ranged soldier that has just fired spends its cooldown WALKING, and is put
+   * back on its attack just before the weapon is ready — the micro every good player does with
+   * archers and riflemen, and the reason it is Insane's alone (`PlusProfile.stutterStep`).
+   *
+   * Two steps, and nothing else: AWAY from a melee unit that is attacking it and standing on
+   * top of it (the kite — the melee unit has to walk after it and stop again to swing), and
+   * TOWARD a target that is walking off out of its range (it arrives in range as the weapon
+   * comes ready, instead of starting its chase then). A unit already in a comfortable fight is
+   * left alone: stepping costs a turn, and a turn is only worth paying for one of those two.
+   *
+   * Runs every AI step rather than on the army's clock, because it is timed to a cooldown of a
+   * second or two; a 0.5 s pass would miss the window as often as it hit it. Everything leaves
+   * through `issue`, the same door and the same order budget as every other order — this is
+   * exactly the move-then-attack a person clicks, and the sim lets the Insane seat's unit walk
+   * out of its backswing to do it (`SimWorld.cancelsBackswing`).
+   */
+  private stutterPass(b: Brain): void {
+    if (!b.profile.stutterStep) return;
+    const world = this.host.world;
+    for (const [id, st] of b.stutters) {
+      const u = world.units.get(id);
+      const t = world.units.get(st.targetId);
+      // Somebody else re-ordered it (a focus-fire, a pull-out, a retreat), or it is over.
+      if (!u || u.hp <= 0 || u.order !== "move" || !t || t.hp <= 0) {
+        b.stutters.delete(id);
+        continue;
+      }
+      if (u.cooldownLeft > STUTTER_LEAD && u.moving) continue;
+      b.stutters.delete(id);
+      this.issue(b, { c: "order", unitId: id, order: st.order, queued: false });
+    }
+    for (const u of this.squadUnits(b)) {
+      if (!u.weapon?.ranged || u.isPeon || u.isHero || isCopy(u) || b.stutters.has(u.id)) continue;
+      if (u.order !== "attack" && u.order !== "attackmove") continue;
+      if (pulledOut(b.pulls.get(u.id), b.clock) || world.holdsChannel(u.id)) continue;
+      const t = u.targetId !== null ? world.units.get(u.targetId) : undefined;
+      if (!t || t.hp <= 0 || !b.ai.hostileTo(t)) continue;
+      const aim = stutterAim(u, t);
+      if (!aim) continue;
+      const spot = this.standSpot(u, aim);
+      const order: Stutter["order"] = u.order === "attackmove"
+        ? { kind: "attackmove", x: u.amDestX, y: u.amDestY }
+        : { kind: "attack", targetId: t.id };
+      b.stutters.set(u.id, { targetId: t.id, order });
+      this.issue(b, { c: "order", unitId: u.id, order: { kind: "move", x: spot.x, y: spot.y }, queued: false });
+    }
+  }
+
   private pullPass(b: Brain): void {
     if (b.profile.pullOutHp <= 0 || b.mode === "retreating") {
       b.pulls.clear();

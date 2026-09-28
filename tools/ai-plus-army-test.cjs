@@ -31,7 +31,7 @@ require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"ty
 const {
   canClearCamp, maxCampLevel, armyPower, forcePower, CAMP_GREEN_MAX, CAMP_ORANGE_MAX, CAMP_HEALTH,
 } = require(join(REPO, ".sim-build", "src", "ai", "plus", "power.js"));
-const { safeLeg, backOffSpot, onGoldDuty, pushStalled, freezeStalled, isShunned, pullBackSpot, pullDue, pulledOut, marching, inContact, cohesionCall } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
+const { safeLeg, backOffSpot, onGoldDuty, pushStalled, freezeStalled, isShunned, pullBackSpot, pullDue, pulledOut, marching, inContact, cohesionCall, stutterAim } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 
 let failed = 0;
@@ -620,6 +620,28 @@ console.log("\n-- winning, losing, and pressing on -----------------------------
   check("bleeding but still the stronger army: fight on", losingFight(50, 40, 100), false);
   check("nothing in front of us: not lost", losingFight(10, 0, 100), false);
 }
+
+console.log("\n-- STUTTER-STEP (Insane's ranged micro between shots) -------------------");
+{
+  const archer = (o = {}) => ({ id: 1, x: 0, y: 0, radius: 16, speed: 270, swingLeft: -1, cooldownLeft: 1.2, targetId: 2, moving: false, weapon: { ranged: true, range: 500 }, ...o });
+  const grunt = (o = {}) => ({ id: 2, x: 60, y: 0, radius: 16, speed: 270, swingLeft: -1, cooldownLeft: 0, targetId: 1, moving: false, weapon: { ranged: false, range: 100 }, ...o });
+  check("PLUS_INSANE stutter-steps", PLUS_INSANE.stutterStep, true);
+  check("…and nobody else does", PLUS_NORMAL.stutterStep || PLUS_EASY.stutterStep, false);
+  const away = stutterAim(archer(), grunt());
+  check("a melee unit on top of it: the archer steps AWAY", away !== null && away.x < 0, true);
+  check("…no further than one step", away !== null && Math.abs(away.x) <= 200, true);
+  check("not mid-swing", stutterAim(archer({ swingLeft: 0.1 }), grunt()), null);
+  check("not with the weapon nearly ready (the turn back would cost the shot)", stutterAim(archer({ cooldownLeft: 0.3 }), grunt()), null);
+  check("not from a melee unit that is hitting somebody else", stutterAim(archer(), grunt({ targetId: 9 })), null);
+  check("not from a RANGED one", stutterAim(archer(), grunt({ weapon: { ranged: true, range: 400 } })), null);
+  const after = stutterAim(archer(), grunt({ x: 480, moving: true, targetId: 7 }));
+  check("a target backing off out of range: the archer steps AFTER it", after !== null && after.x > 0, true);
+  check("…never closer than half its range", after !== null && 480 - 32 - after.x >= 250 - 1, true);
+  check("a target standing in range: no step at all", stutterAim(archer(), grunt({ x: 300, targetId: 7 })), null);
+  check("a melee unit (a Footman) never stutters", stutterAim(archer({ weapon: { ranged: false, range: 90 } }), grunt()), null);
+}
+
+
 
 console.log(failed ? `\n${failed} FAILED\n` : "\nall ok\n");
 process.exit(failed ? 1 : 0);

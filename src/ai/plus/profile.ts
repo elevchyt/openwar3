@@ -190,6 +190,14 @@ export interface PlusProfile {
    * out, how long for, and the cooldown that stops the unit see-sawing in and out of the line.
    */
   readonly pullOutHp: number;
+  /**
+   * Does it STUTTER-STEP its ranged units? The player's micro between shots: the blow has gone
+   * out, the weapon is cooling down, so the unit spends that dead time walking — away from a
+   * melee unit that is on it, or after a target that is backing off — and is ordered back onto
+   * its attack just before the weapon is ready (`stutterPass` in plus/index.ts). Insane only:
+   * it is the same animation-cancelling that seat alone does (`SimWorld.cancelsBackswing`).
+   */
+  readonly stutterStep: boolean;
   /** Does it go and level its hero on creep camps? */
   readonly creeps: boolean;
   /**
@@ -321,7 +329,7 @@ export const PLUS_EASY: PlusProfile = {
   // game by accident.
   // …and it does NOT micro its wounded out of a fight — issue #124's Easy is a player who
   // gives an order and then watches it happen. `pullOutHp` 0 is that in one number.
-  focusFire: false, pullOutHp: 0, creeps: false, creepAt: Infinity, creepFood: Infinity,
+  focusFire: false, pullOutHp: 0, stutterStep: false, creeps: false, creepAt: Infinity, creepFood: Infinity,
   harass: false, scout: false, sweepEvery: Infinity, expansionFirst: 0.5,
   shopping: 0, itemReserve: Infinity, keepPortal: false,
   concedeAfter: 24,
@@ -361,7 +369,7 @@ export const PLUS_NORMAL: PlusProfile = {
   // couple of soldiers and whatever else is standing around, which is what clears a green camp.
   // It does not focus-fire, but it DOES pull a soldier out of the line at a quarter health —
   // the one piece of micro a player picks up long before they learn to focus a target.
-  focusFire: false, pullOutHp: 0.25, creeps: true, creepAt: 150, creepFood: 10,
+  focusFire: false, pullOutHp: 0.25, stutterStep: false, creeps: true, creepAt: 150, creepFood: 10,
   harass: false, scout: true, sweepEvery: 120, expansionFirst: 0.75,
   // Two thirds of a belt, and it keeps 300 gold back for the build order. It DOES keep a Town
   // Portal and replace it: a scroll is the difference between losing a fight and losing an army,
@@ -402,7 +410,7 @@ export const PLUS_INSANE: PlusProfile = {
   firstAttack: 150, waveGap: 30, attackFood: 16, retreatHp: 0.4,
   // Creeping starts at ninety seconds with the hero and eight food — the ladder's own answer,
   // which is "as soon as the hero walks out of the altar".
-  focusFire: true, pullOutHp: 0.25, creeps: true, creepAt: 90, creepFood: 8,
+  focusFire: true, pullOutHp: 0.25, stutterStep: true, creeps: true, creepAt: 90, creepFood: 8,
   harass: true, scout: true, sweepEvery: 75, expansionFirst: 0.85,
   // A full belt and a Town Portal on the hero. Both are what separates a player who has been
   // here before from one who has not.
