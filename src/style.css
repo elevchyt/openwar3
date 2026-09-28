@@ -1229,7 +1229,8 @@ body:not(.hud-tooltip-skinned) .obs-panel { outline: 1px solid rgba(200, 160, 50
 }
 .obs-pull-title {
   position: absolute;
-  inset: 0 calc(var(--obs-pull-button) + var(--obs-pull-arrow)) 0 var(--obs-pull-button);
+  /* Stops short of the arrow, which sits inside the frame's corner band (below). */
+  inset: 0 calc(var(--obs-pull-corner) + var(--obs-pull-arrow) + var(--obs-pull-inset)) 0 var(--obs-pull-button);
   line-height: var(--obs-pull-h);
   white-space: nowrap;
   overflow: hidden;
@@ -1239,11 +1240,13 @@ body:not(.hud-tooltip-skinned) .obs-panel { outline: 1px solid rgba(200, 160, 50
 .obs-pull-title .obs-swatch { vertical-align: -0.05em; }
 .obs-pull-arrow {
   position: absolute;
-  right: var(--obs-pull-button);
+  /* Its right edge on the inner edge of the border's corner band: centred on the inset line
+   * (as it was) the arrow poked half its width out over the gold frame. */
+  right: var(--obs-pull-corner);
   top: 50%;
   width: var(--obs-pull-arrow);
   height: var(--obs-pull-arrow);
-  transform: translate(50%, -50%);
+  transform: translateY(-50%);
   background: var(--obs-esc-arrow, none) center / contain no-repeat;
   z-index: 1;
 }

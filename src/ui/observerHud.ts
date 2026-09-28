@@ -324,8 +324,10 @@ class HeroRow {
     }
   }
 
-  show(h: ObserverHero, levelClass: (level: number, type: string) => string): void {
-    const name = h.properName ? `${h.properName} — ${levelClass(h.level, h.typeName)}` : levelClass(h.level, h.typeName);
+  show(h: ObserverHero, levelWord: (level: number) => string): void {
+    // The hero's CLASS and level only ("Far Seer - Level 2"): a melee hero's proper name is
+    // rolled per match and tells a watcher nothing about what the hero is.
+    const name = `${h.typeName} - ${levelWord(h.level)}`;
     const icon = h.dead ? (h.disabledIcon ?? h.icon) : h.icon;
     this.portrait.set(icon, name, h.dead && h.reviveSecondsLeft > 0 ? h.reviveSecondsLeft : null, h.level, h.simId);
     this.el.classList.toggle("dead", h.dead);
@@ -363,7 +365,7 @@ class HeroColumn {
     this.empty = el("div", "obs-none", this.rows);
   }
 
-  show(seat: ObserverSeat | undefined, levelClass: (level: number, type: string) => string, noHeroes: string): void {
+  show(seat: ObserverSeat | undefined, levelWord: (level: number) => string, noHeroes: string): void {
     this.pull.setTitle(seat ? seatHtml(seat) : "");
     const heroes = seat?.heroes.slice(0, OBSERVER_MAX_HEROES) ?? [];
     const rows = sync(this.rows, this.pool, heroes.length, () => {
@@ -371,7 +373,7 @@ class HeroColumn {
       r.levelWord = this.levelWord;
       return r;
     });
-    heroes.forEach((h, i) => rows[i].show(h, levelClass));
+    heroes.forEach((h, i) => rows[i].show(h, levelWord));
     this.empty.hidden = heroes.length > 0;
     if (!this.empty.hidden && this.empty.parentElement !== this.rows) this.rows.appendChild(this.empty);
     this.empty.textContent = noHeroes;
@@ -719,7 +721,7 @@ export class ObserverHud {
     this.heroCols.forEach((col, i) => {
       if (i < n) {
         if (col.el.parentElement !== this.heroPanel) this.heroPanel.appendChild(col.el);
-        col.show(this.seats.find((s) => s.player === this.shown[i]), this.levelClass, "");
+        col.show(this.seats.find((s) => s.player === this.shown[i]), this.levelWord, "");
       } else col.el.remove();
     });
   }
