@@ -124,7 +124,7 @@ not the attack path:
 | path | why it counts |
 |---|---|
 | `landDamage` | attacks and spell damage alike, before the mana shield — being hit is being hit even when a shield eats the blow |
-| `tickBuffs` (a `dot`) | "hit by a spell which does damage": you cannot regenerate through a Rain of Fire |
+| `tickBuffs` (a `dot`) | "hit by a spell which does damage": you cannot regenerate through a Rain of Fire — except a **poison** (`nonLethal`: Slow Poison, Envenomed Spears, the creeps' `ACvs`, Poison Sting/Arrows, Orb of Venom), whose tick never cancels it; the attack that delivered the poison still does |
 | `spiritLinkSplit` | reported to Blizzard and [dismissed as not-a-bug](https://us.forums.blizzard.com/en/warcraft3/t/critical-strike-cancels-non-combat-healing-via-spirit-link/36256) — a crit on the linked hero dispels the linked Spirit Walker's salve |
 | `tickLightningShields` | the shield's aura damage is damage |
 | `tickDevour` | being digested is being damaged |

@@ -86,6 +86,16 @@ function check(what, got, want, tol = 0.01) {
   world.tickBuffs(u, 1);
   check("a dot tick dispels it", u.buffs.filter((b) => b.group?.startsWith("item:regen")).length, 0);
 }
+// …but a POISON's tick does not: Envenomed Spears (or a Nightcrawler's) whittles the holder
+// and the salve and the mana half both keep pouring through it.
+{
+  const u = unit({ hp: 100, mana: 0 });
+  applyRegen(u, 250, 100, 45);
+  world.applyBuffInternal(u, { kind: "dot", group: "poison-ACvs", timeLeft: 5, sourceId: 0, value: 4, value2: 0, nonLethal: true });
+  for (let i = 0; i < 5; i++) world.tickBuffs(u, 1);
+  check("a poison tick leaves both halves running", u.buffs.filter((b) => b.group?.startsWith("item:regen")).length, 2);
+  check("…and both the poison and the potion landed", u.hp - 100, (250 * 5) / 45 - 4 * 5);
+}
 {
   // Spirit Link's shared slice, which Blizzard's forums confirm is not a bug: a crit on the
   // linked hero dispelled the linked Spirit Walker's salve.

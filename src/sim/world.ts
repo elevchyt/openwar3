@@ -12885,7 +12885,11 @@ export class SimWorld {
         // A dot IS "a spell which does damage", so it cancels a salve on the tick it bites —
         // burning under a Rain of Fire is exactly the fight you cannot regenerate through.
         // Flagged rather than dispelled here: we are walking u.buffs, which the break edits.
-        burned ||= u.hp < before;
+        // A POISON is the exception (the `nonLethal` dots: Slow Poison, Envenomed Spears and
+        // the creeps' `ACvs`, Poison Sting/Arrows, Orb of Venom): its tick does not cancel a
+        // salve, so a Wind Rider's spear whittles you and the potion keeps pouring. The blow
+        // that DELIVERED the poison still breaks it — that is an attack, through landDamage.
+        if (!b.nonLethal) burned ||= u.hp < before;
       }
       if (b.delay > 0) b.delay -= dt; // Wind Walk's Transition Time, counting down to the vanish
       b.timeLeft -= dt;
