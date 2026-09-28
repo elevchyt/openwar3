@@ -8576,7 +8576,10 @@ export class MapViewerScene {
         return this.watchedSeats.map((seat) => ({
           ...rts.observerView(seat.id),
           name: this.playerLabel(seat.id),
-          color: PLAYER_COLORS[rts.playerColor(seat.id) % PLAYER_COLORS.length],
+          // The colour the seat's units WEAR right now — `unitColor`, so the ally-colour filter
+          // (a watcher's per-team colours in mode 3) reaches the swatches as it reaches the
+          // bodies and the minimap, rather than the player's slot colour the world no longer shows.
+          color: PLAYER_COLORS[rts.unitColor(seat.id) % PLAYER_COLORS.length],
           race: seat.race,
           team: this.teamOf(seat.id),
         }));

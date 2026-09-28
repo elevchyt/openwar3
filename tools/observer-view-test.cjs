@@ -119,6 +119,20 @@ console.log("\nPRODUCTION: the head of every queue and every structure going up,
   check("a tier is the target building's icon", p[3].name === "Keep");
   check("each points the camera at its building", p[1].simId === barracks.id && p[2].simId === farm.id);
 }
+{
+  // Two Barracks a half-second apart, the LATER one first in the world's own order. On whole
+  // seconds they tie every other half-second, and a tie fell back on that order — so the two
+  // icons swapped places every second, and the one under the pointer changed its name with them.
+  const late = building("hbar", [{ kind: "unit", unitId: "hfoo", timeLeft: 11.8, buildTime: 20 }]);
+  const early = building("hbar", [{ kind: "unit", unitId: "hpea", timeLeft: 11.3, buildTime: 20 }]);
+  const orders = new Set();
+  for (let t = 0; t < 10; t += 0.25) {
+    late.building.queue[0].timeLeft = 11.8 - t;
+    early.building.queue[0].timeLeft = 11.3 - t;
+    orders.add(observePlayer(sources([late, early]), 0).production.map((x) => x.name).join(","));
+  }
+  check("two jobs showing the same seconds never swap places as the clock ticks", orders.size === 1, [...orders].join(" | "));
+}
 
 console.log("\nthe ARMY: by type, largest first, never buildings, heroes or illusions");
 {

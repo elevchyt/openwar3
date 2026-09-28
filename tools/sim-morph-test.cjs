@@ -448,6 +448,22 @@ function druid(id, typeId = "edoc") {
   world.foodRoom = undefined;
 }
 
+// --- a hero in a form is still the hero -------------------------------------------------
+// A raging Alchemist is a `Nalm` and a Demon Hunter in Metamorphosis an `Edmm`. The one-of-
+// each-type hero rule counts them under the type they came from (SimWorld.normalFormOf), or
+// the altar sells a second Demon Hunter while the first stands on the field as a demon.
+{
+  const u = fiend("Nalc");
+  u.isHero = true;
+  u.abilities = [{ id: "ANcr", code: "ANcr", level: 1, cooldownLeft: 0, autocastOn: false }];
+  check("an Alchemist is an Alchemist", world.normalFormOf(u), "Nalc");
+  world.morphToggle(u, ABILS.ANcr, 1);
+  check("raging, he is an ogre", u.typeId, "Nalm");
+  check("…and still counts as the Alchemist", world.normalFormOf(u), "Nalc");
+  world.morphToggle(u, ABILS.ANcr, 1, true);
+  check("back in his own body, the same answer", [u.typeId, world.normalFormOf(u)], ["Nalc", "Nalc"]);
+}
+
 console.log(`
 ${failed ? `${failed} FAILED` : "all passed"}`);
 process.exit(failed ? 1 : 0);

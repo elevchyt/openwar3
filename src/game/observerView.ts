@@ -93,8 +93,10 @@ export function observePlayer(src: ObserverSources, player: number): ObserverPla
   for (const u of src.units.values()) if (u.owner === player) mine.push(u);
   return {
     player,
-    gold: stash.gold,
-    lumber: stash.lumber,
+    // Whole numbers, as the resource bar prints them: the bank is a float in the sim (a human's
+    // speed-build surcharge is taken per tick, an upkeep cut is a fraction of a trip).
+    gold: Math.floor(stash.gold),
+    lumber: Math.floor(stash.lumber),
     foodUsed: food.used,
     foodMax: food.made,
     apm: src.apm(player),
@@ -161,24 +163,30 @@ function reviveJob(queue: BuildJob[] | undefined, heroId: number): BuildJob | nu
  *  queued behind it are not being worked on (and have not even been paid for in food —
  *  `BuildJob`), which is what "in production" means. Soonest first. */
 function productionOf(src: ObserverSources, mine: SimUnit[]): ObserverIcon[] {
-  const out: ObserverIcon[] = [];
+  // Sorted on the EXACT seconds left, never on the whole seconds printed: two jobs showing the
+  // same number tie, and a tie broken by whichever ticked over first swapped the two icons every
+  // second — the icon under the watcher's pointer, and its hover name, flipping with the clock.
+  // Every head of queue ticks at the same rate, so on exact time the order only changes when a
+  // job starts, ends or stalls.
+  const out: Array<ObserverIcon & { exact: number }> = [];
   for (const u of mine) {
     const b = u.building;
     if (!b) continue;
     if (b.constructionLeft > 0) {
       const def = src.registry.get(u.typeId);
-      out.push({ key: `b${u.id}`, icon: def?.icon ?? "", name: def?.name ?? u.typeId, value: Math.ceil(b.constructionLeft), simId: u.id });
+      out.push({ key: `b${u.id}`, icon: def?.icon ?? "", name: def?.name ?? u.typeId, value: Math.ceil(b.constructionLeft), simId: u.id, exact: b.constructionLeft });
     }
     const j = b.queue[0];
     if (!j) continue;
     if (j.kind === "research") {
-      out.push({ key: `q${u.id}`, icon: src.upgrades.icon(j.unitId, j.level), name: src.upgrades.name(j.unitId, j.level), value: Math.ceil(j.timeLeft), simId: u.id });
+      out.push({ key: `q${u.id}`, icon: src.upgrades.icon(j.unitId, j.level), name: src.upgrades.name(j.unitId, j.level), value: Math.ceil(j.timeLeft), simId: u.id, exact: j.timeLeft });
     } else {
       const def = src.registry.get(j.unitId);
-      out.push({ key: `q${u.id}`, icon: def?.icon ?? "", name: def?.name ?? j.unitId, value: Math.ceil(j.timeLeft), simId: u.id });
+      out.push({ key: `q${u.id}`, icon: def?.icon ?? "", name: def?.name ?? j.unitId, value: Math.ceil(j.timeLeft), simId: u.id, exact: j.timeLeft });
     }
   }
-  return out.sort((a, b) => a.value - b.value);
+  return out.sort((a, b) => a.exact - b.exact || a.simId - b.simId || a.key.localeCompare(b.key))
+    .map(({ exact: _, ...icon }) => icon);
 }
 
 /** The standing army by type, largest first: every living unit that is not a structure, a hero

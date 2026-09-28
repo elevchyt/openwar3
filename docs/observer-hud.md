@@ -18,7 +18,7 @@ where anything goes. The layout was chosen from three mock-ups drawn over a live
 | top centre | the **scoreboard**, one table on each side of the medallion's stone bridge: colour, race, name, gold, lumber, food, APM. Two teams give one team per side; any other split puts the first half of the seats on the left. The match clock sits under the medallion. |
 | bottom left | the **minimap** with its option buttons in a column. These are the console's own elements, *adopted* rather than rebuilt, so every click and hotkey behaves as before. |
 | bottom middle | the **hero panel**: up to four players side by side. Each column's pulldown picks whose heroes it shows, and picking a player already shown in another column swaps the two. Each hero row holds the portrait with its level, HP and mana bars, the learned skills at their ranks, and the six-slot belt. The panel is tall enough for three heroes. |
-| bottom right | a **minimal selection** readout: name, level and class, HP/mana bars, icon, Damage/Armor (or Constructing/Training), and the hero's belt. **Auto Camera** stands above it with no panel, because the replay panel it belongs to is for replays and there are none yet. |
+| bottom right | a **minimal selection** readout: name, level and class, HP/mana bars, a hero's violet **XP bar** with its numbers on it (experience into the level over what the level spans), icon, Damage/Armor, and the hero's belt. A building at work shows its **job** instead of the stat lines: the icon of what it is making, the build bar with the verb and seconds on it (`CONSTRUCTING` / `TRAINING` / `RESEARCHING` / `REVIVING`; a tier upgrade reads the name of what it becomes) and the jobs queued behind. That is how a watcher tells which hero an altar is bringing, and whether it is a hire or a revival. **Auto Camera** stands above it with no panel, because the replay panel it belongs to is for replays and there are none yet. |
 
 What the HUD is built *from* is the game's:
 
@@ -68,9 +68,28 @@ host's reading, carried in the lane.
 
 ## Colour
 
+A seat's swatch (scoreboard, production labels, hero pulldowns) is the colour its units WEAR
+right now, `RtsController.unitColor`, not its slot colour. With the ally-colour filter in mode 3
+a watcher's world is painted one colour per team (`observerTeamColors`), and a swatch in the
+slot colour then named a colour no unit on the field had.
+
 The mana blue (`#2a6cf0`, hud.ts `STATBAR_TINT.mana`) is the developer's pick off these
 mock-ups. It now tints every mana bar: the floating ones over units, the hero bar and the group
 grid. The game's own `ManaBarConsoleSmall.mdx` violet read almost black on the slab.
+
+Gold and lumber are printed as whole numbers (`observePlayer` floors them): the bank is a float
+in the sim.
+
+## Re-rendering under the pointer
+
+Every reading refreshes four times a second, so the icon under the pointer must stay the same
+job from one refresh to the next. The production strip is soonest-first, and it used to sort on
+the WHOLE seconds it prints: two jobs showing the same number tied, the tie was broken by
+whichever had ticked over first, and the two swapped places every second. The icon under the
+pointer, and its hover name, flipped with the clock. It now sorts on the exact seconds left
+(`productionOf`). Every head of queue ticks at the same rate, so that order only changes when a
+job starts, ends or stalls. The slots are also keyed on their job (`syncKeyed`), so a slot keeps
+its job when the list does reorder, and an element is moved only when it is out of place.
 
 ## Testing
 

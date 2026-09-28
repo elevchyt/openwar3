@@ -475,7 +475,10 @@ export class Authority {
     const census = new Map<string, number>();
     const add = (typeId: string): void => void census.set(typeId, (census.get(typeId) ?? 0) + 1);
     for (const u of this.sim.units.values()) {
-      if (u.owner === player && this.registry.get(u.typeId)?.isHero) add(u.typeId);
+      // Under its NORMAL form (SimWorld.normalFormOf): a Demon Hunter in Metamorphosis is an
+      // `Edmm` for 45 seconds, and counted as one the altar offered — and a computer bought —
+      // a second Demon Hunter while the first was on the field in his demon body.
+      if (u.owner === player && this.registry.get(u.typeId)?.isHero) add(this.sim.normalFormOf(u));
       if (u.building && (u.owner === player || u.neutralPassive)) {
         for (const job of u.building.queue) {
           if (job.kind !== "unit" || !this.registry.get(job.unitId)?.isHero) continue;

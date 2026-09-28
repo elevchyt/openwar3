@@ -194,7 +194,7 @@ export interface SelectionInfo {
   trainProgress: number; // 0..1 of the unit currently training (queue[0])
   secondsLeft: number; // seconds remaining on the active construction/training job
   queueLength: number;
-  queue: Array<{ icon: string }>; // icons of the units queued for training
+  queue: Array<{ icon: string; name: string; kind: string }>; // the queue, head first (HudSelection.queue)
   icon: string; // the selected thing's own command-card icon (BLP path)
   /** The worker HIDDEN inside this structure while it goes up — an Orc peon, and only an Orc
    *  peon (`buildsFromInside`): every other race's builder is still standing on the terrain
@@ -7450,6 +7450,8 @@ export class RtsController {
         // the `?? 0` is unreachable for `kind === "research"` and is here so the flattened
         // shape needs no cast back to the union it came from.
         icon: (j.kind === "research" ? this.upgrades.icon(j.unitId, j.level ?? 0) : this.registry.get(j.unitId)?.icon) ?? "",
+        name: (j.kind === "research" ? this.upgrades.name(j.unitId, j.level ?? 0) : this.registry.get(j.unitId)?.name) ?? j.unitId,
+        kind: j.kind,
       })),
       icon: def?.icon ?? "",
       builderId,

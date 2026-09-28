@@ -5011,7 +5011,10 @@ export class SimWorld {
     if (u.owner < 0 || u.isCreep || u.neutralPassive || u.isIllusion) return;
     this.heroDeaths.set(u.owner, (this.heroDeaths.get(u.owner) ?? 0) + 1);
     this.fallen.set(u.id, {
-      id: u.id, owner: u.owner, team: u.team, typeId: u.typeId, properName: u.properName,
+      // Filed under its NORMAL form: a Demon Hunter killed in Metamorphosis is an `Edmm` at
+      // the moment it dies, and filed as one no altar would revive it (`[eate]` trains Edem,
+      // not the demon) while the hero rule counted a type nobody can hire.
+      id: u.id, owner: u.owner, team: u.team, typeId: this.normalFormOf(u), properName: u.properName,
       level: u.level, xp: u.xp, skillPoints: u.skillPoints,
       // Copied, not referenced: the SimUnit is about to be dropped from `units` and its
       // arrays would otherwise be the only thing keeping it alive.
@@ -5021,6 +5024,21 @@ export class SimWorld {
       x: u.x, y: u.y, revivingAt: 0,
       bodyLeft: heroBodyTime(this.unitReg?.get(u.typeId)?.deathTime ?? 0),
     });
+  }
+
+  /**
+   * The type this unit IS when it is not wearing an alternate form: its own `typeId`, or — while
+   * a morph ability has it in the other body — that ability's DataA "Normal Form Unit"
+   * (`morphToggle`). A Demon Hunter in Metamorphosis is an `Edmm` for 45 seconds and an Alchemist
+   * in Chemical Rage a `Nalm`/`Nal2`/`Nal3`, and neither has stopped being the hero it was: the
+   * one-of-each-type hero rule (`Authority.heroCensus`) and a computer's "do I have my Demon
+   * Hunter" both have to count it as one, or a raging hero reads as a free slot and a SECOND
+   * copy of it goes into the altar.
+   */
+  normalFormOf(u: SimUnit): string {
+    if (!u.altFormAbil) return u.typeId;
+    const def = this.abilities?.get(u.altFormAbil);
+    return def?.levelData[0]?.dataStr[0] || u.typeId;
   }
 
   /** This player's fallen heroes, in the order they were first hired (their sim ids ascend

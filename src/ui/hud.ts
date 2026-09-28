@@ -197,7 +197,9 @@ export interface HudSelection {
   trainProgress: number; // 0..1 (unit currently training)
   secondsLeft: number; // seconds left on the active job (for the progress label)
   queueLength: number;
-  queue: Array<{ icon: string }>; // icons of queued training units
+  /** The queue, head first: each job's icon, name and `BuildJob` kind (unit / research /
+   *  upgrade / revive — which verb the observer's readout words it with). */
+  queue: Array<{ icon: string; name: string; kind: string }>;
   icon: string; // the selected thing's own command icon (BLP path)
   builderId: number; // the worker hidden INSIDE this structure while it goes up (0 = none)
   builderIcon: string; // that worker's icon (BLP path) — the button under the building's icon

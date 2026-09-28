@@ -256,6 +256,33 @@ function sync<T extends { el: HTMLElement }>(host: HTMLElement, pool: T[], n: nu
   return pool.slice(0, n);
 }
 
+/**
+ * Keep `host` holding one slot per key, in the keys' order, re-using the slot a key already
+ * had — so an element keeps its job (and its hover name) when the list re-sorts, rather than
+ * the slot under the pointer being handed whichever job now sorts into its place.
+ *
+ * An element is MOVED only when it is out of place: re-appending one that was already where it
+ * belongs is a remove-and-insert the pointer's hover has no reason to go through.
+ */
+function syncKeyed<T extends { el: HTMLElement }>(host: HTMLElement, pool: Map<string, T>, keys: string[], make: () => T): T[] {
+  const out = keys.map((k) => {
+    let slot = pool.get(k);
+    if (!slot) pool.set(k, (slot = make()));
+    return slot;
+  });
+  const want = new Set(out.map((t) => t.el));
+  for (const [k, t] of pool) {
+    if (want.has(t.el)) continue;
+    t.el.remove();
+    pool.delete(k);
+  }
+  out.forEach((t, i) => {
+    const at = host.children[i] ?? null;
+    if (at !== t.el) host.insertBefore(t.el, at);
+  });
+  return out;
+}
+
 /** One hero row in a player's column: portrait over its two bars, skills, belt. */
 class HeroRow {
   readonly el: HTMLDivElement;
@@ -351,7 +378,7 @@ export class ObserverHud {
   private readonly prodPull: Pulldown;
   private readonly prodList: HTMLDivElement;
   private prodView: ProdView = "production";
-  private readonly prodBlocks = new Map<number, { el: HTMLDivElement; label: HTMLDivElement; icons: HTMLDivElement; pool: IconSlot[] }>();
+  private readonly prodBlocks = new Map<number, { el: HTMLDivElement; label: HTMLDivElement; icons: HTMLDivElement; pool: Map<string, IconSlot> }>();
   private readonly scoreLeft: HTMLDivElement;
   private readonly scoreRight: HTMLDivElement;
   private readonly time: HTMLDivElement;
@@ -363,7 +390,10 @@ export class ObserverHud {
     panel: HTMLDivElement; name: HTMLDivElement; sub: HTMLDivElement;
     hp: HTMLDivElement; hpFill: HTMLDivElement; hpText: HTMLSpanElement;
     mp: HTMLDivElement; mpFill: HTMLDivElement; mpText: HTMLSpanElement;
+    xp: HTMLDivElement; xpFill: HTMLDivElement; xpText: HTMLSpanElement;
     icon: IconSlot; lines: HTMLDivElement; belt: HTMLDivElement; beltPool: IconSlot[];
+    job: HTMLDivElement; jobIcon: IconSlot; jobFill: HTMLDivElement; jobText: HTMLSpanElement;
+    jobQueue: HTMLDivElement; jobPool: Map<string, IconSlot>;
   };
   private seats: ObserverSeat[] = [];
   private t = Infinity;
@@ -460,19 +490,32 @@ export class ObserverHud {
     const selPanel = el("div", "obs-panel obs-sel", this.root);
     const name = el("div", "obs-sel-name", selPanel);
     const sub = el("div", "obs-sel-sub", selPanel);
-    const bar = (cls: string): [HTMLDivElement, HTMLDivElement, HTMLSpanElement] => {
-      const track = el("div", `obs-sel-bar ${cls}`, selPanel);
-      const fill = el("div", "obs-bar-fill", track);
-      if (cls === "mana") fill.classList.add("mana");
+    const bar = (cls: string, parent: HTMLElement = selPanel): [HTMLDivElement, HTMLDivElement, HTMLSpanElement] => {
+      const track = el("div", `obs-sel-bar ${cls}`, parent);
+      const fill = el("div", `obs-bar-fill ${cls}`, track);
       const text = el("span", "obs-sel-bar-text", track);
       return [track, fill, text];
     };
     const [hp, hpFill, hpText] = bar("hp");
     const [mp, mpFill, mpText] = bar("mana");
+    // A hero's experience, under its mana: the console's XP bar (`SimpleHeroLevelBar`, the
+    // violet `XpBarConsole` tint — BIGBAR_TINT.xp in hud.ts) with its numbers ON it, since a
+    // watcher has no time to hover for them.
+    const [xp, xpFill, xpText] = bar("xp");
     const row = el("div", "obs-sel-row", selPanel);
     const icon = new IconSlot(driver, "obs-sel-icon", (slot) => driver.observerFocus(slot.simId));
     row.appendChild(icon.el);
     const lines = el("div", "obs-sel-lines", row);
+    // A building at WORK: what it is making, the build bar with the seconds left on it, and the
+    // jobs lined up behind — the info panel's training readout, so a watcher who clicks an
+    // altar sees WHICH hero is coming (a unit's icon alone on the production strip does not
+    // say whether it is a hire or a revival).
+    const job = el("div", "obs-sel-job", row);
+    const jobHead = el("div", "obs-sel-job-head", job);
+    const jobIcon = new IconSlot(driver, "obs-sel-job-icon", () => {});
+    jobHead.appendChild(jobIcon.el);
+    const [, jobFill, jobText] = bar("progress", jobHead);
+    const jobQueue = el("div", "obs-sel-job-queue", job);
     const belt = el("div", "obs-sel-belt", row);
     const beltPool: IconSlot[] = [];
     for (let i = 0; i < 6; i++) {
@@ -480,7 +523,10 @@ export class ObserverHud {
       beltPool.push(slot);
       belt.appendChild(slot.el);
     }
-    this.sel = { panel: selPanel, name, sub, hp, hpFill, hpText, mp, mpFill, mpText, icon, lines, belt, beltPool };
+    this.sel = {
+      panel: selPanel, name, sub, hp, hpFill, hpText, mp, mpFill, mpText, xp, xpFill, xpText,
+      icon, lines, belt, beltPool, job, jobIcon, jobFill, jobText, jobQueue, jobPool: new Map(),
+    };
     // Auto Camera stands ABOVE the selection, on no panel of its own (the replay panel it
     // belongs to is for replays, which OpenWar3 does not have yet).
     this.root.appendChild(adopt.autoCamera);
@@ -604,14 +650,15 @@ export class ObserverHud {
         const blockEl = el("div", "obs-prod-block");
         const label = el("div", "obs-prod-label", blockEl);
         const icons = el("div", "obs-prod-icons", blockEl);
-        b = { el: blockEl, label, icons, pool: [] };
+        b = { el: blockEl, label, icons, pool: new Map() };
         this.prodBlocks.set(seat.player, b);
       }
-      if (b.el.parentElement !== this.prodList) this.prodList.appendChild(b.el);
       const label = seatHtml(seat);
       if (b.label.innerHTML !== label) b.label.innerHTML = label;
       const list: ObserverIcon[] = (this.prodView === "production" ? seat.production : this.prodView === "army" ? seat.army : seat.upgrades).slice(0, OBS.prod.max);
-      const slots = sync(b.icons, b.pool, list.length, () => new IconSlot(this.driver, "obs-prod-icon", this.focus));
+      // Keyed by the reading's own key and the VIEW, so switching the pulldown never hands one
+      // view's slot (and its hover name) to another's.
+      const slots = syncKeyed(b.icons, b.pool, list.map((it) => `${this.prodView}:${it.key}`), () => new IconSlot(this.driver, "obs-prod-icon", this.focus));
       list.forEach((it, i) => {
         if (this.prodView === "production") slots[i].set(it.icon, it.name, it.value, null, it.simId);
         else if (this.prodView === "army") slots[i].set(it.icon, it.name, null, it.value, it.simId);
@@ -620,11 +667,12 @@ export class ObserverHud {
       b.el.classList.toggle("idle", list.length === 0);
     }
     for (const [p, b] of this.prodBlocks) if (!live.has(p)) b.el.remove();
-    // Keep the blocks in seat order.
-    for (const seat of this.seats) {
+    // Keep the blocks in seat order — moving one only when it is out of place (see syncKeyed).
+    this.seats.forEach((seat, i) => {
       const b = this.prodBlocks.get(seat.player)!;
-      this.prodList.appendChild(b.el);
-    }
+      const at = this.prodList.children[i] ?? null;
+      if (at !== b.el) this.prodList.insertBefore(b.el, at);
+    });
   }
 
   private renderHeroes(): void {
@@ -665,6 +713,32 @@ export class ObserverHud {
     this.t = Infinity;
   }
 
+  /** The selected building's job: its icon, verb and seconds on the build bar, and the queue
+   *  behind it. The verbs are GlobalStrings' own (`CONSTRUCTING`, `TRAINING`, `RESEARCHING`,
+   *  `REVIVING`); a tier upgrade has none there, so it reads the name of what it becomes. */
+  private renderJob(sel: HudSelection): void {
+    const s = this.sel;
+    const d = this.driver;
+    const constructing = sel.underConstruction;
+    const head = constructing ? null : sel.queue[0] ?? null;
+    const secs = Math.max(0, Math.ceil(sel.secondsLeft));
+    const verb = constructing ? d.uiString("CONSTRUCTING", "Constructing")
+      : head?.kind === "research" ? d.uiString("RESEARCHING", "Researching")
+      : head?.kind === "revive" ? d.uiString("REVIVING", "Reviving")
+      : head?.kind === "upgrade" ? head.name
+      : d.uiString("TRAINING", "Training");
+    const text = `${verb} (${secs}s)`;
+    if (s.jobText.textContent !== text) s.jobText.textContent = text;
+    const frac = Math.max(0, Math.min(1, constructing ? sel.buildProgress : sel.trainProgress));
+    s.jobFill.style.width = `${frac * 100}%`;
+    s.jobIcon.el.hidden = !head;
+    if (head) s.jobIcon.set(head.icon, head.name, null, null);
+    // Keyed by POSITION and icon: the queue has no ids, and two Footmen in a row are two jobs.
+    const rest = constructing ? [] : sel.queue.slice(1);
+    const slots = syncKeyed(s.jobQueue, s.jobPool, rest.map((q, i) => `${i}:${q.icon}`), () => new IconSlot(d, "obs-sel-job-q", () => {}));
+    rest.forEach((q, i) => slots[i].set(q.icon, q.name, null, null));
+  }
+
   private renderSelection(): void {
     const sel: HudSelection | null = this.driver.selection();
     const s = this.sel;
@@ -683,16 +757,28 @@ export class ObserverHud {
     s.mp.hidden = sel.maxMana <= 0;
     s.mpFill.style.width = `${sel.maxMana > 0 ? Math.max(0, Math.min(1, sel.mana / sel.maxMana)) * 100 : 0}%`;
     s.mpText.textContent = `${Math.floor(sel.mana)} / ${Math.round(sel.maxMana)}`;
+    // Experience INTO this level over what the level spans — the numbers the console's bar
+    // hovers ("Experience: 120 / 400"), and a full bar at the top level.
+    const xpSpan = sel.xpNext - sel.xpThis;
+    s.xp.hidden = !(sel.isHero && sel.level > 0 && !sel.isSummon);
+    if (!s.xp.hidden) {
+      const into = Math.max(0, Math.round(sel.xp - sel.xpThis));
+      s.xpFill.style.width = `${xpSpan > 0 ? Math.max(0, Math.min(1, into / xpSpan)) * 100 : 100}%`;
+      const t = xpSpan > 0 ? `${into} / ${xpSpan}` : this.levelWord(sel.level);
+      if (s.xpText.textContent !== t) s.xpText.textContent = t;
+    }
     s.icon.set(sel.icon, title, null, null, sel.id);
     // The lines the info panel would lead with, in its own words (InfoPanelStrings via
     // uiString), and nothing past them — this panel is the minimal version.
     const d = this.driver;
     const gold = (k: string, f: string): string => `<span class="obs-sel-key">${escapeHtml(d.uiString(k, f))}</span>`;
-    let lines: string;
-    if (sel.isBuilding && sel.underConstruction) {
-      lines = `${gold("CONSTRUCTING", "Constructing")} ${Math.ceil(sel.secondsLeft)}`;
-    } else if (sel.isBuilding && sel.queueLength > 0) {
-      lines = `${gold("TRAINING", "Training")} ${Math.ceil(sel.secondsLeft)}`;
+    const working = sel.isBuilding && (sel.underConstruction || sel.queueLength > 0);
+    s.job.hidden = !working;
+    s.lines.hidden = working;
+    if (working) this.renderJob(sel);
+    let lines = "";
+    if (working) {
+      // the job readout above stands in for the lines
     } else if (sel.isMine) {
       lines = `${gold("COLON_GOLD", "Gold:")} ${sel.goldRemaining}`;
     } else {

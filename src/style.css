@@ -1488,6 +1488,22 @@ body.hud-statbar-skinned .obs-bar-fill.mana { background-image: var(--statbar-ma
   grid-auto-rows: var(--obs-item);
   gap: 1px;
 }
+/* The hero's XP bar: the console's violet (`XpBarConsole.mdx` rgb(139,0,131), baked onto
+   the big-bar fill as --hud-bigbar-xp) — the placeholder gradient is hud.ts's own. */
+body .obs-sel-bar .obs-bar-fill.xp { background: linear-gradient(to bottom, #c07af0 0%, #8a3fd0 50%, #6a1fb0 100%); }
+body.hud-widget-skinned .obs-sel-bar .obs-bar-fill.xp { background: var(--hud-bigbar-xp) 0 0 / var(--track-w) 100% no-repeat; }
+/* The build bar of a building at work: `human-buildprogressbar-fill` (--hud-buildbar-fill),
+   the placeholder the console's gold capsule. */
+body .obs-sel-bar .obs-bar-fill.progress { background: linear-gradient(#ffe9a0, #f0c14a 45%, #b8862a); transition: width 0.25s linear; }
+body.hud-widget-skinned .obs-sel-bar .obs-bar-fill.progress { background: var(--hud-buildbar-fill) 0 0 / 100% 100% no-repeat; }
+.obs-sel-job { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: calc(var(--obs-bottom-pad) * 0.8); }
+.obs-sel-job[hidden] { display: none; }
+.obs-sel-job-head { display: flex; align-items: center; gap: calc(var(--obs-bottom-pad) * 1.2); }
+.obs-sel-job-head .obs-sel-bar { flex: 1; min-width: 0; margin: 0; }
+.obs-sel-job-icon { width: var(--obs-prod-icon); height: var(--obs-prod-icon); }
+.obs-sel-job-icon[hidden] { display: none; }
+.obs-sel-job-queue { display: flex; flex-wrap: wrap; gap: 1px; }
+.obs-sel-job-q { width: var(--obs-item); height: var(--obs-item); }
 /* Auto Camera: above the selection, on no panel — the replay panel it belongs to is for
    replays, which there are none of yet. */
 .hud-autocam.obs-autocam {
