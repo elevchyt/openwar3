@@ -2006,6 +2006,10 @@ interface Brain {
   reissueIn: number;
   /** When the last wave came home — `waveGap` is measured from it. */
   lastWaveEnd: number;
+  /** THIS seat's first-wave clock: the difficulty's `firstAttack` floor plus its own roll of
+   *  `firstAttackSpread`. Every reading of "may the first wave leave yet" asks this, never the
+   *  profile's number, or the seats go back to keeping one clock. */
+  firstAttackAt: number;
   /** When something hostile first appeared in one of our towns (-1 = nothing there). The
    *  difficulty's `defendDelay` is measured off this: an easy computer lets you kill four
    *  workers before it looks up. */
@@ -2340,6 +2344,8 @@ export class ComputerPlusAi {
       target: null,
       reissueIn: 0,
       lastWaveEnd: 0,
+      // Whole seconds off the seat's own stream (`PlusProfile.firstAttackSpread`).
+      firstAttackAt: profile.firstAttack + (profile.firstAttackSpread > 0 ? ai.randomInt(0, profile.firstAttackSpread) : 0),
       threatSince: -1,
       recall: null,
       recallNext: 0,
@@ -4257,7 +4263,7 @@ export class ComputerPlusAi {
    *  question in one place, because `creepNext` has to ask it too and the two must agree. */
   private waveReady(b: Brain): boolean {
     const { profile } = b;
-    if (b.clock < profile.firstAttack) return false;
+    if (b.clock < b.firstAttackAt) return false;
     if (b.clock - b.lastWaveEnd < profile.waveGap) return false;
     // THE OPENING BELONGS TO THE CAMPS — see `EARLY_GAME`. A closed wave window is an OPEN creep
     // window, because this is the same question `creepNext` asks before it lets the hero's level
@@ -7179,8 +7185,9 @@ export class ComputerPlusAi {
     // READY. An announcement is joined on this wave's own clocks (`waveReady`), because a
     // computer that walked out because somebody else happened to attack would be attacking with
     // less than it has decided an attack takes. A rally is a teammate ASKING, which is a reason
-    // of its own to go early: only the difficulty's earliest attack still stands (and an army
-    // big enough to be one — `rallyBusy`'s "small").
+    // of its own to go early: only the difficulty's earliest attack still stands — the FLOOR,
+    // not this seat's own roll of `firstAttackSpread` — (and an army big enough to be one —
+    // `rallyBusy`'s "small").
     if (ask ? b.clock < b.profile.firstAttack : !this.waveReady(b)) return decline(RALLY_BUSY_LINES.notReady);
     const spot = this.foeBase(b, foe);
     if (!spot) return;

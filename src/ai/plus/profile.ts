@@ -153,8 +153,17 @@ export interface PlusProfile {
   readonly upgradeRank: number;
 
   // --- fighting ---------------------------------------------------------------------------
-  /** Seconds before the first wave may leave home, whatever it has built. */
+  /** Seconds before the first wave may leave home, whatever it has built — the FLOOR of it. */
   readonly firstAttack: number;
+  /**
+   * …and how much LATER than that floor each seat's own first wave may be, rolled once per
+   * seat off its own random stream (`Brain.firstAttackAt`, uniform in `[firstAttack,
+   * firstAttack + firstAttackSpread]`). Reported of Easy: every Computer+ Easy player sat in its
+   * base until seven minutes and then every one of them rushed out at once, which "feels very
+   * scripted". The floor is the difficulty's promise not to attack early and it stays; the
+   * spread is what stops four computers keeping the same clock. OURS, like every number here.
+   */
+  readonly firstAttackSpread: number;
   /** Quiet time between waves. */
   readonly waveGap: number;
   /**
@@ -322,7 +331,9 @@ export const PLUS_EASY: PlusProfile = {
   // beside them, and twelve food of each was a two-dozen-food army facing somebody's first
   // game. Eight is four Footmen or two Riflemen, and still clears the Blacksmith's `after` (6).
   armyFood: 8, towers: 0, siegeUnits: 0, heroes: 1, techTier: 1, upgradeRank: 1,
-  firstAttack: 420, waveGap: 150, attackFood: 6, retreatHp: 0,
+  // Seven minutes at the EARLIEST, and each seat somewhere in the three after it
+  // (`firstAttackSpread`) — so a table of Easy computers does not all leave home on one tick.
+  firstAttack: 420, firstAttackSpread: 180, waveGap: 150, attackFood: 6, retreatHp: 0,
   // It never creeps and never shops, so neither clock nor purse below ever matters — the two
   // booleans are the switch. They are still stated rather than left to a default, because a
   // profile that only half-describes a difficulty is how one of them ends up playing another's
@@ -364,7 +375,7 @@ export const PLUS_NORMAL: PlusProfile = {
   // tier 3; they just take longer over it and stop short of the whole tree, which is what
   // `upgradeRank` and the clocks above already say.
   armyFood: 30, towers: 2, siegeUnits: 2, heroes: 2, techTier: 3, upgradeRank: 2,
-  firstAttack: 300, waveGap: 90, attackFood: 14, retreatHp: 0.35,
+  firstAttack: 300, firstAttackSpread: 0, waveGap: 90, attackFood: 14, retreatHp: 0.35,
   // Creeps from two and a half minutes with the hero and ten food behind it — about a hero, a
   // couple of soldiers and whatever else is standing around, which is what clears a green camp.
   // It does not focus-fire, but it DOES pull a soldier out of the line at a quarter health —
@@ -407,7 +418,7 @@ export const PLUS_INSANE: PlusProfile = {
   // type is enough to start shifting, and it remembers what it saw four minutes ago.
   counterWeight: 1, counterSample: 6, counterShare: 0.25, counterMemory: 240,
   armyFood: UPKEEP_TIER2, towers: 4, siegeUnits: 2, heroes: 3, techTier: 3, upgradeRank: 3,
-  firstAttack: 150, waveGap: 30, attackFood: 16, retreatHp: 0.4,
+  firstAttack: 150, firstAttackSpread: 0, waveGap: 30, attackFood: 16, retreatHp: 0.4,
   // Creeping starts at ninety seconds with the hero and eight food — the ladder's own answer,
   // which is "as soon as the hero walks out of the altar".
   focusFire: true, pullOutHp: 0.25, stutterStep: true, creeps: true, creepAt: 90, creepFood: 8,

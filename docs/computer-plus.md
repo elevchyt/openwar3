@@ -392,7 +392,7 @@ Blizzard's unless a comment says otherwise) every value here is ours.
 | upgrade rank | 1 | 2 | 3 |
 | animation-cancels | no | no | **yes** |
 | stutter-steps its ranged units | no | no | **yes** |
-| first attack | 7 min | 5 min | 2½ min |
+| first attack | 7–10 min, rolled per seat | 5 min | 2½ min |
 | army food that makes a wave | 10 | 14 | 16 |
 | **first creep camp** | **never** | 2½ min | 1½ min |
 | army food that makes a creeping party | — | 10 | 8 |
@@ -1321,7 +1321,8 @@ camp and died in it one by one.
 
 Read the Easy column as a description of a player: it makes eight workers and six food of
 tier-1 soldiers, never expands, never towers, never leaves its Town Hall, comes to find you
-after seven minutes, feeds its army in one piece, and takes fifteen seconds to notice you are in
+after seven to ten minutes (each seat rolls its own — `firstAttackSpread` — so a table of Easy
+computers does not all leave home on one tick), feeds its army in one piece, and takes fifteen seconds to notice you are in
 its base. That is issue #124's brief — "must essentially be able to be beaten by players who have
 played MOBAs" — written as numbers.
 
