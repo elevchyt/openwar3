@@ -1018,6 +1018,7 @@ export class RtsController {
 
   setAiPlayers(players: Iterable<number>): void {
     this.aiPlayers = new Set(players);
+    this.sim.computerPlayers = new Set(this.aiPlayers);
   }
 
   /**

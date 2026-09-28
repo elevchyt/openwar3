@@ -1550,6 +1550,15 @@ export interface SimUnit {
   // move-canceled), so its attack clip must NOT resume — it stands out the recovery
   // until the next real swing fires (the swing clears this). Reset every swing start.
   swingBroken: boolean;
+  /**
+   * Seconds of the last strike's BACKSWING (`backSw1/2`, hasted with the damage point) still to
+   * play, counted from the damage point. A player may cut it short by moving — the animation
+   * cancel every WC3 player learns — but the game's own AI never does: a creep or a computer's
+   * unit plays each blow's follow-through out before it takes a step after a target that walked
+   * off (`holdsBackswing`). Chasing from the damage frame on is what made a camp look like it
+   * was attack-cancelling — a swing, a lurch, a swing.
+   */
+  backswingLeft: number;
   // The swing that last landed KILLED its target, and the attacker is following it through.
   // The sim stands a unit down the tick its target drops, which is right for the order and
   // wrong for the body — the blow still has its backswing to play — so the renderer holds the
@@ -3632,6 +3641,9 @@ export class SimWorld {
    *  matrix (RtsController.setPlayerNeutral); this set is what the presentation reads — a
    *  neutral player's units ring neutral-yellow like a shop's (RtsController.ringAllegiance). */
   readonly neutralPlayers = new Set<number>();
+  /** The lobby's COMPUTER seats (`RtsController.setAiPlayers`). Their units play every blow's
+   *  backswing out rather than moving out of it (holdsBackswing), as the game's AI does. */
+  computerPlayers = new Set<number>();
   alliedPlayers: (ownerA: number, ownerB: number) => boolean | null = () => null;
   /**
    * Does `ownerA` hold its fire toward `ownerB`? (ALLIANCE_PASSIVE, granted BY A.)
@@ -8413,6 +8425,7 @@ export class SimWorld {
       | "cooldownLeft"
       | "itemCooldowns" // starts empty — nothing has been drunk yet (see SimUnit.itemCooldowns)
       | "swingLeft"
+      | "backswingLeft"
       | "swingTargetId"
       | "swingTeleports"
       | "swingSeq"
@@ -8685,6 +8698,7 @@ export class SimWorld {
       cooldownLeft: 0,
       itemCooldowns: new Map(),
       swingLeft: -1,
+      backswingLeft: 0,
       swingTargetId: 0,
       swingTeleports: 0,
       swingSeq: 0,
@@ -18918,6 +18932,13 @@ export class SimWorld {
     // range + leash is what tickSwing actually connects a hit from.
     const chaseGap = u.inCombat || !u.moving ? w.range + ATTACK_LEASH : w.range;
     if (gap > chaseGap || this.cliffApart(u, t, w)) {
+      // The target has walked out of reach, but the AI's blow is still following through:
+      // it stands the backswing out, and only then gives chase (see holdsBackswing).
+      if (this.holdsBackswing(u)) {
+        if (u.moving) this.settle(u);
+        u.inCombat = true;
+        return;
+      }
       u.inCombat = false;
       // A tower cannot follow. Whatever it was shooting at has left, so the order is over and
       // it goes back to watching its ground — otherwise an ordered target that walks away
@@ -19029,7 +19050,9 @@ export class SimWorld {
     // range mustn't drag the unit into walking while its strike is still pending — and
     // hold the heading the swing was committed at (no re-aim until the damage point;
     // engage's own wind-up branch says why).
-    if (u.swingLeft >= 0) {
+    // …and an AI's unit stands its blow's follow-through out too, rather than walking on
+    // toward the destination the moment the damage point has gone (see holdsBackswing).
+    if (u.swingLeft >= 0 || this.holdsBackswing(u)) {
       if (u.moving) this.settle(u);
       u.inCombat = true;
       return;
@@ -19551,10 +19574,12 @@ export class SimWorld {
    *  point, launch the projectile (ranged) or deal the hit (melee). */
   private tickSwing(u: SimUnit, dt: number): void {
     const w = u.swingWeapon;
+    if (u.backswingLeft > 0) u.backswingLeft = Math.max(0, u.backswingLeft - dt);
     if (u.swingLeft < 0 || !w) return;
     u.swingLeft -= dt;
     if (u.swingLeft > 0) return;
     u.swingLeft = -1;
+    u.backswingLeft = w.backswing; // the follow-through starts on the fire frame (holdsBackswing)
     if (u.swingTreeId) {
       const treeId = u.swingTreeId;
       u.swingTreeId = 0;
@@ -19612,8 +19637,22 @@ export class SimWorld {
     }
   }
 
+  /**
+   * Is this unit standing out the follow-through of a blow it has just struck, and one that
+   * does not cut it short? True for a creep (Neutral Hostile, owner -1) and for a COMPUTER
+   * seat's units (`computerPlayers`) while `backswingLeft` runs; never for a person's — moving
+   * out of the backswing is a player's technique, and the game leaves it to players.
+   */
+  private holdsBackswing(u: SimUnit): boolean {
+    if (u.backswingLeft <= 0) return false;
+    return (u.owner < 0 && !u.neutralPassive) || this.computerPlayers.has(u.owner);
+  }
+
   /** Cancel any pending swing (unit re-tasked away from its attack). */
   private cancelSwing(u: SimUnit): void {
+    // `backswingLeft` is deliberately left running: a re-task is exactly when an AI would cut
+    // the follow-through short (a creep switching to a new victim), and holdsBackswing ignores
+    // it for a person's unit anyway.
     u.swingLeft = -1;
     u.swingTreeId = 0;
     u.swingGround = null;
