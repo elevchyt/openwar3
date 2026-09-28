@@ -1362,6 +1362,20 @@ const RAZE_CLOSE = 500;
 const SIEGE_STEP = 250;
 
 /**
+ * How far past the building a base assault is razing a defender has to be standing before it
+ * counts as having fallen back behind the buildings (`assaultFrame`/`deepIn`) — about a Farm's
+ * width, so the defender standing BESIDE the building is still fought. OURS.
+ */
+const DEEP_SLACK = 250;
+
+/** A base assault's line — see `assaultFrame`. */
+interface AssaultFrame {
+  readonly from: { x: number; y: number };
+  readonly line: number;
+  readonly near: ReadonlyArray<{ x: number; y: number; id: number }>;
+}
+
+/**
  * A FIGHT BEING LOST, read off the two armies rather than off our own hit points alone
  * (`fightLost`). The old reading only asked whether the group was under 40 % of its hit points
  * or its hero nearly dead, so an army walking into one twice its size fought on until it was
@@ -3655,6 +3669,17 @@ export class ComputerPlusAi {
     }
     cx /= foes.length;
     cy /= foes.length;
+    // A BASE BEING RAZED IS NOT A FIELD FIGHT. Its defenders are "in contact" with the wave
+    // wherever in the base they stand — `CONTACT_LOOK` is wider than most bases — and re-aiming
+    // the wave at their centre is walking it past every building to wherever they fell back to:
+    // exactly the chase the developer ruled out (*"continue attacking the buildings and work its
+    // way inside instead of chasing the enemy's units deep into the enemy's base"*). The wave
+    // keeps its building; the defenders that come OUT are fought where they meet it (`commit`'s
+    // `deepIn`), and a fight going badly is still `fightLost`'s to call.
+    if (this.assaulting(b)) {
+      b.contactSince = -1;
+      return false;
+    }
     if (b.mode === "attacking" && !b.creeping && b.target
         && Math.hypot(b.target.x - cx, b.target.y - cy) <= CONTACT_LOOK) {
       b.target.x = cx;
@@ -4857,9 +4882,6 @@ export class ComputerPlusAi {
     // WHAT IS STANDING AT THE OBJECTIVE, scanned once — the focus-fire pick, the discipline
     // gate and the siege aim all read the same list rather than walking the world three times.
     const near = this.enemiesNear(b, x, y);
-    // Is the defence still worth killing before the buildings are? See `RAZE_EDGE`.
-    const hold = this.holdTheLine(b, near.bodies);
-    const focus = b.profile.focusFire ? this.focusTarget(b, near.bodies, x, y) : null;
     // WHICH BUILDING THIS WAVE IS TAKING DOWN (`razeAim`): the objective itself when it is one
     // of a player's buildings — `peelPass`/`nextBuilding` have already picked it off the outside
     // of the base — else the cheapest in sight of where the wave is standing. It is what the
@@ -4870,6 +4892,15 @@ export class ComputerPlusAi {
     const razeAim = objective && objective.hp > 0 && near.buildings.includes(objective)
       ? objective
       : this.siegeTarget(b, near.buildings);
+    // …AND A DEFENDER THAT HAS FALLEN BACK BEHIND ITS BUILDINGS IS NOT CHASED IN — see
+    // `assaultFrame`. While the wave is razing a base, the defence it reads is the part of it
+    // that is still OUT HERE fighting: every reading below (the discipline gate, the focus
+    // pick, the per-unit swaps) takes `bodies`, not `near.bodies`.
+    const assault = razeAim && b.mode !== "defending" ? this.assaultFrame(b, razeAim) : null;
+    const bodies = assault ? near.bodies.filter((t) => !this.deepIn(assault, t)) : near.bodies;
+    // Is the defence still worth killing before the buildings are? See `RAZE_EDGE`.
+    const hold = this.holdTheLine(b, bodies);
+    const focus = b.profile.focusFire ? this.focusTarget(b, bodies, x, y) : null;
     // WHERE THE ARMY IS, for the cohesion rule below — and it is the CAPTAIN when there is one.
     //
     // "The army follows its hero" is the developer's own framing and it is a better anchor than
@@ -5073,9 +5104,22 @@ export class ComputerPlusAi {
       // `fighting`) — so nearly every soldier in a base is a unit whose order says "attackmove"
       // and whose `targetId` is the building it is hitting. Read off the order alone, neither
       // rule saw the army it was written for.
+      // NOT INTO THE BASE AFTER THEM. A unit whose target has fallen back past the building the
+      // wave is razing (`deepIn`) is taken off it and put back on that building — the base is
+      // worked through from the outside, and the defender will be in reach again when the
+      // buildings in front of it are down. Asked of every unit and every difficulty, because
+      // the chase is the sim's own acquisition as often as it is any order of ours.
+      if (assault && razeAim && u.targetId && this.chasingIn(b, assault, u)) {
+        if (this.host.world.weaponVs(u, razeAim)) {
+          this.issue(b, { c: "order", unitId: u.id, order: { kind: "attack", targetId: razeAim.id }, queued: false });
+        } else {
+          this.issue(b, { c: "order", unitId: u.id, order: { kind: "attackmove", x: razeAim.x, y: razeAim.y }, queued: false });
+        }
+        continue;
+      }
       if (u.targetId) {
         const swap = this.stuckOnHero(b, u) ? this.besideHero(b, u)
-          : this.stuckOnBuilding(b, u) ? this.besideBuilding(b, u, near.bodies, hold ? SWAP_LOOK : RAZE_CLOSE)
+          : this.stuckOnBuilding(b, u) ? this.besideBuilding(b, u, bodies, hold ? SWAP_LOOK : RAZE_CLOSE)
           : null;
         if (swap) {
           // Re-aimed at a BODY rather than merely released. An attack-move here would be
@@ -5090,7 +5134,7 @@ export class ComputerPlusAi {
       // THE DEFENCE IS BROKEN: take the base down, one building at a time and all together —
       // see `razePass`. Asked before the "leave an explicit attack alone" rule below, because a
       // unit left on the Farm it was ordered onto would never move on to the Barracks beside it.
-      if (razeAim && !hold && this.razePass(b, u, razeAim, near.bodies)) continue;
+      if (razeAim && !hold && this.razePass(b, u, razeAim, bodies)) continue;
       // Nothing better to hit: a unit that was explicitly ORDERED onto something is left
       // swinging at it, exactly as before. One merely auto-acquiring under an attack-move
       // falls through to the re-issue guard below, which is where it always went.
@@ -5190,6 +5234,66 @@ export class ComputerPlusAi {
       if (!u.targetKey && u.owner >= 0 && u.owner < MELEE.MAX_PLAYERS) buildings.push(u);
     }
     return { bodies, buildings };
+  }
+
+  /**
+   * THE LINE A BASE ASSAULT HOLDS — where the wave's army stands and how far from it the
+   * building it is razing is (`razeAim`). A defender further from the army than that building,
+   * by more than `DEEP_SLACK`, has fallen back BEHIND the buildings (`deepIn`), and the
+   * developer's rule for it is *"continue attacking the buildings and work its way inside
+   * instead of chasing the enemy's units deep into the enemy's base"*.
+   *
+   * Measured from the squad's CENTRE, not the captain: the captain is the unit most likely to
+   * have run in after somebody, and a line measured from wherever it got to moves with it.
+   * `near` is every one of our fighting bodies, for `deepIn`'s exception.
+   */
+  private assaultFrame(b: Brain, razeAim: SimUnit): AssaultFrame | null {
+    const from = this.squadCentre(b);
+    if (!from) return null;
+    const near: Array<{ x: number; y: number; id: number }> = [];
+    for (const u of this.squadUnits(b)) {
+      if (u.isPeon || isCopy(u) || u.hp <= 0) continue;
+      near.push({ x: u.x, y: u.y, id: u.id });
+    }
+    return { from, line: Math.hypot(razeAim.x - from.x, razeAim.y - from.y) + DEEP_SLACK, near };
+  }
+
+  /**
+   * Has this enemy fallen back behind the buildings — past the assault's line, and NOT fighting
+   * us from there? The exception is the one a player makes without thinking: a defender that
+   * is swinging at one of ours, or standing within `RAZE_CLOSE` of one (its own weapon's reach,
+   * for an archer or a tower shooting over a Farm), is in the fight wherever it is standing, and
+   * is fought.
+   */
+  private deepIn(f: AssaultFrame, t: SimUnit): boolean {
+    if (Math.hypot(t.x - f.from.x, t.y - f.from.y) <= f.line) return false;
+    const reach = Math.max(RAZE_CLOSE, (t.weapon?.range ?? 0) + DEEP_SLACK);
+    for (const p of f.near) {
+      if (t.targetId === p.id) return false;
+      if (Math.hypot(t.x - p.x, t.y - p.y) <= reach) return false;
+    }
+    return true;
+  }
+
+  /** Is this unit following a defender in — its target is an enemy BODY that has fallen back
+   *  behind the buildings (`deepIn`) and is out of `RAZE_CLOSE` of it? A tower is not a body
+   *  here: the ladder already decides when a tower is the next building. */
+  private chasingIn(b: Brain, f: AssaultFrame, u: SimUnit): boolean {
+    if (u.isPeon || isSiege(u)) return false;
+    const t = (u.targetId ? this.host.world.units.get(u.targetId) : undefined);
+    if (!t || t.hp <= 0 || t.building || !b.ai.hostileTo(t)) return false;
+    if (Math.hypot(t.x - u.x, t.y - u.y) <= RAZE_CLOSE) return false;
+    return this.deepIn(f, t);
+  }
+
+  /** Is this wave razing a base right now — its objective one of a player's buildings, with the
+   *  army within `PEEL_RANGE` of it? `contactPass` leaves such a wave alone (see there). */
+  private assaulting(b: Brain): boolean {
+    if (b.mode !== "attacking" || b.creeping || !b.target?.id) return false;
+    const t = this.host.world.units.get(b.target.id);
+    if (!t || t.hp <= 0 || !t.building || !b.ai.hostileTo(t)) return false;
+    const from = this.squadCentre(b);
+    return !!from && Math.hypot(t.x - from.x, t.y - from.y) <= PEEL_RANGE;
   }
 
   /**

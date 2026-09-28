@@ -3766,6 +3766,18 @@ the one building in the middle. Three pieces undo that:
   now takes a unit off a building at ANY stage of the fight (`stuckOnBuilding`, which used to be
   asked only while the defence held), with `SWAP_LOOK` still the reach while it holds. A healthy
   hero is still not what anybody is taken off a building for — the anti-chase rule.
+* **Not in after them** — *"if the defender runs back into their base (behind their buildings),
+  the Computer+ AI must continue attacking the buildings and work its way inside instead of
+  chasing"*. `assaultFrame` draws the wave's LINE: the distance from the squad's centre (not the
+  captain, who is the unit most likely to have run in) to the building being razed, plus
+  `DEEP_SLACK` (250). A defender past it has fallen back (`deepIn`) and is left out of every
+  reading `commit` takes — the discipline gate, Insane's focus pick, the per-unit swaps — so a
+  defence that retreats lets the wave get on with the buildings; a unit already following one in
+  is put back on the building (`chasingIn`). The exception is a defender still IN the fight:
+  swinging at one of ours, or within `RAZE_CLOSE` / its own weapon's reach of one (an archer
+  shooting over a Farm). And `contactPass` leaves a wave that is razing a base alone
+  (`assaulting`): `CONTACT_LOOK` (1400) is wider than most bases, so every defender anywhere in
+  it read as "in contact", and re-aiming the wave at their centre was the chase itself.
 
 ## Manners: glhf, gg, and leaving
 

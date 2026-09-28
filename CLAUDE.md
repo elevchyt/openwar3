@@ -467,7 +467,9 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   once tier 2 stands, and a gun shells buildings EVEN MID-FIGHT (`siegeNear`). A base is RAZED FROM
   THE OUTSIDE IN (`peelPass`/`razeCost`: distance from the army over a tower > production > rest
   rung — the hall a wave is aimed at is only what names the base), and a soldier leaves a
-  building for an enemy body within `RAZE_CLOSE`; and a missing Town Portal is bought at ANY shop a hero stands at, or
+  building for an enemy body within `RAZE_CLOSE` — but never follows a defender that has fallen back
+  BEHIND the building being razed (`assaultFrame`/`deepIn`, and `contactPass` leaves a base assault
+  alone); and a missing Town Portal is bought at ANY shop a hero stands at, or
   detoured to while the party musters (`PlusItems.portalChance`). A race is a TABLE of named builds, one
   rolled per match, and **expanding belongs to the build order** (`PlusStrategy.expandAt`) rather
   than to the difficulty — a fast expand is a build, not a setting. A build names UNITS and its
