@@ -245,7 +245,15 @@ interface Want {
 const LIST: readonly Want[] = [
   // Two healing potions before anything else: it is the item that wins the most fights, every
   // race shop has it, and at 150 it is the cheapest thing on this list that does.
-  { id: "phea", want: 2 },
+  //
+  // Out of the PURSE (`opening`) and past the habit ceiling (`ESSENTIAL`), for the Town Portal's
+  // reason: a hero that fights without one is a hero that dies. Measured on Echo Isles before
+  // this, a Normal orc played twelve minutes and never bought one — its gold was almost never
+  // 300 + 150 at the moment the shopping pass looked, and by the time `[phea] stockStart` (440 s)
+  // had put the potion on the shelf its hero's belt was four creep drops deep, which is
+  // `shopping`'s whole ceiling on Normal. The shelf's own clock is still the only wait: before
+  // 7:20 `shopStock` answers 0 and the row is skipped, exactly as a player's click would be.
+  { id: "phea", want: 2, opening: true },
   // The area heal. The Merchant's and the Tomb's; the reason a Computer+ push does not
   // evaporate the moment it is behind on the trade.
   { id: "shea", want: 1 },
@@ -407,6 +415,10 @@ const RACE_MANA: Partial<Record<PlayableRace, readonly Want[]>> = {
   undead: [{ id: "pman", want: 1 }],
 };
 
+/** The buys `PlusProfile.shopping` does not cap: the Town Portal (see `shop`) and the Potion of
+ *  Healing (see `LIST`). A free SLOT is still required — `shopper` asks for one. */
+const ESSENTIAL: ReadonlySet<string> = new Set(["stwp", "phea"]);
+
 /** Where the Town Portal sits in that list. `keepPortal` puts it FIRST — a player who plans
  *  around having one buys it before the potions, because the potions are no use if the army
  *  it would have saved is dead. Without the habit it is merely the last thing it gets round to. */
@@ -467,13 +479,35 @@ const ESCAPE_HP = 0.4;
  * fighting, and 320 gold is cheaper than a level-6 Blademaster.
  */
 const LAST_RESORT_HP = 0.08;
-/** …and at which it drinks. Higher, because a potion heals over time and a hero that waits for
- *  `PANIC_HP` to drink one has usually waited too long. */
-const HURT_HP = 0.55;
+/**
+ * …and the band a hero drinks a HEALING POTION in (`healSelf`: Potion of Healing, of Greater
+ * Healing, a Health Stone — every `AIhe`). Higher than `PANIC_HP`, because a hero that waits for
+ * the panic line to drink has usually waited too long.
+ *
+ * A BAND and not a line, and the developer's own numbers: heroes carrying a potion "use it when
+ * they are at around 45 to 60 percent health". Each hero is handed its own bar inside the band
+ * (`drinkBar`) so two heroes in one fight do not drink on the same blow — which is what a
+ * single threshold made them do, and what no player does.
+ */
+const HURT_HP_LOW = 0.45;
+const HURT_HP_HIGH = 0.6;
+
+/**
+ * This hero's own drinking bar, somewhere in [`HURT_HP_LOW`, `HURT_HP_HIGH`].
+ *
+ * Off the unit's ID and nothing else: the AI runs on the authority and every client must be
+ * able to reproduce it, so there is no `Math.random` in it — a Knuth multiplicative hash spreads
+ * consecutive ids across the band. Fixed for the hero's life, so it is a temperament and not a
+ * coin tossed every pass (which would simply drink at the top of the band, eventually).
+ */
+export function drinkBar(unitId: number): number {
+  const spread = (Math.imul(unitId, 2654435761) >>> 0) / 0xffffffff;
+  return HURT_HP_LOW + (HURT_HP_HIGH - HURT_HP_LOW) * spread;
+}
 /**
  * How hurt somebody else has to be to be worth a Healing Salve.
  *
- * Ours, like the rest of this block. Read one bar above `HURT_HP` (the line a hero drinks its
+ * Ours, like the rest of this block. Read one bar above `drinkBar` (the line a hero drinks its
  * own potion at) rather than below it, and for the same reason `ARMY_HURT` sits there: a salve
  * pours over forty-five seconds and is cancelled by the next blow (`ITEM_REGEN_GROUP`,
  * docs/items.md), so it is spent BETWEEN fights on a body that is going into the next one — not
@@ -488,7 +522,7 @@ const CLUSTER = 3;
 /**
  * …and how hurt the PARTY has to be, pooled, before an area heal is worth its charge.
  *
- * Ours, like everything else in this block. Higher than `HURT_HP` (the line one unit drinks a
+ * Ours, like everything else in this block. Higher than `drinkBar` (the line one unit drinks a
  * potion at) and deliberately so: pooled health is a gentler number than any one soldier's —
  * an army at two thirds usually has somebody in it at a third — and the thing being spent
  * pours over forty-five seconds rather than saving anybody from the next blow. Two thirds is
@@ -536,7 +570,7 @@ const MANA_TOPUP = 0.75;
  * Reported: *"all Computer+ AI should be willing to use Replenishment potion even if they have
  * a lot of health. they should also be willing to use it if they have less than 70% mana."*
  * The 70 % is the developer's own number; the hit-point bar beside it is `MANA_TOPUP`'s, and it
- * is deliberately the eager one rather than `HURT_HP`, because this potion is not an emergency
+ * is deliberately the eager one rather than `drinkBar`, because this potion is not an emergency
  * item at all. It restores BOTH bars at once for one charge, it is bought by the pair, and its
  * own row calls it a Non-Combat Consumable — so what it is for is the walk between fights, and
  * a charge still in the belt when the next fight starts has done nothing for anybody.
@@ -1097,7 +1131,7 @@ export class PlusItems {
       case "panic":
         return engaged && hp < PANIC_HP;
       case "healSelf":
-        return engaged && hp < HURT_HP;
+        return engaged && hp < drinkBar(u.id);
       // The REGENERATION rungs, and they are the only ones gated on there being NO fight.
       //
       // Reported from both races that open with one: *"the Orc AI must avoid using healing salve
@@ -1379,7 +1413,7 @@ export class PlusItems {
    *
    * A Scroll of Regeneration draws its circle on the presser, so this asks nothing about who
    * else is standing in it: the question is only whether the body at the centre wants what is
-   * about to be poured. `HURT_HP` is the line the hero drinks its own potion at, which is the
+   * about to be poured. `drinkBar` is the line the hero drinks its own potion at, which is the
    * right bar for a hundred-gold area charge spent on one unit — above it the scroll is being
    * spent on a scratch, and `armyHeal` is the reading that decides whether the party makes it
    * worth pouring anyway.
@@ -1398,7 +1432,7 @@ export class PlusItems {
    * reading above still spends either.
    */
   private selfRegenWorthIt(u: SimUnit, hp: number, def: ItemDef): boolean {
-    if (hp >= HURT_HP || this.regenerating(u)) return false;
+    if (hp >= drinkBar(u.id) || this.regenerating(u)) return false;
     return def.abilities.some((aid) => this.view.def(aid)?.code === REGEN);
   }
 
@@ -1603,7 +1637,7 @@ export class PlusItems {
     //
     // The whole purse, not the surplus: `pick` applies `itemReserve` per ROW, because the
     // race's opening buys are not discretionary spending — see `Want.opening`.
-    const buy = this.pick(own, this.view.gold(), ctx, rich);
+    let buy = this.pick(own, this.view.gold(), ctx, rich);
     if (!buy) return void (this.onErrand = 0); // nothing left worth walking for
     // A REPLACEMENT SCROLL IS NOT SHOPPING, and `PlusProfile.shopping` must not stop it.
     //
@@ -1614,7 +1648,18 @@ export class PlusItems {
     // fight ends sat unbought at the shop it walked past. A player who keeps a Town Portal
     // replaces it whatever else is in the belt; a free SLOT is the only thing that can stop
     // them, and `shopper` still asks for one.
-    const hero = this.shopper(own, rich, buy.itemId === PORTAL.id);
+    let hero = this.shopper(own, rich, ESSENTIAL.has(buy.itemId));
+    // …and a row the habit ceiling refuses must not hide an ESSENTIAL one below it. `pick` stops
+    // at the first row it can act on, which for an orc is its opening salve — so a hero at the
+    // ceiling was refused the salve and the pass ended there, every pass, with the Potion of
+    // Healing two rows further down (measured: 1258 gold banked at 15:00 and no potion bought).
+    if (!hero && !ESSENTIAL.has(buy.itemId)) {
+      const essential = this.pick(own, this.view.gold(), ctx, rich, true);
+      if (essential) {
+        buy = essential;
+        hero = this.shopper(own, rich, true);
+      }
+    }
     if (!hero) return void (this.onErrand = 0);
     if (this.view.world.shopReaches(buy.shopId, hero.id)) {
       this.onErrand = 0; // arrived — the army may have it back
@@ -1810,10 +1855,12 @@ export class PlusItems {
     gold: number,
     ctx: ItemCtx,
     rich: boolean,
+    essentialOnly = false,
   ): { shopId: number; itemId: string; x: number; y: number } | null {
     const shops = this.shops(ctx);
     if (!shops.length) return null;
     for (const want of this.list(rich)) {
+      if (essentialOnly && !ESSENTIAL.has(want.id)) continue;
       const purse = want.opening ? gold : gold - this.profile.itemReserve;
       const def = this.view.item(want.id);
       if (!def) continue;

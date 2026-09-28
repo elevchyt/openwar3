@@ -22,7 +22,7 @@
 const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
-const { PlusItems } = require(join(REPO, ".sim-build", "src", "ai", "plus", "items.js"));
+const { PlusItems, drinkBar } = require(join(REPO, ".sim-build", "src", "ai", "plus", "items.js"));
 const { scoutRing, SCOUT_RING_LEGS, lumberCrew, reliefCount } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 
@@ -169,6 +169,7 @@ console.log("\n-- the belt: which button, and when -----------------------------
 const ITEMS = {
   stwp: { id: "stwp", gold: 350, usable: true, abilities: ["AItp"] }, // Scroll of Town Portal
   phea: { id: "phea", gold: 150, usable: true, abilities: ["AIh1"] }, // Potion of Healing
+  pghe: { id: "pghe", gold: 400, usable: true, abilities: ["AIh2"] }, // Potion of Greater Healing (a drop)
   pnvl: { id: "pnvl", gold: 150, usable: true, abilities: ["AIvl"] }, // Potion of Lesser Invuln.
   shea: { id: "shea", gold: 250, usable: true, abilities: ["AIha"] }, // Scroll of Healing
   hslv: { id: "hslv", gold: 100, usable: true, abilities: ["AIrl"] }, // Healing Salve
@@ -201,6 +202,7 @@ const ABILS = {
   // alias   code            what the row carries
   AItp: { code: "AItp", target: "point", levelData: [lvl({ area: 1100, castTime: 5 })] },
   AIh1: { code: "AIhe", target: "", levelData: [lvl({ castRange: 100, data: [250, NaN] })] },
+  AIh2: { code: "AIhe", target: "", levelData: [lvl({ castRange: 100, data: [500, NaN] })] },
   AIm1: { code: "AIma", target: "", levelData: [lvl({ castRange: 100, data: [150, NaN] })] },
   AIvl: { code: "AIvu", target: "", levelData: [lvl({ duration: 7 })] },
   AIha: { code: "AIha", target: "", levelData: [lvl({ area: 600, data: [250, NaN] })] },
@@ -304,7 +306,21 @@ const itemOf = (cmd) => (cmd ? cmd.slot : null);
 
 // --- the healing potion, in a fight ----------------------------------------------------------
 {
-  const h = belt(hero({ hp: 400 }), "phea"); // 40% — under HURT_HP, over PANIC_HP
+  // THE DRINKING BAND — the developer's "around 45 to 60 percent health". Every hero gets its own
+  // bar inside it (`drinkBar`), off its id, so two heroes do not drink on the same blow and a
+  // client replays the same answer.
+  const bars = Array.from({ length: 500 }, (_, i) => drinkBar(i + 1));
+  check("every hero's bar is inside 45–60 %", bars.every((b) => b >= 0.45 && b <= 0.6), true);
+  check("…and they are spread across it, not all one number",
+    Math.min(...bars) < 0.47 && Math.max(...bars) > 0.58, true);
+  check("…and the same hero always gets the same bar", drinkBar(77) === drinkBar(77), true);
+  const at = (pct, item = "phea") => pressed([belt(hero({ hp: pct * 10 }), item), enemy({ x: 200 })], PLUS_NORMAL, AWAY);
+  check("a hero in a fight at 44 % drinks", itemOf(at(44)), 0);
+  check("…at 61 % it does not", at(61), null);
+  check("a Potion of GREATER Healing is drunk the same way", itemOf(at(44, "pghe")), 0);
+}
+{
+  const h = belt(hero({ hp: 400 }), "phea"); // 40% — under the drinking band, over PANIC_HP
   const cmd = pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY);
   check("a hurt hero in a fight drinks its healing potion", itemOf(cmd), 0);
   check("…on itself, with no target", cmd && cmd.targetId, 0);
@@ -976,8 +992,30 @@ const spend = (h, id) => { const i = h.inventory.findIndex((s) => s?.itemId === 
 {
   // The purse is gold ABOVE the reserve the build order keeps — see PlusProfile.itemReserve.
   const h = hero();
+  // (The Potion of Healing is bought out of the purse now — see below — so it is off the shelf
+  // here, to leave an ordinary row as the next thing on the list.)
   check("it will not dip into the build order's gold",
-    shopped([h, MERCHANT], PLUS_INSANE, { gold: PLUS_INSANE.itemReserve + 10 }).buy, null);
+    shopped([h, MERCHANT], PLUS_INSANE, { gold: PLUS_INSANE.itemReserve + 10, soldOut: ["phea"] }).buy, null);
+}
+{
+  // THE HEALING POTION IS BOUGHT OUT OF THE PURSE, like the race's opening buys. Measured on Echo
+  // Isles: a Normal orc's gold was almost never 300 + 150 when the shopping pass looked, and it
+  // played twelve minutes without ever carrying one.
+  const h = belt(hero(), "stwp");
+  check("a Potion of Healing does not wait for the reserve",
+    shopped([h, MERCHANT], PLUS_NORMAL, { gold: 160 }).buy?.itemId, "phea");
+  // …and the habit ceiling does not stop it either: Normal's four slots, full of creep drops.
+  const full = belt(hero(), "stwp", "prvt", "rde1", "cnob");
+  check("…nor for a belt already at the habit's ceiling",
+    shopped([full, MERCHANT], PLUS_NORMAL, { gold: 160 }).buy?.itemId, "phea");
+  // …and an ordinary row ABOVE it that the ceiling refuses does not end the pass. An orc's
+  // opening salve leads its list; at the ceiling the salve is refused, and the potion two rows
+  // down was never reached (measured: 1258 gold banked at 15:00, no potion bought).
+  const LOUNGE = ["shas", "hslv", "plcl", "phea", "pman", "stwp", "tgrh", "oli2"]; // [ovln]
+  check("a refused salve above it does not hide the potion",
+    shopped([belt(hero(), "stwp", "prvt", "rde1", "cnob"), MERCHANT], PLUS_NORMAL, { race: "orc", shelf: LOUNGE, gold: 600 }).buy?.itemId, "phea");
+  check("…but two is still the habit",
+    shopped([belt(hero(), "stwp", "phea", "phea"), MERCHANT], PLUS_NORMAL, { gold: 160 }).buy, null);
 }
 {
   const h = hero();
@@ -1147,7 +1185,7 @@ const spend = (h, id) => { const i = h.inventory.findIndex((s) => s?.itemId === 
   // …and the rest of the list still waits for the surplus, which is what the reserve is for.
   const stocked = belt(hero(), "hslv", "hslv");
   check("…but the general list still waits above the reserve",
-    shopped([stocked, MERCHANT], PLUS_NORMAL, { race: "orc", shelf: LOUNGE, gold: PLUS_NORMAL.itemReserve + 10 }).buy, null);
+    shopped([stocked, MERCHANT], PLUS_NORMAL, { race: "orc", shelf: LOUNGE, gold: PLUS_NORMAL.itemReserve + 10, soldOut: ["phea"] }).buy, null);
 }
 {
   // Nobody else gets the habit: a night elf off the same shelf still opens with the scroll.
@@ -1242,7 +1280,7 @@ const spend = (h, id) => { const i = h.inventory.findIndex((s) => s?.itemId === 
   // exempt.
   const kept = belt(hero(), "stwp", "phea", "bspd", "spro");
   check("…while an ordinary row is still held to it",
-    shopped([kept, MERCHANT], PLUS_NORMAL, { gold: 700 }).buy, null);
+    shopped([kept, MERCHANT], PLUS_NORMAL, { gold: 700, soldOut: ["phea"] }).buy, null);
 }
 
 // The errand latch — what stops the army manager dragging a shopping hero back to the muster

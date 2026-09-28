@@ -2811,7 +2811,7 @@ it needs both:
   and a Scroll of Regeneration is an AREA — the units it covers are not the unit pressing it.
 
 The same reasoning sets **how hurt is hurt enough**: `ALLY_HP`, the bar a Healing Salve is poured
-at, is **65 %** — one bar *above* `HURT_HP` (55 %, where a hero drinks its own potion) rather than
+at, is **65 %** — one bar *above* `drinkBar` (45–60 %, where a hero drinks its own potion) rather than
 below it, and level with `ARMY_HURT`. A potion is an emergency and heals at once; a salve pours
 over forty-five seconds between fights, so waiting for half health on a three-charge, hundred-gold
 item leaves most of an army walking to the next camp hurt with the charges still in the belt.
@@ -2874,7 +2874,7 @@ So it is its own rung, `replenish`, sitting between `mana` and `manaRegen`:
 **OR, not AND**, is the whole of the report: a hero at full health with a spent bar wants this
 exactly as much as a hurt one with a full bar does, and asking for both left the pair bought at
 the shop undrunk for the rest of the match. The 70 % is the developer's own number; the hit-point
-bar beside it is `MANA_TOPUP`'s rather than `HURT_HP`'s, deliberately — this potion is not an
+bar beside it is `MANA_TOPUP`'s rather than `drinkBar`'s, deliberately — this potion is not an
 emergency item, it is what a hero drinks on the walk to the next fight.
 
 #### It sells the duplicate
@@ -3192,7 +3192,7 @@ them in the denominator and a computer with a busy ally could never reach the ha
 overall army is healthy."* Every one of the three questions above is about the **party**, and a
 hero that came out of a camp at a third of its life beside five untouched Footmen fails all three
 while being exactly the unit the next fight turns on. `selfRegenWorthIt` is the other half: the
-hero itself under `HURT_HP` (55 %, the line it drinks its own potion at) and not already pouring.
+hero itself under `drinkBar` (45–60 %, the line it drinks its own potion at) and not already pouring.
 The circle is drawn on the presser either way — `aim` leaves an area item at its own feet — so the
 two are the same press asked for two different reasons: *is the army worth 100 gold, or is the
 hero*.
@@ -4036,3 +4036,15 @@ moves a unit up a tier where RoC's own `Requires` says so (Wind Rider → Fortre
 Black Citadel). `tools/ai-plus-ladder-test.cjs` runs the ladder on RoC data with
 `OW3_EDITION=roc`. The orc has no `antiAir` row there: the Batrider does not exist and the Wind
 Rider is tier 3.
+
+### Healing potions: bought like the scroll, drunk in a band
+
+A hero in a fight drinks a Potion of Healing (or Greater Healing, or anything else on `AIhe`) once
+its life is under its own `drinkBar`. That is a point inside **45–60 %**, the developer's own
+numbers, chosen off the hero's id so two heroes don't drink on the same blow and every machine
+gets the same answer. The Potion of Healing is also **ESSENTIAL** like the Town Portal. It is
+bought out of the whole purse (`opening`) and past `PlusProfile.shopping`'s habit ceiling, and a
+row the ceiling refuses above it no longer ends the shopping pass (`shop` retries with the
+essential rows alone). Before this change, a Normal orc on Echo Isles played fifteen minutes with
+1258 gold banked and never bought one. The shelf's own clock is still the only wait:
+`[phea] stockStart` is 440 s, so nobody can buy one before 7:20.
