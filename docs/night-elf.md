@@ -420,8 +420,12 @@ Pressed on a walking tree it is not a cast at all but an ERRAND, and so is the r
 
 * **Right-click a free gold mine** with an uprooted Tree of Life → `{kind:"entangleat"}`.
   `SimWorld.issueEntangleAt` picks the site, `issueRootAt` walks it there, and `tickEntangleAt`
-  throws the roots the moment it plants. A planted tree is not asked at all (its right-click
-  never gets past `acceptsRally` anyway).
+  throws the roots the moment it plants.
+* **Right-click a free gold mine** with a PLANTED Tree of Life whose roots hold no mine yet
+  (`holdsEntangledMine`) → the same order, taken ahead of the rally point. With the mine in
+  `Rng1` it entangles where it stands; out of reach it uproots first, and `tickEntangleAt`
+  starts the walk the tick the 2.5s transition lets go of it (`SimUnit.entangleUproot`). A
+  Tree that already has its Entangled Gold Mine answers the click with its rally point.
 * **Pressing the button** is the same errand with no mine named: `issueCast` hands `Aent`
   straight to `issueEntangleAt`, which applies the ability's own no-target rule and takes the
   nearest free mine inside `Rng1` = 500. Nothing in reach is the refusal the error line
@@ -432,12 +436,13 @@ Pressed on a walking tree it is not a cast at all but an ERRAND, and so is the r
   the nearest, out to `Rng1` + the mine's radius (exactly how `entangleMine` measures). A tree
   already standing inside that range therefore has nowhere to go and roots where it is: walking
   one that could already reach the rock would be the order overriding the ability's own range.
-* **There is no cast in front of it.** The mine starts closing on the same tick the tree starts
-  lowering itself onto the site — not after the 2.5s root transition, and not after `Cast1`.
+* **There is no cast in front of it, and no gesture either.** `[Aent]` names no `Animnames` —
+  only the Roots `Casterart` — so the tree plays nothing (`CAST_ANIM_STAND` in rts.ts). The
+  mine starts closing on the same tick the tree starts lowering itself onto the site — not after the 2.5s root transition, and not after `Cast1`.
   `tickEntangleAt` calls `entangleMine` directly rather than going through `issueCast`, which
   is also what lets it name the mine the player clicked instead of re-deriving "the nearest
   one". (`Cast1` = 3s survives on the raw cast, which is what a JASS `entangle` order aimed at
-  a planted tree still gets.)
+  a planted tree still gets — and that too plays no clip.)
 * **"Free"** is checked on the smart order, not on the ability: un-entangled (and un-haunted,
   which is free for now — we do not model a Haunted Gold Mine) *and* not being worked by
   another player. That last one is not a rule of `Aent` — Entangle is perfectly happy to wrap a
@@ -524,6 +529,9 @@ are the walking form (`Walk` has no alternate twin — only an uprooted Ancient 
 `* Alternate` ones are the planted tree. That is why the training pose is **"Stand Work
 Alternate"**: an Ancient trains only while planted. A non-Ancient night elf building — the
 Chimaera Roost, the Hunter's Hall — has no alternate half at all and simply plays "Stand Work".
+An Ancient is BUILT planted, so its construction clip is read with the alternate props too
+(`attachInstance`): TreeOfLife.mdx authors no plain "Birth" at all, only "Birth Alternate", and
+read with the type's bare props it found nothing and scaled a finished tree up out of the ground.
 
 Two traps live in that, and both are the kind you only see on screen:
 

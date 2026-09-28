@@ -426,12 +426,13 @@ console.log("`entangleat` — the expansion in one right-click: walk, and root O
   const fp = { w: 12, h: 12, blocked: new Array(144).fill(true), buildBlocked: new Array(144).fill(true) };
   world.setPathStamp(40, fp, 3000, 2000);
   world.recomputeStats(u);
-  // Planted, it is not asked at all: Entangle is the UPROOTED card's button, and a building
-  // has no errand to run.
-  check("planted, the order is not for it", world.issueEntangleAt(40, mine.id) === false);
-  world.toggleRoot(u);
+  // Planted, with no mine of its own and the rock out of reach, the order pulls it up FIRST:
+  // the walk cannot start until the 2.5s uproot transition lets go of it.
+  check("planted and out of reach, the order takes", world.issueEntangleAt(40, mine.id) === true);
+  check("…by uprooting, the mine held for after", u.uprooted === true && u.entangleUproot === true && u.entanglePending === mine.id);
+  check("…and it does not walk mid-transition", !u.rootPending);
   for (let t = 0; t < 3 / 0.05; t++) world.tick(0.05); // the 2.5s uproot transition
-  check("uprooted, the order takes", world.issueEntangleAt(40, mine.id) === true);
+  check("…then it walks", u.entangleUproot === false && !!u.rootPending);
   check("…as a WALK to a site the mine can be reached from", u.uprooted === true && !!u.rootPending, JSON.stringify(u.rootPending));
   // Hull to hull, as WC3 measures a range: the mine's 128 and the tree's own 192 (the 12×12
   // stamp's blocked radius) come off the centre distance first — see SimWorld.entangleBody.
@@ -476,6 +477,26 @@ console.log("…and a tree that can already cast does not walk at all");
   for (let t = 0; t < 10 / 0.05 && u.uprooted; t++) world.tick(0.05);
   check("…so it roots on the spot", u.uprooted === false && Math.hypot(u.x - x0, u.y - y0) < 64);
   check("…and takes the mine from there", mine.entangledBy !== 0);
+}
+
+console.log("…and a PLANTED tree with the mine in reach entangles where it stands");
+{
+  const world = newWorld(200, 200);
+  world.initStash(0, 0, 0);
+  const mine = world.addMine(2000, 2000, 12500, 128);
+  const other = world.addMine(2000, 3000, 12500, 128);
+  world.add(base({ id: 40, typeId: "etol", x: 2560, y: 2000, hp: 1200, maxHp: 1200, speed: 0, radius: 128, isBuilding: true, ancient: true, name: "Tree of Life" }),
+    BUILT(2560, 2000), { abilities: [{ id: "Aent", code: "Aent", level: 1, cooldownLeft: 0, autocastOn: false }, { id: "Aro1", code: "Aroo", level: 1, cooldownLeft: 0, autocastOn: false }] });
+  const u = world.units.get(40);
+  u.baseSpeed = 100;
+  const fp = { w: 12, h: 12, blocked: new Array(144).fill(true), buildBlocked: new Array(144).fill(true) };
+  world.setPathStamp(40, fp, 2560, 2000);
+  world.recomputeStats(u);
+  check("the order takes", world.issueEntangleAt(40, mine.id) === true);
+  check("…without uprooting or walking", u.uprooted === false && !u.rootPending && !u.moving);
+  check("…and without a cast in front of it", u.order !== "cast" && u.pendingCast === null, u.order);
+  check("…the mine claimed at once", mine.entangledBy !== 0);
+  check("a tree whose roots already hold a mine refuses a second", world.issueEntangleAt(40, other.id) === false && other.entangledBy === 0);
 }
 
 console.log("…and it will not send the tree at a mine that is not free");

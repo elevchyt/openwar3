@@ -2067,6 +2067,11 @@ export interface SimUnit {
    *  moment the tree settles) and is what makes the cast happen on the far side of the root
    *  transition. See issueEntangleAt / tickEntangleAt. */
   entanglePending: number;
+  /** True while a PLANTED Tree of Life sent at a mine out of its reach is still hauling its
+   *  roots up (`morphT`): the walk to the site cannot be ordered until the transition lets go
+   *  of it, so `entanglePending` waits under this flag and tickEntangleAt starts the errand
+   *  the tick the tree is free to walk. */
+  entangleUproot: boolean;
   /** The hall a Peasant (or a Militia) is running to in order to answer Call to Arms, or 0.
    *
    *  Call to Arms is not a morph in place, and the ability says so in its own Ubertip:
@@ -6276,8 +6281,11 @@ export class SimWorld {
    * walks to a spot from which Entangle can reach the mine, and the roots go out the instant
    * it starts lowering itself onto that spot (tickEntangleAt).
    *
-   * Only a WALKING tree takes this order: Entangle is the uprooted card's button (see
-   * UPROOTED_ONLY), so a planted one is not asked to do anything here.
+   * A PLANTED tree takes it too, but only one whose roots hold no mine yet — a Tree of Life
+   * that already has its Entangled Gold Mine answers a right-click on a mine with its rally
+   * point, as any hall does. With the mine inside `Rng1` it entangles where it stands; out of
+   * reach, it pulls itself up, walks to the site, plants, and the roots go out as it plants —
+   * the same errand, with an uproot in front of it (`entangleUproot`).
    *
    * `mineId` 0 = the nearest free mine inside Entangle's own range, which is what pressing the
    * button with no target means.
@@ -6302,12 +6310,37 @@ export class SimWorld {
         mine = m;
       }
     }
-    if (!u.uprooted || !mine || !this.mineClaimable(mine, u)) return false;
+    if (!mine || !this.mineClaimable(mine, u)) return false;
+    if (!u.uprooted) {
+      if (this.holdsEntangledMine(u) || this.castLocked(u)) return false;
+      // In reach from where it stands: throw the roots now, measured exactly as entangleMine
+      // and entangleSite measure it (hull to hull).
+      if (Math.hypot(mine.x - u.x, mine.y - u.y) - mine.radius - body <= range) return this.entangleMine(u, def, mine);
+      // Out of reach: pull up first. The walk waits for the transition (tickEntangleAt).
+      if (!this.toggleRoot(u)) return false;
+      u.entanglePending = mine.id;
+      u.entangleUproot = true;
+      return true;
+    }
+    return this.walkToEntangle(u, mine, range);
+  }
+
+  /** The walking half of the errand: pick the site, walk there, and leave `entanglePending`
+   *  set so the roots go out as the tree plants. */
+  private walkToEntangle(u: SimUnit, mine: SimMine, range: number): boolean {
+    const id = u.id;
     const site = this.entangleSite(u, mine, range);
     if (!site) return false;
     if (!this.issueRootAt(id, site[0], site[1])) return false;
     u.entanglePending = mine.id; // …and the roots go out as it plants (tickEntangleAt)
     return true;
+  }
+
+  /** Does this tree's roots already hold a mine — a raised Entangled Gold Mine it grew
+   *  (`SimUnit.entangler`), or a request for one still in flight? */
+  holdsEntangledMine(u: SimUnit): boolean {
+    for (const o of this.units.values()) if (o.entangler === u.id && o.hp > 0) return true;
+    return this.entangleRequests.some((r) => r.casterId === u.id);
   }
 
   /**
@@ -6425,6 +6458,17 @@ export class SimWorld {
     const mine = this.mines.get(u.entanglePending);
     if (!mine || mine.entangledBy !== 0) {
       u.entanglePending = 0;
+      u.entangleUproot = false;
+      return;
+    }
+    if (u.entangleUproot) {
+      // A planted tree sent at a mine out of its reach: still hauling its roots up.
+      if (u.morphT > 0) return;
+      u.entangleUproot = false;
+      const ab = u.abilities.find((a) => a.code === "Aent" && a.level >= 1);
+      const def = ab && this.abilityDefOf(ab);
+      const range = def?.levelData[0]?.castRange || 500;
+      if (!u.uprooted || !this.walkToEntangle(u, mine, range)) u.entanglePending = 0;
       return;
     }
     if (u.uprooted) {
@@ -8539,6 +8583,7 @@ export class SimWorld {
       | "restFaceT"
       | "rootPending"
       | "entanglePending"
+      | "entangleUproot"
       | "militiaCall"
       | "rootSettle"
       | "garrisonJob"
@@ -8819,6 +8864,7 @@ export class SimWorld {
       restFaceT: 0,
       rootPending: null,
       entanglePending: 0,
+      entangleUproot: false,
       militiaCall: 0, // nobody has rung a bell at it
       rootSettle: null,
       garrisonJob: null,
@@ -10976,6 +11022,7 @@ export class SimWorld {
       u0.drinkWellId = 0;
       u0.rootPending = null;
       u0.entanglePending = 0;
+      u0.entangleUproot = false;
       u0.militiaCall = 0; // …and a Peasant told to do anything else is no longer answering the bell
       // A fresh order is the one thing that cuts a killing blow's follow-through short (the
       // renderer holds the swing clip on this flag) — the Stop-cancel of the game.

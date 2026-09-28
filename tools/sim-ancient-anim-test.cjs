@@ -248,6 +248,12 @@ console.log("the Tree of Life trains in a clip no substring match can find");
   check("walking, it stands in the other one", walking.name(walking.a.stand), "Stand Upgrade First Second");
   check("…and has no work pose while its queue is halted", walking.a.standWork, -1);
   check("uprooting plays the planted half's Morph", rooted.name(rooted.a.morph), "Morph Alternate");
+  // An Ancient is BUILT planted, and the Tree authors no plain "Birth" — only the planted
+  // half's. Read with the type's bare props the construction found nothing and scaled up.
+  const tolSeqs = sequences(TOL).map((name) => ({ name }));
+  const tolBirth = (props) => { const i = findBirthFields(tolSeqs, props).birthSeq; return i >= 0 ? tolSeqs[i].name : null; };
+  check("it is built through its Birth Alternate", tolBirth(animPropsFor({ animProps: [] }, true)), "Birth Alternate");
+  check("…which the unplanted props cannot see", tolBirth(animPropsFor({ animProps: [] }, false)), null);
   check("planting plays the walker's", walking.name(walking.a.morph), "Morph");
 }
 

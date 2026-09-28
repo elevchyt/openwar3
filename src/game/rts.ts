@@ -529,8 +529,14 @@ const CAST_ANIM_FALLBACK: Record<string, RegExp> = {
  * thing that moves during a replenish is the art the ability hangs on it (spells.ts,
  * `replenishCasterArt`). Returning here leaves the ordinary idle picker in charge, and a
  * standing unit's idle IS its Stand.
+ *
+ * Entangle Gold Mine (`Aent`) is the same silence in a second row: `[Aent]` in
+ * `Units\NightElfAbilityFunc.txt` names a `Casterart` (the Roots model at the origin) and no
+ * `Animnames`, and a Tree of Life has no gesture for it — the roots going out ARE the cast,
+ * and the tree stands as it was. Left to the fallback, a planted Tree reached for "Spell Eat
+ * Tree" or its ATTACK ALTERNATE and swung at the mine.
  */
-const CAST_ANIM_STAND = new Set(["Arpl", "Arpm"]);
+const CAST_ANIM_STAND = new Set(["Arpl", "Arpm", "Aent"]);
 /** The engine's OWN buff rows, for the states no ability defines a buff for.
  *
  *  A stun is the case that matters: Storm Bolt, Firebolt and the Mountain King's Bash carry
@@ -4221,7 +4227,11 @@ export class RtsController {
       // rather than left for applyFogTint to sample off the instance, because that samples
       // only ONCE and would bake in whatever the model happened to be wearing.
       baseColor: tintColor(def),
-      ...findBirthFields(instance.model.sequences, def.animProps),
+      // Read with the same props as `anims`: an Ancient is built PLANTED, so its construction
+      // clip is the alternate half's. TreeOfLife.mdx authors no plain "Birth" at all — only
+      // "Birth Alternate" — so with the type's bare props the Tree found nothing and fell back
+      // on the scale-up, rising out of the ground as a shrunken finished tree.
+      ...findBirthFields(instance.model.sequences, animPropsFor(def, alt)),
       hidden: false,
       inMine: false,
       insideBuild: false,
@@ -8939,7 +8949,25 @@ export class RtsController {
     // A selected unit-producing building: right-click sets its (smart) rally point. An UPROOTED
     // Ancient is deliberately not one — it is a unit while it walks, so a right-click has to
     // reach the ordinary move below (see SimWorld.acceptsRally).
+    // …except a PLANTED Tree of Life whose roots hold no mine yet, right-clicked onto a free
+    // gold mine: that is the expansion order, not a rally. In reach it entangles where it
+    // stands; out of reach it uproots, walks to a site in reach, plants and entangles
+    // (SimWorld.issueEntangleAt). A Tree that already has its Entangled Gold Mine rallies.
     if (this.primary !== null && this.sim.acceptsRally(this.primary)) {
+      const g = this.groundPoint(cssX, cssY);
+      const mine = g ? this.minePickAt(g[0], g[1], 320).mine : null;
+      if (mine) {
+        let any = false;
+        for (const id of this.orderees) {
+          const t = this.sim.units.get(id);
+          if (!t || t.uprooted || !t.abilities.some((a) => a.code === "Aent" && a.level >= 1) || this.sim.holdsEntangledMine(t)) continue;
+          if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "entangleat", mineId: mine.id }, queued: false })) any = true;
+        }
+        if (any) {
+          this.flashTarget(mine.x, mine.y, mine.radius * MINE_RING_SCALE);
+          return;
+        }
+      }
       const r = this.resolveRally(cssX, cssY);
       if (r) {
         for (const id of this.orderees) {
@@ -9085,8 +9113,7 @@ export class RtsController {
       // walks to a spot from which Entangle reaches the mine and throws its roots out as it
       // plants (SimWorld.issueEntangleAt). Asked first, because a Tree of Life is not a worker
       // and would otherwise fall straight through to a plain move and stand beside the rock.
-      // Uprooted only, like the button itself (UPROOTED_ONLY) — a planted one is a building,
-      // and its right-click is the rally point it never got past `acceptsRally` anyway.
+      // (A PLANTED tree with no mine yet took this click above, before the rally point.)
       const trees = [...this.orderees].filter((id) => {
         const t = this.sim.units.get(id);
         return !!t?.uprooted && t.abilities.some((a) => a.code === "Aent" && a.level >= 1);
