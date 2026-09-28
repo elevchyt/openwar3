@@ -39,6 +39,9 @@ function drive(cam, focus, units, seconds, each = () => {}, clock = null) {
 console.log("\nit goes to the HEROES and ARMIES, and does nothing while off");
 {
   const cam = new AutoCamera();
+  // ON by default (the developer's call — see AutoCamera.enabled), so switch it off to test off.
+  check("it starts ticked", cam.enabled === true);
+  cam.setEnabled(false);
   const focus = { x: 0, y: 0 };
   const units = [
     unit(5000, 5000, { isHero: true }), unit(5050, 5000), unit(5000, 5060), // a hero with an army

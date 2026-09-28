@@ -2230,6 +2230,38 @@ export class AiPlayer {
     return maxHp > 0 ? hp / maxHp : 0;
   }
 
+  /**
+   * The camp AT this spot — the one whose centre is nearest, within `radius` — or null. The same
+   * match `campHealthAt` makes, so the two always mean the same camp.
+   */
+  campAt(x: number, y: number, radius = CAMP_MATCH): { x: number; y: number; level: number; members: number[] } | null {
+    let best: { x: number; y: number; level: number; members: number[] } | null = null;
+    let bestD = radius;
+    for (const camp of this.host.creepCamps()) {
+      const d = Math.hypot(camp.x - x, camp.y - y);
+      if (d < bestD) { bestD = d; best = camp; }
+    }
+    return best;
+  }
+
+  /**
+   * The living creeps of the camp AT this spot (`campAt`).
+   *
+   * A camp's centre is the MEAN of its guard posts, and nothing puts that mean on open ground: a
+   * camp gathered round a building stands with its centre inside the building. The Kobold camp
+   * guarding each Echo Isles Mercenary Camp is exactly that — its centre is 50–77 units from the
+   * camp building, in its footprint — so a party has to be aimed at the CREEPS
+   * (`ComputerPlusAi.campAim`), which is where the fight actually is.
+   */
+  campCreepsAt(x: number, y: number, radius = CAMP_MATCH): SimUnit[] {
+    const out: SimUnit[] = [];
+    for (const id of this.campAt(x, y, radius)?.members ?? []) {
+      const u = this.host.world.units.get(id);
+      if (u && u.hp > 0) out.push(u);
+    }
+    return out;
+  }
+
   private nearestEnemyBuilding(x: number, y: number): SimUnit | null {
     let best: SimUnit | null = null;
     let bestD = Infinity;

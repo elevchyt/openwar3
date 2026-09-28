@@ -722,6 +722,15 @@ to) and shuns anything it cannot reach — which both ends the search loop and s
 massing pass paying for the same A* again. Asked of the **terrain alone**, so a camp merely
 screened by bodies right now is not condemned.
 
+It is asked of the camp's **creeps**, not of its centre (`campAim`). A camp's centre is the MEAN
+of its guard posts, and a camp gathered round a building has its centre inside it: the Kobold camp
+(level 16) guarding each Echo Isles Mercenary Camp sits 50–77 units from the camp building, in its
+footprint, so `canWalkTo` on it was false for every party on the map and the camp was shunned every
+time it came up — no Computer+ army ever took it, however strong. The centre is still tried first;
+failing it, the party is aimed at the post of the reachable creep nearest the centre (its campmates
+answer the call for help), and `writeOff` shuns the camp's CENTRE (`AiPlayer.campAt`) whatever the
+aim was, so the skip test still matches it.
+
 Two more things were walking at treelines, and both are ours rather than the pathfinder's. Every
 destination the army manager *computes* rather than reads off the map is arithmetic — the centre
 of mass a lost unit closes on, the spot `PULL_BACK_DIST` behind the line, the rally point

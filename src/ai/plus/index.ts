@@ -3565,10 +3565,37 @@ export class ComputerPlusAi {
       for (;;) {
         const camp = b.ai.creepCamp(CREEP_FLOOR, ceiling, air, reach, from, skip);
         if (!camp) break;
-        if (this.reachable(b, camp)) return camp;
+        const aim = this.campAim(b, camp);
+        if (aim) return { x: aim.x, y: aim.y, level: camp.level };
         b.shunned.push({ x: camp.x, y: camp.y, until: b.clock + CAMP_SHUN });
       }
     }
+    return null;
+  }
+
+  /**
+   * WHERE TO SEND the party to fight this camp, or null when it cannot get there — the camp's
+   * centre if that is open ground, else the post of the camp's creep nearest that centre that
+   * the party can walk up to.
+   *
+   * The centre is the mean of the guard posts and can sit inside a building: the camp guarding
+   * each Echo Isles Mercenary Camp has its centre in the camp building's footprint, so
+   * `canWalkTo` on the centre was false for every party on the map, the camp was shunned as
+   * unreachable every time it came up, and no army ever took it however strong. A creep's own
+   * post is where the fight is, and its campmates answer its call for help (`CAMP_LINK`), so
+   * aiming there takes the whole camp — and sooner: measured on Echo Isles, eight Tauren sent
+   * from the orc base engaged ~4 s after an attack-move at a post and ~36 s after one at the
+   * centre, which they had to find their way round the building to. The aim still names the camp:
+   * it is well inside `CAMP_MATCH`, which is how `campHealthAt`/`campAt` find a camp from a
+   * party's objective, and `writeOff` shuns the camp's CENTRE rather than the aim.
+   */
+  private campAim(b: Brain, camp: { x: number; y: number }): { x: number; y: number } | null {
+    if (this.reachable(b, camp)) return camp;
+    const posts = b.ai.campCreepsAt(camp.x, camp.y)
+      .filter((u) => !u.flying)
+      .map((u) => ({ x: u.guardX, y: u.guardY }))
+      .sort((p, q) => Math.hypot(p.x - camp.x, p.y - camp.y) - Math.hypot(q.x - camp.x, q.y - camp.y));
+    for (const p of posts) if (this.reachable(b, p)) return p;
     return null;
   }
 
@@ -3933,7 +3960,10 @@ export class ComputerPlusAi {
   private writeOff(b: Brain): void {
     if (!b.target) return;
     const seen = { x: b.target.x, y: b.target.y };
-    if (b.creeping) b.shunned.push({ ...seen, until: b.clock + CAMP_SHUN });
+    // A camp is shunned at its CENTRE, the point `creepTarget`'s skip test is asked of — the
+    // objective may be one of its creeps' posts instead (`campAim`), a few hundred units off.
+    const camp = b.creeping ? b.ai.campAt(seen.x, seen.y) : null;
+    if (b.creeping) b.shunned.push({ x: camp?.x ?? seen.x, y: camp?.y ?? seen.y, until: b.clock + CAMP_SHUN });
     else b.avoid.push({ ...seen, until: b.clock + GOAL_SHUN });
   }
 
