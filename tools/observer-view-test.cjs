@@ -88,11 +88,17 @@ console.log("\na DEAD hero keeps its place, greyed, with the revival's seconds")
   const deadId = alive.id - 1; // hired BEFORE the Mountain King
   altar.building.queue[0].heroId = deadId;
   const view = observePlayer(sources([alive, altar], {
-    fallen: () => [{ id: deadId, typeId: "Hamg", properName: "Dalar", level: 4, revivingAt: altar.id }],
+    fallen: () => [{ id: deadId, typeId: "Hamg", properName: "Dalar", level: 4, revivingAt: altar.id,
+      abilities: [{ id: "AHbz", level: 2 }, { id: "AHab", level: 1 }],
+      inventory: [null, { itemId: "phea", charges: 1 }, null, null, null, null] }],
   }), 0);
   check("the fallen Archmage is first, dead", view.heroes[0].dead && view.heroes[0].simId === deadId);
   check("…wearing the DIS twin", view.heroes[0].disabledIcon === "DISBTNHeroArchMage.blp");
   check("…with the revival's seconds, rounded up", view.heroes[0].reviveSecondsLeft === 13);
+  // What it learned and what it carries lie with it and come back with it, so they are shown.
+  const deadSkills = view.heroes[0].skills.map((k) => `${k.name}:${k.value}`).join(",");
+  check("…still showing the skills it learned", deadSkills === "Blizzard:2,Brilliance Aura:1", deadSkills);
+  check("…and its belt, slot for slot", view.heroes[0].items.length === 6 && view.heroes[0].items[1]?.name === "Potion of Healing" && view.heroes[0].items[0] === null);
   check("the altar's revive also counts as production in hand", view.production.some((p) => p.name === "Archmage" && p.value === 13));
 }
 

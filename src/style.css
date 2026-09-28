@@ -1477,7 +1477,7 @@ body.hud-statbar-skinned .obs-bar-fill.mana { background-image: var(--statbar-ma
   justify-content: center;
   font-size: 0.9em;
 }
-.obs-sel-row { display: flex; gap: calc(var(--obs-bottom-pad) * 1.5); align-items: flex-start; margin-top: calc(var(--obs-bottom-pad) * 1.2); }
+.obs-sel-row { display: flex; gap: calc(var(--obs-bottom-pad) * 1.5); align-items: flex-start; margin-top: calc(var(--obs-bottom-pad) * 0.5); }
 .obs-sel-icon { width: var(--obs-sel-icon); height: var(--obs-sel-icon); }
 .obs-sel-lines { flex: 1; min-width: 0; line-height: 1.4; }
 .obs-sel-key { color: rgb(252, 211, 18); }
@@ -1485,12 +1485,15 @@ body.hud-statbar-skinned .obs-bar-fill.mana { background-image: var(--statbar-ma
 .obs-malus { color: #ff0000; }
 .obs-attr { display: inline-flex; align-items: center; gap: 0.2em; margin-right: 0.7em; pointer-events: auto; }
 .obs-attr img { width: 1.5em; height: 1.5em; }
-/* The Status line: "Status:" then the buff icons on one row, as the console's info panel. */
+/* The Status line: "Status:" then the buff icons on one row, as the console's info panel.
+   Both margins above it are kept TIGHT (this one and `.obs-sel-row`'s): the line is the last
+   thing in the panel's flow, and with a hero's three-row belt setting the row's height the
+   icons used to sit on — and past — the frame's bottom band. */
 .obs-sel-status {
   display: flex;
   align-items: center;
   gap: calc(var(--obs-bottom-pad) * 1.2);
-  margin-top: calc(var(--obs-bottom-pad) * 1.2);
+  margin-top: calc(var(--obs-bottom-pad) * 0.3);
   height: var(--obs-item);
 }
 .obs-sel-status.none { visibility: hidden; }

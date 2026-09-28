@@ -1590,7 +1590,12 @@ export class RtsController {
         lumber: stash.lumber,
         apm: this.authority.actions.apm(player, this.sim.elapsed),
         research: Object.fromEntries(this.sim.tech?.researchedBy(player) ?? []),
-        fallen: this.sim.fallenHeroesOf(player).map((f) => ({ id: f.id, typeId: f.typeId, properName: f.properName, level: f.level, revivingAt: f.revivingAt, bodyLeft: f.bodyLeft })),
+        fallen: this.sim.fallenHeroesOf(player).map((f) => ({
+          id: f.id, typeId: f.typeId, properName: f.properName, level: f.level, revivingAt: f.revivingAt, bodyLeft: f.bodyLeft,
+          // …and what it learned and carries, for the observer HUD's hero rows (observerView.ts).
+          abilities: f.abilities.map((a) => ({ id: a.id, level: a.level })),
+          inventory: f.inventory.map((it) => (it ? { itemId: it.itemId, charges: it.charges } : null)),
+        })),
       };
     });
   }

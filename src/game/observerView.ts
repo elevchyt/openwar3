@@ -60,13 +60,17 @@ export interface ObserverPlayerView {
   upgrades: ObserverIcon[];
 }
 
-/** The fallen-hero record, as either side of the wire holds it. */
+/** The fallen-hero record, as either side of the wire holds it. A dead hero keeps its skills
+ *  and its belt (`FallenHero.abilities`/`inventory` — both come back with it), so the watcher is
+ *  shown them too; optional only because a player's OWN payload does not carry them. */
 interface FallenLike {
   id: number;
   typeId: string;
   properName: string;
   level: number;
   revivingAt: number;
+  abilities?: ReadonlyArray<{ id: string; level: number }>;
+  inventory?: ReadonlyArray<{ itemId: string; charges: number } | null>;
 }
 
 export interface ObserverSources {
@@ -113,13 +117,6 @@ function heroesOf(src: ObserverSources, player: number, mine: SimUnit[]): Observ
   for (const u of mine) {
     if (!u.isHero || u.isIllusion || u.hp <= 0) continue;
     const def = src.registry.get(u.typeId);
-    const skills: ObserverIcon[] = [];
-    for (const id of def?.heroAbilities ?? []) {
-      const have = u.abilities.find((a) => a.id === id);
-      const a = src.abilities.get(id);
-      if (!have || have.level <= 0 || !a) continue;
-      skills.push({ key: id, icon: a.icon, name: a.name, value: have.level, simId: 0 });
-    }
     out.push({
       simId: u.id,
       icon: def?.icon ?? "",
@@ -131,11 +128,8 @@ function heroesOf(src: ObserverSources, player: number, mine: SimUnit[]): Observ
       dead: false,
       disabledIcon: null,
       reviveSecondsLeft: 0,
-      skills,
-      items: u.inventory.map((it) => {
-        const d = it ? src.items.get(it.itemId) : undefined;
-        return it && d ? { key: it.itemId, icon: d.icon, name: d.name, value: it.charges, simId: 0 } : null;
-      }),
+      skills: skillsOf(src, u.typeId, u.abilities),
+      items: beltOf(src, u.inventory),
     });
   }
   for (const f of src.fallen(player)) {
@@ -146,11 +140,34 @@ function heroesOf(src: ObserverSources, player: number, mine: SimUnit[]): Observ
       simId: f.id, icon, properName: f.properName, typeName: def?.name ?? f.typeId, level: f.level,
       hpFrac: 0, manaFrac: -1, dead: true, disabledIcon: icon ? src.disabledIcon(icon) : null,
       reviveSecondsLeft: job ? Math.max(0, Math.ceil(job.timeLeft)) : 0,
-      skills: [], items: [],
+      // …and it is still the hero it was: the skills it learned and the belt it carries lie
+      // with it and come back with it, so a watcher reading the fight is not shown a blank.
+      skills: skillsOf(src, f.typeId, f.abilities ?? []),
+      items: beltOf(src, f.inventory ?? []),
     });
   }
   // A hero keeps its sim id through death and revival, so id order IS hire order.
   return out.sort((a, b) => a.simId - b.simId).slice(0, OBSERVER_MAX_HEROES);
+}
+
+/** A hero's learned skills, in its type's own slot order — alive or lying dead alike. */
+function skillsOf(src: ObserverSources, typeId: string, have: ReadonlyArray<{ id: string; level: number }>): ObserverIcon[] {
+  const out: ObserverIcon[] = [];
+  for (const id of src.registry.get(typeId)?.heroAbilities ?? []) {
+    const rank = have.find((a) => a.id === id)?.level ?? 0;
+    const a = src.abilities.get(id);
+    if (rank <= 0 || !a) continue;
+    out.push({ key: id, icon: a.icon, name: a.name, value: rank, simId: 0 });
+  }
+  return out;
+}
+
+/** A hero's belt, slot for slot. */
+function beltOf(src: ObserverSources, inventory: ReadonlyArray<{ itemId: string; charges: number } | null>): Array<ObserverIcon | null> {
+  return inventory.map((it) => {
+    const d = it ? src.items.get(it.itemId) : undefined;
+    return it && d ? { key: it.itemId, icon: d.icon, name: d.name, value: it.charges, simId: 0 } : null;
+  });
 }
 
 function reviveJob(queue: BuildJob[] | undefined, heroId: number): BuildJob | null {

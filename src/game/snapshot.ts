@@ -517,6 +517,12 @@ export interface FallenHeroSnapshot {
    *  clock: a client mints its roster records from this payload rather than from a death of
    *  its own, so without it the button would come alive on a timer that never started. */
   bodyLeft: number;
+  /** What the hero LEARNED and what it CARRIES, which lie with it and come back with it — sent
+   *  on a watcher's lane only (`WatchedPlayer.fallen`), so the observer HUD shows a dead hero's
+   *  skills and belt as a host's does. A player's own payload leaves them out: its hero bar
+   *  draws neither. */
+  abilities?: Array<{ id: string; level: number }>;
+  inventory?: Array<{ itemId: string; charges: number } | null>;
 }
 
 export interface WorldSnapshot {
