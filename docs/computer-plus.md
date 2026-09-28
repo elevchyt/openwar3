@@ -2130,8 +2130,12 @@ still there in twenty seconds; the fight is not.
 
 **…except a drop at its FEET.** Both rules above are about the WALK — out of the fight, into a live
 camp — and a drop within `LOOT_GRAB` (**50**, the developer's own number) of a hero is no walk at
-all: it is less than a body's width, so it is picked up at once, mid-fight and with the camp still
-standing. Reported: a creep died in the camp beside the hero that killed it, and the hero fought
+all: it is less than a body's width, so it is picked up mid-fight and with the camp still
+standing. Not the instant it lands, though: the hero NOTICES it and bends for it a pause later,
+0.5–2 s (the developer's band, `lootGrabDelay`, off the item's and the hero's ids rather than
+`Math.random` so every client reproduces it), fired by `tickGrabs` on every AI step because the
+pass that notices it runs only every 0.35–2 s. Everything is asked again when the pause is up,
+and a hero the fight has carried past 50 in the meantime is not sent back for it. Reported: a creep died in the camp beside the hero that killed it, and the hero fought
 round its item until the whole camp was down. The belt rule is the walk's (a powerup needs no slot,
 anything else does), a hero holding a channel is left alone, and each item is tried once per
 `LOOT_GRAB_RETRY` (10 s), so a grab that fails is not re-issued every loot pass while the fight

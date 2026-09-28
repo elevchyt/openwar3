@@ -22,7 +22,7 @@
 const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
-const { PlusItems, drinkBar } = require(join(REPO, ".sim-build", "src", "ai", "plus", "items.js"));
+const { PlusItems, drinkBar, lootGrabDelay } = require(join(REPO, ".sim-build", "src", "ai", "plus", "items.js"));
 const { scoutRing, SCOUT_RING_LEGS, lumberCrew, reliefCount } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 
@@ -278,6 +278,12 @@ function pressed(units, profile, ctx, opts = {}) {
     gold: () => opts.gold ?? 0,
   }, profile, opts.race ?? "human");
   items.pass(opts.now ?? 100, ctx);
+  // …and `wait` seconds later, the per-step look that bends for a drop at a hero's feet once
+  // its pause (`lootGrabDelay`) is over. `between` changes the world in the meantime.
+  if (opts.wait !== undefined) {
+    opts.between?.();
+    items.tickGrabs((opts.now ?? 100) + opts.wait);
+  }
   lastOrders = orders;
   return orders.find((c) => c.c === "useitem") ?? null;
 }
@@ -896,24 +902,44 @@ console.log("\n-- what is on the ground ----------------------------------------
   // or not — the developer's own "within 50 units of one of its heroes". Reported: a creep dies
   // in the camp beside the hero that killed it, and the hero fought round its item until the
   // whole camp was down.
+  // …after a PAUSE — the developer's "randomized delay between 0.5 and 2 seconds", off the two
+  // ids (`lootGrabDelay`) so every client reproduces it. Nobody has the item in hand the frame
+  // it lands.
+  const delays = [];
+  for (let i = 1; i <= 300; i++) delays.push(lootGrabDelay(1000 + i, 7), lootGrabDelay(55, i));
+  check("every pause is inside 0.5–2 s", delays.every((d) => d >= 0.5 && d <= 2), true);
+  check("…spread across it, not all one number", Math.min(...delays) < 0.6 && Math.max(...delays) > 1.9, true);
+  check("…and the same drop and hero always get the same pause", lootGrabDelay(12, 3) === lootGrabDelay(12, 3), true);
   const h = hero();
   const it = drop({ x: 40 });
-  check("a drop at a FIGHTING hero's feet is picked up now",
-    looted([h, enemy({ x: 200 })], { ground: [it] })?.itemId, it.id);
+  check("a drop at a FIGHTING hero's feet is not grabbed the instant it lands",
+    looted([h, enemy({ x: 200 })], { ground: [it] }), null);
+  const hA = hero();
+  const itA = drop({ x: 40 });
+  check("…nor before its pause is up",
+    looted([hA, enemy({ x: 200 })], { ground: [itA], wait: lootGrabDelay(itA.id, hA.id) - 0.05 }), null);
+  const hB = hero();
+  const itB = drop({ x: 40 });
+  check("…and is picked up once it is",
+    looted([hB, enemy({ x: 200 })], { ground: [itB], wait: lootGrabDelay(itB.id, hB.id) })?.itemId, itB.id);
+  const hC = hero();
+  const itC = drop({ x: 40 });
+  check("…unless the fight carried the hero away from it meanwhile",
+    looted([hC, enemy({ x: 200 })], { ground: [itC], wait: 2, between: () => { hC.x = 300; } }), null);
   const h2 = hero();
   check("…but one a few steps off still waits for the camp",
-    looted([h2, enemy({ x: 200 })], { ground: [drop({ x: 120 })] }), null);
+    looted([h2, enemy({ x: 200 })], { ground: [drop({ x: 120 })], wait: 2 }), null);
   // …and the belt rule is the walk's: a full belt cannot take an ordinary item, however close.
   const full = belt(hero(), "phea", "phea", "phea", "phea", "phea", "phea");
-  check("…a full belt is not sent at one", looted([full, enemy({ x: 200 })], { ground: [drop({ x: 30 })] }), null);
+  check("…a full belt is not sent at one", looted([full, enemy({ x: 200 })], { ground: [drop({ x: 30 })], wait: 2 }), null);
   // …while a POWERUP needs no slot at all.
   const tome = drop({ x: 30, itemId: "tdex" });
   check("…a tome at its feet is taken whatever the belt holds",
-    looted([belt(hero(), "phea", "phea", "phea", "phea", "phea", "phea"), enemy({ x: 200 })], { ground: [tome] })?.itemId, tome.id);
+    looted([belt(hero(), "phea", "phea", "phea", "phea", "phea", "phea"), enemy({ x: 200 })], { ground: [tome], wait: 2 })?.itemId, tome.id);
   // …and a hero holding a channel is left alone: the order would break it.
   const chan = hero();
   check("…a channelling hero is not interrupted for it",
-    looted([chan, enemy({ x: 200 })], { ground: [drop({ x: 30 })], channelling: [chan.id] }), null);
+    looted([chan, enemy({ x: 200 })], { ground: [drop({ x: 30 })], channelling: [chan.id], wait: 2 }), null);
 }
 
 // ==========================================================================================

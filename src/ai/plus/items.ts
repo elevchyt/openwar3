@@ -617,6 +617,23 @@ const LOOT_GRAB = 50;
  *  step, so a second try inside this is a hero bending over the same item every loot pass while
  *  the fight goes on around it — the see-saw the step exists to be too short for. */
 const LOOT_GRAB_RETRY = 10;
+/** The pause between NOTICING a drop at a hero's feet and bending for it, in seconds — the
+ *  developer's own band: "a randomized delay between 0.5 and 2 seconds". A grab on the very
+ *  pass the creep died read as a machine: no player has the item in hand the frame it lands. */
+const LOOT_GRAB_DELAY_MIN = 0.5;
+const LOOT_GRAB_DELAY_MAX = 2;
+
+/**
+ * This hero's pause before picking up this drop, somewhere in [`LOOT_GRAB_DELAY_MIN`,
+ * `LOOT_GRAB_DELAY_MAX`]. Off the two ids for the reason `drinkBar` is off one: the AI runs on
+ * the authority and every client must be able to reproduce it, so there is no `Math.random`
+ * here — the same Knuth multiplicative hash, over the pair, so two drops (or two heroes) in one
+ * camp do not all wait the same time.
+ */
+export function lootGrabDelay(itemId: number, heroId: number): number {
+  const spread = (Math.imul((itemId * 31 + heroId) | 0, 2654435761) >>> 0) / 0xffffffff;
+  return LOOT_GRAB_DELAY_MIN + (LOOT_GRAB_DELAY_MAX - LOOT_GRAB_DELAY_MIN) * spread;
+}
 /**
  * How far from home a shop has to be before it is not worth the walk. A Goblin Merchant across
  * the map is a hero out of the game for a minute, which is worse than having no potion.
@@ -780,6 +797,10 @@ export class PlusItems {
   /** Items an at-the-feet grab (`LOOT_GRAB`) was ordered on, and when — see `LOOT_GRAB_RETRY`.
    *  Pruned every loot pass, so it holds at most the handful of drops on the floor. */
   private grabbed = new Map<number, number>();
+  /** Drops NOTICED at a hero's feet and waiting out `lootGrabDelay` before the hero bends for
+   *  them — item id → the hero and the clock time it is due. Fired by `tickGrabs`, every AI step,
+   *  because the pass that notices them runs every 0.35–2 s and would round the pause up to that. */
+  private pendingGrabs = new Map<number, { heroId: number; due: number }>();
   /** …and when the belt was last looked over for duplicates worth pawning — see `pawn`. */
   private lastPawn = -Infinity;
   /** Has a Scroll of Town Portal ever been in this player's belt? Latched true and never
@@ -1006,9 +1027,40 @@ export class PlusItems {
    * decision the belt makes and it is cheap — the ground-item table is a handful of entries on
    * a melee map.
    */
+  /**
+   * Bend for the drops whose `lootGrabDelay` has run out. Every AI step, and nearly free: the
+   * table is empty except in the second or two after a creep dies beside a hero.
+   *
+   * Everything `loot` checked is asked AGAIN, because up to two seconds have passed: the item may
+   * be gone (somebody else took it), the hero dead, stunned, channelling, carrying a full belt
+   * now, or — the one that matters — no longer at its feet. A hero the fight has carried past
+   * `LOOT_GRAB` is not sent back for it; the drop waits for the camp like any other.
+   */
+  tickGrabs(now: number): void {
+    if (!this.pendingGrabs.size) return;
+    for (const [itemId, g] of this.pendingGrabs) {
+      if (now < g.due) continue;
+      this.pendingGrabs.delete(itemId);
+      const it = this.view.world.items.get(itemId);
+      const u = this.view.world.units.get(g.heroId);
+      if (!it || !u || u.hp <= 0 || !this.canAct(u) || this.view.world.holdsChannel(u.id)) continue;
+      const def = this.view.item(it.itemId);
+      if (!def || (!def.powerup && u.inventory.indexOf(null) < 0)) continue;
+      if (Math.hypot(u.x - it.x, u.y - it.y) > LOOT_GRAB) continue;
+      if (u.order === "getitem" && u.getItemId === it.id) continue;
+      // Remembered, and NOT re-issued inside `LOOT_GRAB_RETRY` whatever happens to it: the
+      // order ends on its own (picked up, or `tickGetItem` gives up), after which the army's
+      // own passes put the hero back on the fight — the step is taken once, never argued over.
+      this.grabbed.set(itemId, now);
+      this.view.order({ c: "getitem", unitId: u.id, itemId: it.id });
+    }
+  }
+
   private loot(now: number, own: SimUnit[], foes: SimUnit[]): void {
-    if (now - this.lastLoot < LOOT_PERIOD) return;
-    this.lastLoot = now;
+    // The at-the-feet look runs every pass (it only SCHEDULES — `tickGrabs` does the bending);
+    // the walk below keeps its slower clock.
+    const walkDue = now - this.lastLoot >= LOOT_PERIOD;
+    if (walkDue) this.lastLoot = now;
     const ground = [...this.view.world.items.values()];
     if (!ground.length) return;
     // Heroes only, and the errand runner is left alone — it is walking to a shop.
@@ -1031,11 +1083,14 @@ export class PlusItems {
     if (!heroes.length && !grabbers.length) return;
     for (const [id, at] of this.grabbed) if (now - at >= LOOT_GRAB_RETRY || !this.view.world.items.has(id)) this.grabbed.delete(id);
     const taken = new Set<number>();
+    // A hero already waiting to bend for one drop is spoken for, here and for the walk below.
+    for (const g of this.pendingGrabs.values()) taken.add(g.heroId);
     for (const it of ground) {
       const def = this.view.item(it.itemId);
       if (!def) continue;
       // At the feet first. The belt rule is the same one the walk obeys below — a powerup needs no
       // slot, anything else does — so this can never send a full belt to an item it cannot hold.
+      if (this.pendingGrabs.has(it.id)) continue;
       if (!this.grabbed.has(it.id)) {
         let feet: SimUnit | null = null;
         let feetD = LOOT_GRAB;
@@ -1048,15 +1103,12 @@ export class PlusItems {
         if (feet) {
           taken.add(feet.id);
           if (feet.order === "getitem" && feet.getItemId === it.id) continue;
-          // Remembered, and NOT re-issued inside `LOOT_GRAB_RETRY` whatever happens to it: the
-          // order ends on its own (picked up, or `tickGetItem` gives up), after which the army's
-          // own passes put the hero back on the fight — the step is taken once, never argued over.
-          this.grabbed.set(it.id, now);
-          this.view.order({ c: "getitem", unitId: feet.id, itemId: it.id });
+          // Not yet: the hero NOTICES it now and bends for it `lootGrabDelay` later (`tickGrabs`).
+          this.pendingGrabs.set(it.id, { heroId: feet.id, due: now + lootGrabDelay(it.id, feet.id) });
           continue;
         }
       }
-      if (!heroes.length) continue;
+      if (!walkDue || !heroes.length) continue;
       // Nothing is walked to while something hostile is standing over it. This is the whole of
       // "do not feed the hero to the camp for a drop", and it also means a camp's own loot is
       // simply collected once the camp is dead.

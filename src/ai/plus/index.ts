@@ -2254,6 +2254,7 @@ export class ComputerPlusAi {
       if (b.gone || this.paused.has(b.ai.player)) continue;
       b.clock += dt;
       this.drainOrders(b); // last step's leftovers go first, then this step's passes
+      b.items.tickGrabs(b.clock); // a drop at a hero's feet, picked up once its pause is over
       if ((b.buildIn -= dt) <= 0) {
         b.buildIn = b.profile.buildPeriod;
         simProfile.begin("sim.ai.build");
