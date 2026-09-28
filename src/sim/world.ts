@@ -1824,6 +1824,16 @@ export interface SimUnit {
   /** Fraction of RANGED-ATTACK damage this unit shrugs off — the Arcanite Shield's 30%
    *  (`AIdd` dataA = 0.7, "reduces ranged damage TO 70%"). Same shape, different pipe. */
   rangedReduction: number;
+  /**
+   * The share of PIERCING attack damage, and of SPELL and MAGIC-attack damage, that reaches this
+   * unit through a passive of the `AIdd` family on the UNIT itself — the Archer's ELUNE'S GRACE
+   * (`Aegr`, code `AIdd`): "Reduces the damage taken from Piercing attacks to <Aegr,DataA1,%>%,
+   * and spells and Magic attacks to <Aegr,DataE1,%>%" — 0.65 and 0.8. Stated the tooltip's way
+   * round, as what gets THROUGH (1 = no cut). Derived in recomputeStats. The Arcanite Shield
+   * carries the same code as an ITEM and is `rangedReduction`, not this.
+   */
+  pierceTaken: number;
+  magicTaken: number;
   bonusArmor: number; // buff/aura portion of armour (green "+N" in the HUD); derived
   bonusDamage: number; // buff/aura portion of attack damage (green "+N"); derived
   bonusStr: number; // item portion of Strength (green "+N" / red "-N" in the HUD); derived
@@ -8617,6 +8627,8 @@ export class SimWorld {
       | "thorns"
       | "magicReduction"
       | "rangedReduction"
+      | "pierceTaken"
+      | "magicTaken"
       | "bonusArmor"
       | "bonusDamage"
       | "bonusStr"
@@ -8899,6 +8911,8 @@ export class SimWorld {
       thorns: 0,
       magicReduction: 0,
       rangedReduction: 0,
+      pierceTaken: 1,
+      magicTaken: 1,
       bonusArmor: 0,
       bonusDamage: 0,
       bonusStr: 0,
@@ -12405,6 +12419,12 @@ export class SimWorld {
     // ranged half of dealDamage.
     u.magicReduction = item.magicReduction;
     u.rangedReduction = item.rangedReduction;
+    // …and the one worn by the UNIT rather than carried: Elune's Grace (see pierceTaken). The
+    // unit's own ability list only — `passiveLevelData` would fall back on the inventory and
+    // count an Arcanite Shield twice, once here and once as `rangedReduction`.
+    const grace = this.unitPassiveLevel(u, "AIdd");
+    u.pierceTaken = grace ? this.dataOf(grace, 0, 1) : 1; // DataA — Piercing attacks
+    u.magicTaken = grace ? this.dataOf(grace, 4, 1) : 1; // DataE — spells and Magic attacks
     // Spiked Carapace also returns a fraction of melee damage (dataA), like Thorns.
     u.thorns = Math.max(thorns, carapace ? this.dataOf(carapace, 0) : 0);
     u.stunned = stun;
@@ -12886,6 +12906,14 @@ export class SimWorld {
    *  Critical Strike — same row shape, same columns, same handler. Looking only at
    *  `u.abilities` here is what silently switched every passive item in the game off (issue
    *  #130): the item was carried, its ability was loaded, and nothing ever asked it. */
+  /** `passiveLevelData` without the inventory fallback: the unit's OWN ability of this code. */
+  private unitPassiveLevel(u: SimUnit, code: string): AbilityLevel | null {
+    if (!this.abilities) return null;
+    const ab = u.abilities.find((a) => a.code === code && a.level >= 1);
+    const def = ab && this.abilityDefOf(ab);
+    return def ? def.levelData[Math.min(ab.level, def.levelData.length) - 1] ?? null : null;
+  }
+
   private passiveLevelData(u: SimUnit, code: string): AbilityLevel | null {
     if (!this.abilities) return null;
     const ab = u.abilities.find((a) => a.code === code && a.level >= 1);
@@ -17419,9 +17447,10 @@ export class SimWorld {
     // bracers reduce "Magic damage dealt to the Hero", so what reaches the shell to be
     // absorbed is already the smaller number, and a hero wearing both spends his shell more
     // slowly. Ethereal's +66% is applied first for the same reason — it is a property of what
-    // is being hit, not a second reduction to be netted off.
+    // is being hit, not a second reduction to be netted off. Elune's Grace (`magicTaken`) is the
+    // same kind of cut, worn by the unit instead of carried.
     spellDamage: (t, amount, src) =>
-      t.magicImmune ? 0 : this.landDamage(t, this.absorbSpellDamage(t, (t.ethereal ? amount * etherealSpellBonus() : amount) * (1 - t.magicReduction)), src, false),
+      t.magicImmune ? 0 : this.landDamage(t, this.absorbSpellDamage(t, (t.ethereal ? amount * etherealSpellBonus() : amount) * (1 - t.magicReduction) * t.magicTaken), src, false),
     spellHeal: (t, amount) => {
       t.hp = Math.min(t.maxHp, t.hp + amount);
     },
@@ -21722,6 +21751,11 @@ export class SimWorld {
     // "Reduces damage from ranged attacks to <AIdd,DataA1,%>%". No reflect, no stance, no
     // research — just a standing cut on anything that arrives by projectile.
     if (ranged && target.rangedReduction > 0) rawDamage *= 1 - target.rangedReduction;
+    // Elune's Grace, on the blow: a PIERCING attack at DataA, a MAGIC attack at DataE (the
+    // spell half is `spellDamage`'s). Keyed on the attack TYPE, as the tooltip names it — a
+    // Rifleman's bullet and a Huntress's glaive are both Piercing whatever their range.
+    if (attackType === AttackType.Pierce) rawDamage *= target.pierceTaken;
+    else if (attackType === AttackType.Magic || attackType === AttackType.Spells) rawDamage *= target.magicTaken;
     // WC3 damage table: the weapon's attack type vs the target's armor type scales
     // the hit (Normal +50% vs Medium, Pierce ×2 vs Light/Unarmored, Siege ×1.5 vs
     // Fortified, Magic ×2 vs Heavy, …). Applied before the armor-value reduction;
