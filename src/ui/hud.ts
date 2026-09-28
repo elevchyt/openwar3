@@ -1465,8 +1465,10 @@ export class GameHud {
       // The cheat panel is DEVELOPMENT ONLY, and it is gated the way every other dev-only
       // thing in the app is (src/dev/devBoot.ts): `import.meta.env.DEV` is a compile-time
       // constant that Vite folds to `false` in a build, so a packaged OpenWar3 has no
-      // +5000 Gold button, no Spawn Hero and no collider overlay to find.
-      ...(import.meta.env.DEV ? [this.buildCheatPanel()] : []),
+      // +5000 Gold button, no Spawn Hero and no collider overlay to find. Even on the dev
+      // server it appears only with `?dev` on the URL (the same switch devBoot.ts reads), so
+      // a plain localhost match looks like the shipped game.
+      ...(import.meta.env.DEV && new URLSearchParams(location.search).has("dev") ? [this.buildCheatPanel()] : []),
       this.buildMessageLog(),
       this.buildChatLog(),
       this.buildChatBar(),
@@ -2043,8 +2045,8 @@ export class GameHud {
   /** A small floating panel of debug cheats in the bottom-right corner: top up
    *  gold/lumber/food and a Fast Build toggle (builds + trains finish in ~1s).
    *
-   *  DEV SERVER ONLY — the call site is behind `import.meta.env.DEV`, so none of this is
-   *  built into a packaged game. */
+   *  DEV SERVER ONLY, and only with `?dev` on the URL — the call site is behind
+   *  `import.meta.env.DEV`, so none of this is built into a packaged game. */
   private buildCheatPanel(): HTMLDivElement {
     const panel = document.createElement("div");
     panel.className = "hud-cheats";
