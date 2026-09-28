@@ -587,5 +587,39 @@ check("a degenerate anchor cannot produce a NaN destination",
   check("…and a hold that is fighting is not on the clock at all", call(900, true, 60, true, true), "none");
 }
 
+// ==========================================================================================
+console.log("\n-- winning, losing, and pressing on -----------------------------------------");
+// ==========================================================================================
+{
+  const { noteHeroKills, heroesDown, losingFight } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
+  // "When the enemy heroes are dead, the AI that won the fight must attack their base." What
+  // counts is a hero that went down IN FRONT OF US — in contact within a few seconds of dying.
+  const heroes = new Map([[1, { seen: 10 }], [2, { seen: 10 }]]);
+  const killed = new Set();
+  const table = new Map([[1, { hp: 0 }], [2, { hp: 300 }]]);
+  noteHeroKills(heroes, killed, (id) => table.get(id), 11);
+  check("a hero dead in the fight is counted", killed.has(1), true);
+  check("…a live one is not", killed.has(2), false);
+  check("…so their heroes are not all down yet", heroesDown(heroes, killed), false);
+  table.set(2, { hp: 0 });
+  noteHeroKills(heroes, killed, (id) => table.get(id), 30);
+  check("a hero that died long after it left our sight is not a kill we saw", killed.has(2), false);
+  heroes.set(2, { seen: 29 });
+  noteHeroKills(heroes, killed, (id) => table.get(id), 30);
+  check("…one that died in contact is", heroesDown(heroes, killed), true);
+  table.delete(3);
+  heroes.set(3, { seen: 30 });
+  noteHeroKills(heroes, killed, (id) => table.get(id), 31);
+  check("a hero gone from the table (its body decayed) is down too", killed.has(3), true);
+  check("a fight that brought no heroes has none down", heroesDown(new Map(), new Set()), false);
+
+  // "When a fight is being lost, the losing AI must fall back." Read off both armies, not only
+  // off our own hit points — but only once the fight has cost us something.
+  check("outweighed and bleeding: lost", losingFight(50, 80, 100), true);
+  check("outweighed at first sight is contactPass's call, not this one", losingFight(100, 140, 100), false);
+  check("bleeding but still the stronger army: fight on", losingFight(50, 40, 100), false);
+  check("nothing in front of us: not lost", losingFight(10, 0, 100), false);
+}
+
 console.log(failed ? `\n${failed} FAILED\n` : "\nall ok\n");
 process.exit(failed ? 1 : 0);

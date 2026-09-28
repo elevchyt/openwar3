@@ -1303,6 +1303,99 @@ const WON_KEEP = 0.5;
 const WON_HEALTH = 0.4;
 
 /**
+ * PRESSING A WON FIGHT — `pressOn`. Both ours.
+ *
+ *  · `PRESS_WINDOW`: how long after the win the army is still "pressing" — sent on from one
+ *    base to the loser's next rather than home. A hero's revive at an altar is its level × a
+ *    few seconds (`MiscGame` `ReviveBaseFactor`/`ReviveLevelFactor`) and in practice a minute or
+ *    so, and past that the enemy has its hero back and the push is just the next wave.
+ *  · `HERO_DOWN_SEEN`: a hero counts as having gone down IN FRONT OF US only if it was in our
+ *    contact frame within this long of being found dead — the army pass's own period and a
+ *    blow's worth over. A hero that walked out of sight and died somewhere else is not a fact
+ *    this army learnt.
+ */
+const PRESS_WINDOW = 60;
+const HERO_DOWN_SEEN = 3;
+
+/**
+ * How far from a fallen objective the NEXT building of that base may stand to be taken on as
+ * part of the same assault (`objectiveDone`/`nextBuilding`). About a base's width; ours.
+ */
+const RAZE_SWEEP = 1600;
+
+/**
+ * A FIGHT BEING LOST, read off the two armies rather than off our own hit points alone
+ * (`fightLost`). The old reading only asked whether the group was under 40 % of its hit points
+ * or its hero nearly dead, so an army walking into one twice its size fought on until it was
+ * both — and by then there was nothing left to walk home. Two ours:
+ *
+ *  · `LOSING_RATIO`: the enemy in contact outweighs what we have standing by this much
+ *    (`armyPower`, both sides the same metric);
+ *  · `LOSING_BLED`: …and the fight has already cost us this share of the power we brought into
+ *    it (`battle.ours`). Without the second clause an army that merely MET a bigger one would
+ *    turn round at first sight, which is `contactPass`'s decision and not this one's — this is
+ *    about a fight that has been joined and is going the wrong way.
+ */
+const LOSING_RATIO = 1.3;
+const LOSING_BLED = 0.8;
+
+/**
+ * An enemy hall further than this from every start location is an EXPANSION (`noteHalls`).
+ * A melee start location is the spot the main hall is placed on, so its own hall stands within
+ * a few hundred of it; the nearest other mine on any melee map is several thousand away.
+ */
+const START_HALL = 1200;
+
+/**
+ * THE EXPANSION SWEEP (`sweepPass`) — ours.
+ *
+ *  · `SWEEP_STOPS`: mines per trip. Three is the likely naturals of one opponent, or one each of
+ *    three — a tour a worker walks inside `SCOUT_TOUR`.
+ *  · `SWEEP_LOOK`: close enough to a mine to have seen what is on it. A worker sees 800 by day;
+ *    a hall's footprint is a few hundred across.
+ *  · `SWEEP_GUARD`: a live creep this near a mine means nobody has taken it — a melee map guards
+ *    every mine, and the camp has to die first. A mine still guarded is not worth the walk.
+ *  · `SWEEP_START_MINE`: a mine this near a start location is that player's MAIN mine.
+ */
+const SWEEP_STOPS = 3;
+const SWEEP_LOOK = 600;
+const SWEEP_GUARD = 800;
+const SWEEP_START_MINE = 1600;
+
+/**
+ * Did we SEE this hero go down? Marks every hero in `heroes` that is now dead (or gone from the
+ * table) and was in our contact frame within `HERO_DOWN_SEEN` of `now`. Pure, for the test.
+ */
+export function noteHeroKills(
+  heroes: ReadonlyMap<number, { seen: number }>,
+  killed: Set<number>,
+  unit: (id: number) => { hp: number } | undefined,
+  now: number,
+): void {
+  for (const [id, h] of heroes) {
+    if (killed.has(id)) continue;
+    const u = unit(id);
+    if ((!u || u.hp <= 0) && now - h.seen <= HERO_DOWN_SEEN) killed.add(id);
+  }
+}
+
+/** Is every enemy hero that came to this fight down? False for a fight that brought none. */
+export function heroesDown(heroes: ReadonlyMap<number, unknown>, killed: ReadonlySet<number>): boolean {
+  if (!heroes.size) return false;
+  for (const id of heroes.keys()) if (!killed.has(id)) return false;
+  return true;
+}
+
+/**
+ * Is a joined fight going the wrong way — see `LOSING_RATIO`. `ours`/`theirs` are what is in it
+ * now, `brought` the most we had in it. Pure, for the test.
+ */
+export function losingFight(ours: number, theirs: number, brought: number): boolean {
+  if (theirs <= 0) return false;
+  return theirs > ours * LOSING_RATIO && ours < brought * LOSING_BLED;
+}
+
+/**
  * THE SAFETY NET ON A MARCH — the army's own version of the arc the scout walks (`safeLeg`).
  *
  * A wave sent at a camp on the far side of the map takes the straight line, and on a melee map
@@ -1792,7 +1885,46 @@ interface Brain {
    * `ours` the most WE had, `lastSeen` the last pass anything of theirs was there and (x, y)
    * where it was — the field the fight was fought on. Null while there is no such fight.
    */
-  battle: { peak: number; ours: number; lastSeen: number; x: number; y: number } | null;
+  battle: {
+    peak: number; ours: number; lastSeen: number; x: number; y: number;
+    /** Every enemy HERO seen in contact during it, by sim id → the last clock it was seen
+     *  alive there, and its owner. What "their heroes are dead" is read off — see
+     *  `victoryPass`. */
+    heroes: Map<number, { owner: number; seen: number }>;
+    /** How many of those it has SEEN go down (a body dead on the field while it was still in
+     *  our contact frame). */
+    killed: Set<number>;
+    /** Has this fight already been PRESSED (`pressOn`)? Once a fight — see there. */
+    pressed: boolean;
+  } | null;
+  /**
+   * PRESS THE ADVANTAGE: a won fight — or one whose enemy heroes have all gone down in front of
+   * us — sends the army straight on at the loser's base rather than home to wait out
+   * `waveGap` (`pressOn`). `foe` is the seat it is aimed at and `until` the clock the window
+   * closes on: a hero revives in under a minute, and a push that sets off after that is just the
+   * next wave.
+   */
+  press: { foe: number; until: number } | null;
+  /** The BASE objective a wave was walking at when an enemy army met it on the way and it
+   *  turned to fight (`contactPass`) — gone back to once that fight is over (`objectiveDone`),
+   *  instead of the wave ending on the empty field and walking home. */
+  resume: { id: number; x: number; y: number } | null;
+  /**
+   * Every enemy EXPANSION structure this player has seen with its own eyes — a hall, a Haunted
+   * Gold Mine or an Entangled Gold Mine standing away from every start location — by sim id.
+   * A building does not walk, so a remembered one is where the game's own fog still DRAWS it,
+   * and forgetting it the moment the scout turned round is what made `enemyExpansion` (which
+   * asks for one under our eyes NOW) all but never answer. Dropped when we look at the spot and
+   * it is gone. See `noteHalls`.
+   */
+  halls: Map<number, { x: number; y: number; owner: number }>;
+  /** When each gold mine was last under our eyes (mine id → clock) — what an expansion sweep
+   *  skips, since a mine we looked at a minute ago has nothing new to say. */
+  minesSeen: Map<number, number>;
+  /** The legs of the EXPANSION SWEEP the scout is walking (null = it is on the opening tour, or
+   *  not out), and when the next one may set off. See `sweepPass`. */
+  sweep: Array<{ x: number; y: number }> | null;
+  sweepAt: number;
   /** When this player last WON a fight against a player's army (-1 = never) — the enemy army
    *  left our contact (wiped, fled or teleported out) while ours stood. The expansion row reads
    *  it (plus/plan.ts `expand`): a won fight is the moment a ladder player takes the next mine. */
@@ -1913,6 +2045,28 @@ interface Brain {
  * with a little room, and the recorder's `aiOrderDrain` gauge is what it is judged by.
  */
 const ORDERS_PER_STEP = 6;
+
+/**
+ * The CHANNELLED ULTIMATES the army's orders must never break — Starfall (`AEsf`), Tranquility
+ * (`AEtq`), Big Bad Voodoo (`AOvd`), and for the same reason the other three ultimates that are
+ * channels: Death and Decay (`AUdd`), Earthquake (`AOeq`) and Stampede (`ANst`). Every one of
+ * them is a CHANNEL in the sim (world.ts `CHANNELED`): the next order the caster takes ends it,
+ * and a stop, a move or an attack-move is an order.
+ *
+ * Reported: the Priestess, the Keeper and the Shadow Hunter cancelling their own ultimates "to
+ * do things such as attack, move etc." The caster already leaves a unit that is casting alone
+ * (plus/casting.ts `canAct`) and so does the belt (`holdsChannel`), but the ARMY passes did not
+ * — `commit` re-aims every soldier in the squad every `REISSUE_PERIOD`, the hero included, and
+ * cohesion stops a hero that is out in front — so a 60-second ultimate lasted until the next
+ * re-issue. A hero at level 6 spent its whole cooldown on four seconds of it.
+ *
+ * Only the ultimates, and not every channel: a Blizzard or a Drain is a short press the hero
+ * can afford to give up to walk out of a lost fight, while an ultimate is a two- or three-minute
+ * cooldown and, for Tranquility and Big Bad Voodoo, the very thing that is WINNING the fight.
+ * A Scroll of Town Portal still breaks one — that press is the belt's (`portalTo`), and leaving
+ * IS the decision there.
+ */
+const HELD_CHANNELS: ReadonlySet<string> = new Set(["AEsf", "AEtq", "AOvd", "AUdd", "AOeq", "ANst"]);
 
 /** Every Computer+ player in the match. */
 export class ComputerPlusAi {
@@ -2048,6 +2202,12 @@ export class ComputerPlusAi {
       contactSince: -1,
       battle: null,
       wonAt: -1,
+      press: null,
+      resume: null,
+      halls: new Map(),
+      minesSeen: new Map(),
+      sweep: null,
+      sweepAt: Infinity,
       leg: { was: null, since: 0 },
       legOffUntil: 0,
       greeted: false,
@@ -2199,6 +2359,10 @@ export class ComputerPlusAi {
    */
   private issue(b: Brain, cmd: Command): boolean {
     if (cmd.c === "order") {
+      // AN ULTIMATE BEING CHANNELLED IS NOT INTERRUPTED — see `HELD_CHANNELS`. Refused here, at
+      // the one door every army pass leaves through, rather than at each of the dozen call
+      // sites that re-aim a squad: a pass that forgets to ask is one Starfall thrown away.
+      if (this.holdsUltimate(cmd.unitId)) return true;
       const kind = cmd.order.kind;
       if (kind === "move" || kind === "attackmove" || kind === "attack" || kind === "patrol") {
         if (b.ordersThisStep >= ORDERS_PER_STEP) {
@@ -2231,6 +2395,8 @@ export class ComputerPlusAi {
       if (b.ordersThisStep >= ORDERS_PER_STEP) { rest.push(cmd); continue; }
       const u = this.host.world.units.get(cmd.unitId);
       if (!u || u.hp <= 0) continue; // gone
+      // …and asked again on the way out: the order was queued before the channel began.
+      if (this.holdsUltimate(u.id)) continue;
       b.ordersThisStep++;
       b.ai.order(cmd);
       simProfile.tally("aiOrdersIssued");
@@ -2238,6 +2404,14 @@ export class ComputerPlusAi {
     b.orderQueue = rest;
     simProfile.end("sim.ai.orders");
     simProfile.gauge("aiOrderDrain", perfNow() - t0);
+  }
+
+  /** Is this unit channelling one of the `HELD_CHANNELS` ultimates right now? */
+  private holdsUltimate(id: number): boolean {
+    const world = this.host.world;
+    if (!world.holdsChannel(id)) return false;
+    const code = world.units.get(id)?.pendingCast?.code;
+    return !!code && HELD_CHANNELS.has(code);
   }
 
   /** `PauseCompAI` — seats whose AI stands still (it decides nothing and issues nothing; what
@@ -2468,6 +2642,7 @@ export class ComputerPlusAi {
   private armyPass(b: Brain): void {
     this.prune(b);
     this.scoutEnemy(b);
+    this.noteHalls(b);
     this.recruit(b);
     this.hold(b);
     // The base's own defences, and the wounded, before anything is aimed anywhere: a peon in a
@@ -2751,7 +2926,8 @@ export class ComputerPlusAi {
    * MEANT to stand says nothing about where the enemy army decided to walk.
    */
   private scoutPass(b: Brain): void {
-    if (!b.profile.scout || b.scoutDone) return;
+    if (!b.profile.scout) return;
+    if (b.scoutDone && !this.sweepPass(b)) return;
     const scout = b.scoutId ? this.host.world.units.get(b.scoutId) : null;
     if (b.scoutId && (!scout || scout.hp <= 0 || scout.owner !== b.ai.player)) {
       // NOBODY FOLLOWS IT. One scout is sent, ever, and a scout that does not come back is not
@@ -2771,6 +2947,11 @@ export class ComputerPlusAi {
       b.scoutGoal = null;
       b.scoutWas = null;
       b.scoutBack = false;
+      // …not for the OPENING tour. An expansion sweep is a different walk to different places
+      // (`sweepPass`), and it is still worth taking later — just not soon: whatever killed this
+      // worker is still out there, so the next one waits twice the usual gap.
+      b.sweep = null;
+      b.sweepAt = b.clock + 2 * b.profile.sweepEvery;
       return;
     }
     if (!scout) {
@@ -2846,7 +3027,8 @@ export class ComputerPlusAi {
       // between it and its own base. Home is a place it has to actually reach.
       const there = b.scoutBack
         ? Math.hypot(scout.x - b.scoutGoal.x, scout.y - b.scoutGoal.y) <= SCOUT_ARRIVED
-        : this.lookedAt(scout, b.scoutGoal);
+        : (b.sweep && Math.hypot(scout.x - b.scoutGoal.x, scout.y - b.scoutGoal.y) <= SWEEP_LOOK)
+          || this.lookedAt(scout, b.scoutGoal);
       if (there) {
         if (b.scoutBack) return this.release(b);
         b.scoutLeg++;
@@ -3005,13 +3187,94 @@ export class ComputerPlusAi {
     b.scoutStill = 0;
   }
 
-  /** Home, or out of patience: hand the worker back to the economy. */
+  /** Home, or out of patience: hand the worker back to the economy — and put the next
+   *  expansion sweep on the clock (`sweepPass`). */
   private release(b: Brain): void {
     b.scoutId = 0;
     b.scoutDone = true;
     b.scoutGoal = null;
     b.scoutWas = null;
     b.scoutBack = false;
+    b.sweep = null;
+    b.sweepAt = b.clock + b.profile.sweepEvery;
+  }
+
+  /**
+   * GO AND LOOK AGAIN — at the mines an opponent could have taken since.
+   *
+   * The opening tour looks at the enemy MAINS, which a melee player is handed anyway; an
+   * expansion is the one thing a scout can find out that the map does not say, and it goes up
+   * minutes after that tour is home. So every `PlusProfile.sweepEvery` the same machinery walks
+   * a worker round up to `SWEEP_STOPS` mines (`sweepStops`), with every rule the tour has — the
+   * arcs round the camps, the retreat at the first scratch, the deadline, the walk home — and
+   * whatever it sees there lands in `Brain.halls` through the army pass's own `noteHalls`.
+   *
+   * Starts a sweep and returns true when one is due and there is somewhere worth looking; false
+   * otherwise, which leaves `scoutPass` idle exactly as a finished tour always did.
+   */
+  private sweepPass(b: Brain): boolean {
+    if (b.clock < b.sweepAt) return false;
+    const stops = this.sweepStops(b);
+    if (!stops.length) {
+      b.sweepAt = b.clock + b.profile.sweepEvery / 2; // nothing to look at yet — ask again soon
+      return false;
+    }
+    b.sweep = stops;
+    b.sweepAt = Infinity; // re-armed by `release`, or by the scout dying
+    b.scoutDone = false;
+    b.scoutId = 0;
+    b.scoutLeg = 0;
+    b.scoutGoal = null;
+    b.scoutBack = false;
+    return true;
+  }
+
+  /**
+   * The mines worth a sweep, in walking order: every mine that is not a start location's own
+   * (`SWEEP_START_MINE`), not ours, not already known to be taken (`Brain.halls`), not looked at
+   * inside the last `sweepEvery`, and no longer guarded (`SWEEP_GUARD` — a live camp on a mine
+   * means nobody has taken it). The `SWEEP_STOPS` NEAREST AN ENEMY START are kept, since that is
+   * where a player expands to first, and then walked nearest-first from home.
+   */
+  private sweepStops(b: Brain): Array<{ x: number; y: number }> {
+    const world = this.host.world;
+    const me = b.ai.player;
+    const starts = this.host.startLocations();
+    const foes = starts.filter((st) => st.player !== me && !this.host.coAllied(me, st.player));
+    if (!foes.length) return [];
+    const ours: Array<{ x: number; y: number }> = [];
+    for (const u of world.units.values()) {
+      if (u.hp > 0 && u.building && u.owner === me && (u.depotGold || world.hauntsMines(u.typeId))) ours.push(u);
+    }
+    const creeps = this.liveCreeps();
+    const halls = [...b.halls.values()];
+    const near = (p: { x: number; y: number }, list: ReadonlyArray<{ x: number; y: number }>, r: number): boolean =>
+      list.some((q) => Math.hypot(p.x - q.x, p.y - q.y) <= r);
+    const picks: Array<{ x: number; y: number; d: number }> = [];
+    for (const m of world.mines.values()) {
+      if (m.gold <= 0 || m.entangledBy && world.units.get(m.entangledBy)?.owner === me) continue;
+      if (near(m, starts, SWEEP_START_MINE) || near(m, ours, SWEEP_START_MINE / 2)) continue;
+      if (near(m, halls, SWEEP_START_MINE / 2) || near(m, creeps, SWEEP_GUARD)) continue;
+      const seen = b.minesSeen.get(m.id);
+      if (seen !== undefined && b.clock - seen < b.profile.sweepEvery) continue;
+      const d = Math.min(...foes.map((st) => Math.hypot(m.x - st.x, m.y - st.y)));
+      picks.push({ x: m.x, y: m.y, d });
+    }
+    picks.sort((p, q) => p.d - q.d);
+    const chosen = picks.slice(0, SWEEP_STOPS);
+    // Walked as a route rather than in priority order: nearest to where the worker is, each leg.
+    const route: Array<{ x: number; y: number }> = [];
+    let at = b.ai.home();
+    while (chosen.length) {
+      let k = 0;
+      for (let i = 1; i < chosen.length; i++) {
+        if (Math.hypot(chosen[i].x - at.x, chosen[i].y - at.y) < Math.hypot(chosen[k].x - at.x, chosen[k].y - at.y)) k = i;
+      }
+      const [next] = chosen.splice(k, 1);
+      route.push({ x: next.x, y: next.y });
+      at = next;
+    }
+    return route;
   }
 
   /**
@@ -3147,6 +3410,8 @@ export class ComputerPlusAi {
    * for its opening.
    */
   private scoutWaypoint(b: Brain): { x: number; y: number } | null {
+    // An expansion sweep walks its own legs — the mines themselves (`sweepStops`).
+    if (b.sweep) return b.sweep[b.scoutLeg] ?? null;
     const home = b.ai.home();
     const stops = this.scoutStops(b);
     // A custom map with no start locations to read, or a lobby that named none: fall back to
@@ -3308,6 +3573,8 @@ export class ComputerPlusAi {
     if (b.clock - b.contactSince < b.profile.defendDelay) return false;
     b.contactSince = -1;
     if (this.powerOf(foes) * CONTACT_ENGAGE <= this.powerOf(this.squadUnits(b))) {
+      // Remember the base this wave was on its way to, if it was — see `Brain.resume`.
+      if (b.mode === "attacking" && !b.creeping && b.target?.id) b.resume = { ...b.target };
       b.creeping = false;
       b.vanguardDone = false;
       b.target = { id: 0, x: cx, y: cy };
@@ -3380,16 +3647,29 @@ export class ComputerPlusAi {
       fy += u.y;
     }
     const mine = this.powerOf(this.squadUnits(b));
+    // WHICH OF THEIR HEROES WENT DOWN IN FRONT OF US — asked before the scan below decides
+    // anything, because a hero that died since the last pass is no longer among `foes`.
+    if (b.battle) noteHeroKills(b.battle.heroes, b.battle.killed, (id) => this.host.world.units.get(id), b.clock);
     if (foes.length) {
       const theirs = this.powerOf(foes);
       if (!b.battle && theirs < WON_MIN_SHARE * mine) return; // a scout, not an army
-      b.battle = {
-        peak: Math.max(b.battle?.peak ?? 0, theirs),
-        ours: Math.max(b.battle?.ours ?? 0, mine),
-        lastSeen: b.clock,
-        x: fx / foes.length,
-        y: fy / foes.length,
-      };
+      const battle = b.battle ?? { peak: 0, ours: 0, lastSeen: 0, x: 0, y: 0, heroes: new Map(), killed: new Set<number>(), pressed: false };
+      battle.peak = Math.max(battle.peak, theirs);
+      battle.ours = Math.max(battle.ours, mine);
+      battle.lastSeen = b.clock;
+      battle.x = fx / foes.length;
+      battle.y = fy / foes.length;
+      for (const u of foes) if (u.isHero) battle.heroes.set(u.id, { owner: u.owner, seen: b.clock });
+      b.battle = battle;
+      // THEIR HEROES ARE DOWN, and what is left of their army is no match for ours: the fight is
+      // won even though it is not over, and the army walks on into their base through what is
+      // left of it (the march is an attack-move, so the stragglers are fought on the way). See
+      // `pressOn`, and note it takes no verdict from `WON_QUIET` — a player does not wait six
+      // seconds for the last Footman to die before turning on the town.
+      if (!battle.pressed && heroesDown(battle.heroes, battle.killed) && theirs < mine) {
+        battle.pressed = true; // once a fight: see `pressOn` on what re-deciding it every pass did
+        this.pressOn(b, this.pressFoe(battle));
+      }
       return;
     }
     const battle = b.battle;
@@ -3399,6 +3679,149 @@ export class ComputerPlusAi {
     if (mine < WON_KEEP * battle.ours) return; // it cost us the army
     if (this.creepForce(b).health < WON_HEALTH) return; // …or what is left is on its last legs
     b.wonAt = b.clock;
+    this.pressOn(b, this.pressFoe(battle));
+  }
+
+  /** Whose army that was — the owner of most of the heroes it brought, which in a melee fight
+   *  is the player whose army it was; -1 when it brought none (the caller then picks whoever
+   *  `pickTarget` would have). */
+  private pressFoe(battle: NonNullable<Brain["battle"]>): number {
+    const count = new Map<number, number>();
+    for (const h of battle.heroes.values()) count.set(h.owner, (count.get(h.owner) ?? 0) + 1);
+    let best = -1;
+    let most = 0;
+    for (const [owner, n] of count) if (n > most) { most = n; best = owner; }
+    return best;
+  }
+
+  /**
+   * PRESS THE ADVANTAGE — the army that just won a fight goes straight on at the loser's base.
+   *
+   * Reported: *"when the enemy heroes are dead, the Computer+ AI that won the fight must attack
+   * their enemy's base"*. What it did instead was the wave's own ending: the contact objective
+   * was a spot on the ground, reaching it with nothing standing there ended the wave, and
+   * `endWave` walked the army home to wait out `waveGap` — which is exactly the window, with the
+   * enemy's heroes in the altar queue and its army dead, that a player spends in the other
+   * player's base. `PRESS_WINDOW` is that window, measured on a hero's revive.
+   *
+   * Refused while the army is itself on its last legs (`WON_HEALTH` of its hit points, the same
+   * bar a won fight is judged by) and never taken from a creep camp. A fight won in our OWN base
+   * is pressed too, once `defendPass` has let go (the verdict lands `WON_QUIET` after the last
+   * invader, and the mode is `massing` by then): that is the counter-attack.
+   */
+  private pressOn(b: Brain, foe: number): void {
+    if (b.creeping || b.mode === "retreating" || b.mode === "defending") return;
+    if (this.readiness(b) < WON_HEALTH || !b.squad.size) return;
+    // Already walking at that player's BUILDINGS — nothing to change, and re-committing would
+    // re-path the whole army for the same destination.
+    const owner = this.targetOwner(b);
+    if (b.mode === "attacking" && owner >= 0 && (foe < 0 || owner === foe)) {
+      b.press = { foe: owner, until: b.clock + PRESS_WINDOW };
+      return;
+    }
+    // STILL IN THE FIELD FIGHT (aimed at the spot `contactPass` chose): the press is ARMED, not
+    // taken. Re-aiming the army at the base here while stragglers are still in contact made the
+    // two passes flip the objective every pass — base, stragglers, base — re-pathing the whole
+    // army each time until the stall watchdog wrote the push off (seen live, Echo Isles). The
+    // fight finishes first; `objectiveDone` then walks the army on at the base.
+    if (b.mode === "attacking" && !b.target?.id) {
+      if (foe >= 0) b.press = { foe, until: b.clock + PRESS_WINDOW };
+      return;
+    }
+    const target = this.baseTarget(b, foe);
+    if (!target) return;
+    b.press = { foe: this.ownerOf(target.id), until: b.clock + PRESS_WINDOW };
+    b.creeping = false;
+    b.vanguardDone = false;
+    b.target = target;
+    this.setMode(b, "attacking");
+    this.commit(b, target.x, target.y);
+  }
+
+  /** Is this unit still standing and still an enemy of ours? */
+  private alive(b: Brain, id: number): boolean {
+    const u = this.host.world.units.get(id);
+    return !!u && u.hp > 0 && b.ai.hostileTo(u);
+  }
+
+  /** The seat that owns this unit, or -1. */
+  private ownerOf(id: number): number {
+    const u = id ? this.host.world.units.get(id) : null;
+    return u && u.owner >= 0 && u.owner < MELEE.MAX_PLAYERS ? u.owner : -1;
+  }
+
+  /**
+   * WHAT TO DO WHEN AN OBJECTIVE FALLS — instead of going straight home.
+   *
+   * The wave used to end the moment its target building died (or the spot it was sent to was
+   * clear), and `endWave` walks the army back to the rally point: so a Computer+ army that had
+   * fought its way into a base killed the Town Hall and turned round, leaving the Barracks, the
+   * Altar and every tower standing to rebuild from. A player razes what they came for. So, in
+   * order, while the army is still fit to fight (`retreatHp`'s own bar, or `WON_HEALTH` on the
+   * rung that has none):
+   *
+   *  1. the NEXT BUILDING of that base — the nearest one of the same owner we can see within
+   *     `RAZE_SWEEP` of where the last one stood;
+   *  2. while a press is on (`pressOn`), that player's next base — its expansion or its main;
+   *  3. and only then home.
+   */
+  private objectiveDone(b: Brain): void {
+    const fit = this.readiness(b) >= Math.max(b.profile.retreatHp, WON_HEALTH) + 0.1;
+    const last = b.target;
+    if (fit && last && !b.creeping) {
+      const owner = b.press && b.clock < b.press.until ? b.press.foe : this.lastOwner(b, last);
+      const next = owner >= 0 ? this.nextBuilding(b, owner, last.x, last.y) : null;
+      // …then the press, and then the base the wave was walking at before an army met it.
+      const resume = b.resume && this.alive(b, b.resume.id) ? b.resume : null;
+      b.resume = null;
+      const target = next ?? (b.press && b.clock < b.press.until ? this.baseTarget(b, b.press.foe) : null) ?? resume;
+      if (target && !(target.id && target.id === last.id)) {
+        b.target = target;
+        b.push.gap = -1;
+        b.push.since = b.clock;
+        b.reissueIn = 0;
+        this.recommit(b, target.x, target.y);
+        return;
+      }
+    }
+    b.press = null;
+    this.endWave(b);
+  }
+
+  /** Who owned the objective that just fell — read off the building if it is still in the
+   *  table (a corpse keeps its owner), else off the nearest enemy building we can see there. */
+  private lastOwner(b: Brain, last: { id: number; x: number; y: number }): number {
+    const was = this.ownerOf(last.id);
+    if (was >= 0 && was !== b.ai.player) return was;
+    let best = -1;
+    let bestD = RAZE_SWEEP;
+    for (const u of this.host.world.units.values()) {
+      if (u.hp <= 0 || !u.building || u.owner < 0 || u.owner >= MELEE.MAX_PLAYERS) continue;
+      if (!b.ai.hostileTo(u) || !b.ai.knows(u)) continue;
+      const d = Math.hypot(u.x - last.x, u.y - last.y);
+      if (d < bestD) { bestD = d; best = u.owner; }
+    }
+    return best;
+  }
+
+  /**
+   * The next building of `owner`'s to knock down near (x, y), or null — the one we can SEE
+   * (`knows`), nearest first, with a TOWER or a HALL preferred at equal footing because those
+   * are what the base rebuilds and shoots from. Within `RAZE_SWEEP`, which is a base's width:
+   * past it is somewhere else, and that is the press's decision rather than this one's.
+   */
+  private nextBuilding(b: Brain, owner: number, x: number, y: number): { id: number; x: number; y: number } | null {
+    let best: SimUnit | null = null;
+    let bestScore = Infinity;
+    for (const u of this.host.world.units.values()) {
+      if (u.hp <= 0 || !u.building || u.owner !== owner) continue;
+      const d = Math.hypot(u.x - x, u.y - y);
+      if (d > RAZE_SWEEP || !b.ai.knows(u)) continue;
+      // A hall or a tower counts as standing a third nearer than it does.
+      const key = u.depotGold || u.weapons.length > 0 ? d * 0.67 : d;
+      if (key < bestScore) { bestScore = key; best = u; }
+    }
+    return best ? { id: best.id, x: best.x, y: best.y } : null;
   }
 
   /**
@@ -3839,11 +4262,36 @@ export class ComputerPlusAi {
     if (b.mode !== "attacking") return false;
     const force = this.creepForce(b);
     if (force.health < ABORT_GROUP_HP) return true;
+    // AGAINST A PLAYER, THE TWO ARMIES ARE COMPARED — see `LOSING_RATIO`. Our own hit points
+    // are a late reading: an army that has met one twice its size is losing long before it is
+    // under 40 %, and waiting for that is waiting until there is nothing left to bring home.
+    if (!b.creeping && b.battle && b.clock - b.battle.lastSeen <= WON_QUIET) {
+      const ours = this.powerOf(this.squadUnits(b));
+      if (losingFight(ours, this.oppositionPower(b), b.battle.ours)) return true;
+    }
     // No captain at all: for a creep run `attacking` has already ended it; for an assault on a
-    // player this is a broken army in somebody else's base.
-    if (force.heroLevel < 1) return b.creeping;
+    // player it is a broken army in somebody else's base whenever what it is fighting still
+    // outweighs it — the hero was half of what made the fight worth taking.
+    if (force.heroLevel < 1) return b.creeping || this.oppositionHealthy(b);
     if (force.heroHealth >= ABORT_HERO_HP) return false;
     return this.oppositionHealthy(b);
+  }
+
+  /** The power of the enemy we can see around the group — `oppositionHealthy`'s reading, as a
+   *  number, for `losingFight`. Players only: a creep that wandered in is not their army. */
+  private oppositionPower(b: Brain): number {
+    const centre = this.armyAnchor(b) ?? this.squadCentre(b);
+    if (!centre) return 0;
+    const frame = this.armyFrame(b, centre);
+    const foes: SimUnit[] = [];
+    for (const u of this.host.world.units.values()) {
+      if (u.hp <= 0 || u.building || u.isPeon || u.owner === b.ai.player) continue;
+      if (u.isCreep || u.owner < 0 || u.owner >= MELEE.MAX_PLAYERS) continue;
+      if (!inContact(frame, u.x, u.y)) continue;
+      if (isCopy(u) || !b.ai.hostileTo(u) || !b.ai.knows(u)) continue;
+      foes.push(u);
+    }
+    return this.powerOf(foes);
   }
 
   /**
@@ -3884,6 +4332,8 @@ export class ComputerPlusAi {
    *  on (`itemCtx`). Creeps do not chase and will still be there in two minutes; an army does,
    *  and a hero walking away from one usually does not get home. */
   private retreat(b: Brain, from: "creeps" | "player" | "stuck"): void {
+    b.press = null; // a push that has to turn round is over
+    b.resume = null;
     b.retreatFrom = from;
     b.retreatSince = b.clock;
     this.setMode(b, "retreating");
@@ -3941,11 +4391,13 @@ export class ComputerPlusAi {
       if (b.ai.campHealthAt(target.x, target.y) <= 0) return void this.endWave(b);
     } else if (target.id) {
       const u = this.host.world.units.get(target.id);
-      if (!u || u.hp <= 0) return void this.endWave(b);
+      // …and an objective that FALLS is the next building, or the press, before it is home —
+      // see `objectiveDone`. A building that changed hands (a Charm, a shared unit) is fallen too.
+      if (!u || u.hp <= 0 || !b.ai.hostileTo(u)) return void this.objectiveDone(b);
       target.x = u.x;
       target.y = u.y;
     } else if (this.atGoal(b, target) && !this.enemyNear(b, target.x, target.y, CLEARED_RADIUS)) {
-      return void this.endWave(b);
+      return void this.objectiveDone(b);
     }
     // …AND NOTHING WAITS FOR EVER. Every end condition above is a statement about the objective,
     // and none of them can answer "we are never going to get there" — see `PUSH_STUCK_AFTER`.
@@ -4944,12 +5396,10 @@ export class ComputerPlusAi {
         return { id: 0, x: camp.x, y: camp.y };
       }
     }
-    const expansion = ai.enemyExpansion();
-    if (expansion && !ai.isTowered(expansion) && !avoided(expansion)) {
-      return { id: expansion.id, x: expansion.x, y: expansion.y };
-    }
-    const base = ai.enemyBase();
-    if (base && !avoided(base)) return { id: base.id, x: base.x, y: base.y };
+    // 2 and 3: an enemy EXPANSION we know about, most of the time, else the main — see
+    // `baseTarget`, which the press after a won fight asks too.
+    const base = this.baseTarget(b, -1);
+    if (base) return base;
     // 4. …AND WHEN THERE IS NOTHING IT CAN GET TO, IT GOES CREEPING ANYWAY.
     //
     // The rung under "the enemy's base", which for most of this file's life was `null` — the
@@ -4976,7 +5426,155 @@ export class ComputerPlusAi {
     return null;
   }
 
+  /**
+   * WHICH OF THE ENEMY'S BASES — an expansion, most of the time, or the main.
+   *
+   * Reported: the AI should be *"more keen towards scouting for enemy expansions and choosing to
+   * attack the enemy's expansion instead of their main base most of the time (if an expansion
+   * exists)"*. An expansion is the soft target: a hall, a mine and a tower or two, a long walk
+   * for the defence, and a whole mine's income gone if it falls. The main is where every tower
+   * and every production building is. So when this player KNOWS of one (`Brain.halls`, what it
+   * has seen with its own eyes and remembers — never the fog), a wave goes at it with the
+   * difficulty's `expansionFirst` chance, halved when towers are standing over it.
+   *
+   * `foe` narrows it to one player's bases (-1 = anybody's). The MAIN is the hall standing at a
+   * start location, which every melee player is handed (`AiPlayer.knows`' own exemption) — the
+   * old rung read `AiPlayer.enemyBase`, the enemy hall NEAREST US, which is somebody's expansion
+   * as often as it is a main and was never a choice at all.
+   */
+  private baseTarget(b: Brain, foe: number): { id: number; x: number; y: number } | null {
+    if (b.avoid.length) b.avoid = b.avoid.filter((a) => a.until > b.clock);
+    const avoided = (p: { x: number; y: number }): boolean => isShunned(b.avoid, p, b.clock, GOAL_MATCH);
+    const expansion = this.knownExpansion(b, foe, avoided);
+    const main = this.mainOf(b, foe, avoided);
+    if (expansion) {
+      const u = this.host.world.units.get(expansion.id);
+      const chance = u && b.ai.isTowered(u) ? b.profile.expansionFirst / 2 : b.profile.expansionFirst;
+      if (!main || b.ai.randomInt(0, 999) < chance * 1000) return expansion;
+    }
+    return main ?? expansion ?? this.anyBase(b, foe, avoided);
+  }
+
+  /**
+   * The nearest enemy EXPANSION this player remembers (`Brain.halls`), still standing, not
+   * written off and reachable — nearest to the ARMY, since that is who walks there. A remembered
+   * structure that turns out to be gone is dropped here; that it is gone is learnt a few seconds
+   * early, which is the price of not sending a wave at a hall that is not there.
+   */
+  private knownExpansion(
+    b: Brain, foe: number, avoided: (p: { x: number; y: number }) => boolean,
+  ): { id: number; x: number; y: number } | null {
+    const from = this.armyAnchor(b) ?? this.squadCentre(b) ?? b.ai.home();
+    let best: { id: number; x: number; y: number } | null = null;
+    let bestD = Infinity;
+    for (const [id, h] of b.halls) {
+      const u = this.host.world.units.get(id);
+      if (!u || u.hp <= 0 || !b.ai.hostileTo(u)) {
+        b.halls.delete(id);
+        continue;
+      }
+      if (foe >= 0 && u.owner !== foe) continue;
+      if (avoided(h) || !this.reachable(b, h)) continue;
+      const d = Math.hypot(h.x - from.x, h.y - from.y);
+      if (d < bestD) { bestD = d; best = { id, x: h.x, y: h.y }; }
+    }
+    return best;
+  }
+
+  /**
+   * An enemy's MAIN: the hall standing nearest its start location (or, failing a hall, any
+   * building there) — for `foe`, or for the nearest enemy start to us when -1. Map data, like
+   * `AiPlayer.enemyBase` it replaces as the main-base rung; falls back on that for a map with no
+   * start locations to read.
+   */
+  private mainOf(
+    b: Brain, foe: number, avoided: (p: { x: number; y: number }) => boolean,
+  ): { id: number; x: number; y: number } | null {
+    const me = b.ai.player;
+    const home = b.ai.home();
+    const starts = this.host.startLocations()
+      .filter((st) => st.player !== me && (foe >= 0 ? st.player === foe : !this.host.coAllied(me, st.player)))
+      .sort((p, q) => Math.hypot(p.x - home.x, p.y - home.y) - Math.hypot(q.x - home.x, q.y - home.y));
+    for (const st of starts) {
+      let hall: SimUnit | null = null;
+      let hallD = Infinity;
+      let any: SimUnit | null = null;
+      let anyD = Infinity;
+      for (const u of this.host.world.units.values()) {
+        if (u.hp <= 0 || !u.building || u.owner !== st.player || !b.ai.hostileTo(u)) continue;
+        const d = Math.hypot(u.x - st.x, u.y - st.y);
+        if (u.depotGold && d < hallD) { hallD = d; hall = u; }
+        if (d < anyD) { anyD = d; any = u; }
+      }
+      // Only what is standing AT the start: a player whose main has been razed has no main,
+      // and their last building across the map is an expansion (or nothing we know of).
+      const pick = hall && hallD <= RAZE_SWEEP ? hall : any && anyD <= RAZE_SWEEP ? any : null;
+      if (pick && !avoided(pick)) return { id: pick.id, x: pick.x, y: pick.y };
+    }
+    return null;
+  }
+
+  /**
+   * THE LAST RUNG: any building of theirs at all, nearest us — `AiPlayer.enemyBase`, the old
+   * rung whole, for an opponent whose main is razed and whose expansion we never saw, and for a
+   * map with no start locations to read. Without it such a player could never be finished.
+   */
+  private anyBase(
+    b: Brain, foe: number, avoided: (p: { x: number; y: number }) => boolean,
+  ): { id: number; x: number; y: number } | null {
+    if (foe < 0) {
+      const base = b.ai.enemyBase();
+      return base && !avoided(base) ? { id: base.id, x: base.x, y: base.y } : null;
+    }
+    const home = b.ai.home();
+    let best: SimUnit | null = null;
+    let bestD = Infinity;
+    for (const u of this.host.world.units.values()) {
+      if (u.hp <= 0 || !u.building || u.owner !== foe || !b.ai.hostileTo(u) || avoided(u)) continue;
+      const d = Math.hypot(u.x - home.x, u.y - home.y);
+      if (d < bestD) { bestD = d; best = u; }
+    }
+    return best ? { id: best.id, x: best.x, y: best.y } : null;
+  }
+
+  /**
+   * REMEMBER THE ENEMY EXPANSIONS WE SEE, and the mines we have looked at — every army pass.
+   *
+   * An expansion structure is a hall (`depotGold`), a Haunted Gold Mine (`hauntsMines`, the
+   * undead's expansion is the mine and not a Necropolis) or an Entangled Gold Mine (the mine's
+   * own `entangledBy`), standing further than `START_HALL` from every start location. Seen with
+   * our own eyes (`knows`), kept until we look at the spot again and it is not there.
+   */
+  private noteHalls(b: Brain): void {
+    const world = this.host.world;
+    const me = b.ai.player;
+    for (const m of world.mines.values()) {
+      if (this.host.visible(me, m.x, m.y)) b.minesSeen.set(m.id, b.clock);
+    }
+    const starts = this.host.startLocations();
+    for (const u of world.units.values()) {
+      if (u.hp <= 0 || !u.building || u.owner === me || u.owner < 0 || u.owner >= MELEE.MAX_PLAYERS) continue;
+      if (b.halls.has(u.id)) continue;
+      if (!u.depotGold && !world.hauntsMines(u.typeId) && !this.entangles(u)) continue;
+      if (!b.ai.hostileTo(u) || !b.ai.knows(u)) continue;
+      if (starts.some((st) => Math.hypot(u.x - st.x, u.y - st.y) <= START_HALL)) continue;
+      b.halls.set(u.id, { x: u.x, y: u.y, owner: u.owner });
+    }
+    for (const [id, h] of b.halls) {
+      const u = world.units.get(id);
+      if (u && u.hp > 0 && b.ai.hostileTo(u)) continue;
+      if (this.host.visible(me, h.x, h.y)) b.halls.delete(id); // looked, and it is gone
+    }
+  }
+
+  /** Is this building an Entangled Gold Mine — the unit Entangle stands over a mine? */
+  private entangles(u: SimUnit): boolean {
+    for (const m of this.host.world.mines.values()) if (m.entangledBy === u.id) return true;
+    return false;
+  }
+
   private endWave(b: Brain): void {
+    b.resume = null;
     b.target = null;
     b.creeping = false;
     b.retreatFrom = null;

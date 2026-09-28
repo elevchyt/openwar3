@@ -1132,6 +1132,103 @@ is what keeps it cheap, since contact is asked of every unit in the world on eve
 almost everything fails it in O(1). `inContact` is pure and exported, and pinned by
 [`tools/ai-plus-army-test.cjs`](../tools/ai-plus-army-test.cjs) for the same reason `marching` is.
 
+### A won fight is the start of a PUSH, not the end of a wave
+
+Reported: *"when the enemy heroes are dead, the Computer+ AI that won the fight must attack their
+enemy's base"*. It did not, and the reason was the wave's own ending: a fight met in the field is
+aimed at a SPOT (`contactPass` sets the target to the enemy army's centre, `id` 0), reaching a
+spot with nothing standing there ends the wave, and `endWave` walks the army home to wait out
+`waveGap` — exactly the minute, with the loser's heroes in the altar queue, that a player spends
+in the other player's base.
+
+`victoryPass` now keeps, per fight, every enemy HERO it saw in contact and which of them it SAW go
+down (`noteHeroKills`: dead, or gone from the table, within `HERO_DOWN_SEEN` of being in our
+frame — a hero that walked out of sight and died elsewhere is not a fact this army learnt). Two
+things start the push (`pressOn`), and both hand the army straight to the loser's base:
+
+* **Their heroes are all down** (`heroesDown`) while what is left of their army weighs less than
+  ours — once per fight, and without waiting `WON_QUIET`. If the army is still aimed at the
+  field fight the press is only ARMED: the stragglers are finished first and `objectiveDone` then
+  carries the army on to the base. Re-aiming at the base mid-fight was tried and taken back out —
+  `contactPass` aimed it back at the stragglers the next pass, and the two flipped the objective
+  every half-second, re-pathing the whole army each time until the stall watchdog wrote it off.
+* **The fight is won** by the existing verdict (`wonAt`).
+
+The loser is the owner of most of the heroes it brought (`pressFoe`), and the base is chosen by
+`baseTarget` below. `Brain.press` stays up `PRESS_WINDOW` (60 s — about a hero's revive), during
+which a fallen objective hands the army on to that player's NEXT base rather than home. Refused
+from a creep camp, while retreating, and with the army under `WON_HEALTH`; a fight won in our own
+base is pressed too, but only once `defendPass` has let go — the verdict lands `WON_QUIET` after
+the last invader, and the defenders then walk out at the base that sent them (the counter-attack).
+
+### An assault razes the BASE, not the building it was aimed at
+
+The wave ended the moment its target building died, so an army that had fought its way into a
+base killed the Town Hall and walked home, leaving the Barracks, the Altar and every tower to
+rebuild from. `objectiveDone` replaces `endWave` at all three ways an objective ends (the target
+died, changed hands, or the spot is clear) and, while the army still holds
+`max(retreatHp, WON_HEALTH) + 0.1` of its hit points, takes in order: the next building of the same
+owner within `RAZE_SWEEP` (1600, a base's width — halls and towers counted a third nearer), the
+press's next base, and the base the wave was walking at when an army met it on the way
+(`Brain.resume` — `contactPass` used to overwrite that objective, so winning the skirmish sent the
+wave home). Only then home.
+
+### A fight is LOST when the other army outweighs ours — not when ours is nearly dead
+
+Reported: *"when a fight is being lost, the losing Computer+ AI player must fall back along with
+all of its units"*. `fightLost` only asked about OUR side — the group under 40 % of its hit points,
+or the hero under 20 % with the opposition still healthy — so an army that met one twice its size
+fought on until it was both, and there was then nothing left to walk home; and an assault whose
+hero had died fought on unconditionally (`heroLevel < 1` returned "not lost" for everything but a
+creep run). Now, against a PLAYER (`losingFight`): lost when the enemy in contact outweighs what
+we have standing by `LOSING_RATIO` (1.3) **and** the fight has already cost us `LOSING_BLED` (a
+fifth) of the power we brought into it — the second clause keeps "we met a bigger army" as
+`contactPass`'s decision and makes this one about a fight that is going the wrong way. A captain-
+less assault is lost whenever the opposition still outweighs it. The retreat itself was already
+the WHOLE squad — `retreating` re-orders every unit that is not home, whatever it was doing, and
+units still on their way to the fight are in the squad — so the fix is in noticing sooner.
+
+### It goes at the EXPANSION — and it goes and LOOKS for one
+
+Reported: *"more keen towards scouting for enemy expansions and choosing to attack the enemy's
+expansion instead of their main base most of the time (if an expansion exists)"*. Two faults sat
+under that. `AiPlayer.enemyExpansion` asks for a hall under our eyes **now** — so an expansion the
+scout walked past and turned away from was forgotten the moment the fog came back — and needs
+two such halls in view before it answers at all. And the scout made ONE tour, at a minute, which
+sees the enemy mains (map data anyway) long before anybody has expanded.
+
+* **Memory** (`noteHalls`, every army pass): every enemy hall, Haunted Gold Mine or Entangled Gold
+  Mine SEEN standing further than `START_HALL` from every start location is kept in `Brain.halls`
+  until we look at the spot again and it is gone. A building does not walk, and the game's own
+  fog keeps drawing it — this is the same knowledge, not a bypass.
+* **The choice** (`baseTarget`, pickTarget's rungs 2–3 and the press): a known expansion is taken
+  over the main with the difficulty's `expansionFirst` chance (Easy ½, Normal ¾, Insane 0.85),
+  halved when a tower stands over it. The MAIN is the hall at a start location
+  (`mainOf`), not `AiPlayer.enemyBase`'s "enemy hall nearest us", which is somebody's expansion
+  as often as a main; `anyBase` (that old rung, whole) is the last resort so a player whose main is
+  razed can still be finished.
+* **The sweep** (`sweepPass`): every `PlusProfile.sweepEvery` (Normal 120 s, Insane 75 s; Easy
+  never scouts) after the opening tour is home, the same scout machinery walks a worker round up
+  to `SWEEP_STOPS` mines (`sweepStops`): not a start location's own, not ours, not already known
+  taken, not looked at inside the period, and **not still guarded** — a live creep within
+  `SWEEP_GUARD` of a mine means nobody has taken it, which is also what keeps the worker out of the
+  camps. The nearest to an enemy start are kept and walked as a route. A sweep scout that dies does
+  not end sweeping (the opening tour's latch is about THAT walk) — the next one just waits twice as
+  long.
+
+### A channelled ULTIMATE is never interrupted by the army
+
+Reported: the Priestess of the Moon, the Keeper of the Grove and the Shadow Hunter cancelled their
+own ultimates *"to do things such as attack, move etc."* The caster and the belt already left a
+unit that is casting alone, but the ARMY passes did not — `commit` re-aims the whole squad, the
+hero included, every `REISSUE_PERIOD`, and cohesion stops a hero out in front — so a Starfall
+lasted until the next re-issue. `HELD_CHANNELS` (Starfall `AEsf`, Tranquility `AEtq`, Big Bad Voodoo
+`AOvd`, and the other channelled ultimates Death and Decay `AUdd`, Earthquake `AOeq`, Stampede
+`ANst`) is refused at `issue` and again at `drainOrders` — the one door every army order leaves
+through — whenever `SimWorld.holdsChannel` says the unit is in one. Not every channel: a Blizzard
+or a Drain is a short press a hero can give up to walk out of a lost fight. A Scroll of Town
+Portal still breaks one; that press is the belt's, and leaving is the decision there.
+
 ### A march goes ROUND the camps on the way
 
 The army's half of the arc the scout has always walked (`safeLeg`, and see [the scouting
@@ -2141,6 +2238,19 @@ anything else does), a hero holding a channel is left alone, and each item is tr
 `LOOT_GRAB_RETRY` (10 s), so a grab that fails is not re-issued every loot pass while the fight
 goes on — the step is taken once and never argued over, which is what keeps it from see-sawing the
 hero. Everything further than 50 still waits for the camp.
+
+### A spare potion goes to the hero that has none
+
+Reported: *"if a hero has more than one healing/mana potion, it must try and give one to a friendly
+hero that doesn't have one and has an empty inventory slot"*. The shopper is whoever is standing at
+the shop and a drop goes to whoever is nearest, so one hero collected three Potions of Healing and
+the other none. `PlusItems.share` compares the heroes' belts every `SHARE_PERIOD` (2 s): a hero
+holding two or more of a kind (`potionKind` — heal: `healSelf`/`healOther`/`replenish`; mana:
+`mana`/`manaRegen`; a Scroll of Healing is the army's and is neither) hands its LAST one to a hero
+within `SHARE_REACH` (1500) holding none of that kind with a free slot (`potionHandover`, pure and
+pinned in `tools/ai-plus-items-test.cjs`). It is the sim's own `giveitem` — the giver walks into
+`GiveItemRange` — so only our OWN heroes, as in the game, and never while either hero is in a
+fight (`underFire`): the walk replaces whatever the giver was doing.
 
 ### Obsidian Statues: one on life, one on mana
 

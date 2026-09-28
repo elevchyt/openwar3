@@ -1491,5 +1491,48 @@ function pawned(units, opts = {}) {
     pawned([belt(hero(), "clsd", "clsd")], { mayShop: false }), null);
 }
 
+// ==========================================================================================
+console.log("\n-- handing a spare potion over ----------------------------------------------");
+// ==========================================================================================
+
+// "If a hero has more than one healing/mana potion, it must try and give one to a friendly hero
+// that doesn't have one and has an empty inventory slot." The pure half first: who gives to whom.
+{
+  const { potionHandover, potionKind } = require(join(REPO, ".sim-build", "src", "ai", "plus", "items.js"));
+  const b = (heal, mana, free) => ({ heal, mana, free });
+  check("two heals and a hero with none: one goes over",
+    JSON.stringify(potionHandover([b(2, 0, 3), b(0, 0, 4)])), JSON.stringify({ from: 0, to: 1, kind: "heal" }));
+  check("one heal is not a spare", potionHandover([b(1, 0, 3), b(0, 0, 4)]), null);
+  check("…nor is it handed to a hero that already has one", potionHandover([b(3, 0, 3), b(1, 0, 4)]), null);
+  check("…nor to one with a full belt", potionHandover([b(2, 0, 3), b(0, 0, 0)]), null);
+  check("mana is shared the same way",
+    JSON.stringify(potionHandover([b(0, 0, 4), b(1, 2, 2)])), JSON.stringify({ from: 1, to: 0, kind: "mana" }));
+  check("a Scroll of Healing is not a potion", potionKind("healArea"), null);
+  check("a Healing Salve is", potionKind("healOther"), "heal");
+  check("a Clarity Potion is a mana potion", potionKind("manaRegen"), "mana");
+}
+// …and the pass, end to end: the order is the sim's own `giveitem`, from the LAST potion slot.
+{
+  const giver = belt(hero({ x: 4000, y: 4000 }), "phea", "phea", "stwp");
+  const taker = belt(hero({ x: 4300, y: 4000 }), "stwp");
+  pressed([giver, taker], PLUS_INSANE, AWAY);
+  const give = lastOrders.find((c) => c.c === "giveitem") ?? null;
+  check("a hero with two Potions of Healing hands one over", give && give.unitId, giver.id);
+  check("…to the hero with none", give && give.targetId, taker.id);
+  check("…the later of the two", give && give.slot, 1);
+}
+{
+  const giver = belt(hero({ x: 4000, y: 4000 }), "phea", "phea");
+  const taker = belt(hero({ x: 4300, y: 4000 }), "stwp");
+  pressed([giver, taker, enemy({ x: 4100, y: 4000 })], PLUS_INSANE, AWAY);
+  check("…but never in the middle of a fight", lastOrders.some((c) => c.c === "giveitem"), false);
+}
+{
+  const giver = belt(hero({ x: 4000, y: 4000 }), "phea", "phea");
+  const taker = belt(hero({ x: 9000, y: 4000 }), "stwp");
+  pressed([giver, taker], PLUS_INSANE, AWAY);
+  check("…nor across the map", lastOrders.some((c) => c.c === "giveitem"), false);
+}
+
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");
 process.exit(failed ? 1 : 0);

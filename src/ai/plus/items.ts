@@ -730,6 +730,48 @@ const JUNK = new Set<string>([
  *  it is the same errand and the same walk. */
 const PAWN_PERIOD = SHOP_PERIOD;
 
+/**
+ * SHARING A SPARE POTION — `share`. Both ours.
+ *
+ *  · `SHARE_PERIOD`: how often the belts are compared. A hand-over is a walk, and at most one is
+ *    started a look.
+ *  · `SHARE_REACH`: how far apart the two heroes may be. A hero crossing the map with a potion
+ *    is a hero out of its army; two heroes of one army are within this of each other whenever
+ *    it is together.
+ */
+const SHARE_PERIOD = 2;
+const SHARE_REACH = 1500;
+
+/** Which bar a potion refills — the two a hero is handed a spare of. A Scroll of Healing or
+ *  Restoration (`healArea`) is not a potion and is the whole army's, so it is not in either. */
+export type PotionKind = "heal" | "mana";
+export function potionKind(use: Use | null): PotionKind | null {
+  switch (use) {
+    case "healSelf": case "healOther": case "replenish": return "heal";
+    case "mana": case "manaRegen": return "mana";
+    default: return null;
+  }
+}
+
+/**
+ * Who hands a spare potion to whom: the first hero in `belts` holding TWO or more of a kind,
+ * and the first other hero holding NONE of it with a slot free. `belts[i]` is hero i's
+ * potions by kind and its free slots. Pure, for the test — `share` feeds it the real belts.
+ */
+export function potionHandover(
+  belts: ReadonlyArray<{ heal: number; mana: number; free: number }>,
+): { from: number; to: number; kind: PotionKind } | null {
+  for (const kind of ["heal", "mana"] as const) {
+    for (let from = 0; from < belts.length; from++) {
+      if (belts[from][kind] < 2) continue;
+      for (let to = 0; to < belts.length; to++) {
+        if (to !== from && belts[to][kind] === 0 && belts[to].free > 0) return { from, to, kind };
+      }
+    }
+  }
+  return null;
+}
+
 /** What `PlusItems` needs beyond the caster's view: the item rows, a shop's catalogue, and the
  *  purse. Everything else — legality, stock, ranges — is asked of the sim through `world`. */
 export interface ItemView extends CasterView {
@@ -803,6 +845,8 @@ export class PlusItems {
   private pendingGrabs = new Map<number, { heroId: number; due: number }>();
   /** …and when the belt was last looked over for duplicates worth pawning — see `pawn`. */
   private lastPawn = -Infinity;
+  /** …and the heroes' belts were last compared for a spare potion to hand over — see `share`. */
+  private lastShare = -Infinity;
   /** Has a Scroll of Town Portal ever been in this player's belt? Latched true and never
    *  cleared — spending one does not stop being a player who carries one. See `list`. */
   private hadPortal = false;
@@ -836,6 +880,7 @@ export class PlusItems {
       this.press(u, own, friends, foes, ctx);
     }
     this.loot(now, own, foes);
+    this.share(now, own, foes);
     // BEFORE the shopping, and deliberately: a belt with a dead slot in it is a belt the
     // shopper skips (`shopper` wants a free slot), so clearing the duplicate is what lets the
     // next row of the list be bought at all — and the sale pays a third of it.
@@ -868,6 +913,61 @@ export class PlusItems {
     for (const u of own) {
       if (!u.inventory.length || !this.canAct(u) || this.view.world.holdsChannel(u.id)) continue;
       this.press(u, own, friends, foes, ctx);
+    }
+  }
+
+  // ==========================================================================================
+  //  Handing a spare potion to a hero that has none
+  // ==========================================================================================
+
+  /**
+   * ONE HERO'S SPARE IS ANOTHER HERO'S FIRST.
+   *
+   * Reported: *"if a hero has more than one healing/mana potion, it must try and give one to a
+   * friendly hero that doesn't have one and has an empty inventory slot"*. The shopper is
+   * whoever is standing at the shop (`shopper`) and a drop goes to whoever is nearest (`loot`),
+   * so one hero ends up with three Potions of Healing and the other with none — and the one
+   * with none is the one that dies.
+   *
+   * The hand-over is the sim's own `giveitem`, the gesture a player makes by dragging the potion
+   * onto the other hero: the giver walks into `GiveItemRange` and the item changes belts. Only
+   * our OWN heroes — `giveitem` checks both ends' ownership, as the game does — and never in a
+   * fight: the walk is a `getitem` order, which replaces whatever the giver was doing, and a
+   * hero that leaves the line to deliver a potion has spent the fight on it. `underFire` is the
+   * reading every press on this file's ladder calls "this fight", asked of both heroes.
+   */
+  private share(now: number, own: SimUnit[], foes: SimUnit[]): void {
+    if (now - this.lastShare < SHARE_PERIOD) return;
+    this.lastShare = now;
+    const heroes = own.filter((u) => u.isHero && !u.isIllusion && u.inventory.length && this.canAct(u)
+      && !this.view.world.holdsChannel(u.id) && u.order !== "getitem" && !this.underFire(u, foes));
+    if (heroes.length < 2) return;
+    const belts = heroes.map((u) => {
+      const belt = { heal: 0, mana: 0, free: 0 };
+      for (const held of u.inventory) {
+        if (!held) { belt.free++; continue; }
+        const def = this.view.item(held.itemId);
+        const kind = def ? potionKind(this.useOf(def)) : null;
+        if (kind) belt[kind]++;
+      }
+      return belt;
+    });
+    for (let i = 0; i < heroes.length; i++) {
+      // Only heroes standing near THIS one are offered it: a hero across the map is not walked to.
+      const group = heroes.filter((o) => Math.hypot(o.x - heroes[i].x, o.y - heroes[i].y) <= SHARE_REACH);
+      const pick = potionHandover(group.map((o) => belts[heroes.indexOf(o)]));
+      if (!pick || group[pick.from] !== heroes[i]) continue;
+      const from = group[pick.from];
+      const to = group[pick.to];
+      // The LAST such potion in the belt is handed over, so the one the giver presses first
+      // (`press` walks the slots in order) stays where it is.
+      for (let slot = from.inventory.length - 1; slot >= 0; slot--) {
+        const held = from.inventory[slot];
+        const def = held ? this.view.item(held.itemId) : null;
+        if (!def || potionKind(this.useOf(def)) !== pick.kind) continue;
+        this.view.order({ c: "giveitem", unitId: from.id, slot, targetId: to.id });
+        return; // one hand-over a look
+      }
     }
   }
 

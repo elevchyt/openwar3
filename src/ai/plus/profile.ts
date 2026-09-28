@@ -215,6 +215,24 @@ export interface PlusProfile {
   /** Does it send an early scout? (Only matters for finding expansions — a melee player is
    *  handed every start location, see AiPlayer.knows.) */
   readonly scout: boolean;
+  /**
+   * Seconds between EXPANSION SWEEPS — a worker sent round the mines an opponent could have
+   * taken, after the opening tour is over (`ComputerPlusAi.sweepPass`). Infinity = it never
+   * looks again, which is Easy (it does not scout at all).
+   *
+   * The opening tour sees the enemy's MAIN, which every melee player is handed anyway; the one
+   * thing worth walking a worker across the map for later is the hall that went up somewhere
+   * the map promised nobody, and a player who has been here before checks the likely spots
+   * every couple of minutes. Ours.
+   */
+  readonly sweepEvery: number;
+  /**
+   * The chance a wave with a known enemy EXPANSION to go at picks it over the main base. An
+   * expansion is the soft target — a hall, a mine and few towers, a long walk for the defence —
+   * and trading an army for the main is how a computer loses one. "Most of the time", per the
+   * developer; ours.
+   */
+  readonly expansionFirst: number;
 
   // --- items (plus/items.ts) ----------------------------------------------------------------
   /**
@@ -304,7 +322,7 @@ export const PLUS_EASY: PlusProfile = {
   // …and it does NOT micro its wounded out of a fight — issue #124's Easy is a player who
   // gives an order and then watches it happen. `pullOutHp` 0 is that in one number.
   focusFire: false, pullOutHp: 0, creeps: false, creepAt: Infinity, creepFood: Infinity,
-  harass: false, scout: false,
+  harass: false, scout: false, sweepEvery: Infinity, expansionFirst: 0.5,
   shopping: 0, itemReserve: Infinity, keepPortal: false,
   concedeAfter: 24,
 };
@@ -344,7 +362,7 @@ export const PLUS_NORMAL: PlusProfile = {
   // It does not focus-fire, but it DOES pull a soldier out of the line at a quarter health —
   // the one piece of micro a player picks up long before they learn to focus a target.
   focusFire: false, pullOutHp: 0.25, creeps: true, creepAt: 150, creepFood: 10,
-  harass: false, scout: true,
+  harass: false, scout: true, sweepEvery: 120, expansionFirst: 0.75,
   // Two thirds of a belt, and it keeps 300 gold back for the build order. It DOES keep a Town
   // Portal and replace it: a scroll is the difference between losing a fight and losing an army,
   // and a player at this level has learnt that much.
@@ -385,7 +403,7 @@ export const PLUS_INSANE: PlusProfile = {
   // Creeping starts at ninety seconds with the hero and eight food — the ladder's own answer,
   // which is "as soon as the hero walks out of the altar".
   focusFire: true, pullOutHp: 0.25, creeps: true, creepAt: 90, creepFood: 8,
-  harass: true, scout: true,
+  harass: true, scout: true, sweepEvery: 75, expansionFirst: 0.85,
   // A full belt and a Town Portal on the hero. Both are what separates a player who has been
   // here before from one who has not.
   shopping: 6, itemReserve: 200, keepPortal: true,
