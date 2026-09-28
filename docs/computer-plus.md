@@ -390,6 +390,7 @@ Blizzard's unless a comment says otherwise) every value here is ours.
 | heroes | 1 | 2 | 3 |
 | hall tier | **1** | 3 | 3 |
 | upgrade rank | 1 | 2 | 3 |
+| animation-cancels | no | no | **yes** |
 | first attack | 7 min | 5 min | 2½ min |
 | army food that makes a wave | 10 | 14 | 16 |
 | **first creep camp** | **never** | 2½ min | 1½ min |
@@ -407,6 +408,14 @@ Blizzard's unless a comment says otherwise) every value here is ours.
 | misclicks a cast | 35 % | 15 % | never |
 | hero focus | 0.3 | 0.7 | 1 |
 | builds it can roll | tier-1 only | all of them | all of them |
+
+**Insane animation-cancels; the others play every animation out.** Every computer's unit, and
+every creep, stands a blow's backswing out before it chases (`SimWorld.holdsBackswing`), because
+the game's own AI never cuts a follow-through short. Insane plays like a skilled player instead:
+its seat is in `SimWorld.cancelsBackswing` (set in `startMeleeAIFor`), so its units move out of a
+swing the moment the blow has gone out and take their next order the tick a spell goes off rather
+than standing out `castBackswing`. It is not a cheat — both are the click any player makes to cut
+a recovery short.
 
 **Normal reaches tier 3.** It used to stop at a Keep, which is a bigger handicap than it reads
 as: `techTier` is also the filter on which *builds* may be rolled (`rollStrategy`), so a tier-2
@@ -2226,8 +2235,8 @@ is therefore skipped outright while anything that can fight back is within `LOOK
 still there in twenty seconds; the fight is not.
 
 **…except a drop at its FEET.** Both rules above are about the WALK — out of the fight, into a live
-camp — and a drop within `LOOT_GRAB` (**50**, the developer's own number) of a hero is no walk at
-all: it is less than a body's width, so it is picked up mid-fight and with the camp still
+camp — and a drop within `LOOT_GRAB` (**200**, the developer's own number — it was 50) of a hero is no walk at
+all: it is at most a step or two past the engine's own 150 reach (`PickupItemRange`), so it is picked up mid-fight and with the camp still
 standing. Not the instant it lands, though: the hero NOTICES it and bends for it a pause later,
 0.5–2 s (the developer's band, `lootGrabDelay`, off the item's and the hero's ids rather than
 `Math.random` so every client reproduces it), fired by `tickGrabs` on every AI step because the

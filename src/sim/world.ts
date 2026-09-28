@@ -3644,6 +3644,12 @@ export class SimWorld {
   /** The lobby's COMPUTER seats (`RtsController.setAiPlayers`). Their units play every blow's
    *  backswing out rather than moving out of it (holdsBackswing), as the game's AI does. */
   computerPlayers = new Set<number>();
+  /** Computer seats that ANIMATION-CANCEL like a skilled player — Computer+ on Insane
+   *  (`RtsController.startMeleeAIFor`). Their units move out of an attack's backswing the moment
+   *  the blow has gone out (holdsBackswing never holds them) and take their next order the tick
+   *  a spell goes off rather than standing out `castBackswing`. Nothing a person could not do
+   *  with a click: both are the order any player gives to cut a recovery short. */
+  readonly cancelsBackswing = new Set<number>();
   alliedPlayers: (ownerA: number, ownerB: number) => boolean | null = () => null;
   /**
    * Does `ownerA` hold its fire toward `ownerB`? (ALLIANCE_PASSIVE, granted BY A.)
@@ -14519,6 +14525,9 @@ export class SimWorld {
     // No channel → play the cast backswing recovery (0 = none). A channel holds
     // instead; there's no backswing after one.
     pc.backLeft = pc.channelLeft > 0 || NO_WINDUP.has(pc.code) || this.isFormToggle(def) ? 0 : u.castBackswing;
+    // An animation-cancelling seat (`cancelsBackswing`) gives its next order the tick the spell
+    // goes off, as a skilled player does — and a fresh order is exactly what ends a recovery.
+    if (this.cancelsBackswing.has(u.owner)) pc.backLeft = 0;
     if (u.moving) this.settle(u);
     if (pc.channelLeft <= 0 && pc.backLeft <= 0) this.endCast(u, pc); // instant, no recovery
   }
@@ -19644,7 +19653,7 @@ export class SimWorld {
    * out of the backswing is a player's technique, and the game leaves it to players.
    */
   private holdsBackswing(u: SimUnit): boolean {
-    if (u.backswingLeft <= 0) return false;
+    if (u.backswingLeft <= 0 || this.cancelsBackswing.has(u.owner)) return false;
     return (u.owner < 0 && !u.neutralPassive) || this.computerPlayers.has(u.owner);
   }
 

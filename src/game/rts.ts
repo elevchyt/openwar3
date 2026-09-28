@@ -1151,6 +1151,10 @@ export class RtsController {
       this.warnOncePlusOnCustom();
     } else if (seat.plus) {
       this.computerPlus?.add(player, race, seat.difficulty, seat.startX, seat.startY, this.meleeSeed);
+      // Insane Computer+ plays like a skilled player, and a skilled player ANIMATION-CANCELS:
+      // it moves out of a blow's backswing and gives its next order the tick a spell goes off
+      // (SimWorld.cancelsBackswing). Every other computer plays each animation out.
+      if (seat.difficulty === MELEE_INSANE) this.sim.cancelsBackswing.add(player);
       // …and no harvest bonus, at any difficulty. Computer+ does not cheat — see
       // docs/computer-plus.md and `AiPlayer.bypassFog`, which it also switches off.
       return;

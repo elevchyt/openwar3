@@ -887,7 +887,7 @@ console.log("\n-- what is on the ground ----------------------------------------
 {
   // …which is a reading of the HERO, not of the map: the same drop, the same fight, one hero
   // standing out of it.
-  const a = hero({ x: 2100 });
+  const a = hero({ x: 2400 });
   const b = hero();
   check("…while a hero out of it still goes",
     looted([a, b, enemy({ x: 300 })], { ground: [drop({ x: 2000 })] })?.unitId, a.id);
@@ -899,7 +899,7 @@ console.log("\n-- what is on the ground ----------------------------------------
 }
 {
   // THE ONE EXCEPTION (`LOOT_GRAB`): a drop at the hero's FEET is taken mid-fight, camp alive
-  // or not — the developer's own "within 50 units of one of its heroes". Reported: a creep dies
+  // or not — the developer's own "within 200 units of one of its heroes" (once 50). Reported: a creep dies
   // in the camp beside the hero that killed it, and the hero fought round its item until the
   // whole camp was down.
   // …after a PAUSE — the developer's "randomized delay between 0.5 and 2 seconds", off the two
@@ -925,10 +925,10 @@ console.log("\n-- what is on the ground ----------------------------------------
   const hC = hero();
   const itC = drop({ x: 40 });
   check("…unless the fight carried the hero away from it meanwhile",
-    looted([hC, enemy({ x: 200 })], { ground: [itC], wait: 2, between: () => { hC.x = 300; } }), null);
+    looted([hC, enemy({ x: 200 })], { ground: [itC], wait: 2, between: () => { hC.x = 400; } }), null);
   const h2 = hero();
   check("…but one a few steps off still waits for the camp",
-    looted([h2, enemy({ x: 200 })], { ground: [drop({ x: 120 })], wait: 2 }), null);
+    looted([h2, enemy({ x: 200 })], { ground: [drop({ x: 320 })], wait: 2 }), null);
   // …and the belt rule is the walk's: a full belt cannot take an ordinary item, however close.
   const full = belt(hero(), "phea", "phea", "phea", "phea", "phea", "phea");
   check("…a full belt is not sent at one", looted([full, enemy({ x: 200 })], { ground: [drop({ x: 30 })], wait: 2 }), null);

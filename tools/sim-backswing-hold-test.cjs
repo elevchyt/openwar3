@@ -103,6 +103,8 @@ console.log("backswing: the AI stands out the follow-through, a person may cut i
   const ai = chaseAfterBlow((w) => w.computerPlayers.add(1));
   check(`a computer's unit does not step before its 0.3s backswing is over (moved at ${ai.toFixed(2)}s)`, ai >= 0.3 - SIM_DT);
   check("…and then gives chase", ai >= 0 && ai < 0.6);
+  const insane = chaseAfterBlow((w) => { w.computerPlayers.add(1); w.cancelsBackswing.add(1); });
+  check(`…but an INSANE Computer+ unit animation-cancels: it chases at once (moved at ${insane.toFixed(2)}s)`, insane >= 0 && insane < 0.15);
   const human = chaseAfterBlow(() => {});
   check(`a person's unit chases at once (moved at ${human.toFixed(2)}s)`, human >= 0 && human < 0.15);
 }

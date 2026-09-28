@@ -606,13 +606,14 @@ const LOOT_DANGER = 700;
 /**
  * …EXCEPT A DROP AT THE HERO'S FEET, which is picked up whatever is going on — see `loot`.
  *
- * The developer's own number: an item "within 50 units of one of its heroes". That is less than a
- * hero's own collision radius plus the item's, so the walk is a step, not a trip: the hero does
- * not leave the fight, it bends down in it. Reported: a creep dies in the camp, drops its item
+ * The developer's own number: an item "within 200 units of one of its heroes" (raised from 50,
+ * which let a drop a stride away sit there the rest of the fight). The engine's own reach is
+ * `PickupItemRange` = 150 past the hero's radius, so from 200 the grab is at most a step or
+ * two: the hero does not leave the fight, it bends down in it. Reported: a creep dies in the camp, drops its item
  * beside the hero that killed it, and the hero fights on around it for the rest of the camp
  * before walking back for it — or, when the camp is the one that ends the party, never does.
  */
-const LOOT_GRAB = 50;
+const LOOT_GRAB = 200;
 /** How long a failed at-the-feet grab of one item is not tried again. OURS. The whole grab is a
  *  step, so a second try inside this is a hero bending over the same item every loot pass while
  *  the fight goes on around it — the see-saw the step exists to be too short for. */
@@ -1119,7 +1120,7 @@ export class PlusItems {
    * them any more — this needs no special case, it is just the same test.)
    *
    * With ONE exception, and it is a distance rather than a situation: a drop within `LOOT_GRAB`
-   * (50) of a hero is picked up at once, mid-fight and live camp or not, because at that range
+   * (200) of a hero is picked up at once, mid-fight and live camp or not, because at that range
    * there is no walk for either rule to be about. Everything further away still waits for the
    * camp — the developer's own line: "otherwise it's fine to wait until the camp is finished".
    *
