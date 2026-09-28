@@ -238,6 +238,18 @@ campaign chapters open with the same line. Ours is intercepted in `authorityHook
 seam where a gold mine is still a unit (`MINE_ID_BASE`), and lands in
 `SimWorld.issueEntangleInstant`.
 
+**A tree that roots to entangle roots ADJACENT to the rock** — "Must root adjacent to a gold mine
+to entangle it." (`Mustroottoentangle`). What "adjacent" means is written down once, in the same
+`MeleeStartingUnitsNightElf`: the opening Tree is projected 650 from the mine and clamped into
+`GetRectFromCircleBJ(mine, minTreeDist)`, `minTreeDist = 3.50 * bj_CELLWIDTH` — 448 per axis,
+which on Echo Isles stands it 590 from its rock against a Town Hall's 781. So `entangleSite` first
+takes the spot nearest the tree inside that square (`ENTANGLE_ADJACENT`, `adjacentSite`) and only
+falls back on a spot merely in `Rng1` when the square has nothing free. `HALL_MINE_DISTANCE` (768)
+is a rule about BUILDING a hall and still binds the build, which is why an expansion is two acts:
+build at 768, then walk in. Computer+ does exactly that — `entangleat` with `adjacent` uproots a
+planted tree that could entangle from where it stands (`AiPlayer.entangleMines(true)`); measured,
+its expansion Trees went from 770.7 to 452.5 from their mines.
+
 **An Ancient that pulls itself out of the ground lets the mine go.** The roots are the *Tree's*
 — `SimUnit.entangler` is the link, set when the building is raised — so uprooting a Tree of
 Life collapses its Entangled Gold Mine, turns the crew out (`unloadBurrow`, not a burial) and
