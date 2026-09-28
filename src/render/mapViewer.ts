@@ -14725,9 +14725,15 @@ export class MapViewerScene {
     if (!this.observer || !this.autoCam.enabled || !this.rts) return false;
     if (!this.userControl || this.scriptCam.active) return false;
     const want = this.autoCam.update(dt, { x: this.target[0], y: this.target[1] }, this.rts.simView.units.values(), this.simTick * SIM_DT);
-    if (want) {
+    if (want?.ride) {
+      // FOLLOWING: locked the way Ctrl+C locks (`rideLocked`) — the same spring, on the same
+      // game clock, so the two locks feel the same and a paused match holds the camera too.
+      this.easeFocusTo([want.x, want.y]);
+    } else if (want) {
+      // A pan or a cut: the auto camera's own curve, and the spring starts from rest after it.
       this.target[0] = want.x;
       this.target[1] = want.y;
+      this.followVel = [0, 0];
     }
     return true;
   }

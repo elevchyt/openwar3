@@ -143,6 +143,18 @@ console.log("\nit FOLLOWS the action it is watching between pans");
   drive(cam, focus, army, 2);
   drive(cam, focus, army, 8, () => { for (const u of army) u.x += 150 * DT; }); // marching east at 150/s
   check("a marching army is kept in view without a new pan", focus.x > 900, `x ${focus.x.toFixed(0)}, army at ${army[0].x.toFixed(0)}`);
+  // LOCKED, not eased: the point the camera is told to RIDE (the renderer puts it through
+  // Ctrl+C's own spring; this driver writes it straight) is the army's live centre. The whole
+  // army walks 150·DT a frame, so a camera locked on its centre
+  // walks exactly that too, every frame. An eased follow trailed it (90 units at 150/s for the
+  // old 0.6 s time constant) and moved by less than the army whenever it was catching up.
+  const lead = focus.x - army[0].x;
+  let worst = 0;
+  drive(cam, focus, army, 3, () => { for (const u of army) u.x += 150 * DT; });
+  const trace = drive(cam, focus, army, 2, () => { for (const u of army) u.x += 150 * DT; });
+  for (let i = 1; i < trace.length; i++) worst = Math.max(worst, Math.abs(trace[i].x - trace[i - 1].x - 150 * DT));
+  check("…and LOCKED on it: it moves exactly as the army does, frame for frame", worst < 1e-6, `worst ${worst.toExponential(1)}`);
+  check("…holding the same place in the army (no lag building up)", Math.abs(focus.x - army[0].x - lead) < 1e-6, `drift ${(focus.x - army[0].x - lead).toFixed(3)}`);
 }
 
 console.log("\nthe observer's own hand wins");

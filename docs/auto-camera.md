@@ -36,11 +36,17 @@ Nothing in the install says how the game's auto camera chooses, so every rule an
 - **It does not pan often.** After a pan it holds `MIN_HOLD` (7) seconds whatever starts up
   elsewhere — "there must be a delay between each pan even if the point of interest changes" —
   and a new spot must score `SWITCH_MARGIN` (1.35×) the one it is watching. Between pans it
-  FOLLOWS the action it is on (a slow ease, `FOLLOW_TAU`), which is the same point of interest
-  and not a new pan.
+  FOLLOWS the action it is on, which is the same point of interest and not a new pan. The
+  follow is LOCKED, not eased (the developer's call): the scan remembers which units a spot is
+  the centre of (`Spot.members`), and every frame the camera sits on their weighted centre where
+  they stand NOW, and RIDES it the way Ctrl+C's lock rides a unit (the answer carries `ride`,
+  and the renderer hands it to the same `easeFocusTo` spring, 45 ms, on the game clock). The old
+  0.6 s ease trailed a marching army, and locking to the scan's own centre instead would move in
+  half-second steps. A pan's end point tracks the same live centre, so the lock
+  does not jump when the pan lands.
 - **Brisk, and a CUT when far.** A pan is a smoothstep ease over `PAN_MIN`..`PAN_MAX`
   (0.45–1.1 s at `PAN_SPEED` 4500/s) by distance — halved from the first cut (0.9–2.4 s), which
-  was too floaty — and following eases at `FOLLOW_TAU` 0.6 s. A target further than
+  was too floaty. A target further than
   `SNAP_DISTANCE` (3000, the developer's figure) is cut to outright: gliding across the whole map
   shows nothing but empty ground.
 - **A melee opening is a TOUR of the bases.** At 0:00 nothing weighs anything — workers and

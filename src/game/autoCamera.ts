@@ -18,7 +18,11 @@
  *  • It does NOT PAN OFTEN. After a pan it holds for `MIN_HOLD` seconds whatever else starts
  *    up, and a new spot must beat the one it is on by `SWITCH_MARGIN`. Between pans it may
  *    FOLLOW the action it is watching — a fight drifting across the screen, an army marching —
- *    with a slow ease (`FOLLOW_TAU`); that is the same point of interest, not a new pan.
+ *    LOCKED to it: the live weighted centre of the units it chose, re-measured every frame and
+ *    ridden the way Ctrl+C's lock rides a unit (the renderer's `easeFocusTo` spring — the
+ *    answer says `ride`), rather than the slow ease it had, which trailed the army and read as
+ *    the camera drifting (the developer's call). That is the same point of interest, not a new
+ *    pan.
  *  • A pan is BRISK — an ease-in-out over a time that grows with the distance
  *    (`PAN_MIN`..`PAN_MAX`) — and a target further than `SNAP_DISTANCE` is CUT to rather than
  *    panned to: gliding across the whole map shows the observer nothing but empty ground.
@@ -74,8 +78,6 @@ export const SWITCH_MARGIN = 1.35;
 /** Seconds between two looks round the map. OURS: often enough to catch a fight starting,
  *  rarely enough that the scan is free. */
 export const SCAN_PERIOD = 0.5;
-/** Time constant of the ease that FOLLOWS the watched action between pans, in seconds. OURS. */
-export const FOLLOW_TAU = 0.6;
 /** Shortest and longest pan, seconds; in between the time grows with the distance at
  *  `PAN_SPEED` world units a second. OURS — halved from the first cut (0.9–2.4 s at 3000/s),
  *  which the developer found too floaty. */
@@ -99,6 +101,10 @@ interface Spot {
   score: number;
   /** Two or more PLAYERS are fighting here (what `CLASH_BONUS` rewards). */
   clash?: boolean;
+  /** The units this spot is the weighted centre of, so a follow can re-measure it EVERY FRAME
+   *  off where they stand now rather than off the last scan's half-second-old centre (which,
+   *  locked to, moved the camera in steps). None for a fixed spot — a base on the tour. */
+  members?: Array<{ id: number; w: number }>;
 }
 
 export class AutoCamera {
@@ -146,8 +152,9 @@ export class AutoCamera {
    * input this frame); the answer is the focus the auto camera wants, or null to leave it be.
    * `matchTime` is the match clock in seconds — what decides whether the opening tour is on.
    */
-  update(dt: number, focus: { x: number; y: number }, units: Iterable<AutoCamUnit>, matchTime = Infinity): { x: number; y: number } | null {
+  update(dt: number, focus: { x: number; y: number }, iter: Iterable<AutoCamUnit>, matchTime = Infinity): { x: number; y: number; ride?: boolean } | null {
     this.clock += dt;
+    const units = [...iter]; // read by the scan AND by the follow, and an iterator reads once
     if (!this.enabled) return null;
     // Moved by another hand since we last wrote: stand aside, and forget what we were doing —
     // the observer is looking at something, and when the grace runs out we look round afresh.
@@ -176,22 +183,26 @@ export class AutoCamera {
       this.scanLeft = SCAN_PERIOD;
       this.scan(focus, units, matchTime);
     }
-    let out: { x: number; y: number } | null = null;
+    let out: { x: number; y: number; ride?: boolean } | null = null;
+    const live = this.watch?.members?.length ? liveCentre(this.watch.members, units) : null;
     if (this.pan) {
       const p = this.pan;
+      // The pan lands on the action where it IS, not where it was when the pan began — or the
+      // lock would jump by however far the army walked during the pan.
+      if (live) { p.tx = live.x; p.ty = live.y; }
       p.t = Math.min(p.dur, p.t + dt);
       const k = p.dur > 0 ? p.t / p.dur : 1; // a zero-length pan is a CUT (SNAP_DISTANCE)
       const e = k * k * (3 - 2 * k); // smoothstep: eases out of the old spot and into the new one
       out = { x: p.fx + (p.tx - p.fx) * e, y: p.fy + (p.ty - p.fy) * e };
       if (p.t >= p.dur) this.pan = null;
     } else if (this.watch) {
-      // Follow the action being watched — a slow ease, not a pan.
-      const a = 1 - Math.exp(-dt / FOLLOW_TAU);
-      const x = focus.x + (this.watch.x - focus.x) * a;
-      const y = focus.y + (this.watch.y - focus.y) * a;
-      if (Math.hypot(x - focus.x, y - focus.y) > 0.01) out = { x, y };
+      // Follow the action being watched — LOCKED on it: `ride` asks the renderer to ride the
+      // point exactly as Ctrl+C rides a unit. A fixed spot (a base on the opening tour) has no
+      // members and simply holds.
+      const at = live ?? this.watch;
+      if (Math.hypot(at.x - focus.x, at.y - focus.y) > 0.01) out = { x: at.x, y: at.y, ride: true };
     }
-    this.wrote = out ?? this.wrote ?? { x: focus.x, y: focus.y };
+    this.wrote = out ? { x: out.x, y: out.y } : this.wrote ?? { x: focus.x, y: focus.y };
     return out;
   }
 
@@ -290,13 +301,15 @@ export class AutoCamera {
       else if (u.isPeon) w = fighting ? 1 : 0; // a raid on the mine, not the mining
       else w = 1;
       if (fighting) w *= FIGHT_WEIGHT;
-      if (w > 0) out.push({ x: u.x, y: u.y, w, owner: fighting && u.owner >= 0 ? u.owner : -1 });
+      if (w > 0) out.push({ id: u.id, x: u.x, y: u.y, w, owner: fighting && u.owner >= 0 ? u.owner : -1 });
     }
     return out;
   }
 }
 
 interface Weighed {
+  /** The unit this weight is, when there is one (a follow re-measures a spot off its members). */
+  id?: number;
   x: number;
   y: number;
   w: number;
@@ -308,8 +321,10 @@ interface Weighed {
 export function spotAround(units: ReadonlyArray<Weighed>, x: number, y: number): Spot | null {
   let sw = 0, sx = 0, sy = 0;
   const fighters = new Set<number>();
+  const members: Array<{ id: number; w: number }> = [];
   for (const u of units) {
     if (Math.hypot(u.x - x, u.y - y) > VIEW_RADIUS) continue;
+    if (u.id !== undefined) members.push({ id: u.id, w: u.w });
     sw += u.w;
     sx += u.x * u.w;
     sy += u.y * u.w;
@@ -317,7 +332,22 @@ export function spotAround(units: ReadonlyArray<Weighed>, x: number, y: number):
   }
   if (sw <= 0) return null;
   const clash = fighters.size >= 2;
-  return { x: sx / sw, y: sy / sw, score: sw * (clash ? CLASH_BONUS : 1), clash };
+  return { x: sx / sw, y: sy / sw, score: sw * (clash ? CLASH_BONUS : 1), clash, members };
+}
+
+/** Where a spot's members stand NOW, weighted as the scan weighed them; null once none of them
+ *  is left alive (the follow then holds the last centre until the next scan re-finds it). */
+function liveCentre(members: ReadonlyArray<{ id: number; w: number }>, units: ReadonlyArray<AutoCamUnit>): { x: number; y: number } | null {
+  const want = new Map(members.map((m) => [m.id, m.w]));
+  let sw = 0, sx = 0, sy = 0;
+  for (const u of units) {
+    const w = want.get(u.id);
+    if (w === undefined || u.hp <= 0) continue;
+    sw += w;
+    sx += u.x * w;
+    sy += u.y * w;
+  }
+  return sw > 0 ? { x: sx / sw, y: sy / sw } : null;
 }
 
 /** Each player's base, for the opening tour: the centre of their buildings and workers (at the
