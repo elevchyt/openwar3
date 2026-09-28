@@ -2677,7 +2677,7 @@ export class ComputerPlusAi {
     this.mixTalk(b, ctx);
     ai.runBuildLoop();
     ai.spendSkillPoints();
-    ai.entangleMines(); // the night elf's gold, which is a cast rather than a build order
+    ai.entangleMines(true); // the night elf's gold — walked in and rooted ADJACENT to the rock first
   }
 
   /**

@@ -812,6 +812,9 @@ export const MELEE = {
   CREEP_ITEM_DELAY: 0.5,
   /** `unitSpacing` in MeleeStartingUnits*: the grid step of the starting-worker clump. */
   MELEE_UNIT_SPACING: 64,
+  /** bj_CELLWIDTH — Blizzard.j's own "cell", the unit its melee start distances are stated in
+   *  (`MeleeStartingUnitsNightElf`'s `minTreeDist` = 3.50 cells, SimWorld `ENTANGLE_ADJACENT`). */
+  CELLWIDTH: 128,
   /** bj_UNIT_FACING — the facing every melee starting unit is created with (degrees). */
   UNIT_FACING: 270,
 

@@ -1182,7 +1182,7 @@ export type QueuedOrder =
   // PLANTS itself there, and casts Entangle (`Aent`) once its roots are down. Three acts, one
   // order, because that is what "work that mine" means for the one race whose town hall has
   // to be standing next to it. See SimUnit.entanglePending.
-  | { kind: "entangleat"; mineId: number };
+  | { kind: "entangleat"; mineId: number; adjacent?: boolean };
 
 /** Fallback length of a root/unroot transition, seconds — `Aroo`'s own `Dur1` when the data is
  *  there (2.5), which is also what Liquipedia lists as Root/Uproot's "Animation Duration". */
@@ -2750,6 +2750,22 @@ const MINE_TIME = 1.0; // seconds a worker spends inside the mine (Agld DataB)
  * (docs/undead.md), so there is no trip to shorten. See `tooCloseToMine`.
  */
 export const HALL_MINE_DISTANCE = 768;
+/**
+ * How near its gold mine a Tree of Life ROOTS when it roots in order to ENTANGLE it — per axis,
+ * a square around the mine's centre rather than a circle. The game's own refusal line is
+ * `Mustroottoentangle` = "Must root adjacent to a gold mine to entangle it.", and what "adjacent"
+ * means is written down exactly once, in `Blizzard.j`'s `MeleeStartingUnitsNightElf`: the
+ * opening Tree is projected 650 from the mine towards the start location and then CLAMPED into
+ * `GetRectFromCircleBJ(mine, minTreeDist)` with `minTreeDist = 3.50 * bj_CELLWIDTH` — which on
+ * Echo Isles stands it 590 from its rock against a Town Hall's 781. `HALL_MINE_DISTANCE` is a
+ * rule about CONSTRUCTING a hall and it still binds the build; this is the spot the roots go
+ * down on once a planted tree walks in (`entangleSite`).
+ */
+const ENTANGLE_ADJACENT = 3.5 * MELEE.CELLWIDTH;
+/** Is this spot inside the adjacent square round a mine (`ENTANGLE_ADJACENT`)? */
+function isAdjacent(mine: { x: number; y: number }, x: number, y: number): boolean {
+  return Math.abs(x - mine.x) <= ENTANGLE_ADJACENT && Math.abs(y - mine.y) <= ENTANGLE_ADJACENT;
+}
 /** How many times a gatherer that came to rest SHORT of its node re-issues the approach
  *  before parking where it stands (arriveAtNode). Small: two honest A* attempts per leg
  *  of the round trip beat both a fake arrival and a per-tick re-flood. */
@@ -6307,8 +6323,13 @@ export class SimWorld {
    *
    * `mineId` 0 = the nearest free mine inside Entangle's own range, which is what pressing the
    * button with no target means.
+   *
+   * `adjacent` asks a planted tree that COULD entangle from where it stands to walk in and root
+   * adjacent first (`ENTANGLE_ADJACENT`) — how Computer+ takes an expansion, because a hall may
+   * only be BUILT `HALL_MINE_DISTANCE` out, and a tree already standing adjacent (the melee
+   * opening's) entangles in place as before. Without it the order is a player's right-click.
    */
-  issueEntangleAt(id: number, mineId: number): boolean {
+  issueEntangleAt(id: number, mineId: number, adjacent = false): boolean {
     const u = this.units.get(id);
     if (!u || u.hp <= 0 || !this.abilities) return false;
     const ab = u.abilities.find((a) => a.code === "Aent" && a.level >= 1);
@@ -6332,8 +6353,13 @@ export class SimWorld {
     if (!u.uprooted) {
       if (this.holdsEntangledMine(u) || this.castLocked(u)) return false;
       // In reach from where it stands: throw the roots now, measured exactly as entangleMine
-      // and entangleSite measure it (hull to hull).
-      if (Math.hypot(mine.x - u.x, mine.y - u.y) - mine.radius - body <= range) return this.entangleMine(u, def, mine);
+      // and entangleSite measure it (hull to hull) — unless it was asked to root ADJACENT, is
+      // not, and there is an adjacent spot to root on (a tree with nowhere closer to go takes
+      // the mine from here, as it always has).
+      const inReach = Math.hypot(mine.x - u.x, mine.y - u.y) - mine.radius - body <= range;
+      if (inReach && (!adjacent || isAdjacent(mine, u.x, u.y) || !this.adjacentSite(u, mine, u.rootedStamp ?? u.pathStamp?.fp ?? null))) {
+        return this.entangleMine(u, def, mine);
+      }
       // Out of reach: pull up first. The walk waits for the transition (tickEntangleAt).
       if (!this.toggleRoot(u)) return false;
       u.entanglePending = mine.id;
@@ -6417,6 +6443,12 @@ export class SimWorld {
   private entangleSite(u: SimUnit, mine: SimMine, range: number): [number, number] | null {
     const fp = u.rootedStamp;
     if (!this.grid || !fp) return null;
+    // ADJACENT FIRST — "Must root adjacent to a gold mine to entangle it." A spot inside the
+    // square the melee opening roots its own tree in (`ENTANGLE_ADJACENT`), nearest the tree so
+    // it lands on the side it came from. Only when the rock has no such spot free (a crowded or
+    // cliff-bound mine) does the older search below pick one merely IN RANGE.
+    const close = this.adjacentSite(u, mine, fp);
+    if (close) return close;
     const grid = this.grid;
     const half = (Math.max(fp.w, fp.h) * PATHING_CELL) / 2;
     const body = this.entangleBody(u);
@@ -6455,6 +6487,36 @@ export class SimWorld {
         best = [sx, sy];
       }
     }
+    return best;
+  }
+
+  /**
+   * The spot NEAREST THIS TREE, inside the adjacent square round the mine (`ENTANGLE_ADJACENT`),
+   * that its rooted footprint fits on — or null. Walked on the BUILD grid the plant snaps to
+   * (`toggleRoot`), so every candidate is a spot the tree can actually go down on; the rock
+   * itself is kept out by the footprint test, since the mine stamps its own pathing.
+   */
+  private adjacentSite(u: SimUnit, mine: SimMine, fp: Footprint | null): [number, number] | null {
+    if (!this.grid || !fp) return null;
+    const grid = this.grid;
+    let best: [number, number] | null = null;
+    let bestD = Infinity;
+    // The tree's OWN stamp is still on the ground while it is planted, and a candidate that
+    // overlaps it would be refused by it — so a planted tree is asked about with its stamp
+    // lifted, once for the whole scan (the stamps are counted, so it goes back exactly).
+    const own = u.pathStamp;
+    if (own) unstampFootprint(grid, own.fp, own.x, own.y);
+    for (let dx = -ENTANGLE_ADJACENT; dx <= ENTANGLE_ADJACENT; dx += BUILD_CELL) {
+      for (let dy = -ENTANGLE_ADJACENT; dy <= ENTANGLE_ADJACENT; dy += BUILD_CELL) {
+        const [sx, sy] = grid.snapForBuildingRect(mine.x + dx, mine.y + dy, fp.w, fp.h);
+        if (!isAdjacent(mine, sx, sy)) continue;
+        const d = Math.hypot(sx - u.x, sy - u.y);
+        if (d >= bestD || !footprintBuildable(grid, fp, sx, sy)) continue;
+        bestD = d;
+        best = [sx, sy];
+      }
+    }
+    if (own) stampFootprint(grid, own.fp, own.x, own.y);
     return best;
   }
 
@@ -11067,7 +11129,7 @@ export class SimWorld {
       case "drink": return this.issueDrink(id, o.wellId);
       case "cast": return this.issueCast(id, o.code, o.targetId, o.x, o.y);
       case "rootat": return this.issueRootAt(id, o.x, o.y);
-      case "entangleat": return this.issueEntangleAt(id, o.mineId);
+      case "entangleat": return this.issueEntangleAt(id, o.mineId, o.adjacent);
     }
   }
 

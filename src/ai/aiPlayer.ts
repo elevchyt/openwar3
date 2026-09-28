@@ -2358,10 +2358,25 @@ export class AiPlayer {
    * a strategy decision at all: both the classic melee AI and Computer+ have to do it, and
    * they have to do it identically.
    */
-  entangleMines(): void {
+  entangleMines(adjacent = false): void {
     const world = this.host.world;
     for (const u of world.units.values()) {
-      if (u.owner !== this.player || u.hp <= 0 || !u.building || u.uprooted) continue;
+      if (u.owner !== this.player || u.hp <= 0) continue;
+      // …AND A TREE THAT WAS WALKING IN IS NEVER LEFT STANDING. The errand is dropped by the sim
+      // when the site is taken or the way is blocked (`tickEntangleAt`), which leaves an
+      // uprooted Tree of Life idle on the grass — and nothing else here plants a tree, so it
+      // would be a hall that never works again. It goes for the mine again, or roots where it
+      // stands if there is no mine left to go for. Nothing in Computer+ uproots a tree for any
+      // other reason, so an idle uprooted tree is always this.
+      if (adjacent && u.uprooted && u.abilities.some((a) => a.code === "Aent")) {
+        if (u.entanglePending || u.rootPending || u.moving || u.order !== "idle") continue;
+        const mine = world.entangleTarget(u);
+        this.order(mine && mine.gold > 0
+          ? { c: "order", unitId: u.id, order: { kind: "entangleat", mineId: mine.id, adjacent: true }, queued: false }
+          : { c: "order", unitId: u.id, order: { kind: "rootat", x: u.x, y: u.y }, queued: false });
+        continue;
+      }
+      if (!u.building || u.uprooted) continue;
       if (u.building.constructionLeft > 0) continue;
       if (!u.abilities.some((a) => a.code === "Aent")) continue;
       if (u.order === "cast") continue; // already throwing its roots — a re-issue restarts it
@@ -2371,6 +2386,15 @@ export class AiPlayer {
       // 500, a tree standing where the hall rule first allows it was never near its own mine.
       const mine = world.entangleTarget(u);
       if (!mine || mine.gold <= 0) continue;
+      // Computer+ walks the tree in first and roots ADJACENT to the rock, where the melee
+      // opening's own tree stands (SimWorld `ENTANGLE_ADJACENT`): a hall may only be BUILT
+      // `HALL_MINE_DISTANCE` out, so an expansion tree that entangled from where it was built
+      // stood ~180 further from its mine than the one at home. The order roots in place when
+      // it is already adjacent or there is nowhere closer to go.
+      if (adjacent) {
+        this.order({ c: "order", unitId: u.id, order: { kind: "entangleat", mineId: mine.id, adjacent: true }, queued: false });
+        continue;
+      }
       this.order({ c: "cast", unitId: u.id, code: "Aent", targetId: 0, x: 0, y: 0, queued: false });
     }
   }
