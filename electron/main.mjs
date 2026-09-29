@@ -74,8 +74,9 @@ app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 // RENDERER's V8 is told; a plain `--max-old-space-size` on the command line would only
 // reach the main process, which barely allocates.
 //
-// A 32-BIT build (the Windows installer carries one, build/installer.nsh) cannot have that: the
-// renderer's whole address space is 2 GiB, or 4 on 64-bit Windows, and a heap ceiling above what
+// A 32-BIT build (the Windows installer carries one, build/installer.nsh; the i386 AppImage is
+// another, docs/linux.md) cannot have that: the renderer's whole address space is 2 GiB, or 4 on
+// 64-bit Windows (3 on a 32-bit Linux kernel), and a heap ceiling above what
 // the process can map only moves the out-of-memory from V8's tidy report to a crash. 1536 MiB is
 // also ours, the most that leaves the GPU process and the decoded textures room beside it.
 const HEAP_MIB = process.arch === "ia32" ? 1536 : 4096;

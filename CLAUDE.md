@@ -199,6 +199,16 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   WARCRAFT III folder and installs into `<it>\OpenWar3`, and electron-builder's uninstaller is
   `RMDir /r $INSTDIR`, so `$INSTDIR` is kept off the game folder by three guards (after the
   directory page, in `.onInit` for silent installs, and in the uninstaller) — never remove one.
+- **Linux 32-bit:** read [`docs/linux.md`](docs/linux.md) before touching `electron/legacy/`,
+  `tools/build-legacy-main.mjs` or the `linux32` scripts. Electron stopped publishing
+  `linux-ia32` after **18.3.15**, so the i386 AppImage is that Electron (Chromium 100, Node 16)
+  running the SAME shell: `electron/legacy/compat.mjs` fills the gaps in front of `main.mjs`
+  (`protocol.handle`, `Response`, `Readable.toWeb`, `crypto`) and both are bundled to a CommonJS
+  `electron/main-legacy.cjs`, because an ES-module main script needs Electron 28. The updater
+  needs nothing: a 32-bit process asks for `latest-linux-ia32.yml`, which is what electron-builder
+  writes for that build. One trap is NOT an API: Chromium 100 leaves 1–1.6 GB of Oilpan garbage
+  through the menu load, which a 32-bit process dies of, so the legacy shell requests a collection
+  on growth (`HeapProfiler.collectGarbage` over `webContents.debugger`).
 - **Layout:** sim in `src/sim/` (world, pathing, `spells.ts`), game glue in `src/game/rts.ts`, rendering + command card
   in `src/render/mapViewer.ts`, HUD DOM in `src/ui/hud.ts`, data tables in `src/data/` (units, techtree, `abilities.ts`),
   audio in `src/audio/`, styles in `src/style.css`.

@@ -31,3 +31,6 @@ Warcraft III/
 release/
 build/
 .cdn-cache/
+
+# The 32-bit Linux build's bundled main process (tools/build-legacy-main.mjs → Electron 18, docs/linux.md)
+electron/main-legacy.cjs

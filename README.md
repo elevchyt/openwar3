@@ -55,6 +55,7 @@ Packaged builds:
 
 ```bash
 pnpm dist:linux    # release/OpenWar3-<version>.AppImage
+pnpm dist:linux32  # release/OpenWar3-<version>-i386.AppImage   (32-bit, on Electron 18)
 pnpm dist:win      # release/OpenWar3-Setup-<version>.exe   (one installer, 32- and 64-bit)
 pnpm dist:mac      # release/… .dmg
 ```
@@ -69,7 +70,8 @@ into an `OpenWar3` folder inside it without touching a file of the game's. The a
 game from where it sits and goes straight to the menu; the folder picker is still there if the
 game has moved. One installer carries both a 64-bit and a 32-bit build and installs the one your
 Windows runs — see [docs/windows.md](docs/windows.md), including why the Windows build is on
-Electron 43.
+Electron 43. The 32-bit AppImage is the one build on Electron 18, the last to publish 32-bit
+Linux at all — see [docs/linux.md](docs/linux.md).
 
 The desktop app **checks this repo's releases at launch** and asks, in the game's own message box,
 whether to fetch a newer version. Saying yes puts up the game's own load bar — a screen you cannot
@@ -82,6 +84,7 @@ To cut a release, tag the version in `package.json` and:
 ```bash
 GH_TOKEN=<a token with repo scope> pnpm release        # the platform you are on
 GH_TOKEN=<a token with repo scope> pnpm release:win    # the Windows installer (builds fine on Linux)
+GH_TOKEN=<a token with repo scope> pnpm release:linux32  # the 32-bit AppImage
 ```
 
 That builds and uploads the artifacts **plus the `latest-*.yml` beside them**, which is what the
