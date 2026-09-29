@@ -488,7 +488,7 @@ readable with the CASC reader, and nothing of theirs is committed.
 
 | for | files | status |
 |---|---|---|
-| Gargoyle Prioritize (`Aatp`, 1.32.9) — on / off, and the `Batp` buff | `BTNAirAttackOn`, `BTNAirAttackOff` + `DISBTN…` twins | in the chain on stand-ins (`BTNAttack`/`BTNCancel`) |
+| Gargoyle Prioritize (`Aatp`, 1.32.9) — on / off | `BTNAirAttackOn`, `BTNAirAttackOff` + `DISBTN…` twins | **done** — ours, in `src/patches/art/`; the button sits right of Patrol (1,1) |
 | the upgrade-indicator passives, in the game since 1.32.0 | `PASBTNDwarvenLongRifle`, `…AnimalWarTraining`, `…MarkOfFire`, `…HumanLumberUpgrade1/2`, `…Berserk`, `…HeadHunterBerserker`, `…ReinforcedBurrows`, `…SpikedBarricades`, `…ImprovedSpikedBarricades`, `…AdvancedSpikedBarricades`, `…GhoulFrenzy`, `…Shade`, `…SkeletonMage`, `…ImprovedBows`, `…Marksmanship`, `…WellSpring` + `DISPASBTN…` twins | NOT in the chain until they exist; the rows (15 `APai` abilities, the units' ability lists, three upgrade effects) are ready to add |
 
 `PASBTNAdvancedSpikedBarricades` is named by the data but absent even from a 2.0.4 install —

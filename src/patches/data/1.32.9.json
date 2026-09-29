@@ -10,125 +10,245 @@
     {
       "note": "Castle upgrade 40 gold cheaper (360 to 320)",
       "files": {
-        "Units\\UnitBalance.slk": { "hcas": { "goldcost": 1025 } }
+        "Units\\UnitBalance.slk": {
+          "hcas": {
+            "goldcost": 1025
+          }
+        }
       }
     },
     {
       "note": "Peasant hit points 230",
       "files": {
-        "Units\\UnitBalance.slk": { "hpea": { "HP": 230, "realHP": 230 } }
+        "Units\\UnitBalance.slk": {
+          "hpea": {
+            "HP": 230,
+            "realHP": 230
+          }
+        }
       }
     },
     {
       "note": "Militia hit points 230, kept level with the Peasant: not in the notes, but the 1.32.9 checkpoint has it and Liquipedia's 1.35.0 page raises Militia \"from 230\"",
       "source": "undocumented",
       "files": {
-        "Units\\UnitBalance.slk": { "hmil": { "HP": 230, "realHP": 230 } }
+        "Units\\UnitBalance.slk": {
+          "hmil": {
+            "HP": 230,
+            "realHP": 230
+          }
+        }
       }
     },
     {
       "note": "Thunder Clap damage 60/110/150",
       "files": {
-        "Units\\AbilityData.slk": { "AHtc": { "DataA2": 110, "DataA3": 150 } }
+        "Units\\AbilityData.slk": {
+          "AHtc": {
+            "DataA2": 110,
+            "DataA3": 150
+          }
+        }
       }
     },
     {
       "note": "Rifleman attack cooldown back to 1.35",
       "files": {
-        "Units\\UnitWeapons.slk": { "hrif": { "cool1": 1.35, "DPS": 15.5555555555556 } }
+        "Units\\UnitWeapons.slk": {
+          "hrif": {
+            "cool1": 1.35,
+            "DPS": 15.5555555555556
+          }
+        }
       }
     },
     {
       "note": "Spell Breaker armour 2",
       "files": {
-        "Units\\UnitBalance.slk": { "hspt": { "def": 2, "realdef": 2 } }
+        "Units\\UnitBalance.slk": {
+          "hspt": {
+            "def": 2,
+            "realdef": 2
+          }
+        }
       }
     },
     {
       "note": "Sorceress Slow: movement speed reduction 55 %",
       "files": {
-        "Units\\AbilityData.slk": { "Aslo": { "DataA1": 0.55 } }
+        "Units\\AbilityData.slk": {
+          "Aslo": {
+            "DataA1": 0.55
+          }
+        }
       }
     },
     {
       "note": "Siege Engine experience bounty 60 to 85: the unit (and its Barrage twin) is level 4 (both are 4 in the 1.32.9 checkpoint; 1.32.10 drops the twin back to 3)",
       "files": {
-        "Units\\UnitBalance.slk": { "hmtt": { "level": 4 }, "hrtt": { "level": 4 } }
+        "Units\\UnitBalance.slk": {
+          "hmtt": {
+            "level": 4
+          },
+          "hrtt": {
+            "level": 4
+          }
+        }
       }
     },
     {
       "note": "Great Hall, Stronghold and Fortress provide 11 food",
       "files": {
-        "Units\\UnitBalance.slk": { "ogre": { "fmade": 11 }, "ostr": { "fmade": 11 }, "ofrt": { "fmade": 11 } }
+        "Units\\UnitBalance.slk": {
+          "ogre": {
+            "fmade": 11
+          },
+          "ostr": {
+            "fmade": 11
+          },
+          "ofrt": {
+            "fmade": 11
+          }
+        }
       }
     },
     {
       "note": "Mirror Image mana cost 80",
       "files": {
-        "Units\\AbilityData.slk": { "AOmi": { "Cost1": 80, "Cost2": 80, "Cost3": 80, "Cost4": 80 } }
+        "Units\\AbilityData.slk": {
+          "AOmi": {
+            "Cost1": 80,
+            "Cost2": 80,
+            "Cost3": 80,
+            "Cost4": 80
+          }
+        }
       }
     },
     {
       "note": "War Stomp stun on heroes 2/2.5/3 s",
       "files": {
-        "Units\\AbilityData.slk": { "AOws": { "HeroDur2": 2.5, "HeroDur3": 3 } }
+        "Units\\AbilityData.slk": {
+          "AOws": {
+            "HeroDur2": 2.5,
+            "HeroDur3": 3
+          }
+        }
       }
     },
     {
       "note": "Shockwave mana cost 90",
       "files": {
-        "Units\\AbilityData.slk": { "AOsh": { "Cost1": 90, "Cost2": 90, "Cost3": 90 } }
+        "Units\\AbilityData.slk": {
+          "AOsh": {
+            "Cost1": 90,
+            "Cost2": 90,
+            "Cost3": 90
+          }
+        }
       }
     },
     {
       "note": "Spirit Tower and Nerubian Tower repair time 45",
       "files": {
-        "Units\\UnitBalance.slk": { "uzg1": { "reptm": 45 }, "uzg2": { "reptm": 45 } }
+        "Units\\UnitBalance.slk": {
+          "uzg1": {
+            "reptm": 45
+          },
+          "uzg2": {
+            "reptm": 45
+          }
+        }
       }
     },
     {
       "note": "Unholy Aura movement bonus 10/17.5/25 %",
       "files": {
-        "Units\\AbilityData.slk": { "AUau": { "DataA2": 0.175, "DataA3": 0.25 } }
+        "Units\\AbilityData.slk": {
+          "AUau": {
+            "DataA2": 0.175,
+            "DataA3": 0.25
+          }
+        }
       }
     },
     {
       "note": "Carrion Beetles level 2/3 hit points 300/440 (burrowed forms too)",
       "files": {
         "Units\\UnitBalance.slk": {
-          "ucs2": { "HP": 300, "realHP": 300 },
-          "ucsB": { "HP": 300, "realHP": 300 },
-          "ucs3": { "HP": 440, "realHP": 440 },
-          "ucsC": { "HP": 440, "realHP": 440 }
+          "ucs2": {
+            "HP": 300,
+            "realHP": 300
+          },
+          "ucsB": {
+            "HP": 300,
+            "realHP": 300
+          },
+          "ucs3": {
+            "HP": 440,
+            "realHP": 440
+          },
+          "ucsC": {
+            "HP": 440,
+            "realHP": 440
+          }
         }
       }
     },
     {
       "note": "Carrion Beetles move at 280 (all levels)",
       "files": {
-        "Units\\UnitBalance.slk": { "ucs1": { "spd": 280 }, "ucs2": { "spd": 280 }, "ucs3": { "spd": 280 } }
+        "Units\\UnitBalance.slk": {
+          "ucs1": {
+            "spd": 280
+          },
+          "ucs2": {
+            "spd": 280
+          },
+          "ucs3": {
+            "spd": 280
+          }
+        }
       }
     },
     {
       "note": "Carrion Beetle Burrow needs the Burrow research",
       "files": {
-        "Units\\UndeadAbilityFunc.txt": { "Abu2": { "Requires": "Rubu" }, "Abu3": { "Requires": "Rubu" } }
+        "Units\\UndeadAbilityFunc.txt": {
+          "Abu2": {
+            "Requires": "Rubu"
+          },
+          "Abu3": {
+            "Requires": "Rubu"
+          }
+        }
       }
     },
     {
       "note": "Carrion Beetle level 2 collision size 32 (burrowed form too)",
       "files": {
-        "Units\\UnitBalance.slk": { "ucs2": { "collision": 32 }, "ucsB": { "collision": 32 } }
+        "Units\\UnitBalance.slk": {
+          "ucs2": {
+            "collision": 32
+          },
+          "ucsB": {
+            "collision": 32
+          }
+        }
       }
     },
     {
       "note": "Destroyer cast point 0.66",
       "files": {
-        "Units\\UnitWeapons.slk": { "ubsp": { "castpt": 0.66 } }
+        "Units\\UnitWeapons.slk": {
+          "ubsp": {
+            "castpt": 0.66
+          }
+        }
       }
     },
     {
-      "note": "Gargoyle gains Prioritize, a toggle to engage air units first (new ability Aatp)",
+      "note": "Gargoyle gains Prioritize, a stance that engages enemy flying units first (new ability Aatp). Its icons are the live game's paths (our own art); its card slot, right of Patrol (1,1), is the live game's though no table states one; the order pair is ours, the tables name none",
       "files": {
         "Units\\AbilityData.slk": {
           "Aatp": {
@@ -166,10 +286,12 @@
         },
         "Units\\UndeadAbilityFunc.txt": {
           "Aatp": {
-            "Art": "ReplaceableTextures\\CommandButtons\\BTNAttack.blp",
-            "Unart": "ReplaceableTextures\\CommandButtons\\BTNCancel.blp",
-            "Buttonpos": "1,2",
-            "Unbuttonpos": "1,2"
+            "Art": "ReplaceableTextures\\CommandButtons\\BTNAirAttackOn.blp",
+            "Unart": "ReplaceableTextures\\CommandButtons\\BTNAirAttackOff.blp",
+            "Buttonpos": "1,1",
+            "Unbuttonpos": "1,1",
+            "Order": "prioritize",
+            "Unorder": "unprioritize"
           }
         },
         "Units\\UndeadAbilityStrings.txt": {
@@ -183,87 +305,258 @@
             "Unhotkey": "R"
           }
         },
-        "Units\\UnitAbilities.slk": { "ugar": { "abilList": "Astn,Aatp" } }
-      }
+        "Units\\UnitAbilities.slk": {
+          "ugar": {
+            "abilList": "Astn,Aatp"
+          }
+        }
+      },
+      "art": [
+        "ReplaceableTextures\\CommandButtons\\BTNAirAttackOn.blp",
+        "ReplaceableTextures\\CommandButtons\\BTNAirAttackOff.blp",
+        "ReplaceableTextures\\CommandButtonsDisabled\\DISBTNAirAttackOn.blp",
+        "ReplaceableTextures\\CommandButtonsDisabled\\DISBTNAirAttackOff.blp"
+      ]
     },
     {
       "note": "Unholy Frenzy drains 2 hit points per second",
       "files": {
-        "Units\\AbilityData.slk": { "Auhf": { "DataB1": 2 } }
+        "Units\\AbilityData.slk": {
+          "Auhf": {
+            "DataB1": 2
+          }
+        }
       }
     },
     {
       "note": "Rod of Necromancy cooldown 26 s",
       "files": {
-        "Units\\AbilityData.slk": { "AIrd": { "Cool1": 26 } }
+        "Units\\AbilityData.slk": {
+          "AIrd": {
+            "Cool1": 26
+          }
+        }
       }
     },
     {
       "note": "Wisp Detonate drains 40 mana",
       "files": {
-        "Units\\AbilityData.slk": { "Adtn": { "DataA1": 40 } }
+        "Units\\AbilityData.slk": {
+          "Adtn": {
+            "DataA1": 40
+          }
+        }
       }
     },
     {
       "note": "Archer hit points 255",
       "files": {
-        "Units\\UnitBalance.slk": { "earc": { "HP": 255, "realHP": 255 } }
+        "Units\\UnitBalance.slk": {
+          "earc": {
+            "HP": 255,
+            "realHP": 255
+          }
+        }
       }
     },
     {
       "note": "Hippogryph Rider hit points 780",
       "files": {
-        "Units\\UnitBalance.slk": { "ehpr": { "HP": 780, "realHP": 780 } }
+        "Units\\UnitBalance.slk": {
+          "ehpr": {
+            "HP": 780,
+            "realHP": 780
+          }
+        }
       }
     },
     {
       "note": "Druid of the Claw (bear form) base damage 25",
       "files": {
         "Units\\UnitWeapons.slk": {
-          "edcm": { "dmgplus1": 25, "mindmg1": 26, "avgdmg1": 28.5, "maxdmg1": 31, "DPS": 19 }
+          "edcm": {
+            "dmgplus1": 25,
+            "mindmg1": 26,
+            "avgdmg1": 28.5,
+            "maxdmg1": 31,
+            "DPS": 19
+          }
         }
       }
     },
     {
       "note": "Chimaera splash no longer hurts friendly units",
       "files": {
-        "Units\\UnitWeapons.slk": { "echm": { "splashTargs2": "ground,debris,enemy" } }
+        "Units\\UnitWeapons.slk": {
+          "echm": {
+            "splashTargs2": "ground,debris,enemy"
+          }
+        }
       }
     },
     {
       "note": "Pit Lord Rain of Fire level 1 cast range 700",
       "files": {
-        "Units\\AbilityData.slk": { "ANrf": { "Rng1": 700 } }
+        "Units\\AbilityData.slk": {
+          "ANrf": {
+            "Rng1": 700
+          }
+        }
       }
     },
     {
       "note": "Helm of Valor, Medallion of Courage and Hood of Cunning give +5 to each stat (new abilities AIa5/AIs5/AIi5)",
       "files": {
         "Units\\AbilityData.slk": {
-          "AIa5": { "$base": "AIa4", "comments": "Agility bonus +5", "DataA1": 5 },
-          "AIs5": { "$base": "AIs4", "comments": "Strength bonus +5", "DataC1": 5 },
-          "AIi5": { "$base": "AIi4", "comments": "Intelligence bonus +5", "DataB1": 5 }
+          "AIa5": {
+            "$base": "AIa4",
+            "comments": "Agility bonus +5",
+            "DataA1": 5
+          },
+          "AIs5": {
+            "$base": "AIs4",
+            "comments": "Strength bonus +5",
+            "DataC1": 5
+          },
+          "AIi5": {
+            "$base": "AIi4",
+            "comments": "Intelligence bonus +5",
+            "DataB1": 5
+          }
         },
         "Units\\ItemAbilityStrings.txt": {
-          "AIa5": { "$base": "AIa4", "EditorSuffix": "(+5 Agility)" },
-          "AIs5": { "$base": "AIs4", "EditorSuffix": "(+5 Strength)" },
-          "AIi5": { "$base": "AIi4", "EditorSuffix": "(+5 Intelligence)" }
+          "AIa5": {
+            "$base": "AIa4",
+            "EditorSuffix": "(+5 Agility)"
+          },
+          "AIs5": {
+            "$base": "AIs4",
+            "EditorSuffix": "(+5 Strength)"
+          },
+          "AIi5": {
+            "$base": "AIi4",
+            "EditorSuffix": "(+5 Intelligence)"
+          }
         },
         "Units\\AbilityMetaData.slk": {
-          "Iagi": { "useSpecific": { "replace": [["AIa4,AIa6", "AIa4,AIa5,AIa6"], ["AIs4,AIs6", "AIs4,AIs5,AIs6"], ["AIi4,AIi6", "AIi4,AIi5,AIi6"]] } },
-          "Iint": { "useSpecific": { "replace": [["AIa4,AIa6", "AIa4,AIa5,AIa6"], ["AIs4,AIs6", "AIs4,AIs5,AIs6"], ["AIi4,AIi6", "AIi4,AIi5,AIi6"]] } },
-          "Istr": { "useSpecific": { "replace": [["AIa4,AIa6", "AIa4,AIa5,AIa6"], ["AIs4,AIs6", "AIs4,AIs5,AIs6"], ["AIi4,AIi6", "AIi4,AIi5,AIi6"]] } },
-          "Ihid": { "useSpecific": { "replace": [["AIa4,AIa6", "AIa4,AIa5,AIa6"], ["AIs4,AIs6", "AIs4,AIs5,AIs6"], ["AIi4,AIi6", "AIi4,AIi5,AIi6"]] } }
+          "Iagi": {
+            "useSpecific": {
+              "replace": [
+                [
+                  "AIa4,AIa6",
+                  "AIa4,AIa5,AIa6"
+                ],
+                [
+                  "AIs4,AIs6",
+                  "AIs4,AIs5,AIs6"
+                ],
+                [
+                  "AIi4,AIi6",
+                  "AIi4,AIi5,AIi6"
+                ]
+              ]
+            }
+          },
+          "Iint": {
+            "useSpecific": {
+              "replace": [
+                [
+                  "AIa4,AIa6",
+                  "AIa4,AIa5,AIa6"
+                ],
+                [
+                  "AIs4,AIs6",
+                  "AIs4,AIs5,AIs6"
+                ],
+                [
+                  "AIi4,AIi6",
+                  "AIi4,AIi5,AIi6"
+                ]
+              ]
+            }
+          },
+          "Istr": {
+            "useSpecific": {
+              "replace": [
+                [
+                  "AIa4,AIa6",
+                  "AIa4,AIa5,AIa6"
+                ],
+                [
+                  "AIs4,AIs6",
+                  "AIs4,AIs5,AIs6"
+                ],
+                [
+                  "AIi4,AIi6",
+                  "AIi4,AIi5,AIi6"
+                ]
+              ]
+            }
+          },
+          "Ihid": {
+            "useSpecific": {
+              "replace": [
+                [
+                  "AIa4,AIa6",
+                  "AIa4,AIa5,AIa6"
+                ],
+                [
+                  "AIs4,AIs6",
+                  "AIs4,AIs5,AIs6"
+                ],
+                [
+                  "AIi4,AIi6",
+                  "AIi4,AIi5,AIi6"
+                ]
+              ]
+            }
+          }
         },
         "Units\\ItemData.slk": {
-          "hval": { "abilList": "AIs5,AIa5", "cooldownID": "AIs5" },
-          "mcou": { "abilList": "AIs5,AIi5", "cooldownID": "AIs5" },
-          "hcun": { "abilList": "AIa5,AIi5", "cooldownID": "AIa5" }
+          "hval": {
+            "abilList": "AIs5,AIa5",
+            "cooldownID": "AIs5"
+          },
+          "mcou": {
+            "abilList": "AIs5,AIi5",
+            "cooldownID": "AIs5"
+          },
+          "hcun": {
+            "abilList": "AIa5,AIi5",
+            "cooldownID": "AIa5"
+          }
         },
         "Units\\ItemStrings.txt": {
-          "hval": { "Ubertip": { "replace": [["by 4 when", "by 5 when"]] } },
-          "mcou": { "Ubertip": { "replace": [["by 4 when", "by 5 when"]] } },
-          "hcun": { "Ubertip": { "replace": [["by 4 when", "by 5 when"]] } }
+          "hval": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "by 4 when",
+                  "by 5 when"
+                ]
+              ]
+            }
+          },
+          "mcou": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "by 4 when",
+                  "by 5 when"
+                ]
+              ]
+            }
+          },
+          "hcun": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "by 4 when",
+                  "by 5 when"
+                ]
+              ]
+            }
+          }
         }
       }
     },
@@ -272,10 +565,50 @@
       "source": "undocumented",
       "files": {
         "Units\\AbilityMetaData.slk": {
-          "Iagi": { "useSpecific": { "replace": [["AIa4,AIa5", "AIa4,,AIa5"], ["AIx2,AIs1", "AIx2,AIx3,AIx4,AIs1"]] } },
-          "Iint": { "useSpecific": { "replace": [["AIx2,AIs1", "AIx2,AIx3,AIx4,AIs1"]] } },
-          "Istr": { "useSpecific": { "replace": [["AIx2,AIs1", "AIx2,AIx3,AIx4,AIs1"]] } },
-          "Ihid": { "useSpecific": { "replace": [["AIx2,AIs1", "AIx2,AIx3,AIx4,AIs1"]] } }
+          "Iagi": {
+            "useSpecific": {
+              "replace": [
+                [
+                  "AIa4,AIa5",
+                  "AIa4,,AIa5"
+                ],
+                [
+                  "AIx2,AIs1",
+                  "AIx2,AIx3,AIx4,AIs1"
+                ]
+              ]
+            }
+          },
+          "Iint": {
+            "useSpecific": {
+              "replace": [
+                [
+                  "AIx2,AIs1",
+                  "AIx2,AIx3,AIx4,AIs1"
+                ]
+              ]
+            }
+          },
+          "Istr": {
+            "useSpecific": {
+              "replace": [
+                [
+                  "AIx2,AIs1",
+                  "AIx2,AIx3,AIx4,AIs1"
+                ]
+              ]
+            }
+          },
+          "Ihid": {
+            "useSpecific": {
+              "replace": [
+                [
+                  "AIx2,AIs1",
+                  "AIx2,AIx3,AIx4,AIs1"
+                ]
+              ]
+            }
+          }
         }
       }
     },
@@ -284,12 +617,20 @@
       "source": "undocumented",
       "files": {
         "Units\\UnitBalance.slk": {
-          "uabo": { "upgrades": "Ruar,Rume,Rupc,Rupm,Rguv,Ruac" },
-          "ugho": { "upgrades": "Ruar,Rume,Rugf,Rupm,Rguv,Ruac" },
-          "echm": { "reptm": 60 }
+          "uabo": {
+            "upgrades": "Ruar,Rume,Rupc,Rupm,Rguv,Ruac"
+          },
+          "ugho": {
+            "upgrades": "Ruar,Rume,Rugf,Rupm,Rguv,Ruac"
+          },
+          "echm": {
+            "reptm": 60
+          }
         },
         "Units\\UndeadUnitFunc.txt": {
-          "usep": { "Researches": "Ruwb,Rugf,Rusf,Rubu,Ruac" }
+          "usep": {
+            "Researches": "Ruwb,Rugf,Rusf,Rubu,Ruac"
+          }
         }
       }
     },
@@ -298,21 +639,60 @@
       "source": "undocumented",
       "files": {
         "Units\\AbilityData.slk": {
-          "AHtc": { "DataE1": 0, "DataE2": 0, "DataE3": 0, "DataE4": 1400 },
-          "ACfn": { "DataE1": 400 }
+          "AHtc": {
+            "DataE1": 0,
+            "DataE2": 0,
+            "DataE3": 0,
+            "DataE4": 1400
+          },
+          "ACfn": {
+            "DataE1": 400
+          }
         }
       }
     },
     {
       "note": "Claws of Attack +6 becomes Claws of Attack +5",
       "files": {
-        "Units\\ItemData.slk": { "rat6": { "abilList": "AItj" } },
+        "Units\\ItemData.slk": {
+          "rat6": {
+            "abilList": "AItj"
+          }
+        },
         "Units\\ItemStrings.txt": {
           "rat6": {
-            "Name": { "replace": [["+6", "+5"]] },
-            "Tip": { "replace": [["+6", "+5"]] },
-            "Ubertip": { "replace": [["by 6 when", "by 5 when"]] },
-            "Description": { "replace": [["by 6.", "by 5."]] }
+            "Name": {
+              "replace": [
+                [
+                  "+6",
+                  "+5"
+                ]
+              ]
+            },
+            "Tip": {
+              "replace": [
+                [
+                  "+6",
+                  "+5"
+                ]
+              ]
+            },
+            "Ubertip": {
+              "replace": [
+                [
+                  "by 6 when",
+                  "by 5 when"
+                ]
+              ]
+            },
+            "Description": {
+              "replace": [
+                [
+                  "by 6.",
+                  "by 5."
+                ]
+              ]
+            }
           }
         }
       }
@@ -320,13 +700,21 @@
     {
       "note": "Tome of Retraining costs 200 gold",
       "files": {
-        "Units\\ItemData.slk": { "tret": { "goldcost": 200 } }
+        "Units\\ItemData.slk": {
+          "tret": {
+            "goldcost": 200
+          }
+        }
       }
     },
     {
       "note": "Wand of the Wind has 2 charges",
       "files": {
-        "Units\\ItemData.slk": { "wcyc": { "uses": 2 } }
+        "Units\\ItemData.slk": {
+          "wcyc": {
+            "uses": 2
+          }
+        }
       }
     }
   ],
@@ -334,7 +722,7 @@
     {
       "key": "gargoyle-prioritize-air",
       "note": "Prioritize (Aatp) toggled on: a Gargoyle's automatic targeting prefers enemy air units over ground ones; an explicit attack order still wins",
-      "implemented": false
+      "implemented": true
     }
   ]
 }

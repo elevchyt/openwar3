@@ -18559,6 +18559,18 @@ export class SimWorld {
     // once he is in the fight). A committed swing still lands first — the strike is already
     // in flight.
     if (!u.attackOrdered && u.swingLeft < 0 && this.tickAutocast(u)) return;
+    // PRIORITIZE's second half (prioritizesAir): a fight the unit picked ITSELF on the ground
+    // gives way to a flyer that comes into acquisition reach. Asked four times a second, on a
+    // clock staggered by unit id and derived from the sim's own time (no state, so it stays
+    // deterministic), rather than every step for every Gargoyle in a brawl.
+    if (!u.attackOrdered && u.swingLeft < 0 && this.prioritizesAir(u)) {
+      const cur = u.targetId !== null ? this.units.get(u.targetId) : undefined;
+      const off = (u.id % 16) / 64;
+      if (cur && !cur.flying && Math.floor((this.elapsed + off) * 4) !== Math.floor((this.elapsed - dt + off) * 4)) {
+        const air = this.acquireTarget(u, this.acquireRange(u), false, true);
+        if (air && this.issueAttack(u.id, air.id)) return;
+      }
+    }
     // An AUTO-acquired fight ends the moment the target stops being an enemy — ally a player
     // mid-battle in WC3 and the shooting stops. Only the unit's OWN idea of a fight, never an
     // ORDERED attack: "attack THAT one" is the player overriding alliance, which is what a
@@ -24824,7 +24836,13 @@ export class SimWorld {
    *  team — WC3 units never aggro a target hidden in the fog of war — and (b) not
    *  an un-triggered neutral-hostile creep camp: you only pull a camp by attacking
    *  it or walking into its own aggro range, never by an idle unit noticing it. */
-  private acquireTarget(u: SimUnit, range: number, strikeOnly = false): SimUnit | null {
+  private acquireTarget(u: SimUnit, range: number, strikeOnly = false, airOnly = false): SimUnit | null {
+    // A Gargoyle on PRIORITIZE takes the nearest enemy FLYER in reach before anything on the
+    // ground (prioritizesAir) — and whatever it would have taken anyway when there is none.
+    if (!airOnly && this.prioritizesAir(u)) {
+      const air = this.acquireTarget(u, range, strikeOnly, true);
+      if (air) return air;
+    }
     let best: SimUnit | null = null;
     let bestGap = range;
     // A siege unit does not pick what it cannot shoot: an enemy inside its minimum range is
@@ -24834,6 +24852,7 @@ export class SimWorld {
     for (const t of this.units.values()) {
       if (t === u) continue;
       if (distSkip(u, t, bestGap)) continue; // the cheapest thing there is to know — see nearestEnemy
+      if (airOnly && !t.flying) continue;
       if (!this.hostile(u, t)) continue;
       if (t.invulnerable) continue; // invulnerable enemies (goblin merchant, gold mine, Divine Shield, …) aren't attackable (issue #26)
       if (t.isCreep && !this.creepAggroed(t)) continue; // don't wake an idle creep camp
@@ -24848,6 +24867,20 @@ export class SimWorld {
       best = t;
     }
     return best;
+  }
+
+  /**
+   * PRIORITIZE (`Aatp`, the Gargoyle's, 1.32.9 — src/patches/): switched on, the unit "engages
+   * enemy flying units first unless ordered otherwise" (the ability's own Ubertip in the live
+   * tables). Two halves: the pick (acquireTarget takes a flyer first) and the switch (tickAttack
+   * leaves a ground target it picked ITSELF for a flyer that comes into reach). An ORDERED
+   * attack is the "unless": the stance never re-decides what the player pointed at. The flag is
+   * the stance's own autocast bit — the Defend shape (KNOWN_ABILITIES) — and, like Defend, it
+   * does nothing before its row's `Requires` is met (the stock row has none).
+   */
+  private prioritizesAir(u: SimUnit): boolean {
+    for (const ab of u.abilities) if (ab.code === "Aatp" && ab.autocastOn && ab.level >= 1) return this.techMeets(u.owner, ab.id);
+    return false;
   }
 
   /** Assist fallback for an idle unit with no enemy in its own acquisition range: rally to

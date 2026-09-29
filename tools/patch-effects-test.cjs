@@ -188,6 +188,27 @@ console.log("\nthe Orb of Slow's own slow (AIno, code Aosl) slows on the Sorcere
   check("the target is slowed 55% move / 25% attack for 10 s", slow && [slow.value, slow.value2, slow.timeLeft], [0.55, 0.25, 10]);
 }
 
+console.log("\nPrioritize (Aatp): a Gargoyle on the stance takes a flyer before a closer ground unit");
+{
+  world = newWorld();
+  // Target visibility and weapon reach are not what is under test here.
+  world.canSee = () => true;
+  world.canAttack = () => true;
+  const garg = unit({ typeId: "ugar", flying: true, abilities: [{ id: "Aatp", code: "Aatp", level: 1, cooldownLeft: 0, autocastOn: false }] });
+  const ground = unit({ owner: 1, team: 1, x: 1100, prevX: 1100, race: "human" });
+  const flyer = unit({ owner: 1, team: 1, x: 1400, prevX: 1400, flying: true, race: "human" });
+  check("off: the nearest enemy, on the ground", world.acquireTarget(garg, 800)?.id, ground.id);
+  garg.abilities[0].autocastOn = true;
+  check("on: the flyer, though it is farther", world.acquireTarget(garg, 800)?.id, flyer.id);
+  flyer.x = flyer.prevX = 3000;
+  check("on, with no flyer in reach: the ground unit after all", world.acquireTarget(garg, 800)?.id, ground.id);
+  check("the stance is a code the engine implements (it survives the spawn)", !!KNOWN_ABILITIES.Aatp, true);
+  const def = abilities.get("Aatp");
+  check("…on the card right of Patrol, with our icons", [def?.buttonX, def?.buttonY, def?.icon, def?.unIcon],
+    [1, 1, "ReplaceableTextures\\CommandButtons\\BTNAirAttackOn.blp", "ReplaceableTextures\\CommandButtons\\BTNAirAttackOff.blp"]);
+  check("…as a stance (an order pair), so the card flips its face", !!def?.unOrder, true);
+}
+
 if (failed) {
   console.error(`\npatches in play: ${failed} check(s) FAILED`);
   process.exit(1);

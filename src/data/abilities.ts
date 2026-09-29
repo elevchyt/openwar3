@@ -755,6 +755,9 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   // not have until the patch chain adds them.
   AIdg: { target: "unit" }, // Ritual Dagger (1.31.0) — sacrifice a friendly unit, heal around it
   Aaab: { target: "passive" }, // Sundering Blades (1.31.0) — more damage to one armour class (SimWorld.armorClassBonus)
+  // Prioritize (1.32.9, the Gargoyle): a STANCE like Defend — on/off, its `Unart` shown while
+  // on — so it rides the same flag. SimWorld.prioritizesAir is what the stance changes.
+  Aatp: { target: "none", autocast: true },
   Aosl: { target: "unit" }, // Slow, the Orb of Slow's own (`AIno`, 2.0.2) — Aslo's row shape
   AIdc: { target: "unit" }, // Wand of Neutralization — a CHAIN, so it starts on a unit
   AIil: { target: "unit" }, // Wand of Illusion — "a double of the targeted unit"
