@@ -1,4 +1,5 @@
 import { isRoc, mapDataSet } from "./edition";
+import { onPatchLevelChange, patchLevel, patchedMiscGame } from "../patches";
 import { ArmorType, AttackType } from "./enums";
 
 // WC3's "Gameplay Constants" — the numbers the engine reads out of two INI files
@@ -396,7 +397,30 @@ export function miscGame<K extends keyof typeof MISC_GAME>(key: K): (typeof MISC
   if (own !== undefined) return own;
   if (mapDataSet() === "custom" && key in MISC_GAME_CUSTOM) return MISC_GAME_CUSTOM[key as keyof typeof MISC_GAME_CUSTOM];
   if (isRoc() && key in MISC_GAME_V0) return MISC_GAME_V0[key as keyof typeof MISC_GAME_V0];
-  return MISC_GAME[key];
+  const patched = mapDataSet() === "melee" ? patchValue(key, MISC_GAME[key]) : undefined;
+  return patched !== undefined ? patched : MISC_GAME[key];
+}
+
+// --- The game's later patches (src/patches/, docs/patches.md) --------------------------------
+//
+// `MISC_GAME` is 1.30.4's file, compiled in and checked against the install by `pnpm
+// data:verify` — so a row a later patch moved (1.35.0's `ReviveTimeFactor` 0.65 → 0.6, 2.0.3's
+// Piercing against Heavy armour) cannot arrive through the VFS the way a unit row does. It is
+// read here instead, out of the same patch edit PatchDataSource lays over the file, and only on
+// the corner the patches touch: The Frozen Throne's MELEE tables (the two branches above answer
+// Reign of Chaos and a custom map first, and neither was ever rebalanced).
+
+const patchParsed = new Map<string, Shaped | null>();
+onPatchLevelChange(() => patchParsed.clear());
+
+function patchValue(key: string, base: unknown): Shaped | undefined {
+  let v = patchParsed.get(key);
+  if (v === undefined) {
+    const raw = patchedMiscGame(key);
+    v = raw === undefined ? null : parseLike(raw, base);
+    patchParsed.set(key, v);
+  }
+  return v ?? undefined;
 }
 
 /** `Units\MiscData.txt`'s row `key` for this match — the MAP's own value when its
@@ -913,12 +937,12 @@ export const DAMAGE_TABLE_CUSTOM: DamageTable = unpackDamageTable(MISC_GAME_CUST
  *  (data/edition.ts). */
 export function damageTable(): DamageTable {
   const base = isRoc() ? DAMAGE_TABLE_V0 : mapDataSet() === "custom" ? DAMAGE_TABLE_CUSTOM : DAMAGE_TABLE; // RoC states the same five rows in both its copies
-  if (!mapStatesAny(DAMAGE_ROWS)) return base;
+  if (!mapStatesAny(DAMAGE_ROWS) && (isRoc() || mapDataSet() === "custom" || !patchStatesAny(DAMAGE_ROWS))) return base;
   // A MAP that restates a DamageBonus row (war3mapMisc.txt — Balanced Hero Survival rewrites
   // all five) grades every blow by its own table. Built from the rows `miscGame` answers, so
   // each row the map left alone still comes from the data set's copy; rebuilt only when the
   // overlay or the data set changes.
-  const key = `${overlayEpoch}:${isRoc() ? "v0" : "v1"}:${mapDataSet()}`;
+  const key = `${overlayEpoch}:${isRoc() ? "v0" : "v1"}:${mapDataSet()}:${patchLevel()}`;
   if (mapTable?.key !== key) {
     mapTable = { key, table: unpackDamageTable(Object.fromEntries(DAMAGE_ROWS.map((r) => [r, miscGame(r as keyof typeof MISC_GAME)]))) };
   }
@@ -926,6 +950,10 @@ export function damageTable(): DamageTable {
 }
 const DAMAGE_ROWS = ["DamageBonusNormal", "DamageBonusPierce", "DamageBonusSiege", "DamageBonusMagic", "DamageBonusChaos", "DamageBonusSpells", "DamageBonusHero"];
 let mapTable: { key: string; table: DamageTable } | null = null;
+/** Does the active patch chain move any of these rows? */
+function patchStatesAny(keys: readonly string[]): boolean {
+  return keys.some((k) => patchValue(k, MISC_GAME[k as keyof typeof MISC_GAME]) !== undefined);
+}
 /** Does the map's overlay state any of these rows? */
 function mapStatesAny(keys: readonly string[]): boolean {
   return !!mapStated && keys.some((k) => mapValue(k, MISC_GAME[k as keyof typeof MISC_GAME]) !== undefined);

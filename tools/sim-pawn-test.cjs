@@ -17,6 +17,11 @@ const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { SimWorld } = require(join(REPO, ".sim-build", "src", "sim", "world.js"));
 const { PathingGrid } = require(join(REPO, ".sim-build", "src", "sim", "pathing.js"));
+const { setPatchLevel, BASE_PATCH } = require(join(REPO, ".sim-build", "src", "patches", "index.js"));
+// The numbers below are 1.30.4's 0.50. 1.32.10 raised the rate to 0.60 (src/patches/, the live
+// melee tables only), which is a fact about the patch chain, not about pawnItem() — so this
+// file reads the install's own rate. tools/patch-effects-test.cjs is where the chain is checked.
+setPatchLevel(BASE_PATCH);
 
 // Only the ability's CODE is read here — canPawnAt() asks "does this building carry Apit?".
 const ability = (id) => ({

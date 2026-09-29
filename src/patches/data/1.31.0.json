@@ -1,0 +1,1082 @@
+{
+  "patch": "1.31.0",
+  "build": 12071,
+  "released": "2019-05-28",
+  "notes": [
+    "https://us.forums.blizzard.com/en/warcraft3/t/1-31-0-patch-notes/5721",
+    "https://liquipedia.net/warcraft/Patch_1.31.0"
+  ],
+  "changes": [
+    {
+      "note": "Wind Walk cooldown 2 s at every level, and it starts when the invisibility breaks (new Owk5 flag in DataE)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AOwk": {
+            "Cool1": 2,
+            "Cool2": 2,
+            "Cool3": 2,
+            "Cool4": 2,
+            "DataE1": 1,
+            "DataE2": 1,
+            "DataE3": 1,
+            "DataE4": 1
+          }
+        }
+      }
+    },
+    {
+      "note": "Critical Strike multiplies all of the attack's damage again, not only the base damage (Ocr6 off)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AOcr": {
+            "DataF1": 0,
+            "DataF2": 0,
+            "DataF3": 0,
+            "DataF4": 0
+          }
+        },
+        "Units\\OrcAbilityStrings.txt": {
+          "AOcr": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "times base damage",
+                  "times normal damage"
+                ]
+              ]
+            },
+            "Researchubertip": {
+              "replace": [
+                [
+                  "times base damage",
+                  "times normal damage"
+                ]
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "note": "Tauren start with a level-1 Pulverize of 20 damage; the research now raises it to level 2 (60 damage)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Awar": {
+            "levels": 2,
+            "DataB1": 20,
+            "targs2": "ground,enemy,neutral",
+            "Cast2": 0,
+            "Dur2": 0,
+            "HeroDur2": 0,
+            "Cool2": 0,
+            "Cost2": 0,
+            "DataA2": 25,
+            "DataB2": 60,
+            "DataC2": 250,
+            "DataD2": 350
+          }
+        },
+        "Units\\OrcAbilityFunc.txt": {
+          "Awar": {
+            "Requires": null
+          }
+        },
+        "Units\\OrcAbilityStrings.txt": {
+          "Awar": {
+            "Tip": "Pulverize,Improved Pulverize",
+            "Ubertip": {
+              "replace": [
+                [
+                  "nearby units.\"",
+                  "nearby units.\",\"Upgraded: each attack has a <Awar,DataA2>% chance to strike the units around the Tauren for <Awar,DataB2> damage.\""
+                ]
+              ]
+            }
+          }
+        },
+        "Units\\UpgradeData.slk": {
+          "Rows": {
+            "effect1": "rlev",
+            "base1": 1,
+            "mod1": 1,
+            "code1": "Awar"
+          }
+        },
+        "Units\\OrcUpgradeStrings.txt": {
+          "Rows": {
+            "Name": "Upgrade Pulverize",
+            "Tip": "Upgrade |cffffcc00P|rulverize",
+            "Ubertip": "\"Strengthens the Tauren's Pulverize so that it deals <Awar,DataB2> damage to the units around them.\""
+          }
+        }
+      }
+    },
+    {
+      "note": "Upgrade Pulverize costs 225 lumber (was 250)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Rows": {
+            "lumberbase": 225
+          }
+        }
+      }
+    },
+    {
+      "note": "Spiked Barricades has two levels: 5 damage plus 20 %, then 5 plus 50 % of the attacker's damage (new rspp effect)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Rosp": {
+            "maxlevel": 2,
+            "mod1": 0,
+            "effect2": "rspp",
+            "base2": 0.2,
+            "mod2": 0.3
+          }
+        },
+        "Units\\OrcUpgradeStrings.txt": {
+          "Rosp": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "Deals <Rosp,base1> damage per attack.",
+                  "Deals <Rosp,base1> damage per attack, and returns <Rosp,base2,%>% of the blow's own damage as well."
+                ],
+                [
+                  "Increases the amount of damage inflicted on melee attackers by <Rosp,mod1>.",
+                  "Raises the share of the blow returned to melee attackers by a further <Rosp,mod2,%>%."
+                ]
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "note": "New Barracks research Sundering Blades (100/100, 40 s; Castle, Lumber Mill, Blacksmith): Knights deal 15 % more damage to Medium armour",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Rhsb": {
+            "$base": "Rhfc",
+            "comments": "human sundering blades",
+            "lumberbase": 100
+          }
+        },
+        "Units\\HumanUpgradeFunc.txt": {
+          "Rhsb": {
+            "Art": "ReplaceableTextures\\CommandButtons\\BTNSunderingBlades.blp",
+            "Buttonpos": "2,1",
+            "Requires": "hlum,hcas,hbla"
+          }
+        },
+        "Units\\HumanUpgradeStrings.txt": {
+          "Rhsb": {
+            "Name": "Sundering Blades",
+            "Tip": "Research Sundering |cffffcc00B|rlades",
+            "Ubertip": "\"Hones the Knights' swords so that they deal <Ahsb,DataB1,%>% more damage to units with Medium armor.\"",
+            "Hotkey": "B"
+          }
+        },
+        "Units\\AbilityData.slk": {
+          "Ahsb": {
+            "$base": "ACce",
+            "code": "Aaab",
+            "comments": "Sundering Blades",
+            "race": "human",
+            "Area1": 0,
+            "DataA1": 0,
+            "DataB1": 0.15,
+            "DataC1": 1,
+            "InBeta": 1
+          }
+        },
+        "Units\\HumanAbilityFunc.txt": {
+          "Ahsb": {
+            "Art": "ReplaceableTextures\\PassiveButtons\\PASBTNSunderingBlades.blp",
+            "Buttonpos": "0,2",
+            "Requires": "Rhsb"
+          }
+        },
+        "Units\\HumanAbilityStrings.txt": {
+          "Ahsb": {
+            "Name": "Sundering Blades",
+            "Tip": "Sundering Blades",
+            "Ubertip": "\"This unit deals <Ahsb,DataB1,%>% extra damage to enemies with Medium armor.\""
+          }
+        },
+        "Units\\HumanUnitFunc.txt": {
+          "hbar": {
+            "Researches": "Rhde,Rhan,Rhri,Rhsb"
+          }
+        },
+        "Units\\UnitAbilities.slk": {
+          "hkni": {
+            "abilList": "Aihn,Ahsb"
+          }
+        },
+        "Units\\UnitBalance.slk": {
+          "hkni": {
+            "upgrades": "Rhar,Rhme,Rhan,Rhpm,Rguv,Rhsb"
+          }
+        },
+        "Units\\HumanUnitStrings.txt": {
+          "hkni": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "Can learn Animal War Training.",
+                  "Can learn Animal War Training and Sundering Blades."
+                ]
+              ]
+            }
+          }
+        }
+      },
+      "art": [
+        "ReplaceableTextures\\CommandButtons\\BTNSunderingBlades.blp",
+        "ReplaceableTextures\\CommandButtonsDisabled\\DISBTNSunderingBlades.blp",
+        "ReplaceableTextures\\PassiveButtons\\PASBTNSunderingBlades.blp",
+        "ReplaceableTextures\\CommandButtonsDisabled\\DISPASBTNSunderingBlades.blp"
+      ]
+    },
+    {
+      "note": "Paladin: an orb's air attack is no longer slower than his ground attack (weapon 2 cooldown 2.2 -> 2)",
+      "files": {
+        "Units\\UnitWeapons.slk": {
+          "Hpal": {
+            "cool2": 2
+          }
+        }
+      }
+    },
+    {
+      "note": "Knight +50 hit points (835 -> 885)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "hkni": {
+            "HP": 885,
+            "realHP": 885
+          }
+        }
+      }
+    },
+    {
+      "note": "Gryphon Rider +50 hit points (825 -> 875)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "hgry": {
+            "HP": 875,
+            "realHP": 875
+          }
+        }
+      }
+    },
+    {
+      "note": "Dragonhawk Rider +50 hit points (575 -> 625)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "hdhw": {
+            "HP": 625,
+            "realHP": 625
+          }
+        }
+      }
+    },
+    {
+      "note": "Animal War Training gives +100 hit points (was 150)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Rhan": {
+            "base1": 100
+          }
+        }
+      }
+    },
+    {
+      "note": "Animal War Training costs 125 lumber (was 175)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Rhan": {
+            "lumberbase": 125
+          }
+        }
+      }
+    },
+    {
+      "note": "Control Magic costs 45 % of the summon's hit points in mana (was 35 %)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Acmg": {
+            "DataB1": 0.45
+          }
+        }
+      }
+    },
+    {
+      "note": "Orb of Fire becomes a new orb ability: +7 damage, no splash, struck units heal and regenerate 35 % less for 3 s",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIf2": {
+            "$base": "AIfb",
+            "code": "AIhu",
+            "comments": "Orb of Fire v2",
+            "version": 1,
+            "Dur1": 3,
+            "HeroDur1": 3,
+            "Area1": "-",
+            "DataA1": 7,
+            "DataB1": 0.65
+          }
+        },
+        "Units\\ItemAbilityFunc.txt": {
+          "AIf2": {
+            "$base": "AIfb"
+          }
+        },
+        "Units\\ItemAbilityStrings.txt": {
+          "AIf2": {
+            "Name": "Orb of Fire (Heal Reduction)"
+          }
+        },
+        "Units\\ItemData.slk": {
+          "ofir": {
+            "abilList": "AIf2",
+            "cooldownID": "AIf2"
+          }
+        },
+        "Units\\ItemStrings.txt": {
+          "ofir": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "<AIfb,DataA1>",
+                  "<AIf2,DataA1>"
+                ],
+                [
+                  " and do splash damage to nearby enemy units.",
+                  ", and a unit they strike has its healing and regeneration cut by 35% for <AIf2,Dur1> seconds."
+                ]
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "note": "Ultravision on the Mountain Giant, the Spirit of Vengeance and the Avatar of Vengeance",
+      "files": {
+        "Units\\UnitAbilities.slk": {
+          "emtg": {
+            "abilList": "Atau,Agra,Arsk,Assk,Aien,Ault"
+          },
+          "espv": {
+            "abilList": "ACmi,Asp1,ACrk,Avng,Ault"
+          },
+          "even": {
+            "abilList": "Avul,Ault"
+          }
+        },
+        "Units\\UnitBalance.slk": {
+          "espv": {
+            "upgrades": "Reuv"
+          },
+          "even": {
+            "upgrades": "Reuv"
+          }
+        }
+      }
+    },
+    {
+      "note": "Mana Burn costs 50 mana at every level (was 60)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEmb": {
+            "Cost1": 50,
+            "Cost2": 50,
+            "Cost3": 50,
+            "Cost4": 50
+          }
+        }
+      }
+    },
+    {
+      "note": "Druid of the Claw bear form base damage 22 -> 23",
+      "files": {
+        "Units\\UnitWeapons.slk": {
+          "edcm": {
+            "dmgplus1": 23,
+            "mindmg1": 24,
+            "avgdmg1": 26.5,
+            "maxdmg1": 29,
+            "DPS": 17.6666666666667
+          }
+        }
+      }
+    },
+    {
+      "note": "Vorpal Blades: the upgraded glaive flies at 2000 (was 1400), can miss, and splashes in a circle instead of a line",
+      "files": {
+        "Units\\NightElfUnitFunc.txt": {
+          "ebal": {
+            "Missilespeed": "1400,2000"
+          }
+        },
+        "Units\\UnitWeapons.slk": {
+          "ebal": {
+            "weapTp1": "artillery",
+            "weapTp2": "artillery"
+          }
+        },
+        "Units\\UpgradeData.slk": {
+          "Repb": {
+            "effect1": "_",
+            "base1": "-"
+          }
+        },
+        "Units\\NightElfUpgradeStrings.txt": {
+          "Repb": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "strike through initial ground targets and damage those behind",
+                  "fly faster"
+                ]
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "note": "Hippogryph Rider 785 hit points (was 780)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ehpr": {
+            "HP": 785,
+            "realHP": 785
+          }
+        }
+      }
+    },
+    {
+      "note": "Keeper of the Grove: night sight 800 (was 900), Intelligence 18 (was 19)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "Ekee": {
+            "nsight": 800,
+            "INT": 18,
+            "realM": 270
+          }
+        }
+      }
+    },
+    {
+      "note": "Tranquility invulnerability lasts 1 s (was 3)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEtq": {
+            "DataD1": 1,
+            "DataD2": 1,
+            "DataD3": 1,
+            "DataD4": 1
+          }
+        }
+      }
+    },
+    {
+      "note": "Treant base damage 15 -> 14",
+      "files": {
+        "Units\\UnitWeapons.slk": {
+          "efon": {
+            "dmgplus1": 14,
+            "mindmg1": 15,
+            "avgdmg1": 16,
+            "maxdmg1": 17,
+            "DPS": 9.14285714285714
+          }
+        }
+      }
+    },
+    {
+      "note": "Gargoyle moves at 375 (was 350)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ugar": {
+            "spd": 375
+          }
+        }
+      }
+    },
+    {
+      "note": "Gargoyle costs 175 gold (was 185)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ugar": {
+            "goldcost": 175
+          }
+        }
+      }
+    },
+    {
+      "note": "Necromancer spell order Cripple, Raise Dead, (Incite) Unholy Frenzy",
+      "files": {
+        "Units\\UndeadAbilityFunc.txt": {
+          "Acri": {
+            "Buttonpos": "0,2"
+          },
+          "Arai": {
+            "Buttonpos": "1,2",
+            "Unbuttonpos": "1,2"
+          }
+        }
+      }
+    },
+    {
+      "note": "Cripple: 85 mana (was 125); -75 % movement, -10 % attack rate, -35 % damage; needs no training",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Acri": {
+            "Cost1": 85,
+            "DataB1": 0.1,
+            "DataC1": 0.35
+          }
+        },
+        "Units\\UndeadAbilityFunc.txt": {
+          "Acri": {
+            "Requires": null,
+            "Requiresamount": null
+          }
+        }
+      }
+    },
+    {
+      "note": "Unholy Frenzy replaced by Incite Unholy Frenzy (new Auuf): sacrifice a friendly Undead unit, every non-mechanical unit within 250 gains +50 % attack rate for 3 hit points a second; 175 mana, 5 s cooldown, Master Training",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Auuf": {
+            "$base": "Auhf",
+            "code": "Auuf",
+            "comments": "Incite Unholy Frenzy",
+            "version": 1,
+            "targs1": "air,ground,player,nonhero,invu,vuln",
+            "Cool1": 5,
+            "Cost1": 175,
+            "Area1": 250,
+            "DataA1": 0.5,
+            "DataC1": 1,
+            "DataD1": 0,
+            "DataE1": 0,
+            "DataF1": 0,
+            "DataG1": 0,
+            "DataH1": "air,ground,organic"
+          }
+        },
+        "Units\\UndeadAbilityFunc.txt": {
+          "Auuf": {
+            "$base": "Auhf",
+            "Buttonpos": "2,2",
+            "Requiresamount": 2,
+            "Order": "unholyfrenzyaoe"
+          }
+        },
+        "Units\\UndeadAbilityStrings.txt": {
+          "Auuf": {
+            "Name": "Incite Unholy Frenzy",
+            "Tip": "Incite |cffffcc00U|rnholy Frenzy",
+            "Ubertip": "\"Sacrifices a friendly Undead unit. Every non-mechanical unit around it, friend or foe, attacks <Auuf,DataA1,%>% faster but loses <Auuf,DataB1> hit points per second. |nLasts <Auuf,Dur1> seconds.\"",
+            "Hotkey": "U"
+          }
+        },
+        "Units\\UnitAbilities.slk": {
+          "unec": {
+            "abilList": "Acri,Arai,Auuf,Aiun"
+          }
+        }
+      }
+    },
+    {
+      "note": "Raise Dead needs Necromancer Adept Training",
+      "source": "liquipedia",
+      "files": {
+        "Units\\UndeadAbilityFunc.txt": {
+          "Arai": {
+            "Requires": "Rune"
+          }
+        }
+      }
+    },
+    {
+      "note": "Skeletal Mastery needs Necromancer Adept Training",
+      "files": {
+        "Units\\UndeadUpgradeFunc.txt": {
+          "Rusm": {
+            "Requires": "unp1,Rune"
+          }
+        }
+      }
+    },
+    {
+      "note": "Necromancer training tooltips name the spells the two ranks now unlock",
+      "files": {
+        "Units\\UndeadUpgradeStrings.txt": {
+          "Rune": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "cast Unholy Frenzy.",
+                  "cast Raise Dead."
+                ],
+                [
+                  "cast Cripple.",
+                  "cast Incite Unholy Frenzy."
+                ]
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "note": "Ghoul Frenzy +35 % attack rate (was 25 %)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Rugf": {
+            "base1": 0.35
+          }
+        }
+      }
+    },
+    {
+      "note": "New item Ritual Dagger at the Tomb of Relics (125 gold, 2 charges, stock 1, 90 s): sacrifice a friendly Undead unit to heal nearby friendly non-mechanical units 100 in 300 (cast range 400)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIdg": {
+            "$base": "AIha",
+            "code": "AIdg",
+            "comments": "ItemRitualDagger (Instant)",
+            "version": 1,
+            "targs1": "air,ground,player,nonhero,invu,vuln",
+            "Cool1": 20,
+            "Area1": 300,
+            "Rng1": 400,
+            "DataA1": 100,
+            "DataB1": 1,
+            "DataC1": 0,
+            "DataD1": 0,
+            "DataH1": "ground,air,friend,organic,vuln,invu,self"
+          }
+        },
+        "Units\\ItemAbilityFunc.txt": {
+          "AIdg": {
+            "Art": "ReplaceableTextures\\CommandButtons\\BTNSacrificialDagger.blp",
+            "Specialart": "Abilities\\Spells\\Items\\AIhe\\AIheTarget.mdl",
+            "Specialattach": "origin"
+          }
+        },
+        "Units\\ItemAbilityStrings.txt": {
+          "AIdg": {
+            "Name": "Ritual Dagger",
+            "EditorSuffix": " (Instant)"
+          }
+        },
+        "Units\\ItemData.slk": {
+          "ritd": {
+            "$base": "rnec",
+            "comment": "Ritual Dagger",
+            "scriptname": "RitualDagger",
+            "abilList": "AIdg",
+            "cooldownID": "AIdg",
+            "uses": 2,
+            "stockRegen": 90,
+            "goldcost": 125
+          }
+        },
+        "Units\\ItemFunc.txt": {
+          "ritd": {
+            "Art": "ReplaceableTextures\\CommandButtons\\BTNSacrificialDagger.blp"
+          }
+        },
+        "Units\\ItemStrings.txt": {
+          "ritd": {
+            "Name": "Ritual Dagger",
+            "Tip": "Purchase Ritu|cffffcc00a|rl Dagger",
+            "Ubertip": "\"Sacrifice a friendly Undead unit: every friendly non-mechanical unit around it is healed for <AIdg,DataA1> hit points. |nHolds <ritd,uses> charges.\"",
+            "Hotkey": "A",
+            "Description": "Trades a unit's life for its allies' health."
+          }
+        },
+        "Units\\UndeadUnitFunc.txt": {
+          "utom": {
+            "Makeitems": "rnec,dust,skul,phea,pman,stwp,ocor,shea,ritd"
+          }
+        }
+      },
+      "art": [
+        "ReplaceableTextures\\CommandButtons\\BTNSacrificialDagger.blp",
+        "ReplaceableTextures\\CommandButtonsDisabled\\DISBTNSacrificialDagger.blp"
+      ]
+    },
+    {
+      "note": "Alchemist Healing Spray cooldown 6 s (was 0)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANhs": {
+            "Cool1": 6,
+            "Cool2": 6,
+            "Cool3": 6,
+            "Cool4": 6
+          }
+        }
+      }
+    },
+    {
+      "note": "Acid Bomb level 1 5/3 (was 6/4), level 2 10/6 (was 11/7) damage per second to the target / nearby",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANab": {
+            "DataD1": 5,
+            "DataE1": 3,
+            "DataD2": 10,
+            "DataE2": 6
+          }
+        }
+      }
+    },
+    {
+      "note": "Transmute grants 100 % of the unit's cost (was 125 %)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANtm": {
+            "DataA1": 1
+          }
+        }
+      }
+    },
+    {
+      "note": "Soul Burn: 65 mana (was 85); 80/200/340 total damage (was 125/270/450)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANso": {
+            "Cost1": 65,
+            "Cost2": 65,
+            "Cost3": 65,
+            "Cost4": 65,
+            "DataA1": 5,
+            "DataA2": 11.11,
+            "DataA3": 17
+          }
+        },
+        "Units\\NeutralAbilityStrings.txt": {
+          "ANso": {
+            "Researchubertip": {
+              "replace": [
+                [
+                  "Level 1|r - 125 damage",
+                  "Level 1|r - 80 damage"
+                ],
+                [
+                  "Level 2|r - 270 damage",
+                  "Level 2|r - 200 damage"
+                ],
+                [
+                  "Level 3|r - 450 damage",
+                  "Level 3|r - 340 damage"
+                ]
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "note": "Breath of Fire burn 7/14/21 per second (was 5/10/15)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANbf": {
+            "DataE1": 7,
+            "DataE2": 14,
+            "DataE3": 21
+          }
+        }
+      }
+    },
+    {
+      "note": "Boots of Speed out of the random creep drops",
+      "files": {
+        "Units\\ItemData.slk": {
+          "bspd": {
+            "pickRandom": 0
+          }
+        }
+      }
+    },
+    {
+      "note": "Boots of Speed: Goblin Merchants hold 2 (the stock-after-delay field itself is an engine entry)",
+      "files": {
+        "Units\\ItemData.slk": {
+          "bspd": {
+            "stockMax": 2
+          }
+        }
+      }
+    },
+    {
+      "note": "Cloak of Shadows hides its Hero by day as well as at night (new AIhm, Shadow Meld with the Shm4 day flag)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIhm": {
+            "$base": "Ashm",
+            "comments": "Shadow Meld (Item)",
+            "item": 1,
+            "sort": "item",
+            "race": "other",
+            "DataD1": 1
+          }
+        },
+        "Units\\NightElfAbilityFunc.txt": {
+          "AIhm": {
+            "$base": "Ashm",
+            "Art": "ReplaceableTextures\\CommandButtons\\BTNCloak.blp"
+          }
+        },
+        "Units\\NightElfAbilityStrings.txt": {
+          "AIhm": {
+            "$base": "Ashm",
+            "Name": "Shadowmeld",
+            "EditorSuffix": " (Item)",
+            "Ubertip": "\"Stops the Hero from auto-acquiring targets so that the Cloak of Shadows can hide it, by day and by night.\""
+          }
+        },
+        "Units\\ItemData.slk": {
+          "clsd": {
+            "abilList": "AIhm",
+            "cooldownID": "AIhm"
+          }
+        },
+        "Units\\ItemStrings.txt": {
+          "clsd": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "invisibility at night when worn",
+                  "invisibility by day and by night when worn"
+                ]
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "note": "Crystal Ball item level 3 (was 5), 300 gold (was 500)",
+      "files": {
+        "Units\\ItemData.slk": {
+          "crys": {
+            "Level": 3,
+            "goldcost": 300
+          }
+        }
+      }
+    },
+    {
+      "note": "Lion Horn of Stormwind Devotion Aura +2 armour (was +1)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIad": {
+            "DataA1": 2
+          }
+        }
+      }
+    },
+    {
+      "note": "Periapt of Vitality costs 325 gold (was 350)",
+      "files": {
+        "Units\\ItemData.slk": {
+          "prvt": {
+            "goldcost": 325
+          }
+        }
+      }
+    },
+    {
+      "note": "Rings of Protection one step stronger per drop level: +2 out of the drops, +3 at level 2 (125 g), +4 at level 3 (300 g), +5 at level 6 (600 g); no level-7 ring",
+      "files": {
+        "Units\\ItemData.slk": {
+          "rde1": {
+            "class": "Miscellaneous",
+            "Level": 0,
+            "pickRandom": 0
+          },
+          "rde2": {
+            "Level": 2,
+            "goldcost": 125
+          },
+          "rde3": {
+            "Level": 3,
+            "goldcost": 300
+          },
+          "rde4": {
+            "class": "Permanent",
+            "Level": 6,
+            "goldcost": 600
+          }
+        }
+      }
+    },
+    {
+      "note": "Scourge Bone Chimes Vampiric Aura 20 % (was 15 %)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIav": {
+            "DataA1": 0.2
+          }
+        }
+      }
+    },
+    {
+      "note": "Sentry Wards last 180 s (was 300)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIsw": {
+            "Dur1": 180,
+            "HeroDur1": 180
+          }
+        }
+      }
+    },
+    {
+      "note": "Runed Bracers tooltip: the reduction is against spell damage, not magic damage (a tooltip fix listed under bug fixes)",
+      "files": {
+        "Units\\ItemStrings.txt": {
+          "brac": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "Reduces Magic damage",
+                  "Reduces Spell damage"
+                ]
+              ]
+            },
+            "Description": {
+              "replace": [
+                [
+                  "Reduces Magic damage",
+                  "Reduces Spell damage"
+                ]
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "note": "Tome of Experience out of the random creep drops",
+      "files": {
+        "Units\\ItemData.slk": {
+          "texp": {
+            "pickRandom": 0
+          }
+        }
+      }
+    },
+    {
+      "note": "Devour's cargo hold takes a Mountain Giant: Cargo Hold (Devour) holds 4 (was 2)",
+      "source": "undocumented",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Advc": {
+            "DataA1": 4
+          }
+        }
+      }
+    },
+    {
+      "note": "The Faerie Dragon lists Ultravision among its upgrades, beside the two Vengeance units",
+      "source": "undocumented",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "efdr": {
+            "upgrades": "Resw,Rerh,Reuv"
+          }
+        }
+      }
+    },
+    {
+      "note": "The Ritual Dagger sits in the Tomb of Relics' second slot",
+      "source": "undocumented",
+      "files": {
+        "Units\\ItemFunc.txt": {
+          "ritd": {
+            "Buttonpos": "1,0"
+          }
+        }
+      }
+    }
+  ],
+  "engine": [
+    {
+      "key": "windwalk-cooldown-on-break",
+      "note": "Wind Walk's cooldown starts when the invisibility breaks: honour AOwk DataE (Owk5)",
+      "implemented": false
+    },
+    {
+      "key": "critical-strike-all-damage",
+      "note": "Critical Strike multiplies bonus damage too when AOcr DataF (Ocr6) is 0; the sim multiplies the base roll only",
+      "implemented": false
+    },
+    {
+      "key": "devour-mountain-giant",
+      "note": "Devour may target a Mountain Giant that has not researched Resistant Skin (its level is otherwise above Devour's cap)",
+      "implemented": false
+    },
+    {
+      "key": "spiked-barricades-percent",
+      "note": "Upgrade effect rspp (new in 1.31): Spiked Barricades also return a fraction of the attacker's damage",
+      "implemented": false
+    },
+    {
+      "key": "sundering-blades-armor-bonus",
+      "note": "Base code Aaab (new in 1.31): DataB extra damage against the armour type in DataC (Sundering Blades)",
+      "implemented": true
+    },
+    {
+      "key": "orb-heal-reduction",
+      "note": "Base code AIhu (new in 1.31, Orb of Fire): struck units heal and regenerate at DataB of normal for Dur1 seconds",
+      "implemented": false
+    },
+    {
+      "key": "incite-unholy-frenzy",
+      "note": "Base code Auuf (new in 1.31): sacrifice a friendly Undead unit and frenzy every non-mechanical unit in Area1, allies, neutrals and enemies alike",
+      "implemented": false
+    },
+    {
+      "key": "ritual-dagger-sacrifice-heal",
+      "note": "Base code AIdg (new in 1.31): sacrifice a friendly Undead unit to heal friendly non-mechanical units in Area1 by DataA",
+      "implemented": true
+    },
+    {
+      "key": "shadowmeld-by-day",
+      "note": "Shadow Meld with DataD (Shm4) set hides by day too (Cloak of Shadows), and the cloak's Hide also works on a unit that has Shadowmeld",
+      "implemented": false
+    },
+    {
+      "key": "life-drain-dark-minion",
+      "note": "Life Drain applies the Dark Minion effect of the caster's current Black Arrow rank (needs at least one rank)",
+      "implemented": false
+    },
+    {
+      "key": "warsong-drums-kodo-buff",
+      "note": "Warsong Battle Drums apply the Kodo Beast's War Drums buff, so the item and the Kodo aura no longer stack",
+      "implemented": false
+    },
+    {
+      "key": "possession-drops-queued-orders",
+      "note": "Orders given to a unit while it is being Possessed no longer fire once its owner gets it back (bug fix)",
+      "implemented": false
+    },
+    {
+      "key": "item-stock-initial",
+      "note": "New item field Stock Initial After Start Delay (ItemData stockInitial, not a 1.30.4 column): Boots of Speed arrive 2 at a time on Goblin Merchants",
+      "implemented": false
+    }
+  ]
+}

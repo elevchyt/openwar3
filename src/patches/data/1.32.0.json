@@ -1,0 +1,133 @@
+{
+  "patch": "1.32.0",
+  "build": 14481,
+  "released": "2020-01-28",
+  "notes": [
+    "https://us.forums.blizzard.com/en/warcraft3/t/warcraft-iii-reforged-patch-notes/14023",
+    "https://liquipedia.net/warcraft/Patch_1.32.0"
+  ],
+  "changes": [
+    {
+      "note": "Necromancer rework reverted: Unholy Frenzy back in place of Incite Unholy Frenzy, spell order Raise Dead, Unholy Frenzy, Cripple again (3.0.0 carries the 1.30.4 list and buttons; Auuf is left orphaned)",
+      "source": "undocumented",
+      "files": {
+        "Units\\UnitAbilities.slk": {
+          "unec": {
+            "abilList": "Acri,Arai,Auhf,Aiun"
+          }
+        },
+        "Units\\UndeadAbilityFunc.txt": {
+          "Acri": {
+            "Buttonpos": "2,2"
+          },
+          "Arai": {
+            "Buttonpos": "0,2",
+            "Unbuttonpos": "0,2"
+          }
+        }
+      }
+    },
+    {
+      "note": "Cripple back to 125 mana, -50 % attack rate and -50 % damage (3.0.0's Cost1 of 90 is a later release's)",
+      "source": "undocumented",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Acri": {
+            "Cost1": 125,
+            "DataB1": 0.5,
+            "DataC1": 0.5
+          }
+        }
+      }
+    },
+    {
+      "note": "Cripple needs Necromancer Master Training again",
+      "source": "undocumented",
+      "files": {
+        "Units\\UndeadAbilityFunc.txt": {
+          "Acri": {
+            "Requires": "Rune",
+            "Requiresamount": 2
+          }
+        }
+      }
+    },
+    {
+      "note": "Raise Dead needs no training again",
+      "source": "undocumented",
+      "files": {
+        "Units\\UndeadAbilityFunc.txt": {
+          "Arai": {
+            "Requires": null
+          }
+        }
+      }
+    },
+    {
+      "note": "Skeletal Mastery needs no Necromancer training again (3.0.0's unpl requirement is a later release's)",
+      "source": "undocumented",
+      "files": {
+        "Units\\UndeadUpgradeFunc.txt": {
+          "Rusm": {
+            "Requires": "unp1"
+          }
+        }
+      }
+    },
+    {
+      "note": "Necromancer training tooltips name Unholy Frenzy and Cripple again",
+      "source": "undocumented",
+      "files": {
+        "Units\\UndeadUpgradeStrings.txt": {
+          "Rune": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "cast Raise Dead.",
+                  "cast Unholy Frenzy."
+                ],
+                [
+                  "cast Incite Unholy Frenzy.",
+                  "cast Cripple."
+                ]
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "note": "The Ritual Dagger regenerates instead of healing at once: its ability is the new \"Regenerate\" row (AIg2), 125 hit points over 40 s to allies within 300 of the sacrifice. The 1.32.6 notes raise it \"from 125\", so the switch predates them",
+      "source": "undocumented",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIg2": {
+            "$base": "AIdg",
+            "Dur1": 40,
+            "HeroDur1": 40,
+            "Cool1": 20,
+            "Area1": 300,
+            "DataA1": 125,
+            "BuffID1": "BIrl"
+          }
+        },
+        "Units\\ItemData.slk": {
+          "ritd": {
+            "abilList": "AIg2",
+            "cooldownID": "AIg2"
+          }
+        }
+      }
+    },
+    {
+      "note": "The Ritual Dagger tooltip describes the regeneration it now does (our words)",
+      "files": {
+        "Units\\ItemStrings.txt": {
+          "ritd": {
+            "Ubertip": "\"Sacrifices a friendly unit so that the friendly non-mechanical units around it regenerate <AIg2,DataA1> hit points over <AIg2,Dur1> seconds. |nContains <ritd,uses> charges.\""
+          }
+        }
+      }
+    }
+  ]
+}

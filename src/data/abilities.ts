@@ -479,6 +479,19 @@ export function aoeCursorRadius(def: AbilityDef, level: AbilityLevel | undefined
  *  trees carry it (UnitAbilities.slk). Asked by its code, so a map's clone counts. */
 export const TREE_UPGRADE_ABILITY = "Atol";
 
+/**
+ * Base codes a LATER PATCH introduced (src/patches/, docs/patches.md) that are the same ability
+ * as a 1.30.4 code with the same row shape — folded onto it at the SLK boundary, so every rule
+ * keyed on the old code (the corpse rules, the AI's casting table, the card) serves the new row
+ * too. Blizzard mints a new code rather than editing the old one so custom maps keep the old
+ * behaviour; what the new code does DIFFERENTLY is an `engine` entry of its patch.
+ *
+ *   `AUa2` Animate Dead (New), 2.0.3 — the raised keep their abilities (`[Uan3]` Data C)
+ */
+const LATER_CODE_TWINS: Readonly<Record<string, string>> = {
+  AUa2: "AUan",
+};
+
 /** Ability behaviours we implement, keyed by base `code`. `target` tells the UI/
  *  sim how to aim it; `autocast` marks abilities that can toggle autocasting.
  *  Anything not listed here loads as data but is treated as passive/uncastable
@@ -738,6 +751,11 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   AIrv: { target: "none" }, // Potion / Glyph of Omniscience — the whole map
   AIfa: { target: "point" }, // Flare Gun — "Reveals a target area on the map"
   AIdi: { target: "point" }, // Wand / Staff of Negation — "Dispels all magical effects in a target area"
+  // Codes a LATER PATCH brought in (src/patches/, docs/patches.md) — rows a 1.30.4 install does
+  // not have until the patch chain adds them.
+  AIdg: { target: "unit" }, // Ritual Dagger (1.31.0) — sacrifice a friendly unit, heal around it
+  Aaab: { target: "passive" }, // Sundering Blades (1.31.0) — more damage to one armour class (SimWorld.armorClassBonus)
+  Aosl: { target: "unit" }, // Slow, the Orb of Slow's own (`AIno`, 2.0.2) — Aslo's row shape
   AIdc: { target: "unit" }, // Wand of Neutralization — a CHAIN, so it starts on a unit
   AIil: { target: "unit" }, // Wand of Illusion — "a double of the targeted unit"
   AIwb: { target: "unit" }, // Spider Silk Broach — "Binds a target enemy air unit"
@@ -1171,7 +1189,8 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
   for (const id of Object.keys(data.map)) {
     const r = data.getRow(id) as Row | undefined;
     if (!r) continue;
-    const code = str(r, "code") || id;
+    const rawCode = str(r, "code") || id;
+    const code = LATER_CODE_TWINS[rawCode] ?? rawCode;
     // Skip rows with no real code (SLK header/comment artefacts).
     if (!code || code.length < 2) continue;
     const levels = Math.max(1, num(r, "levels", 1));

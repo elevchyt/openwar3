@@ -1,0 +1,30 @@
+{
+  "patch": "2.0.3.23101",
+  "build": 23101,
+  "released": "2025-09-15",
+  "notes": [
+    "https://us.forums.blizzard.com/en/warcraft3/t/warcraft-iii-reforged-patch-notes-version-204/36567/4",
+    "https://liquipedia.net/warcraft/Patch_2.0.3.23101"
+  ],
+  "changes": [
+    {
+      "note": "Ghoul base damage 9 (was 10)",
+      "files": {
+        "Units\\UnitWeapons.slk": { "ugho": { "dmgplus1": 9, "mindmg1": 11, "avgdmg1": 12, "maxdmg1": 13, "dps": 9.23076923076923 } }
+      }
+    },
+    {
+      "note": "Life Drain can no longer target the Dark Ranger herself",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANdr": {
+              "targs1": "air,ground,organic,notself",
+              "targs2": "air,ground,organic,notself",
+              "targs3": "air,ground,organic,notself",
+              "targs4": "air,ground,organic,notself"
+          }
+        }
+      }
+    }
+  ]
+}

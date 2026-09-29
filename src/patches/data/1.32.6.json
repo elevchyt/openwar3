@@ -1,0 +1,1413 @@
+{
+  "patch": "1.32.6",
+  "build": 15355,
+  "released": "2020-06-02",
+  "notes": [
+    "https://us.forums.blizzard.com/en/warcraft3/t/warcraft-iii-reforged-patch-notes-1326/24578",
+    "https://liquipedia.net/warcraft/Patch_1.32.6"
+  ],
+  "changes": [
+    {
+      "note": "Thunder Clap cooldown 7 s at every level",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AHtc": {
+            "Cool1": 7,
+            "Cool2": 7,
+            "Cool3": 7,
+            "Cool4": 7
+          }
+        }
+      }
+    },
+    {
+      "note": "Resurrection costs 150 mana",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AHre": {
+            "Cost1": 150,
+            "Cost2": 150,
+            "Cost3": 150,
+            "Cost4": 150
+          }
+        }
+      }
+    },
+    {
+      "note": "Rifleman attack cooldown 1.35 -> 1.4",
+      "files": {
+        "Units\\UnitWeapons.slk": {
+          "hrif": {
+            "cool1": 1.4,
+            "DPS": 15
+          }
+        }
+      }
+    },
+    {
+      "note": "Big Bad Voodoo costs 150 mana",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AOvd": {
+            "Cost1": 150,
+            "Cost2": 150,
+            "Cost3": 150,
+            "Cost4": 150
+          }
+        }
+      }
+    },
+    {
+      "note": "Earthquake: 20 s, 60 building damage per second, 125 mana, spares friendly units and buildings",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AOeq": {
+            "Dur1": 20,
+            "Cost1": 125,
+            "DataB1": 60,
+            "targs1": "ground,structure,debris,enemy,tree",
+            "Cost2": 125,
+            "DataB2": 60,
+            "targs2": "ground,structure,debris,enemy,tree"
+          }
+        }
+      }
+    },
+    {
+      "note": "War Stomp cooldown 7 s at every level",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AOws": {
+            "Cool1": 7,
+            "Cool2": 7,
+            "Cool3": 7,
+            "Cool4": 7
+          }
+        }
+      }
+    },
+    {
+      "note": "Stasis Trap: activates after 9 s, detects at 175, detonates 0.5 s after triggering (new Detonation Delay field)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Asta": {
+            "DataA1": 9,
+            "DataB1": 175,
+            "DataE1": 0.5
+          }
+        },
+        "Units\\AbilityMetaData.slk": {
+          "Sta5": {
+            "$base": "Sta4",
+            "data": 5,
+            "displayName": "WESTRING_AEVAL_STA5",
+            "sort": "x0a004"
+          }
+        }
+      }
+    },
+    {
+      "note": "Entangling Roots level 3 cast range 800",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEer": {
+            "Rng3": 800
+          }
+        }
+      }
+    },
+    {
+      "note": "Tranquility: no invulnerability, 12 s, heals 48 per second",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEtq": {
+            "Dur1": 12,
+            "HeroDur1": 12,
+            "DataA1": 48,
+            "DataD1": 0
+          }
+        },
+        "Units\\NightElfAbilityStrings.txt": {
+          "AEtq": {
+            "Ubertip": {
+              "replace": [
+                [
+                  ", with an initial invulnerability duration of <AEtq,DataD1> seconds",
+                  ""
+                ]
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "note": "Druid of the Claw bear form base damage 23 -> 24",
+      "files": {
+        "Units\\UnitWeapons.slk": {
+          "edcm": {
+            "dmgplus1": 24,
+            "mindmg1": 25,
+            "avgdmg1": 27.5,
+            "maxdmg1": 30,
+            "DPS": 18.3333333333333
+          }
+        }
+      }
+    },
+    {
+      "note": "Druid of the Talon costs 135 gold",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "edot": {
+            "goldcost": 135
+          }
+        }
+      }
+    },
+    {
+      "note": "Impale cannot be interrupted and its airborne victims can be damaged and attacked (two new fields)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AUim": {
+            "DataE1": 1,
+            "DataF1": 1,
+            "DataE2": 1,
+            "DataF2": 1,
+            "DataE3": 1,
+            "DataF3": 1,
+            "DataE4": 1,
+            "DataF4": 1
+          }
+        },
+        "Units\\AbilityMetaData.slk": {
+          "Uim5": {
+            "$base": "Uim4",
+            "data": 5,
+            "displayName": "WESTRING_AEVAL_UIM5",
+            "sort": "x0a005",
+            "type": "bool",
+            "minVal": null,
+            "maxVal": null
+          },
+          "Uim6": {
+            "$base": "Uim4",
+            "data": 6,
+            "displayName": "WESTRING_AEVAL_UIM6",
+            "sort": "x0a006",
+            "type": "bool",
+            "minVal": null,
+            "maxVal": null
+          }
+        }
+      }
+    },
+    {
+      "note": "Crypt Lord cast point 0.4 -> 0.5",
+      "files": {
+        "Units\\UnitWeapons.slk": {
+          "Ucrl": {
+            "castpt": 0.5
+          }
+        }
+      }
+    },
+    {
+      "note": "Carrion Beetles: 45 mana, two beetles per cast, up to 6, 9 s cooldown",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AUcb": {
+            "Cool1": 9,
+            "Cost1": 45,
+            "DataA1": 2,
+            "DataE1": 6,
+            "Cool2": 9,
+            "Cost2": 45,
+            "DataA2": 2,
+            "DataE2": 6,
+            "Cool3": 9,
+            "Cost3": 45,
+            "DataA3": 2,
+            "DataE3": 6,
+            "Cool4": 9,
+            "Cost4": 45,
+            "DataA4": 2,
+            "DataE4": 6
+          }
+        }
+      }
+    },
+    {
+      "note": "Animate Dead costs 125 mana",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AUan": {
+            "Cost1": 125,
+            "Cost2": 125,
+            "Cost3": 125,
+            "Cost4": 125
+          }
+        }
+      }
+    },
+    {
+      "note": "Skeleton Warrior 190 -> 180 hit points",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "uske": {
+            "HP": 180,
+            "realHP": 180
+          }
+        }
+      }
+    },
+    {
+      "note": "Ritual Dagger heals 175 per charge (was 125)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIg2": {
+            "DataA1": 175
+          }
+        }
+      }
+    },
+    {
+      "note": "Summon Bear costs 100 mana",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANsg": {
+            "Cost1": 100,
+            "Cost2": 100,
+            "Cost3": 100,
+            "Cost4": 100
+          }
+        }
+      }
+    },
+    {
+      "note": "Doom slows its target's movement by 50 % (new Movement Speed Factor field; the creep-level cap becomes a field too)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANdo": {
+            "DataE1": 0.5
+          }
+        },
+        "Units\\AbilityMetaData.slk": {
+          "Ndo4": {
+            "$base": "Ndo3",
+            "data": 4,
+            "displayName": "WESTRING_AEVAL_NDO4",
+            "sort": "x0a004",
+            "type": "int",
+            "maxVal": 100
+          },
+          "Ndo5": {
+            "$base": "Ndo3",
+            "data": 5,
+            "displayName": "WESTRING_AEVAL_NDO5",
+            "sort": "x0a005",
+            "minVal": -10,
+            "maxVal": 10
+          }
+        }
+      }
+    },
+    {
+      "note": "Volcano: 5 waves 3 s apart, buildings take 3x, spares friendly units and buildings",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANvc": {
+            "targs1": "ground,structure,enemy,tree,debris",
+            "DataB1": 5,
+            "DataC1": 3,
+            "DataD1": 3,
+            "targs2": "ground,structure,enemy,tree,debris",
+            "DataB2": 5,
+            "DataC2": 3,
+            "DataD2": 3,
+            "targs3": "ground,structure,enemy,tree,debris",
+            "DataB3": 5,
+            "DataC3": 3,
+            "DataD3": 3,
+            "targs4": "ground,structure,enemy,tree,debris",
+            "DataB4": 5,
+            "DataC4": 3,
+            "DataD4": 3
+          }
+        }
+      }
+    },
+    {
+      "note": "Tornado: no random wander, 125 mana, 20 s, building damage 100 close / 14 far per second",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANto": {
+            "Dur1": 20,
+            "HeroDur1": 20,
+            "Cost1": 125
+          },
+          "Atdg": {
+            "DataA1": 14,
+            "DataC1": 100
+          }
+        },
+        "Units\\UnitAbilities.slk": {
+          "ntor": {
+            "abilList": "Atdg,Atsp,Aasl"
+          }
+        }
+      }
+    },
+    {
+      "note": "Blue Dragon Whelp, Blue Drake and Blue Dragon carry a Frost Attack with a passive icon (new ability Afrc), and their tooltips say so",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Afrc": {
+            "$base": "Afrb",
+            "comments": "Frost Breath (with icon)"
+          }
+        },
+        "Units\\UndeadAbilityFunc.txt": {
+          "Afrc": {
+            "Art": "ReplaceableTextures\\PassiveButtons\\PASBTNFrost.blp",
+            "Buttonpos": "0,2"
+          }
+        },
+        "Units\\UndeadAbilityStrings.txt": {
+          "Afrc": {
+            "Name": "Frost Attack",
+            "Tip": "Frost Attack",
+            "Ubertip": "\"This unit's attacks chill their target, slowing its movement.\"",
+            "EditorSuffix": " (with icon)"
+          }
+        },
+        "Units\\UnitAbilities.slk": {
+          "nadw": {
+            "abilList": "Afrc"
+          },
+          "nadk": {
+            "abilList": "Afrc"
+          },
+          "nadr": {
+            "abilList": "Advc,ACdv,Afrc,ACmi"
+          }
+        },
+        "Units\\NeutralUnitStrings.txt": {
+          "nadw": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "Tiny ranged flying unit.",
+                  "Tiny ranged flying unit whose cold attacks slow enemies."
+                ]
+              ]
+            }
+          },
+          "nadk": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "Small ranged flying unit.",
+                  "Small ranged flying unit whose cold attacks slow enemies."
+                ]
+              ]
+            }
+          },
+          "nadr": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "Heavy ranged flying unit that",
+                  "Heavy ranged flying unit whose cold attacks slow enemies. It"
+                ]
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "note": "Frost Wyrm switched to the icon-carrying Frost Attack as well (what 1.32.7's illusion fix answers)",
+      "source": "undocumented",
+      "files": {
+        "Units\\UnitAbilities.slk": {
+          "ufro": {
+            "abilList": "Afrz,Afrc"
+          }
+        }
+      }
+    },
+    {
+      "note": "Breath of Frost takes Breath of Fire's size and shape",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ACbf": {
+            "Area1": 125,
+            "Rng1": 375,
+            "DataC1": 375,
+            "DataD1": 300
+          }
+        }
+      }
+    },
+    {
+      "note": "Brewmaster Breath of Fire level 2 starting width 120 -> 125, like levels 1 and 3",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANbf": {
+            "Area2": 125
+          }
+        }
+      }
+    },
+    {
+      "note": "Potion of Greater Mana restores 250 (the Mana Stone's consume shares the row)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIm2": {
+            "DataA1": 250
+          }
+        }
+      }
+    },
+    {
+      "note": "Potion of Mana restores 125, costs 150 gold",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIm1": {
+            "DataA1": 125
+          }
+        },
+        "Units\\ItemData.slk": {
+          "pman": {
+            "goldcost": 150
+          }
+        }
+      }
+    },
+    {
+      "note": "Pendant of Energy +100 mana",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AImb": {
+            "DataA1": 100
+          }
+        }
+      }
+    },
+    {
+      "note": "Scroll of Restoration heals 150",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIra": {
+            "DataA1": 150
+          }
+        }
+      }
+    },
+    {
+      "note": "Red Drake Egg and Talisman of the Wild leave the level-5 charged drop pool",
+      "files": {
+        "Units\\ItemData.slk": {
+          "fgrd": {
+            "class": "Miscellaneous",
+            "Level": 0,
+            "prio": 0,
+            "pickRandom": 0
+          },
+          "totw": {
+            "class": "Miscellaneous",
+            "Level": 0,
+            "prio": 0,
+            "pickRandom": 0
+          }
+        }
+      }
+    },
+    {
+      "note": "Scroll of Animate Dead and Scroll of Resurrection leave the level-6 charged drop pool",
+      "files": {
+        "Units\\ItemData.slk": {
+          "sand": {
+            "class": "Miscellaneous",
+            "Level": 0,
+            "prio": 0,
+            "pickRandom": 0
+          },
+          "srrc": {
+            "class": "Miscellaneous",
+            "Level": 0,
+            "prio": 0,
+            "pickRandom": 0
+          }
+        }
+      }
+    },
+    {
+      "note": "New item Blue Drake Egg: level-5 charged drop, summons a Blue Drake for 180 s, 1 charge",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIbd": {
+            "$base": "AIfd",
+            "comments": "Item summon - Blue Drake",
+            "DataC1": "nadk"
+          }
+        },
+        "Units\\ItemAbilityFunc.txt": {
+          "AIbd": {
+            "$base": "AIfd",
+            "Art": "ReplaceableTextures\\CommandButtons\\BTNAzureDragon.blp"
+          }
+        },
+        "Units\\ItemAbilityStrings.txt": {
+          "AIbd": {
+            "Name": "Summon Blue Drake (Item)"
+          }
+        },
+        "Units\\ItemData.slk": {
+          "fgbd": {
+            "$base": "fgrd",
+            "comment": "Blue Drake Egg",
+            "scriptname": "BlueDrakeEgg",
+            "class": "Charged",
+            "Level": 5,
+            "oldLevel": 6,
+            "abilList": "AIbd",
+            "cooldownID": "AIfs",
+            "uses": 1,
+            "prio": 77,
+            "pickRandom": 1,
+            "goldcost": 550
+          }
+        },
+        "Units\\ItemFunc.txt": {
+          "fgbd": {
+            "Art": "ReplaceableTextures\\CommandButtons\\BTNAzureDragon.blp"
+          }
+        },
+        "Units\\ItemStrings.txt": {
+          "fgbd": {
+            "Name": "Blue Drake Egg",
+            "Tip": "Purchase Blue Drake Egg",
+            "Ubertip": "\"Hatches a Blue Drake that fights at your side. |nLasts <AIbd,Dur1> seconds.\"",
+            "Description": "Hatches a Blue Drake."
+          }
+        },
+        "Units\\AbilityMetaData.slk": {
+          "Isn1": {
+            "useSpecific": "AIfd,AIff,AIfr,AIfu,AIfh,AIfs,AIir,AIuw,AIbd"
+          },
+          "Ist1": {
+            "useSpecific": "AIfd,AIff,AIfr,AIfu,AIfh,AIfs,AIir,AIuw,AIbd"
+          },
+          "Isn2": {
+            "useSpecific": "AIfd,AIff,AIfr,AIfu,AIfh,AIfs,AIir,AIuw,AIbd"
+          },
+          "Ist2": {
+            "useSpecific": "AIfd,AIff,AIfr,AIfu,AIfh,AIfs,AIir,AIuw,AIbd"
+          }
+        }
+      }
+    },
+    {
+      "note": "New item Idol of the Wild: level-5 charged drop, summons a Furbolg Tracker for 180 s, 1 charge",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIut": {
+            "$base": "AIff",
+            "comments": "Item summon - Furbolg Tracker",
+            "DataC1": "nfrb"
+          }
+        },
+        "Units\\ItemAbilityFunc.txt": {
+          "AIut": {
+            "$base": "AIff",
+            "Art": "ReplaceableTextures\\CommandButtons\\BTNFurbolgTracker.blp"
+          }
+        },
+        "Units\\ItemAbilityStrings.txt": {
+          "AIut": {
+            "Name": "Summon Furbolg Tracker (Item)"
+          }
+        },
+        "Units\\ItemData.slk": {
+          "iotw": {
+            "$base": "totw",
+            "comment": "Idol of the Wild",
+            "scriptname": "Idolofthewild",
+            "class": "Charged",
+            "Level": 5,
+            "oldLevel": 6,
+            "abilList": "AIut",
+            "cooldownID": "AIfs",
+            "uses": 1,
+            "prio": 84,
+            "pickRandom": 1,
+            "goldcost": 550
+          }
+        },
+        "Units\\ItemFunc.txt": {
+          "iotw": {
+            "Art": "ReplaceableTextures\\CommandButtons\\BTNFurbolgTracker.blp"
+          }
+        },
+        "Units\\ItemStrings.txt": {
+          "iotw": {
+            "Name": "Idol of the Wild",
+            "Tip": "Purchase Idol of the Wild",
+            "Ubertip": "\"Calls a Furbolg Tracker to fight at your side. |nLasts <AIut,Dur1> seconds.\"",
+            "Description": "Calls a Furbolg Tracker."
+          }
+        },
+        "Units\\AbilityMetaData.slk": {
+          "Isn1": {
+            "useSpecific": "AIfd,AIff,AIfr,AIfu,AIfh,AIfs,AIir,AIuw,AIbd,AIut"
+          },
+          "Ist1": {
+            "useSpecific": "AIfd,AIff,AIfr,AIfu,AIfh,AIfs,AIir,AIuw,AIbd,AIut"
+          },
+          "Isn2": {
+            "useSpecific": "AIfd,AIff,AIfr,AIfu,AIfh,AIfs,AIir,AIuw,AIbd,AIut"
+          },
+          "Ist2": {
+            "useSpecific": "AIfd,AIff,AIfr,AIfu,AIfh,AIfs,AIir,AIuw,AIbd,AIut"
+          }
+        }
+      }
+    },
+    {
+      "note": "New item Engraved Scale: level-6 charged drop, summons a Blue Dragonspawn Overseer for 180 s, 1 charge",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIes": {
+            "$base": "AIfd",
+            "comments": "Item summon - Dragonspawn Overseer",
+            "DataC1": "nbdo"
+          }
+        },
+        "Units\\ItemAbilityFunc.txt": {
+          "AIes": {
+            "$base": "AIfd",
+            "Art": "ReplaceableTextures\\CommandButtons\\BTNpurpleDragonSpawn.blp"
+          }
+        },
+        "Units\\ItemAbilityStrings.txt": {
+          "AIes": {
+            "Name": "Summon Dragonspawn Overseer (Item)"
+          }
+        },
+        "Units\\ItemData.slk": {
+          "engr": {
+            "$base": "fgrd",
+            "comment": "Engraved Scale",
+            "scriptname": "EngravedScale",
+            "class": "Charged",
+            "Level": 6,
+            "oldLevel": 8,
+            "abilList": "AIes",
+            "cooldownID": "AIfs",
+            "uses": 1,
+            "prio": 141,
+            "pickRandom": 1,
+            "goldcost": 700
+          }
+        },
+        "Units\\ItemFunc.txt": {
+          "engr": {
+            "Art": "ReplaceableTextures\\CommandButtons\\BTNpurpleDragonSpawn.blp"
+          }
+        },
+        "Units\\ItemStrings.txt": {
+          "engr": {
+            "Name": "Engraved Scale",
+            "Tip": "Purchase Engraved Scale",
+            "Ubertip": "\"Calls a Blue Dragonspawn Overseer to fight at your side. |nLasts <AIes,Dur1> seconds.\"",
+            "Description": "Calls a Blue Dragonspawn Overseer."
+          }
+        },
+        "Units\\AbilityMetaData.slk": {
+          "Isn1": {
+            "useSpecific": "AIfd,AIff,AIfr,AIfu,AIfh,AIfs,AIir,AIuw,AIbd,AIut,AIes"
+          },
+          "Ist1": {
+            "useSpecific": "AIfd,AIff,AIfr,AIfu,AIfh,AIfs,AIir,AIuw,AIbd,AIut,AIes"
+          },
+          "Isn2": {
+            "useSpecific": "AIfd,AIff,AIfr,AIfu,AIfh,AIfs,AIir,AIuw,AIbd,AIut,AIes"
+          },
+          "Ist2": {
+            "useSpecific": "AIfd,AIff,AIfr,AIfu,AIfh,AIfs,AIir,AIuw,AIbd,AIut,AIes"
+          }
+        }
+      }
+    },
+    {
+      "note": "New item Scepter of Avarice: level-6 charged drop, kills a non-Hero unit at range 600 for 75 % of its cost in gold, 1 charge",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIts": {
+            "$base": "ANtm",
+            "comments": "Item Transmute",
+            "hero": 0,
+            "item": 1,
+            "sort": "item",
+            "race": "other",
+            "checkDep": 0,
+            "reqLevel": 0,
+            "Cool1": 0,
+            "Cost1": 0,
+            "Rng1": 600,
+            "DataA1": 0.75
+          }
+        },
+        "Units\\ItemAbilityFunc.txt": {
+          "AIts": {
+            "Art": "ReplaceableTextures\\CommandButtons\\BTNTransmute.blp",
+            "Missileart": "Abilities\\Spells\\Other\\Transmute\\GoldBottleMissile.mdl",
+            "Missilespeed": "700",
+            "Missilearc": "0.4",
+            "MissileHoming": "1",
+            "Order": "transmute"
+          }
+        },
+        "Units\\ItemAbilityStrings.txt": {
+          "AIts": {
+            "Name": "Transmute (Item)"
+          }
+        },
+        "Units\\ItemData.slk": {
+          "scav": {
+            "$base": "srrc",
+            "comment": "Scepter of Avarice",
+            "scriptname": "ScepterOfAvarice",
+            "class": "Charged",
+            "Level": 6,
+            "oldLevel": 8,
+            "abilList": "AIts",
+            "cooldownID": "AIts",
+            "uses": 1,
+            "prio": 134,
+            "pickRandom": 1,
+            "goldcost": 700,
+            "stockStart": 0
+          }
+        },
+        "Units\\ItemFunc.txt": {
+          "scav": {
+            "Art": "ReplaceableTextures\\CommandButtons\\BTNTransmute.blp"
+          }
+        },
+        "Units\\ItemStrings.txt": {
+          "scav": {
+            "Name": "Scepter of Avarice",
+            "Tip": "Purchase Scepter of Avarice",
+            "Ubertip": "\"Slays a target unit on the spot and pays out <AIts,DataA1,%>% of its cost in gold.|nHeroes and creeps above level <AIts,DataC1> are unaffected.\"",
+            "Description": "Turns a non-Hero unit into gold."
+          }
+        },
+        "Units\\AbilityMetaData.slk": {
+          "Ntm1": {
+            "useSpecific": "ANtm,AIts"
+          },
+          "Ntm2": {
+            "useSpecific": "ANtm,AIts"
+          },
+          "Ntm3": {
+            "useSpecific": "ANtm,AIts"
+          },
+          "Ntm4": {
+            "useSpecific": "ANtm,AIts"
+          }
+        }
+      }
+    },
+    {
+      "note": "Scepter of Mastery becomes a level-6 charged drop: range 600, 1 charge",
+      "files": {
+        "Units\\ItemData.slk": {
+          "ccmd": {
+            "class": "Charged",
+            "Level": 6,
+            "uses": 1,
+            "pickRandom": 1
+          }
+        },
+        "Units\\AbilityData.slk": {
+          "AIco": {
+            "Rng1": 600
+          }
+        }
+      }
+    },
+    {
+      "note": "Scepter of Mastery priced 700 like the other level-6 charged items",
+      "source": "undocumented",
+      "files": {
+        "Units\\ItemData.slk": {
+          "ccmd": {
+            "goldcost": 700
+          }
+        }
+      }
+    },
+    {
+      "note": "Inferno Stone moves from level-6 charged to level-7 artifact",
+      "files": {
+        "Units\\ItemData.slk": {
+          "infs": {
+            "class": "Artifact",
+            "Level": 7,
+            "prio": 146
+          }
+        }
+      }
+    },
+    {
+      "note": "Inferno Stone priced 800",
+      "source": "undocumented",
+      "files": {
+        "Units\\ItemData.slk": {
+          "infs": {
+            "goldcost": 800
+          }
+        }
+      }
+    },
+    {
+      "note": "Transport Ship: level 1, 900 hit points, Light armour, stock 2 after 120 s restocking every 30 s, 30 s build/repair, unloads one unit per 0.5 s",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nbot": {
+            "level": 1,
+            "HP": 900,
+            "realHP": 900,
+            "defType": "small",
+            "stockMax": 2,
+            "stockStart": 120,
+            "stockRegen": 30,
+            "bldtm": 30,
+            "reptm": 30
+          }
+        },
+        "Units\\AbilityData.slk": {
+          "Sch5": {
+            "Dur1": 0.5,
+            "HeroDur1": 0.5
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenary camps: new line-up per tileset (Underground/Dungeon, Ashenvale, Barrens, Outland/Black Citadel, Felwood, Icecrown, Lordaeron Winter, Northrend, Sunken Ruins, Village)",
+      "files": {
+        "Units\\NeutralUnitFunc.txt": {
+          "nmr3": {
+            "Sellunits": "nitp,nits,ngrk,nogm"
+          },
+          "nmr4": {
+            "Sellunits": "ncea,ncen,nqbh,nhrw"
+          },
+          "nmr5": {
+            "Sellunits": "ndtp,ndtb,nwlg,nsts"
+          },
+          "nmr6": {
+            "Sellunits": "nmfs,nssp,nsln,nsts"
+          },
+          "nmr7": {
+            "Sellunits": "nnwa,nits,nrvs,nnwr"
+          },
+          "nmr0": {
+            "Sellunits": "nkot,nass,nkog,nkol"
+          },
+          "nmra": {
+            "Sellunits": "nskf,nkog,nowb,nrvs"
+          },
+          "nmrb": {
+            "Sellunits": "nskf,nkog,nowb,nrvs"
+          },
+          "nmrc": {
+            "Sellunits": "nmbg,nsrh,nmsn,nsog"
+          },
+          "nmrd": {
+            "Sellunits": "ntkh,nits,nbdw,nubw"
+          },
+          "nmre": {
+            "Sellunits": "ndrm,nfgb,nvdw,nsog"
+          },
+          "nmrf": {
+            "Sellunits": "ndrm,nfgb,nvdw,nsog"
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenary camps: the Summer and Fall camps list their fourth unit last, and the mercenaries take command-card slots that fit the new line-ups",
+      "source": "undocumented",
+      "files": {
+        "Units\\NeutralUnitFunc.txt": {
+          "nmer": {
+            "Sellunits": "nftb,nfsp,ngrk,nogm"
+          },
+          "nmr2": {
+            "Sellunits": "ngnb,ngnw,ngrk,nomg"
+          },
+          "nass": {
+            "Buttonpos": "1,0"
+          },
+          "nkot": {
+            "Buttonpos": "0,0"
+          },
+          "nogm": {
+            "Buttonpos": "3,0"
+          },
+          "nomg": {
+            "Buttonpos": "3,0"
+          },
+          "nsln": {
+            "Buttonpos": "2,0"
+          },
+          "nsts": {
+            "Buttonpos": "3,0"
+          },
+          "nssp": {
+            "Buttonpos": "1,0"
+          },
+          "nsog": {
+            "Buttonpos": "3,0"
+          },
+          "nsrh": {
+            "Buttonpos": "1,0"
+          },
+          "nfgb": {
+            "Buttonpos": "1,0"
+          },
+          "ndrm": {
+            "Buttonpos": "0,0"
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Assassin 260 gold, 220 s initial delay",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nass": {
+            "goldcost": 260,
+            "goldRep": 260,
+            "stockStart": 220
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Bloodfiend 240 gold, stock 1, 220 s initial delay",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nfgb": {
+            "goldcost": 240,
+            "goldRep": 240,
+            "stockMax": 1,
+            "stockStart": 220
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Blue Dragonspawn Warrior 300 gold, no lumber",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nbdw": {
+            "goldcost": 300,
+            "goldRep": 300,
+            "lumbercost": 0,
+            "lumberRep": 0
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Burning Archer 220 s initial delay",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nskf": {
+            "stockStart": 220
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Centaur Archer 120 s initial delay",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ncea": {
+            "stockStart": 120
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Centaur Outrunner 220 s initial delay",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ncen": {
+            "stockStart": 220
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Dark Troll Berserker 245 gold, 220 s initial delay",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ndtb": {
+            "goldcost": 245,
+            "goldRep": 245,
+            "stockStart": 220
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Dark Troll Shadow Priest 175 gold, 120 s initial delay",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ndtp": {
+            "goldcost": 175,
+            "goldRep": 175,
+            "stockStart": 120
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Draenei Disciple 195 gold 10 lumber, 120 s initial delay, restocks every 110 s",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ndrm": {
+            "goldcost": 195,
+            "goldRep": 195,
+            "lumbercost": 10,
+            "lumberRep": 10,
+            "stockStart": 120,
+            "stockRegen": 110
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Giant Wolf 215 gold, no lumber, 220 s initial delay",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nwlg": {
+            "goldcost": 215,
+            "goldRep": 215,
+            "lumbercost": 0,
+            "lumberRep": 0,
+            "stockStart": 220
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Gnoll Brute 140 gold, no lumber, 120 s initial delay",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ngnb": {
+            "goldcost": 140,
+            "goldRep": 140,
+            "lumbercost": 0,
+            "lumberRep": 0,
+            "stockStart": 120
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Gnoll Warden 180 gold, 220 s initial delay",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ngnw": {
+            "goldcost": 180,
+            "goldRep": 180,
+            "stockStart": 220
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Harpy Windwitch 440 s initial delay",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nhrw": {
+            "stockStart": 440
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Ice Troll Priest 175 gold, 120 s initial delay",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nitp": {
+            "goldcost": 175,
+            "goldRep": 175,
+            "stockStart": 120
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Kobold Geomancer 215 gold",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nkog": {
+            "goldcost": 215,
+            "goldRep": 215
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Kobold Tunneler 150 gold, no lumber, 120 s initial delay",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nkot": {
+            "goldcost": 150,
+            "goldRep": 150,
+            "lumbercost": 0,
+            "lumberRep": 0,
+            "stockStart": 120
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Mur'gul Blood-Gill 195 gold 10 lumber, 120 s initial delay",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nmbg": {
+            "goldcost": 195,
+            "goldRep": 195,
+            "lumbercost": 10,
+            "lumberRep": 10,
+            "stockStart": 120
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Mur'gul Snarecaster 265 gold 30 lumber",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nmsn": {
+            "goldcost": 265,
+            "goldRep": 265,
+            "lumbercost": 30,
+            "lumberRep": 30
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Murloc Flesheater 120 s initial delay",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nmfs": {
+            "stockStart": 120
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Nerubian Warrior 205 gold, 120 s initial delay",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nnwa": {
+            "goldcost": 205,
+            "goldRep": 205,
+            "stockStart": 120
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Quillboar Hunter 220 s initial delay",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nqbh": {
+            "stockStart": 220
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Rogue 120 s initial delay",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nrog": {
+            "stockStart": 120
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Satyr Shadowdancer 200 gold 20 lumber, 440 s initial delay",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nsts": {
+            "goldcost": 200,
+            "goldRep": 200,
+            "lumbercost": 20,
+            "lumberRep": 20,
+            "stockStart": 440
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Spitting Spider 235 gold 30 lumber, 220 s initial delay",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nssp": {
+            "goldcost": 235,
+            "goldRep": 235,
+            "lumbercost": 30,
+            "lumberRep": 30,
+            "stockStart": 220
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Stormreaver Hermit 190 gold, 220 s initial delay",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nsrh": {
+            "goldcost": 190,
+            "goldRep": 190,
+            "stockStart": 220
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Tuskarr Healer 10 lumber, 120 s initial delay",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ntkh": {
+            "lumbercost": 10,
+            "lumberRep": 10,
+            "stockStart": 120
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Unbroken Darkweaver 320 gold 50 lumber",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nubw": {
+            "goldcost": 320,
+            "goldRep": 320,
+            "lumbercost": 50,
+            "lumberRep": 50
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenaries: Voidwalker 245 gold 30 lumber",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nvdw": {
+            "goldcost": 245,
+            "goldRep": 245,
+            "lumbercost": 30,
+            "lumberRep": 30
+          }
+        }
+      }
+    },
+    {
+      "note": "Potion of Divinity and Sentry Wards leave the level-5 drop pool; the Vampiric Potion becomes a charged drop (150 gold) and the Rusty Mining Pick a level-3 item (300 gold) — the charged-pool reshuffle the notes describe",
+      "source": "undocumented",
+      "files": {
+        "Units\\ItemData.slk": {
+          "pdiv": {
+            "class": "Miscellaneous",
+            "Level": 0,
+            "prio": 0,
+            "pickRandom": 0
+          },
+          "ward": {
+            "class": "Miscellaneous",
+            "Level": 0,
+            "pickRandom": 0
+          },
+          "rhe1": {
+            "pickRandom": 1
+          },
+          "vamp": {
+            "class": "Charged",
+            "pickRandom": 1,
+            "goldcost": 150
+          },
+          "rump": {
+            "Level": 3,
+            "prio": 100,
+            "goldcost": 300
+          }
+        }
+      }
+    },
+    {
+      "note": "The Night Elf Shipyard sells the Transport Ship, as the other races' shipyards do",
+      "source": "undocumented",
+      "files": {
+        "Units\\NightElfUnitFunc.txt": {
+          "eshy": {
+            "Sellunits": "etrs"
+          }
+        }
+      }
+    },
+    {
+      "note": "Mercenary camp (Lordaeron) button layout follows the new line-up",
+      "source": "undocumented",
+      "files": {
+        "Units\\NeutralUnitFunc.txt": {
+          "nltc": {
+            "Buttonpos": "2,0"
+          }
+        }
+      }
+    }
+  ],
+  "engine": [
+    {
+      "key": "item-in-inventory-immune-to-projectiles",
+      "note": "A missile already in flight at an item no longer destroys it once a hero has picked it up",
+      "implemented": false
+    },
+    {
+      "key": "impale-uninterruptible-airborne-vulnerable",
+      "note": "Impale reads its two new fields: an order no longer cancels it, and units in the air are damageable and attackable (still untargetable by spells)",
+      "implemented": false
+    },
+    {
+      "key": "stasis-trap-detonation-delay",
+      "note": "Stasis Trap waits its new Detonation Delay field (DataE, 0.5 s) after triggering instead of a fixed 1 s",
+      "implemented": false
+    },
+    {
+      "key": "doom-movement-slow",
+      "note": "Doom slows its target by its new Movement Speed Factor field (DataE); its creep-level cap became a field too",
+      "implemented": false
+    },
+    {
+      "key": "summon-prawns-creep-reaction",
+      "note": "A Makrura Deepseer (Summon Prawns) no longer stops reacting to enemies when a single unit attacks it",
+      "implemented": false
+    }
+  ]
+}

@@ -244,6 +244,22 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   (`tools/sim-edition-data-test.cjs` pins the overlay, the rows and the multipliers together).
   A RoC client lists only `.w3m` maps and only RoC LAN rooms (`RoomInfo.edition`), and both
   melee AIs drop rows the edition's tech tree lacks rather than naming TFT ids.
+- **Patches after 1.30.4:** read [`docs/patches.md`](docs/patches.md) before touching
+  [`src/patches/`](src/patches/README.md), [`src/vfs/patch.ts`](src/vfs/patch.ts) or
+  `tools/patch-*`. Every balance release Blizzard shipped after our 1.30.4 data (1.31.0 → 2.0.4)
+  is one JSON file of OUR OWN in `src/patches/data/`, in the game's terms (file, row id, column,
+  value), and `PatchDataSource` rewrites those tables UNDER the edition overlay — so only The
+  Frozen Throne's LIVE MELEE tables move (Blizzard never rebalanced a custom set or RoC after
+  1.30) and every reader gets the patched game without knowing. `MISC_GAME` is compiled in, so
+  `miscGame()` asks the chain for its rows. The game is ALWAYS on the latest release;
+  `setPatchLevel()` (`?dev&patch=1.32.10`) rolls back for developers only. No Blizzard text in a
+  patch — a tooltip number is fixed with a `{"replace": …}` made in the player's own file, and a
+  new object's words are ours; our own icons for new objects live in `src/patches/art/`
+  (`node tools/patch-art.mjs`). **The Forsaken Paladin (3.0.0) does not exist** (`DENIED_IDS`).
+  `pnpm patches:check` proves a release applies; `node tools/patch-extract.mjs --cdn --verify`
+  proves its values against the LIVE build's tables (Blizzard's CDN keeps only current builds —
+  every 1.30–2.0.4 config is a 404 — but 3.0.0's melee tables are exactly where the chain must
+  end).
 - **Camera:** read [`docs/camera.md`](docs/camera.md) before touching `GAME_FOV`, the zoom constants, or a map's
   camera. The FOV *field* the data carries (70) is **not** the angle the game renders with (**45°**, measured off
   the real client) — conflate them and every distance changes meaning and every map camera breaks.

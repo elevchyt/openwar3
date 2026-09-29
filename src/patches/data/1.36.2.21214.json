@@ -1,0 +1,24 @@
+{
+  "patch": "1.36.2.21214",
+  "build": 21214,
+  "released": "2024-06-17",
+  "notes": [
+    "https://us.forums.blizzard.com/en/warcraft3/t/warcraft-iii-reforged-hotfixes-updated-april-21-2026/28629/16",
+    "https://liquipedia.net/warcraft/Patch_1.36.2.21214"
+  ],
+  "changes": [
+    {
+      "note": "Rod of Necromancy cooldown 22 s (was 24), to offset the charged-item cooldown now travelling with the item",
+      "files": {
+        "Units\\AbilityData.slk": { "AIrd": { "Cool1": 22 } }
+      }
+    }
+  ],
+  "engine": [
+    {
+      "key": "charged-cooldown-kept-on-handover",
+      "note": "A charged item handed to another Hero keeps its running cooldown instead of arriving ready (reverted by 1.36.2.21228)",
+      "implemented": false
+    }
+  ]
+}

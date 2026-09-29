@@ -1,0 +1,17 @@
+{
+  "patch": "1.32.7",
+  "build": 15572,
+  "released": "2020-07-07",
+  "notes": [
+    "https://us.forums.blizzard.com/en/warcraft3/t/warcraft-iii-reforged-patch-notes-1327/25039",
+    "https://liquipedia.net/warcraft/Patch_1.32.7"
+  ],
+  "changes": [],
+  "engine": [
+    {
+      "key": "illusion-no-frost-attack",
+      "note": "A Frost Wyrm illusion's attacks no longer apply the frost slow (a regression 1.32.6 introduced)",
+      "implemented": false
+    }
+  ]
+}

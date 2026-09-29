@@ -1,0 +1,273 @@
+{
+  "patch": "2.0.3",
+  "build": 22968,
+  "released": "2025-07-17",
+  "notes": [
+    "https://us.forums.blizzard.com/en/warcraft3/t/warcraft-iii-reforged-patch-notes-version-204/36567",
+    "https://us.forums.blizzard.com/en/warcraft3/t/version-203-ptr-notes/36314",
+    "https://us.forums.blizzard.com/en/warcraft3/t/version-203-ptr-notes-week-2/36388",
+    "https://us.forums.blizzard.com/en/warcraft3/t/version-203-ptr-notes-week-3/36490",
+    "https://liquipedia.net/warcraft/Patch_2.0.3"
+  ],
+  "changes": [
+    {
+      "note": "Piercing attacks deal 90 % to Heavy armour (was 100 %) — the third entry of DamageBonusPierce, the Large/Heavy column",
+      "files": {
+        "Units\\MiscGame.txt": { "Misc": { "DamageBonusPierce": "2.00,0.75,0.9,0.35,1.00,0.50,0.05,1.50" } }
+      }
+    },
+    {
+      "note": "Every attack with ground splash also splashes Wards (Ward added to each splash target list; the Chimaera's anti-building breath also gains Enemy, as the live table has it)",
+      "files": {
+        "Units\\UnitWeapons.slk": {
+          "hbsh": { "splashTargs1": "ground,structure,debris,tree,wall,enemy,neutral,ward" },
+          "hdes": { "splashTargs1": "ground,structure,debris,tree,wall,enemy,neutral,ward" },
+          "hgry": { "splashTargs1": "ground,structure,enemy,debris,ward" },
+          "hmtm": { "splashTargs1": "ground,structure,debris,tree,wall,ward" },
+          "hphx": { "splashTargs1": "ground,structure,debris,air,enemy,ward" },
+          "hctw": { "splashTargs1": "ground,structure,debris,tree,wall,notself,ward" },
+          "ocat": { "splashTargs1": "ground,structure,debris,tree,wall,ward" },
+          "odes": { "splashTargs1": "ground,structure,debris,tree,wall,enemy,neutral,ward" },
+          "osp4": { "splashTargs1": "ground,air,structure,enemy,ward" },
+          "Edmm": { "splashTargs1": "ground,structure,debris,air,enemy,ward" },
+          "ebal": { "splashTargs1": "ground,structure,debris,wall,ward", "splashTargs2": "ground,structure,debris,wall,tree,ward" },
+          "ebsh": { "splashTargs1": "ground,structure,debris,tree,wall,enemy,neutral,ward" },
+          "echm": { "splashTargs2": "ground,debris,enemy,ward" },
+          "edes": { "splashTargs1": "ground,structure,debris,tree,wall,enemy,neutral,ward" },
+          "etrp": { "splashTargs2": "ground,structure,debris,wall,enemy,neutral,ward" },
+          "ubsp": { "splashTargs1": "ground,air,structure,debris,enemy,ward" },
+          "ufro": { "splashTargs1": "ground,structure,debris,enemy,ward" },
+          "umtw": { "splashTargs1": "ground,structure,debris,tree,wall,ward" },
+          "uubs": { "splashTargs1": "ground,structure,debris,tree,wall,enemy,neutral,ward" },
+          "nnht": { "splashTargs1": "ground,ward" },
+          "nqb3": { "splashTargs1": "ground,air,structure,debris,enemy,ward" },
+          "nqb4": { "splashTargs1": "ground,air,structure,debris,enemy,ward" },
+          "nwe2": { "splashTargs1": "ground,air,structure,debris,enemy,ward" },
+          "nwe3": { "splashTargs1": "ground,air,structure,debris,enemy,ward" },
+          "nadr": { "splashTargs1": "ground,ward" },
+          "nadw": { "splashTargs1": "ground,ward" },
+          "nahy": { "splashTargs1": "ground,structure,debris,ward" },
+          "nbdr": { "splashTargs1": "ground,ward" },
+          "nbwm": { "splashTargs1": "ground,structure,debris,ward" },
+          "nbzd": { "splashTargs1": "ground,ward" },
+          "nbzw": { "splashTargs1": "ground,ward" },
+          "nelb": { "splashTargs1": "enemy,ground,ward" },
+          "nele": { "splashTargs1": "enemy,ground,ward" },
+          "nerd": { "splashTargs1": "ground,structure,debris,air,enemy,ward" },
+          "ners": { "splashTargs1": "ground,structure,debris,air,enemy,ward" },
+          "nerw": { "splashTargs1": "ground,structure,debris,air,enemy,ward" },
+          "nfgo": { "splashTargs1": "ground,structure,debris,air,notself,ward" },
+          "nfod": { "splashTargs1": "ground,air,enemy,neutral,ward" },
+          "nfot": { "splashTargs1": "ground,air,enemy,neutral,ward" },
+          "ngrd": { "splashTargs1": "ground,structure,debris,ward" },
+          "ngrw": { "splashTargs1": "ground,ward" },
+          "nhrq": { "splashTargs1": "ground,air,ward" },
+          "nina": { "splashTargs1": "ground,air,enemy,neutral,ward" },
+          "ninc": { "splashTargs1": "ground,air,enemy,neutral,ward" },
+          "ninm": { "splashTargs1": "ground,air,enemy,neutral,ward" },
+          "nltl": { "splashTargs1": "ground,air,enemy,neutral,ward" },
+          "nndr": { "splashTargs1": "ground,ward" },
+          "nlv1": { "splashTargs1": "enemy,ground,ward" },
+          "nlv2": { "splashTargs1": "enemy,ground,ward" },
+          "nlv3": { "splashTargs1": "enemy,ground,ward" },
+          "nrwm": { "splashTargs1": "ground,structure,debris,ward" },
+          "nslh": { "splashTargs1": "ground,structure,debris,air,enemy,neutral,ward" },
+          "nsll": { "splashTargs1": "ground,structure,debris,air,enemy,neutral,ward" },
+          "nslr": { "splashTargs1": "ground,structure,debris,air,enemy,neutral,ward" },
+          "nslv": { "splashTargs1": "ground,structure,debris,air,enemy,neutral,ward" },
+          "nstw": { "splashTargs1": "ground,air,enemy,neutral,ward" },
+          "nthl": { "splashTargs1": "ground,air,enemy,neutral,ward" },
+          "Eevm": { "splashTargs1": "ground,structure,debris,air,ward" },
+          "Eidm": { "splashTargs1": "ground,structure,debris,air,ward" },
+          "Eilm": { "splashTargs1": "ground,structure,debris,air,ward" },
+          "Uwar": { "splashTargs1": "ground,structure,debris,air,enemy,ward" },
+          "ncat": { "splashTargs1": "ground,structure,debris,tree,wall,ward" },
+          "ndsa": { "splashTargs1": "ground,air,enemy,neutral,ward" },
+          "ojgn": { "splashTargs1": "ground,structure,debris,tree,wall,enemy,neutral,ward" },
+          "ubdd": { "splashTargs1": "ground,air,structure,debris,enemy,ward" },
+          "udes": { "splashTargs1": "ground,structure,debris,tree,wall,enemy,neutral,ward" },
+          "nbt1": { "splashTargs1": "ground,structure,debris,tree,wall,notself,ward" },
+          "nbt2": { "splashTargs1": "ground,structure,debris,tree,wall,notself,ward" },
+          "ncap": { "splashTargs2": "ground,structure,debris,tree,wall,ward" }
+        }
+      }
+    },
+    {
+      "note": "Pulverize (Tauren and creep) can hit Wards",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Awar": { "targs1": "ground,enemy,neutral,ward", "targs2": "ground,enemy,neutral,ward" },
+          "ACpv": { "targs1": "ground,enemy,neutral,ward" }
+        }
+      }
+    },
+    {
+      "note": "Burning Oil can hit Wards",
+      "files": {
+        "Units\\AbilityData.slk": { "Abof": { "targs1": "ground,enemy,neutral,friend,structure,self,ward" } }
+      }
+    },
+    {
+      "note": "Pit Lord's Cleaving Attack can hit Wards",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANca": {
+              "targs1": "ground,enemy,neutral,ward",
+              "targs2": "ground,enemy,neutral,ward",
+              "targs3": "ground,enemy,neutral,ward",
+              "targs4": "ground,enemy,neutral,ward"
+          }
+        }
+      }
+    },
+    {
+      "note": "Wisp gathers lumber every 7.5 s (was 7)",
+      "files": {
+        "Units\\AbilityData.slk": { "Awha": { "Dur1": 7.5, "HeroDur1": 7.5 } }
+      }
+    },
+    {
+      "note": "Archer 275 hit points (was 255)",
+      "files": {
+        "Units\\UnitBalance.slk": { "earc": { "HP": 275, "realHP": 275 } }
+      }
+    },
+    {
+      "note": "Pick up Archer, Mount Hippogryph and Dismount: 5 s cooldown (was 30)",
+      "files": {
+        "Units\\AbilityData.slk": { "Aco2": { "Cool1": 5 }, "Aco3": { "Cool1": 5 }, "Adec": { "Cool1": 5 } }
+      }
+    },
+    {
+      "note": "Hippogryph Rider 800 hit points (was 780)",
+      "files": {
+        "Units\\UnitBalance.slk": { "ehpr": { "HP": 800, "realHP": 800 } }
+      }
+    },
+    {
+      "note": "Huntress glaives no longer bounce to or from structures: a new passive Amgi (Bouncing Missile Filter, its Targets Allowed naming what stops a bounce) and the glaive's splash list drops Structure (and gains Ward, see above)",
+      "files": {
+        "Units\\AbilityData.slk": { "Amgi": { "$base": "Ault", "code": "Amgi", "comments": "Bouncing Missile Filter", "targs1": "structure" } },
+        "Units\\NightElfAbilityStrings.txt": { "Amgi": { "Name": "Glaive Bounce Filter" } },
+        "Units\\UnitAbilities.slk": { "esen": { "abilList": "Aesn,Ashm,Amgl,Aien,Ault,Amgi" } },
+        "Units\\UnitWeapons.slk": { "esen": { "splashTargs1": "ground,debris,enemy,ward" } }
+      }
+    },
+    {
+      "note": "Upgrade Moon Glaive research 50 s (was 60)",
+      "files": {
+        "Units\\UpgradeData.slk": { "Remg": { "timebase": 50 } }
+      }
+    },
+    {
+      "note": "Animate Dead keeps the raised units' abilities: the Death Knight (and the evil Arthas row) learn a new ability AUa2 in place of AUan",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AUa2": {
+              "$base": "AUan",
+              "code": "AUa2",
+              "Cost1": 125,
+              "DataB1": 0,
+              "DataC1": 1,
+              "EfctID1": "Aap5",
+              "Cost2": 125,
+              "DataB2": 0,
+              "EfctID2": "Aap5",
+              "Cost3": 125,
+              "DataB3": 0,
+              "EfctID3": "Aap5",
+              "Cost4": 125,
+              "DataB4": 0,
+              "EfctID4": "Aap5"
+          }
+        },
+        "Units\\UndeadAbilityFunc.txt": { "AUa2": { "$base": "AUan" } },
+        "Units\\UndeadAbilityStrings.txt": {
+          "AUa2": {
+              "$base": "AUan",
+              "Name": "Animate Dead",
+              "Tip": "Animate |cffffcc00D|read",
+              "Ubertip": "\"Brings <AUa2,DataA1> nearby corpses back to fight for the Death Knight for <AUa2,Dur1> seconds, with the abilities they had in life.\"",
+              "Researchtip": "\"Learn Animate |cffffcc00D|read\"",
+              "Researchubertip": "\"Brings <AUa2,DataA1> nearby corpses back to fight for the Death Knight for <AUa2,Dur1> seconds, with the abilities they had in life.\"",
+              "EditorSuffix": " (keeps abilities)"
+          }
+        },
+        "Units\\UnitAbilities.slk": { "Udea": { "heroAbilList": "AUdc,AUdp,AUau,AUa2" }, "Uear": { "heroAbilList": "AUdc,AUdp,AUau,AUa2" } }
+      }
+    },
+    {
+      "note": "Frost Nova cast range 750 (was 700)",
+      "files": {
+        "Units\\AbilityData.slk": { "AUfn": { "Rng1": 750, "Rng2": 750, "Rng3": 750, "Rng4": 750 } }
+      }
+    },
+    {
+      "note": "Life Drain costs 35 mana (was 50). The final notes repeat the PTR's 25, but 2.0.4's notes lower it 'from 35' and the live table still holds 35 on the unused fourth level, which only a 35-at-every-level release explains",
+      "files": {
+        "Units\\AbilityData.slk": { "ANdr": { "Cost1": 35, "Cost2": 35, "Cost3": 35, "Cost4": 35 } }
+      }
+    },
+    {
+      "note": "Pocket Factory makes a Clockwerk Goblin every 4.5/4/3.5/3 s by Engineering level (was 5/4.5/3.5/3)",
+      "files": {
+        "Units\\AbilityData.slk": { "ANsy": { "DataA1": 4.5, "DataA2": 4.5, "DataA3": 4.5, "DataA4": 4.5 }, "ANs1": { "DataA1": 4, "DataA2": 4, "DataA3": 4, "DataA4": 4 } }
+      }
+    },
+    {
+      "note": "Cluster Rockets deal at most 200/250/300 per wave (was 105/195/300), for every Engineering version",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANcs": { "DataD1": 200, "DataD2": 250 },
+          "ANc1": { "DataD1": 200, "DataD2": 250 },
+          "ANc2": { "DataD1": 200, "DataD2": 250 },
+          "ANc3": { "DataD1": 200, "DataD2": 250 }
+        }
+      }
+    },
+    {
+      "note": "Breath of Fire: 80/130/180 damage (was 65/125/170), cap 600/900/1200 (was 480/800/1200), start width 60 (was 125), end width 175 (was 300), burn 10/15/25 per second (was 7/14/21)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANbf": {
+              "DataA1": 80,
+              "DataA2": 130,
+              "DataA3": 180,
+              "DataB1": 600,
+              "DataB2": 900,
+              "DataB3": 1200,
+              "Area1": 60,
+              "Area2": 60,
+              "Area3": 60,
+              "Area4": 60,
+              "DataD1": 175,
+              "DataD2": 175,
+              "DataD3": 175,
+              "DataD4": 175,
+              "DataE1": 10,
+              "DataE2": 15,
+              "DataE3": 25
+          }
+        }
+      }
+    },
+    {
+      "note": "The level-3 Skeletal Orc loses Vampiric Aura and Death Coil (the 1.30.4 row has none; written so the chain ends empty whatever came before)",
+      "files": {
+        "Units\\UnitAbilities.slk": { "nsko": { "abilList": "_" } }
+      }
+    }
+  ],
+  "engine": [
+    { "key": "orb-on-acquire", "note": "Orb effects fire on attacks at auto-acquired targets, not only on ordered attacks", "implemented": false },
+    { "key": "orb-bought-while-silenced", "note": "An Orb of Slow or Orb of Lightning bought while its carrier is silenced still works", "implemented": false },
+    { "key": "bash-orb-magic-immune-air", "note": "Bash stuns magic-immune air units when the Mountain King attacks with an orb", "implemented": false },
+    { "key": "amgi-bounce-filter", "note": "Bouncing Missile Filter (Amgi): a bouncing missile never bounces to or from a target its Targets Allowed names (the Huntress: structures)", "implemented": false },
+    { "key": "animate-dead-keeps-abilities", "note": "Units raised by the new Animate Dead (base code AUa2) keep the abilities they had alive", "implemented": false },
+    { "key": "prioritize-group-toggle", "note": "The Gargoyle's Prioritize toggles correctly when a group is selected", "implemented": false },
+    { "key": "life-drain-self-universal", "note": "Life Drain's damage to the Dark Ranger herself is Universal instead of Magic, so the transfer keeps working while she is magic immune", "implemented": false },
+    { "key": "robo-goblin-item-regen", "note": "The Tinker no longer stacks item regeneration when killed in Robo-Goblin form", "implemented": false },
+    { "key": "immolation-hex-drain", "note": "Immolation stops draining mana when turned off after being levelled during Hex", "implemented": false },
+    { "key": "hex-item-bonuses", "note": "A hexed unit keeps its item bonuses through the whole transformation", "implemented": false }
+  ]
+}

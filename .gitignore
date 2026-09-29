@@ -30,3 +30,4 @@ Warcraft III/
 .logs/
 release/
 build/
+.cdn-cache/

@@ -1,0 +1,101 @@
+{
+  "patch": "2.0.2.22796",
+  "build": 22796,
+  "released": "2025-04-29",
+  "notes": [
+    "https://us.forums.blizzard.com/en/warcraft3/t/warcraft-iii-reforged-hotfixes-updated-april-21-2026/28629/23",
+    "https://liquipedia.net/warcraft/Patch_2.0.2.22796"
+  ],
+  "changes": [
+    {
+      "note": "Siphon Mana costs 25 mana (was 10) and has an 8 s cooldown (was 6)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AHdr": {
+            "Cost1": 25,
+            "Cost2": 25,
+            "Cost3": 25,
+            "Cool1": 8,
+            "Cool2": 8,
+            "Cool3": 8
+          }
+        }
+      }
+    },
+    {
+      "note": "Ultravision research back to 45 s (was 30)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Reuv": {
+            "timebase": 45
+          }
+        }
+      }
+    },
+    {
+      "note": "Sentinel lasts 120 s (was 300)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Aesn": {
+            "DataE1": 120
+          }
+        }
+      }
+    },
+    {
+      "note": "Ritual Dagger restocks every 75 s (was 90)",
+      "files": {
+        "Units\\ItemData.slk": {
+          "ritd": {
+            "stockRegen": 75
+          }
+        }
+      }
+    },
+    {
+      "note": "Infernal and Fire Pandaren Permanent Immolation back to 10 per second (reverts 2.0.2's unintended 5)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANpi": {
+            "DataA1": 10
+          },
+          "Apig": {
+            "DataA1": 10
+          }
+        }
+      }
+    },
+    {
+      "note": "Sentinel range 400 (was 275)",
+      "source": "undocumented",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Aesn": {
+            "DataC1": 400
+          },
+          "Aesr": {
+            "DataC1": 400
+          }
+        }
+      }
+    },
+    {
+      "note": "Phoenix (flying) Permanent Immolation 10 per second (was 20), with the other Permanent Immolations",
+      "source": "undocumented",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Apmf": {
+            "DataA1": 10
+          }
+        }
+      }
+    }
+  ],
+  "engine": [
+    {
+      "key": "life-drain-transfer-ignores-caster-resistance",
+      "note": "Life Drain's transfer is no longer reduced by the Dark Ranger's own spell resistance, and it can target magic-immune units (the drain half is unchanged)",
+      "implemented": false
+    }
+  ]
+}

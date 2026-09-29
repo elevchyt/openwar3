@@ -7,6 +7,7 @@ import { installMaps, type PickedInstall } from "../assets/opfs";
 import { checkVersion } from "./version";
 import { setCustomKeys } from "../data/customKeys";
 import { EditionDataSource } from "./edition";
+import { PatchDataSource } from "./patch";
 
 // Turn a picked install into a mounted VFS (plan §1 exit: "enumerate/extract any file by path
 // from a real install").
@@ -56,7 +57,10 @@ export async function loadProfile(
   // here, at the one door, so nothing downstream can read the expansion's tables by accident.
   if (isCascInstall(install.casc)) {
     const casc = await CascDataSource.open(install.casc, onProgress);
-    return { vfs: new EditionDataSource(casc), mounted: casc.mounted, missing: [], fileCount: casc.list().length, maps };
+    // …and the game's later patches UNDER the edition overlay, so they reach the live melee
+    // tables alone (src/vfs/patch.ts, docs/patches.md). A 1.30.4 store only: the patches are
+    // stated against 1.30.4, which an MPQ-era install is older than.
+    return { vfs: new EditionDataSource(new PatchDataSource(casc)), mounted: casc.mounted, missing: [], fileCount: casc.list().length, maps };
   }
 
   const sources: DataSource[] = [];

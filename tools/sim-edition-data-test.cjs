@@ -26,6 +26,7 @@ const { EditionDataSource } = require(join(REPO, ".sim-build", "src", "vfs", "ed
 const { setEdition, isRoc, ROC_DATA_SET, setMapDataSet, mapDataSet, dataSetFolder } = require(join(REPO, ".sim-build", "src", "data", "edition.js"));
 const { loadUnitRegistry } = require(join(REPO, ".sim-build", "src", "data", "units.js"));
 const { damageTable, damageMultiplier } = require(join(REPO, ".sim-build", "src", "data", "gameplayConstants.js"));
+const { setPatchLevel, BASE_PATCH, LATEST_PATCH } = require(join(REPO, ".sim-build", "src", "patches", "index.js"));
 
 const EXTRACT = join(REPO, "Warcraft III", "ExtractedData", "merged");
 if (!fs.existsSync(join(EXTRACT, ROC_DATA_SET, "Units", "UnitBalance.slk"))) {
@@ -125,8 +126,17 @@ console.log("\nthe damage table is the edition's too");
   // `Units\MiscGame.txt` against `Melee_V0\Units\MiscGame.txt`, verbatim: the expansion's
   // Piercing hits Light for 200%, Reign of Chaos's hits HEAVY for 150% and Light for 75%.
   setEdition("tft");
-  check("expansion: Piercing 200% vs Light, 100% vs Heavy",
+  // …as the INSTALL says it. 2.0.3 moved Piercing-vs-Heavy to 90 % (src/patches/, the live
+  // melee corner only), so the file's own number is read at the install's patch level, and the
+  // patched one beside it — while the custom table and Reign of Chaos never move.
+  setPatchLevel(BASE_PATCH);
+  check("expansion: Piercing 200% vs Light, 100% vs Heavy (1.30.4)",
     [damageMultiplier("pierce", "small"), damageMultiplier("pierce", "large")], [2, 1]);
+  setPatchLevel(LATEST_PATCH);
+  check("expansion, latest patch: Piercing 90% vs Heavy (2.0.3)", damageMultiplier("pierce", "large"), 0.9);
+  setMapDataSet("custom");
+  check("expansion, custom map: Piercing vs Heavy stays 100% whatever the patch", damageMultiplier("pierce", "large"), 1);
+  setMapDataSet("melee");
   check("expansion: Magic 200% vs Heavy, 75% vs Medium",
     [damageMultiplier("magic", "large"), damageMultiplier("magic", "medium")], [2, 0.75]);
   setEdition("roc");

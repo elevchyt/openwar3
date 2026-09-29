@@ -1,0 +1,643 @@
+{
+  "patch": "1.36.1",
+  "build": 20719,
+  "released": "2023-11-20",
+  "notes": [
+    "https://us.forums.blizzard.com/en/warcraft3/t/warcraft-iii-reforged-patch-notes-version-1361/31486",
+    "https://liquipedia.net/warcraft/Patch_1.36.1"
+  ],
+  "changes": [
+    {
+      "note": "Militia lasts 42.5 s (was 40)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Amil": {
+            "Dur1": 42.5,
+            "HeroDur1": 42.5
+          }
+        }
+      }
+    },
+    {
+      "note": "Bash bonus damage 25/40/55 (was 25 at every level)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AHbh": {
+            "DataC2": 40,
+            "DataC3": 55
+          }
+        },
+        "Units\\HumanAbilityStrings.txt": {
+          "AHbh": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "DataA2>% chance that an attack will do <AHbh,DataC1>",
+                  "DataA2>% chance that an attack will do <AHbh,DataC2>"
+                ],
+                [
+                  "DataA3>% chance that an attack will do <AHbh,DataC1>",
+                  "DataA3>% chance that an attack will do <AHbh,DataC3>"
+                ]
+              ]
+            },
+            "Researchubertip": {
+              "replace": [
+                [
+                  "will do <AHbh,DataC1> bonus damage",
+                  "will do bonus damage"
+                ],
+                [
+                  "<AHbh,DataA1>% chance per attack.",
+                  "<AHbh,DataA1>% chance per attack, <AHbh,DataC1> bonus damage."
+                ],
+                [
+                  "<AHbh,DataA2>% chance per attack.",
+                  "<AHbh,DataA2>% chance per attack, <AHbh,DataC2> bonus damage."
+                ],
+                [
+                  "<AHbh,DataA3>% chance per attack.",
+                  "<AHbh,DataA3>% chance per attack, <AHbh,DataC3> bonus damage."
+                ]
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "note": "Devotion Aura armour 2/4/6 (was 2/3.5/5)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AHad": {
+            "DataA2": 4,
+            "DataA3": 6
+          }
+        }
+      }
+    },
+    {
+      "note": "Keep provides 14 food (was 12)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "hkee": {
+            "fmade": 14
+          }
+        }
+      }
+    },
+    {
+      "note": "Castle provides 16 food (was 14)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "hcas": {
+            "fmade": 16
+          }
+        }
+      }
+    },
+    {
+      "note": "Priest cast point 0.4 (was 0.5)",
+      "files": {
+        "Units\\UnitWeapons.slk": {
+          "hmpr": {
+            "castpt": 0.4
+          }
+        }
+      }
+    },
+    {
+      "note": "Heal cooldown 1.1 s (was 1)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Ahea": {
+            "Cool1": 1.1
+          }
+        }
+      }
+    },
+    {
+      "note": "Archmage Strength per level 2 (was 1.8)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "Hamg": {
+            "STRplus": 2
+          }
+        }
+      }
+    },
+    {
+      "note": "Paladin move speed 300 (was 290)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "Hpal": {
+            "spd": 300
+          }
+        }
+      }
+    },
+    {
+      "note": "Moon Well mana regeneration 1.35 (was 1.5)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "emow": {
+            "regenMana": 1.35
+          }
+        }
+      }
+    },
+    {
+      "note": "Immolation costs 10 mana to activate (was 1) and needs 10 mana in reserve (was 9)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEim": {
+            "Cost1": 10,
+            "Cost2": 10,
+            "Cost3": 10,
+            "DataC1": 10,
+            "DataC2": 10,
+            "DataC3": 10
+          }
+        }
+      }
+    },
+    {
+      "note": "Blink cooldown 10/5/2.5 s (was 10/7/4)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEbl": {
+            "Cool2": 5,
+            "Cool3": 2.5
+          }
+        }
+      }
+    },
+    {
+      "note": "Fan of Knives total damage cap 375/750/1330 (was 300/625/950): five, six and seven full hits",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEfk": {
+            "DataB1": 375,
+            "DataB2": 750,
+            "DataB3": 1330
+          }
+        }
+      }
+    },
+    {
+      "note": "Mana Flare damage cap 80 (was 100)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Amfl": {
+            "DataC1": 80
+          }
+        }
+      }
+    },
+    {
+      "note": "Mark of the Talon needs only Druid of the Talon Adept Training",
+      "files": {
+        "Units\\NightElfUpgradeFunc.txt": {
+          "Reec": {
+            "Requiresamount": null
+          }
+        }
+      }
+    },
+    {
+      "note": "Spiked Carapace returns 15/30/45 % of melee damage (was 15/25/35 %)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AUts": {
+            "DataA2": 0.3,
+            "DataA3": 0.45
+          }
+        }
+      }
+    },
+    {
+      "note": "Spiked Carapace armour bonus 4/8/12 (was 3/5/7)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AUts": {
+            "DataC1": 4,
+            "DataC2": 8,
+            "DataC3": 12
+          }
+        }
+      }
+    },
+    {
+      "note": "Cripple costs 100 mana (was 125)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Acri": {
+            "Cost1": 100
+          }
+        }
+      }
+    },
+    {
+      "note": "Skeletal Mastery costs 150 gold / 100 lumber (was 200/175)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Rusm": {
+            "goldbase": 150,
+            "lumberbase": 100
+          }
+        }
+      }
+    },
+    {
+      "note": "Nerubian Tower attack cooldown 1.3 (was 1)",
+      "files": {
+        "Units\\UnitWeapons.slk": {
+          "uzg2": {
+            "cool1": 1.3,
+            "dps": 7.30769230769231
+          }
+        }
+      }
+    },
+    {
+      "note": "Nerubian Tower Frost Attack slows Heroes for 3 s (units still 5 s)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Afra": {
+            "HeroDur1": 3
+          }
+        }
+      }
+    },
+    {
+      "note": "Abomination turn rate 0.5 (was 0.4)",
+      "files": {
+        "Units\\UnitData.slk": {
+          "uabo": {
+            "turnRate": 0.5
+          }
+        }
+      }
+    },
+    {
+      "note": "Crypt Fiend turn rate 0.6 (was 0.5)",
+      "files": {
+        "Units\\UnitData.slk": {
+          "ucry": {
+            "turnRate": 0.6
+          }
+        }
+      }
+    },
+    {
+      "note": "Dreadlord move speed 300 (was 290)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "Udre": {
+            "spd": 300
+          }
+        }
+      }
+    },
+    {
+      "note": "Bladestorm deals 140 damage per second (was 110)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AOww": {
+            "DataA1": 140
+          }
+        }
+      }
+    },
+    {
+      "note": "Spirit Walker build time 35 s (was 38)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ospw": {
+            "bldtm": 35,
+            "reptm": 35
+          }
+        }
+      }
+    },
+    {
+      "note": "Spirit Walker Adept Training 50 s (was 60); Master Training 65 s (was 75) follows from the unchanged per-level increment",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Rowt": {
+            "timebase": 50
+          }
+        }
+      }
+    },
+    {
+      "note": "Orc armour upgrades: lumber increment per level 125 (was 150)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Roar": {
+            "lumbermod": 125
+          }
+        }
+      }
+    },
+    {
+      "note": "Orc melee weapon upgrades: lumber increment per level 75 (was 100)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Rome": {
+            "lumbermod": 75
+          }
+        }
+      }
+    },
+    {
+      "note": "Orc ranged weapon upgrades: lumber increment per level 75 (was 100)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Rora": {
+            "lumbermod": 75
+          }
+        }
+      }
+    },
+    {
+      "note": "Troll Headhunter 375 hit points (was 350)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ohun": {
+            "HP": 375,
+            "realHP": 375
+          }
+        }
+      }
+    },
+    {
+      "note": "Troll Berserker 475 hit points (was 450)",
+      "source": "liquipedia",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "otbk": {
+            "HP": 475,
+            "realHP": 475
+          }
+        }
+      }
+    },
+    {
+      "note": "Tauren build time 39 s (was 44); the repair time moves with it",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "otau": {
+            "bldtm": 39,
+            "reptm": 39
+          }
+        }
+      }
+    },
+    {
+      "note": "Firelord Incinerate costs 3 mana per shot (was 6)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANia": {
+            "Cost1": 3,
+            "Cost2": 3,
+            "Cost3": 3
+          }
+        }
+      }
+    },
+    {
+      "note": "Lava Spawn splits after 13 attacks (was 15)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANlm": {
+            "DataC1": 13,
+            "DataC2": 13,
+            "DataC3": 13
+          }
+        }
+      }
+    },
+    {
+      "note": "Volcano wave damage 125 (was 100)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANvc": {
+            "DataE1": 125
+          }
+        }
+      }
+    },
+    {
+      "note": "Tome of Retraining: shop stock 2",
+      "files": {
+        "Units\\ItemData.slk": {
+          "tret": {
+            "stockMax": 2
+          }
+        }
+      }
+    },
+    {
+      "note": "Staff of Teleportation: shop stock 2",
+      "files": {
+        "Units\\ItemData.slk": {
+          "stel": {
+            "stockMax": 2
+          }
+        }
+      }
+    },
+    {
+      "note": "Crystal Ball: item level 2 (was 3), a charged item with 3 charges, no cooldown",
+      "files": {
+        "Units\\ItemData.slk": {
+          "crys": {
+            "level": 2,
+            "class": "Charged",
+            "uses": 3
+          }
+        },
+        "Units\\AbilityData.slk": {
+          "AIta": {
+            "Cool1": 0
+          }
+        }
+      }
+    },
+    {
+      "note": "Ring of Protection +3 no longer drops at random",
+      "files": {
+        "Units\\ItemData.slk": {
+          "rde2": {
+            "pickRandom": 0
+          }
+        }
+      }
+    },
+    {
+      "note": "Claws of Attack +4 becomes Claws of Attack +5",
+      "files": {
+        "Units\\ItemData.slk": {
+          "rat6": {
+            "abilList": "AItj"
+          }
+        },
+        "Units\\ItemStrings.txt": {
+          "rat6": {
+            "Name": {
+              "replace": [
+                [
+                  "+4",
+                  "+5"
+                ]
+              ]
+            },
+            "Tip": {
+              "replace": [
+                [
+                  "+4",
+                  "+5"
+                ]
+              ]
+            },
+            "Ubertip": {
+              "replace": [
+                [
+                  "by 4 ",
+                  "by 5 "
+                ]
+              ]
+            },
+            "Description": {
+              "replace": [
+                [
+                  "by 4.",
+                  "by 5."
+                ]
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "note": "Periapt of Vitality costs 300 gold (was 325)",
+      "files": {
+        "Units\\ItemData.slk": {
+          "prvt": {
+            "goldcost": 300
+          }
+        }
+      }
+    },
+    {
+      "note": "Dark Troll Trapper move speed 270 (was 300)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ndtt": {
+            "spd": 270
+          }
+        }
+      }
+    },
+    {
+      "note": "Ice Troll Berserker move speed 270 (was 300)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nits": {
+            "spd": 270
+          }
+        }
+      }
+    },
+    {
+      "note": "Ice Troll High Priest move speed 270 (was 300)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nith": {
+            "spd": 270
+          }
+        }
+      }
+    },
+    {
+      "note": "Assassin move speed 270 (was 300)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nass": {
+            "spd": 270
+          }
+        }
+      }
+    },
+    {
+      "note": "Creep Frost Armor slows attackers for 3 s (was 5)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ACfa": {
+            "Dur1": 3,
+            "HeroDur1": 3
+          },
+          "ACf2": {
+            "Dur1": 3,
+            "HeroDur1": 3
+          }
+        }
+      }
+    },
+    {
+      "note": "Spirit Walker (ethereal form) build time 35, as the Spirit Walker",
+      "source": "undocumented",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ospm": {
+            "bldtm": 35,
+            "reptm": 35
+          }
+        }
+      }
+    },
+    {
+      "note": "Crypt Fiend (burrowed) turn rate 0.6, as the Crypt Fiend",
+      "source": "undocumented",
+      "files": {
+        "Units\\UnitData.slk": {
+          "ucrm": {
+            "turnRate": 0.6
+          }
+        }
+      }
+    },
+    {
+      "note": "Crystal Ball 150 gold, with its move to a charged item",
+      "source": "undocumented",
+      "files": {
+        "Units\\ItemData.slk": {
+          "crys": {
+            "goldcost": 150
+          }
+        }
+      }
+    },
+    {
+      "note": "Lava Spawn split factor 0.75 at levels 2 and 3",
+      "source": "undocumented",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANlm": {
+            "DataD2": 0.75,
+            "DataD3": 0.75
+          }
+        }
+      }
+    }
+  ],
+  "engine": [
+    {
+      "key": "stock-initial-retraining-teleport",
+      "note": "Tome of Retraining and Staff of Teleportation start a match with 2 in stock (ItemData stockInitial = 2, a column 1.30.4 does not have)",
+      "implemented": false
+    }
+  ]
+}

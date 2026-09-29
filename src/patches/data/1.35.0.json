@@ -1,0 +1,904 @@
+{
+  "patch": "1.35.0",
+  "build": 19882,
+  "released": "2023-01-19",
+  "notes": [
+    "https://us.forums.blizzard.com/en/warcraft3/t/warcraft-iii-reforged-patch-1350-notes-january-19/29812",
+    "https://liquipedia.net/warcraft/Patch_1.35.0"
+  ],
+  "changes": [
+    {
+      "note": "Altar heroes cost 400 gold (was 425)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "Hpal": {
+            "goldcost": 400,
+            "goldrep": 400
+          },
+          "Hamg": {
+            "goldcost": 400,
+            "goldrep": 400
+          },
+          "Hmkg": {
+            "goldcost": 400,
+            "goldrep": 400
+          },
+          "Hblm": {
+            "goldcost": 400,
+            "goldrep": 400
+          },
+          "Obla": {
+            "goldcost": 400,
+            "goldrep": 400
+          },
+          "Ofar": {
+            "goldcost": 400,
+            "goldrep": 400
+          },
+          "Otch": {
+            "goldcost": 400,
+            "goldrep": 400
+          },
+          "Oshd": {
+            "goldcost": 400,
+            "goldrep": 400
+          },
+          "Edem": {
+            "goldcost": 400,
+            "goldrep": 400
+          },
+          "Ekee": {
+            "goldcost": 400,
+            "goldrep": 400
+          },
+          "Emoo": {
+            "goldcost": 400,
+            "goldrep": 400
+          },
+          "Ewar": {
+            "goldcost": 400,
+            "goldrep": 400
+          },
+          "Udea": {
+            "goldcost": 400,
+            "goldrep": 400
+          },
+          "Udre": {
+            "goldcost": 400,
+            "goldrep": 400
+          },
+          "Ulic": {
+            "goldcost": 400,
+            "goldrep": 400
+          },
+          "Ucrl": {
+            "goldcost": 400,
+            "goldrep": 400
+          },
+          "Edmm": {
+            "goldcost": 400,
+            "goldrep": 400
+          }
+        }
+      }
+    },
+    {
+      "note": "Hero revive time factor 0.6 (was 0.65)",
+      "files": {
+        "Units\\MiscGame.txt": {
+          "Misc": {
+            "ReviveTimeFactor": "0.60"
+          }
+        }
+      }
+    },
+    {
+      "note": "Blacksmith costs 40 lumber (was 60)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "hbla": {
+            "lumbercost": 40
+          }
+        }
+      }
+    },
+    {
+      "note": "Peasant 240 hit points (was 230)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "hpea": {
+            "HP": 240,
+            "realHP": 240
+          }
+        }
+      }
+    },
+    {
+      "note": "Militia 240 hit points (was 230)",
+      "source": "liquipedia",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "hmil": {
+            "HP": 240,
+            "realHP": 240
+          }
+        }
+      }
+    },
+    {
+      "note": "Spell Breaker base armor 3 (was 2)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "hspt": {
+            "def": 3,
+            "realdef": 3
+          }
+        }
+      }
+    },
+    {
+      "note": "Control Magic research needs a Castle (was Keep)",
+      "files": {
+        "Units\\HumanUpgradeFunc.txt": {
+          "Rhss": {
+            "Requires": "hvlt,hcas"
+          }
+        }
+      }
+    },
+    {
+      "note": "Siphon Mana drains 15/25/40 per second (was 15/30/45)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AHdr": {
+            "DataB2": 25,
+            "DataB3": 40
+          }
+        }
+      }
+    },
+    {
+      "note": "Polymorph costs 200 mana (was 220)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Aply": {
+            "Cost1": 200
+          }
+        }
+      }
+    },
+    {
+      "note": "Mechanical Critter sight 500 (was 350); the critter rows it summons from all gain it",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nalb": {
+            "sight": 500,
+            "nsight": 500
+          },
+          "ncrb": {
+            "sight": 500,
+            "nsight": 500
+          },
+          "nder": {
+            "sight": 500,
+            "nsight": 500
+          },
+          "ndog": {
+            "sight": 500,
+            "nsight": 500
+          },
+          "ndwm": {
+            "sight": 500,
+            "nsight": 500
+          },
+          "nech": {
+            "sight": 500,
+            "nsight": 500
+          },
+          "necr": {
+            "sight": 500,
+            "nsight": 500
+          },
+          "nfbr": {
+            "sight": 500,
+            "nsight": 500
+          },
+          "nfro": {
+            "sight": 500,
+            "nsight": 500
+          },
+          "nhmc": {
+            "sight": 500,
+            "nsight": 500
+          },
+          "npig": {
+            "sight": 500,
+            "nsight": 500
+          },
+          "npng": {
+            "sight": 500,
+            "nsight": 500
+          },
+          "npnw": {
+            "sight": 500,
+            "nsight": 500
+          },
+          "nrac": {
+            "sight": 500,
+            "nsight": 500
+          },
+          "nrat": {
+            "sight": 500,
+            "nsight": 500
+          },
+          "nsea": {
+            "sight": 500,
+            "nsight": 500
+          },
+          "nsha": {
+            "sight": 500,
+            "nsight": 500
+          },
+          "nshe": {
+            "sight": 500,
+            "nsight": 500
+          },
+          "nshf": {
+            "sight": 500,
+            "nsight": 500
+          },
+          "nshw": {
+            "sight": 500,
+            "nsight": 500
+          },
+          "nskk": {
+            "sight": 500,
+            "nsight": 500
+          },
+          "nsno": {
+            "sight": 500,
+            "nsight": 500
+          },
+          "nvul": {
+            "sight": 500,
+            "nsight": 500
+          }
+        }
+      }
+    },
+    {
+      "note": "Siege Engine Barrage damage 16 (was 14)",
+      "files": {
+        "Units\\UnitWeapons.slk": {
+          "hmtt": {
+            "dmgplus2": 16,
+            "mindmg2": 17,
+            "avgdmg2": 17.5,
+            "maxdmg2": 18
+          },
+          "hrtt": {
+            "dmgplus2": 16,
+            "mindmg2": 17,
+            "avgdmg2": 17.5,
+            "maxdmg2": 18
+          }
+        }
+      }
+    },
+    {
+      "note": "Siege Engine keeps its unit level when it takes Barrage",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "hrtt": {
+            "level": 4
+          }
+        }
+      }
+    },
+    {
+      "note": "Mass Teleport cooldown 30 s (was 20)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AHmt": {
+            "Cool1": 30,
+            "Cool2": 30,
+            "Cool3": 30,
+            "Cool4": 30
+          }
+        }
+      }
+    },
+    {
+      "note": "Staff of Sanctuary costs 200 gold (was 250)",
+      "files": {
+        "Units\\ItemData.slk": {
+          "ssan": {
+            "goldcost": 200
+          }
+        }
+      }
+    },
+    {
+      "note": "Orb of Fire +5 damage (was +7)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIfb": {
+            "DataA1": 5
+          }
+        }
+      }
+    },
+    {
+      "note": "Orb of Fire costs 250 gold (was 325)",
+      "files": {
+        "Units\\ItemData.slk": {
+          "ofir": {
+            "goldcost": 250
+          }
+        }
+      }
+    },
+    {
+      "note": "Troll Headhunter (and Berserker) build time 22 s (was 20)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ohun": {
+            "bldtm": 22,
+            "reptm": 22
+          },
+          "otbk": {
+            "bldtm": 22,
+            "reptm": 22
+          }
+        }
+      }
+    },
+    {
+      "note": "Mirror Image illusions deal 15% of the Blademaster's damage",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AOmi": {
+            "DataB1": 0.15,
+            "DataB2": 0.15,
+            "DataB3": 0.15,
+            "DataB4": 0.15
+          }
+        }
+      }
+    },
+    {
+      "note": "Liquid Fire slows repair instead of preventing it",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Aliq": {
+            "DataD1": 1,
+            "DataE1": 1.75
+          }
+        },
+        "Units\\OrcAbilityStrings.txt": {
+          "Aliq": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "cannot be repaired",
+                  "are repaired more slowly"
+                ]
+              ]
+            }
+          }
+        },
+        "Units\\OrcUpgradeStrings.txt": {
+          "Rolf": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "stops them from being repaired",
+                  "slows their repair"
+                ]
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "note": "Endurance Aura movement speed 10/15/20% (was 10/20/30%)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AOae": {
+            "DataA2": 0.15,
+            "DataA3": 0.2
+          }
+        }
+      }
+    },
+    {
+      "note": "Stasis Trap activation delay 7 s (was 9)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Asta": {
+            "DataA1": 7
+          }
+        }
+      }
+    },
+    {
+      "note": "Brute Strength +125 hit points (was +100)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Robs": {
+            "base1": 125
+          }
+        }
+      }
+    },
+    {
+      "note": "Bladestorm cooldown 120 s (was 180)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AOww": {
+            "Cool1": 120
+          }
+        }
+      }
+    },
+    {
+      "note": "Great Hall build time 140 s (was 150)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ogre": {
+            "bldtm": 140,
+            "reptm": 140
+          }
+        }
+      }
+    },
+    {
+      "note": "Feral Spirit costs 85 mana (was 75)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AOsf": {
+            "Cost1": 85,
+            "Cost2": 85,
+            "Cost3": 85
+          }
+        }
+      }
+    },
+    {
+      "note": "Chain Lightning costs 110 mana (was 120)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AOcl": {
+            "Cost1": 110,
+            "Cost2": 110,
+            "Cost3": 110,
+            "Cost4": 110
+          }
+        }
+      }
+    },
+    {
+      "note": "Tranquility cooldown 120 s (was 60)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEtq": {
+            "Cool1": 120
+          }
+        }
+      }
+    },
+    {
+      "note": "Starfall cooldown 120 s (was 180)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEsf": {
+            "Cool1": 120
+          }
+        }
+      }
+    },
+    {
+      "note": "Starfall costs 150 mana (was 200)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEsf": {
+            "Cost1": 150
+          }
+        }
+      }
+    },
+    {
+      "note": "Entangling Roots lasts 9/17/25 s on units (was 9/18/30)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEer": {
+            "Dur2": 17,
+            "Dur3": 25
+          }
+        }
+      }
+    },
+    {
+      "note": "Thorns Aura returns 15/30/45% (was 10/20/30%)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEah": {
+            "DataA1": 0.15,
+            "DataA2": 0.3,
+            "DataA3": 0.45
+          }
+        }
+      }
+    },
+    {
+      "note": "Mountain Giant base armor 6 (+2)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "emtg": {
+            "def": 6,
+            "realdef": 6
+          }
+        }
+      }
+    },
+    {
+      "note": "Hardened Skin reduces 8 damage (was 12)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Assk": {
+            "DataC1": 8
+          }
+        }
+      }
+    },
+    {
+      "note": "Ultravision research needs a Tree of Ages",
+      "files": {
+        "Units\\NightElfUpgradeFunc.txt": {
+          "Reuv": {
+            "Requires": "etoa"
+          }
+        }
+      }
+    },
+    {
+      "note": "Immolation drains 6 mana per tick (was 7)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEim": {
+            "DataB1": 6,
+            "DataB2": 6,
+            "DataB3": 6,
+            "DataB4": 6
+          }
+        }
+      }
+    },
+    {
+      "note": "Immolation ticks every 0.5 s (was 1 s)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEim": {
+            "Dur1": 0.5,
+            "Dur2": 0.5,
+            "Dur3": 0.5,
+            "Dur4": 0.5,
+            "HeroDur1": 0.5,
+            "HeroDur2": 0.5,
+            "HeroDur3": 0.5,
+            "HeroDur4": 0.5
+          }
+        },
+        "Units\\NightElfAbilityStrings.txt": {
+          "AEim": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "damage per second",
+                  "damage every 0.5 seconds"
+                ]
+              ]
+            },
+            "Researchubertip": {
+              "replace": [
+                [
+                  "damage per second",
+                  "damage every 0.5 seconds"
+                ]
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "note": "Immolation damage 8/12/18 per tick (was 10/15/20 per second)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEim": {
+            "DataA1": 8,
+            "DataA2": 12,
+            "DataA3": 18
+          }
+        }
+      }
+    },
+    {
+      "note": "Immolation activation costs 20 mana (was 25), 10 more required",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEim": {
+            "Cost1": 20,
+            "Cost2": 20,
+            "Cost3": 20,
+            "Cost4": 20
+          }
+        }
+      }
+    },
+    {
+      "note": "Druid of the Talon crow form attack is Piercing (was Magic)",
+      "files": {
+        "Units\\UnitWeapons.slk": {
+          "edtm": {
+            "atkType1": "pierce"
+          }
+        }
+      }
+    },
+    {
+      "note": "Druid of the Talon crow form base damage 26 (was 34)",
+      "files": {
+        "Units\\UnitWeapons.slk": {
+          "edtm": {
+            "dmgplus1": 26,
+            "mindmg1": 27,
+            "avgdmg1": 30,
+            "maxdmg1": 33
+          }
+        }
+      }
+    },
+    {
+      "note": "Storm Crow Form costs 25 mana (was 50)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Arav": {
+            "Cost1": 25
+          }
+        }
+      }
+    },
+    {
+      "note": "Druid of the Claw starts with 100 mana (was 125)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "edoc": {
+            "mana0": 100
+          }
+        }
+      }
+    },
+    {
+      "note": "Unholy Aura movement speed 10/15/20% (was 10/17.5/25%)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AUau": {
+            "DataA2": 0.15,
+            "DataA3": 0.2
+          }
+        }
+      }
+    },
+    {
+      "note": "Animate Dead corpses can be killed",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AUan": {
+            "DataB1": 0,
+            "DataB2": 0,
+            "DataB3": 0,
+            "DataB4": 0
+          }
+        },
+        "Units\\UndeadAbilityStrings.txt": {
+          "AUan": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "Animated units are invulnerable.",
+                  "Animated units can be killed."
+                ]
+              ]
+            },
+            "Researchubertip": {
+              "replace": [
+                [
+                  "Animated units are invulnerable.",
+                  "Animated units can be killed."
+                ]
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "note": "Animate Dead corpses carry Disease Cloud once it is researched (new ability Aap5)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Aap5": {
+            "$base": "Aap1",
+            "comments": "Aura - Plague (Animated Dead)",
+            "DataA1": 75
+          },
+          "AUan": {
+            "EfctID1": "Aap5",
+            "EfctID2": "Aap5",
+            "EfctID3": "Aap5",
+            "EfctID4": "Aap5"
+          }
+        },
+        "Units\\UndeadAbilityFunc.txt": {
+          "Aap5": {
+            "$base": "Aap1"
+          }
+        },
+        "Units\\UndeadAbilityStrings.txt": {
+          "Aap5": {
+            "Name": "Disease Cloud",
+            "Tip": "Disease Cloud",
+            "Ubertip": "\"Spreads a sickness to nearby living enemies that deals <Aap5,DataB1> damage per second for <Aap5,DataA1> seconds.\"",
+            "EditorSuffix": " (Animate Dead)"
+          }
+        }
+      }
+    },
+    {
+      "note": "Disease Cloud lasts 75 s (was 90)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Aap1": {
+            "DataA1": 75
+          },
+          "Aap2": {
+            "DataA1": 75
+          }
+        }
+      }
+    },
+    {
+      "note": "Obsidian Statue unit level 3 (was 2)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "uobs": {
+            "level": 3
+          }
+        }
+      }
+    },
+    {
+      "note": "Spirit Touch restores 2 mana (was 3)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Arpm": {
+            "DataB1": 2
+          }
+        }
+      }
+    },
+    {
+      "note": "Haunted Gold Mine build time 110 s (was 100)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ugol": {
+            "bldtm": 110,
+            "reptm": 110
+          }
+        }
+      }
+    },
+    {
+      "note": "Dark Ritual cooldown 20 s (15 in the data; the notes say 25)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AUdr": {
+            "Cool1": 20,
+            "Cool2": 20,
+            "Cool3": 20
+          }
+        }
+      }
+    },
+    {
+      "note": "Dark Ritual converts 33/55/80% (was 33/66/100%)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AUdr": {
+            "DataA2": 0.55,
+            "DataA3": 0.8
+          }
+        }
+      }
+    },
+    {
+      "note": "Wand of Illusion 2 charges (was 3)",
+      "files": {
+        "Units\\ItemData.slk": {
+          "will": {
+            "uses": 2
+          }
+        }
+      }
+    },
+    {
+      "note": "Wand of Mana Stealing steals 65 mana (was 50)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Aste": {
+            "DataA1": 65
+          }
+        }
+      }
+    },
+    {
+      "note": "Legion Doom-Horn movement speed bonus 5% (was 7.5%)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIau": {
+            "DataA1": 0.05
+          }
+        }
+      }
+    },
+    {
+      "note": "Ancient Janggo of Endurance movement speed bonus 5% (was 7.5%)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIae": {
+            "DataA1": 0.05
+          }
+        }
+      }
+    },
+    {
+      "note": "Orb of Fire +5 damage on its 1.31 ability row as well (the item carries AIf2 since 1.31.0)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIf2": {
+            "DataA1": 5
+          }
+        }
+      }
+    },
+    {
+      "note": "The Plague Ward's disease aura no longer asks for the Disease Cloud research, with the rework that gave animated corpses the cloud",
+      "source": "undocumented",
+      "files": {
+        "Units\\UndeadAbilityFunc.txt": {
+          "Aap2": {
+            "Requires": null
+          }
+        }
+      }
+    }
+  ],
+  "engine": [
+    {
+      "key": "ams-takes-dispel-damage",
+      "note": "Anti-magic Shell loses barrier to dispels, Purge and Abolish Magic as a summon takes damage from them",
+      "implemented": false
+    },
+    {
+      "key": "animate-dead-not-dispellable",
+      "note": "Animate Dead units can no longer be dispelled",
+      "implemented": false
+    },
+    {
+      "key": "mirror-image-xp-by-level",
+      "note": "Mirror Image illusions give experience as a unit of the Blademaster's level when killed",
+      "implemented": false
+    }
+  ]
+}

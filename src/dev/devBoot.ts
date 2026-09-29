@@ -17,6 +17,7 @@ import { buildStart, newSetup, seatPeers } from "../net/lobbySetup";
 import { matchLinkFrom, type MatchLinkSetup } from "../game/matchLink";
 import { MELEE_INSANE, MELEE_NEWBIE, MELEE_NORMAL } from "../ai/ids";
 import { edition, setEdition, type Edition } from "../data/edition";
+import { patchLevel, setPatchLevel } from "../patches";
 
 /**
  * Scripted boot for automated testing — the load gate without the human
@@ -45,6 +46,8 @@ import { edition, setEdition, type Edition } from "../data/edition";
  *                                            by default) and this machine an observer
  *   ?dev&chapter=NightElfX01                start a CAMPAIGN chapter (&difficulty=easy|normal|hard)
  *   ?dev&edition=roc                        boot the Reign of Chaos client (`tft` for the expansion)
+ *   ?dev&patch=1.32.10                      play on an EARLIER balance patch (`1.30.4` = the install
+ *                                            untouched) — the developer's rollback, docs/patches.md
  *
  * `player` and `seed` are what make two-client testing possible: point two browser contexts at
  * the same map and seed with different slots and they are in the same world looking at it from
@@ -154,6 +157,11 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   const wantEdition = params.get("edition");
   if (wantEdition === "roc" || wantEdition === "tft") setEdition(wantEdition as Edition);
   log(`edition: ${edition()}`);
+  // The game is always on the latest patch (src/patches/); rolling it back is a developer's tool
+  // and this is its only door — before the mount, so no table is parsed at the wrong level.
+  const wantPatch = params.get("patch");
+  if (wantPatch) setPatchLevel(wantPatch);
+  log(`patch: ${patchLevel()}`);
 
   const want = params.get("map") ?? params.get("dev");
   const wantMap = want && want !== "" && want !== "1" ? want : null;

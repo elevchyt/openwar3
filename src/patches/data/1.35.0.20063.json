@@ -1,0 +1,109 @@
+{
+  "patch": "1.35.0.20063",
+  "build": 20063,
+  "released": "2023-03-21",
+  "notes": [
+    "https://us.forums.blizzard.com/en/warcraft3/t/warcraft-iii-reforged-hotfixes/28629/9",
+    "https://liquipedia.net/warcraft/Patch_1.35.0.20063"
+  ],
+  "changes": [
+    {
+      "note": "Mirror Image illusions deal 20% of the Blademaster's damage (was 15%)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AOmi": {
+            "DataB1": 0.2,
+            "DataB2": 0.2,
+            "DataB3": 0.2
+          }
+        }
+      }
+    },
+    {
+      "note": "Mirror Image illusions give at most 30 experience",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AOmi": {
+            "DataE1": 30,
+            "DataE2": 30,
+            "DataE3": 30,
+            "DataE4": 30
+          }
+        }
+      }
+    },
+    {
+      "note": "Immolation damage 7/12/18 per tick (was 8/12/18)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEim": {
+            "DataA1": 7
+          }
+        }
+      }
+    },
+    {
+      "note": "Immolation drains 7 mana per tick (was 6)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEim": {
+            "DataB1": 7,
+            "DataB2": 7,
+            "DataB3": 7
+          }
+        }
+      }
+    },
+    {
+      "note": "Immolation activation costs 1 mana (was 20)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEim": {
+            "Cost1": 1,
+            "Cost2": 1,
+            "Cost3": 1
+          }
+        }
+      }
+    },
+    {
+      "note": "Immolation needs 9 more mana to activate (was 10)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEim": {
+            "DataC1": 9,
+            "DataC2": 9,
+            "DataC3": 9
+          }
+        }
+      }
+    },
+    {
+      "note": "Anti-magic Shell absorbs 420 spell damage (was 300)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Aam2": {
+            "DataC1": 420
+          }
+        }
+      }
+    }
+  ],
+  "engine": [
+    {
+      "key": "mirror-image-xp-cap",
+      "note": "The experience a Mirror Image illusion gives is capped at the ability's DataE",
+      "implemented": false
+    },
+    {
+      "key": "devour-magic-removes-ams",
+      "note": "Fix: a Destroyer's dispel now removes Anti-magic Shell",
+      "implemented": false
+    },
+    {
+      "key": "liquid-fire-repair-expires",
+      "note": "Fix: the Liquid Fire repair penalty ends when the debuff does",
+      "implemented": false
+    }
+  ]
+}

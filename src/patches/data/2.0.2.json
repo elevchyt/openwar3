@@ -1,0 +1,1307 @@
+{
+  "patch": "2.0.2",
+  "build": 22692,
+  "released": "2025-04-16",
+  "notes": [
+    "https://us.forums.blizzard.com/en/warcraft3/t/warcraft-iii-reforged-patch-notes-version-202/35355",
+    "https://liquipedia.net/warcraft/Patch_2.0.2"
+  ],
+  "changes": [
+    {
+      "note": "Sentry Ward sight 1200 (was 1600) and 50 hit points (was 200), for the Witch Doctor's wards and the item's alike",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "oeye": {
+            "HP": 50,
+            "realHP": 50,
+            "sight": 1200,
+            "nsight": 1200
+          }
+        }
+      }
+    },
+    {
+      "note": "The Rune of the Watcher's Watcher Ward gets the same 1200 sight and 50 hit points",
+      "source": "undocumented",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nwad": {
+            "HP": 50,
+            "realHP": 50,
+            "sight": 1200,
+            "nsight": 1200
+          }
+        }
+      }
+    },
+    {
+      "note": "Sentry Wards, Stasis Traps and Healing Wards are magic immune (item and Witch Doctor wards are the same units)",
+      "files": {
+        "Units\\UnitAbilities.slk": {
+          "oeye": {
+            "abilList": "Adt1,Aeth,ACmi"
+          },
+          "otot": {
+            "abilList": "Aeth,ACmi"
+          },
+          "ohwd": {
+            "abilList": "Aoar,ACmi"
+          }
+        }
+      }
+    },
+    {
+      "note": "Healing Wards (item) hold 2 charges (was 3)",
+      "files": {
+        "Units\\ItemData.slk": {
+          "whwd": {
+            "uses": 2
+          }
+        }
+      }
+    },
+    {
+      "note": "Healing Ward aura radius 450 (was 500), for the item's wards and the Witch Doctor's",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Aoar": {
+            "Area1": 450
+          }
+        }
+      }
+    },
+    {
+      "note": "Ring of Protection +4 leaves the random drop pool and Ring of Protection +3 joins it",
+      "files": {
+        "Units\\ItemData.slk": {
+          "rde3": {
+            "pickRandom": 0
+          },
+          "rde2": {
+            "pickRandom": 1
+          }
+        }
+      }
+    },
+    {
+      "note": "Ring of Protection +3 costs 125 gold (was 150), the same as the +4",
+      "files": {
+        "Units\\ItemData.slk": {
+          "rde2": {
+            "goldcost": 125
+          }
+        }
+      }
+    },
+    {
+      "note": "Ring of Protection +3 is an item of level 2 (was 1), the level the +4 dropped at",
+      "source": "undocumented",
+      "files": {
+        "Units\\ItemData.slk": {
+          "rde2": {
+            "Level": 2
+          }
+        }
+      }
+    },
+    {
+      "note": "Backpack no longer needs a shop, for every race",
+      "files": {
+        "Units\\HumanUpgradeFunc.txt": {
+          "Rhpm": {
+            "Requires": null
+          }
+        },
+        "Units\\OrcUpgradeFunc.txt": {
+          "Ropm": {
+            "Requires": null
+          }
+        },
+        "Units\\UndeadUpgradeFunc.txt": {
+          "Rupm": {
+            "Requires": null
+          }
+        },
+        "Units\\NightElfUpgradeFunc.txt": {
+          "Repm": {
+            "Requires": null
+          }
+        }
+      }
+    },
+    {
+      "note": "Orb of Darkness raises level-2 Dark Minions (was the lesser ones)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANbs": {
+            "UnitID1": "ndr2"
+          }
+        }
+      }
+    },
+    {
+      "note": "Ancient Janggo of Endurance aura: +7.5 % movement speed (was 5 %) and +3.5 % attack rate (was 3 %)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIae": {
+            "DataA1": 0.075,
+            "DataB1": 0.035
+          }
+        }
+      }
+    },
+    {
+      "note": "Legion Doom-Horn aura: +7.5 % movement speed (was 5 %) and 0.35 hit points per second (was 0.3)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIau": {
+            "DataA1": 0.075,
+            "DataB1": 0.35
+          }
+        }
+      }
+    },
+    {
+      "note": "Arcane Vault: Orb of Fire replaced by Orb of Slow (325 gold, needs a Castle, +5 damage, 25 % chance to proc on units and 10 % on Heroes; the slow is a new ability AIno with a new buff Bson: -55 % movement and -25 % attack rate for 10 s, 5 s on Heroes). The old orb-slow ability AIos is retuned to the same numbers, as the live table has it",
+      "files": {
+        "Units\\HumanUnitFunc.txt": {
+          "hvlt": {
+            "Makeitems": "sreg,mcri,plcl,phea,pman,stwp,tsct,oslo,ssan"
+          }
+        },
+        "Units\\ItemData.slk": {
+          "oslo": {
+            "goldcost": 325
+          }
+        },
+        "Units\\ItemFunc.txt": {
+          "oslo": {
+            "Requires": "hcas",
+            "Buttonpos": "0,2"
+          }
+        },
+        "Units\\AbilityData.slk": {
+          "AIsb": {
+            "DataA1": 5,
+            "DataB1": 25,
+            "DataC1": 10,
+            "DataD1": 25,
+            "UnitID1": "AIno"
+          },
+          "AIos": {
+            "Dur1": 10,
+            "HeroDur1": 5,
+            "DataA1": 0.55
+          },
+          "AIno": {
+            "$base": "AIos",
+            "code": "Aosl",
+            "checkDep": 1,
+            "targs1": "air,ground,enemy",
+            "Dur1": 10,
+            "HeroDur1": 5,
+            "Rng1": 1000,
+            "DataA1": 0.55,
+            "BuffID1": "Bson"
+          }
+        },
+        "Units\\AbilityBuffData.slk": {
+          "Bson": {
+            "$base": "Bslo",
+            "code": "Bson",
+            "comments": "OrbOfSlow",
+            "version": 1,
+            "sort": "item",
+            "race": "other"
+          }
+        },
+        "Units\\ItemAbilityFunc.txt": {
+          "AIno": {
+            "$base": "AIos",
+            "Art": "ReplaceableTextures\\CommandButtons\\BTNOrbofSlowness.blp"
+          },
+          "Bson": {
+            "Buffart": "ReplaceableTextures\\CommandButtons\\BTNOrbofSlowness.blp",
+            "Targetart": "Abilities\\Spells\\Human\\slow\\slowtarget.mdl"
+          }
+        },
+        "Units\\ItemAbilityStrings.txt": {
+          "AIno": {
+            "Name": "Orb of Slow (slowing strike)",
+            "EditorSuffix": " (Orb of Slow)"
+          },
+          "Bson": {
+            "Bufftip": "Orb of Slow",
+            "Buffubertip": "\"Struck by an Orb of Slow: moves and attacks more slowly.\""
+          }
+        },
+        "Units\\ItemStrings.txt": {
+          "oslo": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "<AIos,DataA1,%>",
+                  "<AIno,DataA1,%>"
+                ],
+                [
+                  "<AIos,DataB1,%>",
+                  "<AIno,DataB1,%>"
+                ],
+                [
+                  "<AIos,Dur1>",
+                  "<AIno,Dur1>"
+                ]
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "note": "Flame Strike costs 125 mana (was 135)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AHfs": {
+            "Cost1": 125,
+            "Cost2": 125,
+            "Cost3": 125
+          }
+        }
+      }
+    },
+    {
+      "note": "Siphon Mana range 700 (was 800)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AHdr": {
+            "Area1": 700,
+            "Area2": 700,
+            "Area3": 700
+          }
+        }
+      }
+    },
+    {
+      "note": "Banish cooldown 4/2/0 s (was 0 at every level)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AHbn": {
+            "Cool1": 4,
+            "Cool2": 2,
+            "Cool3": 0
+          }
+        }
+      }
+    },
+    {
+      "note": "Holy Light cooldown 5.5 s (was 5)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AHhb": {
+            "Cool1": 5.5,
+            "Cool2": 5.5,
+            "Cool3": 5.5,
+            "Cool4": 5.5
+          }
+        }
+      }
+    },
+    {
+      "note": "Devotion Aura +2/+3.5/+5 armour (was +2/+4/+6)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AHad": {
+            "DataA1": 2,
+            "DataA2": 3.5,
+            "DataA3": 5
+          }
+        }
+      }
+    },
+    {
+      "note": "Militia armour 3 (was 4)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "hmil": {
+            "def": 3,
+            "realdef": 3
+          }
+        }
+      }
+    },
+    {
+      "note": "Defend: piercing damage taken 50 % (was 35 %, i.e. a 50 % reduction instead of 65 %), deflect chance 25 % (was 30 %)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Adef": {
+            "DataA1": 0.5,
+            "DataF1": 25
+          }
+        }
+      }
+    },
+    {
+      "note": "Defend research 125 gold / 75 lumber (was 150/100), 40 s (was 45)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Rhde": {
+            "goldbase": 125,
+            "lumberbase": 75,
+            "timebase": 40
+          }
+        }
+      }
+    },
+    {
+      "note": "Slow lasts 45 s (was 60)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Aslo": {
+            "Dur1": 45
+          }
+        }
+      }
+    },
+    {
+      "note": "Invisibility cast range 400 (was 300)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Aivs": {
+            "Rng1": 400
+          }
+        }
+      }
+    },
+    {
+      "note": "Heal cast range 350 (was 250)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Ahea": {
+            "Rng1": 350
+          }
+        }
+      }
+    },
+    {
+      "note": "The creep Heal rows also reach 350 (was 250)",
+      "source": "undocumented",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Anhe": {
+            "Rng1": 350
+          },
+          "Anh1": {
+            "Rng1": 350
+          },
+          "Anh2": {
+            "Rng1": 350
+          }
+        }
+      }
+    },
+    {
+      "note": "Flying Machine moves at 375 (was 400)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "hgyr": {
+            "spd": 375
+          }
+        }
+      }
+    },
+    {
+      "note": "Dragonhawk Rider and the Cloud research no longer need an Arcane Vault (Cloud still needs a Castle)",
+      "files": {
+        "Units\\HumanUnitFunc.txt": {
+          "hdhw": {
+            "Requires": null
+          }
+        },
+        "Units\\HumanUpgradeFunc.txt": {
+          "Rhcd": {
+            "Requires": "hcas"
+          }
+        }
+      }
+    },
+    {
+      "note": "Orb of Lightning's purge deals 200 damage to summoned units (was 150)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIpg": {
+            "DataC1": 200
+          }
+        }
+      }
+    },
+    {
+      "note": "Mirror Image cooldown 5 s (was 3)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AOmi": {
+            "Cool1": 5,
+            "Cool2": 5,
+            "Cool3": 5
+          }
+        }
+      }
+    },
+    {
+      "note": "Great Hall build time 135 s (was 140)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ogre": {
+            "bldtm": 135
+          }
+        }
+      }
+    },
+    {
+      "note": "Wind Rider is level 3 (was 4) and moves at 310 (was 320)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "owyv": {
+            "level": 3,
+            "spd": 310
+          }
+        }
+      }
+    },
+    {
+      "note": "Envenomed Spears deal 3 damage per second (was 4)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Aven": {
+            "DataA1": 3
+          }
+        }
+      }
+    },
+    {
+      "note": "Stasis Trap: 25 hit points (was 100), triggers within 350 (was 400), stuns 4 s / 2 s on Heroes (was 6 / 2.5)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "otot": {
+            "HP": 25,
+            "realHP": 25
+          }
+        },
+        "Units\\AbilityData.slk": {
+          "Asta": {
+            "DataC1": 350,
+            "DataD1": 4,
+            "HeroDur1": 2
+          }
+        }
+      }
+    },
+    {
+      "note": "Healing Ward (Witch Doctor) lasts 25 s (was 30)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Ahwd": {
+            "Dur1": 25,
+            "HeroDur1": 25
+          }
+        }
+      }
+    },
+    {
+      "note": "The creep Healing Ward also lasts 25 s (was 30)",
+      "source": "undocumented",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AChw": {
+            "Dur1": 25,
+            "HeroDur1": 25
+          }
+        }
+      }
+    },
+    {
+      "note": "Tauren have Resistant Skin",
+      "files": {
+        "Units\\UnitAbilities.slk": {
+          "otau": {
+            "abilList": "Awar,Aion,ACsk"
+          }
+        }
+      }
+    },
+    {
+      "note": "Tauren cost 300 gold / 100 lumber (was 280/80)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "otau": {
+            "goldcost": 300,
+            "lumbercost": 100,
+            "goldRep": 300,
+            "lumberRep": 100
+          }
+        }
+      }
+    },
+    {
+      "note": "Orb of Venom poison deals 8 per second (was 9)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Apo2": {
+            "DataA1": 8
+          }
+        }
+      }
+    },
+    {
+      "note": "Keeper of the Grove gains 2 strength per level (was 1.8)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "Ekee": {
+            "STRplus": 2
+          }
+        }
+      }
+    },
+    {
+      "note": "Treant attack cooldown 1.65 s (was 1.75)",
+      "files": {
+        "Units\\UnitWeapons.slk": {
+          "efon": {
+            "cool1": 1.65,
+            "dps": 9.6969696969697
+          }
+        }
+      }
+    },
+    {
+      "note": "Wisp gathers lumber every 7 s (was 8)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Awha": {
+            "Dur1": 7,
+            "HeroDur1": 7
+          }
+        }
+      }
+    },
+    {
+      "note": "Upgrade Moon Glaive also turns the Huntress's armour Heavy (the Defense Type Change effect, which this patch makes work — see engine), costs 125 gold / 175 lumber (was 100/150) and takes 60 s (was 35)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Remg": {
+            "goldbase": 125,
+            "lumberbase": 175,
+            "timebase": 60,
+            "effect2": "rart",
+            "base2": 2
+          }
+        }
+      }
+    },
+    {
+      "note": "Huntress moves at 340 (was 350)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "esen": {
+            "spd": 340
+          }
+        }
+      }
+    },
+    {
+      "note": "Ultravision research 30 s (was 45)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Reuv": {
+            "timebase": 30
+          }
+        }
+      }
+    },
+    {
+      "note": "Chimaera moves at 270 (was 250)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "echm": {
+            "spd": 270
+          }
+        }
+      }
+    },
+    {
+      "note": "Vorpal Blades also gives the Glaive Thrower +10 attack damage",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Repb": {
+            "effect1": "ratx",
+            "base1": 10
+          }
+        }
+      }
+    },
+    {
+      "note": "Wand of Negation becomes a single-target dispel (new ability AIpw, a Purge that deals 200 damage to summoned units) with 4 charges (was 2)",
+      "files": {
+        "Units\\ItemData.slk": {
+          "wneg": {
+            "abilList": "AIpw",
+            "cooldownID": "AIpw",
+            "uses": 4
+          }
+        },
+        "Units\\AbilityData.slk": {
+          "AIpw": {
+            "$base": "AIpg",
+            "comments": "Purge(Wand of Negation)",
+            "Dur1": 0,
+            "HeroDur1": 0,
+            "Rng1": 500,
+            "DataA1": 0,
+            "DataC1": 200,
+            "DataD1": 0,
+            "DataE1": 0,
+            "InBeta": 0
+          }
+        },
+        "Units\\ItemAbilityFunc.txt": {
+          "AIpw": {
+            "$base": "AIpg",
+            "Targetart": "Abilities\\Spells\\Human\\DispelMagic\\DispelMagicTarget.mdl"
+          }
+        },
+        "Units\\ItemAbilityStrings.txt": {
+          "AIpw": {
+            "Name": "Negation Purge",
+            "EditorSuffix": " (Wand of Negation)"
+          }
+        },
+        "Units\\ItemStrings.txt": {
+          "wneg": {
+            "Ubertip": "\"Strips the magic from one target unit. |nSummoned units take <AIpw,DataC1> damage. |nContains <wneg,uses> charges.\"",
+            "Description": "Dispels magic on one unit."
+          }
+        }
+      }
+    },
+    {
+      "note": "Ritual Dagger: 75 gold (was 100), 1 charge (was 2), regenerates 200 hit points (was 175)",
+      "files": {
+        "Units\\ItemData.slk": {
+          "ritd": {
+            "goldcost": 75,
+            "uses": 1
+          }
+        },
+        "Units\\AbilityData.slk": {
+          "AIg2": {
+            "DataA1": 200
+          }
+        }
+      }
+    },
+    {
+      "note": "Frost Nova cast range 700 (was 800)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AUfn": {
+            "Rng1": 700,
+            "Rng2": 700,
+            "Rng3": 700,
+            "Rng4": 700
+          }
+        }
+      }
+    },
+    {
+      "note": "Carrion Swarm level 2 deals 135 (was 125)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AUcs": {
+            "DataA2": 135
+          }
+        }
+      }
+    },
+    {
+      "note": "Nerubian Tower attack cooldown 1.15 s (was 1.3)",
+      "files": {
+        "Units\\UnitWeapons.slk": {
+          "uzg2": {
+            "cool1": 1.15,
+            "dps": 8.26086956521739
+          }
+        }
+      }
+    },
+    {
+      "note": "Burrow research 30 s (was 45)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Rubu": {
+            "timebase": 30
+          }
+        }
+      }
+    },
+    {
+      "note": "Gargoyle moves at 350 (was 375)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ugar": {
+            "spd": 350
+          }
+        }
+      }
+    },
+    {
+      "note": "Cripple costs 90 mana (was 100)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Acri": {
+            "Cost1": 90
+          }
+        }
+      }
+    },
+    {
+      "note": "Banshee's Anti-magic Shell absorbs 300 damage (was 420)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Aam2": {
+            "DataC1": 300
+          }
+        }
+      }
+    },
+    {
+      "note": "Disease Clouds left by a dying Abomination no longer collide (the cloud unit becomes a flyer, which is how the live table does it)",
+      "files": {
+        "Units\\UnitData.slk": {
+          "uplg": {
+            "movetp": "fly"
+          }
+        }
+      }
+    },
+    {
+      "note": "Frost Wyrm: ground and air attacks reach 375 (was 300), and the air attack splashes like the ground one (the ground attack's splash stops listing air, since the air attack now covers it)",
+      "files": {
+        "Units\\UnitWeapons.slk": {
+          "ufro": {
+            "rangeN1": 375,
+            "rangeN2": 375,
+            "splashTargs1": "ground,structure,debris,enemy",
+            "Farea2": 25,
+            "Harea2": 50,
+            "Qarea2": 200,
+            "Hfact2": 0.2,
+            "Qfact2": 0.1,
+            "splashTargs2": "air,enemy"
+          }
+        }
+      }
+    },
+    {
+      "note": "Rain of Fire level 1 cast range 800 (was 700)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANrf": {
+            "Rng1": 800
+          }
+        }
+      }
+    },
+    {
+      "note": "Life Drain can be cast on a friendly unit to hand it life: 30/45/60 hit points per second transferred (the Drain column the Blood Mage's Siphon Mana uses for its ally half); see engine",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANdr": {
+            "DataD1": 30,
+            "DataD2": 45,
+            "DataD3": 60
+          }
+        }
+      }
+    },
+    {
+      "note": "Poison Treant loses Entangling Roots (and with it its mana); 350 hit points (was 290)",
+      "files": {
+        "Units\\UnitAbilities.slk": {
+          "nenp": {
+            "abilList": "ACvs"
+          }
+        },
+        "Units\\UnitBalance.slk": {
+          "nenp": {
+            "HP": 350,
+            "realHP": 350,
+            "manaN": " - ",
+            "realM": " - ",
+            "mana0": " - ",
+            "regenMana": " - "
+          }
+        }
+      }
+    },
+    {
+      "note": "Spitting Spider: Medium armour (was Heavy), 350 hit points (was 400)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nssp": {
+            "defType": "medium",
+            "HP": 350,
+            "realHP": 350
+          }
+        }
+      }
+    },
+    {
+      "note": "Giant Spider 500 hit points (was 550)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nsgt": {
+            "HP": 500,
+            "realHP": 500
+          }
+        }
+      }
+    },
+    {
+      "note": "Satyr Hellcaller is level 8 (was 9)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nsth": {
+            "level": 8
+          }
+        }
+      }
+    },
+    {
+      "note": "Giant Wolf (mercenary) first appears after 440 s (was 220)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nwlg": {
+            "stockStart": 440
+          }
+        }
+      }
+    },
+    {
+      "note": "Satyr Shadowdancer (mercenary) 190 gold (was 200) — the live table lowered goldRep and left goldcost at 200, and that is what is written",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nsts": {
+            "goldRep": 190
+          }
+        }
+      }
+    },
+    {
+      "note": "Creep Immolation deals 5 per second (was 10)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ACim": {
+            "DataA1": 5
+          }
+        }
+      }
+    },
+    {
+      "note": "Infernal and Fire Pandaren Permanent Immolation also fell to 5 per second (was 10) — unintended, reverted in 22796",
+      "source": "liquipedia",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANpi": {
+            "DataA1": 5
+          },
+          "Apig": {
+            "DataA1": 5
+          }
+        }
+      }
+    },
+    {
+      "note": "Creep Entangling Roots hold 6 s (was 10; 3 s on Heroes unchanged), cast range 600 (was 800)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Aenr": {
+            "Dur1": 6,
+            "Rng1": 600
+          },
+          "Aenw": {
+            "Dur1": 6,
+            "Rng1": 600
+          }
+        }
+      }
+    },
+    {
+      "note": "Creep Frost Nova slows for 2 s (was 4)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ACfn": {
+            "Dur1": 2,
+            "HeroDur1": 2
+          }
+        }
+      }
+    },
+    {
+      "note": "Creep Unholy Frenzy drains 2 hit points per second (was 4), the Chaos Warlock's copy too",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ACuf": {
+            "DataB1": 2
+          },
+          "Suhf": {
+            "DataB1": 2
+          }
+        }
+      }
+    },
+    {
+      "note": "Creep Brilliance Aura +0.5 mana per second (was 1)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ACba": {
+            "DataA1": 0.5
+          }
+        }
+      }
+    },
+    {
+      "note": "Creep Polymorph costs 200 mana (the notes say from 225; the 1.30.4 table has 220) and lasts 20 s (was 25)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ACpy": {
+            "Cost1": 200,
+            "Dur1": 20,
+            "HeroDur1": 20
+          }
+        }
+      }
+    },
+    {
+      "note": "Creep Healing Wave heals 130 (was 215) and jumps 3 times (was 4)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AChv": {
+            "DataA1": 130,
+            "DataB1": 3
+          }
+        }
+      }
+    },
+    {
+      "note": "Creep Cold Arrows: slow on Heroes 1 s (was 0.75), damage bonus 1 (was 0.25)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ACcw": {
+            "HeroDur1": 1,
+            "DataA1": 1
+          }
+        }
+      }
+    },
+    {
+      "note": "Creep Disease Cloud lasts 75 s (was 120)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Aap3": {
+            "DataA1": 75
+          }
+        }
+      }
+    },
+    {
+      "note": "Creep Animate Dead lasts 40 s (was 120), costs 150 mana (was 250), cooldown 180 s (was 240)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ACad": {
+            "Dur1": 40,
+            "HeroDur1": 40,
+            "Cost1": 150,
+            "Cool1": 180
+          }
+        }
+      }
+    },
+    {
+      "note": "Creep Parasite lasts 15 s (was 30), the naga Parasite row too",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ACpa": {
+            "Dur1": 15
+          },
+          "ANpa": {
+            "Dur1": 15
+          }
+        }
+      }
+    },
+    {
+      "note": "Creep Blizzard cast time 0.599 s (was 1)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ACbz": {
+            "Cast1": 0.599
+          }
+        }
+      }
+    },
+    {
+      "note": "Creep Rain of Fire cast time 0.599 s (was 1), both creep variants",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ACrf": {
+            "Cast1": 0.599
+          },
+          "ACrg": {
+            "Cast1": 0.599
+          }
+        }
+      }
+    },
+    {
+      "note": "Skink moves at 100 (was 200)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nskk": {
+            "spd": 100,
+            "minSpd": 100
+          }
+        }
+      }
+    },
+    {
+      "note": "Apprentice Wizard: 200 hit points (was 180), +2 damage",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nwiz": {
+            "HP": 200,
+            "realHP": 200
+          }
+        },
+        "Units\\UnitWeapons.slk": {
+          "nwiz": {
+            "dmgplus1": 8,
+            "mindmg1": 9,
+            "avgdmg1": 10.5,
+            "maxdmg1": 12,
+            "dps": 5.83333333333333
+          }
+        }
+      }
+    },
+    {
+      "note": "Fallen Priest +2 damage",
+      "files": {
+        "Units\\UnitWeapons.slk": {
+          "nhfp": {
+            "dmgplus1": 8,
+            "mindmg1": 9,
+            "avgdmg1": 10.5,
+            "maxdmg1": 12,
+            "dps": 5.83333333333333
+          }
+        }
+      }
+    },
+    {
+      "note": "Lightning Lizard: Medium armour (was Heavy), 300 hit points (was 280), damage die 1d2 (was 1d8)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nltl": {
+            "defType": "medium",
+            "HP": 300,
+            "realHP": 300
+          }
+        },
+        "Units\\UnitWeapons.slk": {
+          "nltl": {
+            "sides1": 2,
+            "avgdmg1": 15.5,
+            "maxdmg1": 16,
+            "dmod1": 11,
+            "DmgUpg": "high",
+            "dps": 10.3333333333333
+          }
+        }
+      }
+    },
+    {
+      "note": "Salamander Hatchling: Medium armour (was Heavy), -1 damage",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nslh": {
+            "defType": "medium"
+          }
+        },
+        "Units\\UnitWeapons.slk": {
+          "nslh": {
+            "dmgplus1": 19,
+            "mindmg1": 20,
+            "avgdmg1": 23.5,
+            "maxdmg1": 27,
+            "dps": 13.0555555555556
+          }
+        }
+      }
+    },
+    {
+      "note": "Arachnathid Earth-borer loses Shadow Strike and its mana; 450 hit points (was 400)",
+      "files": {
+        "Units\\UnitAbilities.slk": {
+          "nane": {
+            "abilList": "ACvs"
+          }
+        },
+        "Units\\UnitBalance.slk": {
+          "nane": {
+            "HP": 450,
+            "realHP": 450,
+            "manaN": " - ",
+            "realM": " - ",
+            "mana0": " - ",
+            "regenMana": " - "
+          }
+        }
+      }
+    },
+    {
+      "note": "Mur'gul Snarecaster: 400 hit points (was 375), -1 damage",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nmsn": {
+            "HP": 400,
+            "realHP": 400
+          }
+        },
+        "Units\\UnitWeapons.slk": {
+          "nmsn": {
+            "dmgplus1": 26,
+            "mindmg1": 27,
+            "avgdmg1": 31.5,
+            "maxdmg1": 36,
+            "dps": 17.5
+          }
+        }
+      }
+    },
+    {
+      "note": "Skeletal Orc Champion swaps Death Coil for Cripple and Vampiric Aura",
+      "files": {
+        "Units\\UnitAbilities.slk": {
+          "nsoc": {
+            "abilList": "ACcr,ACvp"
+          }
+        }
+      }
+    },
+    {
+      "note": "Infernal Machine gains Unholy Aura",
+      "files": {
+        "Units\\UnitAbilities.slk": {
+          "ninm": {
+            "abilList": "ACbc,ACua"
+          }
+        }
+      }
+    },
+    {
+      "note": "The Orb of Fire, gone from the Arcane Vault, carries its original ability again (AIfb)",
+      "source": "undocumented",
+      "files": {
+        "Units\\ItemData.slk": {
+          "ofir": {
+            "abilList": "AIfb",
+            "cooldownID": "AIfb"
+          }
+        }
+      }
+    },
+    {
+      "note": "Wand of Negation's dispel wears no buff of its own",
+      "source": "undocumented",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIpw": {
+            "BuffID1": null
+          }
+        }
+      }
+    },
+    {
+      "note": "Ritual Dagger: 200 over 45 s to allies within 450, 5 s cooldown (the 45 s and 450 are the live row's; the notes give only the 200)",
+      "source": "undocumented",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIg2": {
+            "Dur1": 45,
+            "HeroDur1": 45,
+            "Cool1": 5,
+            "Area1": 450
+          }
+        }
+      }
+    },
+    {
+      "note": "Great Hall repair time 125; Chimaera repair time 60",
+      "source": "undocumented",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ogre": {
+            "reptm": 125
+          },
+          "echm": {
+            "reptm": 60
+          }
+        }
+      }
+    },
+    {
+      "note": "Reinforced Defenses names FORTIFIED as the armour it grants (`rart` base 3, was 1) — the data half of 2.0.2's \"Defense Type Change upgrades now change the armour type\"",
+      "source": "undocumented",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Rorb": {
+            "base1": 3
+          }
+        }
+      }
+    },
+    {
+      "note": "The Ritual Dagger tooltip counts its single charge",
+      "files": {
+        "Units\\ItemStrings.txt": {
+          "ritd": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "Contains <ritd,uses> charges.",
+                  "Contains 1 charge."
+                ]
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "engine": [
+    {
+      "key": "defense-type-change-upgrade",
+      "note": "An upgrade's Defense Type Change effect (rart) actually changes the unit's armour type — what makes Upgrade Moon Glaive turn the Huntress Heavy",
+      "implemented": false
+    },
+    {
+      "key": "orb-of-slow-aosl",
+      "note": "Orb of Slow's new slow (base code Aosl, buff Bson) cannot be dispelled, reaches magic-immune units and stacks with other slows; the melee movement floor is 150",
+      "implemented": false
+    },
+    {
+      "key": "life-drain-ally-transfer",
+      "note": "Life Drain cast on a friendly unit moves the Dark Ranger's life to it (DataD per second) instead of draining",
+      "implemented": false
+    }
+  ]
+}

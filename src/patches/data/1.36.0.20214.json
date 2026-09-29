@@ -1,0 +1,50 @@
+{
+  "patch": "1.36.0.20214",
+  "build": 20214,
+  "released": "2023-05-10",
+  "notes": [
+    "https://us.forums.blizzard.com/en/warcraft3/t/warcraft-iii-reforged-hotfixes/28629/11"
+  ],
+  "changes": [
+    {
+      "note": "Ring of Protection +3 costs 150 gold",
+      "files": {
+        "Units\\ItemData.slk": {
+          "rde2": {
+            "goldcost": 150
+          }
+        }
+      }
+    },
+    {
+      "note": "Ring of Protection +4 costs 125 gold",
+      "files": {
+        "Units\\ItemData.slk": {
+          "rde3": {
+            "goldcost": 125
+          }
+        }
+      }
+    },
+    {
+      "note": "Ring of Protection +5 costs 300 gold",
+      "files": {
+        "Units\\ItemData.slk": {
+          "rde4": {
+            "goldcost": 300
+          }
+        }
+      }
+    },
+    {
+      "note": "Ring of the Archmagi costs 400 gold",
+      "files": {
+        "Units\\ItemData.slk": {
+          "ram3": {
+            "goldcost": 400
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "patch": "1.32.8",
+  "build": 15762,
+  "released": "2020-08-11",
+  "notes": [
+    "https://us.forums.blizzard.com/en/warcraft3/t/warcraft-iii-reforged-patch-notes-version-1328/25373",
+    "https://liquipedia.net/warcraft/Patch_1.32.8"
+  ],
+  "changes": [
+    {
+      "note": "Carrion Beetles cost 50 mana",
+      "files": {
+        "Units\\AbilityData.slk": { "AUcb": { "Cost1": 50, "Cost2": 50, "Cost3": 50, "Cost4": 50 } }
+      }
+    },
+    {
+      "note": "Carrion Beetle hit points: level 2 330 -> 275, level 3 490 -> 410 (burrowed forms too)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ucs2": { "HP": 275, "realHP": 275 },
+          "ucsB": { "HP": 275, "realHP": 275 },
+          "ucs3": { "HP": 410, "realHP": 410 },
+          "ucsC": { "HP": 410, "realHP": 410 }
+        }
+      }
+    }
+  ],
+  "engine": [
+    {
+      "key": "animate-dead-burrowed-fiend-web",
+      "note": "A Crypt Fiend killed while burrowed and raised by Animate Dead no longer keeps its Web",
+      "implemented": false
+    }
+  ]
+}

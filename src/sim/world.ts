@@ -2935,6 +2935,12 @@ const CORPSE_LOADERS = new Set(["Amel"]);
  * run the SPELL — one set of corpse rules, in the one place that owns them (sim/corpses.ts) —
  * with the item's own numbers on it: 65 seconds of skeleton against the Necromancer's 45.
  */
+/** common.j's `ConvertDefenseType` order — how an ability row names an armour CLASS by number
+ *  (Sundering Blades' `DataC`). */
+const DEFENSE_TYPE_ORDER: readonly ArmorType[] = [
+  ArmorType.Small, ArmorType.Medium, ArmorType.Large, ArmorType.Fort,
+  ArmorType.Normal, ArmorType.Hero, ArmorType.Divine, ArmorType.None,
+];
 const ITEM_CORPSE_SPELL: Record<string, string> = {
   AIrd: "Arai", // Rod of Necromancy → Raise Dead
   ACad: "AUan", // `stre` Scroll of the Dead / the creep row → Animate Dead
@@ -21774,12 +21780,38 @@ export class SimWorld {
     // Magic/Spells (issue #49, EtherealDamageBonus). A physical auto-attack thus
     // lands 0 on a banished unit — the melee simply can't hurt it.
     if (target.ethereal) typeMult *= etherealDamageMultiplier(attackType);
+    if (attacker && !raising) typeMult *= this.armorClassBonus(attacker, target);
     // Berserk (Absk) and the like: the holder takes a fraction MORE damage from every source.
     let vuln = 0;
     for (const b of target.buffs) if (b.kind === "vuln") vuln = Math.max(vuln, b.value);
     const reduction = armorDamageReduction(target.armor);
     const final = this.hardenedSkin(target, rawDamage * typeMult * (1 + vuln) * (1 - reduction), ranged);
     return this.landDamage(target, this.spiritLinkSplit(target, final), attackerId, true, weaponSound, blow);
+  }
+
+  /**
+   * SUNDERING BLADES (`Ahsb`, code `Aaab` — a later patch's ability, src/patches/): the Knight
+   * deals MORE damage to one armour CLASS. The row says which and how much and nothing else:
+   *
+   *   DataB  the bonus, a fraction   0.15 at 1.31.0, 0.10 from 1.36.0
+   *   DataC  the armour class        1 — common.j's `DEFENSE_TYPE_MEDIUM`
+   *
+   * DataC counts common.j's `ConvertDefenseType` order (LIGHT 0, MEDIUM 1, LARGE 2, FORT 3,
+   * NORMAL 4, HERO 5, DIVINE 6, NONE 7), which is also how the World Editor lists the classes.
+   * Gated on the research the ability's own `Requires` names (`[Ahsb] Requires=Rhsb`), the same
+   * graph that greys its icon, and — like every multiplier here — on the unit's OWN ability,
+   * because 1.32.10 built it INTO the Knight rather than onto an item.
+   */
+  private armorClassBonus(attacker: SimUnit, target: SimUnit): number {
+    if (!attacker.abilities.length) return 1;
+    let mult = 1;
+    for (const ab of attacker.abilities) {
+      if (ab.code !== "Aaab" || ab.level < 1 || !this.techMeets(attacker.owner, ab.id)) continue;
+      const lvl = this.unitPassiveLevel(attacker, "Aaab");
+      const cls = DEFENSE_TYPE_ORDER[lvl?.data[2] ?? -1];
+      if (lvl && cls === target.armorType && Number.isFinite(lvl.data[1])) mult *= 1 + lvl.data[1];
+    }
+    return mult;
   }
 
   /**
@@ -23565,6 +23597,39 @@ export class SimWorld {
         // Each of these reaches for something no spell handler can see — the clock, the
         // terrain, the tech graph, the hero's own progression — so each keeps its own small
         // method here rather than a place in SPELL_HANDLERS.
+        // RITUAL DAGGER (`ritd`, 1.31.0 — a later patch's item, src/patches/): SACRIFICE the
+        // friendly non-hero it is aimed at (`targs1 = …,player,nonhero`), and the units around
+        // the body get its life. Two rows on one code, and their numbers are the difference:
+        //
+        //   `AIdg` "Instant"  DataA 100, Area 300              — 1.31.0 to 1.36.x
+        //   `AIg2` "Regen"    DataA 200, Area 450, Dur 45, BIrl — 2.0.2 on: the same total, POURED
+        //
+        // WHO is healed is the row's own DataH, a second target list ("ground,air,friend,
+        // organic,…") — the victim's list and the beneficiaries' are not the same. The poured
+        // kind rides `ITEM_REGEN_GROUP`, so damage strips it like any other non-combat
+        // regeneration (Liquipedia: "dispelled when the target takes damage").
+        case "AIdg": {
+          const victim = this.units.get(targetId);
+          if (!victim || victim === u || victim.isHero || victim.hp <= 0 || this.targetError(u, victim, ad.targetFlags, ad.code) !== null) break;
+          const heal = d(0);
+          const seconds = lvl?.duration || 0;
+          const healedFlags = (lvl?.dataStr[7] || "ground,air,friend,organic").split(",");
+          const [cx, cy] = [victim.x, victim.y];
+          if (ad.targetArt) this.spellEffects.push({ art: ad.targetArt, x: cx, y: cy, targetId: victim.id, z: 0 });
+          this.killUnit(victim.id);
+          const buffId = buffIdOf(ad);
+          const fx = buffId ? this.abilities.buffFx(buffId) : [];
+          for (const t of this.unitsInAreaInternal(cx, cy, lvl?.area || 300)) {
+            if (t === victim || t.hp <= 0 || t.building || this.targetAllowed(u, t, healedFlags) !== null) continue;
+            if (seconds > 0) {
+              this.applyBuffInternal(t, { kind: "hot", group: ITEM_REGEN_GROUP, timeLeft: seconds, sourceId: u.id, value: heal / seconds, value2: 0, fx, buffId });
+            } else {
+              t.hp = Math.min(t.maxHp, t.hp + heal);
+            }
+          }
+          fired = true;
+          break;
+        }
         case "AIct": fired = this.itemArtificialNight(ad); break; // Moonstone
         case "AItp": fired = this.itemTownPortal(u, ad, x, y); break; // Scroll of Town Portal
         case "AIrt": // Amulet of Recall …

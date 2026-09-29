@@ -1,0 +1,308 @@
+{
+  "patch": "1.36.0",
+  "build": 20210,
+  "released": "2023-05-09",
+  "notes": [
+    "https://us.forums.blizzard.com/en/warcraft3/t/warcraft-iii-reforged-patch-notes-version-136/30481",
+    "https://news.blizzard.com/en-us/warcraft3/23951676/warcraft-iii-reforged-version-1-36-patch-now-live",
+    "https://liquipedia.net/warcraft/Patch_1.36.0"
+  ],
+  "changes": [
+    {
+      "note": "Arcane Tower Feedback burns 16 mana from heroes (was 12)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Afbt": {
+            "DataC1": 16
+          }
+        }
+      }
+    },
+    {
+      "note": "Sundering Blades bonus 10% (was 15%)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Ahsb": {
+            "DataB1": 0.1
+          }
+        }
+      }
+    },
+    {
+      "note": "Troll Headhunter 350 hit points (was 375)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ohun": {
+            "HP": 350,
+            "realHP": 350
+          }
+        }
+      }
+    },
+    {
+      "note": "Troll Berserker 450 hit points (was 475)",
+      "source": "liquipedia",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "otbk": {
+            "HP": 450,
+            "realHP": 450
+          }
+        }
+      }
+    },
+    {
+      "note": "Pulverize upgrade costs 175 lumber (was 225)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Rows": {
+            "lumberbase": 175
+          }
+        }
+      }
+    },
+    {
+      "note": "Immolation damage 6/11/17 per tick (was 7/12/18)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEim": {
+            "DataA1": 6,
+            "DataA2": 11,
+            "DataA3": 17
+          }
+        }
+      }
+    },
+    {
+      "note": "Sentinel research costs 50 gold, 50 lumber (was 100/100)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Resc": {
+            "goldbase": 50,
+            "lumberbase": 50
+          }
+        }
+      }
+    },
+    {
+      "note": "Cannibalize research costs 50 gold (was 75)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Ruac": {
+            "goldbase": 50
+          }
+        }
+      }
+    },
+    {
+      "note": "Cannibalize research time 15 s (was 30)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Ruac": {
+            "timebase": 15
+          }
+        }
+      }
+    },
+    {
+      "note": "Claws of Attack +5 becomes +4",
+      "files": {
+        "Units\\ItemData.slk": {
+          "rat6": {
+            "abilList": "AIti"
+          }
+        },
+        "Units\\ItemStrings.txt": {
+          "rat6": {
+            "Name": {
+              "replace": [
+                [
+                  "+5",
+                  "+4"
+                ]
+              ]
+            },
+            "Tip": {
+              "replace": [
+                [
+                  "+5",
+                  "+4"
+                ]
+              ]
+            },
+            "Ubertip": {
+              "replace": [
+                [
+                  "by 5",
+                  "by 4"
+                ]
+              ]
+            },
+            "Description": {
+              "replace": [
+                [
+                  "by 5",
+                  "by 4"
+                ]
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "note": "Claws of Attack +9 becomes +8",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIt9": {
+            "DataA1": 8
+          }
+        },
+        "Units\\ItemStrings.txt": {
+          "rat9": {
+            "Name": {
+              "replace": [
+                [
+                  "+9",
+                  "+8"
+                ]
+              ]
+            },
+            "Tip": {
+              "replace": [
+                [
+                  "+9",
+                  "+8"
+                ]
+              ]
+            },
+            "Ubertip": {
+              "replace": [
+                [
+                  "by 9",
+                  "by 8"
+                ]
+              ]
+            },
+            "Description": {
+              "replace": [
+                [
+                  "by 9",
+                  "by 8"
+                ]
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "note": "Potion of Greater Mana and Mana Stone restore 200 mana (was 250)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIm2": {
+            "DataA1": 200
+          }
+        }
+      }
+    },
+    {
+      "note": "Circlet of Nobility item level 3 (was 2)",
+      "files": {
+        "Units\\ItemData.slk": {
+          "cnob": {
+            "Level": 3
+          }
+        }
+      }
+    },
+    {
+      "note": "Ring of Protection +3 item level 1 (was 2)",
+      "files": {
+        "Units\\ItemData.slk": {
+          "rde2": {
+            "Level": 1
+          }
+        }
+      }
+    },
+    {
+      "note": "Ring of Protection +4 item level 2 (was 3)",
+      "files": {
+        "Units\\ItemData.slk": {
+          "rde3": {
+            "Level": 2
+          }
+        }
+      }
+    },
+    {
+      "note": "Ring of Protection +5 item level 3 (was 6), a permanent drop",
+      "files": {
+        "Units\\ItemData.slk": {
+          "rde4": {
+            "Level": 3,
+            "class": "Permanent"
+          }
+        }
+      }
+    },
+    {
+      "note": "Ring of Superiority drops as a level 1 permanent item",
+      "files": {
+        "Units\\ItemData.slk": {
+          "rnsp": {
+            "class": "Permanent",
+            "Level": 1,
+            "oldLevel": 1,
+            "prio": 35,
+            "pickRandom": 1
+          }
+        }
+      }
+    },
+    {
+      "note": "Ring of the Archmagi drops as a level 4 permanent item",
+      "files": {
+        "Units\\ItemData.slk": {
+          "ram3": {
+            "class": "Permanent",
+            "Level": 4,
+            "pickRandom": 1
+          }
+        }
+      }
+    },
+    {
+      "note": "Wand of Mana Stealing steals 60 mana (was 65)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Aste": {
+            "DataA1": 60
+          }
+        }
+      }
+    },
+    {
+      "note": "Wand of Lightning Shield no longer drops",
+      "files": {
+        "Units\\ItemData.slk": {
+          "wlsd": {
+            "pickRandom": 0
+          }
+        }
+      }
+    },
+    {
+      "note": "Abominations list Cannibalize among their upgrades",
+      "source": "undocumented",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "uabo": {
+            "upgrades": "Ruar,Rume,Rupc,Rupm,Rguv,Ruac"
+          }
+        }
+      }
+    }
+  ]
+}

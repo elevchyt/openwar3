@@ -1,0 +1,723 @@
+{
+  "patch": "1.36.2",
+  "build": 21179,
+  "released": "2024-06-04",
+  "notes": [
+    "https://us.forums.blizzard.com/en/warcraft3/t/warcraft-iii-reforged-patch-notes-version-1362/32218",
+    "https://liquipedia.net/warcraft/Patch_1.36.2"
+  ],
+  "changes": [
+    {
+      "note": "Polymorph can target Heroes, for 1.5 s",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Aply": {
+            "targs1": "air,ground,enemy,organic,neutral",
+            "HeroDur1": 1.5
+          }
+        }
+      }
+    },
+    {
+      "note": "Arcane Tower Feedback burns 14 mana from Heroes (was 16)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Afbt": {
+            "DataC1": 14
+          }
+        }
+      }
+    },
+    {
+      "note": "Knights no longer need a Lumber Mill",
+      "files": {
+        "Units\\HumanUnitFunc.txt": {
+          "hkni": {
+            "Requires": "hcas,hbla"
+          }
+        }
+      }
+    },
+    {
+      "note": "Sundering Blades is a Barracks research again (no longer built into the Knight), 100 gold / 150 lumber; the notes also drop its Lumber Mill requirement, but the live table still asks for one, and that is what is written",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Rhsb": {
+            "goldbase": 100,
+            "lumberbase": 150
+          }
+        },
+        "Units\\HumanUpgradeFunc.txt": {
+          "Rhsb": {
+            "Requires": "hlum,hcas,hbla"
+          }
+        },
+        "Units\\HumanUnitFunc.txt": {
+          "hbar": {
+            "Researches": "Rhde,Rhan,Rhri,Rhsb"
+          }
+        },
+        "Units\\HumanAbilityFunc.txt": {
+          "Ahsb": {
+            "Requires": "Rhsb"
+          }
+        },
+        "Units\\UnitBalance.slk": {
+          "hkni": {
+            "upgrades": "Rhar,Rhme,Rhan,Rhpm,Rguv,Rhsb"
+          }
+        }
+      }
+    },
+    {
+      "note": "Flame Strike cast time 0.8 s (was 0.9)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AHfs": {
+            "Cast1": 0.8,
+            "Cast2": 0.8,
+            "Cast3": 0.8
+          }
+        }
+      }
+    },
+    {
+      "note": "Control Magic: 0.35 mana per hit point of the summon (was 0.45) plus a 40-mana cast cost (was 25)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Acmg": {
+            "DataB1": 0.35,
+            "Cost1": 40
+          }
+        }
+      }
+    },
+    {
+      "note": "Dragonhawk Rider base damage 19 (was 17)",
+      "files": {
+        "Units\\UnitWeapons.slk": {
+          "hdhw": {
+            "dmgplus1": 19,
+            "mindmg1": 20,
+            "avgdmg1": 21,
+            "maxdmg1": 22,
+            "dps": 12
+          }
+        }
+      }
+    },
+    {
+      "note": "Troll Headhunter base damage 21 (was 22); the Berserker keeps 22",
+      "files": {
+        "Units\\UnitWeapons.slk": {
+          "ohun": {
+            "dmgplus1": 21,
+            "mindmg1": 22,
+            "avgdmg1": 24,
+            "maxdmg1": 26,
+            "dps": 10.3896103896104
+          }
+        }
+      }
+    },
+    {
+      "note": "Healing Ward costs 150 mana (was 200)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Ahwd": {
+            "Cost1": 150
+          }
+        }
+      }
+    },
+    {
+      "note": "Tauren move speed 290 (was 270)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "otau": {
+            "spd": 290
+          }
+        }
+      }
+    },
+    {
+      "note": "Level-3 Serpent Ward base damage 45 (was 47)",
+      "files": {
+        "Units\\UnitWeapons.slk": {
+          "osp3": {
+            "dmgplus1": 45,
+            "mindmg1": 46,
+            "avgdmg1": 48,
+            "maxdmg1": 50,
+            "dps": 32
+          }
+        }
+      }
+    },
+    {
+      "note": "Demolisher move speed 240 (was 220)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ocat": {
+            "spd": 240
+          }
+        }
+      }
+    },
+    {
+      "note": "Searing Arrows bonus damage 12/24/48 (was 10/20/30)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AHfa": {
+            "DataA1": 12,
+            "DataA2": 24,
+            "DataA3": 48
+          }
+        }
+      }
+    },
+    {
+      "note": "Starfall lasts 30 s (was 45) and deals 60 per wave (was 50)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEsf": {
+            "Dur1": 30,
+            "DataA1": 60
+          }
+        }
+      }
+    },
+    {
+      "note": "Vorpal Blades research time 45 s (was 60)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Repb": {
+            "timebase": 45
+          }
+        }
+      }
+    },
+    {
+      "note": "Moon Well mana regeneration 1.45 (was 1.35)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "emow": {
+            "regenMana": 1.45
+          }
+        }
+      }
+    },
+    {
+      "note": "Well Spring adds 100 mana capacity (was 125)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Rews": {
+            "base1": 100
+          }
+        }
+      }
+    },
+    {
+      "note": "Fan of Knives 70/130/200 per knife (was 75/125/190), total cap 420/780/1200 (six hits at every level)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEfk": {
+            "DataA1": 70,
+            "DataA2": 130,
+            "DataA3": 200,
+            "DataB1": 420,
+            "DataB2": 780,
+            "DataB3": 1200
+          }
+        }
+      }
+    },
+    {
+      "note": "Wisp 125 hit points (was 120)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ewsp": {
+            "HP": 125,
+            "realHP": 125
+          }
+        }
+      }
+    },
+    {
+      "note": "Glaive Thrower move speed 240 (was 220)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ebal": {
+            "spd": 240
+          }
+        }
+      }
+    },
+    {
+      "note": "Nature's Blessing costs 150 lumber (was 200)",
+      "source": "undocumented",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Renb": {
+            "lumberbase": 150
+          }
+        }
+      }
+    },
+    {
+      "note": "Tranquility cooldown 100 s (was 120)",
+      "source": "undocumented",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AEtq": {
+            "Cool1": 100,
+            "Cool2": 100,
+            "Cool3": 100
+          }
+        }
+      }
+    },
+    {
+      "note": "Haunted Gold Mine build time 105 s (was 110)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ugol": {
+            "bldtm": 105,
+            "reptm": 105
+          }
+        }
+      }
+    },
+    {
+      "note": "Nerubian Tower deals Piercing damage (was Normal)",
+      "files": {
+        "Units\\UnitWeapons.slk": {
+          "uzg2": {
+            "atkType1": "pierce"
+          }
+        }
+      }
+    },
+    {
+      "note": "Ghoul Frenzy research time 50 s (was 45); move speed bonus 60 (was 80)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Rugf": {
+            "timebase": 50,
+            "base2": 60
+          }
+        }
+      }
+    },
+    {
+      "note": "Curse lasts 60 s, 30 s on Heroes (was 120/60)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Acrs": {
+            "Dur1": 60,
+            "HeroDur1": 30
+          }
+        }
+      }
+    },
+    {
+      "note": "Cripple can target mechanical units",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Acri": {
+            "targs1": "air,ground,enemy,neutral"
+          }
+        }
+      }
+    },
+    {
+      "note": "Tomb of Relics: Scroll of Healing removed, Wand of Negation added (tier 2 through the wand's own Halls of the Dead requirement)",
+      "files": {
+        "Units\\UndeadUnitFunc.txt": {
+          "utom": {
+            "Makeitems": "rnec,dust,skul,phea,pman,stwp,ocor,wneg,ritd"
+          }
+        }
+      }
+    },
+    {
+      "note": "Wand of Negation: 2 charges, 150 gold, a 5 s cooldown",
+      "files": {
+        "Units\\ItemData.slk": {
+          "wneg": {
+            "uses": 2,
+            "goldcost": 150,
+            "ignoreCD": 0
+          }
+        },
+        "Units\\AbilityData.slk": {
+          "AIdi": {
+            "Cool1": 5
+          }
+        }
+      }
+    },
+    {
+      "note": "Meat Wagon move speed 240 (was 220)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "umtw": {
+            "spd": 240
+          }
+        }
+      }
+    },
+    {
+      "note": "Frost Nova slows units for 4/5/6 s (was 4/6/8); Heroes unchanged",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AUfn": {
+            "Dur2": 5,
+            "Dur3": 6
+          }
+        }
+      }
+    },
+    {
+      "note": "Impale costs 90 mana (was 100)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AUim": {
+            "Cost1": 90,
+            "Cost2": 90,
+            "Cost3": 90
+          }
+        }
+      }
+    },
+    {
+      "note": "Death and Decay costs 200 mana (was 250)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AUdd": {
+            "Cost1": 200
+          }
+        }
+      }
+    },
+    {
+      "note": "Web research costs 100 gold / 100 lumber (was 150/150)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Ruwb": {
+            "goldbase": 100,
+            "lumberbase": 100
+          }
+        }
+      }
+    },
+    {
+      "note": "Boneyard costs 150 gold (was 175), 200 lumber unchanged",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ubon": {
+            "goldcost": 150,
+            "goldRep": 150
+          }
+        }
+      }
+    },
+    {
+      "note": "Freezing Breath research costs 225 lumber (was 275)",
+      "files": {
+        "Units\\UpgradeData.slk": {
+          "Rufb": {
+            "lumberbase": 225
+          }
+        }
+      }
+    },
+    {
+      "note": "Abomination base damage 34 (was 32)",
+      "files": {
+        "Units\\UnitWeapons.slk": {
+          "uabo": {
+            "dmgplus1": 34,
+            "mindmg1": 35,
+            "avgdmg1": 38,
+            "maxdmg1": 41,
+            "dps": 20
+          }
+        }
+      }
+    },
+    {
+      "note": "Volcano deals double damage to buildings (was triple)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANvc": {
+            "DataD1": 2
+          }
+        }
+      }
+    },
+    {
+      "note": "Soul Burn reduces attack damage by 75 % (was 50 %) and lasts 8/9/10 s on Heroes (was 7/8/9)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANso": {
+            "DataC1": 0.75,
+            "DataC2": 0.75,
+            "DataC3": 0.75,
+            "HeroDur1": 8,
+            "HeroDur2": 9,
+            "HeroDur3": 10
+          }
+        }
+      }
+    },
+    {
+      "note": "Tornado moves at 150 (was 75), base and minimum",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ntor": {
+            "spd": 150,
+            "minSpd": 150
+          }
+        }
+      }
+    },
+    {
+      "note": "Mana Shield costs 10 mana to activate (was 25)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANms": {
+            "Cost1": 10,
+            "Cost2": 10,
+            "Cost3": 10
+          }
+        }
+      }
+    },
+    {
+      "note": "Goblin Zeppelin costs 1 food (was 0)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nzep": {
+            "fused": 1
+          }
+        }
+      }
+    },
+    {
+      "note": "Ankh of Reincarnation revives after 5 s (was 7)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIrc": {
+            "DataA1": 5
+          }
+        }
+      }
+    },
+    {
+      "note": "Gloves of Haste +18 % attack speed (was 15 %)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIsx": {
+            "DataA1": 0.18
+          }
+        }
+      }
+    },
+    {
+      "note": "Circlet of Nobility costs 200 gold (was 175)",
+      "files": {
+        "Units\\ItemData.slk": {
+          "cnob": {
+            "goldcost": 200
+          }
+        }
+      }
+    },
+    {
+      "note": "Creep Sleep: no longer on Heroes, lasts 8 s (was 10), costs 100 mana (was 125), cooldown 8 s (was 6; the notes say 10, the live table has 8)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ACsl": {
+            "targs1": "air,ground,enemy,organic,neutral,nonhero",
+            "Dur1": 8,
+            "Cool1": 8,
+            "Cost1": 100
+          }
+        }
+      }
+    },
+    {
+      "note": "Dark Troll High Priest gains Abolish Magic",
+      "files": {
+        "Units\\UnitAbilities.slk": {
+          "ndth": {
+            "abilList": "ACdm,Anh2,ACsl"
+          }
+        }
+      }
+    },
+    {
+      "note": "Enforcer and Bandit Lord lose Shadowmeld and sleep at night",
+      "files": {
+        "Units\\UnitAbilities.slk": {
+          "nenf": {
+            "abilList": "ACev"
+          },
+          "nbld": {
+            "abilList": "ACav,ACds"
+          }
+        },
+        "Units\\UnitData.slk": {
+          "nenf": {
+            "canSleep": 1
+          },
+          "nbld": {
+            "canSleep": 1
+          }
+        }
+      }
+    },
+    {
+      "note": "Enforcer 600 hit points (was 500)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "nenf": {
+            "HP": 600,
+            "realHP": 600
+          }
+        }
+      }
+    },
+    {
+      "note": "Rune of Speed lasts 20 s (was 60)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "APsa": {
+            "Dur1": 20,
+            "HeroDur1": 20
+          }
+        }
+      }
+    },
+    {
+      "note": "Infernal Contraption, Infernal Machine and Infernal Juggernaut move speed 200 (was 180)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ninc": {
+            "spd": 200
+          },
+          "ninm": {
+            "spd": 200
+          },
+          "nina": {
+            "spd": 200
+          }
+        }
+      }
+    },
+    {
+      "note": "Creep Mana Burn burns 50 mana (was 100)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Ambd": {
+            "DataA1": 50
+          },
+          "Amnb": {
+            "DataA1": 50
+          },
+          "Ambb": {
+            "DataA1": 50
+          }
+        }
+      }
+    },
+    {
+      "note": "Creep Force of Nature summons 2 Treants (was 3) for 100 mana (was 175)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ACfr": {
+            "DataA1": 2,
+            "Cost1": 100
+          }
+        }
+      }
+    },
+    {
+      "note": "Creep Pulverize (Sea Giant) 30 damage, 15 % chance (was 40/20)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ACpv": {
+            "DataA1": 15,
+            "DataB1": 30
+          }
+        }
+      }
+    },
+    {
+      "note": "Creep Cripple lasts 20 s on units (was 60; Heroes still 10); the notes' 125-mana cost never reached the live table, which still has 175",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ACcr": {
+            "Dur1": 20
+          }
+        }
+      }
+    },
+    {
+      "note": "Centaur Archer armour Medium (was Heavy)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ncea": {
+            "defType": "medium"
+          }
+        }
+      }
+    },
+    {
+      "note": "Centaur Impaler armour Medium (was Heavy), 400 hit points (was 350)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ncim": {
+            "defType": "medium",
+            "HP": 400,
+            "realHP": 400
+          }
+        }
+      }
+    },
+    {
+      "note": "Centaur Sorcerer armour Medium (was Heavy)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "ncks": {
+            "defType": "medium"
+          }
+        }
+      }
+    },
+    {
+      "note": "Warlock Cripple lasts 20 s, as the other creep Cripples",
+      "source": "undocumented",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Scri": {
+            "Dur1": 20
+          }
+        }
+      }
+    }
+  ],
+  "engine": [
+    {
+      "key": "ams-immune-to-devour-magic",
+      "note": "Anti-magic Shell is no longer removed by Devour Magic",
+      "implemented": false
+    },
+    {
+      "key": "rogue-wizard-sleeps",
+      "note": "Rogue Wizards sleep at night; its row already has canSleep = 1 in 1.30.4 and no table changes, so whatever kept it awake is not in the data",
+      "implemented": false
+    }
+  ]
+}

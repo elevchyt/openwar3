@@ -1,0 +1,391 @@
+{
+  "patch": "1.32.10",
+  "build": 17165,
+  "released": "2021-04-13",
+  "notes": [
+    "https://us.forums.blizzard.com/en/warcraft3/t/warcraft-iii-reforged-patch-notes-version-13210/26961",
+    "https://liquipedia.net/warcraft/Patch_1.32.10"
+  ],
+  "changes": [
+    {
+      "note": "Improved Lumber Harvesting needs nothing; Advanced Lumber Harvesting needs a Keep instead of a Castle",
+      "files": {
+        "Units\\HumanUpgradeFunc.txt": {
+          "Rhlh": {
+            "Requires": null,
+            "Requires1": "hkee"
+          }
+        }
+      }
+    },
+    {
+      "note": "Knights have Sundering Blades without researching it; the research leaves the Barracks",
+      "files": {
+        "Units\\HumanAbilityFunc.txt": {
+          "Ahsb": {
+            "Requires": null
+          }
+        },
+        "Units\\HumanUnitFunc.txt": {
+          "hbar": {
+            "Researches": "Rhde,Rhan,Rhri"
+          }
+        },
+        "Units\\UnitBalance.slk": {
+          "hkni": {
+            "upgrades": "Rhar,Rhme,Rhan,Rhpm,Rguv"
+          }
+        }
+      }
+    },
+    {
+      "note": "Priest Dispel Magic cast range 700",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Adis": {
+            "Rng1": 700
+          }
+        }
+      }
+    },
+    {
+      "note": "Human towers repair 5 s faster",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "hwtw": {
+            "reptm": 15
+          },
+          "hgtw": {
+            "reptm": 45
+          },
+          "hatw": {
+            "reptm": 45
+          },
+          "hctw": {
+            "reptm": 60
+          }
+        }
+      }
+    },
+    {
+      "note": "Thunder Clap area 300/325/350",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AHtc": {
+            "Area2": 325,
+            "Area3": 350
+          }
+        }
+      }
+    },
+    {
+      "note": "Scroll of Speed costs 70 gold",
+      "files": {
+        "Units\\ItemData.slk": {
+          "shas": {
+            "goldcost": 70
+          }
+        }
+      }
+    },
+    {
+      "note": "Serpent Ward experience bounty 12.5/30/42.5: levels 2 and 3 count as unit levels 3 and 4 (the level-4 campaign ward moved with them)",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "osp2": {
+            "level": 3
+          },
+          "osp3": {
+            "level": 4
+          },
+          "osp4": {
+            "level": 4
+          }
+        }
+      }
+    },
+    {
+      "note": "Acolyte regenerates 3 hit points per second on blight",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "uaco": {
+            "regenHP": 3
+          }
+        }
+      }
+    },
+    {
+      "note": "Rod of Necromancy cooldown 24 s",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIrd": {
+            "Cool1": 24
+          }
+        }
+      }
+    },
+    {
+      "note": "Ritual Dagger costs 100 gold",
+      "files": {
+        "Units\\ItemData.slk": {
+          "ritd": {
+            "goldcost": 100
+          }
+        }
+      }
+    },
+    {
+      "note": "Impale stun on heroes 1/1.5/2 s",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AUim": {
+            "HeroDur2": 1.5,
+            "HeroDur3": 2
+          }
+        }
+      }
+    },
+    {
+      "note": "Impale damage 60/105/150",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AUim": {
+            "DataC1": 60,
+            "DataC2": 105,
+            "DataC3": 150
+          }
+        }
+      }
+    },
+    {
+      "note": "Boneyard no longer requires a Sacrificial Pit",
+      "files": {
+        "Units\\UndeadUnitFunc.txt": {
+          "ubon": {
+            "Requires": "unp2"
+          }
+        }
+      }
+    },
+    {
+      "note": "Frost Armor slows attackers for 3/5/7 s",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AUfu": {
+            "Dur1": 3,
+            "Dur2": 5,
+            "Dur3": 7,
+            "HeroDur1": 3,
+            "HeroDur2": 5,
+            "HeroDur3": 7
+          }
+        }
+      }
+    },
+    {
+      "note": "Druid of the Claw starts with 125 mana",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "edoc": {
+            "mana0": 125
+          }
+        }
+      }
+    },
+    {
+      "note": "Mountain Giant Taunt no longer fires a second time",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Atau": {
+            "DataD1": 1
+          }
+        }
+      }
+    },
+    {
+      "note": "Taunt cooldown 14 s",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Atau": {
+            "Cool1": 14
+          }
+        }
+      }
+    },
+    {
+      "note": "Mana Flare deals 4 damage per point of mana",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Amfl": {
+            "DataA1": 4
+          }
+        }
+      }
+    },
+    {
+      "note": "Mana Flare damage cap 100",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Amfl": {
+            "DataC1": 100
+          }
+        }
+      }
+    },
+    {
+      "note": "Faerie Dragon base damage 12",
+      "files": {
+        "Units\\UnitWeapons.slk": {
+          "efdr": {
+            "dmgplus1": 12,
+            "mindmg1": 13,
+            "avgdmg1": 14,
+            "maxdmg1": 15,
+            "DPS": 8
+          }
+        }
+      }
+    },
+    {
+      "note": "Pandaren Brewmaster +1 Strength and +1 Intelligence",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "Npbm": {
+            "STR": 23,
+            "INT": 16,
+            "realHP": 675,
+            "realM": 240
+          }
+        }
+      }
+    },
+    {
+      "note": "Breath of Fire damage cap 480/800/1200",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANbf": {
+            "DataB2": 800,
+            "DataB3": 1200
+          }
+        }
+      }
+    },
+    {
+      "note": "Alleria's Flute of Accuracy damage bonus 7.5 %",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIar": {
+            "DataA1": 0.075
+          }
+        }
+      }
+    },
+    {
+      "note": "Ancient Janggo of Endurance: movement 7.5 %, attack speed 3 %",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIae": {
+            "DataA1": 0.075,
+            "DataB1": 0.03
+          }
+        }
+      }
+    },
+    {
+      "note": "Khadgar's Pipe of Insight mana regeneration bonus 0.5",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIba": {
+            "DataA1": 0.5
+          }
+        }
+      }
+    },
+    {
+      "note": "Legion Doom-Horn: movement 7.5 %, life regeneration 0.3",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIau": {
+            "DataA1": 0.075,
+            "DataB1": 0.3
+          }
+        }
+      }
+    },
+    {
+      "note": "Scourge Bone Chimes life steal 15 %",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIav": {
+            "DataA1": 0.15
+          }
+        }
+      }
+    },
+    {
+      "note": "The Lion Horn of Stormwind armour bonus 1.5",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIad": {
+            "DataA1": 1.5
+          }
+        }
+      }
+    },
+    {
+      "note": "Items sell back for 60 % of their cost",
+      "files": {
+        "Units\\MiscGame.txt": {
+          "Misc": {
+            "PawnItemRate": "0.60"
+          }
+        }
+      }
+    },
+    {
+      "note": "Scroll of Town Portal costs 325 gold",
+      "files": {
+        "Units\\ItemData.slk": {
+          "stwp": {
+            "goldcost": 325
+          }
+        }
+      }
+    },
+    {
+      "note": "Mountain Giant Taunt: one taunt, 14 s cooldown (the ability row's own numbers)",
+      "source": "undocumented",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANta": {
+            "Cool1": 14,
+            "DataD1": 1
+          }
+        }
+      }
+    },
+    {
+      "note": "Mana Flare can be switched off",
+      "source": "undocumented",
+      "files": {
+        "Units\\MiscGame.txt": {
+          "Misc": {
+            "CanDeactivateManaFlare": 1
+          }
+        }
+      }
+    }
+  ],
+  "engine": [
+    {
+      "key": "warsong-drums-damage-75",
+      "note": "Warsong Battle Drums damage bonus 10 % to 7.5 % per the notes, but no table carries it: AIcd DataA1 is still 0.1 in the live 3.0.0 tables and no later release mentions the item",
+      "implemented": false
+    },
+    {
+      "key": "goldmine-rally-fog-leak",
+      "note": "A rally flag set on a gold mine behaves consistently and no longer reveals the player's position through the fog",
+      "implemented": false
+    }
+  ]
+}

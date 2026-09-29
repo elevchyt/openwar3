@@ -1212,6 +1212,14 @@ function replenishPulse(api: SpellApi, caster: SimUnit, def: AbilityDef, rank: n
   }
 }
 
+/** Slow's shape, shared by the Sorceress (`Aslo`) and 2.0.2's Orb of Slow (`Aosl`). */
+const slow: Handler = (api, caster, def, rank, ctx) => {
+  const t = api.getUnit(ctx.targetId);
+  if (!t || !api.hostile(caster, t)) return;
+  const lvl = def.levelData[rank - 1];
+  api.applyBuff(t, { kind: "slow", group: "slow", timeLeft: dur(lvl, t) || 15, sourceId: caster.id, value: d(lvl, 0, 0.35), value2: d(lvl, 1, 0.35), ...fx(def) });
+};
+
 /** Storm Bolt's shape, shared with the creeps' Hurl Boulder (see the `AHtb`/`ACtb` rows). */
 const stormBolt: Handler = (api, caster, def, rank, ctx) => {
   const t = api.getUnit(ctx.targetId);
@@ -1401,12 +1409,11 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   },
 
   // Slow — cripple an enemy: slow its movement (dataA) and attack (dataB).
-  Aslo: (api, caster, def, rank, ctx) => {
-    const t = api.getUnit(ctx.targetId);
-    if (!t || !api.hostile(caster, t)) return;
-    const lvl = def.levelData[rank - 1];
-    api.applyBuff(t, { kind: "slow", group: "slow", timeLeft: dur(lvl, t) || 15, sourceId: caster.id, value: d(lvl, 0, 0.35), value2: d(lvl, 1, 0.35), ...fx(def) });
-  },
+  Aslo: slow,
+  // …and 2.0.2's Orb of Slow (`AIno`, code `Aosl` — src/patches/), the Effect Ability its `AIsb`
+  // wrapper casts on a hit. Its own code, the Sorceress's row shape: DataA 0.55 movement, DataB
+  // 0.25 attack, Dur 10 / HeroDur 5.
+  Aosl: slow,
 
   // Dispel Magic — clear timed buffs from every unit in the area; summoned units
   // additionally take dataB damage (which usually destroys them).

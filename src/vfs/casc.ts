@@ -76,7 +76,7 @@ export function isCascInstall(files: CascFiles | null): files is CascFiles {
 
 /** One `.build.info` row, by column name. The file is a header row of `Name!TYPE:size`
  *  followed by one row per installed branch; the active branch is the one we want. */
-function parseBuildInfo(text: string): Map<string, string> {
+export function parseBuildInfo(text: string): Map<string, string> {
   const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
   if (lines.length < 2) throw new Error(".build.info: no branch rows");
   const columns = lines[0].split("|").map((c) => c.split("!")[0].trim());
@@ -103,7 +103,7 @@ export function buildInfoVersion(text: string): string | null {
 }
 
 /** A build/CDN config: `key = value`, `#` comments. Values with two hashes are `CKey EKey`. */
-function parseConfig(text: string): Map<string, string> {
+export function parseConfig(text: string): Map<string, string> {
   const out = new Map<string, string>();
   for (const line of text.split(/\r?\n/)) {
     if (!line || line.startsWith("#")) continue;
@@ -130,7 +130,7 @@ const RECORD_HEADER = 30;
  * offsets that were reused by a later patch, which reads as corrupt data rather than as a
  * missing file.
  */
-function parseIndex(idx: Map<string, Uint8Array>): Map<string, Location> {
+export function parseIndex(idx: Map<string, Uint8Array>): Map<string, Location> {
   const live = new Map<number, { version: number; bytes: Uint8Array }>();
   for (const [name, bytes] of idx) {
     const m = /^([0-9a-f]{2})([0-9a-f]{8})\.idx$/i.exec(name);
@@ -176,7 +176,7 @@ function parseIndex(idx: Map<string, Uint8Array>): Map<string, Location> {
 
 /** CKey → the EKey its bytes are stored under. (The e-key half of the file is not read: we
  *  never need to go the other way.) */
-function parseEncoding(bytes: Uint8Array): Map<string, string> {
+export function parseEncoding(bytes: Uint8Array): Map<string, string> {
   if (bytes[0] !== 0x45 || bytes[1] !== 0x4e) throw new Error("encoding: bad magic (want 'EN')");
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const cKeySize = bytes[3];
@@ -235,7 +235,7 @@ interface RootEntry {
   ckey: string;
 }
 
-function parseRoot(text: string): Map<string, RootEntry[]> {
+export function parseRoot(text: string): Map<string, RootEntry[]> {
   const byArchive = new Map<string, RootEntry[]>();
   for (const line of text.split(/\r?\n/)) {
     if (!line) continue;

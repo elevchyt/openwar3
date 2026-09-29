@@ -1,0 +1,37 @@
+{
+  "patch": "1.36.2.21228",
+  "build": 21228,
+  "released": "2024-06-18",
+  "notes": [
+    "https://us.forums.blizzard.com/en/warcraft3/t/warcraft-iii-reforged-hotfixes-updated-april-21-2026/28629/17",
+    "https://liquipedia.net/warcraft/Patch_1.36.2.21228"
+  ],
+  "changes": [
+    {
+      "note": "Rod of Necromancy cooldown back to 24 s",
+      "files": {
+        "Units\\AbilityData.slk": { "AIrd": { "Cool1": 24 } }
+      }
+    },
+    {
+      "note": "Troll Headhunter base damage back to 22",
+      "files": {
+        "Units\\UnitWeapons.slk": { "ohun": { "dmgplus1": 22, "mindmg1": 23, "avgdmg1": 25, "maxdmg1": 27, "dps": 10.8225108225108 } }
+      }
+    },
+    {
+      "note": "Nature's Blessing back to 200 lumber",
+      "source": "undocumented",
+      "files": {
+        "Units\\UpgradeData.slk": { "Renb": { "lumberbase": 200 } }
+      }
+    }
+  ],
+  "engine": [
+    {
+      "key": "charged-cooldown-kept-on-handover-reverted",
+      "note": "Reverts 1.36.2.21214: a charged item handed to another Hero arrives with its cooldown reset again, as in 1.36.2",
+      "implemented": false
+    }
+  ]
+}
