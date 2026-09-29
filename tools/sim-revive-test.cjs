@@ -26,6 +26,11 @@ const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { SimWorld } = require(join(REPO, ".sim-build", "src", "sim", "world.js"));
 const { PathingGrid } = require(join(REPO, ".sim-build", "src", "sim", "pathing.js"));
+const { setPatchLevel, BASE_PATCH } = require(join(REPO, ".sim-build", "src", "patches", "index.js"));
+// The numbers below are 1.30.4's (ReviveTimeFactor 0.65); 1.35.0 made it 0.6 on the melee
+// tables (src/patches/), a fact about the chain that tools/patch-effects-test.cjs checks — so
+// this file reads the install's own rule.
+setPatchLevel(BASE_PATCH);
 const {
   MISC_GAME, heroReviveCost, heroReviveVitals,
 } = require(join(REPO, ".sim-build", "src", "data", "gameplayConstants.js"));

@@ -162,3 +162,15 @@ export function disabledIconPath(path: string): string | null {
   if (cut < 0) return null;
   return `ReplaceableTextures\\CommandButtonsDisabled\\DIS${path.slice(cut + 1)}`;
 }
+
+/** The placeholder a missing BUTTON icon is drawn as (MapViewerScene.blpIcon, docs/icons.md): `BTNTemp.blp`,
+ *  or null when the path is not a live button icon at all — a model's texture, a loading screen,
+ *  or a greyed DIS* twin, whose own fallback (`disabledArt`'s caller) is the live art. */
+export function placeholderIcon(path: string): string | null {
+  const p = path.replace(/\//g, "\\");
+  const name = p.split("\\").pop() ?? "";
+  if (/^DIS/i.test(name) || /\\CommandButtonsDisabled\\/i.test(p)) return null;
+  const button = /\\(CommandButtons|PassiveButtons)\\/i.test(p) || /^(PAS)?BTN/i.test(name);
+  if (!button || /^BTNTemp\.blp$/i.test(name)) return null;
+  return "ReplaceableTextures\\CommandButtons\\BTNTemp.blp";
+}

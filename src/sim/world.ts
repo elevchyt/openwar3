@@ -2700,6 +2700,8 @@ interface UpgradeBonuses {
   range: number; sight: number; speed: number; attackSpeed: number; damage: number;
   lumber: number; spillDist: number; spillRadius: number; weaponMask: number;
   attackLevel: number; armorLevel: number;
+  /** `rlev` — ability id → the LEVEL a research sets it to (see sumUpgradeBonuses). */
+  abilityLevels: [string, number][];
 }
 /** The grid's cell, in world units. Ours, and free to be anything: the reach a body is offered is
  *  computed from the radii, so the size only decides how many cells a query walks and how many
@@ -11976,7 +11978,7 @@ export class SimWorld {
    *
    *  Still deliberately unhandled rather than guessed at: `rart` (armour-type swap, Orc
    *  Reinforced Defenses), `ratc` (attack target count — Moon Glaive's bounce), `rrai`,
-   *  `rent`, `rspi`, `rlev`, `raud`, `rmin`, `radl`. `rtma` is not a stat at all — it flips a
+   *  `rent`, `rspi`, `raud`, `rmin`, `radl`. `rtma` is not a stat at all — it flips a
    *  unit's availability and is handled by TechState.maxAllowed. */
   private upgradeBonuses(u: SimUnit): Readonly<UpgradeBonuses> {
     // The sum depends on three things only — the owner's research levels, the unit's TYPE (its
@@ -12005,6 +12007,7 @@ export class SimWorld {
       attackLevel: 0, armorLevel: 0,
       // -1 = "no `renw` researched" — the unit keeps whatever mask its data shipped with.
       weaponMask: -1,
+      abilityLevels: [] as [string, number][],
     };
     if (!this.tech || !this.upgradeReg || !this.unitReg) return b;
     const def = this.unitReg.get(u.typeId);
@@ -12057,6 +12060,12 @@ export class SimWorld {
           // slots); Impaling Bolt (`Repb`) is 2, which SWITCHES the Glaive Thrower off slot 1
           // and onto slot 2 — the tree-piercing bolt — rather than giving it a second attack.
           case "renw": b.weaponMask = v; break;
+          // Increase Ability Level (`rlev`, `code` = the ability): the research's level IS the
+          // ability's — base 1 / mod 1 on 1.32's upgrade badges, so Improved Lumber Harvesting
+          // shows `Ahlh` at level 1 (its first icon) and Advanced at level 2 (its second). Read
+          // as the level SET, not added: an unresearched badge is hidden by its `Requires`, so
+          // there is no level to add to.
+          case "rlev": if (e.code) b.abilityLevels.push([e.code, v]); break;
         }
       }
     }
@@ -12146,6 +12155,10 @@ export class SimWorld {
     if (u.backpacks) this.openBackpacks(u);
     const item = this.itemBonuses(u);
     const upg = this.upgradeBonuses(u);
+    // `rlev` (sumUpgradeBonuses): a research that sets an ability's level — 1.32's upgrade badges.
+    for (const [abilityId, level] of upg.abilityLevels) {
+      for (const ab of u.abilities) if (ab.id === abilityId && ab.level !== level) ab.level = level;
+    }
     // Buffed attributes (Robo-Goblin's Strength) count exactly as an item's do — same pool,
     // same downstream effects (hit points, damage on a Strength hero, the panel's number).
     let buffStr = 0;

@@ -417,7 +417,6 @@ data corrected the transcription in ways no amount of reading the notes could ha
   against summons), `ANbf Area4`, `ANdr Cost4` (unused fourth levels) and the Plague Ward aura's
   `Requires`. A RETAIL 2.0.4.23745 install's own tables (`patch-extract.mjs --install`, the
   `2.0.4.23745` checkpoint) agree with the chain on all four, so they are 3.0.0's, and out of scope.
-- **The Knight's and Necromancer's icon-only passives** (`Ahan`, `Ausm`) — below.
 - **The Cloak of Shadows' by-day icon** — the game names `BTNAmbushDay.blp`, which a 1.30.4
   install does not have, so ours keeps `BTNCloak.blp`.
 
@@ -446,11 +445,8 @@ note saying so. That only matters for a ROLLBACK; at the latest level the chain 
   engine settings 3.0.0 added to `MiscGame.txt` (`AICallForHelp`, `BaseMeleeCritDamage`, …).
 - **Unused ability levels** — a fourth level on a three-level hero ability (`AHtc DataE4`,
   `ANso DataA4`, …): data nothing can reach.
-- **The upgrade display icons** — fifteen passive `APai` rows (`Ahri` Long Rifles, `Augf` Ghoul
-  Frenzy, …) that hang on a unit to show a research it has, already present in 1.32.8's tables.
-  Presentation only, and fourteen of their fifteen `PASBTN*` icons do not exist in a 1.30.4
-  install (only `PASBTNRegenerate.blp` does) — they wait on art, as the Ritual Dagger and
-  Sundering Blades did.
+- **The upgrade display icons** are IN the chain now (1.32.0, fifteen `APai` badges, levelled by
+  `rlev`), their PASBTN art derived at mount (docs/icons.md).
 - **Two code swaps with no behaviour behind them here** — Moon Glaive's rows moved to code
   `Aaab` (the engine does not model the glaive's bounce at all yet) and `[utod] Researches`,
   which 1.30.4 states on two lines that the tech tree already unions.
@@ -489,7 +485,8 @@ readable with the CASC reader, and nothing of theirs is committed.
 | for | files | status |
 |---|---|---|
 | Gargoyle Prioritize (`Aatp`, 1.32.9) — on / off | `BTNAirAttackOn`, `BTNAirAttackOff` + `DISBTN…` twins | **done** — ours, in `src/patches/art/`; the button sits right of Patrol (1,1) |
-| the upgrade-indicator passives, in the game since 1.32.0 | `PASBTNDwarvenLongRifle`, `…AnimalWarTraining`, `…MarkOfFire`, `…HumanLumberUpgrade1/2`, `…Berserk`, `…HeadHunterBerserker`, `…ReinforcedBurrows`, `…SpikedBarricades`, `…ImprovedSpikedBarricades`, `…AdvancedSpikedBarricades`, `…GhoulFrenzy`, `…Shade`, `…SkeletonMage`, `…ImprovedBows`, `…Marksmanship`, `…WellSpring` + `DISPASBTN…` twins | NOT in the chain until they exist; the rows (15 `APai` abilities, the units' ability lists, three upgrade effects) are ready to add |
+| the upgrade-indicator passives, in the game since 1.32.0 | `PASBTNDwarvenLongRifle`, `…AnimalWarTraining`, `…Berserk`, … (sixteen) + `DISPASBTN…` twins | **not drawn — DERIVED**: each is its 1.30.4 `BTN` with the bevel off (docs/icons.md), computed at mount; the badges are in the chain (1.32.0) |
 
-`PASBTNAdvancedSpikedBarricades` is named by the data but absent even from a 2.0.4 install —
-only its disabled twin ships.
+Nothing is left to draw. A PASBTN is derived from its BTN and a DISPASBTN IS its DISBTN, so a
+later patch's passive badge never needs art of ours as long as its command icon ships — and an
+icon that can be neither found nor derived is drawn as `BTNTemp.blp`.

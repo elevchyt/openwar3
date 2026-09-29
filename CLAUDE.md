@@ -261,6 +261,13 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   1.30–2.0.4 config is a 404), so the intermediate CHECKPOINTS are community copies pinned by
   commit in `tools/patch-checkpoints.mjs` (1.31.1 … 2.0.4; none exists for 1.35/1.36). Where the
   notes and the tables disagree, the tables win.
+- **Icons:** read [`docs/icons.md`](docs/icons.md) before touching
+  [`src/vfs/derivedArt.ts`](src/vfs/derivedArt.ts), `blpIcon` or an ability's `Art`. An icon is
+  the install's, then our own drawn art (`src/patches/art/`), then DERIVED at mount — a missing
+  `PASBTN<X>` is `BTN<X>` with its 4-pixel bevel blacked and the next eight rings shaded (a
+  measured curve; 3/255 from the real ones), a missing `DISPASBTN<X>` IS `DISBTN<X>` — and last
+  `BTNTemp.blp`, drawn rather than an empty square. An `Art` may list one icon per LEVEL
+  (`iconAt`), which `rlev` upgrade effects advance.
 - **Camera:** read [`docs/camera.md`](docs/camera.md) before touching `GAME_FOV`, the zoom constants, or a map's
   camera. The FOV *field* the data carries (70) is **not** the angle the game renders with (**45°**, measured off
   the real client) — conflate them and every distance changes meaning and every map camera breaks.

@@ -235,7 +235,11 @@ export interface AbilityDef {
   targetFlags: string[]; // targs1 — air/ground/enemy/friend/organic/notself/…
   autocast: boolean; // can toggle autocast (Heal, Slow, …)
   name: string;
-  icon: string; // command-button BLP path (art)
+  icon: string; // command-button BLP path (art) — level 1's, when the row names one per level
+  /** `Art` as a LIST: a few rows name one icon per level ("…\\PASBTNHumanLumberUpgrade1.blp,
+   *  …\\PASBTNHumanLumberUpgrade2.blp"), which read as one path names a file that does not exist.
+   *  `icon` is the first; the command card shows the one for the unit's level (iconAt). */
+  icons?: string[];
   hotkey: string; // Hotkey — the letter that CASTS it from the command card
   /** Researchhotkey — the letter that LEARNS it on the hero's skill page. A separate
    *  string in AbilityStrings, and for a passive it is the ONLY one: Bash ([AHbh]),
@@ -755,6 +759,10 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   // not have until the patch chain adds them.
   AIdg: { target: "unit" }, // Ritual Dagger (1.31.0) — sacrifice a friendly unit, heal around it
   Aaab: { target: "passive" }, // Sundering Blades (1.31.0) — more damage to one armour class (SimWorld.armorClassBonus)
+  // The upgrade BADGES 1.32 hangs on a unit (`Ahri` Long Rifles, `Augf` Ghoul Frenzy, …): a
+  // passive icon and nothing else — the research is what does the work. Gated by each row's
+  // `Requires`, levelled by `rlev`, drawn off PASBTN art a 1.30.4 install derives (vfs/derivedArt.ts).
+  APai: { target: "passive" },
   // Prioritize (1.32.9, the Gargoyle): a STANCE like Defend — on/off, its `Unart` shown while
   // on — so it rides the same flag. SimWorld.prioritizesAir is what the stance changes.
   Aatp: { target: "none", autocast: true },
@@ -1237,7 +1245,8 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       targetFlags: normalizeTargetFlags(str(r, "targs1") || ""),
       autocast: !!known?.autocast,
       name: (s && str(s, "Name")) || id,
-      icon: f ? str(f, "art") : "",
+      icon: f ? artList(str(f, "art"))[0] ?? "" : "",
+      icons: f ? artList(str(f, "art")) : [],
       hotkey: (s ? (str(s, "Hotkey").trim()[0] ?? "") : "").toUpperCase(),
       researchHotkey: (s ? (str(s, "Researchhotkey").trim()[0] ?? str(s, "Hotkey").trim()[0] ?? "") : "").toUpperCase(),
       buttonX: bx,
@@ -1575,6 +1584,21 @@ export function mdlPath(v: string): string {
 function parseButtonPos(v: string): [number, number] {
   const m = /(\d+)\s*,\s*(\d+)/.exec(v || "");
   return m ? [parseInt(m[1], 10), parseInt(m[2], 10)] : [0, 0];
+}
+
+/** An `Art` field as its icons, one per level (usually just the one). */
+function artList(v: string): string[] {
+  return v.split(",").map((a) => a.trim()).filter(Boolean);
+}
+
+/** The icon an ability shows at `level` — its own for that level when the row names one per
+ *  level, else the last it names, else `icon`. */
+export function iconAt(def: Pick<AbilityDef, "icon" | "icons">, level: number): string {
+  const list = def.icons ?? [];
+  // A map's object edit sets `icon` alone (data/objectData.ts), and then the list is the base
+  // row's and no longer the ability's — the edit wins.
+  if (!list.length || list[0] !== def.icon) return def.icon;
+  return list[Math.max(0, Math.min(level, list.length) - 1)];
 }
 
 function str(row: Row, key: string): string {

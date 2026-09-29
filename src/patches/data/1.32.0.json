@@ -253,6 +253,371 @@
           }
         }
       }
+    },
+    {
+      "note": "Upgrade BADGES: fifteen passive icons (code APai) that show on a unit once its research is in — Long Rifles, Animal War Training, Lumber Harvesting (one icon per level, raised by the research's own `rlev` effect), Brute Strength, Berserker Upgrade, Reinforced Defenses, Spiked Barricades, Troll Regeneration, Ghoul Frenzy, Skeletal Mastery, Improved Bows, Marksmanship, Well Spring, and the always-on Phoenix and Shade badges; the Headhunter also lists Berserk, behind the Berserker Upgrade. Rows, slots, requirements and art paths as the 1.32.1 tables (and 2.0.4's) have them; the words are ours. Their PASBTN art is DERIVED at mount from each BTN (vfs/derivedArt.ts, docs/icons.md)",
+      "source": "undocumented",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Ahri": {
+            "$base": "Agyb",
+            "code": "APai",
+            "comments": "Passive - Long Rifles (upgrade badge)",
+            "race": "human",
+            "levels": 1
+          },
+          "Ahan": {
+            "$base": "Agyb",
+            "code": "APai",
+            "comments": "Passive - Animal War Training (upgrade badge)",
+            "race": "human",
+            "levels": 1
+          },
+          "Ahpe": {
+            "$base": "Agyb",
+            "code": "APai",
+            "comments": "Passive - Phoenix (upgrade badge)",
+            "race": "human",
+            "levels": 1
+          },
+          "Ahlh": {
+            "$base": "Agyb",
+            "code": "APai",
+            "comments": "Passive - Lumber Harvesting (upgrade badge)",
+            "race": "human",
+            "levels": 2
+          },
+          "Aobs": {
+            "$base": "Agyb",
+            "code": "APai",
+            "comments": "Passive - Brute Strength (upgrade badge)",
+            "race": "orc",
+            "levels": 1
+          },
+          "Aobk": {
+            "$base": "Agyb",
+            "code": "APai",
+            "comments": "Passive - Berserker Upgrade (upgrade badge)",
+            "race": "orc",
+            "levels": 1
+          },
+          "Aorb": {
+            "$base": "Agyb",
+            "code": "APai",
+            "comments": "Passive - Reinforced Defenses (upgrade badge)",
+            "race": "orc",
+            "levels": 1
+          },
+          "Aosp": {
+            "$base": "Agyb",
+            "code": "APai",
+            "comments": "Passive - Spiked Barricades (upgrade badge)",
+            "race": "orc",
+            "levels": 2
+          },
+          "Aotr": {
+            "$base": "Agyb",
+            "code": "APai",
+            "comments": "Passive - Troll Regeneration (upgrade badge)",
+            "race": "orc",
+            "levels": 1
+          },
+          "Augf": {
+            "$base": "Agyb",
+            "code": "APai",
+            "comments": "Passive - Ghoul Frenzy (upgrade badge)",
+            "race": "undead",
+            "levels": 1
+          },
+          "Augh": {
+            "$base": "Agyb",
+            "code": "APai",
+            "comments": "Passive - Shade (upgrade badge)",
+            "race": "undead",
+            "levels": 1
+          },
+          "Ausm": {
+            "$base": "Agyb",
+            "code": "APai",
+            "comments": "Passive - Skeletal Mastery (upgrade badge)",
+            "race": "undead",
+            "levels": 1
+          },
+          "Aeib": {
+            "$base": "Agyb",
+            "code": "APai",
+            "comments": "Passive - Improved Bows (upgrade badge)",
+            "race": "nightelf",
+            "levels": 1
+          },
+          "Aemk": {
+            "$base": "Agyb",
+            "code": "APai",
+            "comments": "Passive - Marksmanship (upgrade badge)",
+            "race": "nightelf",
+            "levels": 1
+          },
+          "Aews": {
+            "$base": "Agyb",
+            "code": "APai",
+            "comments": "Passive - Well Spring (upgrade badge)",
+            "race": "nightelf",
+            "levels": 1
+          }
+        },
+        "Units\\HumanAbilityFunc.txt": {
+          "Ahri": {
+            "Art": "ReplaceableTextures\\PassiveButtons\\PASBTNDwarvenLongRifle.blp",
+            "Buttonpos": "0,2",
+            "Requires": "Rhri"
+          },
+          "Ahan": {
+            "Art": "ReplaceableTextures\\PassiveButtons\\PASBTNAnimalWarTraining.blp",
+            "Buttonpos": "3,2",
+            "Requires": "Rhan"
+          },
+          "Ahpe": {
+            "Art": "ReplaceableTextures\\PassiveButtons\\PASBTNMarkOfFire.blp",
+            "Buttonpos": "0,2"
+          },
+          "Ahlh": {
+            "Art": "ReplaceableTextures\\PassiveButtons\\PASBTNHumanLumberUpgrade1.blp,ReplaceableTextures\\PassiveButtons\\PASBTNHumanLumberUpgrade2.blp",
+            "Buttonpos": "2,1",
+            "Requires": "Rhlh"
+          }
+        },
+        "Units\\HumanAbilityStrings.txt": {
+          "Ahri": {
+            "Name": "Long Rifles",
+            "Tip": "Long Rifles",
+            "Ubertip": "This unit has researched Long Rifles: it shoots from further away."
+          },
+          "Ahan": {
+            "Name": "Animal War Training",
+            "Tip": "Animal War Training",
+            "Ubertip": "This unit has researched Animal War Training: it has more hit points."
+          },
+          "Ahpe": {
+            "Name": "Phoenix",
+            "Tip": "Phoenix",
+            "Ubertip": "When this unit dies it is reborn from a Phoenix Egg."
+          },
+          "Ahlh": {
+            "Name": "Lumber Harvesting",
+            "Tip": "\"Improved Lumber Harvesting\",\"Advanced Lumber Harvesting\"",
+            "Ubertip": "\"This unit has researched Improved Lumber Harvesting: it carries more lumber per trip.\",\"This unit has researched Advanced Lumber Harvesting: it carries still more lumber per trip.\""
+          }
+        },
+        "Units\\OrcAbilityFunc.txt": {
+          "Aobs": {
+            "Art": "ReplaceableTextures\\PassiveButtons\\PASBTNBerserk.blp",
+            "Buttonpos": "0,2",
+            "Requires": "Robs"
+          },
+          "Aobk": {
+            "Art": "ReplaceableTextures\\PassiveButtons\\PASBTNHeadHunterBerserker.blp",
+            "Buttonpos": "1,2",
+            "Requires": "Robk"
+          },
+          "Aorb": {
+            "Art": "ReplaceableTextures\\PassiveButtons\\PASBTNReinforcedBurrows.blp",
+            "Buttonpos": "3,2",
+            "Requires": "Rorb"
+          },
+          "Aosp": {
+            "Art": "ReplaceableTextures\\PassiveButtons\\PASBTNSpikedBarricades.blp,ReplaceableTextures\\PassiveButtons\\PASBTNImprovedSpikedBarricades.blp,ReplaceableTextures\\PassiveButtons\\PASBTNAdvancedSpikedBarricades.blp",
+            "Buttonpos": "3,2",
+            "Requires": "Rosp"
+          },
+          "Aotr": {
+            "Art": "ReplaceableTextures\\PassiveButtons\\PASBTNRegenerate.blp",
+            "Buttonpos": "3,2",
+            "Requires": "Rotr"
+          },
+          "Absk": {
+            "Requires": "Robk"
+          }
+        },
+        "Units\\OrcAbilityStrings.txt": {
+          "Aobs": {
+            "Name": "Brute Strength",
+            "Tip": "Brute Strength",
+            "Ubertip": "This unit has researched Brute Strength: it has more hit points."
+          },
+          "Aobk": {
+            "Name": "Berserker Upgrade",
+            "Tip": "Berserker Upgrade",
+            "Ubertip": "This unit has researched the Berserker Upgrade."
+          },
+          "Aorb": {
+            "Name": "Reinforced Defenses",
+            "Tip": "Reinforced Defenses",
+            "Ubertip": "This building has researched Reinforced Defenses: its armor is Fortified."
+          },
+          "Aosp": {
+            "Name": "Spiked Barricades",
+            "Tip": "\"Spiked Barricades\",\"Improved Spiked Barricades\"",
+            "Ubertip": "\"This building has researched Spiked Barricades: melee attackers are hurt by its spikes.\",\"This building has researched Improved Spiked Barricades: its spikes hurt melee attackers more.\""
+          },
+          "Aotr": {
+            "Name": "Troll Regeneration",
+            "Tip": "Troll Regeneration",
+            "Ubertip": "This unit has researched Troll Regeneration: it heals faster."
+          }
+        },
+        "Units\\UndeadAbilityFunc.txt": {
+          "Augf": {
+            "Art": "ReplaceableTextures\\PassiveButtons\\PASBTNGhoulFrenzy.blp",
+            "Buttonpos": "1,2",
+            "Requires": "Rugf"
+          },
+          "Augh": {
+            "Art": "ReplaceableTextures\\PassiveButtons\\PASBTNShade.blp",
+            "Buttonpos": "1,2"
+          },
+          "Ausm": {
+            "Art": "ReplaceableTextures\\PassiveButtons\\PASBTNSkeletonMage.blp",
+            "Buttonpos": "3,2",
+            "Requires": "Rusm"
+          }
+        },
+        "Units\\UndeadAbilityStrings.txt": {
+          "Augf": {
+            "Name": "Ghoul Frenzy",
+            "Tip": "Ghoul Frenzy",
+            "Ubertip": "This unit has researched Ghoul Frenzy: it attacks and moves faster."
+          },
+          "Augh": {
+            "Name": "Shade",
+            "Tip": "Shade",
+            "Ubertip": "This unit is permanently invisible."
+          },
+          "Ausm": {
+            "Name": "Skeletal Mastery",
+            "Tip": "Skeletal Mastery",
+            "Ubertip": "This unit has researched Skeletal Mastery: one of its raised skeletons is a Skeletal Mage."
+          }
+        },
+        "Units\\NightElfAbilityFunc.txt": {
+          "Aeib": {
+            "Art": "ReplaceableTextures\\PassiveButtons\\PASBTNImprovedBows.blp",
+            "Buttonpos": "2,2",
+            "Requires": "Reib"
+          },
+          "Aemk": {
+            "Art": "ReplaceableTextures\\PassiveButtons\\PASBTNMarksmanship.blp",
+            "Buttonpos": "3,2",
+            "Requires": "Remk"
+          },
+          "Aews": {
+            "Art": "ReplaceableTextures\\PassiveButtons\\PASBTNWellSpring.blp",
+            "Buttonpos": "1,0",
+            "Requires": "Rews"
+          }
+        },
+        "Units\\NightElfAbilityStrings.txt": {
+          "Aeib": {
+            "Name": "Improved Bows",
+            "Tip": "Improved Bows",
+            "Ubertip": "This unit has researched Improved Bows: it shoots from further away."
+          },
+          "Aemk": {
+            "Name": "Marksmanship",
+            "Tip": "Marksmanship",
+            "Ubertip": "This unit has researched Marksmanship: its arrows hit harder."
+          },
+          "Aews": {
+            "Name": "Well Spring",
+            "Tip": "Well Spring",
+            "Ubertip": "This building has researched Well Spring: it holds more mana and restores it faster."
+          }
+        },
+        "Units\\UnitAbilities.slk": {
+          "hdhw": {
+            "abilList": "Aclf,Amls,Ahan"
+          },
+          "hgry": {
+            "abilList": "Asth,Ahan"
+          },
+          "hkni": {
+            "abilList": "Aihn,Ahsb,Ahan"
+          },
+          "hpea": {
+            "abilList": "Ahar,Amil,Ahrp,Ahlh"
+          },
+          "hphx": {
+            "abilList": "Aphx,ACmi,ACrk,Apxf,Ahpe"
+          },
+          "hrif": {
+            "abilList": "Aihn,Ahri"
+          },
+          "odoc": {
+            "abilList": "Aeye,Ahwd,Asta,Aion,Aotr"
+          },
+          "ogru": {
+            "abilList": "Asal,Aion,Aobs"
+          },
+          "ohun": {
+            "abilList": "Sbsk,Aion,Absk,Aobk,Aotr"
+          },
+          "otbk": {
+            "abilList": "Absk,Aion,Aobk,Aotr"
+          },
+          "otbr": {
+            "abilList": "Aliq,Auco,Aotr"
+          },
+          "ofrt": {
+            "abilList": "Abdl,Aspi,Argl,Aosp"
+          },
+          "ogre": {
+            "abilList": "Abdl,Aspi,Argl,Aosp"
+          },
+          "ostr": {
+            "abilList": "Abdl,Aspi,Argl,Aosp"
+          },
+          "otrb": {
+            "abilList": "Abds,Aspi,Abun,Abtl,Astd,Arbr,Aorb"
+          },
+          "owtw": {
+            "abilList": "Abds,Arbr,Aspi,Aorb"
+          },
+          "earc": {
+            "abilList": "Aco2,Ashm,Aien,Ault,Aegr,Aeib,Aemk"
+          },
+          "ehpr": {
+            "abilList": "Adec,Ault,Aeib,Aemk"
+          },
+          "emow": {
+            "abilList": "Abds,Ambt,Aews"
+          },
+          "ugho": {
+            "abilList": "Acan,Ahrl,Aiun,Augf"
+          },
+          "unec": {
+            "abilList": "Acri,Arai,Aiun,Auhf,Ausm"
+          },
+          "ushd": {
+            "abilList": "Atru,Agho,Augh"
+          },
+          "ocbw": {
+            "abilList": "Abds,Aspi,Abun,Sbtl,Astd,Arbr,Aorb"
+          }
+        },
+        "Units\\UpgradeData.slk": {
+          "Rhlh": {
+            "effect2": "rlev",
+            "base2": 1,
+            "mod2": 1,
+            "code2": "Ahlh"
+          },
+          "Rosp": {
+            "effect3": "rlev",
+            "base3": 1,
+            "mod3": 1,
+            "code3": "Aosp"
+          }
+        }
+      }
     }
   ]
 }

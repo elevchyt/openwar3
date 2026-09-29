@@ -8,6 +8,7 @@ import { checkVersion } from "./version";
 import { setCustomKeys } from "../data/customKeys";
 import { EditionDataSource } from "./edition";
 import { PatchDataSource } from "./patch";
+import { DerivedArtDataSource } from "./derivedArt";
 
 // Turn a picked install into a mounted VFS (plan §1 exit: "enumerate/extract any file by path
 // from a real install").
@@ -60,7 +61,12 @@ export async function loadProfile(
     // …and the game's later patches UNDER the edition overlay, so they reach the live melee
     // tables alone (src/vfs/patch.ts, docs/patches.md). A 1.30.4 store only: the patches are
     // stated against 1.30.4, which an MPQ-era install is older than.
-    return { vfs: new EditionDataSource(new PatchDataSource(casc)), mounted: casc.mounted, missing: [], fileCount: casc.list().length, maps };
+    // …and, over everything, the icons the tables name and the install lacks, derived from the
+    // ones it has (src/vfs/derivedArt.ts, docs/icons.md) — computed here, once, after the mount.
+    const vfs = new DerivedArtDataSource(new EditionDataSource(new PatchDataSource(casc)));
+    onProgress?.("Preparing icons…");
+    vfs.prepare();
+    return { vfs, mounted: casc.mounted, missing: [], fileCount: casc.list().length, maps };
   }
 
   const sources: DataSource[] = [];
@@ -87,6 +93,8 @@ export async function loadProfile(
   }
 
   // LayeredDataSource wants highest priority first, so reverse the mount order.
-  const vfs = new EditionDataSource(new LayeredDataSource(sources.slice().reverse()));
+  // An MPQ-era install gets the derived icons too — the passive rule is the game's, not a patch's.
+  const vfs = new DerivedArtDataSource(new EditionDataSource(new LayeredDataSource(sources.slice().reverse())));
+  vfs.prepare();
   return { vfs, mounted, missing, fileCount: vfs.list().length, maps };
 }

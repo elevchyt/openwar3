@@ -51,9 +51,9 @@ import { loadUberSplatRegistry, type UberSplatDef, type UberSplatRegistry } from
 import { loadLightningRegistry } from "../data/lightning";
 import { specialFxPhaseAt, type SpecialFxClips } from "./specialFxClock";
 import { pickEffectSequence, yawPitchRollQuat } from "./effectAnim";
-import { loadAbilityRegistry, mdlPath, type AbilityRegistry, type AbilityDef, type BuffFx, isRepairCode, KNOWN_ABILITIES, TREE_UPGRADE_ABILITY, requiredHeroLevel, aoeCursorRadius, morphFlags, MORPH_FLAG_PERMANENT, MORPH_FLAG_REQUIRES_PAYMENT, type AbilityLevel } from "../data/abilities";
+import { loadAbilityRegistry, mdlPath, type AbilityRegistry, type AbilityDef, type BuffFx, isRepairCode, KNOWN_ABILITIES, TREE_UPGRADE_ABILITY, requiredHeroLevel, aoeCursorRadius, morphFlags, MORPH_FLAG_PERMANENT, MORPH_FLAG_REQUIRES_PAYMENT, type AbilityLevel, iconAt } from "../data/abilities";
 import { isDesktopApp } from "../assets/nativeInstall";
-import { loadCommandStrings, disabledIconPath, type CommandStrings } from "../data/commandStrings";
+import { loadCommandStrings, disabledIconPath, placeholderIcon, type CommandStrings } from "../data/commandStrings";
 import { resolveTipRefs } from "../data/tipRefs";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
 import { CAMERA, MELEE, MINIMAP, MISC_DATA, TEXT_TAG, heroReviveCost, mapMiscEpoch, miscKeyIsRead, setMapMiscOverlay, type ReviveMode } from "../data/gameplayConstants";
@@ -11336,7 +11336,7 @@ export class MapViewerScene {
         // stays a toggle, as it is in the game.
         id: passive ? "noop" : def.autocast && !def.orderOn ? `autocast:${ab.code}` : `ability:${ab.code}`,
         altId: passive || !def.autocast ? undefined : `autocast:${ab.code}`,
-        icon: this.blpIcon(reversed ? def.unIcon : def.icon),
+        icon: this.blpIcon(reversed ? def.unIcon : iconAt(def, ab.level)),
         // The reverse direction has no `Unname` of its own — the row carries one Name — so
         // the title comes from `Untip`, which is where WC3 keeps it ("Up|cffffcc00r|root").
         name: reversed ? wc3ToPlain(def.unTip) || def.name : formWords ? wc3ToPlain(formWords.tip) : def.levels > 1 ? `${def.name} (Level ${ab.level})` : def.name,
@@ -12467,8 +12467,14 @@ export class MapViewerScene {
     if (url === undefined) {
       const bytes = key === path ? this.vfs.rawBytes(path) : map!.rawBytes(path);
       url = bytes ? blpToDataUrl(bytes) : null;
+      // The LAST RESORT (docs/icons.md): a button icon that is neither in the install nor
+      // derivable from it (vfs/derivedArt.ts) is drawn as the engine's own placeholder,
+      // `BTNTemp.blp`, rather than as an empty square, so the ability or item behind it is still
+      // there to see and press. Its greyed twin then comes the ordinary way (DISBTNTemp).
+      const temp = url ? null : placeholderIcon(path);
+      if (temp) url = this.blpIcon(temp);
       this.iconCache.set(key, url);
-      if (url) this.iconSource.set(url, path);
+      if (url && !temp) this.iconSource.set(url, path);
     }
     return url;
   }

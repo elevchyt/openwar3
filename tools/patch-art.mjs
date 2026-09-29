@@ -25,6 +25,8 @@ import { readFileSync, readdirSync, writeFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inflateSync } from "node:zlib";
+import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 const ART = join(REPO, "src", "patches", "art");
@@ -95,104 +97,15 @@ function decodePng(bytes) {
   return { width, height, rgba };
 }
 
-// ---------------------------------------------------------------------------------------------
-// Median cut → 256 colours
-
-function medianCut(rgba, count) {
-  const pixels = [];
-  for (let i = 0; i < rgba.length; i += 4) pixels.push([rgba[i], rgba[i + 1], rgba[i + 2]]);
-  let boxes = [pixels];
-  const range = (box, c) => {
-    let lo = 255, hi = 0;
-    for (const p of box) { lo = Math.min(lo, p[c]); hi = Math.max(hi, p[c]); }
-    return hi - lo;
-  };
-  while (boxes.length < count) {
-    let best = -1, bestSpan = 0, bestChannel = 0;
-    boxes.forEach((box, i) => {
-      if (box.length < 2) return;
-      for (let c = 0; c < 3; c++) {
-        const span = range(box, c);
-        if (span > bestSpan) { bestSpan = span; best = i; bestChannel = c; }
-      }
-    });
-    if (best < 0) break;
-    const box = boxes[best].slice().sort((a, b) => a[bestChannel] - b[bestChannel]);
-    const mid = box.length >> 1;
-    boxes.splice(best, 1, box.slice(0, mid), box.slice(mid));
-  }
-  const colours = boxes.map((box) => {
-    const sum = [0, 0, 0];
-    for (const p of box) for (let c = 0; c < 3; c++) sum[c] += p[c];
-    return sum.map((v) => Math.round(v / box.length));
-  });
-  while (colours.length < count) colours.push([0, 0, 0]);
-  return colours;
+// The encoder is the game's own (src/assets/blpEncode.ts — the one DerivedArtDataSource uses at
+// mount), compiled by tools/tsconfig.sim.json, so a drawn icon and a derived one are one format.
+const BUILD = join(REPO, ".sim-build");
+if (!existsSync(join(BUILD, "src", "assets", "blpEncode.js"))) {
+  execFileSync("npx", ["tsc", "-p", "tools/tsconfig.sim.json"], { cwd: REPO, stdio: "inherit" });
 }
-
-function nearest(colours, r, g, b) {
-  let best = 0, bestD = Infinity;
-  for (let i = 0; i < colours.length; i++) {
-    const [cr, cg, cb] = colours[i];
-    const d = (cr - r) ** 2 + (cg - g) ** 2 + (cb - b) ** 2;
-    if (d < bestD) { bestD = d; best = i; }
-  }
-  return best;
-}
-
-function downsample({ width, height, rgba }) {
-  const w = Math.max(1, width >> 1), h = Math.max(1, height >> 1);
-  const out = new Uint8Array(w * h * 4);
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    for (let c = 0; c < 4; c++) {
-      let sum = 0, n = 0;
-      for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
-        const sx = Math.min(width - 1, x * 2 + dx), sy = Math.min(height - 1, y * 2 + dy);
-        sum += rgba[(sy * width + sx) * 4 + c]; n++;
-      }
-      out[(y * w + x) * 4 + c] = Math.round(sum / n);
-    }
-  }
-  return { width: w, height: h, rgba: out };
-}
-
-/** BLP1, content 1 (paletted), alpha 8, picture type 4, with every mip down to 1×1. */
-function encodeBlp(img) {
-  const colours = medianCut(img.rgba, 256);
-  const mips = [];
-  let level = img;
-  for (;;) {
-    const size = level.width * level.height;
-    const data = new Uint8Array(size * 2);
-    for (let i = 0; i < size; i++) {
-      data[i] = nearest(colours, level.rgba[i * 4], level.rgba[i * 4 + 1], level.rgba[i * 4 + 2]);
-      data[size + i] = level.rgba[i * 4 + 3];
-    }
-    mips.push(data);
-    if (level.width === 1 && level.height === 1) break;
-    level = downsample(level);
-    if (mips.length === 16) break;
-  }
-  const HEADER = 156, PALETTE = 1024;
-  const total = HEADER + PALETTE + mips.reduce((n, m) => n + m.length, 0);
-  const out = Buffer.alloc(total);
-  out.write("BLP1", 0, "latin1");
-  out.writeInt32LE(1, 4); // content: paletted
-  out.writeInt32LE(8, 8); // alpha bits
-  out.writeInt32LE(img.width, 12);
-  out.writeInt32LE(img.height, 16);
-  out.writeInt32LE(4, 20); // picture type: indices + alpha
-  out.writeInt32LE(1, 24); // has mipmaps
-  let at = HEADER + PALETTE;
-  mips.forEach((m, i) => {
-    out.writeInt32LE(at, 28 + i * 4);
-    out.writeInt32LE(m.length, 92 + i * 4);
-    out.set(m, at);
-    at += m.length;
-  });
-  colours.forEach(([r, g, b], i) => out.set([b, g, r, 0], HEADER + i * 4)); // BGRA
-  return out;
-}
+writeFileSync(join(BUILD, "package.json"), '{"type":"commonjs"}');
+const { encodeBlp: encodeRgba } = createRequire(import.meta.url)(join(BUILD, "src", "assets", "blpEncode.js"));
+const encodeBlp = (img) => Buffer.from(encodeRgba({ width: img.width, height: img.height, data: img.rgba }));
 
 // ---------------------------------------------------------------------------------------------
 
