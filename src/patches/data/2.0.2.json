@@ -218,7 +218,8 @@
         "Units\\ItemAbilityFunc.txt": {
           "AIno": {
             "$base": "AIos",
-            "Art": "ReplaceableTextures\\CommandButtons\\BTNOrbofSlowness.blp"
+            "Art": "ReplaceableTextures\\CommandButtons\\BTNOrbofSlowness.blp",
+            "Order": null
           },
           "Bson": {
             "Buffart": "ReplaceableTextures\\CommandButtons\\BTNOrbofSlowness.blp",
@@ -665,7 +666,8 @@
         "Units\\ItemAbilityFunc.txt": {
           "AIpw": {
             "$base": "AIpg",
-            "Targetart": "Abilities\\Spells\\Human\\DispelMagic\\DispelMagicTarget.mdl"
+            "Targetart": "Abilities\\Spells\\Human\\DispelMagic\\DispelMagicTarget.mdl",
+            "Order": null
           }
         },
         "Units\\ItemAbilityStrings.txt": {
@@ -699,14 +701,13 @@
       }
     },
     {
-      "note": "Frost Nova cast range 700 (was 800)",
+      "note": "Frost Nova cast range 700 (was 800) at its three levels; the unused fourth stays 800, as 2.0.2's own tables (build 22692) have it",
       "files": {
         "Units\\AbilityData.slk": {
           "AUfn": {
             "Rng1": 700,
             "Rng2": 700,
-            "Rng3": 700,
-            "Rng4": 700
+            "Rng3": 700
           }
         }
       }
@@ -914,6 +915,17 @@
             "DataA1": 5
           },
           "Apig": {
+            "DataA1": 5
+          }
+        }
+      }
+    },
+    {
+      "note": "The flying Permanent Immolation (no melee unit carries it) fell to 5 per second (was 20) with the others — 2.0.2's own tables (build 22692) have 5",
+      "source": "undocumented",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Apmf": {
             "DataA1": 5
           }
         }
@@ -1148,11 +1160,11 @@
       }
     },
     {
-      "note": "Arachnathid Earth-borer loses Shadow Strike and its mana; 450 hit points (was 400)",
+      "note": "Arachnathid Earth-borer loses Shadow Strike and its mana; 450 hit points (was 400). Every real table from 2.0.2 on (2.0.2, 2.0.3, 2.0.4, live) spells the ability it keeps 'Acvs', an id no ability has (Envenomed Weapons is ACvs), so the game's own row is written: the notes remove only Shadow Strike, but the tables win",
       "files": {
         "Units\\UnitAbilities.slk": {
           "nane": {
-            "abilList": "ACvs"
+            "abilList": "Acvs"
           }
         },
         "Units\\UnitBalance.slk": {
@@ -1198,23 +1210,22 @@
       }
     },
     {
-      "note": "Infernal Machine gains Unholy Aura",
+      "note": "The level-3 Skeletal Orc gets the Champion's new Cripple and Vampiric Aura too — 2.0.2's own tables (build 22692) have them on it, and 2.0.3's notes take them away again",
+      "source": "undocumented",
       "files": {
         "Units\\UnitAbilities.slk": {
-          "ninm": {
-            "abilList": "ACbc,ACua"
+          "nsko": {
+            "abilList": "ACcr,ACvp"
           }
         }
       }
     },
     {
-      "note": "The Orb of Fire, gone from the Arcane Vault, carries its original ability again (AIfb)",
-      "source": "undocumented",
+      "note": "Infernal Machine gains Unholy Aura",
       "files": {
-        "Units\\ItemData.slk": {
-          "ofir": {
-            "abilList": "AIfb",
-            "cooldownID": "AIfb"
+        "Units\\UnitAbilities.slk": {
+          "ninm": {
+            "abilList": "ACbc,ACua"
           }
         }
       }
@@ -1231,29 +1242,15 @@
       }
     },
     {
-      "note": "Ritual Dagger: 200 over 45 s to allies within 450, 5 s cooldown (the 45 s and 450 are the live row's; the notes give only the 200)",
-      "source": "undocumented",
-      "files": {
-        "Units\\AbilityData.slk": {
-          "AIg2": {
-            "Dur1": 45,
-            "HeroDur1": 45,
-            "Cool1": 5,
-            "Area1": 450
-          }
-        }
-      }
-    },
-    {
-      "note": "Great Hall repair time 125; Chimaera repair time 60",
+      "note": "Great Hall repair time 125 and Hunter's Hall repair lumber 80 — not in 1.32.10's tables, in 2.0.2's own (build 22692); no release names them",
       "source": "undocumented",
       "files": {
         "Units\\UnitBalance.slk": {
           "ogre": {
             "reptm": 125
           },
-          "echm": {
-            "reptm": 60
+          "edob": {
+            "lumberRep": 80
           }
         }
       }
@@ -1282,6 +1279,17 @@
                 ]
               ]
             }
+          }
+        }
+      }
+    },
+    {
+      "note": "Mana Flare can be switched off (CanDeactivateManaFlare) — 0 in 1.32.10's tables, 1 in 2.0.2's; 1.35/1.36 have no copy to tell, so it is placed here",
+      "source": "undocumented",
+      "files": {
+        "Units\\MiscGame.txt": {
+          "Misc": {
+            "CanDeactivateManaFlare": 1
           }
         }
       }

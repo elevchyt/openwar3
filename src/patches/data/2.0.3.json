@@ -172,12 +172,15 @@
               "EfctID1": "Aap5",
               "Cost2": 125,
               "DataB2": 0,
+              "DataC2": 0,
               "EfctID2": "Aap5",
               "Cost3": 125,
               "DataB3": 0,
+              "DataC3": 0,
               "EfctID3": "Aap5",
               "Cost4": 125,
               "DataB4": 0,
+              "DataC4": 0,
               "EfctID4": "Aap5"
           }
         },
@@ -203,9 +206,16 @@
       }
     },
     {
-      "note": "Life Drain costs 35 mana (was 50). The final notes repeat the PTR's 25, but 2.0.4's notes lower it 'from 35' and the live table still holds 35 on the unused fourth level, which only a 35-at-every-level release explains",
+      "note": "Life Drain costs 25 mana (was 50), at every level — as the notes say and as 2.0.3's own tables (build 22968) have it; the 35 that 2.0.4's notes lower 'from' came later (see 2.0.3.23101)",
       "files": {
-        "Units\\AbilityData.slk": { "ANdr": { "Cost1": 35, "Cost2": 35, "Cost3": 35, "Cost4": 35 } }
+        "Units\\AbilityData.slk": { "ANdr": { "Cost1": 25, "Cost2": 25, "Cost3": 25, "Cost4": 25 } }
+      }
+    },
+    {
+      "note": "Animate Dead's old row AUan inherits upgrades at its unused levels 2-4 (DataC 1, was 0) — 2.0.3's own tables have it, beside the new AUa2",
+      "source": "undocumented",
+      "files": {
+        "Units\\AbilityData.slk": { "AUan": { "DataC2": 1, "DataC3": 1, "DataC4": 1 } }
       }
     },
     {
@@ -252,9 +262,20 @@
       }
     },
     {
-      "note": "The level-3 Skeletal Orc loses Vampiric Aura and Death Coil (the 1.30.4 row has none; written so the chain ends empty whatever came before)",
+      "note": "The level-3 Skeletal Orc loses the abilities 2.0.2 gave it by mistake (the notes say Vampiric Aura and Death Coil; 2.0.2's tables had Cripple and Vampiric Aura on it) — back to none, as 2.0.3's own tables have it",
       "files": {
         "Units\\UnitAbilities.slk": { "nsko": { "abilList": "_" } }
+      }
+    },
+    {
+      "note": "Mercenary camps list each mercenary in the order of its command-card slot, and the Satyr Shadowdancer moves to the fourth slot, so no two mercenaries of one camp share a slot (the notes' Hotkeys line on reordering the mercenaries; 2.0.2's tables have the old order, 2.0.3's own the new)",
+      "files": {
+        "Units\\NeutralUnitFunc.txt": {
+          "nmer": { "Sellunits": "nftb,nfsp,ngrk,nogm" },
+          "nmr2": { "Sellunits": "ngnb,ngnw,ngrk,nomg" },
+          "nmr6": { "Sellunits": "nmfs,nssp,nsln,nsts" },
+          "nsts": { "Buttonpos": "3,0" }
+        }
       }
     }
   ],

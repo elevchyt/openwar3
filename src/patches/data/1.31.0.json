@@ -312,7 +312,7 @@
       }
     },
     {
-      "note": "Orb of Fire becomes a new orb ability: +7 damage, no splash, struck units heal and regenerate 35 % less for 3 s",
+      "note": "Orb of Fire becomes a new orb ability: +7 damage, no splash, struck units heal and regenerate 35 % less for 3 s — sold as a NEW item, Orb of Fire v2 (`ofr2`), at the Arcane Vault (a Castle item); the original `ofir` keeps its splash for custom maps and drops (the 1.32.8 and live tables both have it); its buff is the new HealMultiplier row BIhm (in 1.31.1's tables, w3x2lni's zhCN-1.31.1 copy)",
       "files": {
         "Units\\AbilityData.slk": {
           "AIf2": {
@@ -335,16 +335,24 @@
         "Units\\ItemAbilityStrings.txt": {
           "AIf2": {
             "Name": "Orb of Fire (Heal Reduction)"
+          },
+          "BIhm": {
+            "Bufftip": "Scorched",
+            "Buffubertip": "\"This unit heals and regenerates less than normal.\""
           }
         },
         "Units\\ItemData.slk": {
-          "ofir": {
+          "ofr2": {
+            "$base": "ofir",
+            "comment": "Orb of Fire v2",
+            "scriptname": "OrbofFirev2",
             "abilList": "AIf2",
             "cooldownID": "AIf2"
           }
         },
         "Units\\ItemStrings.txt": {
-          "ofir": {
+          "ofr2": {
+            "$base": "ofir",
             "Ubertip": {
               "replace": [
                 [
@@ -357,6 +365,39 @@
                 ]
               ]
             }
+          }
+        },
+        "Units\\ItemFunc.txt": {
+          "ofr2": {
+            "$base": "ofir",
+            "Buttonpos": "0,2",
+            "Requires": "hcas"
+          }
+        },
+        "Units\\HumanUnitFunc.txt": {
+          "hvlt": {
+            "Makeitems": {
+              "replace": [
+                [
+                  ",ofir,",
+                  ",ofr2,"
+                ]
+              ]
+            }
+          }
+        },
+        "Units\\AbilityBuffData.slk": {
+          "BIhm": {
+            "$base": "BIrl",
+            "code": "BIhm",
+            "comments": "HealMultiplier",
+            "version": 1
+          }
+        },
+        "Units\\NeutralAbilityFunc.txt": {
+          "BIhm": {
+            "Buffart": "ReplaceableTextures\\CommandButtons\\BTNOrbOfFire.blp",
+            "Targetart": "Abilities\\Spells\\Human\\FlameStrike\\FlameStrikeDamageTarget.mdl"
           }
         }
       }
@@ -428,8 +469,7 @@
         },
         "Units\\UpgradeData.slk": {
           "Repb": {
-            "effect1": "_",
-            "base1": "-"
+            "base1": 0
           }
         },
         "Units\\NightElfUpgradeStrings.txt": {
@@ -531,13 +571,13 @@
       }
     },
     {
-      "note": "Cripple: 85 mana (was 125); -75 % movement, -10 % attack rate, -35 % damage; needs no training",
+      "note": "Cripple: 85 mana (was 125); -75 % movement, -10 % attack rate, -25 % damage (the notes say 35 %; 1.31.1's tables (w3x2lni's zhCN-1.31.1 copy) hold 0.25); needs no training",
       "files": {
         "Units\\AbilityData.slk": {
           "Acri": {
             "Cost1": 85,
             "DataB1": 0.1,
-            "DataC1": 0.35
+            "DataC1": 0.25
           }
         },
         "Units\\UndeadAbilityFunc.txt": {
@@ -588,7 +628,7 @@
         },
         "Units\\UnitAbilities.slk": {
           "unec": {
-            "abilList": "Acri,Arai,Auuf,Aiun"
+            "abilList": "Acri,Arai,Aiun,Auuf"
           }
         }
       }
@@ -599,17 +639,18 @@
       "files": {
         "Units\\UndeadAbilityFunc.txt": {
           "Arai": {
-            "Requires": "Rune"
+            "Requires": "Rune",
+            "Requiresamount": 1
           }
         }
       }
     },
     {
-      "note": "Skeletal Mastery needs Necromancer Adept Training",
+      "note": "Skeletal Mastery needs Necromancer Adept Training, and nothing else (1.31.1's tables (w3x2lni's zhCN-1.31.1 copy) drop the Halls of the Dead)",
       "files": {
         "Units\\UndeadUpgradeFunc.txt": {
           "Rusm": {
-            "Requires": "unp1,Rune"
+            "Requires": "Rune"
           }
         }
       }
@@ -646,7 +687,7 @@
       }
     },
     {
-      "note": "New item Ritual Dagger at the Tomb of Relics (125 gold, 2 charges, stock 1, 90 s): sacrifice a friendly Undead unit to heal nearby friendly non-mechanical units 100 in 300 (cast range 400)",
+      "note": "New item Ritual Dagger at the Tomb of Relics (125 gold, 2 charges, stock 1, 90 s): sacrifice a friendly Undead unit so the friendly non-mechanical units around it regenerate, damage ending it, 5 s between charges, cast range 400. The notes say 100 hit points in 300; 1.31.1's tables (w3x2lni's zhCN-1.31.1 copy) put the item on the regenerating row AIg2 — 125 over 45 s in 450 — and keep the notes' instant 100-in-300 as the unsold AIdg row, so the tables win",
       "files": {
         "Units\\AbilityData.slk": {
           "AIdg": {
@@ -663,6 +704,16 @@
             "DataC1": 0,
             "DataD1": 0,
             "DataH1": "ground,air,friend,organic,vuln,invu,self"
+          },
+          "AIg2": {
+            "$base": "AIdg",
+            "comments": "ItemRitualDagger (Regen)",
+            "Dur1": 45,
+            "HeroDur1": 45,
+            "Cool1": 5,
+            "Area1": 450,
+            "DataA1": 125,
+            "BuffID1": "BIrl"
           }
         },
         "Units\\ItemAbilityFunc.txt": {
@@ -670,12 +721,19 @@
             "Art": "ReplaceableTextures\\CommandButtons\\BTNSacrificialDagger.blp",
             "Specialart": "Abilities\\Spells\\Items\\AIhe\\AIheTarget.mdl",
             "Specialattach": "origin"
+          },
+          "AIg2": {
+            "Art": "ReplaceableTextures\\CommandButtons\\BTNSacrificialDagger.blp"
           }
         },
         "Units\\ItemAbilityStrings.txt": {
           "AIdg": {
             "Name": "Ritual Dagger",
             "EditorSuffix": " (Instant)"
+          },
+          "AIg2": {
+            "Name": "Ritual Dagger",
+            "EditorSuffix": " (Regenerate)"
           }
         },
         "Units\\ItemData.slk": {
@@ -683,8 +741,8 @@
             "$base": "rnec",
             "comment": "Ritual Dagger",
             "scriptname": "RitualDagger",
-            "abilList": "AIdg",
-            "cooldownID": "AIdg",
+            "abilList": "AIg2",
+            "cooldownID": "AIg2",
             "uses": 2,
             "stockRegen": 90,
             "goldcost": 125
@@ -699,7 +757,7 @@
           "ritd": {
             "Name": "Ritual Dagger",
             "Tip": "Purchase Ritu|cffffcc00a|rl Dagger",
-            "Ubertip": "\"Sacrifice a friendly Undead unit: every friendly non-mechanical unit around it is healed for <AIdg,DataA1> hit points. |nHolds <ritd,uses> charges.\"",
+            "Ubertip": "\"Sacrifice a friendly Undead unit: every friendly non-mechanical unit around it regenerates <AIg2,DataA1> hit points over <AIg2,Dur1> seconds, until it takes damage. |nContains <ritd,uses> charges.\"",
             "Hotkey": "A",
             "Description": "Trades a unit's life for its allies' health."
           }
@@ -752,7 +810,7 @@
       }
     },
     {
-      "note": "Soul Burn: 65 mana (was 85); 80/200/340 total damage (was 125/270/450)",
+      "note": "Soul Burn: 65 mana (was 85); 80/200/340 total damage (was 125/270/450); the unused fourth level's rate is 16.25 in 1.31.1's tables (w3x2lni's zhCN-1.31.1 copy)",
       "files": {
         "Units\\AbilityData.slk": {
           "ANso": {
@@ -762,7 +820,8 @@
             "Cost4": 65,
             "DataA1": 5,
             "DataA2": 11.11,
-            "DataA3": 17
+            "DataA3": 17,
+            "DataA4": 16.25
           }
         },
         "Units\\NeutralAbilityStrings.txt": {
@@ -820,7 +879,7 @@
       }
     },
     {
-      "note": "Cloak of Shadows hides its Hero by day as well as at night (new AIhm, Shadow Meld with the Shm4 day flag)",
+      "note": "Cloak of Shadows hides its Hero by day as well as at night (new AIhm, Shadow Meld with the Shm4 day flag); the other two Shadow Meld rows state the new field as 0",
       "files": {
         "Units\\AbilityData.slk": {
           "AIhm": {
@@ -830,6 +889,12 @@
             "sort": "item",
             "race": "other",
             "DataD1": 1
+          },
+          "Ashm": {
+            "DataD1": 0
+          },
+          "Sshm": {
+            "DataD1": 0
           }
         },
         "Units\\NightElfAbilityFunc.txt": {
@@ -979,6 +1044,67 @@
       }
     },
     {
+      "note": "Warsong Battle Drums share the Kodo Beast's War Drums: the drop is a NEW item, war2, whose aura AIwd is an item copy of War Drums (base code Aakb, buff Bakb), and the Command Aura drums (ward) leave the drop pool for custom maps — as 1.31.1's tables (w3x2lni's zhCN-1.31.1 copy) have it",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIwd": {
+            "$base": "AIcd",
+            "code": "Aakb",
+            "comments": "ItemAuraWarDrums",
+            "BuffID1": "Bakb"
+          }
+        },
+        "Units\\ItemAbilityFunc.txt": {
+          "AIwd": {
+            "Art": "ReplaceableTextures\\PassiveButtons\\PASBTNDrum.blp",
+            "Targetart": "Abilities\\Spells\\Orc\\WarDrums\\DrumsCasterHeal.mdl",
+            "Targetattach": "origin"
+          }
+        },
+        "Units\\ItemAbilityStrings.txt": {
+          "AIwd": {
+            "EditorSuffix": " (Item)"
+          }
+        },
+        "Units\\ItemData.slk": {
+          "war2": {
+            "$base": "ward",
+            "comment": "Warsong Battle Drums (Kodo)",
+            "scriptname": "WarsongBattleDrums2",
+            "abilList": "AIwd",
+            "cooldownID": "Aakb"
+          },
+          "ward": {
+            "class": "Miscellaneous",
+            "Level": 0,
+            "pickRandom": 0
+          }
+        },
+        "Units\\ItemFunc.txt": {
+          "war2": {
+            "Art": "ReplaceableTextures\\CommandButtons\\BTNDrum.blp"
+          }
+        },
+        "Units\\ItemStrings.txt": {
+          "war2": {
+            "$base": "ward",
+            "Ubertip": {
+              "replace": [
+                [
+                  "<AIcd,DataA1,%>",
+                  "<AIwd,DataA1,%>"
+                ],
+                [
+                  "Command Aura.",
+                  "War Drums."
+                ]
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
       "note": "Devour's cargo hold takes a Mountain Giant: Cargo Hold (Devour) holds 4 (was 2)",
       "source": "undocumented",
       "files": {
@@ -1007,6 +1133,17 @@
         "Units\\ItemFunc.txt": {
           "ritd": {
             "Buttonpos": "1,0"
+          }
+        }
+      }
+    },
+    {
+      "note": "Treant weapon: its dmod1 column becomes 15 — in the 1.31.1 tables; no release names it",
+      "source": "undocumented",
+      "files": {
+        "Units\\UnitWeapons.slk": {
+          "efon": {
+            "dmod1": 15
           }
         }
       }
@@ -1050,7 +1187,7 @@
     },
     {
       "key": "ritual-dagger-sacrifice-heal",
-      "note": "Base code AIdg (new in 1.31): sacrifice a friendly Undead unit to heal friendly non-mechanical units in Area1 by DataA",
+      "note": "Base code AIdg (new in 1.31): sacrifice a friendly Undead unit so friendly non-mechanical units in Area1 gain DataA — at once (AIdg) or poured over Dur1 under BuffID BIrl, which damage ends (AIg2, the row the item uses)",
       "implemented": true
     },
     {
@@ -1060,12 +1197,12 @@
     },
     {
       "key": "life-drain-dark-minion",
-      "note": "Life Drain applies the Dark Minion effect of the caster's current Black Arrow rank (needs at least one rank)",
+      "note": "Life Drain applies the Dark Minion effect of the caster's current Black Arrow rank (needs at least one rank). 1.31.1's tables flag it on ANdr as DataJ (NdrA, \"Use Black Arrow Effect\") = 1, a column 1.30.4's AbilityData.slk does not have",
       "implemented": false
     },
     {
       "key": "warsong-drums-kodo-buff",
-      "note": "Warsong Battle Drums apply the Kodo Beast's War Drums buff, so the item and the Kodo aura no longer stack",
+      "note": "Warsong Battle Drums (war2) carry AIwd, an item copy of the Kodo Beast's War Drums (base code Aakb, buff Bakb): the item and the Kodo aura are one buff and do not stack",
       "implemented": false
     },
     {

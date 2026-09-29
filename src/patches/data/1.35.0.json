@@ -114,7 +114,7 @@
       }
     },
     {
-      "note": "Militia 240 hit points (was 230)",
+      "note": "Militia 240 hit points (Liquipedia: was 230; the chain has 220, as 1.32.9 raised only the Peasant)",
       "source": "liquipedia",
       "files": {
         "Units\\UnitBalance.slk": {
@@ -319,20 +319,23 @@
       }
     },
     {
-      "note": "Orb of Fire +5 damage (was +7)",
+      "note": "Orb of Fire +5 damage (was +7): the Arcane Vault's orb (ofr2) on AIf2",
       "files": {
         "Units\\AbilityData.slk": {
-          "AIfb": {
+          "AIf2": {
             "DataA1": 5
           }
         }
       }
     },
     {
-      "note": "Orb of Fire costs 250 gold (was 325)",
+      "note": "Orb of Fire costs 250 gold (was 325), the splash orb (ofir) as well as the Arcane Vault's (ofr2), as in the live table",
       "files": {
         "Units\\ItemData.slk": {
           "ofir": {
+            "goldcost": 250
+          },
+          "ofr2": {
             "goldcost": 250
           }
         }
@@ -671,10 +674,13 @@
       }
     },
     {
-      "note": "Druid of the Claw starts with 100 mana (was 125)",
+      "note": "Druid of the Claw starts with 100 mana (was 125) (both forms: the bear `edcm` as well, as every table from 2.0.2 on has it)",
       "files": {
         "Units\\UnitBalance.slk": {
           "edoc": {
+            "mana0": 100
+          },
+          "edcm": {
             "mana0": 100
           }
         }
@@ -863,22 +869,12 @@
       }
     },
     {
-      "note": "Orb of Fire +5 damage on its 1.31 ability row as well (the item carries AIf2 since 1.31.0)",
-      "files": {
-        "Units\\AbilityData.slk": {
-          "AIf2": {
-            "DataA1": 5
-          }
-        }
-      }
-    },
-    {
-      "note": "The Plague Ward's disease aura no longer asks for the Disease Cloud research, with the rework that gave animated corpses the cloud",
+      "note": "The original splash Orb of Fire (ofir, AIfb) +5 damage as well (was +10): 1.32.8 has 10, the live table 5; placed with the melee orb's cut",
       "source": "undocumented",
       "files": {
-        "Units\\UndeadAbilityFunc.txt": {
-          "Aap2": {
-            "Requires": null
+        "Units\\AbilityData.slk": {
+          "AIfb": {
+            "DataA1": 5
           }
         }
       }

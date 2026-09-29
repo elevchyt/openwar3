@@ -7,7 +7,7 @@
   ],
   "changes": [
     {
-      "note": "Ring of Protection +3 costs 150 gold",
+      "note": "Ring of Protection +3 costs 150 gold (was 125); the hotfix names no prices, 150 is 2.0.2's \"from\"",
       "files": {
         "Units\\ItemData.slk": {
           "rde2": {
@@ -17,7 +17,7 @@
       }
     },
     {
-      "note": "Ring of Protection +4 costs 125 gold",
+      "note": "Ring of Protection +4 costs 125 gold (was 300), the live table's price (2.0.2 confirms +4 at 125)",
       "files": {
         "Units\\ItemData.slk": {
           "rde3": {
@@ -27,7 +27,7 @@
       }
     },
     {
-      "note": "Ring of Protection +5 costs 300 gold",
+      "note": "Ring of Protection +5 costs 300 gold (was 600), the live table's price",
       "files": {
         "Units\\ItemData.slk": {
           "rde4": {
@@ -37,7 +37,7 @@
       }
     },
     {
-      "note": "Ring of the Archmagi costs 400 gold",
+      "note": "Ring of the Archmagi costs 400 gold (was 550), the live table's price",
       "files": {
         "Units\\ItemData.slk": {
           "ram3": {

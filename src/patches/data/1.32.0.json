@@ -13,7 +13,7 @@
       "files": {
         "Units\\UnitAbilities.slk": {
           "unec": {
-            "abilList": "Acri,Arai,Auhf,Aiun"
+            "abilList": "Acri,Arai,Aiun,Auhf"
           }
         },
         "Units\\UndeadAbilityFunc.txt": {
@@ -58,18 +58,19 @@
       "files": {
         "Units\\UndeadAbilityFunc.txt": {
           "Arai": {
-            "Requires": null
+            "Requires": null,
+            "Requiresamount": null
           }
         }
       }
     },
     {
-      "note": "Skeletal Mastery needs no Necromancer training again (3.0.0's unpl requirement is a later release's)",
+      "note": "Skeletal Mastery needs no Necromancer training again (3.0.0's unpl requirement is a later release's); what it asks for instead is the Necropolis (unpl), as 1.32.8's tables have it — 1.31.1's tables (w3x2lni's zhCN-1.31.1 copy) had Rune alone, 1.30.4 the Halls",
       "source": "undocumented",
       "files": {
         "Units\\UndeadUpgradeFunc.txt": {
           "Rusm": {
-            "Requires": "unp1"
+            "Requires": "unpl"
           }
         }
       }
@@ -97,34 +98,158 @@
       }
     },
     {
-      "note": "The Ritual Dagger regenerates instead of healing at once: its ability is the new \"Regenerate\" row (AIg2), 125 hit points over 40 s to allies within 300 of the sacrifice. The 1.32.6 notes raise it \"from 125\", so the switch predates them",
+      "note": "Sentinel range 400 (was 275) — in 1.32.8's tables; no release names it",
       "source": "undocumented",
       "files": {
         "Units\\AbilityData.slk": {
-          "AIg2": {
-            "$base": "AIdg",
-            "Dur1": 40,
-            "HeroDur1": 40,
-            "Cool1": 20,
-            "Area1": 300,
-            "DataA1": 125,
-            "BuffID1": "BIrl"
-          }
-        },
-        "Units\\ItemData.slk": {
-          "ritd": {
-            "abilList": "AIg2",
-            "cooldownID": "AIg2"
+          "Aesn": {
+            "DataC1": 400
+          },
+          "Aesr": {
+            "DataC1": 400
           }
         }
       }
     },
     {
-      "note": "The Ritual Dagger tooltip describes the regeneration it now does (our words)",
+      "note": "War Drums gains a fifth data field (DataE, Akb2 — its label is not in any strings file we have): 1 on the Kodo's aura, 0 on the Warsong Battle Drums' item copy; absent from 1.31.1's tables (w3x2lni's zhCN-1.31.1 copy), present in 1.32.8's",
+      "source": "undocumented",
       "files": {
+        "Units\\AbilityData.slk": {
+          "Aakb": {
+            "DataE1": 1
+          },
+          "AIwd": {
+            "DataE1": 0
+          }
+        }
+      }
+    },
+    {
+      "note": "Soul Burn's unused fourth level burns 17 a second (was 16.25), matching level 3 — 1.31.1's tables have 16.25, 1.32.8's have 17",
+      "source": "undocumented",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "ANso": {
+            "DataA4": 17
+          }
+        }
+      }
+    },
+    {
+      "note": "The level-5 Potion of Divinity drop becomes plain invulnerability: a NEW item pdi2 whose AIvg is a 25 s copy of the Invulnerability potions' ability (base code AIvu, 45 s cooldown) takes the drop slot, and the Divine Shield potion (pdiv) leaves the random drops; the three AIvu rows gain DataA = 1 (a field new since 1.31.1; its label is not in any strings file we have). Absent from 1.31.1's tables, present in 1.32.1's (both w3x2lni copies) and 1.32.8's; no notes name it",
+      "source": "undocumented",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIvg": {
+            "$base": "AIvu",
+            "comments": "ItemInvul (Divinity)",
+            "Dur1": 25,
+            "HeroDur1": 25,
+            "DataA1": 1
+          },
+          "AIvu": {
+            "DataA1": 1
+          },
+          "AIvl": {
+            "DataA1": 1
+          }
+        },
+        "Units\\ItemAbilityFunc.txt": {
+          "AIvg": {
+            "Art": "ReplaceableTextures\\CommandButtons\\BTNPotionOfDivinity.blp"
+          }
+        },
+        "Units\\ItemAbilityStrings.txt": {
+          "AIvg": {
+            "$base": "AIvu",
+            "EditorSuffix": " (Divinity)"
+          }
+        },
+        "Units\\ItemData.slk": {
+          "pdi2": {
+            "$base": "pdiv",
+            "comment": "Potion of Divinity (Invulnerability)",
+            "scriptname": "PotionofDivinity2",
+            "abilList": "AIvg",
+            "cooldownID": "AIvu"
+          },
+          "pdiv": {
+            "pickRandom": 0
+          }
+        },
+        "Units\\ItemFunc.txt": {
+          "pdi2": {
+            "Art": "ReplaceableTextures\\CommandButtons\\BTNPotionOfDivinity.blp"
+          }
+        },
         "Units\\ItemStrings.txt": {
-          "ritd": {
-            "Ubertip": "\"Sacrifices a friendly unit so that the friendly non-mechanical units around it regenerate <AIg2,DataA1> hit points over <AIg2,Dur1> seconds. |nContains <ritd,uses> charges.\""
+          "pdi2": {
+            "$base": "pdiv",
+            "Ubertip": {
+              "replace": [
+                [
+                  "<AIdv,Dur1>",
+                  "<AIvg,Dur1>"
+                ]
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "note": "Card layout the 1.32.1 tables already have: the Night Elf Shipyard sells the Transport Ship, Freezing Breath moves to 1,2 (Frost Attack's icon takes 0,2), and the Makrura Tidecaller and Ogre Mauler mercenaries take slots 2,0 and 3,0",
+      "source": "undocumented",
+      "files": {
+        "Units\\UndeadAbilityFunc.txt": {
+          "Afrz": {
+            "Buttonpos": "1,2"
+          }
+        },
+        "Units\\NightElfUnitFunc.txt": {
+          "eshy": {
+            "Sellunits": "etrs"
+          }
+        },
+        "Units\\NeutralUnitFunc.txt": {
+          "nltc": {
+            "Buttonpos": "2,0"
+          },
+          "nogm": {
+            "Buttonpos": "3,0"
+          }
+        }
+      }
+    },
+    {
+      "note": "The Frost Wyrm carries a new Frost Attack row with a passive icon (Afrc, on Frost Breath's code) — in the 1.32.1 tables, so a Reforged-launch change; 1.32.7's fix for its illusions answers it It starts on the Nerubian Tower's code (Afra): the 1.32.1 and 1.32.5 tables have it so",
+      "source": "undocumented",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Afrc": {
+            "$base": "Afrb",
+            "comments": "Frost Breath (with icon)",
+            "code": "Afra"
+          }
+        },
+        "Units\\UndeadAbilityFunc.txt": {
+          "Afrc": {
+            "Art": "ReplaceableTextures\\PassiveButtons\\PASBTNFrost.blp",
+            "Buttonpos": "0,2"
+          }
+        },
+        "Units\\UndeadAbilityStrings.txt": {
+          "Afrc": {
+            "Name": "Frost Attack",
+            "Tip": "Frost Attack",
+            "Ubertip": "\"This unit's attacks chill their target, slowing its movement.\"",
+            "EditorSuffix": " (with icon)"
+          }
+        },
+        "Units\\UnitAbilities.slk": {
+          "ufro": {
+            "abilList": "Afrz,Afrc"
           }
         }
       }

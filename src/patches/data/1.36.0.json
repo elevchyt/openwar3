@@ -237,12 +237,11 @@
       }
     },
     {
-      "note": "Ring of Protection +5 item level 3 (was 6), a permanent drop",
+      "note": "Ring of Protection +5 item level 3 (was 6)",
       "files": {
         "Units\\ItemData.slk": {
           "rde4": {
-            "Level": 3,
-            "class": "Permanent"
+            "Level": 3
           }
         }
       }
@@ -294,12 +293,22 @@
       }
     },
     {
-      "note": "Abominations list Cannibalize among their upgrades",
+      "note": "The Vampiric Potion becomes a charged drop (150 gold), the Rusty Mining Pick a level-3 item (300 gold), and the Rune of Lesser Healing enters the random pool — after 1.32.8 (its tables still have the old rows) and by 2.0.4; placed with this release's drop-pool changes, the exact release is not known",
       "source": "undocumented",
       "files": {
-        "Units\\UnitBalance.slk": {
-          "uabo": {
-            "upgrades": "Ruar,Rume,Rupc,Rupm,Rguv,Ruac"
+        "Units\\ItemData.slk": {
+          "rhe1": {
+            "pickRandom": 1
+          },
+          "vamp": {
+            "class": "Charged",
+            "pickRandom": 1,
+            "goldcost": 150
+          },
+          "rump": {
+            "Level": 3,
+            "prio": 100,
+            "goldcost": 300
           }
         }
       }

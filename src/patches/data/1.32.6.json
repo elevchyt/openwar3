@@ -136,6 +136,14 @@
                   ""
                 ]
               ]
+            },
+            "Researchubertip": {
+              "replace": [
+                [
+                  ", with an initial invulnerability duration of <AEtq,DataD1> seconds",
+                  ""
+                ]
+              ]
             }
           }
         }
@@ -166,7 +174,7 @@
       }
     },
     {
-      "note": "Impale cannot be interrupted and its airborne victims can be damaged and attacked (two new fields)",
+      "note": "Impale cannot be interrupted and its airborne victims can be damaged and attacked (two new fields; the creep Impale ACmp gets both at 0, as 1.32.8's tables have it)",
       "files": {
         "Units\\AbilityData.slk": {
           "AUim": {
@@ -178,6 +186,10 @@
             "DataF3": 1,
             "DataE4": 1,
             "DataF4": 1
+          },
+          "ACmp": {
+            "DataE1": 0,
+            "DataF1": 0
           }
         },
         "Units\\AbilityMetaData.slk": {
@@ -233,6 +245,26 @@
             "Cost4": 45,
             "DataA4": 2,
             "DataE4": 6
+          }
+        },
+        "Units\\UndeadAbilityStrings.txt": {
+          "AUcb": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "Beetle from",
+                  "Beetles from"
+                ]
+              ]
+            },
+            "Researchubertip": {
+              "replace": [
+                [
+                  "Beetle from",
+                  "Beetles from"
+                ]
+              ]
+            }
           }
         }
       }
@@ -309,11 +341,31 @@
             "minVal": -10,
             "maxVal": 10
           }
+        },
+        "Units\\NeutralAbilityStrings.txt": {
+          "ANdo": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "cannot cast spells and will take",
+                  "cannot cast spells, moves <ANdo,DataE1,%>% slower, and will take"
+                ]
+              ]
+            },
+            "Researchubertip": {
+              "replace": [
+                [
+                  "cannot cast spells and will take",
+                  "cannot cast spells, moves <ANdo,DataE1,%>% slower, and will take"
+                ]
+              ]
+            }
+          }
         }
       }
     },
     {
-      "note": "Volcano: 5 waves 3 s apart, buildings take 3x, spares friendly units and buildings",
+      "note": "Volcano: 5 waves 3 s apart, buildings take 3x, spares friendly units and buildings (the tooltip's fixed duration reads 15 s, as 1.32.8's melee string does)",
       "files": {
         "Units\\AbilityData.slk": {
           "ANvc": {
@@ -333,6 +385,26 @@
             "DataB4": 5,
             "DataC4": 3,
             "DataD4": 3
+          }
+        },
+        "Units\\NeutralAbilityStrings.txt": {
+          "ANvc": {
+            "Ubertip": {
+              "replace": [
+                [
+                  "Lasts 35 seconds",
+                  "Lasts 15 seconds"
+                ]
+              ]
+            },
+            "Researchubertip": {
+              "replace": [
+                [
+                  "Lasts 35 seconds",
+                  "Lasts 15 seconds"
+                ]
+              ]
+            }
           }
         }
       }
@@ -359,28 +431,18 @@
       }
     },
     {
-      "note": "Blue Dragon Whelp, Blue Drake and Blue Dragon carry a Frost Attack with a passive icon (new ability Afrc), and their tooltips say so",
+      "note": "Feedback's Summoned Damage field is no longer capped at 10 in the editor",
       "files": {
-        "Units\\AbilityData.slk": {
-          "Afrc": {
-            "$base": "Afrb",
-            "comments": "Frost Breath (with icon)"
+        "Units\\AbilityMetaData.slk": {
+          "fbk5": {
+            "maxVal": 99999
           }
-        },
-        "Units\\UndeadAbilityFunc.txt": {
-          "Afrc": {
-            "Art": "ReplaceableTextures\\PassiveButtons\\PASBTNFrost.blp",
-            "Buttonpos": "0,2"
-          }
-        },
-        "Units\\UndeadAbilityStrings.txt": {
-          "Afrc": {
-            "Name": "Frost Attack",
-            "Tip": "Frost Attack",
-            "Ubertip": "\"This unit's attacks chill their target, slowing its movement.\"",
-            "EditorSuffix": " (with icon)"
-          }
-        },
+        }
+      }
+    },
+    {
+      "note": "Blue Dragon Whelp, Blue Drake and Blue Dragon carry the icon-carrying Frost Attack (Afrc, which 1.32.0 gave the Frost Wyrm), and their tooltips say so",
+      "files": {
         "Units\\UnitAbilities.slk": {
           "nadw": {
             "abilList": "Afrc"
@@ -422,17 +484,6 @@
                 ]
               ]
             }
-          }
-        }
-      }
-    },
-    {
-      "note": "Frost Wyrm switched to the icon-carrying Frost Attack as well (what 1.32.7's illusion fix answers)",
-      "source": "undocumented",
-      "files": {
-        "Units\\UnitAbilities.slk": {
-          "ufro": {
-            "abilList": "Afrz,Afrc"
           }
         }
       }
@@ -836,6 +887,18 @@
           "AIco": {
             "Rng1": 600
           }
+        },
+        "Units\\ItemStrings.txt": {
+          "ccmd": {
+            "Ubertip": {
+              "replace": [
+                [
+                  " |nContains <ccmd,uses> charges.",
+                  ""
+                ]
+              ]
+            }
+          }
         }
       }
     },
@@ -911,7 +974,7 @@
             "Sellunits": "ndtp,ndtb,nwlg,nsts"
           },
           "nmr6": {
-            "Sellunits": "nmfs,nssp,nsln,nsts"
+            "Sellunits": "nmfs,nssp,nsts,nsln"
           },
           "nmr7": {
             "Sellunits": "nnwa,nits,nrvs,nnwr"
@@ -941,16 +1004,10 @@
       }
     },
     {
-      "note": "Mercenary camps: the Summer and Fall camps list their fourth unit last, and the mercenaries take command-card slots that fit the new line-ups",
+      "note": "Mercenaries take command-card slots that fit the new camp line-ups",
       "source": "undocumented",
       "files": {
         "Units\\NeutralUnitFunc.txt": {
-          "nmer": {
-            "Sellunits": "nftb,nfsp,ngrk,nogm"
-          },
-          "nmr2": {
-            "Sellunits": "ngnb,ngnw,ngrk,nomg"
-          },
           "nass": {
             "Buttonpos": "1,0"
           },
@@ -967,7 +1024,7 @@
             "Buttonpos": "2,0"
           },
           "nsts": {
-            "Buttonpos": "3,0"
+            "Buttonpos": "2,0"
           },
           "nssp": {
             "Buttonpos": "1,0"
@@ -1329,55 +1386,14 @@
       }
     },
     {
-      "note": "Potion of Divinity and Sentry Wards leave the level-5 drop pool; the Vampiric Potion becomes a charged drop (150 gold) and the Rusty Mining Pick a level-3 item (300 gold) — the charged-pool reshuffle the notes describe",
+      "note": "Potion of Divinity leaves the level-5 charged drops (Miscellaneous, level 0) — the charged-pool reshuffle the notes describe; 1.32.8's tables have it so",
       "source": "undocumented",
       "files": {
         "Units\\ItemData.slk": {
           "pdiv": {
             "class": "Miscellaneous",
             "Level": 0,
-            "prio": 0,
-            "pickRandom": 0
-          },
-          "ward": {
-            "class": "Miscellaneous",
-            "Level": 0,
-            "pickRandom": 0
-          },
-          "rhe1": {
-            "pickRandom": 1
-          },
-          "vamp": {
-            "class": "Charged",
-            "pickRandom": 1,
-            "goldcost": 150
-          },
-          "rump": {
-            "Level": 3,
-            "prio": 100,
-            "goldcost": 300
-          }
-        }
-      }
-    },
-    {
-      "note": "The Night Elf Shipyard sells the Transport Ship, as the other races' shipyards do",
-      "source": "undocumented",
-      "files": {
-        "Units\\NightElfUnitFunc.txt": {
-          "eshy": {
-            "Sellunits": "etrs"
-          }
-        }
-      }
-    },
-    {
-      "note": "Mercenary camp (Lordaeron) button layout follows the new line-up",
-      "source": "undocumented",
-      "files": {
-        "Units\\NeutralUnitFunc.txt": {
-          "nltc": {
-            "Buttonpos": "2,0"
+            "prio": 0
           }
         }
       }

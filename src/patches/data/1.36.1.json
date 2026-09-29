@@ -87,7 +87,7 @@
       }
     },
     {
-      "note": "Castle provides 16 food (was 14)",
+      "note": "Castle provides 16 food (the notes say from 14; the 1.30.4 and 1.32.8 tables have 12)",
       "files": {
         "Units\\UnitBalance.slk": {
           "hcas": {

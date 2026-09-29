@@ -39,17 +39,11 @@
       }
     },
     {
-      "note": "Sundering Blades is a Barracks research again (no longer built into the Knight), 100 gold / 150 lumber; the notes also drop its Lumber Mill requirement, but the live table still asks for one, and that is what is written",
+      "note": "Sundering Blades is a Barracks research again (no longer built into the Knight), 100 gold (unchanged) / 150 lumber; the notes also drop its Lumber Mill requirement, but the live table still asks for one, so Requires is left as it is",
       "files": {
         "Units\\UpgradeData.slk": {
           "Rhsb": {
-            "goldbase": 100,
             "lumberbase": 150
-          }
-        },
-        "Units\\HumanUpgradeFunc.txt": {
-          "Rhsb": {
-            "Requires": "hlum,hcas,hbla"
           }
         },
         "Units\\HumanUnitFunc.txt": {
@@ -60,11 +54,6 @@
         "Units\\HumanAbilityFunc.txt": {
           "Ahsb": {
             "Requires": "Rhsb"
-          }
-        },
-        "Units\\UnitBalance.slk": {
-          "hkni": {
-            "upgrades": "Rhar,Rhme,Rhan,Rhpm,Rguv,Rhsb"
           }
         }
       }

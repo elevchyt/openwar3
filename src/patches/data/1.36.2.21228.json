@@ -32,6 +32,11 @@
       "key": "charged-cooldown-kept-on-handover-reverted",
       "note": "Reverts 1.36.2.21214: a charged item handed to another Hero arrives with its cooldown reset again, as in 1.36.2",
       "implemented": false
+    },
+    {
+      "key": "ghoul-frenzy-speed-plus-10",
+      "note": "Ghoul Frenzy movement bonus +10 per the notes, but no table carries it: Rugf base2 is still 60 in the live 3.0.0 tables (Liquipedia: documented, not implemented) and no later release mentions it",
+      "implemented": false
     }
   ]
 }

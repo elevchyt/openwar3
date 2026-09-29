@@ -25,6 +25,13 @@
           }
         }
       }
+    },
+    {
+      "note": "Life Drain costs 35 mana (was 25) at every level. No hotfix note says so, but 2.0.3's own tables (build 22968) have 25, 2.0.4's notes lower it 'from 35/35/35', and the live table still holds 35 on the unused fourth level; this is the first release after 22968 in the chain",
+      "source": "undocumented",
+      "files": {
+        "Units\\AbilityData.slk": { "ANdr": { "Cost1": 35, "Cost2": 35, "Cost3": 35, "Cost4": 35 } }
+      }
     }
   ]
 }

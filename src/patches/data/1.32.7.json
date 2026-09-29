@@ -6,7 +6,19 @@
     "https://us.forums.blizzard.com/en/warcraft3/t/warcraft-iii-reforged-patch-notes-1327/25039",
     "https://liquipedia.net/warcraft/Patch_1.32.7"
   ],
-  "changes": [],
+  "changes": [
+    {
+      "note": "The icon-carrying Frost Attack (Afrc) moves from the tower's code Afra to Frost Breath's Afrb — the 1.32.7 tables have Afrb, 1.32.5's Afra; the data half of this release's fix for Frost Wyrm illusions",
+      "source": "undocumented",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "Afrc": {
+            "code": "Afrb"
+          }
+        }
+      }
+    }
+  ],
   "engine": [
     {
       "key": "illusion-no-frost-attack",

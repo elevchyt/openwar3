@@ -66,21 +66,7 @@
       }
     },
     {
-      "note": "Sentinel range 400 (was 275)",
-      "source": "undocumented",
-      "files": {
-        "Units\\AbilityData.slk": {
-          "Aesn": {
-            "DataC1": 400
-          },
-          "Aesr": {
-            "DataC1": 400
-          }
-        }
-      }
-    },
-    {
-      "note": "Phoenix (flying) Permanent Immolation 10 per second (was 20), with the other Permanent Immolations",
+      "note": "The flying Permanent Immolation back up to 10 per second (was 5 since 2.0.2, 20 before), with the Infernal's and the Pandaren's",
       "source": "undocumented",
       "files": {
         "Units\\AbilityData.slk": {

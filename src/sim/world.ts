@@ -23601,8 +23601,9 @@ export class SimWorld {
         // friendly non-hero it is aimed at (`targs1 = …,player,nonhero`), and the units around
         // the body get its life. Two rows on one code, and their numbers are the difference:
         //
-        //   `AIdg` "Instant"  DataA 100, Area 300              — 1.31.0 to 1.36.x
-        //   `AIg2` "Regen"    DataA 200, Area 450, Dur 45, BIrl — 2.0.2 on: the same total, POURED
+        //   `AIdg` "Instant"  DataA 100, Area 300, Cool 20        — the row nothing sells
+        //   `AIg2` "Regen"    DataA 125→175→200 over Dur 45, Area 450, BIrl — the item's own
+        //                     from 1.31 on (1.31.1's tables), the heal raised by 1.32.6 and 2.0.2
         //
         // WHO is healed is the row's own DataH, a second target list ("ground,air,friend,
         // organic,…") — the victim's list and the beneficiaries' are not the same. The poured

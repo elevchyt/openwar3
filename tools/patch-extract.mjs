@@ -178,8 +178,10 @@ function installStorage(dir) {
     for (const e of fs.readdirSync(at, { withFileTypes: true })) {
       const full = path.join(at, e.name);
       if (e.isDirectory()) { if (depth < 3) walk(full, depth + 1); }
-      else if (/^[0-9a-f]{10}\.idx$/i.test(e.name)) idx.set(e.name.toLowerCase(), new Uint8Array(fs.readFileSync(full)));
-      else if (/^data\.\d{3}$/i.test(e.name)) data.set(Number(e.name.slice(5)), full);
+      // Only `Data/data`: a Reforged install keeps a second storage (`Data/ecache`) whose index
+      // and archive files carry the SAME names, and mixing the two reads garbage.
+      else if (/^[0-9a-f]{10}\.idx$/i.test(e.name) && path.basename(at).toLowerCase() === "data") idx.set(e.name.toLowerCase(), new Uint8Array(fs.readFileSync(full)));
+      else if (/^data\.\d{3}$/i.test(e.name) && path.basename(at).toLowerCase() === "data") data.set(Number(e.name.slice(5)), full);
       else if (/^[0-9a-f]{32}$/i.test(e.name)) config.set(e.name.toLowerCase(), full);
     }
   };
@@ -332,15 +334,21 @@ if (diffDir) {
 if (verifyDir) {
   // Our chain, applied to the install, against the build: what is left is either a line of the
   // notes we have not transcribed, a value we got wrong, or a change the notes never mention.
-  const chain = path.join(CACHE, "chain");
+  // Per process: several reviewers verify at once, and a shared folder is rewritten under them.
+  const chain = path.join(CACHE, `chain-${process.pid}`);
   fs.rmSync(chain, { recursive: true, force: true });
-  execFileSync("node", [path.join(REPO, "tools", "patch-check.cjs"), "--dump", chain], { cwd: REPO, stdio: "inherit" });
-  const merged = path.join(CACHE, "chain-merged");
+  // `--level <version>`: the chain as it stood at that release, for a snapshot of an
+  // intermediate build (w3x2lni keeps 1.32.8's tables — docs/patches.md).
+  const level = opt("--level")?.[0];
+  execFileSync("node", [path.join(REPO, "tools", "patch-check.cjs"), "--dump", chain, ...(level ? ["--level", level] : [])], { cwd: REPO, stdio: "inherit" });
+  const merged = path.join(CACHE, `chain-merged-${process.pid}`);
   fs.rmSync(merged, { recursive: true, force: true });
   fs.cpSync(INSTALL, merged, { recursive: true, filter: (src) => !/ExtractedData[\\/]merged[\\/](Maps|ReplaceableTextures|Doodads)/.test(src) });
   if (fs.existsSync(chain)) fs.cpSync(chain, merged, { recursive: true });
   const only = /^units\\[^\\]+\.(slk|txt)$/i;
   printReport(diffTrees(merged, verifyDir, only), `our chain → ${path.basename(verifyDir)} (live melee tables)`);
+  fs.rmSync(chain, { recursive: true, force: true });
+  fs.rmSync(merged, { recursive: true, force: true });
 }
 if (!out && !diffDir && !verifyDir) {
   console.log("usage: --cdn [--ptr] [<build> <cdn>] | --install <folder>, then --diff / --verify (see the header)");

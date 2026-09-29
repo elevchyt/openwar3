@@ -19,7 +19,7 @@
       }
     },
     {
-      "note": "Knights have Sundering Blades without researching it; the research leaves the Barracks",
+      "note": "Knights have Sundering Blades without researching it; the research leaves the Barracks (the Knight's upgrades list keeps Rhsb, as the 1.32.10 checkpoint shows)",
       "files": {
         "Units\\HumanAbilityFunc.txt": {
           "Ahsb": {
@@ -29,11 +29,6 @@
         "Units\\HumanUnitFunc.txt": {
           "hbar": {
             "Researches": "Rhde,Rhan,Rhri"
-          }
-        },
-        "Units\\UnitBalance.slk": {
-          "hkni": {
-            "upgrades": "Rhar,Rhme,Rhan,Rhpm,Rguv"
           }
         }
       }
@@ -183,10 +178,13 @@
       }
     },
     {
-      "note": "Druid of the Claw starts with 125 mana",
+      "note": "Druid of the Claw starts with 125 mana (the bear form too, per the 1.32.10 checkpoint)",
       "files": {
         "Units\\UnitBalance.slk": {
           "edoc": {
+            "mana0": 125
+          },
+          "edcm": {
             "mana0": 125
           }
         }
@@ -323,6 +321,16 @@
       }
     },
     {
+      "note": "Warsong Battle Drums damage bonus 7.5 % (the melee drums are war2, whose aura is AIwd)",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AIwd": {
+            "DataA1": 0.075
+          }
+        }
+      }
+    },
+    {
       "note": "The Lion Horn of Stormwind armour bonus 1.5",
       "files": {
         "Units\\AbilityData.slk": {
@@ -365,23 +373,42 @@
       }
     },
     {
-      "note": "Mana Flare can be switched off",
+      "note": "The Barrage Siege Engine drops back to unit level 3 (the plain one stays 4): the PTR's bounty revert that the final notes dropped, landing on the Barrage twin alone — 1.32.10 checkpoint; 1.35.0 fixes the level drop",
+      "source": "undocumented",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "hrtt": {
+            "level": 3
+          }
+        }
+      }
+    },
+    {
+      "note": "Storm Crow form build and repair time 25, lumber repair cost 35 (a morph form's unused columns) — 1.32.10 checkpoint; its gold repair cost 150 there is back to 135 by 2.0.2 and is left alone",
+      "source": "undocumented",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "edtm": {
+            "bldtm": 25,
+            "reptm": 25,
+            "lumberRep": 35
+          }
+        }
+      }
+    },
+    {
+      "note": "New gameplay constant NeutralBuildingPollPeriod 0.5 — 1.32.10 checkpoint (which cannot tell 1.32.10 from 1.33/1.34)",
       "source": "undocumented",
       "files": {
         "Units\\MiscGame.txt": {
           "Misc": {
-            "CanDeactivateManaFlare": 1
+            "NeutralBuildingPollPeriod": 0.5
           }
         }
       }
     }
   ],
   "engine": [
-    {
-      "key": "warsong-drums-damage-75",
-      "note": "Warsong Battle Drums damage bonus 10 % to 7.5 % per the notes, but no table carries it: AIcd DataA1 is still 0.1 in the live 3.0.0 tables and no later release mentions the item",
-      "implemented": false
-    },
     {
       "key": "goldmine-rally-fog-leak",
       "note": "A rally flag set on a gold mine behaves consistently and no longer reveals the player's position through the fog",

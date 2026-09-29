@@ -164,10 +164,13 @@
       }
     },
     {
-      "note": "Creep Abolish Magic deals 150 to summoned units (was 250)",
+      "note": "Creep Abolish Magic deals 150 to summoned units (was 250), both creep rows — 2.0.4's own tables have 150 on both (the live 3.0.0 table has 250 again on ACd2)",
       "files": {
         "Units\\AbilityData.slk": {
           "ACdm": {
+            "DataB1": 150
+          },
+          "ACd2": {
             "DataB1": 150
           }
         }
@@ -184,13 +187,14 @@
       }
     },
     {
-      "note": "Breath of Fire start width 90 (was 60)",
+      "note": "Breath of Fire start width 90 (was 60), at the unused fourth level too as 2.0.4's own tables have it (the live 3.0.0 table has 60 there)",
       "files": {
         "Units\\AbilityData.slk": {
           "ANbf": {
             "Area1": 90,
             "Area2": 90,
-            "Area3": 90
+            "Area3": 90,
+            "Area4": 90
           }
         }
       }
@@ -233,13 +237,14 @@
       }
     },
     {
-      "note": "Life Drain: 30 mana (was 35), cast range 600 (was 500), breaks at 700 (was 800) — the same ranges as Siphon Mana",
+      "note": "Life Drain: 30 mana (was 35), cast range 600 (was 500), breaks at 700 (was 800) — the same ranges as Siphon Mana; the cost at the unused fourth level too, as 2.0.4's own tables have it (the live 3.0.0 table has 35 there)",
       "files": {
         "Units\\AbilityData.slk": {
           "ANdr": {
             "Cost1": 30,
             "Cost2": 30,
             "Cost3": 30,
+            "Cost4": 30,
             "Rng1": 600,
             "Rng2": 600,
             "Rng3": 600,
@@ -248,44 +253,6 @@
             "Area2": 700,
             "Area3": 700,
             "Area4": 700
-          }
-        }
-      }
-    },
-    {
-      "note": "Druid of the Talon build and repair time 25, repair lumber 35; Hunter's Hall repair lumber 80 — found in the live tables; no release names it, so it is placed with the change it belongs to",
-      "source": "undocumented",
-      "files": {
-        "Units\\UnitBalance.slk": {
-          "edtm": {
-            "bldtm": 25,
-            "reptm": 25,
-            "lumberRep": 35
-          },
-          "edob": {
-            "lumberRep": 80
-          }
-        }
-      }
-    },
-    {
-      "note": "Frost Wyrm Freezing Breath button moves to 1,2 — found in the live tables; no release names it, so it is placed with the change it belongs to",
-      "source": "undocumented",
-      "files": {
-        "Units\\UndeadAbilityFunc.txt": {
-          "Afrz": {
-            "Buttonpos": "1,2"
-          }
-        }
-      }
-    },
-    {
-      "note": "Skeletal Mastery needs only a Necropolis (was Halls of the Dead) — found in the live tables; no release names it",
-      "source": "undocumented",
-      "files": {
-        "Units\\UndeadUpgradeFunc.txt": {
-          "Rusm": {
-            "Requires": "unpl"
           }
         }
       }

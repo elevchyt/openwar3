@@ -256,10 +256,11 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   patch — a tooltip number is fixed with a `{"replace": …}` made in the player's own file, and a
   new object's words are ours; our own icons for new objects live in `src/patches/art/`
   (`node tools/patch-art.mjs`). **The Forsaken Paladin (3.0.0) does not exist** (`DENIED_IDS`).
-  `pnpm patches:check` proves a release applies; `node tools/patch-extract.mjs --cdn --verify`
-  proves its values against the LIVE build's tables (Blizzard's CDN keeps only current builds —
-  every 1.30–2.0.4 config is a 404 — but 3.0.0's melee tables are exactly where the chain must
-  end).
+  `pnpm patches:check` proves a release applies; `node tools/patch-audit.mjs` proves every
+  release's VALUES against real builds' tables — Blizzard's CDN keeps only the live build (every
+  1.30–2.0.4 config is a 404), so the intermediate CHECKPOINTS are community copies pinned by
+  commit in `tools/patch-checkpoints.mjs` (1.31.1 … 2.0.4; none exists for 1.35/1.36). Where the
+  notes and the tables disagree, the tables win.
 - **Camera:** read [`docs/camera.md`](docs/camera.md) before touching `GAME_FOV`, the zoom constants, or a map's
   camera. The FOV *field* the data carries (70) is **not** the angle the game renders with (**45°**, measured off
   the real client) — conflate them and every distance changes meaning and every map camera breaks.

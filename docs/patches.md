@@ -354,6 +354,73 @@ changed: a column only one side's SLK has (`stockInitial`, `DataK`–`DataT`), a
 build emptied in every row (art and sound went to `*Skin.txt`), and a new row nothing changed
 points at (Reforged's campaign objects). Tooltip wording is left out unless `--strings`.
 
+## Checking every release, not only the end
+
+The live build only proves where the chain ENDS. What proves each release on the way is a
+CHECKPOINT — a real build's tables at a known level — and `tools/patch-audit.mjs` walks the chain
+against all of them at once: for every cell a release edits it prints the value before and after,
+and FLAGS it when a checkpoint at or after the release (with no later edit in between) holds
+something else. `.cdn-cache/audit/<release>.txt` is one release's worksheet: the note, then every
+cell it moved. The other direction — a change in a checkpoint that NO release makes — is
+`patch-extract.mjs --verify <checkpoint> --level <release>`.
+
+Blizzard's CDN serves only the live build, so the intermediate checkpoints are community copies
+committed to GitHub, each pinned to its commit in `tools/patch-checkpoints.mjs` (which fetches
+them into `.cdn-cache/extract/`, gitignored, and reproduces them byte for byte):
+
+| checkpoint | level | source | how the version is known |
+|---|---|---|---|
+| install | 1.30.4 | `Warcraft III/ExtractedData/merged/` | `.build.info` |
+| `1.31.1-community` | 1.31.1 (= 1.31.0 for tables) | sumneko/w3x2lni `data/zhCN-1.31.1` | folder name |
+| `1.32.1-community`, `1.32.5-community` | 1.32.0 | sumneko/w3x2lni history | folder name |
+| `1.32.7-community`, `1.32.8-w3x2lni` | 1.32.7, 1.32.8 | sumneko/w3x2lni history | folder name |
+| `1.32.9-community` | 1.32.9 | flowtsohg/war3-objectdata | fingerprint against the chain |
+| `1.32.10-community` | 1.32.10 (or 1.33/1.34 — no table differs) | rhazarian/warpack | fingerprint |
+| `2.0.2-community` | 2.0.2 (build 22692) | rhazarian/warpack | fingerprint + commit date |
+| `2.0.3-community` | 2.0.3 | rhazarian/warpack | commit message |
+| `2.0.4-community` | 2.0.4 | tdauth/wowr + voces/wc3data, byte-identical to each other | fingerprint |
+| `2.0.4.23745` | **2.0.4, retail** — the chain's end | a Reforged install on disk (`patch-extract.mjs --install <folder>`) | its `.build.info`; outranks every copy above |
+| `3.0.0.24268-retail` | 3.0.0 (= 2.0.4 balance) | Blizzard's CDN (`patch-extract.mjs --cdn`) | the CDN |
+
+**No copy of 1.35.x or 1.36.x was found anywhere**, so those six releases are checked against the
+notes and against the next checkpoint (2.0.2) only. The w3x2lni copies have Chinese strings;
+text is never compared anyway — ours is ours by rule.
+
+Two traps in reading a checkpoint, both of which made correct rows look wrong: the copies save
+their TXT files with LF endings or a bare `\r` on the last line, and mdx-m3-viewer's `IniFile`
+splits on `\r\n` alone and its `.*$` stops at a `\r` — so the whole file, or its last key, reads
+as absent. The fetch and both tools normalise line endings.
+
+### What the review changed
+
+Every release was then reviewed line by line against the official notes and Liquipedia by an
+agent that had not written it, with the audit worksheets and the checkpoints as evidence. The
+data corrected the transcription in ways no amount of reading the notes could have:
+
+- **New items, not reworked ones.** 1.31.0 did not rework the Orb of Fire or the Warsong Battle
+  Drums: it added `ofr2` "Orb of Fire v2" (on `AIf2`) and `war2` (a War Drums aura, `AIwd`) and
+  took the originals out of the shops and drops, leaving them for custom maps — and 1.32.0 did
+  the same to the Potion of Divinity (`pdi2`, `AIvg`). The Ritual Dagger was on its regenerating
+  row `AIg2` from 1.31 on, never on the instant `AIdg` it was created beside.
+- **Notes that are wrong.** The Castle gave 12 food before 1.36.1 ("from 14"); Cripple's 1.31
+  damage cut is 0.25 ("35 %"); Life Drain cost 25 in 2.0.3 and 35 again in 2.0.3.23101.
+- **Unannounced changes, now dated by the tables around them.** The Militia's 230 hit points and
+  the Siege Engine's level (1.32.9, back to 3 in 1.32.10), the Frost Wyrm's icon-carrying Frost
+  Attack (in 1.32.1, on the tower's code until 1.32.7), the Night Elf Shipyard's Transport Ship
+  and a mercenary button layout (1.32.1), Mana Flare's off switch (by 2.0.2).
+- **Undocumented changes placed where the checkpoints bracket them**: every `"source":
+  "undocumented"` note now says which tables show it and which do not.
+
+### What the checkpoints still disagree with, on purpose
+
+- **The live build, four cells 3.0.0 itself changed** — `ACd2 DataB1` (creep Abolish Magic
+  against summons), `ANbf Area4`, `ANdr Cost4` (unused fourth levels) and the Plague Ward aura's
+  `Requires`. A RETAIL 2.0.4.23745 install's own tables (`patch-extract.mjs --install`, the
+  `2.0.4.23745` checkpoint) agree with the chain on all four, so they are 3.0.0's, and out of scope.
+- **The Knight's and Necromancer's icon-only passives** (`Ahan`, `Ausm`) — below.
+- **The Cloak of Shadows' by-day icon** — the game names `BTNAmbushDay.blp`, which a 1.30.4
+  install does not have, so ours keeps `BTNCloak.blp`.
+
 ## The chain as it stands
 
 Twenty files, one per release that changed a table: `1.31.0`, `1.32.0` (the undocumented
@@ -380,8 +447,10 @@ note saying so. That only matters for a ROLLBACK; at the latest level the chain 
 - **Unused ability levels** — a fourth level on a three-level hero ability (`AHtc DataE4`,
   `ANso DataA4`, …): data nothing can reach.
 - **The upgrade display icons** — fifteen passive `APai` rows (`Ahri` Long Rifles, `Augf` Ghoul
-  Frenzy, …) that Reforged hangs on a unit to show a research it has. Presentation only; no
-  release names them and a 1.30.4 install has no art for most of them.
+  Frenzy, …) that hang on a unit to show a research it has, already present in 1.32.8's tables.
+  Presentation only, and fourteen of their fifteen `PASBTN*` icons do not exist in a 1.30.4
+  install (only `PASBTNRegenerate.blp` does) — they wait on art, as the Ritual Dagger and
+  Sundering Blades did.
 - **Two code swaps with no behaviour behind them here** — Moon Glaive's rows moved to code
   `Aaab` (the engine does not model the glaive's bounce at all yet) and `[utod] Researches`,
   which 1.30.4 states on two lines that the tech tree already unions.
@@ -400,8 +469,27 @@ passed. `tools/patch-effects-test.cjs` asserts it for each code that matters.
 | `Aosl` | Orb of Slow's `AIno` | done — Slow's handler (the Sorceress's row shape) |
 | `Aprg` | Wand of Negation `AIpw` | already implemented (Purge) |
 | `AUa2` | Animate Dead (New) | folded onto `AUan` at the SLK boundary (`LATER_CODE_TWINS`); keeping abilities is an engine entry |
-| `Afrb` | Frost Attack (New) `Afrc` | already implemented (it keeps `Afrb`'s code) |
+| `Afra`→`Afrb` | Frost Attack (New) `Afrc` | already implemented (the tower's code until 1.32.7, Frost Breath's after) |
+| `Aakb` | Warsong Battle Drums v2 `AIwd` (item `war2`) | already implemented (the Kodo's War Drums aura, carried) |
+| `AIvu` | Potion of Divinity v2 `AIvg` (item `pdi2`) | already implemented (the invulnerability potions) |
 | `Aatp`, `Amgi`, `AIhu`, `Auuf` | Prioritize, the glaive filter, Orb of Fire v2, Incite Unholy Frenzy | not implemented — the last two are unused at 2.0.4 |
 
 Every other behaviour change is an `engine` entry in its release with `implemented: false` — the
 to-do list for `patchAtLeast()`.
+
+## Art still to draw
+
+Every object the chain adds reuses an icon a 1.30.4 install already has, except the ones below.
+Our own versions go in `src/patches/art/` under the file name the game uses (then
+`node tools/patch-art.mjs`), exactly as the Ritual Dagger's and Sundering Blades' did — a later
+editor's map that names the path then finds ours. Blizzard's originals are only a REFERENCE for
+drawing them: a Reforged install keeps its SD icons as `.dds` under `War3.w3mod:ReplaceableTextures\…`,
+readable with the CASC reader, and nothing of theirs is committed.
+
+| for | files | status |
+|---|---|---|
+| Gargoyle Prioritize (`Aatp`, 1.32.9) — on / off, and the `Batp` buff | `BTNAirAttackOn`, `BTNAirAttackOff` + `DISBTN…` twins | in the chain on stand-ins (`BTNAttack`/`BTNCancel`) |
+| the upgrade-indicator passives, in the game since 1.32.0 | `PASBTNDwarvenLongRifle`, `…AnimalWarTraining`, `…MarkOfFire`, `…HumanLumberUpgrade1/2`, `…Berserk`, `…HeadHunterBerserker`, `…ReinforcedBurrows`, `…SpikedBarricades`, `…ImprovedSpikedBarricades`, `…AdvancedSpikedBarricades`, `…GhoulFrenzy`, `…Shade`, `…SkeletonMage`, `…ImprovedBows`, `…Marksmanship`, `…WellSpring` + `DISPASBTN…` twins | NOT in the chain until they exist; the rows (15 `APai` abilities, the units' ability lists, three upgrade effects) are ready to add |
+
+`PASBTNAdvancedSpikedBarricades` is named by the data but absent even from a 2.0.4 install —
+only its disabled twin ships.

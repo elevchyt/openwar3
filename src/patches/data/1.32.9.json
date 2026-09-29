@@ -20,6 +20,13 @@
       }
     },
     {
+      "note": "Militia hit points 230, kept level with the Peasant: not in the notes, but the 1.32.9 checkpoint has it and Liquipedia's 1.35.0 page raises Militia \"from 230\"",
+      "source": "undocumented",
+      "files": {
+        "Units\\UnitBalance.slk": { "hmil": { "HP": 230, "realHP": 230 } }
+      }
+    },
+    {
       "note": "Thunder Clap damage 60/110/150",
       "files": {
         "Units\\AbilityData.slk": { "AHtc": { "DataA2": 110, "DataA3": 150 } }
@@ -28,7 +35,7 @@
     {
       "note": "Rifleman attack cooldown back to 1.35",
       "files": {
-        "Units\\UnitWeapons.slk": { "hrif": { "cool1": 1.35 } }
+        "Units\\UnitWeapons.slk": { "hrif": { "cool1": 1.35, "DPS": 15.5555555555556 } }
       }
     },
     {
@@ -44,7 +51,7 @@
       }
     },
     {
-      "note": "Siege Engine experience bounty 60 to 85: the unit (and its Barrage twin) is level 4",
+      "note": "Siege Engine experience bounty 60 to 85: the unit (and its Barrage twin) is level 4 (both are 4 in the 1.32.9 checkpoint; 1.32.10 drops the twin back to 3)",
       "files": {
         "Units\\UnitBalance.slk": { "hmtt": { "level": 4 }, "hrtt": { "level": 4 } }
       }
@@ -257,6 +264,42 @@
           "hval": { "Ubertip": { "replace": [["by 4 when", "by 5 when"]] } },
           "mcou": { "Ubertip": { "replace": [["by 4 when", "by 5 when"]] } },
           "hcun": { "Ubertip": { "replace": [["by 4 when", "by 5 when"]] } }
+        }
+      }
+    },
+    {
+      "note": "The attribute meta rows also list the older all-stat item abilities AIx3/AIx4 (editor metadata only; not in 1.32.8's tables, present in 1.32.9's exactly so, doubled comma in Iagi included)",
+      "source": "undocumented",
+      "files": {
+        "Units\\AbilityMetaData.slk": {
+          "Iagi": { "useSpecific": { "replace": [["AIa4,AIa5", "AIa4,,AIa5"], ["AIx2,AIs1", "AIx2,AIx3,AIx4,AIs1"]] } },
+          "Iint": { "useSpecific": { "replace": [["AIx2,AIs1", "AIx2,AIx3,AIx4,AIs1"]] } },
+          "Istr": { "useSpecific": { "replace": [["AIx2,AIs1", "AIx2,AIx3,AIx4,AIs1"]] } },
+          "Ihid": { "useSpecific": { "replace": [["AIx2,AIs1", "AIx2,AIx3,AIx4,AIs1"]] } }
+        }
+      }
+    },
+    {
+      "note": "Cannibalize research (Ruac) listed among the Abomination's upgrades and moved to the end of the Ghoul's upgrades and the Graveyard's research list; Chimaera repair time 60 (a unit's unused column) — all in the 1.32.9 checkpoint, none in the notes",
+      "source": "undocumented",
+      "files": {
+        "Units\\UnitBalance.slk": {
+          "uabo": { "upgrades": "Ruar,Rume,Rupc,Rupm,Rguv,Ruac" },
+          "ugho": { "upgrades": "Ruar,Rume,Rugf,Rupm,Rguv,Ruac" },
+          "echm": { "reptm": 60 }
+        },
+        "Units\\UndeadUnitFunc.txt": {
+          "usep": { "Researches": "Ruwb,Rugf,Rusf,Rubu,Ruac" }
+        }
+      }
+    },
+    {
+      "note": "Thunder Clap and the creep Frost Nova gain a fifth data field (DataE; meta rows Htc5/Ufn5, labels not in any strings file we have): 0/0/0 on Thunder Clap's three levels (1400 in its unused fourth), 400 on ACfn — in the 1.32.9 checkpoint, absent from 1.32.8's",
+      "source": "undocumented",
+      "files": {
+        "Units\\AbilityData.slk": {
+          "AHtc": { "DataE1": 0, "DataE2": 0, "DataE3": 0, "DataE4": 1400 },
+          "ACfn": { "DataE1": 400 }
         }
       }
     },
