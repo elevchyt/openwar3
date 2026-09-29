@@ -643,6 +643,9 @@ interface HideableWidget {
     // its transform/model to spawn a scene-animated stand-in.
     localRotation?: Float32Array;
     localScale?: Float32Array;
+    /** The viewer's per-instance texture overrides (index → texture) — where a destructible's
+     *  row `texID`/`texFile` canopy lands (the viewer patch, w3x map.js). */
+    textureOverrides?: Map<number, unknown>;
     model?: { sequences: Array<{ name: string; interval?: ArrayLike<number> }>; addInstance?(): SpawnInstance };
   };
 }
@@ -725,6 +728,7 @@ interface SpawnInstance {
   setTeamColor(id: number): void;
   setUniformScale(s: number): void;
   setVertexColor(c: ArrayLike<number>): void;
+  setTexture?(index: number, texture: unknown): void;
   frame: number;
   timeScale: number; // animation playback rate (attack/walk clips are re-rated — see rts.ts animRate)
   sequenceEnded: boolean; // mdx-m3-viewer: true once a non-looping clip finishes
@@ -7162,6 +7166,13 @@ export class MapViewerScene {
     inst.setLocation(src.localLocation);
     if (src.localRotation) inst.setRotation(src.localRotation);
     if (src.localScale && src.localScale[0]) inst.setUniformScale(src.localScale[0]);
+    // …and WEARING what the placed one wore. A destructible's canopy is not in its model: one
+    // LordaeronTree.mdx is the summer, fall, snow and winter tree alike, told apart by the ROW's
+    // `texID`/`texFile` (DestructableData.slk — `LordaeronSnowTree` and friends), which the
+    // viewer lays over that one INSTANCE's replaceable texture. A fresh `addInstance()` has the
+    // model's default, so every snowy tree turned back into a summer tree the moment it was hit
+    // or felled — reported on (4)LostTemple. The override is copied across, whatever it is.
+    for (const [index, texture] of src.textureOverrides ?? []) inst.setTexture?.(index, texture);
     const stand = this.seqByName(inst.model.sequences, /^stand$/i);
     if (stand >= 0) {
       inst.setSequence(stand);
