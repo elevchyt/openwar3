@@ -276,10 +276,6 @@ export const BUSY_LINES = {
     "i can't come there right now, i'm in a fight",
     "can't come, i'm busy",
   ],
-  creeping: [
-    "can't, i'm creeping",
-    "i'm creeping, i can't come",
-  ],
   broken: [
     "can't come, my army is dead",
     "i have nothing left to send",
@@ -434,17 +430,6 @@ export const HELP_CLEAR = 8;
  *  fell while we were walking is an ally we cannot help, and standing in the wreckage of it is
  *  how the second base is lost too. */
 export const HELP_TIMEOUT = 90;
-
-/**
- * How far the ally has to be before the scroll is worth spending on the trip rather than walking.
- *
- * Stated as a walk, because that is what the decision is about: a Footman's `spd` is 270
- * (UnitBalance.slk), so 5400 is twenty seconds of open ground and rather more once the route
- * bends round a cliff. A fight that has been going for twenty seconds is a fight that has been
- * decided, which is exactly when a scroll is the difference and exactly what the item is for
- * (docs/items.md, and `PlusProfile.keepPortal` for who is carrying one).
- */
-export const PORTAL_WALK = 5400;
 
 /** How many distinct enemy PLAYERS have to be in our towns before it calls for help. Two: the
  *  request is "when its facing multiple opponents", and one opponent in your base is a melee

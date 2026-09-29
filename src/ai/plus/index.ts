@@ -23,7 +23,7 @@ import {
   ATTACK_TELL_GAP, BUSY_LINES, COLOUR_NAMES, COMING_LINES, COUNTER_TELL, HELP_ANSWER_GAP,
   HELP_ANSWER_STAGGER, HELP_CALLS, HELP_CALL_FOES, HELP_CALL_GAP, HELP_CLEAR, HELP_GRACE,
   HELP_TIMEOUT, JOIN_LINES, JOIN_STAGGER, JOIN_TIMEOUT, OPENER_AT, OPENER_UNITS, OVERRUN_BODIES,
-  OVERRUN_EDGE, PORTAL_LINES, PORTAL_WALK, STRATEGY_TIER, SWITCH_MARGIN, TALK_GAP, attackLine,
+  OVERRUN_EDGE, PORTAL_LINES, STRATEGY_TIER, SWITCH_MARGIN, TALK_GAP, attackLine,
   namedColour, namedPlayer, playerNames,
   openerLine, readAllyCall, switchLine,
   RALLY_ACCEPT_LINES, RALLY_ALREADY_LINES, RALLY_ANSWER_GAP, RALLY_BUSY_LINES,
@@ -2151,6 +2151,11 @@ interface Brain {
    *  than standing in the middle of the map wondering. Null when there was nothing to go back
    *  to (it was at home). */
   helpResume: { mode: Mode; target: { id: number; x: number; y: number } | null; creeping: boolean } | null;
+  /** A Scroll of Town Portal being spent to REACH that ally (`helpPortalPass`) — the recall's
+   *  twin, aimed at somebody else's town: the hero that reads it, when the gather began, when it
+   *  was read (-1 = still gathering), and the point it is aimed at, which the scroll resolves to
+   *  the friendly hall nearest it. Null while the rescue is walking, or has landed. */
+  helpPortal: { heroId: number; since: number; readAt: number; x: number; y: number } | null;
   /** When it said gg (-1 = it hasn't). It leaves LEAVE_AFTER seconds later. */
   /** Is the wave in the field a CREEPING party rather than an attack? The two end on
    *  different terms — a creep run is over the moment the captain is gone (see `attacking`). */
@@ -2387,6 +2392,7 @@ export class ComputerPlusAi {
       helpSince: 0,
       helpDangerAt: 0,
       helpResume: null,
+      helpPortal: null,
       creeping: false,
       creepLevel: 0,
       vanguardUntil: 0,
@@ -2840,6 +2846,10 @@ export class ComputerPlusAi {
     // returns early in exactly the last of those.
     this.victoryPass(b);
     if (this.defendPass(b)) return;
+    // …a rescue that is gathering on its hero to read a Scroll of Town Portal owns the army until
+    // the scroll lands. Below `defendPass` (our own base still wins) and above `contactPass`,
+    // which would otherwise walk a party that is waiting for the channel off to a fight.
+    if (this.helpPortalPass(b)) return;
     // …and the same decision taken OUT ON THE MAP: an enemy army in front of the wave is either
     // fought or walked away from, never walked past. Below `defendPass` because the base always
     // wins — a party that turns to fight in the field while its own hall is being killed has
@@ -3718,21 +3728,28 @@ export class ComputerPlusAi {
     const reach = b.items.portalReach(hero);
     if (!reach) return this.endRecall(b); // spent, sold, dropped or on cooldown — walk instead
     const { coming, total } = this.recallGather(b, hero, threat, reach.area * RECALL_INNER, reach.wait);
-    const waited = b.clock - r.since;
-    const ready = coming >= total
-      || (waited >= RECALL_PATIENCE && coming >= total * RECALL_QUORUM)
-      || waited >= RECALL_DEADLINE;
-    if (!ready) {
-      // Hold the hero still, so the circle closes on a point that is not moving — a hero that is
-      // WALKING is stopped; one that is swinging at something is left to swing where it stands.
-      if (hero.order === "move" || hero.order === "attackmove" || hero.order === "patrol" || hero.order === "follow") {
-        this.issue(b, { c: "order", unitId: hero.id, order: { kind: "stop" }, queued: false });
-      }
-      return true;
-    }
+    if (!this.recallReady(b, hero, r.since, coming, total)) return true;
     if (!b.items.portalTo(hero, threat.x, threat.y)) return this.endRecall(b);
     r.readAt = b.clock;
     return true;
+  }
+
+  /**
+   * Is the gather DONE — may the scroll be read now? Every soldier will make the circle, or
+   * `RECALL_QUORUM` of them after `RECALL_PATIENCE`, or whoever made it by `RECALL_DEADLINE`.
+   * Until then the hero is held still, so the circle closes on a point that is not moving — a
+   * hero that is WALKING is stopped; one that is swinging at something is left to swing where
+   * it stands. Shared by both trips the scroll is spent on (`recallPass`, `helpPortalPass`).
+   */
+  private recallReady(b: Brain, hero: SimUnit, since: number, coming: number, total: number): boolean {
+    const waited = b.clock - since;
+    const ready = coming >= total
+      || (waited >= RECALL_PATIENCE && coming >= total * RECALL_QUORUM)
+      || waited >= RECALL_DEADLINE;
+    if (!ready && (hero.order === "move" || hero.order === "attackmove" || hero.order === "patrol" || hero.order === "follow")) {
+      this.issue(b, { c: "order", unitId: hero.id, order: { kind: "stop" }, queued: false });
+    }
+    return ready;
   }
 
   /**
@@ -3742,9 +3759,12 @@ export class ComputerPlusAi {
    * instead — as is one that is simply NEARER the invader than the hero (a soldier left at home,
    * a straggler already on the road back), which the scroll could only carry away from the
    * fight. Neither is in the count, since the scroll has nothing to do for them.
+   *
+   * On a trip to an ALLY (`helpPortalPass`) the "invader" is the spot the help is needed at, and
+   * the rule reads the same: a soldier already nearer the fight than the hero walks to it.
    */
   private recallGather(
-    b: Brain, hero: SimUnit, threat: SimUnit, reach: number, wait = 0,
+    b: Brain, hero: SimUnit, threat: { x: number; y: number }, reach: number, wait = 0,
   ): { coming: number; total: number } {
     let coming = 0;
     let total = 0;
@@ -7328,47 +7348,160 @@ export class ComputerPlusAi {
     b.helpDangerAt = b.clock;
     b.creeping = false;
     this.setMode(b, "attacking");
-    // ON FOOT, or by scroll — and the scroll is spent on ONE thing: an ally whose BASE is being
-    // attacked. That is what a Town Portal is for and it is the only trip that pays for it. A
-    // teammate whose army is in trouble in the middle of the map is a teammate you walk to: the
-    // scroll goes to a town hall (`SimWorld.nearestHall`, docs/items.md), the fight is not at
-    // one, and a scroll spent on a field battle is a scroll that is not there for the base.
-    // `PORTAL_WALK` still applies on top — a base three seconds' walk away is a walk.
+    // ON FOOT, or by SCROLL — the developer's rule: *"if the help is needed far away (more than
+    // 2200 units) then the Computer+ AI must use a scroll of town portal to teleport there if
+    // possible, otherwise it should walk there"*, and the army is gathered on the hero first *"to
+    // ensure that every unit is affected by the teleport"*. That is exactly the recall that
+    // brings the army home to defend (`recallPass`), aimed at somebody else's town — so it is the
+    // same gather, the same distance (`RECALL_FAR`) and the same readiness rule, run by
+    // `helpPortalPass` until the scroll lands.
     //
-    // WHICH OF THEIR HALLS is the second half of that decision, and it was not being made.
-    // Reported: *"when a Computer+ AI decides to teleport to a teammate to help them, they
-    // should decide at which main hall building to teleport to of that player's, because the
-    // player asking for help might require help at their expansion instead of their main
-    // town"*. The scroll resolves to `nearestHall` **from the point it is aimed at**, and the
-    // point it was aimed at was `helpSpot` — which is their ARMY, or a fight in the field, and
-    // quite often nowhere near the hall that is being knocked down. So the rescue arrived at
-    // whichever hall happened to be closest to that, and an ally whose expansion was under
-    // siege got an army in their main. `hallUnderAttack` names the hall the fight is actually
-    // at, and that hall is both the aim of the scroll and where the wave is sent.
-    const centre = this.squadCentre(b) ?? b.ai.home();
+    // WHERE it is aimed is the half that was once wrong. Reported: *"they should decide at which
+    // main hall building to teleport to of that player's, because the player asking for help
+    // might require help at their expansion instead of their main town"*. The scroll resolves to
+    // the friendly hall nearest the point it is aimed at (`SimWorld.nearestHall`), so the aim is
+    // the hall the fight is actually at when one is (`hallUnderAttack`), and the help itself
+    // otherwise — and the scroll is only spent when that landing is really THERE: it has to save
+    // at least `RECALL_FAR` of walking (`portalLanding`), or the ten seconds of gather and
+    // channel buy nothing a walk does not.
     const hero = this.squadHero(b);
-    const hall = hero ? this.hallUnderAttack(b, from) : null;
-    const far = !!hall && Math.hypot(centre.x - hall.x, centre.y - hall.y) > PORTAL_WALK;
-    const tp = far && hero && hall ? b.items.portalTo(hero, hall.x, hall.y) : false;
-    // Only a scroll that was actually spent moves the objective: a wave that is walking still
-    // goes where the help is (`helpSpot`), while one that has just come out of a portal is
-    // standing at that hall and has no business walking off to where the ally's army was.
-    const dest = tp && hall ? { x: hall.x, y: hall.y } : spot;
-    b.target = { id: 0, x: dest.x, y: dest.y };
-    this.tell(b, tp ? PORTAL_LINES : COMING_LINES);
-    this.commit(b, dest.x, dest.y);
+    const hall = this.hallUnderAttack(b, from);
+    const aim = hall ? { x: hall.x, y: hall.y } : spot;
+    if (hero && !isOffField(hero) && hero.portalLeft <= 0 && b.items.portalReach(hero)) {
+      const far = Math.hypot(hero.x - aim.x, hero.y - aim.y);
+      const land = far > RECALL_FAR ? this.portalLanding(b, aim.x, aim.y) : null;
+      if (land && Math.hypot(land.x - aim.x, land.y - aim.y) + RECALL_FAR <= far) {
+        b.helpPortal = { heroId: hero.id, since: b.clock, readAt: -1, x: aim.x, y: aim.y };
+        b.target = { id: 0, x: aim.x, y: aim.y };
+        this.tell(b, PORTAL_LINES);
+        return;
+      }
+    }
+    b.target = { id: 0, x: spot.x, y: spot.y };
+    this.tell(b, COMING_LINES);
+    this.commit(b, spot.x, spot.y);
   }
 
-  /** Why it cannot come, or null if it can. In the order a player would give them: my own base
-   *  first, then what is left of my army, then what I am in the middle of. */
+  /**
+   * THE RESCUE BY SCROLL, once `answerCall` has decided on it — the ally's twin of `recallPass`,
+   * in the same three phases: GATHER on the hero (`recallGather`, aimed at the help), READ the
+   * scroll when `recallReady` says the circle is full, and CHANNEL while the stragglers keep
+   * walking in, since the scroll takes whoever is inside its `Area1` at the END of its wait.
+   * True for as long as it owns the army, so neither `contactPass` nor `attacking` sends the
+   * party walking off while it waits. When the scroll has landed, the wave is pointed at the
+   * help from where it now stands, and `attacking` takes it from there.
+   *
+   * A scroll that could not be read after all (spent, sold, on cooldown, refused by the sim) is
+   * the walk the rescue would have been anyway — the developer's "otherwise it should walk
+   * there". A scroll ALREADY being read cannot be taken back, so a rescue called off mid-channel
+   * simply lands and hands the army back.
+   */
+  private helpPortalPass(b: Brain): boolean {
+    const p = b.helpPortal;
+    if (!p) return false;
+    const hero = this.host.world.units.get(p.heroId);
+    if (!hero || hero.hp <= 0 || hero.owner !== b.ai.player) {
+      b.helpPortal = null;
+      return false;
+    }
+    if (p.readAt >= 0) {
+      // READ: keep gathering for as long as the channel runs — even for a rescue called off in
+      // the meantime, since the scroll lands regardless and the stragglers had better be on it.
+      // A second of grace for the press to reach the sim, then a hero with no channel left has
+      // landed.
+      if (hero.portalLeft > 0 || b.clock - p.readAt < 1) {
+        this.recallGather(b, hero, p, Infinity);
+        return true;
+      }
+      return this.helpPortalDone(b);
+    }
+    // Called off while still GATHERING: nothing has been spent, and `dropHelp` has already put
+    // the wave back on what it was doing.
+    if (b.helping < 0) {
+      b.helpPortal = null;
+      return false;
+    }
+    const reach = b.items.portalReach(hero);
+    if (!reach) return this.helpPortalDone(b); // no scroll to read after all — walk
+    const { coming, total } = this.recallGather(b, hero, p, reach.area * RECALL_INNER, reach.wait);
+    if (!this.recallReady(b, hero, p.since, coming, total)) return true;
+    if (!b.items.portalTo(hero, p.x, p.y)) return this.helpPortalDone(b);
+    p.readAt = b.clock;
+    return true;
+  }
+
+  /** The scroll has landed, or was never read: point the rescue at the help from where the army
+   *  now stands and hand it back to `attacking`. Always `false`, as `endRecall` is, so the rest
+   *  of the army pass runs on this very pass. */
+  private helpPortalDone(b: Brain): false {
+    b.helpPortal = null;
+    b.reissueIn = 0;
+    const spot = b.helping >= 0 ? this.helpSpot(b, b.helping) : null;
+    if (spot) {
+      b.target = { id: 0, x: spot.x, y: spot.y };
+      this.commit(b, spot.x, spot.y);
+    }
+    return false;
+  }
+
+  /**
+   * Where a Scroll of Town Portal aimed at (x, y) would put us down: the finished TOWN HALL of
+   * ours or an ally's nearest the point — `SimWorld.nearestHall`'s own rule (the sim is the
+   * authority and refuses the press if it disagrees; this only asks whether it is worth making).
+   */
+  private portalLanding(b: Brain, x: number, y: number): SimUnit | null {
+    let best: SimUnit | null = null;
+    let bestDist = Infinity;
+    for (const u of this.host.world.units.values()) {
+      if (u.hp <= 0 || !u.building || u.building.constructionLeft > 0) continue;
+      if (u.owner !== b.ai.player && !b.allies.includes(u.owner)) continue;
+      if (this.host.registry.get(u.typeId)?.buffType !== HALL_CATEGORY) continue;
+      const d = Math.hypot(u.x - x, u.y - y);
+      if (d < bestDist) { bestDist = d; best = u; }
+    }
+    return best;
+  }
+
+  /**
+   * Why it cannot come, or null if it can. In the order a player would give them: my own base
+   * first, then what is left of my army, then what I am in the middle of.
+   *
+   * CREEPING IS NOT A REASON. It used to be one ("can't, i'm creeping"), and the developer's
+   * report is the whole argument against it: a camp waits, a teammate's base does not, and the
+   * decline backfired on exactly the calls that mattered. A creeping party that is called drops
+   * the camp and goes — `helpResume` remembers it, so the party comes back to the camp when the
+   * rescue is over.
+   *
+   * NOR IS "NOT A WAVE". The bar used to be `attackFood` (14 on Normal, 16 on Insane) — the size
+   * of an ATTACK — and it was measured with `squadFood`, which leaves out every soldier pulled
+   * out of the line and every one drinking a potion. Reported: an orc with *"hero + 4 grunts + 2
+   * headhunters"* said it had no army — twenty-one food, read in the middle of a creep camp where
+   * half of it was stepping back or drinking. A rescue is not an attack: a party that can clear a
+   * camp can stand beside an ally, so the bar is the CREEPING party's (`creepFood`, a hero and a
+   * couple of soldiers, never above `attackFood`), and it counts everything alive in the squad —
+   * the wounded come too. And a RETREAT is only "my army is dead" when it is running from a
+   * PLAYER's army; a party walking home from a camp it gave up on is still an army.
+   */
   private busyLines(b: Brain): readonly string[] | null {
     if (b.mode === "defending" || b.ai.townThreatened()) return BUSY_LINES.attacked;
-    if (b.mode === "retreating") return BUSY_LINES.broken;
-    // Not enough to be a wave is not enough to be a rescue either — `attackFood` is this
-    // difficulty's own answer to "is this an army yet".
-    if (this.squadFood(b) < b.profile.attackFood) return BUSY_LINES.small;
-    if (b.mode === "attacking") return b.creeping ? BUSY_LINES.creeping : BUSY_LINES.fighting;
+    if (b.mode === "retreating" && b.retreatFrom === "player") return BUSY_LINES.broken;
+    if (this.rescueFood(b) < Math.min(b.profile.attackFood, b.profile.creepFood)) {
+      return b.mode === "retreating" ? BUSY_LINES.broken : BUSY_LINES.small;
+    }
+    if (b.mode === "attacking" && !b.creeping) return BUSY_LINES.fighting;
     return null;
+  }
+
+  /** The food a RESCUE can bring: everything alive in the squad, the wounded included — unlike
+   *  `squadFood`, which prices the wave that sets off and so leaves them out. Illusions are still
+   *  not an army. */
+  private rescueFood(b: Brain): number {
+    let food = 0;
+    for (const u of this.squadUnits(b)) {
+      if (u.hp <= 0 || isCopy(u)) continue;
+      food += this.host.registry.get(u.typeId)?.foodUsed ?? 0;
+    }
+    return food;
   }
 
   /**

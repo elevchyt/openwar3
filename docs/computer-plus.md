@@ -4175,6 +4175,8 @@ teammate who is not interested gets silence, which is how a team game reads. "at
 question, and every allied Computer+ player answers it — yes (`RALLY_ACCEPT_LINES`, and the wave
 actually goes), already doing it (`RALLY_ALREADY_LINES`), or no and WHY (`RALLY_BUSY_LINES`: base
 under attack, in a fight, creeping, army dead, army too small, too early, helping somebody else).
+A call for HELP is declined for fewer reasons than a rally, and creeping is not one of them (see
+below).
 Once per `RALLY_ANSWER_GAP` per computer, so "attack attack ATTACK" is answered once. An unnamed
 rally is aimed by each listener (`rallyFoe`): the opponent whose base is nearest the CALLER's army,
 which is who a person typing "lets attack" is standing in front of. It is joined on the
@@ -4196,6 +4198,17 @@ answering there would re-enter `deliverChat` from inside its own routing.
 
 ### Coming to help
 
+**It says no for three reasons, and creeping is not one.** Base under attack; its army broken (a
+retreat from a PLAYER's army, or too little left); in a fight with a player. "can't, i'm creeping"
+used to be a fourth and it backfired on exactly the calls that mattered — a camp waits, a
+teammate's base does not — so a creeping party drops the camp and goes, and `helpResume` brings it
+back to the camp once the rescue is over. The "no army" bar is a CREEPING party's
+(`min(attackFood, creepFood)`, 10 food on Normal), not a wave's, and it counts everything alive in
+the squad (`rescueFood`) — the wounded come too. It used to be `attackFood` measured with
+`squadFood`, which leaves out every soldier pulled out of the line or drinking, so an orc with a
+hero, four Grunts and two Headhunters — twenty-one food — told its ally it had no army from the
+middle of a creep camp.
+
 **It goes to the ally's ARMY.** Three answers, in order, and the first two are both "where their
 units are" — because that is what "help me" means. **The fight**, if there is one to see: the ally
 unit with the most enemies around it, which is where the help is needed rather than merely where
@@ -4215,13 +4228,26 @@ looking through its teammate's units. Enemy *players* only: a creep camp an ally
 into is not what "help" means. Where an ally's *base* is is public — a melee player is shown their
 teammates' start locations from the first frame.
 
-**The scroll is for one thing: the ally's BASE being attacked.** It walks unless two things are
-both true — the walk is longer than `PORTAL_WALK` (5400; a Footman's `spd` is 270, so about twenty
-seconds of open ground, and a fight that has been going twenty seconds has been decided) *and*
-`hallUnderAttack` can see a fight at one of that ally's town halls. That second gate is not a
-policy, it is what the item is: a Town Portal's destination is a **town hall**
-([`items.md`](./items.md)), so a scroll spent on a field battle drops the army somewhere near the
-fight at best and is simply gone at worst — and gone is exactly when the base call comes.
+**It comes BY SCROLL when the help is more than 2200 away** — the developer's rule and number:
+*"if the help is needed far away (more than 2200 units) then the Computer+ AI must use a scroll of
+town portal to teleport there if possible, otherwise it should walk there"*, with the army
+gathered on the hero first *"to ensure that every unit is affected by the teleport"*. That is the
+recall that brings the army home to defend (`recallPass`, `RECALL_FAR` = 2200) aimed at somebody
+else's town, and `helpPortalPass` runs it with the same parts: `recallGather` walks every soldier
+AT the hero while the hero is held still, `recallReady` reads the scroll once the whole party will
+be inside `RECALL_INNER` of its `Area1` (1100) when the 5-second channel ends — or at
+`RECALL_PATIENCE`/`RECALL_QUORUM`, or at `RECALL_DEADLINE` with whoever made it — and the
+stragglers keep walking in through the channel, because the scroll takes whoever stands in the
+circle at the END of its wait. It owns the army from `answerCall` until the scroll lands (below
+`defendPass`, above `contactPass`), and then points the wave at the help from where it now stands.
+
+"If possible" is two things. The hero must hold a scroll it could press now (`portalReach`), or
+the rescue walks. And the landing must really be THERE: a Town Portal's destination is a **town
+hall** ([`items.md`](./items.md)), the friendly one nearest the point it is aimed at, so
+`portalLanding` asks where that is and the scroll is spent only when it saves at least
+`RECALL_FAR` of walking. An ally fighting in the middle of the map, far from any hall, is walked
+to; the old gate that spent the scroll on a BASE fight and nothing else (`PORTAL_WALK`, 5400) is
+gone, because the developer's rule is the distance.
 
 **WHICH of their halls is a second decision, and it is the scroll's aim.** A Town Portal lands at
 `nearestHall` **to the point it is aimed at**, and the point it used to be aimed at was
