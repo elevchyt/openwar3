@@ -6449,15 +6449,16 @@ export class SimWorld {
 
   /**
    * Where to plant a tree that has been sent to entangle `mine`: the spot NEAREST THE TREE on
-   * which its rooted footprint fits and from which Entangle can still reach the mine.
+   * which its rooted footprint fits, inside the ADJACENT square round the rock
+   * (`adjacentSite`, "Must root adjacent to a gold mine to entangle it.") — and only when that
+   * square has no such spot, the nearest one from which Entangle can still reach the mine.
    *
-   * Nearest the tree, not nearest the mine, and that is the whole rule. The only thing that
-   * has to be true of the site is that the ability can be cast from it — `Rng1` = 500, plus
-   * the mine's own radius, measured exactly as `entangleMine` measures it — so a tree already
-   * standing inside that range has nowhere to go and roots where it is. Walking a tree that
-   * could already cast up to the rock would be the order overriding the ability's own range.
+   * Nearest the tree, not nearest the mine: a tree already standing adjacent has nowhere to go
+   * and roots where it is, and one merely IN RANGE (`Rng1` = 500 hull to hull, measured exactly
+   * as `entangleMine` measures it) walks only the last step in, on the side it came from. The
+   * in-range fallback keeps a crowded or cliff-bound rock takeable at all.
    *
-   * The candidates are still swept as rings around the MINE, because what is being placed is
+   * The fallback's candidates are swept as rings around the MINE, because what is being placed is
    * a BUILDING: the answer has to be a whole free 12×12 on the build grid, and around a mine
    * there are usually only a handful of those (the rock blocks the middle). Every ring out to
    * the ability's reach is swept and the closest survivor to the tree wins, so it also lands

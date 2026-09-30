@@ -454,11 +454,13 @@ console.log("`entangleat` — the expansion in one right-click: walk, and root O
   check("…and the errand is spent", u.entanglePending === 0);
 }
 
-console.log("…and a tree that can already cast does not walk at all");
+console.log("…and a walking tree in reach but not ADJACENT walks only the last step in");
 {
-  // The site's only requirement is that Entangle can be cast from it, so a tree standing
-  // inside `Rng1` roots where it is. Walking one that could already reach the rock would be
-  // the order overriding the ability's own range.
+  // "Must root adjacent to a gold mine to entangle it." (`Mustroottoentangle`) — a tree that
+  // ROOTS to entangle roots inside the square Blizzard.j's MeleeStartingUnitsNightElf clamps the
+  // opening tree into (`ENTANGLE_ADJACENT`, 3.5 cells = 448 per axis), even when `Rng1` would
+  // reach from where it stands. So this tree, 560 out and inside the ability's 500 hull to
+  // hull, walks the short way in rather than rooting on the spot (docs/night-elf.md).
   const world = newWorld(200, 200);
   world.initStash(0, 0, 0);
   const mine = world.addMine(2000, 2000, 12500, 128);
@@ -472,7 +474,33 @@ console.log("…and a tree that can already cast does not walk at all");
   world.toggleRoot(u);
   for (let t = 0; t < 3 / 0.05; t++) world.tick(0.05);
   const [x0, y0] = [u.x, u.y];
-  check("the order takes at 432 — inside the ability's 500", world.issueEntangleAt(40, mine.id) === true);
+  check("the order takes at 560 — in reach, and not adjacent", world.issueEntangleAt(40, mine.id) === true && Math.abs(x0 - mine.x) > 448);
+  const site = u.rootPending && { x: u.rootPending.x, y: u.rootPending.y };
+  check("…and the site is inside the adjacent square", !!site && Math.abs(site.x - mine.x) <= 448 && Math.abs(site.y - mine.y) <= 448, JSON.stringify(site));
+  check("…on the side it came from, one build cell or two in", !!site && site.x > mine.x && Math.hypot(site.x - x0, site.y - y0) < 192, JSON.stringify(site));
+  for (let t = 0; t < 20 / 0.05 && u.uprooted; t++) world.tick(0.05);
+  check("…where it roots", u.uprooted === false && !!site && Math.hypot(u.x - site.x, u.y - site.y) < 64, JSON.stringify({ x: u.x, y: u.y }));
+  check("…and takes the mine from there", mine.entangledBy !== 0);
+}
+
+console.log("…and a walking tree already adjacent does not walk at all");
+{
+  // The site is the spot nearest the TREE inside that square, so one already standing in it has
+  // nowhere to go: it roots where it is.
+  const world = newWorld(200, 200);
+  world.initStash(0, 0, 0);
+  const mine = world.addMine(2000, 2000, 12500, 128);
+  world.add(base({ id: 40, typeId: "etol", x: 2432, y: 2000, hp: 1200, maxHp: 1200, speed: 0, radius: 128, isBuilding: true, ancient: true, name: "Tree of Life" }),
+    BUILT(2432, 2000), { abilities: [{ id: "Aent", code: "Aent", level: 1, cooldownLeft: 0, autocastOn: false }, { id: "Aro1", code: "Aroo", level: 1, cooldownLeft: 0, autocastOn: false }] });
+  const u = world.units.get(40);
+  u.baseSpeed = 100;
+  const fp = { w: 12, h: 12, blocked: new Array(144).fill(true), buildBlocked: new Array(144).fill(true) };
+  world.setPathStamp(40, fp, 2432, 2000);
+  world.recomputeStats(u);
+  world.toggleRoot(u);
+  for (let t = 0; t < 3 / 0.05; t++) world.tick(0.05);
+  const [x0, y0] = [u.x, u.y];
+  check("the order takes at 432 — already adjacent", world.issueEntangleAt(40, mine.id) === true);
   check("…and the site is the ground it is standing on", Math.hypot(u.rootPending.x - x0, u.rootPending.y - y0) < 64, JSON.stringify(u.rootPending));
   for (let t = 0; t < 10 / 0.05 && u.uprooted; t++) world.tick(0.05);
   check("…so it roots on the spot", u.uprooted === false && Math.hypot(u.x - x0, u.y - y0) < 64);
