@@ -5,6 +5,13 @@
 // the invisible units inside it for as long as it lasts, with a marker at its centre that every
 // player sees (`global`). The Crystal Ball also hangs its ball over the user for the same length.
 //
+// Every one of them, and Dust of Appearance too, is HEARD: RevealMap.wav, the `SNDxANDT` event
+// AItbTarget.mdx carries, played once (`sound`).
+//
+// The FLARES (the Mortar Team's `Afla`, the Flare Gun's `AIfa`) are the other shape: the gun's
+// FlareCaster.mdl at the shooter, and `Fla2` = 0.8 s later FlareTarget.mdl coming down on the
+// target with all four of its own SND events (`events`), and only then does the ground light.
+//
 // Dust of Appearance lights NOTHING. It marks the hidden enemies around the user with `Bdet`
 // (the `dusted` buff), and a marked unit is detected by the duster's side wherever it walks —
 // which is what these cases pin, because the old handler was a reveal round the hero and so
@@ -32,6 +39,8 @@ const def = (over) => ({ id: over.code, targetFlags: [], buffFx: [], casterArt: 
 const AIta = def({ code: "AIta", casterArt: "Abilities\\Spells\\Items\\AIta\\CrystalBallCaster.mdl", casterAttach: ["overhead"], levelData: [lvl({ area: 900, duration: 10, heroDuration: 10, data: D(3) })] });
 const AOfs = def({ code: "AOfs", levelData: [lvl({ area: 900, duration: 8, heroDuration: 8, data: D(3) })] });
 const Andt = def({ code: "Andt", levelData: [lvl({ area: 900, duration: 6, heroDuration: 6, data: D(50, 0, 3) })] });
+const Afla = def({ code: "Afla", casterArt: "Abilities\\Spells\\Human\\Flare\\FlareCaster.mdl", fxArt: "Abilities\\Spells\\Human\\Flare\\FlareTarget.mdl", levelData: [lvl({ area: 1800, duration: 15, heroDuration: 15, data: D(3, 0.8, 0) })] });
+const AIfa = def({ code: "AIfa", casterArt: "Abilities\\Spells\\Human\\Flare\\FlareCaster.mdl", fxArt: "Abilities\\Spells\\Human\\Flare\\FlareTarget.mdl", levelData: [lvl({ area: 1800, duration: 45, heroDuration: 45, data: D(1, 0.8) })] });
 const AItb = def({ code: "AItb", casterArt: "Abilities\\Spells\\Items\\AItb\\AItbTarget.mdl", targetFlags: ["air", "ground", "ward", "enemy", "neutral", "vuln", "invu"], levelData: [lvl({ area: 1000, duration: 20, heroDuration: 20, data: D(3), buffs: ["Bdet"] })] });
 
 /** A SpellApi that records what a handler asked for, over a unit list. */
@@ -62,6 +71,7 @@ const unit = (over) => ({ id: 0, owner: 0, team: 0, hp: 100, x: 0, y: 0, invisib
   const marker = log.effects.find((e) => /AItbTarget/i.test(e.art));
   check("…an AItbTarget marker at the centre, held for the whole reveal", !!marker && marker.x === 3000 && marker.life === 10 && marker.anim === "hold", true);
   check("…seen by everyone (global)", marker?.global, true);
+  check("…and heard: its own RevealMap event, once (sound)", marker?.sound, true);
   const ball = log.effects.find((e) => /CrystalBallCaster/i.test(e.art));
   check("…and the ball over the user's head (overhead, held for Dur1)", !!ball && ball.targetId === 1 && ball.attach?.[0] === "overhead" && ball.anim === "hold" && ball.life === 10, true);
 }
@@ -101,6 +111,7 @@ for (const [name, d, secs, key] of [["Far Sight", AOfs, 8, "AOfs"], ["Reveal", A
   check("…not an ally", ally.buffs.length, 0);
   const puff = log.effects[0];
   check("…plays AItbTarget ONCE on the user (Stand, the clip's own length)", log.effects.length === 1 && /AItbTarget/i.test(puff.art) && puff.targetId === 10 && puff.anim === "stand" && puff.life === 0, true);
+  check("…with RevealMap.wav (sound)", puff.sound, true);
 
   // The mark is what the duster's side detects by, wherever the body goes.
   const world = new SimWorld({ width: 8, height: 8, cell: 128, blocked: new Uint8Array(64) }, 1);
@@ -109,6 +120,37 @@ for (const [name, d, secs, key] of [["Far Sight", AOfs, 8, "AOfs"], ["Reveal", A
   check("a dusted unit is detected by the duster's team anywhere", world.teamDetects(0, walker.x, walker.y, walker), true);
   check("…not by a third side", world.teamDetects(2, walker.x, walker.y, walker), false);
   check("…and the bare point it stands on uncovers nobody else", world.teamDetects(0, walker.x, walker.y), false);
+}
+
+// --- the flares ------------------------------------------------------------------------------
+for (const [name, d, secs, detect] of [["Flare (Mortar Team)", Afla, 15, true], ["Flare Gun", AIfa, 45, true]]) {
+  const mortar = unit({ id: 20, owner: 0, team: 0, isHero: false });
+  const { api, log } = fakeApi([mortar]);
+  SPELL_HANDLERS[d.code](api, mortar, d, 1, { targetId: 0, x: 2000, y: -1000 });
+  const r = log.reveals[0];
+  check(`${name}: reveals 1800 for ${secs} s, detecting`, !!r && r.radius === 1800 && r.seconds === secs && r.detect === detect, true);
+  check(`${name}: …opening after Fla2's 0.8 s Effect Delay`, r?.delay, 0.8);
+  const gun = log.effects.find((e) => /FlareCaster/i.test(e.art));
+  check(`${name}: FlareCaster at the shooter, now`, !!gun && gun.targetId === 20 && !gun.delay, true);
+  const fl = log.effects.find((e) => /FlareTarget/i.test(e.art));
+  check(`${name}: FlareTarget on the point, 0.8 s later, its clip's own length`, !!fl && fl.x === 2000 && fl.delay === 0.8 && fl.life === 0, true);
+  check(`${name}: …firing its own four SND events, seen by all`, fl?.events === true && fl?.global === true, true);
+  check(`${name}: …and no reveal marker`, log.effects.some((e) => /AItbTarget/i.test(e.art)), false);
+}
+{
+  // The flare lights nothing while it is still in the air.
+  const world = new SimWorld({ width: 8, height: 8, cell: 128, blocked: new Uint8Array(64) }, 1);
+  world.addItemReveal(0, 0, { x: 0, y: 0, radius: 1800, seconds: 15, detect: true, delay: 0.8 });
+  check("a flare in the air neither detects…", world.teamDetects(0, 100, 0), false);
+  check("…nor lights the fog", [...world.activeItemReveals()].length, 0);
+  world.tickClient(0.5);
+  check("…at 0.5 s, still not", [...world.activeItemReveals()].length, 0);
+  world.tickClient(0.4);
+  check("…landed at 0.8 s: lights and detects", [...world.activeItemReveals()].length === 1 && world.teamDetects(0, 100, 0), true);
+  world.tickClient(14.9);
+  check("…and its 15 s run from the landing, not the shot", [...world.activeItemReveals()].length, 1);
+  world.tickClient(0.2);
+  check("…then out", [...world.activeItemReveals()].length, 0);
 }
 
 // --- a reveal's circle detects through ItemReveal.detect ---------------------------------

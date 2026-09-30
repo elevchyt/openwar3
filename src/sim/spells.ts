@@ -25,6 +25,10 @@ export interface EffectOpts {
   anim?: EffectAnim;
   /** Seen by every player, fog or no fog — see SimSpellEffect.global. */
   global?: boolean;
+  /** Fire the model's own SND events as its clip passes them — see SimSpellEffect.events. */
+  events?: boolean;
+  /** Seconds before the effect is played at all (a flare's `Fla2` "Effect Delay"). */
+  delay?: number;
 }
 
 export interface SpellApi {
@@ -292,6 +296,7 @@ export interface RevealOptions {
   detect?: boolean;
   follow?: number; // unit id the circle rides on (0 = a fixed point)
   untilBuffGone?: string; // buff GROUP whose loss ends the reveal early
+  delay?: number; // seconds before it opens (a flare is in the air for `Fla2` first)
 }
 
 /** See SpellApi.createIllusion. */
@@ -580,6 +585,9 @@ const IMPALE_CASTER_ART = "Abilities\\Spells\\Undead\\Impale\\ImpaleCaster.mdx";
  * `Andt\Andt.mdl` (CommonAbilityFunc [Xbdt]) — a model that is in the install (Birth + Stand)
  * but is not what the developer sees the original play there.
  * Seen by EVERY player (`global`), whose fog it ignores: being scouted is the news it carries.
+ * And HEARD: the model carries its own `SNDxANDT` event (AnimLookups ANDT → AnimSounds
+ * "RevealMap" → `Abilities\Spells\Other\Andt\RevealMap.wav`), played once as it lands
+ * (`sound`) rather than on every lap of the Stand it is parked on.
  */
 const REVEAL_TARGET_ART = "Abilities\\Spells\\Items\\AItb\\AItbTarget.mdx";
 
@@ -588,7 +596,33 @@ const REVEAL_TARGET_ART = "Abilities\\Spells\\Items\\AItb\\AItbTarget.mdx";
  *  marker there for the same length (REVEAL_TARGET_ART). */
 function revealPlace(api: SpellApi, owner: number, team: number, x: number, y: number, radius: number, seconds: number): void {
   api.revealArea(owner, team, { x, y, radius, seconds, detect: true });
-  api.emitEffect(REVEAL_TARGET_ART, x, y, 0, seconds, undefined, { anim: "hold", global: true });
+  api.emitEffect(REVEAL_TARGET_ART, x, y, 0, seconds, undefined, { anim: "hold", global: true, sound: true });
+}
+
+/** `FlareTarget.mdl` — what `[Xfla] Effectart` names, for a row whose effect object is missing. */
+const FLARE_TARGET_ART = "Abilities\\Spells\\Human\\Flare\\FlareTarget.mdx";
+
+/**
+ * A FLARE — the Mortar Team's `Afla` ("Launches a Dwarven flare above a target point, which
+ * reveals that area for <Afla,Dur1> seconds. |nReveals invisible units.", HumanAbilityStrings)
+ * and the Flare Gun's `AIfa`, which carries the same row shape and the same art. It is not a
+ * reveal marker: the gun fires `Casterart = FlareCaster.mdl` (its one Birth) at the shooter, and
+ * `Fla2` "Effect Delay" (DataB, 0.8 on both) later the flare itself — `EfctID1 = Xfla` →
+ * `FlareTarget.mdl`, one 4-second Birth of a flare coming down out of the sky — lands on the
+ * target, and only then does the ground light. Its sound is four SND events parked in that
+ * Birth (`SNDXAFL1..4` → FlareTarget1..4.wav, `events`). Area1 1800; Dur1 15 (Afla) / 45 (AIfa).
+ *
+ * `Fla1` "Detection Type" (DataA) is the `[detectionType]` enum of UI\UnitEditorData.txt —
+ * 0 none, 1 invisible, 2 burrowed, 3 both — so the Flare Gun's 1 detects invisible units as
+ * the Mortar Team's 3 does. Anything but 0 detects: burrowing is invisibility here.
+ */
+function flare(api: SpellApi, caster: SimUnit, def: AbilityDef, rank: number, ctx: CastContext, fallbackSeconds: number): void {
+  const lvl = lv(def, rank);
+  const delay = d(lvl, 1, 0.8);
+  const seconds = dur(lvl, caster) || fallbackSeconds;
+  if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, caster.id, 0, def.casterAttach);
+  api.revealArea(caster.owner, caster.team, { x: ctx.x, y: ctx.y, radius: lvl.area || 1800, seconds, detect: d(lvl, 0, 0) > 0, delay });
+  api.emitEffect(def.fxArt || FLARE_TARGET_ART, ctx.x, ctx.y, 0, 0, undefined, { global: true, events: true, delay });
 }
 /** The group of the short stun a hurled unit spends in the AIR (spells.ts `AUim`). */
 const IMPALE_AIR_GROUP = "impaleAir";
@@ -3541,7 +3575,8 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
       if (!api.admits(def, t) || !api.allows(caster, def, t)) continue;
       api.applyBuff(t, { kind: "dusted", group: "dust", timeLeft: dur(lvl, t) || 20, sourceId: caster.id, value: caster.team, art: "", fx: [], buffId: buffIdOf(def) || "Bdet" });
     }
-    if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, caster.id, 0, def.casterAttach, { anim: "stand" });
+    // …and heard: the puff's own `SNDxANDT` event, RevealMap.wav (see REVEAL_TARGET_ART).
+    if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, caster.id, 0, def.casterAttach, { anim: "stand", sound: true });
   },
 
   // Crystal Ball (`AIta`, "ItemDetectAoe") — "Reveals a targeted area. Invisible units are
@@ -3580,14 +3615,11 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   },
 
   // Flare Gun (`AIfa`) — "Reveals a target area on the map", Area1 1800, Dur1 45, Rng1 99999
-  // (anywhere). No detection: a flare lights ground, it does not see through invisibility —
-  // `DataA "Detection Type"` = 1 where every true detector carries 3.
-  AIfa: (api, caster, def, rank, ctx) => {
-    const lvl = lv(def, rank);
-    const time = dur(lvl, caster) || 45;
-    api.revealArea(caster.owner, caster.team, { x: ctx.x, y: ctx.y, radius: lvl.area || 1800, seconds: time });
-    if (def.targetArt) api.emitEffect(def.targetArt, ctx.x, ctx.y, 0, time);
-  },
+  // (anywhere). The Mortar Team's Flare in an item: see `flare`.
+  AIfa: (api, caster, def, rank, ctx) => flare(api, caster, def, rank, ctx, 45),
+
+  // Flare (`Afla`, the Mortar Team's, `Requires=Rhfl`) — see `flare`.
+  Afla: (api, caster, def, rank, ctx) => flare(api, caster, def, rank, ctx, 15),
 
   // Wand of Negation (`AIdi`) / Staff of Negation (`AIds`) / Rune of Dispel Magic (`APdi`) —
   // "Dispels all magical effects in a target area", `DataB "Damage To Summoned Units"` = 200

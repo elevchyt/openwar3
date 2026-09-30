@@ -197,15 +197,27 @@ caster).
 
 The **reveals** — `REVEAL_CODES` in [`src/data/abilities.ts`](../src/data/abilities.ts): Far
 Sight, the Crystal Ball (and the Arcane Tower's Reveal, `AHta`, which is its code), the Goblin
-Laboratory's Reveal (`Andt`) and the Flare Gun — look at a PLACE. So they aim with a **bare
+Laboratory's Reveal (`Andt`) and the two flares (the Mortar Team's `Afla`, the Flare Gun's
+`AIfa`) — look at a PLACE. So they aim with a **bare
 reticle** (no `SpellAreaOfEffect` splat: nothing on the ground is caught) and they may be aimed
-**on the minimap** (`RtsController.minimapReveal`). All but the flare also **detect**: invisible
-units inside the circle are uncovered for the reveal's whole `Dur1`. Each plants
+**on the minimap** (`RtsController.minimapReveal`). All of them **detect**: invisible units
+inside the circle are uncovered for the reveal's whole `Dur1` (the flares' `Fla1` "Detection
+Type" is the `[detectionType]` enum — 1 is *invisible*, so the Flare Gun detects as well). Each
+non-flare plants
 `AItbTarget.mdx` at its centre, its Stand looped for the reveal's length and seen by **every**
 player whatever their fog (`SimSpellEffect.global`) — the developer's reading of the original,
-taken over the tables' `EfctID1 = Xbdt` → `Andt.mdl`. The Crystal Ball's own row adds
+taken over the tables' `EfctID1 = Xbdt` → `Andt.mdl` — and it is HEARD: the model's own
+`SNDxANDT` event (AnimLookups → "RevealMap" → `RevealMap.wav`), played once as it lands rather
+than on every lap of its Stand. The Crystal Ball's own row adds
 `Casterart = CrystalBallCaster.mdl`, `Casterattach = overhead`: Birth, Stand for `Dur1`, Death,
 over the user's head (the "hold" effect).
+
+A **flare** is the other shape. The gun fires `Casterart = FlareCaster.mdl` at the shooter, and
+`Fla2` "Effect Delay" (0.8 s) later `[Xfla] Effectart = FlareTarget.mdl` comes down out of the sky
+onto the target — its one 4-second Birth — and only then does the ground light (the reveal's
+`delay`; `Dur1` counts from the landing). Its sound is FOUR events parked in that Birth,
+`SNDXAFL1..4` → FlareTarget1..4.wav at 33 / 1100 / 2467 / 3467 ms, each fired at its own frame
+on the world's clock (`SimSpellEffect.events`, `MapViewerScene.fxSoundTracks`).
 
 The Goblin Laboratory is Neutral Passive, so its Reveal is pressed by a player who does not own
 it: the `neutralcast` command, one of the player's units inside the lab's `Ane2` radius, and
@@ -216,7 +228,7 @@ reveal is the BUYER's side's (`CastContext.onBehalfOf`).
 user with `Bdet` (the `dusted` buff, `value` = the duster's team), and a marked unit is detected
 by that side wherever it walks for `Dur1` = 20 s (`SimWorld.teamDetects`, which takes the UNIT
 for exactly this). Its art is `[AItb] Casterart = AItbTarget.mdl` on the user, the Stand played
-once. The mark is worn bare: `Bdet` is filed twice, and the second copy (CommonAbilityFunc.txt)
+once, with the same RevealMap.wav. The mark is worn bare: `Bdet` is filed twice, and the second copy (CommonAbilityFunc.txt)
 carries a Magic Lariat's Aerial Shackles model that key-by-key merging would otherwise put on
 every dusted unit. `tools/sim-reveal-test.cjs` pins all of this.
 

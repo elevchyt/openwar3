@@ -757,6 +757,12 @@ export class SoundBoard {
     return this.playModelSound(modelArt, at);
   }
 
+  /** The frame window of a model's Birth clip, for a caller that walks it on its own clock
+   *  and asks playModelEventsIn about each slice (a flare's four SND events). */
+  modelBirthWindow(modelArt: string): [number, number] | null {
+    return modelArt ? this.resolveModelSounds(modelArt).birth : null;
+  }
+
   playModelEventsIn(modelArt: string, from: number, to: number, at?: SoundPos): boolean {
     if (!modelArt) return false;
     const ms = this.resolveModelSounds(modelArt);

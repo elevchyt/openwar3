@@ -359,6 +359,16 @@ const CREEP_SLEEP_ABILITY = "ACsp";
  *  HumanX04 script throws on a dying neutral building (`AddSpecialEffectLocBJ(…, "…\
  *  NeutralBuildingExplosion.mdl")`). One clip, Birth, 7.4 s. See collapseGoldMine. */
 const GOLD_MINE_COLLAPSE_ART = "Objects\\Spawnmodels\\Other\\NeutralBuildingExplosion\\NeutralBuildingExplosion.mdx";
+/**
+ * Abilities whose sound is played by what they LAND, not by the press — so the cast-fire chain
+ * guesses nothing for them (only a caster model's own SND event for the code still plays).
+ * The reveals' marker carries RevealMap.wav (`SNDxANDT` on AItbTarget.mdx) and Dust's puff the
+ * same; a flare's four FlareTarget WAVs ride FlareTarget.mdx's Birth (spells.ts `flare`). The
+ * chain's guess found those same events off the rows' `EfctID1` art (`Xbdt` → Andt.mdl carries
+ * RevealMap too) and played them a second time at the SHOOTER — a Flare Gun pressed in your base
+ * whistled there, 0.8 s before the flare came down on the other side of the map.
+ */
+const SOUNDED_BY_EFFECT = new Set(["AIta", "AOfs", "Andt", "AItb", "AIfa", "Afla"]);
 // Cast sounds for spells whose effect model doesn't sit next to a folder WAV
 // (e.g. Divine Shield has no target/caster art), by base ability code.
 const SPELL_SOUND_FALLBACK: Record<string, string> = {
@@ -5571,8 +5581,25 @@ export class MapViewerScene {
     });
   }
 
+  /** Effects whose SND events are fired as their Birth clip plays (SimSpellEffect.events). Timed
+   *  on the WORLD's clock rather than read off the instance's frame, because an instance the
+   *  camera is not looking at does not advance its clip — and a flare is heard where it lands
+   *  whether or not anybody is looking at it (distance does the rest). */
+  private fxSoundTracks: Array<{ art: string; from: number; to: number; t: number; last: number; x: number; y: number; z: number }> = [];
+
   private updateEffects(dt: number): void {
     this.updateEffectAnims();
+    for (let i = this.fxSoundTracks.length - 1; i >= 0; i--) {
+      const s = this.fxSoundTracks[i];
+      s.t += dt * 1000;
+      const cur = Math.min(s.from + s.t, s.to);
+      if (cur > s.last) {
+        // (last, cur] — half-open, so an event on a fractional frame between two slices fires once.
+        this.sounds?.playModelEventsIn(s.art, s.last + 0.001, cur, { x: s.x, y: s.y, z: s.z });
+        s.last = cur;
+      }
+      if (cur >= s.to) this.fxSoundTracks.splice(i, 1);
+    }
     for (let i = this.effects.length - 1; i >= 0; i--) {
       const e = this.effects[i];
       // An effect that rides a unit is walked with it every frame — see followedFxPos. One
@@ -13990,6 +14017,12 @@ export class MapViewerScene {
           if (fx.soundLabel) this.sounds?.playAbilitySound(fx.soundLabel, { x, y, z });
           // …and the one named by PATH (Hex/Polymorph's air and ground poofs; SimSpellEffect).
           if (fx.soundFile) this.sounds?.playSpellFile(fx.soundFile, { x, y, z });
+          // …and EVERY sound event the model parks in its Birth, each at its own frame
+          // (SimSpellEffect.events — the flare's whistle, pop and burn).
+          if (fx.events) {
+            const w = this.sounds?.modelBirthWindow(fx.art);
+            if (w) this.fxSoundTracks.push({ art: fx.art, from: w[0], to: w[1], t: 0, last: w[0] - 0.001, x, y, z });
+          }
         }
         // Ground decals a spell painted this frame (Thunder Clap's scorch, THND).
         for (const s of this.rts!.drainFxSplats()) this.addSpellSplat(s.splatId, s.x, s.y);
@@ -14048,6 +14081,7 @@ export class MapViewerScene {
             continue;
           }
           if (this.sounds?.playModelAbilityEvent(this.rts!.renderedModelPath(c.casterId), c.code, at)) continue;
+          if (SOUNDED_BY_EFFECT.has(c.code)) continue; // …heard where it lands instead
           // An ITEM's press is keyed by its own ability code straight into AnimLookups — `AIMA`
           // → "ManaPotion", `AIRE` → "RestorationPotion" (UI\SoundInfo\AnimLookups.slk) — which is
           // the game naming that press's sound outright. The art chain below only reaches

@@ -3393,6 +3393,10 @@ export interface ItemReveal {
   /** Non-empty: it also ends the moment `unitId` stops carrying this buff group, which is how
    *  "until that unit is dispelled" is stated. */
   untilBuffGone: string;
+  /** Seconds before it OPENS — a flare lights nothing while it is still in the air (`Afla`
+   *  `Fla2` "Effect Delay" 0.8). Neither lights nor detects until it reaches 0; `timeLeft`
+   *  starts counting only then. */
+  delay: number;
 }
 
 /**
@@ -3459,6 +3463,11 @@ export interface SimSpellEffect {
    *  sees it because it is looking there, and the side being looked at sees it because being
    *  scouted is exactly what it is there to tell them. */
   global?: boolean;
+  /** Fire the model's OWN `SND` event objects as its clip passes over them, every one of them
+   *  at its own frame — rather than the single cue `sound` picks. `FlareTarget.mdx` is why:
+   *  its four `SNDXAFL1..4` (AnimLookups → Flare1..4 → FlareTarget1..4.wav) are parked at
+   *  33, 1100, 2467 and 3467 ms of its one Birth, the flare's whistle, pop and burn. */
+  events?: boolean;
 }
 
 /** A hidden attacker's position, given away to one team for a moment. */
@@ -17923,7 +17932,10 @@ export class SimWorld {
       }
     },
     emitEffect: (art, x, y, targetId, life, attach, opts) => {
-      if (art) this.spellEffects.push({ art, x, y, targetId, z: 0, life, ...(attach?.length ? { attach } : {}), ...(opts?.sound ? { sound: true } : {}), ...(opts?.anim ? { anim: opts.anim } : {}), ...(opts?.global ? { global: true } : {}) });
+      if (!art) return;
+      const fx: SimSpellEffect = { art, x, y, targetId, z: 0, life, ...(attach?.length ? { attach } : {}), ...(opts?.sound ? { sound: true } : {}), ...(opts?.anim ? { anim: opts.anim } : {}), ...(opts?.global ? { global: true } : {}), ...(opts?.events ? { events: true } : {}) };
+      if (opts?.delay && opts.delay > 0) this.delayedEffects.push({ t: opts.delay, fx });
+      else this.spellEffects.push(fx);
     },
     emitSplat: (splatId, x, y) => {
       if (splatId) this.spellSplats.push({ splatId, x, y });
@@ -18518,6 +18530,7 @@ export class SimWorld {
     this.tickAttackReveals(dt);
     this.tickDeathReveals(dt); // …and the eyes a body keeps while it falls (issue #126)
     this.tickItemReveals(dt); // …and the ground a Crystal Ball / flare / Far Sight is holding open
+    this.tickDelayedEffects(dt); // …and a flare still falling onto it
     this.tickMoonstone(dt); // …and the eclipse a Moonstone is holding over the map
     this.tickSoulGems(); // …and the hero a Soul Gem is holding off it
     this.tickBuildings(dt);
@@ -19862,7 +19875,7 @@ export class SimWorld {
     // Tower or a Goblin Laboratory uncover invisible units inside their circle for as long as
     // it lasts, with nothing standing there to do the seeing (see ItemReveal.detect).
     for (const r of this.itemReveals) {
-      if (!r.detect || r.team !== team) continue;
+      if (!r.detect || r.team !== team || r.delay > 0) continue;
       if (Math.hypot(r.x - x, r.y - y) <= r.radius) return true;
     }
     return false;
@@ -22503,12 +22516,25 @@ export class SimWorld {
   }
 
   /** Open a patch of fog for a player (see ItemReveal and SpellApi.revealArea). */
-  addItemReveal(owner: number, team: number, o: { x: number; y: number; radius: number; seconds: number; detect?: boolean; follow?: number; untilBuffGone?: string }): void {
+  addItemReveal(owner: number, team: number, o: { x: number; y: number; radius: number; seconds: number; detect?: boolean; follow?: number; untilBuffGone?: string; delay?: number }): void {
     if (o.radius <= 0 || o.seconds <= 0) return;
     this.itemReveals.push({
       x: o.x, y: o.y, radius: o.radius, owner, team, timeLeft: o.seconds,
-      detect: !!o.detect, unitId: o.follow ?? 0, untilBuffGone: o.untilBuffGone ?? "",
+      detect: !!o.detect, unitId: o.follow ?? 0, untilBuffGone: o.untilBuffGone ?? "", delay: Math.max(0, o.delay ?? 0),
     });
+  }
+
+  /** Effects a handler asked for LATER (EffectOpts.delay) — a flare's target model, which
+   *  lands `Fla2` seconds after the gun goes off. Released onto `spellEffects` when due. */
+  private delayedEffects: Array<{ t: number; fx: SimSpellEffect }> = [];
+  private tickDelayedEffects(dt: number): void {
+    for (let i = this.delayedEffects.length - 1; i >= 0; i--) {
+      const d = this.delayedEffects[i];
+      d.t -= dt;
+      if (d.t > 0) continue;
+      this.spellEffects.push(d.fx);
+      this.delayedEffects.splice(i, 1);
+    }
   }
 
   /** Age the item reveals, and drop the ones whose subject has gone. A following reveal
@@ -22517,6 +22543,10 @@ export class SimWorld {
   private tickItemReveals(dt: number): void {
     for (let i = this.itemReveals.length - 1; i >= 0; i--) {
       const r = this.itemReveals[i];
+      if (r.delay > 0) { // still in the air — its own clock has not started
+        r.delay -= dt;
+        continue;
+      }
       r.timeLeft -= dt;
       let done = r.timeLeft <= 0;
       if (!done && r.unitId) {
@@ -22532,9 +22562,9 @@ export class SimWorld {
     }
   }
 
-  /** The fog an item is holding open, for the vision pass. */
+  /** The fog an item is holding open, for the vision pass — not one still in the air. */
   activeItemReveals(): Iterable<ItemReveal> {
-    return this.itemReveals;
+    return this.itemReveals.some((r) => r.delay > 0) ? this.itemReveals.filter((r) => r.delay <= 0) : this.itemReveals;
   }
 
   /**
