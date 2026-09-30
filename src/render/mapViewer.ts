@@ -2750,6 +2750,7 @@ export class MapViewerScene {
    *  owns the setup; neither should reach across the other. */
   attachMatchLink(setup: MatchLinkSetup): void {
     this.rts?.attachMatchLink(setup);
+    void this.voiceChat.warm(); // open the microphone now, so the first press loses nothing
     // Arm the background pump HERE, not from the frame loop: rAF is stopped in a hidden
     // window, so a host whose tab is already covered when the match starts would otherwise
     // never run the frame that starts the pump — the authority sits dead until refocused

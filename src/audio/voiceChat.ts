@@ -7,6 +7,14 @@
 
 import { VOICE_RATE, decodeVoice, encodeVoice } from "../game/voice";
 
+/** Seconds of microphone kept while NOT transmitting, and sent ahead of the first live slice
+ *  when the key goes down — a talker starts speaking as they press, and the microphone, the
+ *  processor's buffer and the key event all lag that by a few tens of milliseconds. */
+const PREROLL_SECS = 0.4;
+
+/** Samples per processor callback (at the context's rate): ~21 ms at 48 kHz. */
+const TAP_SAMPLES = 1024;
+
 /** Seconds of speech a speaker's buffer is kept ahead of the playhead — the jitter cushion. */
 const LEAD_SECS = 0.12;
 
@@ -17,6 +25,10 @@ export class VoiceChat {
   private tap: ScriptProcessorNode | null = null;
   private transmitting = false;
   private opening: Promise<boolean> | null = null;
+  /** Encoded slices heard while idle, newest last — the pre-roll. */
+  private preroll: Uint8Array[] = [];
+  /** Report an open failure to the player? Off for the silent warm-up at match start. */
+  private loud = true;
   /** Where each speaker's next slice starts, on the context's clock. */
   private readonly playhead = new Map<number, number>();
 
@@ -28,17 +40,36 @@ export class VoiceChat {
     return this.transmitting;
   }
 
-  /** Start sending. Opens the microphone the first time (which is when the browser asks). */
-  async start(): Promise<void> {
-    this.transmitting = true;
-    if (!(await this.open()) || !this.transmitting) return;
-    this.stream?.getAudioTracks().forEach((t) => (t.enabled = true));
+  /**
+   * Open the microphone ahead of the first press, quietly. Opening it is asynchronous (and the
+   * first time a permission prompt), and speech begun during that wait was lost — so a match
+   * with other people in it does it up front, and a refusal is not reported until the player
+   * actually tries to talk.
+   */
+  async warm(): Promise<void> {
+    this.loud = false;
+    await this.open();
+    this.loud = true;
   }
 
-  /** Stop sending. The microphone stays open but muted, so the next press has no delay. */
+  /** Start sending, beginning with what was said just before the key went down. */
+  async start(): Promise<void> {
+    this.transmitting = true;
+    if (this.stream) this.flushPreroll();
+    if (!(await this.open()) || !this.transmitting) return;
+    this.flushPreroll(); // the first open: whatever the tap caught while we waited
+  }
+
+  /** Stop sending. The microphone stays open, listening into the pre-roll, so the next press
+   *  has neither a delay nor a clipped first word. */
   stop(): void {
     this.transmitting = false;
-    this.stream?.getAudioTracks().forEach((t) => (t.enabled = false));
+  }
+
+  private flushPreroll(): void {
+    const frames = this.preroll;
+    this.preroll = [];
+    for (const f of frames) this.onFrame(f);
   }
 
   /** Play a slice of somebody else's speech. */
@@ -72,6 +103,7 @@ export class VoiceChat {
     this.source = null;
     this.tap = null;
     this.opening = null;
+    this.preroll = [];
     this.playhead.clear();
   }
 
@@ -96,7 +128,7 @@ export class VoiceChat {
   private async acquire(): Promise<boolean> {
     const ctx = this.context();
     if (!ctx || !navigator.mediaDevices?.getUserMedia) {
-      this.onError("Voice chat needs a microphone and a secure page (localhost or https).");
+      if (this.loud) this.onError("Voice chat needs a microphone and a secure page (localhost or https).");
       return false;
     }
     try {
@@ -104,18 +136,24 @@ export class VoiceChat {
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
     } catch {
-      this.onError("Voice chat: microphone unavailable or permission refused.");
+      if (this.loud) this.onError("Voice chat: microphone unavailable or permission refused.");
       return false;
     }
-    this.stream.getAudioTracks().forEach((t) => (t.enabled = this.transmitting));
     this.source = ctx.createMediaStreamSource(this.stream);
     // ScriptProcessor is deprecated but is the one tap every Chromium the game ships in
     // (including the 32-bit Electron 18 build) has, and needs no module file to load.
-    this.tap = ctx.createScriptProcessor(2048, 1, 1);
+    this.tap = ctx.createScriptProcessor(TAP_SAMPLES, 1, 1);
+    const keep = Math.ceil((PREROLL_SECS * ctx.sampleRate) / TAP_SAMPLES);
     this.tap.onaudioprocess = (e) => {
-      if (!this.transmitting) return;
       const bytes = encodeVoice(e.inputBuffer.getChannelData(0), ctx.sampleRate);
-      if (bytes.length) this.onFrame(bytes);
+      if (!bytes.length) return;
+      // Sending, or listening into the pre-roll. Nothing leaves this machine unless the key is
+      // down: an idle slice is only ever kept, in memory, for PREROLL_SECS.
+      if (this.transmitting) this.onFrame(bytes);
+      else {
+        this.preroll.push(bytes);
+        if (this.preroll.length > keep) this.preroll.shift();
+      }
     };
     // A ScriptProcessor only runs while it reaches the destination; its own output is silent.
     this.source.connect(this.tap);

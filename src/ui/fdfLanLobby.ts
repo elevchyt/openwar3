@@ -866,9 +866,23 @@ function buildLobbyRoot(lib: FdfLibrary, groups: Group[]): FdfFrame {
     // and the title fit the 0.125 the container has (the reference packs them just so).
     size(findFrame(display, "AdvancedOptionsTitleLabel"), PANE_W, DISPLAY_TITLE_H);
     for (const row of DISPLAY_ROWS) size(findFrame(display, row), PANE_W, DISPLAY_ROW_H);
-    // …and the container grows for the eighth row: the file sized it for its own seven.
+    // …and the container is a VIEWPORT (issue #133): with our two extra rows the summary is
+    // taller than the panel it sits in, and it used to run out over the panel's border. Handing
+    // the container a SCROLLBAR makes it scroll like the player rows above it do
+    // (ui/fdf/widgets.ts buildScrollFrame; drawn only while the rows overrun the box), and the
+    // rows stand in from the right edge by the bar's width so a value never runs under it.
     setProp(findFrame(root, "AdvancedOptionsContainer"), "Height", [num(DISPLAY_H)]);
-    adopt(root, "AdvancedOptionsContainer", [display]);
+    const children = [display];
+    const advBar = lib.resolveRoot(BLURB_SCROLLBAR);
+    if (advBar) {
+      advBar.name = "AdvancedOptionsScrollBar";
+      children.push(advBar);
+      const barW = numProp(advBar, "Width") ?? 0.012;
+      const right = findFrame(display, "AdvancedOptionsTitleLabel")?.props
+        .find((p) => p.key === "SetPoint" && p.args[0]?.s === "TOPRIGHT");
+      if (right && right.args.length >= 5) right.args[3] = num((right.args[3].n ?? 0) - barW - DISPLAY_BAR_GAP);
+    }
+    adopt(root, "AdvancedOptionsContainer", children);
   }
 
   // …and the map panel moves left to sit inside the 3D chrome that frames it, exactly as the
@@ -929,8 +943,12 @@ const DISPLAY_ROWS = [
 ];
 const DISPLAY_TITLE_H = 0.016;
 const DISPLAY_ROW_H = 0.012;
-/** GameChatroom.fdf gives AdvancedOptionsContainer 0.125 for seven rows; ours has eight. */
-const DISPLAY_H = 0.138;
+/** GameChatroom.fdf gives AdvancedOptionsContainer 0.125 for seven rows; ours has nine, so the
+ *  summary SCROLLS. The box is what the panel has room for — the title and eight rows — and not
+ *  a height that fits the whole list: that ran the last row over the panel's border. */
+const DISPLAY_H = 0.126;
+/** Clear space between a value and the scrollbar standing beside it. */
+const DISPLAY_BAR_GAP = 0.004;
 
 /** GameChatroom.fdf's own ChatTextArea box, how far ABOVE its own anchor the log starts in our
  *  16:9 chrome (whose panel border is higher than the 4:3 file's), and the margin it keeps off
