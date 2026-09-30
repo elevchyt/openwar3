@@ -3996,7 +3996,6 @@ body.in-game .load-gate { display: none; }
   height: var(--voice-h);
   padding: 0 calc(var(--voice-h) * 0.4) 0 calc(var(--voice-h) * 0.15);
   border-radius: calc(var(--voice-h) * 0.12);
-  border: calc(var(--voice-h) * 0.05) solid color-mix(in srgb, var(--voice-tint) 60%, #fff);
   background: color-mix(in srgb, var(--voice-tint) 82%, #000);
   font-size: calc(var(--voice-h) * 0.5);
   line-height: 1;
