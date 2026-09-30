@@ -11,7 +11,7 @@ import type { FogMode } from "../ui/lobby";
 // The seven rows are the game's own, and the values the two menus carry are the GlobalStrings
 // KEYS of their `MenuItem`s (`FULL_OBSERVERS`, `MAP_EXPLORED`…) — so the wire says exactly what
 // the FDF says, and a screen prints a value by looking its key up, never by re-typing it.
-// `computerPlus` is the eighth row and OURS (src/overrides/, issue #124).
+// `computerPlus` is the eighth row and OURS (src/overrides/, issue #124); `allTalk` the ninth (#133).
 
 /** `ObserversPopupMenuMenu`'s four items, by their GlobalStrings key. */
 export const OBSERVER_ITEMS = ["FULL_OBSERVERS", "OBSERVERS_ON_DEFEAT", "REFEREES", "NO_OBSERVERS"] as const;
@@ -46,6 +46,9 @@ export interface AdvancedOptions {
   visibility: Visibility;
   /** Play the computer seats with Computer+ (src/ai/plus/) rather than Blizzard's scripts. */
   computerPlus: boolean;
+  /** Voice chat has no channels: everybody hears everybody (issue #133). Off, a talker is heard
+   *  by their allies only — the same audience "To Allies:" chat has. OURS, the ninth row. */
+  allTalk: boolean;
 }
 
 /**
@@ -70,6 +73,7 @@ export const DEFAULT_ADVANCED: AdvancedOptions = {
   observers: "NO_OBSERVERS",
   visibility: "DEFAULT",
   computerPlus: false,
+  allTalk: false,
 };
 
 /** Every row still as the pane opened it — the game lobby prints the Advanced Options block

@@ -48,3 +48,15 @@ Frame "TEXT" "ComputerPlusLabel" INHERITS "StandardLabelTextTemplate" {
 Frame "GLUECHECKBOX" "ComputerPlusCheckBox" INHERITS WITHCHILDREN "StandardCheckBoxTemplate" {
     SetPoint TOPRIGHT, "MapVisibilityMenu", BOTTOMRIGHT, -0.005, -0.008,
 }
+
+// "All Talk" (issue #133) — hosted games only, under Computer+. Voice chat is heard by allies
+// unless this is on, when there are no channels and everybody hears everybody.
+Frame "TEXT" "AllTalkLabel" INHERITS "StandardLabelTextTemplate" {
+    Height 0.024,
+    SetPoint TOPLEFT, "ComputerPlusLabel", BOTTOMLEFT, 0.0, -0.008,
+    Text "COLON_ALL_TALK",
+}
+
+Frame "GLUECHECKBOX" "AllTalkCheckBox" INHERITS WITHCHILDREN "StandardCheckBoxTemplate" {
+    SetPoint TOPRIGHT, "ComputerPlusCheckBox", BOTTOMRIGHT, 0.0, -0.008,
+}

@@ -8128,6 +8128,7 @@ export class RtsController {
     // the same renderer callback, which routes (host) or just shows it (client).
     link.onChatSaid = (line) => this.onChatSaid?.(line);
     link.onSignal = (from, x, y) => this.onSignalHeard?.(from, x, y);
+    link.onVoice = (from, data) => this.onVoiceHeard?.(from, data);
     // The pause, both ways round: on the host a player's request to judge, on a client the
     // ruling to obey. Neither is state this controller keeps — the pause belongs to the
     // renderer, which owns the world's clock — so both are passed straight through.
@@ -8174,6 +8175,9 @@ export class RtsController {
   /** A minimap signal arriving over the wire (matchLink `signal` / `signals`) — the chat
    *  split: on the host a client asking to signal, on a client the host's routed ruling. */
   onSignalHeard: ((from: number, x: number, y: number) => void) | null = null;
+  /** A slice of voice arriving over the wire (matchLink `vox` / `voxs`, issue #133) — the chat
+   *  split: on the host a client talking, on a client the host's routed ruling. */
+  onVoiceHeard: ((from: number, data: string) => void) | null = null;
 
   /**
    * A line was said, and these are the players who HEARD it — the routing

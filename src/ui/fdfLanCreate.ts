@@ -237,13 +237,14 @@ export async function mountLanCreateScreen(
    */
   function fillAdvanced(s: FdfScreen): void {
     const text = (key: string): string => lib?.string(key) ?? key;
-    const boxes: Array<[string, keyof AdvancedOptions & ("lockTeams" | "teamsTogether" | "sharedControl" | "randomRaces" | "randomHero" | "computerPlus")]> = [
+    const boxes: Array<[string, keyof AdvancedOptions & ("lockTeams" | "teamsTogether" | "sharedControl" | "randomRaces" | "randomHero" | "computerPlus" | "allTalk")]> = [
       ["LockTeamsCheckBox", "lockTeams"],
       ["TeamsTogetherCheckBox", "teamsTogether"],
       ["AdvSharedControlCheckBox", "sharedControl"],
       ["RandomRacesCheckBox", "randomRaces"],
       ["RandomHeroCheckBox", "randomHero"],
       ["ComputerPlusCheckBox", "computerPlus"],
+      ["AllTalkCheckBox", "allTalk"],
     ];
     for (const [name, key] of boxes) {
       const box = s.checkBox(name);

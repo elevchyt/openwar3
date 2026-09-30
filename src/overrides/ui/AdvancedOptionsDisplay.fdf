@@ -26,3 +26,16 @@ Frame "TEXT" "ComputerPlusDisplayLabel" INHERITS "StandardLabelTextTemplate" {
         FontJustificationH JUSTIFYRIGHT,
     }
 }
+
+// The ninth row (issue #133), under Computer+.
+Frame "TEXT" "AllTalkDisplayLabel" INHERITS "StandardLabelTextTemplate" {
+    Height 0.012,
+    SetPoint TOPLEFT, "ComputerPlusDisplayLabel", BOTTOMLEFT, 0.0, -0.002,
+    SetPoint TOPRIGHT, "ComputerPlusDisplayLabel", BOTTOMRIGHT, 0.0, -0.002,
+    Text "COLON_ALL_TALK",
+
+    Frame "TEXT" "AllTalkDisplayValue" INHERITS "StandardValueTextTemplate" {
+        SetAllPoints,
+        FontJustificationH JUSTIFYRIGHT,
+    }
+}

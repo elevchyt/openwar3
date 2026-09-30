@@ -243,6 +243,8 @@ export const LAN_ADVANCED_OPTIONS_OVERRIDE: FdfOverride = {
   add: [
     { frame: "ComputerPlusLabel", into: "AdvancedOptionsPane" },
     { frame: "ComputerPlusCheckBox", into: "AdvancedOptionsPane" },
+    { frame: "AllTalkLabel", into: "AdvancedOptionsPane" },
+    { frame: "AllTalkCheckBox", into: "AdvancedOptionsPane" },
   ],
 };
 
@@ -348,7 +350,10 @@ export const LAN_LOBBY_ADDRESS_OVERRIDE: FdfOverride = {
 export const ADVANCED_OPTIONS_DISPLAY_OVERRIDE: FdfOverride = {
   id: "ow3-advanced-options-display",
   source: advancedOptionsDisplayFdf,
-  add: [{ frame: "ComputerPlusDisplayLabel", into: "AdvancedOptionsDisplay" }],
+  add: [
+    { frame: "ComputerPlusDisplayLabel", into: "AdvancedOptionsDisplay" },
+    { frame: "AllTalkDisplayLabel", into: "AdvancedOptionsDisplay" },
+  ],
 };
 
 /**

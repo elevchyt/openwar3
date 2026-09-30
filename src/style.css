@@ -3971,3 +3971,45 @@ body.in-game .load-gate { display: none; }
   background: var(--hud-inventory-cover) 0 0 / 100% 100% no-repeat;
   pointer-events: none;
 }
+
+/* Voice chat (issue #133): one plate per player talking, stacked upward from the console's top
+   edge down the right side. right/bottom/width and --voice-h/--voice-gap come from ui/hud.ts
+   (VOICE_AREA). The plate's colour is --voice-tint — the speaker's tint in the current Ally Color
+   Mode — and falls back to a neutral grey. */
+.hud-voice {
+  position: absolute;
+  display: flex;
+  flex-direction: column; /* bottom-pinned, so it grows upward; the first talker is the top plate */
+  align-items: flex-end;
+  gap: var(--voice-gap);
+  pointer-events: none;
+  z-index: 6;
+}
+.hud-voice[hidden] { display: none; }
+.hud-voice-plate {
+  --voice-tint: #8a8a8a;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: calc(var(--voice-h) * 0.22);
+  max-width: 100%;
+  height: var(--voice-h);
+  padding: 0 calc(var(--voice-h) * 0.4) 0 calc(var(--voice-h) * 0.15);
+  border-radius: calc(var(--voice-h) * 0.12);
+  border: calc(var(--voice-h) * 0.05) solid color-mix(in srgb, var(--voice-tint) 60%, #fff);
+  background: color-mix(in srgb, var(--voice-tint) 82%, #000);
+  font-size: calc(var(--voice-h) * 0.5);
+  line-height: 1;
+  text-shadow: 0 0 2px #000;
+}
+.hud-voice-race {
+  height: 78%;
+  aspect-ratio: 1;
+  object-fit: contain;
+}
+.hud-voice-name {
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

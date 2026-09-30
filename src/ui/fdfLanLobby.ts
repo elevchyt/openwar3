@@ -758,6 +758,7 @@ export async function mountLanLobbyScreen(
     s.setText("ObserversValue", t(a.observers));
     s.setText("MapVisibilityValue", t(a.visibility));
     s.setText("ComputerPlusDisplayValue", yesNo(a.computerPlus));
+    s.setText("AllTalkDisplayValue", yesNo(a.allTalk));
   }
 
   /** A change to a player row. On the host it applies straight away (its own row, and the AI

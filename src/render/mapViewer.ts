@@ -41,6 +41,8 @@ import type { Instance as RtsInstance } from "../game/rts";
 import type { MatchLinkSetup } from "../game/matchLink";
 import { unitSnapshot, unitSnapshots } from "../game/jassHooks";
 import { SoundBoard } from "../audio/sounds";
+import { VoiceChat } from "../audio/voiceChat";
+import { Talkers, VOICE_HUD_MAX, VOICE_KEY_CODE, voiceFromBase64, voiceRecipients, voiceToBase64 } from "../game/voice";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
 import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData, applyMapTechData, heroFoldConstants, makeTrigStr, refoldHeroConstants } from "../data/objectData";
 import { readMapFormat, UNKNOWN_FORMAT, type MapFormatProfile } from "../compat/mapFormat";
@@ -1025,6 +1027,10 @@ interface FogDoodadTable {
   row: Map<object, number>;
 }
 
+/** The campaign screens' race stamps (`UI\Glues\Loading\Backgrounds\Campaigns\<X>Symbol.blp`) —
+ *  what the voice plates wear beside a name. */
+const RACE_SYMBOL: Record<PlayableRace, string> = { human: "Human", orc: "Orc", undead: "Undead", nightelf: "NightElf" };
+
 export class MapViewerScene {
   // The game camera's shape — what the view opens at and what ResetToGameCamera returns to
   // (7.24).
@@ -1457,6 +1463,14 @@ export class MapViewerScene {
   private observers: ReadonlyArray<{ id: number; peer: number; name: string }> = [];
   /** Advanced Options → Lock Teams (`MeleeConfig.lockTeams`): the Allies dialog's boxes are dead. */
   private lockTeams = false;
+  /** Advanced Options → All Talk (`MeleeConfig.allTalk`): voice reaches everybody, not allies. */
+  private allTalk = false;
+  /** Every seat's race as the match resolved it — the voice plates wear the speaker's symbol. */
+  private matchRaces = new Map<number, PlayableRace>();
+  /** Voice chat (issue #133): the microphone + speakers, who is talking, the plates' clock. */
+  private readonly voiceChat = new VoiceChat();
+  private readonly talkers = new Talkers();
+  private voiceTimer = 0;
   private localRace: PlayableRace = "human";
   // Footprints of registered resource nodes, for unstamping on removal.
   private nodeFootprints = new Map<number, { fp: Footprint; x: number; y: number }>();
@@ -2557,6 +2571,7 @@ export class MapViewerScene {
     this.observer = config.observer === true;
     this.observers = config.observers ?? [];
     this.lockTeams = config.lockTeams === true;
+    this.allTalk = config.allTalk === true;
     // A LAN client is told (every human slot in a shared config says "user", so
     // the fallback would seat every machine on the same player — see MeleeConfig.localPlayer).
     this.localPlayer = config.localPlayer
@@ -2599,6 +2614,7 @@ export class MapViewerScene {
     // Resolve "random" once per slot: roster and console skin must agree.
     const races = new Map(config.slots.map((s) => [s.id, resolveRace(s.race)]));
     this.localRace = races.get(this.localPlayer) ?? "human";
+    this.matchRaces = races;
     this.meleeTeams = new Map(config.slots.map((s) => [s.id, s.team]));
     // Who an observer watches (issue #168): every seat in the match, with the race it resolved
     // to. Handed to the controller on BOTH sides of the wire — the host builds a watcher's lane
@@ -4127,6 +4143,10 @@ export class MapViewerScene {
       // A minimap signal, both ways it arrives: an armed click on this machine (rts.onSignal),
       // or over the wire — where the chat split holds again: the host routes, a client shows.
       this.rts.onSignal = (x, y) => this.signalPing(this.localPlayer, x, y);
+      // Voice chat, the same split: the host routes, a client just plays what it was sent.
+      this.rts.onVoiceHeard = (from, data) => (this.rts?.frozenClient ? this.hearVoice(from, data) : this.routeVoice(from, data));
+      this.voiceChat.onFrame = (bytes) => this.sendVoice(voiceToBase64(bytes));
+      this.voiceChat.onError = (m) => this.announce(m);
       this.rts.onSignalHeard = (from, x, y) =>
         this.rts?.frozenClient ? this.showSignal(from, x, y) : this.deliverSignal(from, x, y);
       // A Computer+ player conceding (issue #124). Raised as the ORDINARY player-left event on
@@ -9405,6 +9425,87 @@ export class MapViewerScene {
     );
   }
 
+  // ---- Voice chat (issue #133) -------------------------------------------------------------
+  //
+  // Push-to-talk on "/", in a LAN match only (a single-player game has nobody to talk to). The
+  // audio rides the chat's routing — allies, or everybody under All Talk (game/voice.ts) — and
+  // a talker shows on a plate down the right edge (ui/voiceHud.ts) for as long as slices keep
+  // arriving.
+
+  /** A slice of our own microphone, encoded. On the host it is routed; a client asks the host. */
+  private sendVoice(data: string): void {
+    const link = this.rts?.matchLinkHandle ?? null;
+    if (!link) return;
+    this.talkers.heard(this.localPlayer, performance.now() / 1000);
+    this.startVoiceTimer();
+    if (this.rts?.frozenClient) link.askToTalk(data);
+    else this.routeVoice(this.localPlayer, data);
+  }
+
+  /** The AUTHORITY's path: hand the slice to each player who may hear it. */
+  private routeVoice(from: number, data: string): void {
+    const link = this.rts?.matchLinkHandle ?? null;
+    if (!link) return;
+    for (const player of voiceRecipients(from, this.allTalk, this.chatWorld())) {
+      if (player === this.localPlayer) this.hearVoice(from, data);
+      else link.relayVoice(player, from, data);
+    }
+  }
+
+  /** A slice we are meant to hear (or, from ourselves, to see on the plates). */
+  private hearVoice(from: number, data: string): void {
+    this.talkers.heard(from, performance.now() / 1000);
+    this.startVoiceTimer();
+    if (from !== this.localPlayer) this.voiceChat.play(from, voiceFromBase64(data));
+  }
+
+  private startVoiceTimer(): void {
+    if (this.voiceTimer) return;
+    this.refreshVoice();
+    this.voiceTimer = window.setInterval(() => this.refreshVoice(), 100);
+  }
+
+  /**
+   * Draw the plates. The plate is filled with `unitColor` — what the speaker's body wears under
+   * the current Ally Color Mode, as a chat name does (`renderChat`) — so it is the team's colour;
+   * there is no separate dot. Re-read each tick, so Alt-A repaints a plate that is already up.
+   */
+  private refreshVoice(): void {
+    const active = this.talkers.active(performance.now() / 1000).slice(0, VOICE_HUD_MAX);
+    if (!active.length && this.voiceTimer) {
+      clearInterval(this.voiceTimer);
+      this.voiceTimer = 0;
+    }
+    const hex = (c: string | null): string | null => (c ? c.slice(2) : null);
+    this.hud?.setVoice(
+      active.map((p) => {
+        const race = this.matchRaces.get(p);
+        return {
+          player: p,
+          name: this.playerLabel(p),
+          symbol: race ? this.blpIcon(`UI\\Glues\\Loading\\Backgrounds\\Campaigns\\${RACE_SYMBOL[race]}Symbol.blp`) : "",
+          tint: hex(teamColorHex(this.vfs, this.rts?.unitColor(p) ?? p)),
+        };
+      }),
+    );
+  }
+
+  /** Push-to-talk keys, wired once per match next to the other window listeners. */
+  private bindVoiceKeys(): void {
+    const down = (e: KeyboardEvent): void => {
+      if (e.code !== VOICE_KEY_CODE || e.ctrlKey || e.altKey || e.metaKey || isTyping(e.target)) return;
+      if (!this.rts?.matchLinkHandle) return; // nobody to talk to
+      e.preventDefault();
+      if (!e.repeat && !this.voiceChat.talking) void this.voiceChat.start();
+    };
+    const up = (e: KeyboardEvent): void => {
+      if (e.code === VOICE_KEY_CODE) this.voiceChat.stop();
+    };
+    this.on(window, "keydown", down);
+    this.on(window, "keyup", up);
+    this.on(window, "blur", () => this.voiceChat.stop()); // a key released elsewhere is never seen
+  }
+
   /**
    * Hand gold and lumber to an ally — the Allies dialog's two gift fields on Accept.
    *
@@ -14116,6 +14217,9 @@ export class MapViewerScene {
     // handler a dead match left on `window` still answers keys typed at the main menu.
     for (const off of this.detachers) off();
     this.detachers = [];
+    this.voiceChat.dispose();
+    if (this.voiceTimer) clearInterval(this.voiceTimer);
+    this.voiceTimer = 0;
     this.rts?.dispose();
     this.rts = null;
     this.clock?.dispose();
@@ -15753,6 +15857,7 @@ export class MapViewerScene {
 
   private attachControls(): void {
     const c = this.canvas;
+    this.bindVoiceKeys();
     this.on(window, "keydown", (e: KeyboardEvent) => {
       // ESC during a cinematic SKIPS it — WC3 raises EVENT_PLAYER_END_CINEMATIC for the
       // local player and the map's own skip trigger takes it from there (see

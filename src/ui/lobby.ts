@@ -178,6 +178,8 @@ export interface MeleeConfig {
   /** Advanced Options → Full Shared Unit Control: team-mates are seeded with
    *  `AllianceType.SharedControl` as well as the five ally grants. */
   sharedControl?: boolean;
+  /** Advanced Options → All Talk (issue #133): voice chat reaches everybody, not just allies. */
+  allTalk?: boolean;
   /**
    * The CAMPAIGN difficulty the player chose on the campaign screen, as the common.j
    * `gamedifficulty` index (MAP_DIFFICULTY_EASY 0 / NORMAL 1 / HARD 2 / INSANE 3). Omitted

@@ -17,6 +17,7 @@ import type { HeroBarEntry } from "../game/rts";
 import { allyButtonSkin, type AllyColorMode } from "../game/allyColor";
 import type { MinimapDot } from "../game/minimapView";
 import { CONSOLE_BAND_H, type ConsoleResources } from "./consoleUi";
+import { VoiceHud, type VoiceEntry } from "./voiceHud";
 import { UI_HEIGHT, UI_WIDTH } from "./fdf/layout";
 import { MinimapModel } from "./minimapModel";
 import { gamepadPaired, isHovered } from "./gamepad";
@@ -866,6 +867,16 @@ const MSG_AREA = {
  * `HERO_BAR.left + HERO_BAR.slot` ≈ 0.044) — asked for, and the same trade as the overlap
  * with the message area: a hero's portrait may end up behind a line of chat.
  */
+const VOICE_AREA = {
+  right: 0.012,
+  /** Just above the console band's top edge, so the plates float over the world beside the
+   *  command card rather than covering a button. */
+  bottom: CONSOLE_BAND_H + 0.012,
+  width: 0.2,
+  plate: 0.026,
+  gap: 0.004,
+} as const;
+
 const CHAT_AREA = {
   left: 0.022, // hard against the frame's edge, hero bar or no hero bar
   /** Clear of the idle-worker button — the one thing standing in this strip. `style.css` hangs
@@ -1406,6 +1417,8 @@ export class GameHud {
   // The in-game chat display (CChatDisplay / ORIGIN_FRAME_CHAT_MSG) — its own stack in its own
   // corner, so a line of chat never moves the map's messages. See CHAT_AREA.
   private chatLog!: HTMLDivElement;
+  /** The voice plates (issue #133), down the right edge over the console. */
+  private readonly voice = new VoiceHud();
   // The chat entry line under the message column (WC3 draws this one in engine code, not FDF).
   private chatBar!: HTMLDivElement;
   private chatPromptEl!: HTMLSpanElement;
@@ -1474,6 +1487,7 @@ export class GameHud {
       this.buildMessageLog(),
       this.buildChatLog(),
       this.buildChatBar(),
+      this.buildVoice(),
       this.buildErrorLine(),
     );
     parent.appendChild(this.root);
@@ -2201,6 +2215,26 @@ export class GameHud {
     this.chatLog.className = "hud-chatlog";
     column.append(this.chatLog);
     return column;
+  }
+
+  /**
+   * The voice plates (issue #133): who is talking, stacked upward from just above the
+   * console's top edge, hard against the frame's RIGHT edge — the side the command card is on.
+   * Like the chat column it is measured from the screen edge and not from the centred 0.8 box.
+   */
+  private buildVoice(): HTMLDivElement {
+    const el = this.voice.el;
+    el.style.right = uiPx(VOICE_AREA.right);
+    el.style.bottom = uiPx(VOICE_AREA.bottom);
+    el.style.width = uiPx(VOICE_AREA.width);
+    el.style.setProperty("--voice-h", uiPx(VOICE_AREA.plate));
+    el.style.setProperty("--voice-gap", uiPx(VOICE_AREA.gap));
+    return el;
+  }
+
+  /** Show these players as talking, top to bottom in the order they started (≤ 4). */
+  setVoice(entries: readonly VoiceEntry[]): void {
+    this.voice.update(entries);
   }
 
   /**

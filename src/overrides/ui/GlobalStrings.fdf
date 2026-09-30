@@ -16,6 +16,9 @@ StringList {
     // longer than the latter.
     COLON_COMPUTER_PLUS         "Computer+ (Improved AI):",
 
+    // ...and the row under it on a HOSTED game: voice chat with no team channels (issue #133).
+    COLON_ALL_TALK              "All Talk:",
+
     // ...and the row the game's own COLON_OBSERVERS ("Observers:") had. That one offered four
     // ways for other people to watch a HOSTED game and could never be anything but "No
     // Observers" on this screen; this one is about the person sitting at this machine, so it

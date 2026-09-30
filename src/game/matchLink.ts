@@ -186,6 +186,33 @@ export function isChatSaidMessage(data: unknown): data is ChatSaidMessage {
 }
 
 /**
+ * A slice of VOICE (issue #133, game/voice.ts) — the chat split once more, for the same reasons:
+ * `vox` goes client → host carrying only the audio (base64 µ-law), the host stamps the sender
+ * from the relay, and `voxs` goes host → each player the authority's routing says may hear it
+ * (allies, or everyone under All Talk). A client is never sent a channel it may not listen to.
+ */
+export interface VoiceMessage {
+  k: "vox";
+  d: string;
+}
+
+export function isVoiceMessage(data: unknown): data is VoiceMessage {
+  const d = data as { k?: unknown; d?: unknown } | null;
+  return typeof d === "object" && d !== null && d.k === "vox" && typeof d.d === "string" && d.d.length < 16384;
+}
+
+export interface VoiceSentMessage {
+  k: "voxs";
+  from: number;
+  d: string;
+}
+
+export function isVoiceSentMessage(data: unknown): data is VoiceSentMessage {
+  const d = data as { k?: unknown; from?: unknown; d?: unknown } | null;
+  return typeof d === "object" && d !== null && d.k === "voxs" && Number.isFinite(d.from) && typeof d.d === "string";
+}
+
+/**
  * A MINIMAP SIGNAL — the Minimap Signal button right of the minimap, Alt-G, or Alt+left-click
  * (`MINIMAPSIGNALTOOLTIP_UBER`: "…will display a signal at that location on your allies'
  * minimaps"). The same split chat makes, for the same reasons: `signal` goes client → host
@@ -440,6 +467,8 @@ export class MatchLink {
    *  signal (route it to that player's allies and show it if we are one); on a client, the
    *  host's ruling that we are one of the allies who sees it. */
   onSignal: (from: number, x: number, y: number) => void = () => {};
+  /** Voice: on the host a client's slice (stamped), on a client the host's routed ruling. */
+  onVoice: (from: number, data: string) => void = () => {};
 
   /** Host side: this player asked to stop or restart the match. The sender is the relay's
    *  stamp, never the payload's. Whether they may is the authority's ruling, not this
@@ -517,6 +546,10 @@ export class MatchLink {
       }
       // Client side: the host's ruling on something somebody said.
       else if (isChatSaidMessage(data)) this.onChatSaid({ from: data.from, text: data.text, target: data.target });
+      else if (isVoiceMessage(data)) {
+        const player = this.seats.find((s) => s.peer === from)?.id;
+        if (player !== undefined) this.onVoice(player, data.d);
+      } else if (isVoiceSentMessage(data)) this.onVoice(data.from, data.d);
       // Host side: a client's minimap signal, stamped with the relay's sender like chat.
       else if (isSignalMessage(data)) {
         const player = this.seats.find((s) => s.peer === from)?.id;
@@ -604,6 +637,19 @@ export class MatchLink {
     const peer = this.peerFor(player);
     if (peer === undefined) return;
     this.channel.send({ k: "chats", from: line.from, text: line.text, target: line.target } satisfies ChatSaidMessage, peer);
+  }
+
+  /** Client side: hand the host a slice of our voice to route. */
+  askToTalk(data: string): void {
+    this.channel.send({ k: "vox", d: data } satisfies VoiceMessage, this.hostPeer);
+  }
+
+  /** Host side: play one slice of `from`'s voice to one listener. */
+  relayVoice(player: number, from: number, data: string): void {
+    if (player === this.localPlayer) return;
+    const peer = this.peerFor(player);
+    if (peer === undefined) return;
+    this.channel.send({ k: "voxs", from, d: data } satisfies VoiceSentMessage, peer);
   }
 
   /** Client side: ask the host to put a signal on our allies' minimaps. Nothing is shown here

@@ -320,6 +320,7 @@ export function toConfig(msg: StartMatch, me: number | undefined, mapExplored: b
     ...(observers.length ? { observers } : {}),
     lockTeams: advanced.lockTeams,
     sharedControl: advanced.sharedControl,
+    allTalk: advanced.allTalk,
   };
 }
 
