@@ -297,6 +297,9 @@ function argbOf(css: string): number {
  */
 const CARRIER_CLIPS: Record<string, { clip: "birth" | "death"; land: number; launch?: string; landSound?: string }> = {
   "abilities\\spells\\nightelf\\cyclone\\cyclonetarget.mdx": { clip: "death", land: 18233 },
+  // Tornado Spin's (`[Btsp]`): a half-size copy of the Cyclone's funnel — the same clips and the
+  // same rig, its `dummy move` hovering 220–290 and on the ground at the same 18233.
+  "abilities\\spells\\other\\tornado\\tornadoelementalsmall.mdx": { clip: "death", land: 18233 },
   "abilities\\spells\\undead\\impale\\impalehittarget.mdx": {
     clip: "birth",
     land: 3367,
@@ -6021,6 +6024,7 @@ export class MapViewerScene {
     this.collectMineCircles(active);
     this.collectSleepFx(active);
     this.collectTreeUpgradeFx(active);
+    this.updateSummonLoops();
     for (const [key, inst] of this.buffFx) {
       if (!active.has(key)) this.dropBuffFx(key, inst);
     }
@@ -6516,6 +6520,52 @@ export class MapViewerScene {
     ride.fallFrom = ride.off[2];
     return false;
   }
+
+  /**
+   * The bed a SUMMON howls for as long as it stands — its summoning ability's timed-life buff's
+   * `Effectsoundlooped`. One in the stock data: the Tornado (`ntor`), summoned by `[ANto]`
+   * (`UnitID1 = ntor`, `BuffID1 = BNto`) whose `[BNto]` — "Tornado (Timed Life)" — names
+   * `TornadoLoop` → TornadoLoop1.wav. Keyed on the unit TYPE rather than on the summon clock,
+   * which a client is not sent for somebody else's unit. It walks with the tornado
+   * (movePathLoop), and a tornado in the fog is not heard.
+   */
+  private updateSummonLoops(): void {
+    const rts = this.rts;
+    if (!rts || !this.sounds) return;
+    if (!this.summonLoopByType) {
+      this.summonLoopByType = new Map();
+      for (const def of this.abilities.all()) {
+        for (const lvl of def.levelData) {
+          const loop = lvl.summon && lvl.buffs[0] ? this.abilities.buff(lvl.buffs[0])?.loop : "";
+          const wav = loop ? this.sounds.abilityLoopPath(loop) : "";
+          if (wav && !this.summonLoopByType.has(lvl.summon)) this.summonLoopByType.set(lvl.summon, wav);
+        }
+      }
+    }
+    const live = new Set<string>();
+    if (this.summonLoopByType.size) {
+      for (const u of rts.simView.units.values()) {
+        const wav = this.summonLoopByType.get(u.typeId);
+        if (!wav || u.hp <= 0 || rts.unitHidden(u.id)) continue;
+        const key = `sumloop|${u.id}`;
+        const at = { x: u.x, y: u.y, z: rts.groundHeightAt(u.x, u.y) };
+        live.add(key);
+        if (!this.summonLoops.has(key)) {
+          this.summonLoops.add(key);
+          this.sounds.setPathLoop(key, wav, true, at);
+        } else this.sounds.movePathLoop(key, at);
+      }
+    }
+    for (const key of this.summonLoops) {
+      if (live.has(key)) continue;
+      this.summonLoops.delete(key);
+      this.sounds.setPathLoop(key, "", false);
+    }
+  }
+  /** Summon unit type → the WAV its timed-life buff loops (built once, off the tables). */
+  private summonLoopByType: Map<string, string> | null = null;
+  /** Summon beds playing last frame, by key. */
+  private summonLoops = new Set<string>();
 
   /** Sound the carrier's SND events in a frame window, at its rider's feet. Only reached for a
    *  rider the fog is not hiding (trackCarrier), which is the same gate its picture has. */
@@ -13109,7 +13159,9 @@ export class MapViewerScene {
       // (Critical Strike) and `SNDxAOWW` → AnimLookups AOWW "Whirlwind" → BladeMasterWhirlwind.wav
       // — so every Mirror Image landed to the sound of Bladestorm. The Wand of Illusion copies
       // any unit and would have played whatever that unit's model happened to key.
-      else if (!s.illusion && this.pointVisible(sx, sy)) this.sounds?.playModelSound(d.model, { x: sx, y: sy, z: this.rts!.groundHeightAt(sx, sy) });
+      // It is the Birth clip's event and not "any" A event (playModelBirthSound): the Tornado's
+      // model keys its Birth AND its Death, and landed to the sound of dying half the time.
+      else if (!s.illusion && this.pointVisible(sx, sy)) this.sounds?.playModelBirthSound(d.model, { x: sx, y: sy, z: this.rts!.groundHeightAt(sx, sy) });
       void this.spawnUnit(d, sx, sy, s.owner, s.team).then((simId) => {
         if (simId === null) return;
         const su = world.units.get(simId);

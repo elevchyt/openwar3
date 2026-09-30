@@ -201,6 +201,11 @@ export interface BuffDef {
    * and Impale (`BUim`).
    */
   carrier: BuffFx | null;
+  /** `Effectsoundlooped` — the AbilitySounds LABEL of the bed the buff's effect holds while it
+   *  lasts ("" for most). Read for exactly one kind of buff so far: a summon's TIMED LIFE, which
+   *  is what `[BNto] Effectsoundlooped = TornadoLoop` is (its EditorSuffix is "(Timed Life)") —
+   *  the Tornado's howl (mapViewer `summonLoops`). */
+  loop: string;
   /** `EditorSuffix` — what the World Editor prints after the name to tell two rows with the
    *  SAME name apart. Nearly always cosmetic, and load-bearing for exactly one family: the
    *  buffs that come in an AIR twin and a GROUND twin. Ensnare's `buffid1` is `Bena,Beng` and
@@ -979,6 +984,13 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   Aoar: { target: "passive" }, // Regeneration aura, life (Fountain of Health `ACnr`, Healing Ward)
   Aabr: { target: "passive" }, // Regeneration aura, life (the Marketplace statue) — 0.4% / 700
   Aarm: { target: "passive" }, // Regeneration aura, mana (Fountain of Mana `ANre`)
+  // The TORNADO's three (`[ntor] abilList = Atdg,Atsp,Aasl` once 1.32.6 took Tornado Wander
+  // off it). Passives on the summon, run by the world (SimWorld.tickTornado, AURA_BUFFS `Aasl`)
+  // — and, like the fountains' auras above, dropped at the door unless named here, which left
+  // the Naga Sea Witch's ultimate a harmless unit that could only walk about.
+  Atdg: { target: "passive" }, // Building Damage Aura (Tornado) — 100/s under it, 14/s out to 650
+  Atsp: { target: "passive" }, // Tornado Spin — tosses an enemy ground unit every 3 s
+  Aasl: { target: "passive" }, // Slow Aura (Tornado) — −60% move speed, 600
   Atru: { target: "passive" }, // True Sight — the Shade (`ushd`), Rng1 900
   Adts: { target: "passive" }, // Magic Sentry — the four Human towers, Rng1 900, gated on `Rhse`
   Amim: { target: "passive" }, // Magic Immunity — Dryad, Faerie Dragon, Spirit Walker, nbel
@@ -1358,6 +1370,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       tip: rawTip(s ? str(s, "Buffubertip") : ""),
       fx: buffFxOf(func, id),
       carrier: buffCarrierOf(func, id),
+      loop: f ? str(f, "Effectsoundlooped") : "",
       suffix: s ? str(s, "EditorSuffix") : "",
     });
   }

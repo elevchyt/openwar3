@@ -260,6 +260,9 @@ interface ModelSounds {
    *  looping sound (the builder's hammer, `AREP`) gets both its period and its phase without
    *  the renderer having to watch the instance's frame. See unitAnims.eventCycle. */
   eventTimes: Map<string, number[]>;
+  /** The model's first `Birth` clip, as a model-global [start, end] — null when it has none.
+   *  What playModelBirthSound pairs the events against. */
+  birth: [number, number] | null;
 }
 
 /** A live `sound` handle the script started (StartSound). The nodes arrive a tick late —
@@ -742,6 +745,18 @@ export class SoundBoard {
    * (a carrier: CycloneTarget.mdx fires `SNDXACYB` → "CycloneBirth" → CycloneBirth1.wav on the
    * first frame of Birth, and `SNDXACYD` → CycloneDeath1.wav on the first frame of Death).
    */
+  /**
+   * A model ARRIVING: the ability events parked inside its own Birth clip, and only those —
+   * falling back to playModelSound for a model whose Birth carries none. The Tornado is why:
+   * TornadoElemental.mdx keys `SNDXACYB` (CycloneBirth1.wav) on Birth and `SNDXACYD`
+   * (CycloneDeath1.wav) on Death, and "any A event" drew the Death one for half its summons.
+   */
+  playModelBirthSound(modelArt: string, at?: SoundPos): boolean {
+    const b = modelArt ? this.resolveModelSounds(modelArt).birth : null;
+    if (b && this.playModelEventsIn(modelArt, b[0], b[1], at)) return true;
+    return this.playModelSound(modelArt, at);
+  }
+
   playModelEventsIn(modelArt: string, from: number, to: number, at?: SoundPos): boolean {
     if (!modelArt) return false;
     const ms = this.resolveModelSounds(modelArt);
@@ -860,7 +875,7 @@ export class SoundBoard {
     const key = modelArt.toLowerCase();
     const cached = this.modelSounds.get(key);
     if (cached) return cached;
-    const out: ModelSounds = { attack: [], launch: [], impact: [], ability: [], death: [], abilityByCode: new Map(), eventTimes: new Map() };
+    const out: ModelSounds = { attack: [], launch: [], impact: [], ability: [], death: [], abilityByCode: new Map(), eventTimes: new Map(), birth: null };
     this.modelSounds.set(key, out); // memoize up-front so a missing/broken model isn't re-parsed
     const bytes = this.vfs.rawBytes(modelArt);
     if (!bytes) return out;
@@ -871,6 +886,8 @@ export class SoundBoard {
     } catch {
       return out; // unparseable model — stay silent rather than throw mid-combat
     }
+    const birth = model.sequences.find((q) => /^birth/i.test(q.name));
+    if (birth) out.birth = [birth.interval[0], birth.interval[1]];
     for (const evt of model.eventObjects) {
       // Event-object names are "SND" + a 1-char separator + a 4-char code ("SNDXKRIF").
       if (evt.name.substring(0, 3) !== "SND") continue;
@@ -1074,6 +1091,21 @@ export class SoundBoard {
    *  two fields but ONE howl — the second caster queues behind the first instead of
    *  laying an identical loop over it, and inherits the bed if its own field outlives
    *  the owner's. */
+  /** Carry a playing path loop to a new spot — for a bed whose source WALKS (the Tornado's).
+   *  A no-op for one still decoding or never placed in the world. */
+  movePathLoop(key: string, at: SoundPos): void {
+    const p = this.loopPanners.get(key);
+    if (!p) return;
+    const z = at.z ?? 0;
+    if (p.positionX) {
+      p.positionX.value = at.x;
+      p.positionY.value = at.y;
+      p.positionZ.value = z;
+    } else p.setPosition?.(at.x, at.y, z);
+  }
+  /** The panner each positioned path loop plays through, by its key (movePathLoop). */
+  private readonly loopPanners = new Map<string, PannerNode>();
+
   setPathLoop(key: string, path: string, on: boolean, at?: SoundPos): void {
     if (on) {
       if (this.loops.has(key) || this.loopFile.get(key) === path) return;
@@ -1098,8 +1130,11 @@ export class SoundBoard {
         const src = this.source(buf, clip);
         src.loop = true;
         const g = src.connect(this.gain(clip.gain));
-        if (at && this.listener) g.connect(this.panner(clip, at)).connect(this.master);
-        else g.connect(this.master);
+        if (at && this.listener) {
+          const p = this.panner(clip, at);
+          this.loopPanners.set(key, p);
+          g.connect(p).connect(this.master);
+        } else g.connect(this.master);
         this.loops.set(key, src);
         src.start();
       });
@@ -1108,6 +1143,7 @@ export class SoundBoard {
       // key was playing — or waiting for — is looked up rather than passed in.
       const file = this.loopFile.get(key);
       this.loopFile.delete(key);
+      this.loopPanners.delete(key);
       const src = this.loops.get(key);
       if (src) {
         this.loops.delete(key);

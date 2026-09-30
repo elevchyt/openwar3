@@ -3955,4 +3955,11 @@ export const AURA_BUFFS: Record<string, (lvl: AbilityLevel) => AuraEffect[]> = {
   Aoar: (lvl) => [{ kind: "hpRegen", value: d(lvl, 0, 0.01), pctOfMax: d(lvl, 1, 1) !== 0 }],
   Aabr: (lvl) => [{ kind: "hpRegen", value: d(lvl, 0, 0.004), pctOfMax: d(lvl, 1, 1) !== 0 }],
   Aarm: (lvl) => [{ kind: "manaRegen", value: d(lvl, 0, 0.01), pctOfMax: d(lvl, 1, 1) !== 0 }],
+  // Slow Aura (Tornado) — `Aasl`, on the Tornado the Naga Sea Witch summons. The same columns
+  // as the Slow spell (`AbilityMetaData` useSpecific `Aslo,ACsw,AIos,Aasl`: DataA "Movement
+  // Speed Reduction (%)", DataB "Attack Speed Reduction (%)"), but this row writes the
+  // reduction NEGATIVE — DataA1 = -0.6, DataB1 = 0 — so it is read by its size. `targs1` is
+  // `air,ground,enemy,vuln,invu`: hostile (the world reads the side off the flags), and it
+  // does reach flyers — "Tornado also slows air units, unlike Earthquake" (Liquipedia). 600.
+  Aasl: (lvl) => [{ kind: "slow", value: Math.abs(d(lvl, 0, 0.6)), value2: Math.abs(d(lvl, 1, 0)) }],
 };

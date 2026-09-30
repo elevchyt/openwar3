@@ -47,6 +47,9 @@ import {
 import { perfNow, simProfile } from "./profile";
 import { flyHeight, type MissileFlight } from "./missile";
 import { SPELL_HANDLERS, ITEM_INVULN_GROUP, AURA_BUFFS, SELF_INVIS_GROUP, BLADESTORM_GROUP, FIELD_PIERCES_SPELL_IMMUNITY, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, NO_SUMMON_TARGET, DISPEL_CODES, REPLENISH_BAR, replenishRefusal, survivesDispel, worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, CANNIBALIZE_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
+/** The buff group a Tornado's toss is applied under — both halves, so the invulnerability's wipe
+ *  spares the stun it came with (clearStatusForInvulnerable). See tickTornado. */
+const TORNADO_SPIN_GROUP = "tornadoSpin";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -2230,6 +2233,15 @@ export interface SimUnit {
    *  Immolation's so the two clocks cannot interfere (they never run together anyway: the
    *  cloak stands down while its wearer is alight — see tickCarriedItems). */
   cloakBurnTick: number;
+  /** A TORNADO's two clocks (`ntor`, tickTornado): seconds toward its next once-a-second burn of
+   *  the buildings around it (`Atdg`), and toward its next toss (`Atsp` DataB "Minimum
+   *  Interval"). 0 on everything that is not carrying those abilities. */
+  tornadoBurnTick: number;
+  tornadoSpinTick: number;
+  /** Seconds before a Tornado may toss THIS unit again — `Atsp` DataA (22), set on the unit it
+   *  tosses. Liquipedia's Tornado notes: "Tornado cyclones a particular unit once every 22
+   *  seconds". Counts down on every unit, 0 when free to be caught. */
+  spinCooldown: number;
   /** GOBLIN LAND MINE (`Amin`, "Mine - exploding"): seconds this mine has been in the
    *  ground. It measures the ability's own `Min1` "Activation Delay" (DataA = 10) — the
    *  window in which a freshly-placed mine is inert and can simply be shot — and nothing
@@ -8103,6 +8115,79 @@ export class SimWorld {
   }
 
   /**
+   * THE TORNADO (`ntor`, summoned by the Naga Sea Witch's `ANto`). A unit like any other — it
+   * walks where its owner sends it, holds, patrols — with no weapon (`UnitWeapons weapsOn` 0,
+   * so its card has no Attack) and three abilities that do everything it does
+   * (`UnitAbilities abilList` Atdg,Atsp,Aasl; 1.32.6 took `Atwa` Tornado Wander off it, which
+   * is why it no longer drifts about on its own — src/patches/data/1.32.6.json). The slow is an
+   * ordinary aura (spells.ts AURA_BUFFS `Aasl`); the other two are clocks, and they are here.
+   *
+   * **Building Damage Aura** (`Atdg`, targs `structure,enemy`). Its columns, by their World
+   * Editor labels (`WESTRING_AEVAL_TDG1..5`, read off the zhCN strings — docs/REFERENCES.md):
+   * DataA "Damage per Second" out to `Area1` (650), DataB/DataC a "Medium Radius" and its damage
+   * per second (125 / 100 after 1.32.6), DataD/DataE a "Small Radius" and its (0 / 0). Liquipedia
+   * says the same thing in words: "100 damage per second to buildings under it, and 14 damage
+   * per second to buildings in its general vicinity". The innermost ring a building's edge is in
+   * sets its rate; paid once a second.
+   *
+   * **Tornado Spin** (`Atsp`, targs `ground,enemy`). DataB "Minimum Interval" (3) is how often
+   * it tosses, DataA (22 — `TSP1`, labelled "air time") how long before the SAME unit can be
+   * tossed again: Liquipedia, "Tornado tosses units every 3 seconds, and the toss lasts for 12
+   * seconds. Tornado cyclones a particular unit once every 22 seconds." Which one is RANDOM
+   * among the enemy ground units inside `Area1` (275) — "randomly tosses enemy ground units into
+   * the air". The toss is a Cyclone: stunned and untouchable for Dur1 (12) / HeroDur1 (6), and
+   * drawn the same way, the unit's body riding its buff's carrier (`[Btsp] Effectart =
+   * TornadoElementalSmall.mdl`, `Effectattach = sprite,first` — a half-size CycloneTarget).
+   */
+  private tickTornado(u: SimUnit, dt: number): void {
+    if (u.spinCooldown > 0) u.spinCooldown -= dt;
+    if (u.hp <= 0 || !u.abilities.length) return;
+    const burn = this.findAbility(u, "Atdg");
+    const burnDef = burn && this.abilityDefOf(burn);
+    const burnLvl = burnDef?.levelData[Math.min(burn!.level, burnDef.levelData.length) - 1];
+    if (burnDef && burnLvl) {
+      u.tornadoBurnTick += dt;
+      if (u.tornadoBurnTick >= 1) {
+        u.tornadoBurnTick -= 1;
+        const small = this.dataOf(burnLvl, 3, 0), medium = this.dataOf(burnLvl, 1, 125);
+        for (const t of this.unitsInAreaInternal(u.x, u.y, burnLvl.area || 650)) {
+          if (!t.building || t.invulnerable || !this.hostile(u, t) || !this.targsAdmit(t, burnDef.targetFlags)) continue;
+          const edge = Math.max(0, Math.hypot(t.x - u.x, t.y - u.y) - t.radius);
+          const dps = small > 0 && edge <= small ? this.dataOf(burnLvl, 4, 0)
+            : medium > 0 && edge <= medium ? this.dataOf(burnLvl, 2, 100)
+            : this.dataOf(burnLvl, 0, 14);
+          if (dps > 0) this.landDamage(t, dps, u.id, false);
+        }
+      }
+    }
+    const spin = this.findAbility(u, "Atsp");
+    const spinDef = spin && this.abilityDefOf(spin);
+    const spinLvl = spinDef?.levelData[Math.min(spin!.level, spinDef.levelData.length) - 1];
+    if (!spinDef || !spinLvl) return;
+    const interval = this.dataOf(spinLvl, 1, 3);
+    u.tornadoSpinTick += dt;
+    if (u.tornadoSpinTick < interval) return;
+    const caught = this.unitsInAreaInternal(u.x, u.y, spinLvl.area || 275).filter((t) =>
+      t !== u && !t.building && !t.flying && !t.invulnerable && !(t.spinCooldown > 0) &&
+      this.hostile(u, t) && this.targsAdmit(t, spinDef.targetFlags));
+    // Nobody to toss: the interval has run, so the first to walk in is caught at once.
+    if (!caught.length) {
+      u.tornadoSpinTick = interval;
+      return;
+    }
+    u.tornadoSpinTick = 0;
+    const t = caught[Math.floor(this.rng() * caught.length)];
+    t.spinCooldown = this.dataOf(spinLvl, 0, 22);
+    const time = (t.isHero ? spinLvl.heroDuration : spinLvl.duration) || spinLvl.duration || 12;
+    const buffId = spinLvl.buffs[0] ?? "";
+    const carrier = buffId ? (this.abilities?.buffCarrier?.(buffId) ?? null) : null;
+    this.provoke(t, u.id);
+    this.applyBuffInternal(t, { kind: "stun", group: TORNADO_SPIN_GROUP, timeLeft: time, sourceId: u.id, buffId, art: "", fx: carrier ? [carrier] : [] });
+    this.applyBuffInternal(t, { kind: "invuln", group: TORNADO_SPIN_GROUP, timeLeft: time, sourceId: u.id, buffId });
+    this.recomputeStats(t);
+  }
+
+  /**
    * The two carried items that need a CLOCK rather than a stat (issue #130) — everything
    * else an item grants passively is derived in recomputeStats and needs nothing here.
    *
@@ -8738,6 +8823,9 @@ export class SimWorld {
       | "immolation"
       | "immolationTick"
       | "cloakBurnTick"
+      | "tornadoBurnTick"
+      | "tornadoSpinTick"
+      | "spinCooldown"
       | "mineAge"
       | "spellShieldCooldown"
       | "voodooLeft"
@@ -9023,6 +9111,9 @@ export class SimWorld {
       immolation: "",
       immolationTick: 0,
       cloakBurnTick: 0,
+      tornadoBurnTick: 0,
+      tornadoSpinTick: 0,
+      spinCooldown: 0,
       mineAge: 0, // a mine counts its own arming delay (tickMine)
       spellShieldCooldown: 0,
       voodooLeft: 0,
@@ -18194,6 +18285,7 @@ export class SimWorld {
       this.tickVoodoo(u, dt); // …and Big Bad Voodoo renews its circle for as long as the ritual holds
       this.tickExhume(u, dt); // …and a Meat Wagon with the upgrade grows its own bodies
       this.tickCarriedItems(u, dt); // …and an Amulet of Spell Shield regrowing its shield
+      this.tickTornado(u, dt); // …and a Tornado battering buildings and tossing whoever it passes over
       this.tickMine(u, dt); // …and a Goblin Land Mine hiding itself, arming, and going off
       this.recomputeStats(u); // derive armour/speed/damage/regen/stun/invuln
       this.tickRegen(u, dt); // mana + (hero) hp regeneration

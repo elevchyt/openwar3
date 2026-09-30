@@ -134,8 +134,8 @@ exactly the rows whose `Effectart` comes with a `sprite,first` attach (`buffCarr
 
 No unit model has a "Sprite First Ref"; the EFFECT does. That is what gives the shape away, and
 why this `Effectart` is not the usual end-of-buff one (`buffEffectArt`, an unsummon).
-**Cyclone** and **Impale** are wired to it (spells.ts `Acyc` / `AUim` add the carrier to a
-stun's `fx`); Tornado's spin is the same mechanism waiting for a handler to ask.
+**Cyclone**, **Impale** and the **Tornado**'s spin are wired to it (spells.ts `Acyc` / `AUim`,
+SimWorld.tickTornado — each adds the carrier to a stun's `fx`).
 
 `CycloneTarget.mdx`, parsed out of the install, is the whole of what a cycloned unit does on
 screen: `Sprite First Ref` hangs off `dummy move` (the lift — 0 → 440 through Birth, bobbing
@@ -193,6 +193,19 @@ one-shots). The model is ONE Birth clip [2233, 3600]: `dummy move` throws `Sprit
   `landSound`); and the CAST sounds `Units\Undead\HeroCryptLord\Impale.wav` — a file no SoundInfo
   row names — IN PLACE OF the Crypt Lord's `SNDxAUIM` (which is that same ImpaleLaunch1.wav, now
   each victim's): `CAST_SOUND_FILES`, ahead of every other rung of the cast-sound chain.
+
+The **Tornado** (`ntor`, the Naga Sea Witch's `ANto`) is a UNIT that carries the third one: it walks
+where its owner sends it (1.32.6 took `Atwa` Tornado Wander off it — src/patches/data/1.32.6.json),
+has no weapon (`weapsOn` 0, so no Attack on its card), and its three passives are all it does —
+`Atdg` batters enemy buildings (100/s within 125, 14/s out to 650), `Aasl` slows everything
+hostile within 600, and `Atsp` tosses one random enemy ground unit inside 275 every 3 s (DataB),
+the same unit at most once every 22 s (DataA, `SimUnit.spinCooldown`), for 12 s (heroes 6). The
+toss is a Cyclone in every respect and rides `[Btsp] Effectart = TornadoElementalSmall.mdl`, a
+half-size copy of the Cyclone's funnel (lift 220–290, landing at the same frame 18233). The
+three rows are only SEATED because `KNOWN_ABILITIES` names them — without that the summon was a
+harmless unit that walked about. Its howl is its summoning ability's timed-life buff (`[BNto]
+Effectsoundlooped = TornadoLoop`, mapViewer `updateSummonLoops`), carried along as it moves
+(`SoundBoard.movePathLoop`). See `tools/sim-tornado-test.cjs`.
 
 A trap that made Cyclone do nothing at all for a long time, and that is not art: becoming
 invulnerable wipes a unit's buffs (`clearStatusForInvulnerable`, the Divine Shield rule), and
