@@ -980,7 +980,8 @@ function shopped(units, profile, opts = {}) {
     // WHOSE list this is: `RACE_FIRST` gives the orc two Healing Salves before anything else,
     // and every other race shops off `LIST` alone.
   }, profile, opts.race ?? "human");
-  const ctx = { home: { x: 0, y: 0 }, losing: false, mayShop: opts.mayShop ?? true, mayDetour: opts.mayDetour ?? false, portalWorthIt: true };
+  const ctx = { home: { x: 0, y: 0 }, losing: false, mayShop: opts.mayShop ?? true, mayDetour: opts.mayDetour ?? false, portalWorthIt: true,
+    defending: opts.defending ?? false, tier: opts.tier ?? 1 };
   items.pass(opts.now ?? 500, ctx);
   // A SECOND pass on the SAME belt, for the rules that are about what this player has already
   // had rather than about what it is holding — `PlusItems.hadPortal` is the only one today.
@@ -1095,6 +1096,36 @@ const spend = (h, id) => { const i = h.inventory.findIndex((s) => s?.itemId === 
   const h = hero();
   const r = shopped([h, MERCHANT], PLUS_INSANE, { inRange: false, mayShop: false });
   check("…and not while there is a wave in the field", !r.move && !r.buy, true);
+}
+// A POTION OF HEALING FOR THE DEFENCE (`PlusItems.defenceChance`). The developer: "when a
+// Computer+ AI's base is under attack, and that player has a shop built AND is at least tier 2,
+// he should buy a potion of healing to hold in case his hero's health drops low".
+{
+  const VAULT = () => unit({ owner: 0, typeId: "hvlt", x: 600, y: 0, building: { constructionLeft: 0, stock: null } });
+  const VAULT_WARES = ["sreg", "mcri", "plcl", "phea", "pman", "stwp", "tsct", "ofir", "ssan"]; // [hvlt]
+  const def = { defending: true, tier: 2, mayShop: false, shelf: VAULT_WARES, gold: 300 };
+  check("under attack at tier 2 with our own shop: a Potion of Healing, ahead of the scroll",
+    shopped([hero(), VAULT()], PLUS_NORMAL, def).buy?.itemId, "phea");
+  check("…not at tier 1", shopped([hero(), VAULT()], PLUS_NORMAL, { ...def, tier: 1 }).buy?.itemId === "phea", false);
+  check("…not with no shop of our own (only a Merchant)",
+    shopped([hero(), MERCHANT], PLUS_NORMAL, { ...def, shelf: undefined }).buy?.itemId === "phea", false);
+  const building = unit({ owner: 0, typeId: "hvlt", x: 600, y: 0, building: { constructionLeft: 20, stock: null } });
+  check("…nor with it still going up", shopped([hero(), building], PLUS_NORMAL, def).buy?.itemId === "phea", false);
+  check("…not when nothing is attacking the base",
+    shopped([hero(), VAULT()], PLUS_NORMAL, { ...def, defending: false }).buy?.itemId === "phea", false);
+  check("…and ONE is enough", shopped([belt(hero(), "phea"), VAULT()], PLUS_NORMAL, def).buy?.itemId === "phea", false);
+  check("…nor on Easy, which shops for nothing", shopped([hero(), VAULT()], PLUS_EASY, def).buy, null);
+  // Out of the shop's reach: the hero runs over for it, in combat or not — it is our own shop, in
+  // the town it is defending — and the army leaves the errand alone (`items.errand`).
+  const fighting = hero({ inCombat: true });
+  const r = shopped([fighting, VAULT()], PLUS_NORMAL, { ...def, inRange: false });
+  check("…out of reach, a hero in the fight walks to the shop for it",
+    !!r.move && r.move.order.x === 600 && r.errand === fighting.id, true);
+  const far = unit({ owner: 0, typeId: "hvlt", x: 3000, y: 0, building: { constructionLeft: 0, stock: null } });
+  check("…but not from across the map", shopped([hero(), far], PLUS_NORMAL, { ...def, inRange: false }).move, null);
+  // The shelf's own clock still rules: `[phea] stockStart` is 440, so before 7:20 there is none.
+  check("…and not while the shelf has none",
+    shopped([hero(), VAULT()], PLUS_NORMAL, { ...def, soldOut: ["phea"] }).buy?.itemId === "phea", false);
 }
 // A MISSING TOWN PORTAL IS BOUGHT WHEREVER THE CHANCE COMES (`PlusItems.portalChance`).
 // Reported: the AI "seems to not want to re-buy Scroll of Town Portal if it doesn't have one".

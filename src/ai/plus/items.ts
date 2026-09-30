@@ -681,6 +681,13 @@ const SHOP_REACH = 5000;
  */
 const PORTAL_DETOUR = 2000;
 
+/** The Potion of Healing a defence buys (`defenceChance`) — `[phea]`, on all four race shops. */
+const DEFENCE_POTION = "phea";
+/** …and how far a hero defending the base will walk for it. About a base's width: the shop is
+ *  ours and in the town, and a hero further than this from it is not defending the same place.
+ *  OURS. */
+const DEFENCE_SHOP_WALK = 1600;
+
 /**
  * Gold above `itemReserve` at which the shopping stops being careful — see `RICH`.
  *
@@ -846,6 +853,11 @@ export interface ItemCtx {
    *  whenever the party is mustering, in the field as much as at home — a wider door than
    *  `mayShop`, for the one item worth it. Absent means no. */
   mayDetour?: boolean;
+  /** Is our base UNDER ATTACK — the army manager's own `defending`? See `defenceChance`.
+   *  Absent means no. */
+  defending?: boolean;
+  /** The highest hall tier standing (1/2/3) — `defenceChance` asks for the second. */
+  tier?: number;
 }
 
 /** One computer player's inventory: what it buys, and when it presses it. */
@@ -911,6 +923,10 @@ export class PlusItems {
     // THE LATCH (`hadPortal`, see `list`) is read by every buying branch below, so it is set
     // before any of them can return — `fightChance` acting first used to leave it unset.
     if (!this.hadPortal && this.carried(own, PORTAL.id) > 0) this.hadPortal = true;
+    // THE BASE IS UNDER ATTACK and there is no Potion of Healing in the belt — see
+    // `defenceChance`. Ahead of the Town Portal: the army is home already, and the potion is what
+    // keeps the hero standing in the fight that is happening.
+    if (this.defenceChance(now, own, ctx)) return;
     // A missing Town Portal first, and on the BELT's clock rather than the shop's: a hero walking
     // past a Goblin Merchant is in its range for a second or two, and a five-second look misses it.
     if (this.portalChance(now, own, ctx)) return;
@@ -1935,6 +1951,37 @@ export class PlusItems {
   }
 
   /**
+   * A POTION OF HEALING FOR THE DEFENCE — the developer's *"when a Computer+ AI's base is under
+   * attack, and that player has a shop built AND is at least tier 2, he should buy a potion of
+   * healing to hold in case his hero's health drops low"*.
+   *
+   * The ordinary trip cannot: `mayShop` is false while defending, on purpose, because a hero
+   * sent off on a shopping list mid-defence is a hero out of the fight. This is ONE item and the
+   * shop is IN the base, so it is the same errand as the field's Town Portal detour
+   * (`itemChance`) with a shorter leash, `DEFENCE_SHOP_WALK`, and without its "not while in
+   * combat" clause — the fight is the whole reason for the potion, and a player under attack
+   * runs the hero to the shop and back. Bought, it is only HELD: `press` drinks it at the same
+   * bar as any other Potion of Healing.
+   *
+   *  · OUR OWN race shop, finished (`[hvlt]`/`[ovln]`/`[eden]`/`[utom]` all stock `phea`) —
+   *    "has a shop built". A Goblin Merchant in reach still sells it once that holds.
+   *  · The second tier STANDING (`ItemCtx.tier`).
+   *  · One potion carried by any hero is enough; `share` hands a spare across.
+   *  · `shopping` > 0, so Easy — which never shops at all — stays out of it.
+   *
+   * The shelf's own clock still applies (`[phea] stockStart` = 440, 7:20): before it there is
+   * nothing to buy, exactly as there is not for a player.
+   */
+  private defenceChance(now: number, own: SimUnit[], ctx: ItemCtx): boolean {
+    if (!ctx.defending || (ctx.tier ?? 0) < 2 || this.profile.shopping <= 0) return false;
+    if (this.carried(own, DEFENCE_POTION) > 0) return false;
+    const shop = own.some((u) => u.building && u.building.constructionLeft <= 0
+      && this.view.wares(u.typeId).includes(DEFENCE_POTION));
+    if (!shop) return false;
+    return this.itemChance(now, own, { ...ctx, mayDetour: true }, DEFENCE_POTION, DEFENCE_SHOP_WALK, true);
+  }
+
+  /**
    * `portalChance` for the `FIGHT` items: a missing Scroll of Healing or Potion of Lesser
    * Invulnerability is bought wherever a hero stands in a shop's range, and fetched on the field
    * detour, exactly as a missing scroll is. Only once the portal is carried — the portal outranks
@@ -1953,8 +2000,9 @@ export class PlusItems {
 
   /** Buy `itemId` for our first hero with room if one is standing in range of a shop that sells
    *  it, else walk that hero there on the field detour (`PORTAL_DETOUR`, `ItemCtx.mayDetour`).
-   *  Out of the whole purse. Answers whether it acted. */
-  private itemChance(now: number, own: SimUnit[], ctx: ItemCtx, itemId: string): boolean {
+   *  Out of the whole purse. Answers whether it acted. `leash` and `inFight` are the defence's
+   *  (`defenceChance`): a shorter walk, taken even by a hero in combat. */
+  private itemChance(now: number, own: SimUnit[], ctx: ItemCtx, itemId: string, leash = PORTAL_DETOUR, inFight = false): boolean {
     const def = this.view.item(itemId);
     if (!def || def.gold > this.view.gold()) return false;
     // The FIRST hero where it can be: the highest level (which is nearly always the first one
@@ -1986,9 +2034,9 @@ export class PlusItems {
     const hero = heroes[0];
     // Already on its way: leave it walking (re-ordered on the throttle, in case it was bumped).
     if (this.onErrand && this.onErrand !== hero.id) return false;
-    if (hero.inCombat) return false;
+    if (hero.inCombat && !inFight) return false;
     let near: SimUnit | null = null;
-    let best = PORTAL_DETOUR;
+    let best = leash;
     for (const shop of shops) {
       const d = Math.hypot(shop.x - hero.x, shop.y - hero.y);
       if (d <= best) {

@@ -877,25 +877,41 @@ within `EXP_CAMP_REACH` of whatever `expansionFoe` names — priced (`maxCampLev
 (`campAim`) like any other, and only when the foe is a CREEP (an enemy army on the rock is a wave's
 business) — and falls back to nearest-first when it cannot have it.
 
-#### …and a WON FIGHT is when the next mine is taken
+#### …and a WON FIGHT is when the next mine is taken — a quarter of the time
 
 The developer's second half of the same report: expand *"when it gets the chance — notably after
 winning a fight (the enemy army teleported out, fled or was wiped)"*. `ComputerPlusAi.victoryPass`
 watches every army pass for contact with a PLAYER's army (the `contactPass` frame and filter —
 no creeps, workers, buildings, illusions or fogged bodies) whose power reached `WON_MIN_SHARE`
-(¼) of ours, and records `Brain.wonAt` when that contact has been gone `WON_QUIET` (6 s) while we
+(¼) of ours, and calls the fight WON when that contact has been gone `WON_QUIET` (6 s) while we
 are not retreating, our anchor still stands within `CONTACT_LOOK` of where their army was last
 seen (we HOLD THE FIELD — contact also ends when we leave, and the first live run had a night elf
 "win" a fight its hero had just Town-Portalled out of), at least `WON_KEEP` (½) of the power we
 brought into it is still standing (the same army came out of the human's base with three units of
-twelve, healthy ones) and what is left holds `WON_HEALTH` (40 %) of its hit points. For `WON_EXPAND_WINDOW`
+twelve, healthy ones) and what is left holds `WON_HEALTH` (40 %) of its hit points.
+
+What the win is SPENT on is a roll (`rollWin` → `winPlan`), once per fight, at the developer's
+odds: **expand 25 %, carry on 35 %, attack the loser's base 10 % before 7:30 (`WIN_LATE`) and 40 %
+after**. Before 7:30 the three leave 30 % over and that is carrying on too — the two numbers stated
+for expanding and attacking are kept exactly and the rest is the default. Winning used to mean
+attacking every time (see the push below), which is exactly what a ladder player does NOT always
+do with a won fight. An expansion the player could not take (`expansionOpen`: Easy, its ceiling
+reached, before `TIER2_CLOCK`) is carrying on instead. *Carry on* is nothing special — the wave
+ends as it would have and the army goes back to creeping and its own clocks.
+
+*Expand* (`expandOnWin`) does two things. It records `Brain.wonAt`, and for `WON_EXPAND_WINDOW`
 (90 s) after it, from `TIER2_CLOCK` on, plus/plan.ts `wonExpansion` lifts the build's expansion
 clock AND moves the expansion row up from the bottom of the ladder to just under the core army —
 a clock that opens does nothing for a row the loop never reaches. One row either way (a doubled row
 reserves twice), every race, and every other gate still stands (`expansions`, so Easy never; never
 while threatened; `startExpansion`'s mine, price and camp). On the ladder fixture a fight won at
 4:00 brings a Normal night elf's first expansion from 672–806 s to 246 s, at a cost of 28–46 s on
-its tier 2.
+its tier 2. And it sends the ARMY, straight from the field, at whatever is sitting on that mine
+(`nextExpansion` claims the town exactly as the build row would a pass later, and
+`AiPlayer.townGuarded` names the camp) — `pickTarget`'s rung 0, taken now rather than whenever the
+ladder next sets `takeExp` and a later wave reaches it, and refused for the same reasons (a mine
+the party cannot walk to or has written off, an army under `WON_HEALTH`, a party already
+creeping).
 
 ### The last resort: a captain that has stopped moving takes the party home
 
@@ -1169,7 +1185,10 @@ the invader, so `nearestHall` lands the army at the besieged town, expansion or 
 number but the 2200 is ours. Verified live on Echo Isles: a Paladin 5,300 units out gathered a
 scattered squad, read the scroll 2.6 s later and landed with it beside the raided Town Hall.
 
-### A won fight is the start of a PUSH, not the end of a wave
+### A won fight MAY be the start of a PUSH, not the end of a wave
+
+Since the won-fight roll (above) this is one of three answers, taken when the roll says
+*attack* — 10 % of wins before 7:30 and 40 % after. Everything below is what that answer does.
 
 Reported: *"when the enemy heroes are dead, the Computer+ AI that won the fight must attack their
 enemy's base"*. It did not, and the reason was the wave's own ending: a fight met in the field is
@@ -1184,12 +1203,14 @@ frame — a hero that walked out of sight and died elsewhere is not a fact this 
 things start the push (`pressOn`), and both hand the army straight to the loser's base:
 
 * **Their heroes are all down** (`heroesDown`) while what is left of their army weighs less than
-  ours — once per fight, and without waiting `WON_QUIET`. If the army is still aimed at the
+  ours — once per fight, and without waiting `WON_QUIET`. This is where the roll is taken if the
+  verdict has not taken it yet; *expand* and *carry on* then wait for the verdict, since neither
+  means anything with their army still standing in front of ours. If the army is still aimed at the
   field fight the press is only ARMED: the stragglers are finished first and `objectiveDone` then
   carries the army on to the base. Re-aiming at the base mid-fight was tried and taken back out —
   `contactPass` aimed it back at the stragglers the next pass, and the two flipped the objective
   every half-second, re-pathing the whole army each time until the stall watchdog wrote it off.
-* **The fight is won** by the existing verdict (`wonAt`).
+* **The fight is won** by the existing verdict.
 
 The loser is the owner of most of the heroes it brought (`pressFoe`), and the base is chosen by
 `baseTarget` below. `Brain.press` stays up `PRESS_WINDOW` (60 s — about a hero's revive), during
@@ -1559,8 +1580,8 @@ list **and returns at the first unit row it cannot afford**:
 
 > **gold crew** → **forest crew** → *(undead: haunt the mine)* → hall → food → **altar** →
 > **first hero** → barracks → the rest of the workers → **shop** → **core army** →
-> **tier 2, from 3:00** → tech buildings → **upgrades** → always → **expansion** → extra heroes →
-> tier → towers → **the rest of the army**
+> **tier 2, from 3:00** → **first tower** → tech buildings → **upgrades** → always → **expansion** →
+> extra heroes → tier → towers → **the rest of the army**
 
 Seven of those positions were moved after a live match said so, and each is worth stating:
 
@@ -1662,6 +1683,21 @@ is met — so a tier-1 base buys the Arcane Tower now and the Guard Towers when 
 lands. The base row is unchanged and asks in the folded count (a Guard Tower *is* a Scout Tower
 to `TownCount`), so an upgrade never makes it ask for another Scout Tower. Pinned in
 [`tools/ai-plus-ladder-test.cjs`](../tools/ai-plus-ladder-test.cjs).
+
+### At least one tower, on Normal and Insane
+
+The developer: *"for Normal and Insane difficulty, make the Computer+ AI get at least one tower"*
+— an Arcane Tower, a Watch Tower, a Spirit Tower, an Ancient Protector. `towers` asked for them all
+along, from the very bottom of the ladder and only from `TOWER_CLOCK` (8:00), under the tier-up,
+the extra heroes and the expansion — every one a row that halts the loop while it saves. The
+ten-minute ladder fixture (which now pays for the main's towers rather than ignoring them) found
+exactly ONE of the 42 Normal/Insane runs with a tower by 10:00. `firstTower` lifts the main's first
+one to just under the tier-2 row, gated on the second tier STANDING (or a threat) and on the
+tower's own `Requires` (`[owtw]` a War Mill, `[uzg1]` a Graveyard, `[etrp]` a Hunter's Hall — all
+support rows above it), and for the human the Scout Tower then becomes its Arcane Tower. Measured:
+every run has one — 6:30–8:20 for most, the two lumber-starved undead tier-3 builds at ~11:00 —
+with tier 2 unchanged to the second and the build's power-spike building 0–30 s later (one
+outlier, an Insane chimaera night elf, 76 s).
 
 ### The food headroom is the SUPPLY BUILDING's, not a Farm's
 
@@ -3401,6 +3437,23 @@ gold `OneBuildLoop` was going to spend. A floor is the only way a separate pass 
 the build ladder first call: the shop sees the surplus and nothing else. It is not a rung in the
 ladder and does not pretend to be one. The one exception is the race's opening buy, above, and it
 is an exception for a stated reason rather than a leak.
+
+#### …and a Potion of Healing when the BASE is under attack (`defenceChance`)
+
+The developer: *"when a Computer+ AI's base is under attack, and that player has a shop built AND
+is at least tier 2, he should buy a potion of healing to hold in case his hero's health drops
+low"*. The ordinary trip cannot — `mayShop` is false while defending, on purpose, since a hero sent
+off on a shopping LIST mid-defence is a hero out of the fight. This is one item from a shop that
+is in the town being defended, so it is `itemChance` — the Town Portal's own "buy it where you
+stand, else step over for it" — with a shorter leash (`DEFENCE_SHOP_WALK`, 1600) and WITHOUT the
+detour's "not while in combat" clause: the fight is the whole reason for the potion. The army's
+`commit` skips a hero on a shop errand (as `massing` always did), or `defendPass` re-committing
+every pass would turn it round short of the shop. Gated on `ItemCtx.defending` (the army
+manager's own `defending` mode), `ItemCtx.tier` ≥ 2, a FINISHED shop of ours whose wares list
+`phea` (all four race shops do), no Potion of Healing already carried by any hero, and
+`shopping` > 0 (so not Easy). It runs ahead of the Town Portal: the army is home already. Bought,
+it is only HELD — `press` drinks it at the same bar as any Potion of Healing. The shelf's own
+clock still rules: `[phea] stockStart` is 440, so before 7:20 there is nothing to buy.
 
 #### …and when the gold is just SITTING there (`RICH`, `SURPLUS`)
 

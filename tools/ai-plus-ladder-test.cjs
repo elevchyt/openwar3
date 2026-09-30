@@ -395,6 +395,44 @@ for (const [race, table] of Object.entries(PLUS_RACES)) {
   check(`${race}: …and Easy still never expands`, easy.build.some((x) => x.kind === "expand"), false);
 }
 
+// --- at least one tower, on Normal and Insane ------------------------------------------------
+//
+// The developer: "for Normal and Insane difficulty, make the Computer+ AI get at least one tower".
+// `towers` sits at the very bottom of the ladder and waits for `TOWER_CLOCK`, under every row that
+// halts it; `firstTower` asks for the main's first one just under the tier-2 row once the second
+// tier stands — and for the human, the Scout Tower's Arcane Tower.
+console.log("\n--- at least one tower on Normal and Insane ---");
+for (const [race, table] of Object.entries(PLUS_RACES)) {
+  const strategy = table.strategies[0];
+  const standing = { [table.halls[0]]: 1, [table.halls[1]]: 1, [table.altar]: 1, [table.barracks]: 1 };
+  for (const [name, profile] of [["Normal", PLUS_NORMAL], ["Insane", PLUS_INSANE]]) {
+    // Tier 2 standing, well before `TOWER_CLOCK`, nothing in the base.
+    const r = recorder(table, strategy, profile, { standing, clock: 300, tier: 2, armyFood: 20 });
+    buildPlan(r.ctx);
+    const at = r.build.findIndex((x) => x.item === table.tower && x.town === 0);
+    check(`${race} (${name}) asks for a ${table.tower} at tier 2`, at >= 0 && r.build[at].qty >= 1, true);
+    const armyAt = r.build.findLastIndex((x) => x.kind === "unit" && x.item !== table.tower);
+    check(`${race} (${name}): …above the bottom of the ladder`, at >= 0 && at < armyAt, true);
+    // …not while the opening's gold is still the hero's, the army's and the Keep's.
+    const t1 = recorder(table, strategy, profile, { standing: { ...standing, [table.halls[1]]: 0 }, clock: 300, tier: 1, armyFood: 20 });
+    buildPlan(t1.ctx);
+    check(`${race} (${name}): …and none at tier 1`, t1.build.some((x) => x.item === table.tower), false);
+    // …nor while its own `Requires` is unmet — the row would halt the ladder for nothing.
+    const barred = recorder(table, strategy, profile, { standing, clock: 300, tier: 2, armyFood: 20, meets: (id) => id !== table.tower });
+    buildPlan(barred.ctx);
+    check(`${race} (${name}): …nor before its Requires`, barred.build.some((x) => x.item === table.tower), false);
+    if (table.towerUpgrades) {
+      const up = table.towerUpgrades[0].id;
+      const raised = recorder(table, strategy, profile, { standing: { ...standing, [table.tower]: 1 }, clock: 300, tier: 2, armyFood: 20 });
+      buildPlan(raised.ctx);
+      check(`${race} (${name}): the standing tower becomes a ${up}`, raised.build.some((x) => x.item === up && x.town === 0), true);
+    }
+  }
+  const easy = recorder(table, strategy, PLUS_EASY, { standing, clock: 300, tier: 2, armyFood: 20 });
+  buildPlan(easy.ctx);
+  check(`${race} (Easy): no tower at all`, easy.build.some((x) => x.item === table.tower), false);
+}
+
 // --- a missing Town Portal is saved for below the opening ---------------------------------
 //
 // `PlusItems.portalSaving` hands the plan the scroll's price; the plan spends it as a RESERVE row
@@ -802,7 +840,11 @@ function runEconomy() {
       // …and when the FIRST expansion was founded (the row reached and paid for) — printed so a
       // race that "rarely expands" shows up as a column rather than as a feeling.
       expandAt: Infinity,
+      // …and when the first TOWER stood (plan.ts `firstTower`): the race's tower or what it
+      // becomes.
+      towerAt: Infinity,
     };
+    const towerIds = [table.tower, ...(table.towerUpgrades ?? []).map((u) => u.id)];
     const alive = (id) => S.units[id] ?? 0;
     const of = (id) => S.bldgs.filter((b) => b.type === id);
     const jobs = () => S.bldgs.map((b) => b.job).filter(Boolean);
@@ -838,7 +880,10 @@ function runEconomy() {
       secondaryTown: (t, q, item) => { if (q > 0 && known(item)) list.push({ type: "u", qty: q, item }) },
       basicExpansion: (go, hall) => { if (go && townCount(hall) === townCountDone(hall)) ai.setBuildExpa(townCount(hall) + 1, hall) },
       meleeTownHall: () => {},
-      guardSecondary: () => {},
+      // The MAIN's towers only: the run has one base, and `secondaryTown` here is priced against
+      // the global count — an expansion's tower row would read the main's as its own. The main's
+      // are what `firstTower` asks for, and paying for them is what keeps its timing honest.
+      guardSecondary: (t, q, item) => { if (t === 0) ai.secondaryTown(t, q, item) },
       buildFactory: (item) => ai.setBuildUnit(1, item),
       count: countRaw, countDone: doneRaw, townCountDone, townCountTotal: () => S.mines,
       // One town's worth is the whole model here — the run has one base — so a per-town count
@@ -1049,6 +1094,7 @@ function runEconomy() {
       }
       if (S.tier2At === Infinity && doneRaw(table.halls[1]) > 0) S.tier2At = S.t;
       if (S.spikeAt === Infinity && spike && doneRaw(spike) > 0) S.spikeAt = S.t;
+      if (S.towerAt === Infinity && towerIds.some((id) => doneRaw(id) > 0)) S.towerAt = S.t;
       S.t += DT;
     }
     return {
@@ -1065,6 +1111,7 @@ function runEconomy() {
       tierHaltShare: S.tierHaltsEarly / Math.max(1, S.passesEarly),
       tier2At: Math.round(S.tier2At), spike, spikeAt: Math.round(S.spikeAt),
       expandAt: Math.round(S.expandAt),
+      towerAt: Math.round(S.towerAt),
       back,
       foodCap: ai.foodCap(), foodUsed: ai.foodUsed(),
       foreign: [...foreign],
@@ -1126,6 +1173,7 @@ function runEconomy() {
           + (r.spike ? ` ${r.spike}@${String(r.spikeAt).padStart(3)}s` : "")
           + ` siege=${r.siege}`
           + ` expand@${String(r.expandAt).padStart(3)}s`
+          + ` tower@${String(r.towerAt).padStart(3)}s`
           + ` openingStuckOnTier=${Math.round(r.tierHaltShare * 100)}%`);
         check(`${EDITION} ${name} ${race}/${s.id} asks for nothing this edition lacks`, r.foreign.join(","), "");
         if (name !== "NORM") continue;
@@ -1151,6 +1199,11 @@ function runEconomy() {
         // see `tierTwoHero`, which is the row that made this true: below the expansion, the
         // second hero was reached only in the moments the AI happened to be rich.
         check(`${race}/${s.id} has both its heroes by ten minutes`, r.heroes, 2);
+        // AT LEAST ONE TOWER (plan.ts `firstTower`). Twelve minutes rather than ten for the two
+        // undead tier-3 builds, whose lumber goes on the Slaughterhouse and the Boneyard first
+        // and whose Spirit Tower lands at about eleven.
+        check(`${race}/${s.id} has a tower by twelve minutes`,
+          r.towerAt < 600 || run(race, s.id, profile, 720).towerAt < 720, true);
         // …AND, FOR THE HUMAN, THE BUILD'S OWN TIER-2 PRODUCER IS STANDING. A Keep with no
         // Arcane Sanctum behind it has bought the human nothing: the Priests and Sorceresses are
         // the whole reason the race tiers at all (races.ts `tier2Clock`), and reaching the hall

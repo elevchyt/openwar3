@@ -17,7 +17,7 @@ import {
 } from "./chatter";
 import { PlusItems, type ItemCtx } from "./items";
 import {
-  LUMBER_FLOOR, buildPlan, buildableMix, harvestPlan, openingUnit, type PlusCtx,
+  LUMBER_FLOOR, buildPlan, buildableMix, expansionOpen, harvestPlan, openingUnit, type PlusCtx,
 } from "./plan";
 import {
   ATTACK_TELL_GAP, BUSY_LINES, COLOUR_NAMES, COMING_LINES, COUNTER_TELL, HELP_ANSWER_GAP,
@@ -1320,6 +1320,43 @@ const PRESS_WINDOW = 60;
 const HERO_DOWN_SEEN = 3;
 
 /**
+ * WHAT A WON FIGHT IS SPENT ON — `rollWin`. The developer's own odds, not the game's (nothing in
+ * the install describes an improved AI):
+ *
+ *  · `WIN_EXPAND` — clear the nearest free mine and take it (`expandOnWin`): the tempo a won
+ *    fight buys spent on a second base, while the army that could punish a new hall walks home.
+ *  · CARRY ON, 35 % — nothing special: the wave ends as it would have and the army goes back to
+ *    creeping and to its own clocks.
+ *  · `WIN_ATTACK_EARLY` / `WIN_ATTACK_LATE` — press on at the loser's base (`pressOn`), rare
+ *    before `WIN_LATE` (7:30) and the likeliest answer after it. Early on a won fight is two
+ *    openings bumping into each other and a base is towers and a full militia; late, the army
+ *    that just lost is most of what the other player had.
+ *
+ * Before 7:30 the three add up to 70 %, and the missing 30 % is CARRYING ON: the two numbers the
+ * developer stated for expanding and attacking are kept exactly, and the rest is the default.
+ * An expansion the player cannot take (Easy, its ceiling reached, no free mine, before
+ * `WON_EXPAND_FLOOR`) also falls back to carrying on.
+ */
+const WIN_EXPAND = 0.25;
+const WIN_ATTACK_EARLY = 0.1;
+const WIN_ATTACK_LATE = 0.4;
+const WIN_LATE = 450;
+export type WinPlan = "expand" | "carryOn" | "attack";
+
+/**
+ * The roll itself, apart from the seat's stream so it can be checked (tools/ai-plus-army-test.cjs):
+ * `r` is a uniform draw in [0, 1), `clock` the game time and `canExpand` whether an expansion
+ * could be taken at all (`expansionOpen`). See `WIN_EXPAND` for the odds.
+ */
+export function winPlan(r: number, clock: number, canExpand: boolean): WinPlan {
+  const attack = clock < WIN_LATE ? WIN_ATTACK_EARLY : WIN_ATTACK_LATE;
+  if (r < attack) return "attack";
+  if (r < attack + WIN_EXPAND) return canExpand ? "expand" : "carryOn";
+  // Carrying on: its own 35 %, and whatever the three leave over (30 % before `WIN_LATE`).
+  return "carryOn";
+}
+
+/**
  * How far from a fallen objective the NEXT building of that base may stand to be taken on as
  * part of the same assault (`objectiveDone`/`nextBuilding`). About a base's width; ours.
  */
@@ -2041,10 +2078,14 @@ interface Brain {
     killed: Set<number>;
     /** Has this fight already been PRESSED (`pressOn`)? Once a fight — see there. */
     pressed: boolean;
+    /** What winning it is to be spent on (`rollWin`) — rolled ONCE a fight, at the first sign
+     *  of a win (the heroes down, or the verdict), so the two cannot disagree. Null until then. */
+    plan: WinPlan | null;
   } | null;
   /**
    * PRESS THE ADVANTAGE: a won fight — or one whose enemy heroes have all gone down in front of
-   * us — sends the army straight on at the loser's base rather than home to wait out
+   * us — that rolled "attack" (`rollWin`) sends the army straight on at the loser's base rather
+   * than home to wait out
    * `waveGap` (`pressOn`). `foe` is the seat it is aimed at and `until` the clock the window
    * closes on: a hero revives in under a minute, and a push that sets off after that is just the
    * next wave.
@@ -2070,9 +2111,9 @@ interface Brain {
    *  not out), and when the next one may set off. See `sweepPass`. */
   sweep: Array<{ x: number; y: number }> | null;
   sweepAt: number;
-  /** When this player last WON a fight against a player's army (-1 = never) — the enemy army
-   *  left our contact (wiped, fled or teleported out) while ours stood. The expansion row reads
-   *  it (plus/plan.ts `expand`): a won fight is the moment a ladder player takes the next mine. */
+  /** When this player last WON a fight against a player's army AND rolled to spend it on an
+   *  expansion (-1 = never) — see `rollWin`/`expandOnWin`. The expansion row reads it
+   *  (plus/plan.ts `expand`): the clock is lifted and the row moves up the ladder. */
   wonAt: number;
   /** The march's own freeze watchdog, and the clock that switches the safety net off when it
    *  fires — see `MARCH_DIRECT`. */
@@ -2727,6 +2768,10 @@ export class ComputerPlusAi {
       // …and the wider door for a missing Town Portal (`PlusItems.portalChance`): any muster,
       // the field's included, since that is where the Goblin Merchants are.
       mayDetour: b.mode === "massing",
+      // The one purchase a DEFENCE makes (`PlusItems.defenceChance`): a Potion of Healing, from
+      // our own shop, once the second tier stands.
+      defending: b.mode === "defending",
+      tier: this.tier(b),
     };
   }
 
@@ -3905,8 +3950,9 @@ export class ComputerPlusAi {
   }
 
   /**
-   * DID WE JUST WIN A FIGHT? — the reading a won fight leaves behind (`Brain.wonAt`), for the
-   * expansion row (plus/plan.ts `expand`) to spend.
+   * DID WE JUST WIN A FIGHT? — and if so, what the win is spent on (`rollWin`): the loser's
+   * base (`pressOn`), the next mine (`expandOnWin`, which leaves `Brain.wonAt` for the expansion
+   * row in plus/plan.ts to spend), or nothing special.
    *
    * Reported: the night elf "rarely expands", and the moment it most obviously should have was
    * straight after beating the other army — the enemy wiped, fled or Town-Portalled out, and
@@ -3968,7 +4014,7 @@ export class ComputerPlusAi {
     if (foes.length) {
       const theirs = this.powerOf(foes);
       if (!b.battle && theirs < WON_MIN_SHARE * mine) return; // a scout, not an army
-      const battle = b.battle ?? { peak: 0, ours: 0, lastSeen: 0, x: 0, y: 0, heroes: new Map(), killed: new Set<number>(), pressed: false };
+      const battle = b.battle ?? { peak: 0, ours: 0, lastSeen: 0, x: 0, y: 0, heroes: new Map(), killed: new Set<number>(), pressed: false, plan: null };
       battle.peak = Math.max(battle.peak, theirs);
       battle.ours = Math.max(battle.ours, mine);
       battle.lastSeen = b.clock;
@@ -3981,9 +4027,14 @@ export class ComputerPlusAi {
       // left of it (the march is an attack-move, so the stragglers are fought on the way). See
       // `pressOn`, and note it takes no verdict from `WON_QUIET` — a player does not wait six
       // seconds for the last Footman to die before turning on the town.
+      //
+      // …IF that is what this win is spent on (`rollWin`). The other two answers wait for the
+      // verdict below: an expansion is not taken, and a wave not ended, with their army still
+      // standing in front of ours.
       if (!battle.pressed && heroesDown(battle.heroes, battle.killed) && theirs < mine) {
         battle.pressed = true; // once a fight: see `pressOn` on what re-deciding it every pass did
-        this.pressOn(b, this.pressFoe(battle));
+        battle.plan ??= this.rollWin(b);
+        if (battle.plan === "attack") this.pressOn(b, this.pressFoe(battle));
       }
       return;
     }
@@ -3993,8 +4044,60 @@ export class ComputerPlusAi {
     if (Math.hypot(anchor.x - battle.x, anchor.y - battle.y) > CONTACT_LOOK) return; // WE left
     if (mine < WON_KEEP * battle.ours) return; // it cost us the army
     if (this.creepForce(b).health < WON_HEALTH) return; // …or what is left is on its last legs
+    switch (battle.plan ?? this.rollWin(b)) {
+      case "attack": return this.pressOn(b, this.pressFoe(battle));
+      case "expand": return this.expandOnWin(b);
+      case "carryOn": return; // the wave ends as it would have — see `objectiveDone`
+    }
+  }
+
+  /**
+   * WHAT IS THIS WIN SPENT ON? — rolled once a fight, off the seat's own stream.
+   *
+   * Reported: winning a fight used to mean attacking the loser's base, EVERY time — *"we must
+   * make it so that the Computer+ AI can decide different things"*. So it is a roll between
+   * the three things a player does with a won fight, at the developer's odds (`WIN_EXPAND`,
+   * carrying on, `WIN_ATTACK_EARLY`/`WIN_ATTACK_LATE`). An expansion this player could not
+   * take anyway is carrying on instead (`expansionOpen`), rather than a wasted roll that then
+   * does nothing with the army either.
+   */
+  private rollWin(b: Brain): WinPlan {
+    return winPlan(b.ai.randomInt(0, 9999) / 10000, b.clock, expansionOpen(b.ai, b.profile, b.clock));
+  }
+
+  /**
+   * SPEND A WON FIGHT ON THE NEXT MINE — clear it, and found the town on it.
+   *
+   * Two halves, one for each thing that stops a computer expanding:
+   *
+   *  · the BUILD ORDER: `wonAt` lifts the expansion row's clock and moves it up the ladder for
+   *    `WON_EXPAND_WINDOW` (plus/plan.ts `wonExpansion`), so the hall is paid for now rather
+   *    than at the strategy's own minute;
+   *  · the CAMP: whatever is sitting on the mine it is going to take (`AiPlayer.townGuarded` —
+   *    the same reading `startExpansion` holds the hall back on) is where the army goes next,
+   *    straight from the field, instead of waiting for the ladder to set `takeExp` and a later
+   *    wave to reach `pickTarget`'s rung 0. It is that rung's objective, taken the same way,
+   *    and refused for the same reasons: a mine the party cannot walk to or has written off, an
+   *    army that is itself on its last legs (`WON_HEALTH`), or a party already out creeping.
+   *
+   * `nextExpansion` CLAIMS the town when it picks it, exactly as the build row would a pass later,
+   * so the army and the row are aimed at the same rock.
+   */
+  private expandOnWin(b: Brain): void {
+    const { ai } = b;
+    const town = ai.nextExpansion();
+    if (town < 0) return;
     b.wonAt = b.clock;
-    this.pressOn(b, this.pressFoe(battle));
+    if (b.creeping || b.mode === "retreating" || b.mode === "defending") return;
+    if (this.readiness(b) < WON_HEALTH || !b.squad.size) return;
+    const foe = ai.townGuarded(town);
+    if (!foe || isShunned(b.avoid, foe, b.clock, GOAL_MATCH) || !this.reachable(b, foe)) return;
+    b.press = null;
+    b.resume = null;
+    b.vanguardDone = false;
+    b.target = { id: foe.id, x: foe.x, y: foe.y };
+    this.setMode(b, "attacking");
+    this.commit(b, foe.x, foe.y);
   }
 
   /** Whose army that was — the owner of most of the heroes it brought, which in a melee fight
@@ -4011,6 +4114,9 @@ export class ComputerPlusAi {
 
   /**
    * PRESS THE ADVANTAGE — the army that just won a fight goes straight on at the loser's base.
+   *
+   * ONE of three answers to a won fight now, not the only one — `rollWin` decides, and this is
+   * what its "attack" runs.
    *
    * Reported: *"when the enemy heroes are dead, the Computer+ AI that won the fight must attack
    * their enemy's base"*. What it did instead was the wave's own ending: the contact objective
@@ -5174,6 +5280,12 @@ export class ComputerPlusAi {
       // the line on its own clock, and an attack-move issued over the top of that is the whole
       // army's order undoing one soldier's — which is how a pull-back becomes a see-saw.
       if (this.recovering(u) || u.order === "getitem" || pulledOut(b.pulls.get(u.id), b.clock)) continue;
+      // …nor a hero on a SHOP errand, `massing`'s own skip. The one errand that is still running
+      // when this is called is the defence's Potion of Healing (plus/items.ts `defenceChance`):
+      // a few steps to our own shop, and `defendPass` re-committing the army every pass would
+      // turn it round before it got there. Every other errand is let go the moment there is a
+      // wave out (`PlusItems.shop`).
+      if (u.id === b.items.errand) continue;
       // …nor is one that is still FADING. `cloaked && !invisible` is the Transition Time of an
       // invisibility that has been pressed and has not landed yet (`[AOwk]` DataA = 0.6 s), and
       // an attack ordered inside that window is the one thing that throws the press away: the

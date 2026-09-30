@@ -70,8 +70,9 @@ export interface PlusCtx {
    * is nothing to save for. See `portalSaving`.
    */
   readonly portalReserve?: number;
-  /** When this player last WON a fight against a player's army, on `clock`'s scale (-1 or
-   *  absent = never) — `ComputerPlusAi.victoryPass`. What `expand` reads as "now is the time". */
+  /** When this player last WON a fight against a player's army and chose to spend it on an
+   *  expansion, on `clock`'s scale (-1 or absent = never) — `ComputerPlusAi.expandOnWin`. What
+   *  `expand` reads as "now is the time". */
   readonly wonAt?: number;
   /** A unit type's food cost. */
   foodOf(id: string): number;
@@ -422,6 +423,9 @@ export function buildPlan(c: PlusCtx): void {
   // nothing on the field.
   tierTwoHero(c);
   tierUpDue(c); // …and from three minutes, the Keep — see TIER2_CLOCK
+  // ONE TOWER AT HOME, on Normal and Insane — see `firstTower` for why it is up here and not
+  // only in `towers` at the bottom.
+  firstTower(c);
   techBuildings(c);
   upgrades(c);
   always(c);
@@ -1371,6 +1375,36 @@ function towers(c: PlusCtx): void {
 }
 
 /**
+ * AT LEAST ONE TOWER — the developer's *"for Normal and Insane difficulty, make the Computer+ AI
+ * get at least one tower"*: an Arcane Tower for the human, a Watch Tower for the orc, a Spirit
+ * Tower for the undead and an Ancient Protector for the night elf (`PlusRaceTable.tower`, and
+ * for the human the first of `towerUpgrades`).
+ *
+ * `towers` below already asks for them, and asks at the very BOTTOM of the ladder — under the
+ * tier-up, the extra heroes and the expansion, every one of them a row that halts the loop while
+ * it saves — so in practice the row that reached it was the rare pass on which the AI had
+ * nothing else to buy, and whole matches went by without one. This is the first of them lifted
+ * to just under the tier-2 row, where it is reached once the Keep is paid for.
+ *
+ * Gated on the SECOND TIER STANDING (or something already in the base): below that the
+ * opening's gold is the hero's, the army's and the Keep's, and a player's first tower goes up
+ * with the tech rather than ahead of it. `profile.towers` is what keeps Easy out, and each race's
+ * tower has a `Requires` (`[owtw]` a War Mill, `[uzg1]` a Graveyard, `[etrp]` a Hunter's Hall —
+ * the support rows above) that is asked first, so an illegal row never halts the ladder.
+ * One at the MAIN: the expansions get theirs from `towers`, which counts this one as its own.
+ */
+function firstTower(c: PlusCtx): void {
+  const { ai, profile, table, tier, threatened } = c;
+  if (profile.towers < 1) return;
+  if (tier < 2 && !threatened) return;
+  if (!ai.techMeets(table.tower)) return;
+  ai.guardSecondary(0, 1, table.tower);
+  // …and for the human, the Scout Tower BECOMES the Arcane Tower (`[hatw] Requires=` is empty).
+  const up = table.towerUpgrades?.[0];
+  if (up && ai.countAt(table.tower, 0, true) >= 1 && ai.techMeets(up.id)) ai.guardSecondary(0, 1, up.id);
+}
+
+/**
  * Upgrades, capped twice over: by what the row is worth (armour is 3 ranks, Defend is 1) and by
  * what the difficulty allows. `setBuildUpgr` applies common.ai's own third cap on top — an easy
  * computer never buys rank 2 of anything.
@@ -1447,7 +1481,8 @@ function expand(c: PlusCtx, early = false): void {
  * had beaten the other army — theirs wiped, fled or Town-Portalled home, ours standing. A ladder
  * player takes the next mine THEN, because the one thing that punishes a new hall standing
  * exposed at a rock is the army that has just been sent away, and it will be minutes before it
- * is back. `ComputerPlusAi.victoryPass` is what notices (`PlusCtx.wonAt`); this is the row
+ * is back. `ComputerPlusAi.victoryPass` is what notices, and when its roll spends the win on a
+ * mine (`rollWin` → `expandOnWin`) it leaves `PlusCtx.wonAt` behind; this is the row
  * spending it, for every race — nothing about the moment is the night elf's.
  *
  * It does two things for `WON_EXPAND_WINDOW` seconds, and each fixes a different half of "never
@@ -1468,6 +1503,17 @@ function expand(c: PlusCtx, early = false): void {
  * one hall for a minute and a half, and the town the row CLAIMED keeps its hall row near the top
  * afterwards anyway (`meleeTownHall(1, …)`, and the undead's `mineBuildings`).
  */
+/**
+ * COULD this player take an expansion off a won fight at all? — asked by
+ * `ComputerPlusAi.rollWin` before it spends the win on one, with `expand`'s own gates: the
+ * difficulty's ceiling (Easy none), the mines already held, and `WON_EXPAND_FLOOR`, before which
+ * `wonExpansion` would not lift the clock anyway.
+ */
+export function expansionOpen(ai: AiPlayer, profile: PlusProfile, clock: number): boolean {
+  if (profile.expansions < 1 || clock < WON_EXPAND_FLOOR) return false;
+  return Math.max(1, ai.minesOwned()) < 1 + profile.expansions;
+}
+
 function wonExpansion(c: PlusCtx): boolean {
   const at = c.wonAt ?? -1;
   return at >= 0 && c.clock >= at && c.clock - at <= WON_EXPAND_WINDOW && c.clock >= WON_EXPAND_FLOOR;
