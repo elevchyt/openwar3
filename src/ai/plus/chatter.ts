@@ -136,12 +136,10 @@ export interface Standing {
  * never fired. A teammate who was WIPED OUT counts too: either way there is nobody there to
  * fight beside.
  *
- * Half or MORE, against the team as it started, and only on a team of TWO or more teammates:
- * one of two (a 3v3) concedes, one of three (a 4v4) does not. A 2v2's partner is left to the
- * weighed reading instead — the developer's own ruling, that the one departure there is worth
- * `DESPAIR.teamGone` (half a defeat) "by itself" rather than the whole of one — so a computer
- * whose partner quits concedes the moment anything else about its game is going wrong, and
- * plays on while it is not. An empty team is a 1v1 or a free-for-all and scores nothing.
+ * Half or MORE, against the team as it started: a 2v2 whose partner goes concedes at once (the
+ * developer's ruling — "make 2v2 concede immediately when the partner leaves"), so does a 3v3
+ * down one of two, and a 4v4 down one of three does not. An empty team is a 1v1 or a
+ * free-for-all and can never concede for this reason.
  */
 export function goneCount(team: readonly number[], allies: readonly number[]): number {
   let gone = 0;
@@ -154,7 +152,7 @@ export function goneShare(team: readonly number[], allies: readonly number[]): n
 }
 
 export function teamLost(team: readonly number[], allies: readonly number[]): boolean {
-  return team.length >= 2 && goneShare(team, allies) >= 0.5;
+  return team.length > 0 && goneShare(team, allies) >= 0.5;
 }
 
 /**
@@ -226,10 +224,10 @@ export function teamLost(team: readonly number[], allies: readonly number[]): bo
  *    two of them, and it makes the game harder for everyone left in a way none of the other
  *    terms can see. It is PER HEAD — `DESPAIR.teamGone` for EACH teammate gone (`goneCount`) —
  *    and not a share of the team, as the developer asked: every departure makes a computer more
- *    eager to go, and a 2v2 partner leaving is 0.5 by itself. It used to be 0.7 × the share,
+ *    eager to go. It used to be 0.7 × the share,
  *    which put one of three in a 4v4 at 0.23 — not enough to tip anything but a position
  *    already lost. Where `teamLost` applies it settles the game outright first; this is what
- *    speaks for the teams it does not — a 2v2, and a 4v4 or larger below half — and it cannot
+ *    speaks for the teams it does not — a 4v4 or larger below half — and it cannot
  *    carry a concession alone until TWO have gone. A 1v1 and a free-for-all have no team and
  *    score 0. "Gone" includes a teammate who was WIPED OUT: either way there is nobody there to
  *    fight beside (see `teamLost`).

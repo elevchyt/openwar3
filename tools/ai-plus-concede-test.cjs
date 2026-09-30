@@ -128,8 +128,9 @@ console.log("\n-- half the team has gone ---------------------------------------
 // (`PlusHost.playerOut`, since a leaver's units stay on the field shared with its team) or one
 // with nothing left on the map. See docs/computer-plus.md.
 check("a 1v1 can never concede for this reason", teamLost([], []), false);
-// A 2v2 is the developer's ruling: the partner leaving is WEIGHED (0.5 by itself), not a verdict.
-check("a 2v2 whose partner goes is left to the weighed reading", teamLost([1], []), false);
+// A 2v2 is the developer's ruling: the partner leaving ends it, at once and whatever the board.
+check("a 2v2 with the partner still playing plays on", teamLost([1], [1]), false);
+check("…and concedes the moment the partner goes", teamLost([1], []), true);
 // Half or MORE, so one of two is already it — a 3v3 that is now a 2v3 has lost half its team.
 check("a 3v3 concedes when one of its two teammates goes", teamLost([1, 2], [2]), true);
 check("…and of course when both do", teamLost([1, 2], []), true);
@@ -147,8 +148,8 @@ check("a 4v4 down one of its three has lost one teammate", goneCount([1, 2, 3], 
 check("…and the share is still a third, for the bar", goneShare([1, 2, 3], [2, 3]), 1 / 3);
 check("each teammate gone is half a defeat by itself",
   despair(holding({ heroes: 1, workers: 12, teamGone: 1 }), HALL), 0.5);
-// THE 2v2 THE REQUEST IS ABOUT: the partner walked out. Healthy, it plays on…
-check("a healthy player whose 2v2 partner left plays on — one departure is half, not whole",
+// Below the hard rule (a 4v4 down one of three) one departure is half a defeat: healthy, it plays on…
+check("a healthy player one teammate down plays on — one departure is half, not whole",
   hopeless(at({ halls: 1, structures: 9, workers: 12, armyFood: 40, armyUnits: 12, gold: 800, heroes: 2, teamGone: 1 }), HALL), false);
 // …but half a defeat beside ANY heavy term is a whole one: the hero down, or the hall.
 check("…and concedes once its heroes are down as well",

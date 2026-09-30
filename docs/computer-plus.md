@@ -4070,13 +4070,13 @@ are only ever true of a match being lost.
 or concedes is one fewer army on our side of a map drawn for two of them, and that makes the game
 harder for everyone left in a way no other term can see. It is **per head** — 0.5 for EACH
 teammate gone (`goneCount`) — which is the developer's ruling: every departure makes a computer
-more eager to go, and in a 2v2 the partner leaving is worth 0.5 *by itself*. It used to be 0.7 ×
+more eager to go. It used to be 0.7 ×
 the share of the team, which put one of three gone in a 4v4 at 0.23 and could tip nothing but a
 position that was already lost.
 
-So a 2v2 computer whose partner left concedes the moment anything heavy goes wrong beside it (its
-heroes down: 1.0; its hall razed: 1.0) and plays on while nothing does; a 4v4 down one of three is
-the same; and two departures carry a concession alone (a 6v6 down two of five). A 1v1 and a
+So a 4v4 computer down one of three concedes the moment anything heavy goes wrong beside it (its
+heroes down: 1.0; its hall razed: 1.0) and plays on while nothing does; and two departures carry a
+concession alone (a 6v6 down two of five). A 2v2 never gets here: `teamLost` ends it first. A 1v1 and a
 free-for-all have no team and score 0. "Gone" counts a teammate who was WIPED OUT as well as one
 who quit — either way there is nobody there to fight beside.
 
@@ -4116,14 +4116,13 @@ AI still stops playing — it simply stands there, like a player who alt-tabbed.
 
 ### …and the concession that is not a reading of the board at all
 
-**If half or more of the team has gone, the rest concede** — on a team of two teammates or more
-(a 3v3 and up). `teamCollapsed`, and it is deliberately not run through `hopeless()`: that reading
+**If half or more of the team has gone, the rest concede** — a 2v2 the moment the partner leaves
+(the developer's ruling), a 3v3 down one of two. `teamCollapsed`, and it is deliberately not run through `hopeless()`: that reading
 is about *this* player's base, army and heroes, and a computer whose two teammates walked out can
 be sitting on a perfectly healthy economy while the match is over. A 3v3 that is now a 1v3 is not
 a game anybody plays out. For the same reason it is exempt from `CONCEDE_NOT_BEFORE` — a teammate
 leaving at ninety seconds has decided the game every bit as thoroughly as one leaving at ten
-minutes. A **2v2** is not settled by it: the developer's ruling is that the partner leaving is
-worth `DESPAIR.teamGone` (half a defeat) by itself, so it goes through the weighed reading.
+minutes.
 
 **"Left" has to be ASKED — the field does not say it.** `MeleeTriggerActionPlayerLeft` hands a
 leaver's units to Neutral Passive only when no ally is left; with one it calls
