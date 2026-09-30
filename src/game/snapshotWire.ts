@@ -11,7 +11,7 @@ import type { BuffFx } from "../data/abilities";
  * them at every send. At the 60 Hz cadence the sim already runs, that is what capped the
  * wire at 30 (see `SNAPSHOT_INTERVAL`'s history). So the two hot arrays cross as a
  * fixed-layout binary record instead — positions quantized to i16 world units, facing to
- * u16 of 2π, hp/mana to u16, every boolean packed into one flags word, every string
+ * u16 of 2π, hp to u32 and mana to u16, every boolean packed into one flags word, every string
  * interned once in a per-payload table — and everything else (stash, research, creepCamps,
  * fx, deaths, corpses, mines, items) stays JSON: tiny, rare, not worth hand-packing.
  *
@@ -51,7 +51,7 @@ export type WireSnapshot = Omit<WorldSnapshot, "units" | "projectiles"> & { hot:
 /** Bumped when the binary layout changes. Carried in the blob so a mismatched decode fails
  *  loudly at the header rather than as garbage fields three units in. The relay's
  *  `PROTOCOL_VERSION` still gates the SESSION; this gates the blob. */
-const CODEC_VERSION = 9; // 9: owner/team are SIGNED bytes (the neutrals are -1), and a building carries the gold mine it stands on (8: a buff's art carries the node its holder RIDES and the carrier's loop (7: a projectile carries its `Missilearc` (6: a buff carries the duration it started at (the denominator of an expiry bar) (5: a unit carries its Hex critter skin; 4: a buff's art carries its SIZE variant; 3: a pending build's `paid` flag; 2: buffs carry their `B….` row id)
+const CODEC_VERSION = 10; // 10: a second flags byte carries uprooted/morphT/portalLeft/immolation, the unit's sight rides beside it, and hp/maxHp are u32 (9: owner/team are SIGNED bytes (the neutrals are -1), and a building carries the gold mine it stands on (8: a buff's art carries the node its holder RIDES and the carrier's loop (7: a projectile carries its `Missilearc` (6: a buff carries the duration it started at (the denominator of an expiry bar) (5: a unit carries its Hex critter skin; 4: a buff's art carries its SIZE variant; 3: a pending build's `paid` flag; 2: buffs carry their `B….` row id)
 
 const TWO_PI = Math.PI * 2;
 
@@ -66,6 +66,8 @@ export const quantPos = (v: number): number => Math.max(-32768, Math.min(32767, 
 export const quantFacing = (f: number): number => (((Math.round((f / TWO_PI) * 65536) % 65536) + 65536) % 65536 / 65536) * TWO_PI;
 /** hp/mana/speed/range and kin: rounded, clamped to u16. */
 export const quantU16 = (v: number): number => Math.max(0, Math.min(65535, Math.round(v)));
+/** Hit points: rounded, clamped to u32. */
+export const quantU32 = (v: number): number => Math.max(0, Math.min(0xffffffff, Math.round(v)));
 /** Bonus damage/stats: rounded, clamped to i16. */
 export const quantI16 = (v: number): number => Math.max(-32768, Math.min(32767, Math.round(v)));
 /** Time-shaped floats cross as f32. */
@@ -334,8 +336,10 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
   w.f32(s.spawning);
   w.f32(s.constructing);
   if (flags & F_DEVOURED) w.u32(s.devouredBy);
-  w.u16(quantU16(s.hp));
-  w.u16(quantU16(s.maxHp));
+  // u32, not u16: a custom map's boss is free to carry more than 65 535 hit points, and a u16
+  // clamped its bar to full until it had lost everything above that.
+  w.u32(quantU32(s.hp));
+  w.u32(quantU32(s.maxHp));
   w.u16(quantU16(s.mana));
   w.u16(quantU16(s.maxMana));
   w.f32(s.armor);
@@ -346,9 +350,9 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
   w.u8(Math.min(255, Math.max(0, s.attackUpgrade)));
   w.u8(Math.min(255, Math.max(0, s.armorUpgrade)));
   if (flags & F_HAS_HERO) {
-    w.u8(s.level);
+    w.u8(Math.min(255, Math.max(0, s.level))); // clamped like the upgrade levels above — a custom map's cap is its own
     w.u32(s.xp);
-    w.u8(s.skillPoints);
+    w.u8(Math.min(255, Math.max(0, s.skillPoints)));
     w.u16(quantU16(s.str));
     w.u16(quantU16(s.agi));
     w.u16(quantU16(s.int));
@@ -469,6 +473,19 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
   // The critter skin, unconditionally: every one of the 32 flag bits is spoken for (see
   // `altFormLeft` above), and an interned "" is two bytes.
   w.u16(w.intern(s.hexForm));
+  // A second, small flags byte for the predicted-then-stuck state (UnitSnapshot.uprooted): the
+  // first word is full, and all four are zero on almost every unit, so one byte and nothing
+  // else is what a footman pays.
+  const ex = (s.uprooted ? 1 : 0) | (s.morphT > 0 ? 2 : 0) | (s.portalLeft > 0 ? 4 : 0) | (s.immolation ? 8 : 0) | (s.sightDay !== undefined ? 16 : 0);
+  w.u8(ex);
+  // Sight crosses only where the payload carries it — the recipient's own eyes (UnitSnapshot.sightDay).
+  if (ex & 16) {
+    w.u16(quantU16(s.sightDay ?? 0));
+    w.u16(quantU16(s.sightNight ?? 0));
+  }
+  if (ex & 2) w.f32(s.morphT);
+  if (ex & 4) w.f32(s.portalLeft);
+  if (ex & 8) w.u16(w.intern(s.immolation));
 }
 
 function readUnit(r: Reader): UnitSnapshot {
@@ -555,6 +572,10 @@ function readUnit(r: Reader): UnitSnapshot {
     orderQueue: null,
     pendingCastCode: null,
     hexForm: "",
+    uprooted: false, // …read below, off the second flags byte
+    morphT: 0,
+    portalLeft: 0,
+    immolation: "",
   };
   // The fixed block, in the writer's exact order. Kept as assignments rather than inlined
   // into the literal above because argument evaluation order is the one thing that must
@@ -576,8 +597,8 @@ function readUnit(r: Reader): UnitSnapshot {
   s.spawning = r.f32();
   s.constructing = r.f32();
   if (flags & F_DEVOURED) s.devouredBy = r.u32();
-  s.hp = r.u16();
-  s.maxHp = r.u16();
+  s.hp = r.u32();
+  s.maxHp = r.u32();
   s.mana = r.u16();
   s.maxMana = r.u16();
   s.armor = r.f32();
@@ -702,6 +723,15 @@ function readUnit(r: Reader): UnitSnapshot {
   if (flags & F_HAS_ORDER_QUEUE) s.orderQueue = JSON.parse(r.str());
   if (flags & F_HAS_PENDING_CAST) s.pendingCastCode = r.str();
   s.hexForm = r.str();
+  const ex = r.u8();
+  s.uprooted = (ex & 1) !== 0;
+  if (ex & 16) {
+    s.sightDay = r.u16();
+    s.sightNight = r.u16();
+  }
+  if (ex & 2) s.morphT = r.f32();
+  if (ex & 4) s.portalLeft = r.f32();
+  if (ex & 8) s.immolation = r.str();
 
   return s;
 }

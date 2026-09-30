@@ -76,6 +76,15 @@ export function writeUnitSnapshot(u: SimUnit, s: UnitSnapshot): void {
   u.properName = s.properName;
   u.isCreep = s.isCreep;
   u.hexForm = s.hexForm;
+  // The authority's word over the client's own prediction — see UnitSnapshot.uprooted.
+  u.uprooted = s.uprooted;
+  u.morphT = s.morphT;
+  u.portalLeft = s.portalLeft;
+  // Only where it was sent: the recipient's own eyes (UnitSnapshot.sightDay). An enemy's record
+  // keeps the def's seeded value, which nothing on a client casts.
+  if (s.sightDay !== undefined) u.sightDay = s.sightDay;
+  if (s.sightNight !== undefined) u.sightNight = s.sightNight;
+  u.immolation = s.immolation;
 
   // Pose. `prev*` is rolled forward first so anything reading "where was it last frame"
   // sees the previous payload's position rather than garbage.
@@ -248,6 +257,11 @@ export interface ApplyResult {
    *  writes the new `typeId` silently; the renderer still owes it the other model. Remembered
    *  images are deliberately excluded: WC3 keeps showing what you SAW, and so do we. */
   morphed: Array<{ id: number; to: string }>;
+  /** Records that changed HANDS in place — a Charm, a `SetUnitOwner`, a leaver's army shared
+   *  with an ally. The write carries the new `owner` silently, and the team colour is the
+   *  model's, so the renderer owes it a repaint (the host's own `drainOwnerChanges`, which on a
+   *  client nothing fills). Remembered images excluded, as for `morphed`. */
+  recoloured: Array<{ id: number; owner: number }>;
 }
 
 /**
@@ -264,10 +278,12 @@ export interface ApplyResult {
 export function applyWorldSnapshot(world: ApplyWorld, snap: WorldSnapshot, create: (s: UnitSnapshot) => SimUnit | null): ApplyResult {
   const created: UnitSnapshot[] = [];
   const morphed: ApplyResult["morphed"] = [];
+  const recoloured: ApplyResult["recoloured"] = [];
   const sent = new Set<number>();
   for (const s of snap.units) {
     sent.add(s.id);
     let u = world.units.get(s.id);
+    const fresh = !u;
     if (!u) {
       u = create(s) ?? undefined;
       if (!u) continue;
@@ -279,6 +295,7 @@ export function applyWorldSnapshot(world: ApplyWorld, snap: WorldSnapshot, creat
       // remembered image — its whole point is showing what was last SEEN.
       morphed.push({ id: s.id, to: s.typeId });
     }
+    if (!fresh && u.owner !== s.owner && !s.remembered) recoloured.push({ id: s.id, owner: s.owner });
     writeUnitSnapshot(u, s);
   }
   const removed: number[] = [];
@@ -425,5 +442,5 @@ export function applyWorldSnapshot(world: ApplyWorld, snap: WorldSnapshot, creat
       });
     }
   }
-  return { created, removed, morphed, createdItems, removedItems, createdProjectiles, removedProjectiles };
+  return { created, removed, morphed, recoloured, createdItems, removedItems, createdProjectiles, removedProjectiles };
 }

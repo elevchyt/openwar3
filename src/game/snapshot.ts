@@ -1,4 +1,4 @@
-import { isOffField, type SimSpellEffect, type SimUnit, type SimMine, type SimItem, type BuildJob, type SimBuff, type SimAbility, type HeldItem, type SimProjectile, type SimCorpse, type SimLightning, type CombatText, type FallenHero } from "../sim/world";
+import { isOffField, type SimSpellEffect, type SimUnit, type SimMine, type SimItem, type BuildJob, type SimBuff, type SimAbility, type HeldItem, type SimProjectile, type SimCorpse, type SimLightning, type CombatText, type FallenHero, type WireNotices } from "../sim/world";
 
 /**
  * What one client is TOLD about the world (docs/multiplayer.md Phase E item 5).
@@ -296,6 +296,29 @@ export interface UnitSnapshot {
    *  A client needs it for the model alone — the rules it implies already arrive as the buff
    *  and the speed. */
   hexForm: string;
+  /** The four pieces of state a client PREDICTS for itself and then could never take back.
+   *  A client runs its own commands on its own records first (RtsController.execute), so
+   *  pressing Uproot or reading a Scroll of Town Portal there sets `uprooted`/`morphT` or
+   *  `portalLeft` locally — and only the sim's tick counts those down, which on a client never
+   *  runs. `castLocked` then refused every order to that Ancient or that hero for the rest of
+   *  the match. Carried so the authority's value overwrites the guess every payload; Immolation
+   *  rides with them because its button face and its price read the same kind of toggle. */
+  uprooted: boolean;
+  morphT: number;
+  /** The unit's CURRENT sight, day and night (SimUnit.sightDay/sightNight) — what a client's
+   *  own fog is cast from (Viewpoint.rebuild). Re-derived by the host's recomputeStats from
+   *  the type plus Ultravision, a Goblin Night Scope, a Scout's upgrade and every other
+   *  modifier, and never by a client's, which does not tick: a Night Elf client's army saw at
+   *  night with its base radius and dropped from its own selection the enemies the host had
+   *  every right to send it.
+   *
+   *  ABSENT for any unit whose eyes are not the recipient's (`seesFor`) — an enemy's sight
+   *  radius tells a client where it is safe to walk, and the client's fog never casts an
+   *  enemy's sight anyway (`revealsFor`). */
+  sightDay?: number;
+  sightNight?: number;
+  portalLeft: number;
+  immolation: string;
   spawning: number;
   constructing: number;
   /** Whether this worker is hammering. Kept as an OBJECT rather than the flat `repairing`
@@ -595,6 +618,17 @@ export interface WorldSnapshot {
    *  a silent retire cannot be un-retired; the client's handling is idempotent, so the
    *  repeat a due broadcast may carry is ignored. */
   deaths: Array<{ id: number; x: number; y: number }>;
+  /** Trees this recipient has just SEEN come down (SimWorld.fellTree), by tree id — ids agree
+   *  on every machine, from the .doo's order. Filled by `MatchLink` like `deaths`, but held back
+   *  per recipient until their eyes are on the spot, because a forest thinning under the fog is
+   *  exactly what the fog hides: WC3 draws the last tree you saw until you look again. Optional,
+   *  so a payload from before the lane (a harness's hand-fed one) reads as "none". */
+  felledTrees?: number[];
+  /** The engine's announcements that are THIS recipient's news (SimWorld.noticeWire): alerts
+   *  about their own or an ally's property — `showAlert` already speaks only to those two — and
+   *  the completion cues of their own buildings and research. Filled by `MatchLink` on due
+   *  broadcasts like `fx`; absent when there is nothing to say. */
+  notices?: Partial<WireNotices>;
   /** Corpses under this recipient's eyes (the items' rule — nothing remembered). */
   corpses: CorpseSnapshot[];
   /**
@@ -681,6 +715,10 @@ export function rememberedUnit(u: SimUnit): UnitSnapshot {
     altModel: u.altModel,
     altFormLeft: 0, // a memory has no live clock on it — the same rule the rest of this stub keeps
     hexForm: "", // …nor a critter skin: only organic units are hexed, and only buildings are remembered
+    uprooted: false, // …nor anything a live unit is in the middle of
+    morphT: 0,
+    portalLeft: 0,
+    immolation: "",
     spawning: 0,
     constructing: 0,
     repair: null,
@@ -818,6 +856,11 @@ export function snapshotFor(
       altModel: u.altModel,
       altFormLeft: u.altFormLeft,
       hexForm: u.hexForm,
+      uprooted: u.uprooted,
+      morphT: u.morphT,
+      ...(viewer.seesFor(u.owner) ? { sightDay: u.sightDay, sightNight: u.sightNight } : {}),
+      portalLeft: u.portalLeft,
+      immolation: u.immolation,
       spawning: u.spawning,
       constructing: u.constructing,
       repair: u.repair ? { active: u.repair.active } : null,

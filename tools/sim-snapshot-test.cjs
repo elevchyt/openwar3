@@ -111,12 +111,16 @@ console.log("the snapshot is a subset of the sim unit, not a serialisation of it
   // THE check. A spread-based `snapshotFor` passes everything above and fails only here.
   const internals = ["repathT", "path", "velX", "velY", "stuckT", "acquireT", "baseMaxHp",
     "baseDamage", "turnRate", "targetId", "cooldownLeft", "illusionDamageDealt",
-    "illusionDamageTaken", "sightDay", "sightNight"];
+    "illusionDamageTaken"];
   check("no sim-internal field survives the trip", internals.filter((k) => k in u), []);
 
-  // Vision ranges specifically: a client that knows enemy sight radii can compute where it is
-  // safe to walk. `viewpoint.ts` reads these on the AUTHORITY and must keep doing so.
-  check("enemy sight radii are not derivable client-side", ["sightDay" in u, "sightNight" in u], [false, false]);
+  // Vision ranges specifically: a client that knows ENEMY sight radii can compute where it is
+  // safe to walk. Its OWN units' sight it must have — its fog is cast from them (Viewpoint.
+  // rebuild), and only the host re-derives them (Ultravision, a Night Scope, day and night) —
+  // so the rule is the recipient's eyes and nobody else's (UnitSnapshot.sightDay).
+  check("its own unit's sight rides along", [u.sightDay, u.sightNight], [1400, 800]);
+  const enemy = snapshotFor(worldOf([unit({ id: 2, owner: 1 })]), viewer(0, { 0: 0, 1: 1 }), 0, 5.5).units[0];
+  check("enemy sight radii are not derivable client-side", ["sightDay" in enemy, "sightNight" in enemy], [false, false]);
 }
 
 console.log("the recipient's research rides along — its own, nobody else's");

@@ -388,6 +388,8 @@ function worldAt(hp) {
     // and not to this unit fails these checks with the new field's name in them — which is the
     // signal to add it here, not to loosen the check.
     ringSlot: 0, altFormLeft: 0, attackUpgrade: 0, armorUpgrade: 0,
+    hexForm: "", uprooted: false, morphT: 0, portalLeft: 0, immolation: "",
+    swingFollowThrough: false, hidden: false,
   };
   return { units: new Map([[1, u]]), mines: new Map(), items: new Map(), timeOfDay: 12, dawnDusk: true, stashOf: () => ({ gold: 500, lumber: 150 }) };
 }
@@ -915,9 +917,10 @@ console.log("a client slower than the wire still gets every burst and every coll
     drainDeaths: () => dQ.shift() ?? [],
   };
   // Two due broadcasts back to back, BEFORE the client consumes anything — the second
-  // supersedes the first exactly the way a slow frame loop experiences the 60 Hz wire.
-  hostLink.tickHost(1 / 60, worldAt(420), src, 1);
-  hostLink.tickHost(1 / 60, worldAt(420), src, 2);
+  // supersedes the first exactly the way a slow frame loop experiences the wire. A whole
+  // SNAPSHOT_INTERVAL each, so both are due (the cadence is 20 Hz since the wire went binary).
+  hostLink.tickHost(1 / 20, worldAt(420), src, 1);
+  hostLink.tickHost(1 / 20, worldAt(420), src, 2);
   await tick();
   check("only the newest payload is held", peerLink.latest()?.time, 2);
   check("…carrying only its own burst", peerLink.latest()?.fx.effects.map((e) => e.art), ["B.mdx"]);
@@ -942,6 +945,45 @@ console.log("a command's consequences are expedited off-cadence, without fx and 
   check("the very next tick carries the answer", sent, 1);
   check("…with the world as it now is", peerLink.latest()?.units[0].hp, 300);
   check("and the broadcast still comes round on its own clock", hostLink.tickHost(0.05, worldAt(300), sources, 3), 1);
+}
+
+console.log("a felled tree waits for the recipient's eyes; a notice goes to whose news it is");
+{
+  const { host, peer } = await room();
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS);
+  // Player 1's eyes are on x < 1000 only: tree 11 fell where it can see, tree 12 in the dark.
+  let sightEdge = 1000;
+  const eyes = { ...seer, fogBlocksAt: (p) => p.x >= sightEdge };
+  const felledQ = [[{ id: 11, x: 500, y: 0 }, { id: 12, x: 5000, y: 0 }]];
+  const noticesQ = [{
+    alerts: [
+      { kind: "townattack", player: 1, x: 0, y: 0 }, // its own town
+      { kind: "townattack", player: 0, x: 0, y: 0 }, // the host's — an ally only if allied
+    ],
+    built: [{ buildingId: 5, owner: 1 }, { buildingId: 6, owner: 0 }],
+    researched: [{ buildingId: 5, upgradeId: "Rhme", level: 1, owner: 0 }],
+  }];
+  const src = {
+    ...sources,
+    viewers: () => [{ player: 0, viewer: seer }, { player: 1, viewer: eyes }],
+    drainFelledTrees: () => felledQ.shift() ?? [],
+    drainNotices: () => noticesQ.shift() ?? { alerts: [], built: [], researched: [] },
+    coAllied: () => false,
+  };
+  hostLink.tickHost(1 / 20, worldAt(420), src, 1);
+  await tick();
+  check("only the tree it can see is told", peerLink.takeFelledTrees(), [11]);
+  const n = peerLink.takeNotices();
+  check("an enemy's alert is not its news", n.alerts.map((a) => a.player), [1]);
+  check("…nor an enemy's finished building or research", [n.built.map((c) => c.buildingId), n.researched], [[5], []]);
+  sightEdge = 10000; // it walks up to the stump
+  hostLink.tickHost(1 / 20, worldAt(420), src, 2);
+  await tick();
+  check("the tree felled in the dark is told once it is seen", peerLink.takeFelledTrees(), [12]);
+  hostLink.tickHost(1 / 20, worldAt(420), src, 3);
+  await tick();
+  check("…and never twice", peerLink.takeFelledTrees(), []);
 }
 
 console.log(failed === 0 ? "\nloopback: all checks passed" : `\nloopback: ${failed} FAILED`);

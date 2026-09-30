@@ -4651,6 +4651,8 @@ export class RtsController {
         // the shop's overhead arrow never appeared on a client.
         this.sim.adoptShopBuyers();
       }
+      // …and the few clocks that age off records the payload wrote (SimWorld.tickClient).
+      this.sim.tickClient(dt);
       // Draw the records between payloads (see `poses`) — the payload wrote where every unit
       // IS, this writes where the frame should DRAW it, a measured delay behind.
       this.tickPoses(dt);
@@ -8300,9 +8302,30 @@ export class RtsController {
     // the drain consumes the id before the next one could clear it.
     this.pendingWireDeaths.clear();
     for (const d of this.matchLink?.takeDeaths() ?? []) this.pendingWireDeaths.add(d.id);
+    // …and the trees it saw come down, into the same renderer queue a local felling fills.
+    for (const id of this.matchLink?.takeFelledTrees() ?? []) this.sim.fellTree(id);
+    // …and the engine's announcements that are ours to hear (WorldSnapshot.notices).
+    const notices = this.matchLink?.takeNotices();
+    if (notices) this.sim.receiveNotices(notices);
+    // A gold mine the payload no longer lists has run dry (every live one is always sent —
+    // snapshot.ts). Collapsed once OUR eyes are on it rather than the moment it goes, for the
+    // fog's reason: a mine emptied in the dark stands in memory until somebody looks. An empty
+    // list is a hand-fed payload, not a map with every mine gone at once.
+    if (snap.mines.length) {
+      const listed = new Set(snap.mines.map((m) => m.id));
+      for (const m of [...this.sim.mines.values()]) {
+        if (!listed.has(m.id) && !this.local.fogBlocksAt(m)) this.sim.dropMine(m.id);
+      }
+    }
     // Records whose type changed in place (Scout Tower → Arcane Tower): the renderer owes
     // each the other model, exactly the host's own morph drain shape.
     this.snapshotMorphs.push(...res.morphed);
+    for (const m of res.morphed) {
+      const u = this.sim.units.get(m.id);
+      if (u) this.sim.retypeRecord(u);
+    }
+    // …and records that changed hands are owed their new owner's colour (ApplyResult.recoloured).
+    for (const c of res.recoloured) this.setUnitTeamColor(c.id, this.playerColor(c.owner));
   }
 
   /** Payload-declared deaths awaiting this tick's removal drain (client), and the death
@@ -8633,6 +8656,9 @@ export class RtsController {
         creepCampsFor: (p) => this.creepCamps(this.viewpoints.viewpointFor(p)),
         drainFx: () => this.takeWireFx(),
         drainDeaths: () => this.takeWireDeaths(),
+        drainFelledTrees: () => this.sim.drainFelledForWire(),
+        drainNotices: () => this.sim.drainNoticesForWire(),
+        coAllied: (a, b) => this.playersAreCoAllied(a, b),
         watchedFor: (p) => this.watchedFor(p),
       }, this.matchTime);
     } else if (link.latest()) {

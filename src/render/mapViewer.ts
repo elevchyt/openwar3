@@ -13218,11 +13218,8 @@ export class MapViewerScene {
     // model — the same swap the host's own drainMorphs runs, minus the upgrade chime (that
     // is the owner's, and remodelUnit's own localPlayer check keeps it so).
     for (const m of this.rts?.drainSnapshotMorphs() ?? []) void this.remodelUnit(m.id, m.to);
-    // Everything below CREATES sim records with freshly-minted LOCAL ids — the collision
-    // family option 2 removes — so a frozen client refuses it. Its trained/summon queues
-    // never fill anyway (the sim does not step); new units arrive as snapshot records and
-    // grow models through the drains just above.
-    if (this.rts?.frozenClient) return;
+    // Felled trees CREATE nothing, so they are drained on a frozen client too — there the
+    // queue is filled by the authority's word (WorldSnapshot.felledTrees → SimWorld.fellTree).
     const map = this.viewer.map;
     if (map) {
       for (const tree of world.drainFelledTrees()) {
@@ -13230,6 +13227,11 @@ export class MapViewerScene {
         this.rts?.onTreeFelled(tree.x, tree.y, tree.blockRadius); // stop blocking fog line-of-sight
       }
     }
+    // Everything below CREATES sim records with freshly-minted LOCAL ids — the collision
+    // family option 2 removes — so a frozen client refuses it. Its trained/summon queues
+    // never fill anyway (the sim does not step); new units arrive as snapshot records and
+    // grow models through the drains just above.
+    if (this.rts?.frozenClient) return;
     // Finished training: the unit exits from the building corner nearest its
     // rally point and rotates counterclockwise to the next clear spot if that
     // corner is crowded (WC3), then walks to the rally point. `claimed` holds

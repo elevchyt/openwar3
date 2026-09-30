@@ -1392,6 +1392,13 @@ export interface Alert {
   killer?: { properName: string; typeId: string };
 }
 
+/** What the host tells each recipient that only the sim's tick produces (SimWorld.noticeWire). */
+export interface WireNotices {
+  alerts: Alert[];
+  built: Array<{ buildingId: number; owner: number }>;
+  researched: Array<{ buildingId: number; upgradeId: string; level: number; owner: number }>;
+}
+
 /** A structure's construction reaching a milestone (EVENT_(PLAYER_)UNIT_CONSTRUCT_*):
  *  the foundation laid, the build cancelled, or the building finished. */
 export interface ConstructEvent {
@@ -4184,6 +4191,40 @@ export class SimWorld {
     return best;
   }
 
+  /** A tree has come down — every felling site goes through here. The renderer's queue, and on
+   *  a LAN host the wire's too (`drainFelledForWire`), because nothing else would ever tell a
+   *  client: its sim never steps, so a tree chopped out, struck down or burnt on the host stood
+   *  on every other machine for the rest of the match — drawn, blocking its placement grid and
+   *  its line of sight, and taking harvest orders its own authority still accepted. */
+  private noteFelled(tree: SimTree): void {
+    this.felled.push(tree);
+    this.felledWire?.push(tree);
+  }
+  private felledWire: SimTree[] | null = null;
+
+  /** Host side: trees felled since the last ask, for `MatchLink`'s felled-tree lane. The first
+   *  ask switches the tap on, so a sim nobody hosts from keeps no second queue. */
+  drainFelledForWire(): SimTree[] {
+    if (!this.felledWire) {
+      this.felledWire = [];
+      return [];
+    }
+    if (!this.felledWire.length) return this.felledWire;
+    const out = this.felledWire;
+    this.felledWire = [];
+    return out;
+  }
+
+  /** Client side: the authority says this tree is down (`WorldSnapshot.felledTrees`). Felled
+   *  through the renderer's own queue, exactly as a local felling is; a tree already gone is
+   *  a repeat and does nothing. */
+  fellTree(id: number): void {
+    const tree = this.trees.get(id);
+    if (!tree) return;
+    this.trees.delete(id);
+    this.felled.push(tree);
+  }
+
   /** Trees felled since the last drain (renderer hides them + unstamps cells). */
   drainFelledTrees(): SimTree[] {
     if (!this.felled.length) return this.felled;
@@ -4924,6 +4965,35 @@ export class SimWorld {
   }
 
   /** Announcements since the last drain (renderer turns each into text + sound + ping). */
+  /** Every alert goes through here: the renderer's queue, and on a LAN host the wire's. */
+  private noteAlert(a: Alert): void {
+    this.alerts.push(a);
+    this.noticeWire?.alerts.push(a);
+  }
+
+  /** The engine's own announcements, teed for the wire (`drainNoticesForWire`): the alerts, the
+   *  "Job's done." of a finished building and the research-complete chime. All three are queued
+   *  by the sim's TICK for the renderer to drain, and a client's sim never ticks — so on every
+   *  machine but the host a town under attack said nothing, a hero died in silence and a
+   *  Blacksmith finished without a word. Null until a host first asks. */
+  private noticeWire: WireNotices | null = null;
+
+  /** Host side: the notices since the last ask (`MatchLink`'s notices lane). The first ask
+   *  switches the tap on. */
+  drainNoticesForWire(): WireNotices {
+    const out = this.noticeWire ?? { alerts: [], built: [], researched: [] };
+    this.noticeWire = { alerts: [], built: [], researched: [] };
+    return out;
+  }
+
+  /** Client side: the authority's notices for this recipient, into the queues the renderer
+   *  already drains — so they are shown, voiced and worded exactly as the host's own are. */
+  receiveNotices(n: Partial<WireNotices>): void {
+    if (n.alerts) this.alerts.push(...n.alerts);
+    if (n.built) this.buildCompletions.push(...n.built);
+    if (n.researched) this.researchCompletions.push(...n.researched);
+  }
+
   drainAlerts(): Alert[] {
     const out = this.alerts;
     this.alerts = [];
@@ -4952,6 +5022,16 @@ export class SimWorld {
   private mineCollapses = new Set<number>();
   takeMineCollapse(id: number): boolean {
     return this.mineCollapses.delete(id);
+  }
+
+  /** Client side: the authority no longer lists this mine (it ran dry — the payload carries
+   *  every live one, `snapshotFor`), so it leaves through the same queue a local depletion
+   *  does and the renderer collapses it. */
+  dropMine(id: number): void {
+    const mine = this.mines.get(id);
+    if (!mine) return;
+    this.mines.delete(id);
+    this.depleted.push(mine);
   }
 
   drainDepletedMines(): SimMine[] {
@@ -7058,7 +7138,7 @@ export class SimWorld {
       if (mine.gold <= 0) {
         this.mines.delete(mine.id);
         this.depleted.push(mine);
-        this.alerts.push({ kind: "minedestroyed", player: u.owner, x: mine.x, y: mine.y });
+        this.noteAlert({ kind: "minedestroyed", player: u.owner, x: mine.x, y: mine.y });
         // Nothing left to hold, or to haunt. WC3 collapses the building with the mine — the
         // crew is turned out (unloadBurrow / the ring is dropped below) rather than buried,
         // and the building goes the way a cancelled one does: no death, no corpse, no kill
@@ -7070,7 +7150,7 @@ export class SimWorld {
         this.removeUnit(u.id);
       } else if (mine.gold < dataNum("LowGoldAmount") && !this.minesRunningLow.has(mine.id)) {
         this.minesRunningLow.add(mine.id);
-        this.alerts.push({ kind: "minelow", player: u.owner, x: mine.x, y: mine.y });
+        this.noteAlert({ kind: "minelow", player: u.owner, x: mine.x, y: mine.y });
       }
     }
   }
@@ -7292,6 +7372,7 @@ export class SimWorld {
           if (job.kind === "research") {
             this.tech?.setResearchLevel(u.owner, job.unitId, job.level);
             this.researchCompletions.push({ buildingId: u.id, upgradeId: job.unitId, level: job.level, owner: u.owner });
+            this.noticeWire?.researched.push({ buildingId: u.id, upgradeId: job.unitId, level: job.level, owner: u.owner });
             this.applyUnitSwap(u.owner, job.unitId); // rtma: morph existing units (Headhunter→Berserker)
           } else if (job.kind === "upgrade") {
             this.morphUnit(u, job.unitId);
@@ -7370,6 +7451,7 @@ export class SimWorld {
     const start = this.unitReg?.get(u.typeId)?.manaStart ?? 0;
     if (start > 0) u.mana = Math.min(start, u.baseMaxMana);
     this.buildCompletions.push({ buildingId: u.id, owner: u.owner });
+    this.noticeWire?.built.push({ buildingId: u.id, owner: u.owner });
     this.noteConstruct(u.id, "finish"); // EVENT_(PLAYER_)UNIT_CONSTRUCT_FINISH
   }
 
@@ -7444,6 +7526,27 @@ export class SimWorld {
     // the body. A unit that DIES a critter turns back too (kill): it falls as itself, and the
     // poof is what says the critter was never the thing that died.
     this.spellEffects.push({ art: HEX_DONE_ART, x: u.x, y: u.y, targetId: 0, z: 0, soundFile: HEX_DONE_SOUND });
+  }
+
+  /**
+   * Client side: a record the payload RETYPED in place (ApplyResult.morphed) takes its new
+   * type's own traits — the part of `morphUnit` the wire does not carry. Hit points, mana,
+   * armour, the live weapon, the abilities and the worker block all arrive already morphed;
+   * what did not was what the unit IS (the classification, whose `isPeon` kept a Militia an
+   * idle worker on every client), its armour CLASS, its cast timing and its weapon list.
+   */
+  retypeRecord(u: SimUnit): void {
+    const def = this.unitReg?.get(u.typeId);
+    if (!def) return;
+    u.armorType = def.armorType;
+    u.castPoint = def.castPoint;
+    u.castBackswing = def.castBackswing;
+    u.weapons = weaponsFromDef(def);
+    const cls = def.classification ?? [];
+    u.isPeon = cls.includes("peon");
+    u.ward = cls.includes("ward");
+    u.mechanical = cls.includes("mechanical");
+    u.ancient = cls.includes("ancient");
   }
 
   private morphUnit(u: SimUnit, toTypeId: string): void {
@@ -10080,7 +10183,7 @@ export class SimWorld {
       return;
     }
     this.trees.delete(tree.id);
-    this.felled.push(tree);
+    this.noteFelled(tree);
   }
 
   /**
@@ -17355,7 +17458,7 @@ export class SimWorld {
     if (!fell) return;
     for (const t of fell) {
       this.trees.delete(t.id);
-      this.felled.push(t);
+      this.noteFelled(t);
     }
   }
 
@@ -17675,7 +17778,7 @@ export class SimWorld {
       const tree = this.nearestTree(x, y, reach);
       if (!tree || Math.hypot(tree.x - eater.x, tree.y - eater.y) - eater.radius > reach) return false;
       this.trees.delete(tree.id);
-      this.felled.push(tree); // renderer plays the tree's death and leaves the stump
+      this.noteFelled(tree); // renderer plays the tree's death and leaves the stump
       return true;
     },
     setReplenishTarget: (well, targetId) => { well.replenishTargetId = targetId; },
@@ -17766,7 +17869,7 @@ export class SimWorld {
     for (const t of this.nearestTrees(x, y, radius, Math.max(1, max))) {
       if (Math.hypot(t.x - x, t.y - y) > radius) continue; // nearestTrees pads to `limit`
       this.trees.delete(t.id);
-      this.felled.push(t);
+      this.noteFelled(t);
       out.push({ x: t.x, y: t.y });
     }
     return out;
@@ -18241,6 +18344,29 @@ export class SimWorld {
    *  come off the same reproducible sequence as damage and drops instead of Math.random. */
   random(): number {
     return this.rng();
+  }
+
+  /**
+   * The slice of `tick` a frozen LAN CLIENT still runs (RtsController.tick — its sim never
+   * steps; the payload writes its records). Each piece is here because it reads only what the
+   * payload already wrote, and nothing on the wire carries its result:
+   *
+   *   · the tech census — `tick` invalidates it wholesale for the reason its comment gives, and
+   *     on a client nothing did, so a building finishing or a hall becoming a Keep left the
+   *     requirement checks stale (buttons grey, and refused by the client's own authority)
+   *     until some unrelated record happened to be created;
+   *   · the item reveals — a Crystal Ball, Flare Gun or Dust the client used is predicted onto
+   *     its OWN records (RtsController.execute runs a command locally first), and only this
+   *     ages it, so the veil stayed lifted for the rest of the match;
+   *   · blight — painted off finished buildings, which are exactly the records the payload
+   *     carries, and with no lane of its own: without it a client never saw the rot spread,
+   *     and refused every Undead structure outside the start discs ("Must summon structures
+   *     upon Blight.").
+   */
+  tickClient(dt: number): void {
+    this.tech?.invalidate();
+    this.tickItemReveals(dt);
+    this.tickBlight(dt);
   }
 
   tick(dt: number): void {
@@ -20708,7 +20834,7 @@ export class SimWorld {
     if (!fell) return;
     for (const t of fell) {
       this.trees.delete(t.id);
-      this.felled.push(t);
+      this.noteFelled(t);
     }
   }
 
@@ -20947,12 +21073,12 @@ export class SimWorld {
             this.depleted.push(mine);
             // "A gold mine has collapsed." — told to whoever was working it, since they are
             // the one who has to go and find another (Goldminedestroyed + GoldMineCollapseSound).
-            this.alerts.push({ kind: "minedestroyed", player: u.owner, x: mine.x, y: mine.y });
+            this.noteAlert({ kind: "minedestroyed", player: u.owner, x: mine.x, y: mine.y });
           } else if (mine.gold < dataNum("LowGoldAmount") && !this.minesRunningLow.has(mine.id)) {
             // MiscData names the line itself: "this is the amount where a gold mine is
             // considered low" (LowGoldAmount=1500). Warned on the trip that crosses it, once.
             this.minesRunningLow.add(mine.id);
-            this.alerts.push({ kind: "minelow", player: u.owner, x: mine.x, y: mine.y });
+            this.noteAlert({ kind: "minelow", player: u.owner, x: mine.x, y: mine.y });
           }
           // Emerge on the side facing the town hall — the worker was invisible
           // inside, so re-placing it here is seamless and makes it ALWAYS exit
@@ -21201,7 +21327,7 @@ export class SimWorld {
       tree.lumber -= w.lumberPerChop;
       if (tree.lumber <= 0) {
         this.trees.delete(tree.id);
-        this.felled.push(tree); // renderer plays "death" + leaves the stump
+        this.noteFelled(tree); // renderer plays "death" + leaves the stump
         // The tree we were chopping just fell. Pick the next one NOW, from HERE, whether or
         // not the sack is full: a full worker walks home and comes back to `resId`, and if
         // that still names the stump, the search for a replacement is made from the DEPOT
@@ -22288,7 +22414,7 @@ export class SimWorld {
     if (last && this.elapsed - last.t < dataNum("AttackNotifyDelay") &&
         Math.hypot(target.x - last.x, target.y - last.y) <= dataNum("AttackNotifyRange")) return;
     this.attackNotify.set(key, { t: this.elapsed, x: target.x, y: target.y });
-    this.alerts.push({ kind: target.building ? "townattack" : "attack", player: target.owner, x: target.x, y: target.y });
+    this.noteAlert({ kind: target.building ? "townattack" : "attack", player: target.owner, x: target.x, y: target.y });
   }
 
   /**
@@ -22940,7 +23066,7 @@ export class SimWorld {
     // neither is announced: nothing has actually been lost.
     if (u.isHero) {
       const killer = killerId ? this.units.get(killerId) : undefined;
-      this.alerts.push({
+      this.noteAlert({
         kind: "herodeath", player: u.owner, x: u.x, y: u.y,
         hero: { properName: u.properName, typeId: u.typeId, level: u.level },
         killer: killer?.isHero ? { properName: killer.properName, typeId: killer.typeId } : undefined,
