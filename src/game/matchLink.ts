@@ -48,6 +48,14 @@ export interface MatchChannel {
    */
   onPeerRejoin: (peer: number) => void;
   /**
+   * A peer left the room for good (`peer-leave`) — it quit, or its dropped seat's hold ran out.
+   *
+   * Required, for `onRoomClosed`'s reason turned round: a client leaving is the one departure
+   * nothing else reports, so a channel that quietly lacked it left the host playing on against
+   * an empty seat — no "has left the game.", no EVENT_PLAYER_LEAVE, no victory check.
+   */
+  onPeerLeave: (peer: number) => void;
+  /**
    * The room is gone, so the match is over (item F6).
    *
    * Required, for the same reason `onPeerRejoin` is: v1 has no host migration, so a host

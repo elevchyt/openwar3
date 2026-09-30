@@ -233,6 +233,13 @@ export interface BuildingSnapshot {
    *  from the read window — true only where the sim steps; a frozen client's shelves never
    *  restocked and never felt anybody else's purchases. */
   stock: StockSnapshot[] | null;
+  /** The gold mine this building stands ON (a Haunted or Entangled Gold Mine), else 0 —
+   *  `SimUnit.mineId`, and through it `SimMine.entangledBy`. The host's RENDERER forms that
+   *  link when the model lands (`attachEntangled`), which a client's never does, so without it
+   *  a client's Haunted Gold Mine drew no ring of marks, a right-click on it was not a harvest
+   *  (`hauntedMine` answered null) and the plain gold mine stayed drawn inside it. Public: the
+   *  building standing on the mine says as much to anybody who can see it. */
+  mineId: number;
 }
 
 /** One unit, as a client that did not simulate it needs it. */
@@ -711,7 +718,7 @@ export function rememberedUnit(u: SimUnit): UnitSnapshot {
     bonusInt: 0,
 
     worker: null,
-    building: { constructionLeft: 0, buildTimeTotal: 0, queue: [], producesUnits: false, selfBuilds: false, rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0, stock: null },
+    building: { constructionLeft: 0, buildTimeTotal: 0, queue: [], producesUnits: false, selfBuilds: false, rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0, stock: null, mineId: u.mineId },
     abilities: [],
     buffs: [],
     inventory: [],
@@ -872,6 +879,7 @@ export function snapshotFor(
               u.building.stock && (u.neutralPassive || viewer.seesFor(u.owner))
                 ? [...u.building.stock].map(([id, st]) => ({ id, count: st.count, max: st.max, timer: encodeStockTime(st.timer), period: encodeStockTime(st.period), kind: st.kind, unlimited: !!st.unlimited }))
                 : null,
+            mineId: u.mineId,
           }
         : null,
       abilities: u.abilities,

@@ -261,6 +261,10 @@ export class LanLobby {
    *  for the MATCH, whose host owes that seat the world it missed (item 11b). Separate from
    *  `onPeerData` because it is relay news about who is in the room, not game traffic. */
   onPeerRejoin: (peer: number) => void = () => {};
+  /** A peer is out of the room for good — it left, or its dropped seat's hold ran out. The
+   *  roster forgets it below either way; this hook is for the MATCH, where it is a player
+   *  leaving the game. */
+  onPeerLeave: (peer: number) => void = () => {};
   /** The room is gone — in v1 that means the HOST left, since a host drop closes the room and
    *  there is no migration. For the LAN screen this is just an error line; for a MATCH in
    *  progress it is the end of the game, and nothing else will ever say so: the wire simply
@@ -274,7 +278,14 @@ export class LanLobby {
     /** Where the rejoin token is kept between a drop and a return. localStorage by default —
      *  survives a tab reload, which memory would not. */
     private readonly store: SessionStore = localStorageStore(),
-  ) {}
+  ) {
+    // Closing the tab or the window is a departure too, and the one that gets no `close()`:
+    // best effort, since the page may be gone before the frame is, and the relay's hold on a
+    // dropped seat (server/rooms.mjs HOLD_MS) is the backstop when it is.
+    globalThis.addEventListener?.("pagehide", () => {
+      if (this.state.room) this.transport?.send({ t: "leave" });
+    });
+  }
 
   get snapshot(): LobbyState {
     return this.state;
@@ -610,6 +621,12 @@ export class LanLobby {
    *  hand-off, `dispose()` does. */
   close(): void {
     this.store.save(null); // the match is over on our end; a fresh game starts a fresh session
+    // SAY so before hanging up. Every caller of this is a chosen departure (End Game, Quit
+    // Mission, Exit Program, a finished match, a screen going away), and a bare socket close
+    // reads to the relay as a DROP — a seat held for a player who might come back — so the host
+    // heard nothing until the hold ran out. A `leave` frees the seat at once and every peer is
+    // told `peer-leave`, which is what the match turns into the map's own EVENT_PLAYER_LEAVE.
+    if (this.state.room) this.transport?.send({ t: "leave" });
     // Silently, like `promote`'s: the close event of a socket we ended is not news, and landing
     // after the reset below it would paint "Connection to the game host was lost." on whatever
     // screen is up next.
@@ -650,7 +667,11 @@ export class LanLobby {
       case "peer-join":
         return this.set({ peers: [...this.state.peers, m.peer] });
       case "peer-leave":
-        return this.set({ peers: this.state.peers.filter((p) => p.id !== m.peerId) });
+        this.set({ peers: this.state.peers.filter((p) => p.id !== m.peerId) });
+        // …and tell the match, AFTER the roster (as `peer-rejoin` below): in a game in progress
+        // this is a player leaving it — the relay sends it for a chosen `leave` and for a
+        // dropped seat whose hold ran out alike (server/rooms.mjs HOLD_MS).
+        return this.onPeerLeave(m.peerId);
       case "peer-drop":
         // A peer dropped but its slot is HELD (item 11a). Keep it in the roster — it may be
         // back — rather than removing it as a leave does. The screen may grey it as "reconnecting".

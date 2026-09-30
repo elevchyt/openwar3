@@ -28,7 +28,7 @@ export interface ApplyWorld {
   readonly units: Map<number, SimUnit>;
   /** Mine positions are public map furniture (ids agree from `.doo` order); only the gold
    *  reading is written, and only when the recipient has eyes on it (-1 = "no eyes"). */
-  readonly mines: ReadonlyMap<number, { gold: number }>;
+  readonly mines: ReadonlyMap<number, { gold: number; entangledBy: number }>;
   readonly items: Map<number, SimItem>;
   /** In-flight missiles, upserted like items: present = written, absent = gone. Optional so
    *  the stub worlds tests pass keep compiling; the real `SimWorld` always has it. */
@@ -172,6 +172,7 @@ export function writeUnitSnapshot(u: SimUnit, s: UnitSnapshot): void {
   } else {
     u.building = null;
   }
+  u.mineId = s.building?.mineId ?? 0;
   u.abilities = s.abilities;
   u.buffs = s.buffs;
   u.inventory = s.inventory;
@@ -287,6 +288,15 @@ export function applyWorldSnapshot(world: ApplyWorld, snap: WorldSnapshot, creat
   for (const m of snap.mines) {
     const rec = world.mines.get(m.id);
     if (rec && m.gold >= 0) rec.gold = m.gold; // -1 = no eyes on it: keep the last reading
+  }
+  // …and which building stands on each mine, the other half of `mineId` (BuildingSnapshot).
+  // `hauntedMine`/`mineRingStations` ask the MINE, so the link is written from the record that
+  // carries it; the release is `removeUnit`'s own (`releaseEntangled`), which already ran above
+  // for a building the payload dropped.
+  for (const u of world.units.values()) {
+    if (!u.mineId) continue;
+    const rec = world.mines.get(u.mineId);
+    if (rec && rec.entangledBy !== u.id) rec.entangledBy = u.id;
   }
   // Ground items follow the units' create/remove rule (an item in the dark is ABSENT, not
   // remembered — snapshot.ts). `charges` does not cross: pickup and pawn are host-judged.

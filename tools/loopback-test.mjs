@@ -350,7 +350,7 @@ function channelFor(t) {
   // whether the wire was hung up without needing a real socket to hang up.
   const ch = {
     send: (data, to) => t.send({ t: "relay", to, data }),
-    onPeerData: () => {}, onPeerRejoin: () => {}, onRoomClosed: () => {},
+    onPeerData: () => {}, onPeerRejoin: () => {}, onPeerLeave: () => {}, onRoomClosed: () => {},
     closed: 0, close: () => { ch.closed++; },
   };
   // Both halves of `MatchChannel`: game traffic, and the one piece of roster news the match
@@ -359,6 +359,7 @@ function channelFor(t) {
   t.onMessage = (m) => {
     if (m.t === "deliver") ch.onPeerData(m.from, m.data);
     else if (m.t === "peer-rejoin") ch.onPeerRejoin(m.peer.id);
+    else if (m.t === "peer-leave") ch.onPeerLeave(m.peerId);
   };
   return ch;
 }

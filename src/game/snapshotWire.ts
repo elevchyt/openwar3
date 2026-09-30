@@ -51,7 +51,7 @@ export type WireSnapshot = Omit<WorldSnapshot, "units" | "projectiles"> & { hot:
 /** Bumped when the binary layout changes. Carried in the blob so a mismatched decode fails
  *  loudly at the header rather than as garbage fields three units in. The relay's
  *  `PROTOCOL_VERSION` still gates the SESSION; this gates the blob. */
-const CODEC_VERSION = 8; // 8: a buff's art carries the node its holder RIDES and the carrier's loop (7: a projectile carries its `Missilearc` (6: a buff carries the duration it started at (the denominator of an expiry bar) (5: a unit carries its Hex critter skin; 4: a buff's art carries its SIZE variant; 3: a pending build's `paid` flag; 2: buffs carry their `B….` row id)
+const CODEC_VERSION = 9; // 9: owner/team are SIGNED bytes (the neutrals are -1), and a building carries the gold mine it stands on (8: a buff's art carries the node its holder RIDES and the carrier's loop (7: a projectile carries its `Missilearc` (6: a buff carries the duration it started at (the denominator of an expiry bar) (5: a unit carries its Hex critter skin; 4: a buff's art carries its SIZE variant; 3: a pending build's `paid` flag; 2: buffs carry their `B….` row id)
 
 const TWO_PI = Math.PI * 2;
 
@@ -171,6 +171,7 @@ class Writer {
   }
 
   u8(v: number): void { this.ensure(1); this.view.setUint8(this.pos, v); this.pos += 1; }
+  i8(v: number): void { this.ensure(1); this.view.setInt8(this.pos, v); this.pos += 1; }
   u16(v: number): void { this.ensure(2); this.view.setUint16(this.pos, v, true); this.pos += 2; }
   i16(v: number): void { this.ensure(2); this.view.setInt16(this.pos, v, true); this.pos += 2; }
   u32(v: number): void { this.ensure(4); this.view.setUint32(this.pos, v, true); this.pos += 4; }
@@ -199,6 +200,7 @@ class Reader {
     this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   }
   u8(): number { const v = this.view.getUint8(this.pos); this.pos += 1; return v; }
+  i8(): number { const v = this.view.getInt8(this.pos); this.pos += 1; return v; }
   u16(): number { const v = this.view.getUint16(this.pos, true); this.pos += 2; return v; }
   i16(): number { const v = this.view.getInt16(this.pos, true); this.pos += 2; return v; }
   u32(): number { const v = this.view.getUint32(this.pos, true); this.pos += 4; return v; }
@@ -306,8 +308,12 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
   w.u32(flags >>> 0);
 
   w.u32(s.id);
-  w.u8(s.owner);
-  w.u8(s.team);
+  // SIGNED: the neutrals are owner -1 and team -1 (rts.ts NEUTRAL_HOSTILE_OWNER / _TEAM), and a
+  // u8 turned that into 255 on every client — the creeps arrived as "Player 256", nobody's
+  // neutral, and wore the enemy's red under the ally-colour filter. A seat is 0–27 and a team
+  // smaller still, so a signed byte holds every value either can take.
+  w.i8(s.owner);
+  w.i8(s.team);
   w.u16(w.intern(s.typeId));
   w.u16(w.intern(s.race));
   w.u16(w.intern(s.properName));
@@ -384,7 +390,7 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
 
   if (s.building) {
     const b = s.building;
-    w.u8((b.producesUnits ? 1 : 0) | (b.stock ? 2 : 0) | (b.selfBuilds ? 4 : 0));
+    w.u8((b.producesUnits ? 1 : 0) | (b.stock ? 2 : 0) | (b.selfBuilds ? 4 : 0) | (b.mineId ? 8 : 0));
     w.f32(b.constructionLeft);
     w.f32(b.buildTimeTotal);
     w.f32(b.rallyX);
@@ -395,6 +401,7 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
     // -1-encoded JSON-safe shape — both ride the string table as the small JSON they are.
     w.u16(w.intern(JSON.stringify(b.queue)));
     if (b.stock) w.u16(w.intern(JSON.stringify(b.stock)));
+    if (b.mineId) w.u32(b.mineId);
   }
 
   w.u8(s.abilities.length);
@@ -468,8 +475,8 @@ function readUnit(r: Reader): UnitSnapshot {
   const flags = r.u32();
   const s: UnitSnapshot = {
     id: r.u32(),
-    owner: r.u8(),
-    team: r.u8(),
+    owner: r.i8(),
+    team: r.i8(),
     typeId: r.str(),
     race: r.str(),
     properName: "",
@@ -621,7 +628,8 @@ function readUnit(r: Reader): UnitSnapshot {
     const rallyTargetId = r.u32();
     const queue = JSON.parse(r.str());
     const stock = bf & 2 ? JSON.parse(r.str()) : null;
-    s.building = { constructionLeft, buildTimeTotal, queue, producesUnits: (bf & 1) !== 0, selfBuilds: (bf & 4) !== 0, rallyX, rallyY, rallyKind, rallyTargetId, stock };
+    const mineId = bf & 8 ? r.u32() : 0;
+    s.building = { constructionLeft, buildTimeTotal, queue, producesUnits: (bf & 1) !== 0, selfBuilds: (bf & 4) !== 0, rallyX, rallyY, rallyKind, rallyTargetId, stock, mineId };
   }
 
   const nAbilities = r.u8();

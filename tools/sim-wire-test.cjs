@@ -143,7 +143,7 @@ const shop = () => ({
       { kind: "research", unitId: "Rome", level: 2, timeLeft: 13.7, buildTime: 60 },
       { kind: "upgrade", unitId: "ostr", timeLeft: 100, buildTime: 140 },
     ],
-    producesUnits: true, selfBuilds: false, rallyX: -512.25, rallyY: 300.5, rallyKind: "unit", rallyTargetId: 1042,
+    producesUnits: true, selfBuilds: false, rallyX: -512.25, rallyY: 300.5, rallyKind: "unit", rallyTargetId: 1042, mineId: 0,
     stock: [
       { id: "pinv", count: 2, max: 3, timer: 30.5, period: 120, kind: "item" },
       { id: "nkod", count: 1, max: 1, timer: -1, period: -1, kind: "unit" },
@@ -173,7 +173,7 @@ function richSnapshot() {
     stash: { gold: 812, lumber: 344 },
     research: { Rome: 2, Rowd: 1 },
     creepCamps: [{ x: 900, y: -700, level: 12 }],
-    units: [hero(), shop(), peon(), rememberedUnit({ ...base(), id: 4, owner: 3, team: 3, typeId: "hcas", x: 4000, y: 4000, facing: 0, altModel: true, building: {} })],
+    units: [hero(), shop(), peon(), rememberedUnit({ ...base(), id: 4, owner: 3, team: 3, typeId: "hcas", x: 4000, y: 4000, facing: 0, altModel: true, building: {}, mineId: 0 })],
     mines: [{ id: 501, x: 2000, y: 2000, radius: 96, gold: 11250 }, { id: 502, x: -2000, y: -2000, radius: 96, gold: -1 }],
     items: [{ id: 7001, itemId: "gold", x: 44, y: -12 }],
     projectiles: projectiles(),
@@ -213,6 +213,14 @@ console.log("decode(encode(snap)) is the same payload, field for field");
   // builder and cannot be given one) rides the same byte as producesUnits/stock.
   const selfBuilt = { ...richSnapshot(), units: [{ ...shop(), building: { ...shop().building, selfBuilds: true } }] };
   check("a self-raising structure's flag crosses", decodeSnapshot(encodeSnapshot(selfBuilt)).units[0].building.selfBuilds, true);
+  // …and so does the gold mine a building stands ON (a Haunted/Entangled Gold Mine), which a
+  // client has no other way to learn: the host's renderer forms that link, a client's never does.
+  const haunted = { ...richSnapshot(), units: [{ ...shop(), building: { ...shop().building, mineId: 70000 } }] };
+  check("the mine a building stands on crosses", decodeSnapshot(encodeSnapshot(haunted)).units[0].building.mineId, 70000);
+  // The neutrals are owner -1 / team -1. A u8 made that 255 on every client: "Player 256", red.
+  const creep = { ...richSnapshot(), units: [{ ...peon(), owner: -1, team: -1, isCreep: true }] };
+  const cb = decodeSnapshot(encodeSnapshot(creep)).units[0];
+  check("a creep's owner and team stay -1 (signed, not 255)", [cb.owner, cb.team], [-1, -1]);
   check("encoding did not mutate the source payload", firstDiff(snap, richSnapshot()), null);
 }
 
@@ -259,7 +267,7 @@ console.log("\nthe win, measured on a teamfight-sized world");
   for (let i = 0; i < 190; i++) units.push(grunt(i));
   for (let i = 0; i < 10; i++) units.push({ ...hero(), id: 15000 + i, orderQueue: null, buildPending: null, pendingCastCode: null });
   for (let i = 0; i < 24; i++) units.push({ ...shop(), id: 20000 + i });
-  for (let i = 0; i < 16; i++) units.push(rememberedUnit({ ...base(), id: 30000 + i, typeId: "hcas", building: {} }));
+  for (let i = 0; i < 16; i++) units.push(rememberedUnit({ ...base(), id: 30000 + i, typeId: "hcas", building: {}, mineId: 0 }));
   const projs = [];
   for (let i = 0; i < 60; i++) projs.push({ ...projectiles()[0], id: 40000 + i });
   const snap = { ...richSnapshot(), units, projectiles: projs };

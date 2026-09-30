@@ -230,6 +230,33 @@ try {
     await delay(HEARTBEAT_MS * 2);
   }
 
+  console.log("a held slot is not held for ever");
+  {
+    // In-process, over the core the socket adapter wraps, so the hold can be short without
+    // racing the rejoin checks above against it. A dropped player who never comes back must
+    // become a player who LEFT — the host hears `peer-leave` exactly as for a chosen leave, and
+    // that is the only thing that ever raises the map's EVENT_PLAYER_LEAVE for them.
+    const { RelayCore } = await import(join(REPO, "server", "rooms.mjs"));
+    const core = new RelayCore({ holdMs: 150 });
+    const conn = () => { const c = { got: [], send: (m) => c.got.push(m) }; core.connect(c); return c; };
+    const hostC = conn();
+    core.handle(hostC, { t: "create", name: "Hold", playerName: "Host", mapPath: MAP_PATH, maxPlayers: 3 });
+    const roomId = hostC.got.find((m) => m.t === "created").room.id;
+    const gone = conn();
+    core.handle(gone, { t: "join", roomId, playerName: "Gone" });
+    const back = conn();
+    core.handle(back, { t: "join", roomId, playerName: "Back" });
+    const backToken = back.got.find((m) => m.t === "joined").token;
+    core.disconnect(gone);
+    core.disconnect(back);
+    const back2 = conn();
+    core.handle(back2, { t: "join", roomId, playerName: "Back", token: backToken }); // returns in time
+    await delay(400);
+    const leaves = hostC.got.filter((m) => m.t === "peer-leave").map((m) => m.peerId);
+    check("a dropped seat whose hold runs out is announced as a leave", leaves.includes(2));
+    check("…and one reclaimed in time is not", !leaves.includes(3));
+  }
+
   console.log("a socket that dies WITHOUT closing is reaped");
   // The failure this covers was seen live: the games list advertised a room whose both tabs
   // had been shut minutes earlier. `ws.on("close")` never fired for them, because a tab that

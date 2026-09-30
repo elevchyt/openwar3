@@ -1299,6 +1299,12 @@ export class MapViewerScene {
   /** The seat of the machine holding the authoritative sim, when this machine is a client of
    *  one — so a room that closes under us can say who left (`showMatchOver`). */
   private hostSeat: number | null = null;
+  /** The match's seating (`MatchLinkSetup.seats`) — which relay peer sits in which slot, so a
+   *  peer leaving the room can be named as the PLAYER who left the game (`peerLeft`). */
+  private linkSeats: MatchLinkSetup["seats"] = [];
+  /** Seats whose game is already over — `RemovePlayer` (a defeat, a leave) — so a defeated
+   *  player hanging up afterwards is not made to leave a second time (`peerLeft`). */
+  private playersOut = new Set<number>();
   /**
    * **The pause, in three independent sources.**
    *
@@ -2758,6 +2764,8 @@ export class MapViewerScene {
     // so arming it early costs nothing on a visible window.
     this.startBackgroundPump();
     this.hostSeat = setup.isHost ? null : (setup.seats.find((s) => s.peer === setup.hostPeer)?.id ?? null);
+    this.linkSeats = setup.seats;
+    this.playersOut.clear();
     // A client turns the authority's payload back into the same `DialogObj` its own script
     // would have built, so `GameDialog` renders the real screen off the game's own FDF and the
     // two engine button behaviours (any click closes; a quit button leaves) work unchanged.
@@ -3408,6 +3416,7 @@ export class MapViewerScene {
         const PLAYER_GAME_RESULT_VICTORY = 0;
         const PLAYER_GAME_RESULT_DEFEAT = 1;
         if (result !== PLAYER_GAME_RESULT_DEFEAT) this.matchDecided = true;
+        this.playersOut.add(player);
         // A campaign chapter is "completed" exactly when its own script declares the local
         // player the winner — the same signal, read for a different reason.
         if (result === PLAYER_GAME_RESULT_VICTORY && player === this.localPlayer) this.onLocalVictory?.();
@@ -4711,8 +4720,15 @@ export class MapViewerScene {
         this.claimMineWidget(simId, mineId, widget);
       });
     }
-    // …and the way back. The building has left the world (destroyed, or the mine ran dry and
-    // it collapsed with it): un-hide the gold mine under it and repaint its foundation.
+    this.releaseMineWidgets(world);
+  }
+
+  /** …and the way back. The building has left the world (destroyed, or the mine ran dry and
+   *  it collapsed with it): un-hide the gold mine under it and repaint its foundation. Split
+   *  out of raiseEntangledMines because a CLIENT needs it too — its mine buildings arrive as
+   *  snapshot records (drainWorldSpawns claims the widget there) and leave the same way, while
+   *  the raise above only ever runs where the sim steps. */
+  private releaseMineWidgets(world: SimWorld): void {
     if (!this.entangledMines.size) return;
     for (const [simId, held] of [...this.entangledMines]) {
       if (world.units.has(simId)) continue;
@@ -9660,6 +9676,36 @@ export class MapViewerScene {
   private upkeepBandNow = -1;
 
   /**
+   * A player LEFT the match — the relay's `peer-leave` (MatchChannel.onPeerLeave): a client
+   * that quit, or whose dropped seat's hold ran out (server/rooms.mjs HOLD_MS).
+   *
+   * Every machine prints the game's own line for it (`PLAYER_LEFT_GAME`, the one
+   * `showMatchOver` prints for the host), because every machine is told. Only the AUTHORITY
+   * acts on it, and what it does is the map's business rather than ours: the seat becomes
+   * `PLAYER_SLOT_STATE_LEFT` (common.j `ConvertPlayerSlotState(2)`) and the ordinary
+   * `EVENT_PLAYER_LEAVE` is raised — the same door a conceding Computer+ player goes out of —
+   * so a melee map's `MeleeTriggerActionPlayerLeft` shares the leaver's units with an ally or
+   * hands them to Neutral Passive and runs the victory check. The slot state is set FIRST
+   * because that check reads it: `MeleePlayerIsOpponent` counts only a slot still PLAYING.
+   *
+   * A seat whose game was already over (defeated, then hung up) is announced and nothing more:
+   * blizzard.j has already removed it, and a second `MeleeDoLeave` would end it twice.
+   */
+  peerLeft(peer: number): void {
+    if (this.matchEnded) return; // our own game is over — nobody here is waiting on them
+    const seat = this.linkSeats.find((s) => s.peer === peer)?.id;
+    if (seat === undefined) return;
+    const s = (key: string, fallback: string): string => this.globalStrings?.strings.get(key) ?? fallback;
+    this.announce(fillSlots(s("PLAYER_LEFT_GAME", "%s has left the game."), [this.playerLabel(seat)]));
+    if (this.rts?.frozenClient || this.playersOut.has(seat)) return;
+    this.playersOut.add(seat);
+    const interp = this.mapScript?.interp;
+    if (!interp) return;
+    interp.rt.ensurePlayer(seat).slotState = 2; // PLAYER_SLOT_STATE_LEFT
+    interp.firePlayerEvent(seat, EVENT_PLAYER_LEAVE);
+  }
+
+  /**
    * The match ended out from under us: the room is gone, which in v1 means the host left.
    *
    * To a player still in the game that is the opponent LEAVING, and Blizzard.j already says
@@ -13132,8 +13178,21 @@ export class MapViewerScene {
         // …and a unit that walks into view ALREADY a critter is owed its critter: the body just
         // attached is its own type's, and the swap that hexed it happened out of our sight.
         if (s.hexForm) void this.remodelUnit(s.id, s.typeId);
+        // A Haunted or Entangled Gold Mine is a whole mine in its own model, so the map's plain
+        // gold mine under it goes out of sight exactly as it does where the building was raised
+        // (raiseEntangledMines / the haunted raise). The link came over the wire
+        // (BuildingSnapshot.mineId); the widget is this machine's own.
+        const mineId = s.building?.mineId ?? 0;
+        const mine = mineId ? world.mines.get(mineId) : undefined;
+        const vmap = this.viewer.map;
+        if (mine && world.units.has(s.id) && !this.entangledMines.has(s.id)) {
+          const widget = vmap ? this.nearestDoodadWidget(mine.x, mine.y, vmap.units as unknown as HideableWidget[]) : null;
+          this.claimMineWidget(s.id, mineId, widget);
+        }
       });
     }
+    // …and gives it back when that record goes (the raise itself is below the frozen gate).
+    if (this.rts?.frozenClient) this.releaseMineWidgets(world);
     for (const it of this.rts?.drainSnapshotItemSpawns() ?? []) void this.spawnItemModel(it.id, it.itemId, it.x, it.y);
     // died=false: the applier removing an item means "no longer sent" (picked up, or eyes
     // left it) — there is no death burst to play.
@@ -14319,6 +14378,8 @@ export class MapViewerScene {
     this.consoleUi?.dispose();
     this.consoleUi = null;
     this.hostSeat = null;
+    this.linkSeats = [];
+    this.playersOut.clear();
     this.panelPaused = this.scriptPaused = this.playerPaused = false;
     this.pauseVeil?.remove();
     this.pauseVeil = null;

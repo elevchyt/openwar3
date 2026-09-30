@@ -846,6 +846,9 @@ async function startGame(
       // is the only evidence a client gets (docs/multiplayer.md Phase F item 6). Without it the
       // wire simply goes quiet and the client keeps simulating a world nobody owns any more.
       link.channel.onRoomClosed = () => mapScene?.showMatchOver();
+      // …and a CLIENT leaving is the departure nothing else reports: the relay's `peer-leave`
+      // is the only word of it, and the host is the one machine that must act on it.
+      link.channel.onPeerLeave = (peer) => mapScene?.peerLeft(peer);
     }
     // The last stretch of the bar is a REAL load rather than a number climbing on its own: the
     // models and icons the opening minutes will ask for, fetched now instead of hitching the

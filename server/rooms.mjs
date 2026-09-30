@@ -51,6 +51,20 @@ const peerInfo = (p) => ({ id: p.id, name: p.name, host: p.host });
  *  slot, cheap enough to mint on a free tier. Node's global crypto in every runtime we target. */
 const mkToken = () => globalThis.crypto.randomUUID();
 
+/**
+ * How long a DROPPED player's slot is held before the drop becomes a leave.
+ *
+ * A held slot is a promise that the player may come back, and until this existed it was a
+ * promise with no end: a client that closed its tab, lost its machine or quit without a word
+ * stayed "disconnected" in the room for the rest of the match, the host was never told it had
+ * gone, and so the map's own `EVENT_PLAYER_LEAVE` never fired — its units stood there under a
+ * player who was not coming back and the victory check never ran. The client's reconnect is a
+ * single re-dial of the socket (LanLobby.onLost), plus whatever a reloaded tab does on its
+ * way back in; a minute covers both with room to spare. Ours, not the game's: WC3's own
+ * "waiting for players" countdown is a different mechanism (it PAUSES the game).
+ */
+const HOLD_MS = 60_000;
+
 export class RelayCore {
   /**
    * `describeHost` is asked, per connection, what this machine looks like from the network —
@@ -59,12 +73,13 @@ export class RelayCore {
    * addresses say nothing about how a player reaches the game. Asked per connection rather than
    * captured once, since an address can appear or vanish while the game sits on the menu.
    */
-  constructor({ describeHost = null } = {}) {
+  constructor({ describeHost = null, holdMs = HOLD_MS } = {}) {
     /** Rooms live only in memory. Losing them on restart loses lobbies, not matches. */
     this.rooms = new Map();
     this.conns = new Set();
     this.nextRoomId = 1;
     this.describeHost = describeHost;
+    this.holdMs = holdMs;
   }
 
   listing() {
@@ -133,6 +148,22 @@ export class RelayCore {
     peer.conn = null; // the old connection is gone; a rejoin reattaches a fresh one
     this.inRoom(room, { t: "peer-drop", peerId: peer.id });
     this.broadcastRooms();
+    // …but not for ever (HOLD_MS). The seat is let go exactly as a chosen `leave` would let it
+    // go, so every peer — the host above all — hears the same `peer-leave` either way.
+    clearTimeout(peer.dropTimer);
+    peer.dropTimer = setTimeout(() => {
+      peer.dropTimer = null;
+      if (!peer.disconnected || this.rooms.get(room.id) !== room || room.peers.get(peer.id) !== peer) return;
+      room.peers.delete(peer.id);
+      const anyLive = [...room.peers.values()].some((p) => !p.disconnected);
+      if (!anyLive) {
+        this.rooms.delete(room.id);
+      } else {
+        this.inRoom(room, { t: "peer-leave", peerId: peer.id });
+      }
+      this.broadcastRooms();
+    }, this.holdMs);
+    peer.dropTimer.unref?.(); // a test's RelayCore must not keep Node alive on a held seat
   }
 
   /** A CHOSEN departure (the `leave` message). Frees the slot immediately — the opposite of a
@@ -198,6 +229,8 @@ export class RelayCore {
         // players back in.
         const held = msg.token && [...room.peers.values()].find((p) => p.disconnected && p.token === msg.token);
         if (held) {
+          clearTimeout(held.dropTimer); // back in time: the seat is not let go
+          held.dropTimer = null;
           held.conn = conn;
           held.disconnected = false;
           if (msg.playerName) held.name = msg.playerName;
