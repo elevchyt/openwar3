@@ -15250,7 +15250,10 @@ export class MapViewerScene {
     // …and a STOPPED match has no camera either: the arrow keys and the screen edges are the
     // player moving through a world, and there is no moving through one that is not running.
     // (`updateEdgeScroll` tests the pause a second time for its own arrow cursor.)
-    if (this.userControl && !this.hardPaused) {
+    // …and a MIDDLE-DRAG is the one hand on the camera while it is held: the map is pinned
+    // under the cursor, so an arrow key, the stick or the cursor brushing a screen edge would
+    // each slide it out from under the hand that is holding it.
+    if (this.userControl && !this.hardPaused && !this.midPanning) {
       const panUp = (letters && this.keys.has("w")) || this.keys.has("arrowup");
       const panDown = (letters && this.keys.has("s")) || this.keys.has("arrowdown");
       const panRight = (letters && this.keys.has("d")) || this.keys.has("arrowright");
@@ -15458,7 +15461,9 @@ export class MapViewerScene {
       scale > 0 &&
       !!this.hud &&
       !this.paused &&
-      !this.placement &&
+      // NOT gated on a building placement: a Farm is carried to the edge of the base and past
+      // it, and in WC3 the view scrolls under the silhouette while you do (the ghost is
+      // re-seated under the cursor every frame, so it rides along).
       this.pointerInWindow &&
       !document.body.classList.contains("game-menu-open");
     let dx = 0;
