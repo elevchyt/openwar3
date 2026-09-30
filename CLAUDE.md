@@ -285,9 +285,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   FIVE presentation mechanisms (effect models, buff art, **lightning ribbons**, ubersplats, sound), and two of
   them play no model at all — a Chain Lightning or a Drain has no `Targetart` to find, and a buff's art lives on
   the BUFF row rather than on the ability. Reaching for the wrong one is the standard "this spell has no art" bug.
-  A CARRIER (Cyclone's `[Bcyc]`: an `Effectart` with a `sprite,first` attach) is buff art the other way round —
+  A CARRIER (Cyclone's `[Bcyc]`, Impale's `[BUim]`: an `Effectart` with a `sprite,first` attach) is buff art the other way round —
   it stands on the ground and the holder's MODEL rides its `Sprite First Ref`, while the unit, its pathing and
-  its click volumes stay put (`RtsController.setRide`); its landing is timed to the buff's clock.
+  its click volumes stay put (`RtsController.setRide`); its landing is timed to the buff's clock
+  (`CARRIER_CLIPS`: Cyclone pre-rolls its Death clip, Impale plays its one Birth clip at the rate of Air Time).
 - **Lighting & shadows:** read [`docs/lighting.md`](docs/lighting.md) before adding anything light- or
   shadow-shaped. WC3 has **no real-time shadows** — a shadow is a blob decal, a baked `war3map.shd` mask
   (16 bytes per terrain CELL, 0-or-255, no header), or nothing — and the glue screens are lit by the

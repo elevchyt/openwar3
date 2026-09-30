@@ -274,24 +274,53 @@ function argbOf(css: string): number {
   return (0xff000000 | parseInt(css.slice(1), 16)) >>> 0;
 }
 /**
- * The frame of a CARRIER's Death clip at which it has set its rider back on the ground — read
- * off the carrier's node tracks, keyed by the model's path (lower-cased, as `rides` keys it).
+ * When a CARRIER sets its rider back on the ground: the clip that does it and the frame at which
+ * the node is down — read off the carrier's node tracks, keyed by the model's path (lower-cased,
+ * as `rides` keys it). Both timed to the BUFF that wears the carrier (trackCarrier).
  *
- * `CycloneTarget.mdx` Death is [13467, 18467]. Its `dummy move` hovers (439–578) exactly as
- * Stand does until 17633, drops to 23.7 at 17933, bounces to 50.4 at 18100 and is on the ground
- * at **18233**. Parsed out of the install. The Death clip is authored as four more seconds of
- * Stand with the descent at its end, and that is what makes it possible to START it early, so
- * the body touches down on the frame the buff runs out (trackCarrier). The alternatives — cut
- * to the descent when the buff ends, or let go and fall — were recorded beside it and the
- * developer picked this one (issue #157).
+ * - `CycloneTarget.mdx` Death is [13467, 18467]. Its `dummy move` hovers (439–578) exactly as
+ *   Stand does until 17633, drops to 23.7 at 17933, bounces to 50.4 at 18100 and is on the
+ *   ground at **18233**. The Death clip is authored as four more seconds of Stand with the
+ *   descent at its end, and that is what makes it possible to START it early, so the body
+ *   touches down on the frame the buff runs out. The alternatives — cut to the descent when
+ *   the buff ends, or let go and fall — were recorded beside it and the developer picked this
+ *   one (issue #157).
+ * - `ImpaleHitTarget.mdx` is ONE Birth clip, [2233, 3600]: `dummy move` throws the node to
+ *   392.7 at 2700 and 439.6 at 2900 and has it back on the ground at **3367**, tumbling all the
+ *   way. The throw is the whole clip, so it is not pre-rolled but PLAYED AT A RATE — the
+ *   1.134 s the model spends in the air stretched onto the buff's own clock, which is
+ *   `[AUim] DataD` "Air Time" (1 s). The height is the model's own: 0.6× and 0.35× were
+ *   recorded beside it and the developer kept the authored throw.
+ *
+ * `launch` / `landSound` are AnimSounds labels sounded as the body leaves the ground and as
+ * it touches down — which WAV goes where is the developer's call; the rows are the game's.
  */
-const CARRIER_LANDING: Record<string, number> = {
-  "abilities\\spells\\nightelf\\cyclone\\cyclonetarget.mdx": 18233,
+const CARRIER_CLIPS: Record<string, { clip: "birth" | "death"; land: number; launch?: string; landSound?: string }> = {
+  "abilities\\spells\\nightelf\\cyclone\\cyclonetarget.mdx": { clip: "death", land: 18233 },
+  "abilities\\spells\\undead\\impale\\impalehittarget.mdx": {
+    clip: "birth",
+    land: 3367,
+    launch: "Impale", // AnimSounds "Impale" → ImpaleLaunch1.wav
+    landSound: "ImpaleLand", // AnimSounds "ImpaleLand" → ImpaleLand.wav
+  },
 };
 /** How fast a body a carrier has LET GO of falls, in world units/s² — only when the buff was
  *  taken off early (dispelled) and there is no Death clip to ride down. OURS: nothing in the
  *  install says; from the top of a cyclone (~550) it is on the ground in about 0.6 s. */
 const CARRIER_FALL_G = 3000;
+/**
+ * A cast whose sound is a FILE no table leads to — the developer's call, not the data's.
+ *
+ * `Units\Undead\HeroCryptLord\Impale.wav` is in the install and no row of any SoundInfo table
+ * names it. What the data plays at Impale's cast is the Crypt Lord's `SNDxAUIM` → AnimSounds
+ * "Impale" → `ImpaleLaunch1.wav`, and that is now the sound of each hurled body leaving the
+ * ground (CARRIER_CLIPS `launch`), so the cast itself sounds this file instead (issue #157's
+ * follow-up: "the ability should also play the impale.wav"). Ahead of every other rung of the
+ * cast-sound chain.
+ */
+const CAST_SOUND_FILES: Record<string, string> = {
+  AUim: "Units\\Undead\\HeroCryptLord\\Impale.wav",
+};
 /** How far past a clip's start frame (ms) a carrier's SND event still counts as "on it". */
 const CARRIER_EVENT_SLACK = 50;
 
@@ -5978,7 +6007,7 @@ export class MapViewerScene {
           seen.add("b:" + key);
           b.fx.forEach((fx, i) =>
             fx.carry
-              ? this.trackCarrier(active, `${u.id}|${key}|${i}`, fx, u.id, b.timeLeft)
+              ? this.trackCarrier(active, `${u.id}|${key}|${i}`, fx, u.id, b.timeLeft, b.total)
               : this.trackBuffFx(active, `${u.id}|${key}|${i}`, fx, u.id),
           );
         }
@@ -6398,8 +6427,8 @@ export class MapViewerScene {
 
   /** A carrier buff model, live this frame: stood at the holder's feet (`ground`), with the
    *  holder hung from its node once it has loaded. `timeLeft` is the buff's own clock, which is
-   *  what times the set-down (see CARRIER_LANDING). */
-  private trackCarrier(active: Set<string>, key: string, fx: BuffFx, simId: number, timeLeft: number): void {
+   *  what times the set-down (see CARRIER_CLIPS). */
+  private trackCarrier(active: Set<string>, key: string, fx: BuffFx, simId: number, timeLeft: number, total: number): void {
     // A body the fog hides is not flying about in a funnel for everybody to see either — the
     // same answer the unit's own model gets.
     if (this.rts?.unitHidden(simId)) return;
@@ -6413,9 +6442,19 @@ export class MapViewerScene {
       ride = { key, inst, node, path: fx.path.toLowerCase(), phase: "ride", off: new Float32Array(3), turn: new Float32Array([0, 0, 0, 1]), fallV: 0, fallFrom: 0, simId };
       this.rides.set(simId, ride);
       // The toss's own sound: the SND event the model parks on Birth's first frame
-      // (`SNDXACYB` → CycloneBirth1.wav). We start this clip, so we sound what it passes over.
+      // (`SNDXACYB` → CycloneBirth1.wav, `SNDXAUIT` → ImpaleHit.wav). We start this clip, so we
+      // sound what it passes over.
       const birth = inst.model.sequences[inst.sequence]?.interval;
-      if (birth && /^birth/i.test(inst.model.sequences[inst.sequence].name)) this.carrierSound(ride, birth[0], birth[0] + CARRIER_EVENT_SLACK);
+      const birthing = !!birth && /^birth/i.test(inst.model.sequences[inst.sequence].name);
+      if (birthing) this.carrierSound(ride, birth[0], birth[0] + CARRIER_EVENT_SLACK);
+      // A carrier whose throw IS its Birth clip (Impale) plays it at the rate that lands the
+      // body on the buff's own clock, and is already on its way down from the first frame.
+      const clip = CARRIER_CLIPS[ride.path];
+      if (clip?.clip === "birth" && birthing && birth) {
+        if (total > 0 && Number.isFinite(total)) inst.timeScale = (clip.land - birth[0]) / 1000 / total;
+        ride.phase = "land";
+      }
+      if (clip?.launch) this.carrierAnimSound(ride, clip.launch);
     }
     if (fx.loop && !this.carrierLoops.has(key)) {
       const wav = this.sounds?.abilityLoopPath(fx.loop) ?? "";
@@ -6426,8 +6465,9 @@ export class MapViewerScene {
       }
     }
     // The Death clip is STARTED EARLY, so that the body it sets down touches the ground on the
-    // frame the buff runs out (CARRIER_LANDING).
-    const land = CARRIER_LANDING[ride.path];
+    // frame the buff runs out (CARRIER_CLIPS).
+    const carried = CARRIER_CLIPS[ride.path];
+    const land = carried?.clip === "death" ? carried.land : undefined;
     if (land !== undefined && ride.phase !== "fall" && Number.isFinite(timeLeft)) {
       const death = this.sizedSeq(inst, "death");
       const iv = inst.model.sequences[death]?.interval;
@@ -6460,13 +6500,14 @@ export class MapViewerScene {
    */
   private endCarrier(ride: { inst: SpawnInstance; path: string; phase: string; fallV: number; fallFrom: number; off: Float32Array; simId: number }): boolean {
     const inst = ride.inst;
-    const death = this.sizedSeq(inst, "death");
-    const iv = death >= 0 ? inst.model.sequences[death]?.interval : undefined;
-    // Already setting the body down on time: the Death clip is running, let it finish.
-    if (ride.phase === "land" && iv) {
-      this.dyingFx.push({ inst, ttl: Math.max(0, iv[1] - inst.frame) / 1000 + 0.5 });
+    // Already setting the body down on time: the clip that lands it is running, let it finish.
+    const playing = inst.model.sequences[inst.sequence]?.interval;
+    if (ride.phase === "land" && playing) {
+      this.dyingFx.push({ inst, ttl: Math.max(0, playing[1] - inst.frame) / 1000 / Math.max(inst.timeScale, 1e-3) + 0.5 });
       return true;
     }
+    const death = this.sizedSeq(inst, "death");
+    const iv = death >= 0 ? inst.model.sequences[death]?.interval : undefined;
     // Otherwise the buff was taken off EARLY (a dispel): the carrier lets go and plays its own
     // Death clip out alone while the body falls — sounding it, as fadeOutFx starts it at its top.
     if (iv) this.carrierSound(ride, iv[0], iv[0] + CARRIER_EVENT_SLACK);
@@ -6484,6 +6525,21 @@ export class MapViewerScene {
     this.sounds?.playModelEventsIn(ride.path, from, to, { x: u.x, y: u.y, z: this.rts!.groundHeightAt(u.x, u.y) });
   }
 
+  /** Sound an AnimSounds LABEL at a rider's feet (CARRIER_CLIPS `launch` / `landSound`). */
+  private carrierAnimSound(ride: { simId: number }, label: string): void {
+    const u = this.rts?.simView.units.get(ride.simId);
+    if (!u || this.rts?.unitHidden(ride.simId)) return;
+    this.sounds?.playAnimSound(label, { x: u.x, y: u.y, z: this.rts!.groundHeightAt(u.x, u.y) });
+  }
+
+  /** The body is back on the ground: take it off the carrier, with the carrier's landing sound. */
+  private landRider(id: number, r: { path: string; simId: number }): void {
+    this.rts?.setRide(id, null);
+    this.rides.delete(id);
+    const land = CARRIER_CLIPS[r.path]?.landSound;
+    if (land) this.carrierAnimSound(r, land);
+  }
+
   /** Hand every rider's pose to the controller for this frame (RtsController.setRide). */
   private updateRiders(dt: number): void {
     const rts = this.rts;
@@ -6499,8 +6555,7 @@ export class MapViewerScene {
         r.fallV += CARRIER_FALL_G * dt;
         const z = r.off[2] - r.fallV * dt;
         if (z <= 0 || r.fallFrom <= 0) {
-          rts.setRide(id, null);
-          this.rides.delete(id);
+          this.landRider(id, r);
           continue;
         }
         // Straight down onto its own feet: the orbit's sideways offset and the spin both run
@@ -6513,10 +6568,9 @@ export class MapViewerScene {
         rts.setRide(id, r.off, r.turn);
         continue;
       }
-      const land = CARRIER_LANDING[r.path];
-      if (r.phase === "land" && (r.inst.sequenceEnded || (land !== undefined && r.inst.frame >= land))) {
-        rts.setRide(id, null);
-        this.rides.delete(id);
+      const clip = CARRIER_CLIPS[r.path];
+      if (r.phase === "land" && (r.inst.sequenceEnded || (clip !== undefined && r.inst.frame >= clip.land))) {
+        this.landRider(id, r);
         continue;
       }
       // Where the node is, against where it sits in the model at rest: the carrier stands
@@ -13651,6 +13705,11 @@ export class MapViewerScene {
           // whichever model plays the gesture — which for Fan of Knives is the WARDEN, not the
           // spell's art (see playModelAbilityEvent). Asking her model by code is exact; the
           // art chain below is the guess we fall back to.
+          const own = CAST_SOUND_FILES[c.code];
+          if (own) {
+            this.sounds?.playSpellFile(own, at);
+            continue;
+          }
           if (this.sounds?.playModelAbilityEvent(this.rts!.renderedModelPath(c.casterId), c.code, at)) continue;
           // An ITEM's press is keyed by its own ability code straight into AnimLookups — `AIMA`
           // → "ManaPotion", `AIRE` → "RestorationPotion" (UI\SoundInfo\AnimLookups.slk) — which is

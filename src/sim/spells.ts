@@ -553,20 +553,18 @@ const FIELD_ART: Record<string, string> = {
 };
 
 /**
- * Impale's other two models. `[AUim]` names ONE art — `Specialart =
- * ImpaleMissTarget.mdl`, the tendril that bursts out of empty ground — and the install
- * holds two more in the same folder that no ability row mentions at all:
+ * Impale's slam. `[AUim]` names ONE art — `Specialart = ImpaleMissTarget.mdl`, the tendril
+ * that bursts out of empty ground — and its buff `[BUim]` names the tendril that CATCHES a
+ * unit (`Effectart = ImpaleHitTarget.mdl`, `Effectattach = sprite,first`: a carrier, see
+ * `buffCarrierOf`). The Crypt Lord's own slam is in the same folder and no row names it:
  *
- *     Abilities\Spells\Undead\Impale\ImpaleCaster.mdx      the Crypt Lord's slam
- *     Abilities\Spells\Undead\Impale\ImpaleHitTarget.mdx   the tendril that catches a unit
+ *     Abilities\Spells\Undead\Impale\ImpaleCaster.mdx
  *
- * The pairing is the file names' own doing — "MissTarget" only means anything opposite a
- * "HitTarget" — and it is the same shape as FIELD_ART above: art the engine knows and the
- * table does not. (`ImpaleTargetDust.mdx` under Objects\Spawnmodels is the dust beneath a
- * hurled unit; we do not throw units, so it has nothing to sit under yet.)
+ * the same shape as FIELD_ART above: art the engine knows and the table does not.
  */
 const IMPALE_CASTER_ART = "Abilities\\Spells\\Undead\\Impale\\ImpaleCaster.mdx";
-const IMPALE_HIT_ART = "Abilities\\Spells\\Undead\\Impale\\ImpaleHitTarget.mdx";
+/** The group of the short stun a hurled unit spends in the AIR (spells.ts `AUim`). */
+const IMPALE_AIR_GROUP = "impaleAir";
 
 /** When a shard's damage lands, measured off the models themselves: in BOTH
  *  BlizzardTarget.mdx and RainOfFireTarget.mdx (the same rig, reskinned) the falling
@@ -1869,13 +1867,25 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // spell is a ROW of them bursting out of the ground as the wave passes, so it launches
   // with a `trail` instead: one tendril every half-width, which lays them shoulder to
   // shoulder down a line whose width is `Area1`.
+  //
+  // A unit it catches is HURLED: the buff's carrier (`[BUim] Effectart = ImpaleHitTarget.mdl`,
+  // `Effectattach = sprite,first`) bursts up under it and its body rides the tendril's
+  // `Sprite First Ref` up and back down (docs/spell-fx.md § Carriers). The flight is its own
+  // short stun lasting `Uim4` Air Time — the renderer times the tendril's clip to it — beside
+  // the ordinary one, Dur1 2 s (HeroDur1 1 s), which wears the row's Targetart (the Storm Bolt
+  // stars overhead) and holds the unit where it landed for the rest.
   AUim: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
     const hit = (t: SimUnit) => {
       if (!api.hostile(caster, t) || t.flying) return;
       api.spellDamage(t, d(lvl, 2, 75), caster.id);
-      api.applyBuff(t, { kind: "stun", timeLeft: dur(lvl, t) || 1, sourceId: caster.id, ...fx(def) });
-      api.emitEffect(IMPALE_HIT_ART, t.x, t.y, t.id); // the tendril that CAUGHT something
+      const worn = fx(def);
+      api.applyBuff(t, { kind: "stun", timeLeft: dur(lvl, t) || 1, sourceId: caster.id, ...worn });
+      const carrier = api.buffCarrierOf(worn.buffId);
+      const air = d(lvl, 3, 1);
+      if (carrier && air > 0) {
+        api.applyBuff(t, { kind: "stun", group: IMPALE_AIR_GROUP, timeLeft: air, sourceId: caster.id, buffId: worn.buffId, art: "", fx: [carrier] });
+      }
     };
     const swept = api.getUnit(ctx.targetId);
     if (swept) return hit(swept);

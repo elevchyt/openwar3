@@ -133,9 +133,9 @@ exactly the rows whose `Effectart` comes with a `sprite,first` attach (`buffCarr
     [BUim]  Effectart = …\Impale\ImpaleHitTarget.mdl           Effectattach = sprite,first
 
 No unit model has a "Sprite First Ref"; the EFFECT does. That is what gives the shape away, and
-why this `Effectart` is not the usual end-of-buff one (`buffEffectArt`, an unsummon). Only
-**Cyclone** is wired to it so far (spells.ts `Acyc` adds the carrier to its stun's `fx`); Tornado
-and Impale are the same mechanism waiting for a handler to ask.
+why this `Effectart` is not the usual end-of-buff one (`buffEffectArt`, an unsummon).
+**Cyclone** and **Impale** are wired to it (spells.ts `Acyc` / `AUim` add the carrier to a
+stun's `fx`); Tornado's spin is the same mechanism waiting for a handler to ask.
 
 `CycloneTarget.mdx`, parsed out of the install, is the whole of what a cycloned unit does on
 screen: `Sprite First Ref` hangs off `dummy move` (the lift — 0 → 440 through Birth, bobbing
@@ -159,7 +159,7 @@ How it is drawn (`MapViewerScene.trackCarrier` / `updateRiders`, `RtsController.
   they are drawn and carries them back onto the standing pose (`rebaseVolumes`). The health bar
   rides up with the body.
 - **The landing is timed to the buff.** Death is authored as ~4 s more of Stand's hovering with
-  the descent at its end (on the ground at frame 18233 of [13467, 18467] — `CARRIER_LANDING`),
+  the descent at its end (on the ground at frame 18233 of [13467, 18467] — `CARRIER_CLIPS`),
   so the renderer starts it early, `(18233 − 13467) / 1000` s before the buff's clock runs out,
   and the body touches down on the frame it becomes free to act. Recast while it is coming down
   and the funnel goes back to Stand. Taken off EARLY (a dispel), there is no Death clip to ride:
@@ -173,6 +173,26 @@ How it is drawn (`MapViewerScene.trackCarrier` / `updateRiders`, `RtsController.
   — `resolveModelSounds` trims them, or the codes miss AnimLookups and the toss is silent.
 - A fogged holder has no carrier either (`unitHidden`), and a body killed mid-air dies where it
   stands.
+
+**Impale** is the same machinery with a one-clip carrier. `[BUim] Effectart =
+ImpaleHitTarget.mdl`, `Effectattach = sprite,first` is the tendril that bursts up under a unit
+the line catches (the line itself is `[AUim] Specialart = ImpaleMissTarget.mdl`, a `trail` of
+one-shots). The model is ONE Birth clip [2233, 3600]: `dummy move` throws `Sprite First Ref` to
+392.7 at 2700 and 439.6 at 2900, tumbling, and has it back on the ground at **3367**. So:
+
+- The flight is its own short stun, group `impaleAir`, lasting `[AUim] DataD` "Air Time" (1 s),
+  and it wears the carrier; the ordinary stun beside it (Dur1 2 s, HeroDur1 1 s) wears the row's
+  Targetart (the Storm Bolt stars) and holds the unit on the ground for the rest.
+- Nothing is pre-rolled — the throw is the whole clip — so the Birth clip is PLAYED AT A RATE:
+  `timeScale = (3367 − 2233) / 1000 / airTime`, which lands the body on the buff's own clock.
+- The height is the model's own (~440). 0.6× and 0.35× were recorded beside it and the developer
+  kept the authored throw.
+- Sound, the developer's mapping onto the game's rows: the tendril's own `SNDXAUIT` on Birth's
+  first frame (→ ImpaleHit.wav); AnimSounds `Impale` (→ ImpaleLaunch1.wav) as the body leaves the
+  ground and `ImpaleLand` (→ ImpaleLand.wav) as it touches down (`CARRIER_CLIPS` `launch` /
+  `landSound`); and the CAST sounds `Units\Undead\HeroCryptLord\Impale.wav` — a file no SoundInfo
+  row names — IN PLACE OF the Crypt Lord's `SNDxAUIM` (which is that same ImpaleLaunch1.wav, now
+  each victim's): `CAST_SOUND_FILES`, ahead of every other rung of the cast-sound chain.
 
 A trap that made Cyclone do nothing at all for a long time, and that is not art: becoming
 invulnerable wipes a unit's buffs (`clearStatusForInvulnerable`, the Divine Shield rule), and

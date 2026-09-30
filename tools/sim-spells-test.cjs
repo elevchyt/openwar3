@@ -50,7 +50,7 @@ function harness(units) {
     },
     spellDamage: (t, amount) => log.damage.push({ id: t.id, amount }),
     spellHeal: (t, amount) => log.heals.push({ id: t.id, amount }),
-    applyBuff: (t, b) => log.buffs.push({ id: t.id, kind: b.kind, group: b.group, value: b.value, value2: b.value2, timeLeft: b.timeLeft, art: b.art }),
+    applyBuff: (t, b) => log.buffs.push({ id: t.id, kind: b.kind, group: b.group, value: b.value, value2: b.value2, timeLeft: b.timeLeft, art: b.art, ...(b.fx?.some((f) => f.carry) ? { carrier: b.fx.find((f) => f.carry).path } : {}) }),
     emitEffect: (art) => log.effects.push(art),
     emitLightning: (id, from, to, life = 0, delay = 0, tag) => log.bolts.push({ id, from: from.id, to: to.id, life: round(life), delay: round(delay), ...(tag ? { tag } : {}) }),
     stopLightning: (tag) => log.boltStops.push(tag),
@@ -58,6 +58,9 @@ function harness(units) {
     // picks between them (the Drain's caster/target x life/mana grid). The stub returns the
     // id itself as the "path" so a test can assert WHICH row was chosen.
     buffFxOf: (buffId) => (buffId ? [{ path: buffId, attach: [] }] : []),
+    // A buff row's CARRIER (BuffDef.carrier) — only Impale's `BUim` has one in this harness,
+    // its tendril, named by the row id so a test can see it was the buff's own.
+    buffCarrierOf: (buffId) => (buffId === "BUim" ? { path: "ImpaleHitTarget", attach: [], carry: ["sprite", "first"] } : null),
     dispel: () => {}, emitSplat: () => {}, summon: () => {}, killUnit: () => {},
     transmute: (t, c, goldFactor, lumberFactor) => { log.transmutes.push({ id: t.id, by: c.id, goldFactor, lumberFactor }); return 0; },
   };
@@ -355,6 +358,7 @@ const round = (n) => Math.round(n * 1000) / 1000;
   const caster = unit({ id: 1, team: 0, radius: 0 });
   const foe = unit({ id: 2, team: 1, x: 300, y: 0, radius: 0 });
   const impale = def({ data: [600, 0.3, 75, 1], area: 250, duration: 2, specialArt: "ImpaleMissTarget" });
+  impale.levelData[0].buffs = ["BUim"];
   {
     const { api, log } = harness([caster, foe]);
     SPELL_HANDLERS.AUim(api, caster, impale, 1, { targetId: 0, x: 600, y: 0 });
@@ -366,12 +370,14 @@ const round = (n) => Math.round(n * 1000) / 1000;
     check("…and nothing is damaged at the cast", log.damage, []);
   }
   {
-    // The front reaching a unit: dataC damage, the stun, and the tendril that CAUGHT it.
+    // The front reaching a unit: dataC damage, the stun, and the tendril that CAUGHT it — the
+    // buff's own carrier, riding a second, shorter stun that lasts `Uim4` Air Time (the flight).
     const { api, log } = harness([caster, foe]);
     SPELL_HANDLERS.AUim(api, caster, impale, 1, { targetId: 2, x: 300, y: 0, wave: { budget: 0 } });
     check("a unit the tendrils reach takes dataC", log.damage, [{ id: 2, amount: 75 }]);
     check("…and is stunned for the row's duration", [log.buffs[0].kind, log.buffs[0].timeLeft], ["stun", 2]);
-    check("…and wears the hit tendril, not the miss one", log.effects, ["Abilities\\Spells\\Undead\\Impale\\ImpaleHitTarget.mdx"]);
+    check("…and is HURLED for the row's Air Time, riding the buff's own hit tendril", log.buffs.slice(1).map((b) => [b.kind, b.group, b.timeLeft, b.carrier]), [["stun", "impaleAir", 1, "ImpaleHitTarget"]]);
+    check("…which is a carrier on the buff, not a one-shot effect", log.effects, []);
   }
   {
     // Air units are not impaled — the ground is what erupts (targs1 `ground,…`).
