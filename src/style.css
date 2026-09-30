@@ -4018,6 +4018,9 @@ body.in-game .load-gate { display: none; }
      one is cut with an ellipsis (issue #133). */
   flex: none;
   width: 18ch;
+  /* overflow:hidden (for the ellipsis) clips at the line box, so it must be taller than the
+     glyphs' descenders — at line-height 1 the tails of g, y, p and j were cut off. */
+  line-height: 1.4;
   color: #fff;
   white-space: nowrap;
   overflow: hidden;
