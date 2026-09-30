@@ -31,7 +31,7 @@ require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"ty
 const {
   canClearCamp, maxCampLevel, armyPower, forcePower, CAMP_GREEN_MAX, CAMP_ORANGE_MAX, CAMP_HEALTH,
 } = require(join(REPO, ".sim-build", "src", "ai", "plus", "power.js"));
-const { safeLeg, backOffSpot, onGoldDuty, pushStalled, freezeStalled, isShunned, pullBackSpot, pullDue, pulledOut, marching, inContact, cohesionCall, stutterAim } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
+const { safeLeg, backOffSpot, onGoldDuty, pushStalled, freezeStalled, isShunned, pullBackSpot, pullDue, pulledOut, marching, inContact, cohesionCall, stutterAim, healTripStep } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 
 let failed = 0;
@@ -663,6 +663,22 @@ console.log("\n-- STUTTER-STEP (Insane's ranged micro between shots) -----------
   check("from 7:30: carry on 35 %", Math.round(late.carryOn * 100) / 100, 0.35);
   const shut = share(600, false);
   check("an expansion it cannot take is carrying on instead", shut.expand === 0 && Math.round(shut.carryOn * 100) === 60, true);
+}
+
+
+console.log("\n-- a hero below 40 % goes home to heal, sometimes -----------------------------");
+{
+  const yes = () => true, no = () => false;
+  check("a healthy hero never goes", healTripStep(-1, 0.6, true, false, yes).go, false);
+  check("a hero at 35 % out on the map goes when the coin says so", healTripStep(-1, 0.35, true, false, yes).go, true);
+  check("…and stays when it does not", healTripStep(-1, 0.35, true, false, no).go, false);
+  check("…which is remembered for this wound", healTripStep(-1, 0.35, true, false, no).roll, 0);
+  check("…so the same wound is not re-tossed", healTripStep(0, 0.2, true, false, yes).go, false);
+  check("one wound, one trip — spent after it goes", healTripStep(2, 0.3, true, false, yes).go, false);
+  check("never in the middle of a fight", healTripStep(-1, 0.3, true, true, yes).go, false);
+  check("…but a fight does not spend the toss", healTripStep(-1, 0.3, true, true, yes).roll, -1);
+  check("never from inside its own towns", healTripStep(-1, 0.3, false, false, yes).go, false);
+  check("healed past the line re-arms it", healTripStep(2, 0.45, true, false, yes).roll, -1);
 }
 
 console.log(failed ? `\n${failed} FAILED\n` : "\nall ok\n");

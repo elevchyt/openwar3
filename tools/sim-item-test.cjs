@@ -68,6 +68,12 @@ const ABILITIES = new Map([
   // Tome of Intelligence / Strength — DataA agi, DataB int, DataC str (the +2 tomes)
   ["AIim", ability("AIim", "AIim", { levelData: [lvl({ data: D(0, 2, 0) })] })],
   ["AIsm", ability("AIsm", "AIsm", { levelData: [lvl({ data: D(0, 0, 2) })] })],
+  // Cloak of Flames — Dur 1, Area 160, DataA 10, and its buff row `[BIcf]` wears Immolation's
+  // own `Targetart = Abilities\Spells\NightElf\Immolation\ImmolationTarget.mdl`.
+  ["AIcf", ability("AIcf", "AIcf", { targetFlags: ["ground", "enemy", "neutral"],
+    buffArt: "Abilities\\Spells\\NightElf\\Immolation\\ImmolationTarget.mdl",
+    buffFx: [{ art: "Abilities\\Spells\\NightElf\\Immolation\\ImmolationTarget.mdl", attach: [] }],
+    levelData: [lvl({ duration: 1, area: 160, data: D(10), buffs: ["BIcf"] })] })],
 ]);
 
 const item = (id, abils, over = {}) => ({
@@ -86,6 +92,7 @@ const ITEMS = new Map([
   ["brac", passive("brac", ["AIsr"])], ["arsh", passive("arsh", ["AIdd"])],
   ["nspi", passive("nspi", ["AImx"])], ["gemt", passive("gemt", ["Adt1"])],
   ["ward", passive("ward", ["AIcd"])], ["spsh", passive("spsh", ["ANss"])],
+  ["clfm", passive("clfm", ["AIcf"])],
   ["ankh", item("ankh", ["AIrc"], { usable: false })],
   // The one item in the whole of ItemData.slk with `droppable` 0 — `soul`, "Soul"; pawnable
   // and sellable are 0 on it too. Its twin here, `ledg`, is Gerard's Lost Ledger, which the
@@ -312,6 +319,27 @@ console.log("\nthe Amulet of Spell Shield eats one enemy spell, then grows back 
   const friend = unit({ x: 1200, y: 1000, prevX: 1200, prevY: 1000 });
   check("a friendly spell passes straight through it", world.consumeSpellShield(friend, hero.id), false);
   check("…leaving the shield up", hero.buffs.filter((b) => b.kind === "spellShield").length, 1);
+}
+
+console.log("\nthe Cloak of Flames is WORN: its BIcf fire is on the carrier while it burns");
+{
+  world = newWorld();
+  const hero = give(unit({ isHero: true }), "clfm");
+  const fire = () => hero.buffs.filter((b) => b.group === "cloakOfFlames");
+  world.tickCarriedItems(hero, 0.1);
+  check("the carrier wears the cloak's fire", fire().length, 1);
+  check("…and it is the buff row's own model", fire()[0]?.fx?.[0]?.art, "Abilities\\Spells\\NightElf\\Immolation\\ImmolationTarget.mdl");
+  world.tickCarriedItems(hero, 0.1);
+  check("…once, however many ticks it burns", fire().length, 1);
+  hero.immolation = "AEim";
+  world.tickCarriedItems(hero, 0.1);
+  check("lit Immolation takes over — the cloak's fire comes off", fire().length, 0);
+  hero.immolation = "";
+  world.tickCarriedItems(hero, 0.1);
+  check("…and goes back on when Immolation is doused", fire().length, 1);
+  hero.inventory = [];
+  world.tickCarriedItems(hero, 0.1);
+  check("dropping the cloak puts the fire out", fire().length, 0);
 }
 
 console.log("\nthe Ankh of Reincarnation is spent, and the hero gets up where he fell");

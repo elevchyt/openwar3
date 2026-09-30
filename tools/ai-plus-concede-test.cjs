@@ -24,7 +24,7 @@
 const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
-const { hopeless, despair, goneShare, teamLost, DESPAIR, CONCEDE_AT, WORKER_ECONOMY, ARMY_REMNANT, CONCEDE_NOT_BEFORE, LEAVE_AFTER, HERO_DEATHS_BEHIND, FIRST_HERO_LEVELS_BEHIND } = require(join(REPO, ".sim-build", "src", "ai", "plus", "chatter.js"));
+const { hopeless, despair, goneShare, goneCount, teamLost, DESPAIR, CONCEDE_AT, WORKER_ECONOMY, ARMY_REMNANT, CONCEDE_NOT_BEFORE, LEAVE_AFTER, HERO_DEATHS_BEHIND, FIRST_HERO_LEVELS_BEHIND } = require(join(REPO, ".sim-build", "src", "ai", "plus", "chatter.js"));
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 
 let failed = 0;
@@ -124,11 +124,12 @@ console.log("\n-- half the team has gone ---------------------------------------
 
 // The other concession, and the one that is not a reading of this player's own board at all:
 // `teamLost` (plus/chatter.ts). `team` is the roster as it started — every seat that has ever
-// been an ally — and `allies` is who still has anything on the map, so a player who quit and
-// one who was wiped out are the same thing here. See docs/computer-plus.md.
+// been an ally — and `allies` is who is still playing: a seat whose game is over
+// (`PlusHost.playerOut`, since a leaver's units stay on the field shared with its team) or one
+// with nothing left on the map. See docs/computer-plus.md.
 check("a 1v1 can never concede for this reason", teamLost([], []), false);
-check("a 2v2 with the partner still playing plays on", teamLost([1], [1]), false);
-check("…and concedes when the partner goes", teamLost([1], []), true);
+// A 2v2 is the developer's ruling: the partner leaving is WEIGHED (0.5 by itself), not a verdict.
+check("a 2v2 whose partner goes is left to the weighed reading", teamLost([1], []), false);
 // Half or MORE, so one of two is already it — a 3v3 that is now a 2v3 has lost half its team.
 check("a 3v3 concedes when one of its two teammates goes", teamLost([1, 2], [2]), true);
 check("…and of course when both do", teamLost([1, 2], []), true);
@@ -139,24 +140,34 @@ check("…and concedes at two of three", teamLost([1, 2, 3], [3]), true);
 // from both sides of the ratio at once and the rule would never fire.
 check("a shrinking roster would never fire — the latched one does", teamLost([1, 2, 3], [1]), true);
 
-// …and BELOW that bar a departure is not nothing either: `goneShare` is the measurement
-// `teamLost` is a bar on AND a term of the weighed reading, so the two can never disagree about
-// who is still playing. Under a half it leans on the decision instead of settling it.
-check("a 1v1 has no team to lose", goneShare([], []), 0);
-check("a 4v4 down one of its three is a third of a team gone", goneShare([1, 2, 3], [2, 3]), 1 / 3);
-check("…which is a real weight, even though the bar itself has not been reached",
-  despair(holding({ heroes: 1, workers: 12, teamGone: 1 / 3 }), HALL) > 0.2, true);
-// The one place it can change an answer: a position the hard rule and every clause are silent
-// about, which a teammate walking out of tips over. This is the 4v4 the request is about.
+// …and BELOW that bar a departure is not nothing either: it is a PER-HEAD weight
+// (`DESPAIR.teamGone` for each teammate gone), counted off the same two lists.
+check("a 1v1 has no team to lose", goneCount([], []), 0);
+check("a 4v4 down one of its three has lost one teammate", goneCount([1, 2, 3], [2, 3]), 1);
+check("…and the share is still a third, for the bar", goneShare([1, 2, 3], [2, 3]), 1 / 3);
+check("each teammate gone is half a defeat by itself",
+  despair(holding({ heroes: 1, workers: 12, teamGone: 1 }), HALL), 0.5);
+// THE 2v2 THE REQUEST IS ABOUT: the partner walked out. Healthy, it plays on…
+check("a healthy player whose 2v2 partner left plays on — one departure is half, not whole",
+  hopeless(at({ halls: 1, structures: 9, workers: 12, armyFood: 40, armyUnits: 12, gold: 800, heroes: 2, teamGone: 1 }), HALL), false);
+// …but half a defeat beside ANY heavy term is a whole one: the hero down, or the hall.
+check("…and concedes once its heroes are down as well",
+  hopeless(holding({ workers: 12, heroesLost: 1, teamGone: 1 }), HALL), true);
+check("…or once its hall is razed as well",
+  hopeless(at({ structures: 5, workers: 12, armyFood: 30, armyUnits: 10, gold: 800, heroes: 1, teamGone: 1 }), HALL), true);
+// The one place it can change an answer in a 4v4: a position the hard rule and every clause
+// are silent about, which a teammate walking out tips over.
 // Hero dead, army traded, the raid seen off — 0.8, and every clause silent: the hall stands
 // (1, 3), a worker is on it (2), and nobody is in the base (2, 3, 5) let alone a hero (4).
 const wounded = { halls: 2, structures: 9, workers: 12, gold: 800, heroesLost: 1 };
 check("no hero and no army left, in a 4v4 with the team intact — plays on",
   hopeless(at(wounded), HALL), false);
 check("…and the same position concedes once one of the three teammates has gone",
-  hopeless(at({ ...wounded, teamGone: 1 / 3 }), HALL), true);
-check("a healthy player on a broken team still plays on — this term does not carry a game alone",
-  hopeless(at({ halls: 2, structures: 9, workers: 12, armyFood: 40, armyUnits: 12, gold: 800, heroes: 2, teamGone: 1 / 3 }), HALL), false);
+  hopeless(at({ ...wounded, teamGone: 1 }), HALL), true);
+check("a healthy player on a broken team still plays on — one departure does not carry a game alone",
+  hopeless(at({ halls: 2, structures: 9, workers: 12, armyFood: 40, armyUnits: 12, gold: 800, heroes: 2, teamGone: 1 }), HALL), false);
+check("…but two departures do, in a team too large for the hard rule (a 6v6 down two of five)",
+  hopeless(at({ halls: 2, structures: 9, workers: 12, armyFood: 40, armyUnits: 12, gold: 800, heroes: 2, teamGone: 2 }), HALL), true);
 
 console.log("\n-- the weighed reading -----------------------------------------------------");
 

@@ -1106,6 +1106,8 @@ export class RtsController {
       playerColor: (player) => this.playerColor(player),
       // …and what they are PLAYING, which is the better name and the one it reaches for first.
       playerRace: (player) => this.meleeRaces.get(player) ?? null,
+      // …and whether a seat's game is over, which only the map's script knows (`isPlayerOut`).
+      playerOut: (player) => this.isPlayerOut?.(player) ?? false,
     };
     this.meleeAi = new MeleeAi(host);
     this.computerPlus = new ComputerPlusAi(host);
@@ -1280,6 +1282,14 @@ export class RtsController {
    * follows is the map's. Nothing here decides any of it.
    */
   onPlayerLeft: ((player: number) => void) | null = null;
+
+  /**
+   * Has this seat been REMOVED from the match — `RemovePlayer`, defeated or left? Answered by
+   * the presentation side, which is where the script's `playerGameOver` hook lands. A leaver
+   * in a team game keeps its units on the field (`ShareEverythingWithTeam`), so nothing in the
+   * sim can tell; Computer+ asks this to know a teammate has gone (`PlusHost.playerOut`).
+   */
+  isPlayerOut: ((player: number) => boolean) | null = null;
 
   /** The owner-line label for a player slot — the lobby name, or a generic
    *  "Player N" fallback so an un-seeded slot still reads sensibly. */

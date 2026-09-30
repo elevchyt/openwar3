@@ -180,6 +180,10 @@ const ITEMS = {
   prep: { id: "prep", gold: 100, usable: true, abilities: ["AIp1"] }, // Replenishment Potion
   bspd: { id: "bspd", gold: 250, usable: false, abilities: ["AIms"] }, // Boots of Speed — passive
   will: { id: "will", gold: 150, usable: true, abilities: ["AIil"] }, // Wand of Illusion
+  wcyc: { id: "wcyc", gold: 200, usable: true, charges: 3, abilities: ["AIcy"] }, // Wand of the Wind
+  sres: { id: "sres", gold: 400, usable: true, abilities: ["AIra"] }, // Scroll of Restoration
+  crys: { id: "crys", gold: 150, usable: true, pawnable: true, charges: 3, abilities: ["AIta"] }, // Crystal Ball
+  wswd: { id: "wswd", gold: 150, usable: true, pawnable: true, charges: 2, abilities: ["AIsw"] }, // Sentry Wards
   rnec: { id: "rnec", gold: 150, usable: true, charges: 4, perishable: true, abilities: ["AIrd"] }, // Rod of Necromancy
   // --- the permanent drops, for the PAWNING pass. What separates them is whether the game adds
   // a second one to the first (`itemBonuses`' own switch, mirrored as `STACKS`).
@@ -213,6 +217,12 @@ const ABILS = {
   AIpr: { code: "AIrg", target: "", levelData: [lvl({ duration: 45, data: [0, 200] })] },
   AIp1: { code: "AIrg", target: "", levelData: [lvl({ duration: 30, data: [100, 25] })] },
   AIda: { code: "AIda", target: "", levelData: [lvl()] },
+  AIra: { code: "AIra", target: "", levelData: [lvl({ area: 600, data: [300, 150] })] },
+  // `[AIcy] code = Acyc` — Cyclone off a wand: `targs1` ground,enemy,neutral, `Rng1` 600,
+  // `Dur1` 20, `HeroDur1` 5.6.
+  AIcy: { code: "Acyc", target: "unit", levelData: [lvl({ castRange: 600, duration: 20 })] },
+  AIta: { code: "AIta", target: "point", levelData: [lvl({ area: 900, duration: 10 })] },
+  AIsw: { code: "Aeye", target: "point", levelData: [lvl({ castRange: 500, duration: 300 })] },
   // `[AIil] targs1` = "ground,air,friend,self", `Rng1` = 500, `Dur1` = 60, and DataA "Damage
   // Dealt (%)" is EMPTY — the 0 that makes the copy harmless (docs/illusions.md).
   AIil: { code: "AIil", target: "unit", levelData: [lvl({ castRange: 500, duration: 60, data: [0, 2] })] },
@@ -429,6 +439,50 @@ const itemOf = (cmd) => (cmd ? cmd.slot : null);
 {
   const h = belt(hero(), "stwp");
   check("…nor when it is winning", pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY), null);
+}
+
+// --- the Scroll of Healing as an EMERGENCY ------------------------------------------------------
+{
+  // "use its Scroll of Healing even for healing the hero that is carrying it if it's an
+  // emergency and that hero is less than 20% health" — in the fight, which the army reading
+  // never allows, and with no army around it at all.
+  const dying = belt(hero({ hp: 150 }), "shea");
+  check("a hero at 15 % in a fight reads its own Scroll of Healing",
+    itemOf(pressed([dying, enemy({ x: 200 })], PLUS_INSANE, AWAY)), 0);
+  check("…and a Scroll of Restoration the same way",
+    itemOf(pressed([belt(hero({ hp: 150 }), "sres"), enemy({ x: 200 })], PLUS_INSANE, AWAY)), 0);
+  check("…but not at 25 %, where it is still the army's charge",
+    pressed([belt(hero({ hp: 250 }), "shea"), enemy({ x: 200 })], PLUS_INSANE, AWAY), null);
+  // A POUR is cancelled by the next blow, so the Scroll of Regeneration is never an emergency.
+  check("…and a Scroll of Regeneration is not an emergency heal",
+    pressed([belt(hero({ hp: 150 }), "sreg"), enemy({ x: 200 })], PLUS_INSANE, AWAY), null);
+  // A potion is the hero's own answer, and it comes first on the ladder.
+  check("…a Potion of Healing beside it is drunk first",
+    itemOf(pressed([belt(hero({ hp: 150 }), "shea", "phea"), enemy({ x: 200 })], PLUS_INSANE, AWAY)), 1);
+}
+
+// --- the Wand of the Wind: an enemy HERO first ---------------------------------------------------
+{
+  const blademaster = () => enemy({ x: 300, isHero: true, level: 5, typeId: "Obla" });
+  const tauren = () => enemy({ x: 200, maxHp: 1300, hp: 1300, typeId: "otau" });
+  const grunts = () => [1, 2, 3].map((i) => enemy({ x: 150 + 20 * i, maxHp: 700, hp: 700, typeId: "ogru" }));
+  const units = [belt(hero(), "wcyc"), tauren(), ...grunts(), blademaster()];
+  const cmd = pressed(units, PLUS_INSANE, AWAY);
+  check("the wand is thrown in a fight", itemOf(cmd), 0);
+  check("…at the enemy HERO, over the bigger Tauren beside it", cmd && cmd.targetId, units[5].id);
+  const two = [belt(hero(), "wcyc"), enemy({ x: 300, isHero: true, level: 3 }), enemy({ x: 350, isHero: true, level: 6 })];
+  check("…the HIGHER level of two heroes", pressed(two, PLUS_INSANE, AWAY)?.targetId, two[2].id);
+  // Cyclone is also an invulnerability: thrown at a hero the army is finishing, it RESCUES it.
+  const finishing = [belt(hero(), "wcyc"), enemy({ x: 300, isHero: true, level: 5, hp: 300 })];
+  check("never at a hero under the kill line — that would save it", pressed(finishing, PLUS_INSANE, AWAY), null);
+  check("…nor at one out of its 600 range", pressed([belt(hero(), "wcyc"), enemy({ x: 900, isHero: true, level: 5 })], PLUS_INSANE, AWAY), null);
+  check("…nor at one already spinning", pressed([belt(hero(), "wcyc"), enemy({ x: 300, isHero: true, level: 5, stunned: true, invulnerable: true })], PLUS_INSANE, AWAY), null);
+  check("…nor at a flyer (targs1 is ground)", pressed([belt(hero(), "wcyc"), enemy({ x: 300, isHero: true, level: 5, flying: true })], PLUS_INSANE, AWAY), null);
+  // No hero: the biggest body, in a real fight — the creeping trick.
+  const noHero = [belt(hero(), "wcyc"), tauren(), ...grunts()];
+  check("no hero in reach: the Tauren, in a real fight", pressed(noHero, PLUS_INSANE, AWAY)?.targetId, noHero[1].id);
+  check("…but never a Grunt-sized body", pressed([belt(hero(), "wcyc"), ...grunts()], PLUS_INSANE, AWAY), null);
+  check("…and nothing at all out of a fight", pressed([belt(hero(), "wcyc")], PLUS_INSANE, AWAY), null);
 }
 
 // --- healing the ARMY, not just the hero --------------------------------------------------------
@@ -1572,6 +1626,14 @@ function pawned(units, opts = {}) {
   // It is a WALK, so it waits like the shopping trip does: never while there is a wave out.
   check("…and never while the army is in the field",
     pawned([belt(hero(), "clsd", "clsd")], { mayShop: false }), null);
+}
+
+{
+  // The two SCOUTING drops: nothing on the ladder presses either, so each is junk even alone.
+  const sale = pawned([belt(hero(), "phea", "crys")]);
+  check("a Crystal Ball is sold", sale && sale.slot, 1);
+  const wards = pawned([belt(hero(), "wswd", "phea")]);
+  check("…and so are Sentry Wards", wards && wards.slot, 0);
 }
 
 // ==========================================================================================

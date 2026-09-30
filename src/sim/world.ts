@@ -50,6 +50,8 @@ import { SPELL_HANDLERS, ITEM_INVULN_GROUP, AURA_BUFFS, SELF_INVIS_GROUP, BLADES
 /** The buff group a Tornado's toss is applied under — both halves, so the invulnerability's wipe
  *  spares the stun it came with (clearStatusForInvulnerable). See tickTornado. */
 const TORNADO_SPIN_GROUP = "tornadoSpin";
+/** The buff group a carried Cloak of Flames' `BIcf` fire is worn under — see tickCarriedItems. */
+const CLOAK_GROUP = "cloakOfFlames";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -8443,10 +8445,25 @@ export class SimWorld {
    * **Amulet of Spell Shield** (`ANss`): "Blocks a negative spell that an enemy casts on the
    * Hero once every <ANss,Cool1> seconds." The block itself is consumeSpellShield; this is
    * the regrow — and the reason the amulet is worth wearing after the first block.
+   *
+   * The cloak is also WORN, and the fire is data: its buff row is Immolation's twin —
+   * `[BIcf] Targetart = Abilities\Spells\NightElf\Immolation\ImmolationTarget.mdl`
+   * (Units\ItemAbilityFunc.txt), the same flames `[BEim]` hangs on a lit Demon Hunter — so the
+   * carrier holds a timeless `BIcf` mark for exactly as long as the cloak is burning
+   * (`CLOAK_GROUP`). Without it the burn landed with no fire on the hero at all, which is not
+   * what the item looks like in the game. It comes off when the cloak leaves the belt and while
+   * Immolation is lit, which wears the same model already and is what the burn gives way to.
    */
   private tickCarriedItems(u: SimUnit, dt: number): void {
+    const cloak = u.hp > 0 ? this.itemAbility(u, "AIcf") : null;
+    const burning = !!cloak && !u.immolation;
+    const worn = u.buffs.some((b) => b.group === CLOAK_GROUP);
+    if (burning && !worn) {
+      this.applyBuffInternal(u, { kind: "mark", group: CLOAK_GROUP, timeLeft: Infinity, sourceId: u.id, ...this.buffArtOf(cloak.def) });
+    } else if (!burning && worn) {
+      u.buffs = u.buffs.filter((b) => b.group !== CLOAK_GROUP);
+    }
     if (u.hp <= 0 || !u.inventory.length) return;
-    const cloak = this.itemAbility(u, "AIcf");
     if (cloak && !u.immolation) {
       const interval = cloak.level.duration || 1;
       u.cloakBurnTick += dt;

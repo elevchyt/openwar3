@@ -4,6 +4,7 @@ import type { PlayableRace } from "../../data/races";
 import { ITEM_REGEN_GROUP, type SimUnit } from "../../sim/world";
 import { isOrbCode } from "../../sim/orbs";
 import { near, type CasterView } from "../casting";
+import { HERO_KILL_HP } from "./targeting";
 import type { PlusProfile } from "./profile";
 
 // Computer+ — buying items, and pressing them (issue #124, issue #130).
@@ -57,9 +58,9 @@ import type { PlusProfile } from "./profile";
  * highest first, one button per pass — and it reads the way a player's hands do: get out, don't
  * die, top up, then everything else.
  */
-export type Use = "escape" | "panic" | "healSelf" | "healArea" | "healOther" | "mana" | "replenish" | "manaRegen" | "raise" | "illusion" | "buff";
+export type Use = "escape" | "panic" | "healSelf" | "disable" | "healArea" | "healOther" | "mana" | "replenish" | "manaRegen" | "raise" | "illusion" | "buff";
 
-const LADDER: readonly Use[] = ["escape", "panic", "healSelf", "healArea", "healOther", "mana", "replenish", "manaRegen", "raise", "illusion", "buff"];
+const LADDER: readonly Use[] = ["escape", "panic", "healSelf", "disable", "healArea", "healOther", "mana", "replenish", "manaRegen", "raise", "illusion", "buff"];
 const useRank = (u: Use): number => LADDER.indexOf(u);
 
 /**
@@ -95,6 +96,15 @@ const USE_OF: Readonly<Record<string, Use>> = {
   // --- hit points, on the drinker ----------------------------------------------------------
   AIhe: "healSelf", // Potion of Healing / of Greater Healing / Health Stone / Essence of Aszune
   AIre: "healSelf", // Potion of Restoration
+
+  // --- take one of THEIRS out of the fight ---------------------------------------------------
+  // Wand of the Wind (`wcyc`, `[AIcy] code = Acyc`): Cyclone, "tosses a target enemy unit into
+  // the air, rendering it unable to attack, move or cast spells" — 20 seconds on a unit and
+  // `HeroDur1` 5.6 on a HERO, and a hero is still what it is aimed at first: five seconds of the
+  // enemy's Blademaster or Lich out of the fight is worth more than twenty of any soldier. See
+  // `windTarget`. Right below the hero's own potion, because it is pressed IN a fight as that
+  // is, and a hero about to die drinks before it throws anything.
+  Acyc: "disable",
 
   // --- hit points, on an AREA around the user ----------------------------------------------
   AIha: "healArea", // Scroll of Healing (and the three Runes of Healing)
@@ -538,6 +548,27 @@ export function drinkBar(unitId: number): number {
  * most of an army walking to the next camp hurt with the charges still in the belt.
  */
 const ALLY_HP = 0.65;
+/**
+ * THE SCROLL OF HEALING AS AN EMERGENCY — the hit-point share below which the hero carrying an
+ * INSTANT area heal (`AIha` Scroll of Healing, `AIra` Scroll of Restoration) reads it on itself,
+ * fight or no fight. The developer's own number: "use its Scroll of Healing even for healing the
+ * hero that is carrying it if it's an emergency and that hero is less than 20% health".
+ *
+ * Only the instant kind. A pour (`AIrg`, the Scroll of Regeneration) is cancelled by the next
+ * blow (`ITEM_REGEN_GROUP`), so in an emergency — which is by definition a hero being hit — it is
+ * a charge thrown away; the instant scroll puts its 150 (or 300) back at the press and nothing can
+ * take it off again. Lower than `PANIC_HP` and the potion's `drinkBar`, so a hero carrying either
+ * of those reaches for them first (both sit above it on the ladder anyway), and the army's
+ * charge is only spent on one body when that body is about to be gone.
+ */
+const SCROLL_EMERGENCY_HP = 0.2;
+/**
+ * The smallest non-hero worth a Wand of the Wind charge when no enemy HERO is in reach — "a
+ * Knight's worth" of hit points (`[hkni] HP` 835, UnitBalance.slk), so a Knight, a Tauren (1300),
+ * an Abomination (1175) or a camp's big creep qualifies and a Grunt (700) or a Footman (420) never
+ * does. Ours.
+ */
+const WIND_BODY_HP = 800;
 /** How many of ours have to be hurt before an AREA heal is better than a potion. Below this the
  *  scroll is being spent to heal one unit, which is what the potion is for. */
 const CLUSTER = 3;
@@ -754,6 +785,13 @@ const STACKS = new Set<string>([
  */
 const JUNK = new Set<string>([
   "wlsd", // Wand of Lightning Shield — see above
+  // …and the two SCOUTING items, reported: the AI "must sell crystal ball and sentry wards since
+  // it doesn't look like it uses them". It does not — nothing on the `USE_OF` ladder is a reveal,
+  // because what to look AT is a question about the enemy's plans that this belt never asks —
+  // and both come to a Computer+ hero only as creep drops (`loot`). So each is a slot a potion
+  // wants, and pawned it is half its price towards one.
+  "crys", // Crystal Ball — `AIta`, reveal an area anywhere on the map
+  "wswd", // Sentry Wards — `AIsw` (code `Aeye`), a ward dropped to watch a spot
 ]);
 
 /** How often the belt is looked over for duplicates worth pawning — the shopping clock, since
@@ -1407,10 +1445,17 @@ export class PlusItems {
       // leaves an area item at the presser's own feet), so the two readings are the same press
       // asked for two different reasons: is the ARMY worth 100 gold, or is the HERO.
       case "healArea":
+        // The EMERGENCY half first, and it is the one clause of this rung that does not ask
+        // whether there is a fight — see `SCROLL_EMERGENCY_HP`.
+        if (u.isHero && hp < SCROLL_EMERGENCY_HP && this.instantHeal(def)) return true;
         return (
           !engaged
           && (this.armyHeal(u, own, friends, this.areaOf(def), foes) || this.selfRegenWorthIt(u, hp, def))
         );
+      // A Wand of the Wind is thrown IN a fight, at the body the fight is decided by — see
+      // `windTarget`, which is both the reading and the aim.
+      case "disable":
+        return engaged && !!this.windTarget(u, def, foes);
       case "healOther":
         return !engaged && !!this.hurtest(u, friends, foes);
       // Mana is topped up for the fight, not during the panic — a hero with no mana is a hero
@@ -1525,6 +1570,7 @@ export class PlusItems {
       const t =
         use === "healOther" ? this.hurtest(u, friends, foes)
         : use === "illusion" ? this.toCopy(u, friends, aimed.levelData[0]?.castRange ?? 0)
+        : use === "disable" ? this.windTarget(u, def, foes)
         : u;
       if (!t) return false;
       targetId = t.id;
@@ -1680,6 +1726,57 @@ export class PlusItems {
    * at 54 % out of combat is exactly the press a player would kick themselves for. The army
    * reading above still spends either.
    */
+  /** Does this item heal AT THE PRESS — the Scroll of Healing or of Restoration, rather than a
+   *  pour? See `SCROLL_EMERGENCY_HP`. */
+  private instantHeal(def: ItemDef): boolean {
+    return def.abilities.some((aid) => {
+      const code = this.view.def(aid)?.code;
+      return code === "AIha" || code === "AIra";
+    });
+  }
+
+  /**
+   * WHO THE WAND OF THE WIND THROWS — an enemy HERO first, and only a big body otherwise.
+   *
+   * Asked for in as many words: the AI "must be able to use the wand of the wind (priority
+   * targets must be enemy heroes)". A hero is the piece a melee army is built around, and a
+   * cycloned one casts nothing and swings at nothing for `HeroDur1`. Among the heroes in reach
+   * the HIGHEST LEVEL goes — the one whose spells the fight is being lost to.
+   *
+   * One hero is NEVER thrown, and it is the one the rest of the army most wants: a hero under
+   * `HERO_KILL_HP`. Cyclone is also an INVULNERABILITY (spells.ts `Acyc`), so a Wand of the Wind
+   * pointed at a hero the army is finishing is a hero RESCUED — the exact line plus/targeting.ts
+   * starts treating a hero as a kill at is the line this stops throwing at.
+   *
+   * With no hero in reach it falls back on the biggest non-hero body (`WIND_BODY_HP`) in a fight
+   * big enough to be worth a charge (`CLUSTER`) — which is also the creeping trick: the camp's
+   * big creep spins while the party kills the rest. Everything the sim would refuse is left out
+   * here rather than found out at `itemUseError`, so a refused target does not cost the rung its
+   * pass: `targs1` is `ground,enemy,neutral`, so nothing that flies; nothing already stunned or
+   * invulnerable (a unit already in the funnel among them); nothing magic-immune; only what is
+   * inside the wand's own `Rng1` (600), so the hero never walks into the enemy line to throw it.
+   */
+  private windTarget(u: SimUnit, def: ItemDef, foes: SimUnit[]): SimUnit | null {
+    const row = def.abilities.map((aid) => this.view.def(aid)).find((ad) => ad?.code === "Acyc");
+    const range = (row?.levelData[0]?.castRange || 600) + u.radius;
+    let hero: SimUnit | null = null;
+    let body: SimUnit | null = null;
+    let fighting = 0;
+    for (const f of foes) {
+      if (f.building || f.hp <= 0) continue;
+      if (!f.isPeon && near(u, f, LOOK)) fighting++;
+      if (f.flying || f.mechanical || f.stunned || f.invulnerable || f.magicImmune) continue;
+      if (Math.hypot(f.x - u.x, f.y - u.y) > range + f.radius) continue;
+      if (f.isHero) {
+        if (f.hp / Math.max(1, f.maxHp) < HERO_KILL_HP) continue; // see above — never a rescue
+        if (!hero || f.level > hero.level || (f.level === hero.level && f.hp > hero.hp)) hero = f;
+      } else if (!f.isPeon && f.maxHp >= WIND_BODY_HP && (!body || f.maxHp > body.maxHp)) {
+        body = f;
+      }
+    }
+    return hero ?? (fighting >= CLUSTER ? body : null);
+  }
+
   private selfRegenWorthIt(u: SimUnit, hp: number, def: ItemDef): boolean {
     if (hp >= drinkBar(u.id) || this.regenerating(u)) return false;
     return def.abilities.some((aid) => this.view.def(aid)?.code === REGEN);

@@ -102,8 +102,8 @@ export interface Standing {
    *  struck off the moment it is actually revived. So this is "one of ours is down right now",
    *  and it is empty both for a player who has lost none and for one who never built any. */
   heroesLost: number;
-  /** What SHARE of the team we started with is no longer playing — `goneShare`, the same
-   *  measurement `teamLost` is a bar on. 0 on a 1v1 or a free-for-all, which have no team. */
+  /** How many of the teammates we started with are no longer playing — `goneCount`, off the
+   *  same two lists `teamLost` reads. 0 on a 1v1 or a free-for-all, which have no team. */
   teamGone: number;
   /** A 1v1 ONLY (0 anywhere else): how many more times our heroes have died this match than the
    *  opponent's have — every death, the revived ones included. What `DESPAIR.heroDeathsBehind`
@@ -127,29 +127,34 @@ export interface Standing {
  * at ninety seconds has decided the game as thoroughly as one leaving at ten minutes.
  *
  * `team` is the roster as it STARTED and `allies` who is still playing, and the caller's job is
- * that the first only ever grows (`Brain.team`): "left" is seen as *nothing on the map*, because
- * leaving runs `MeleeTriggerActionPlayerLeft` and the leaver's units go to Neutral Passive — so
- * a re-derived roster would lose the departed from both sides of the ratio at once and it would
- * never move. It also means a teammate who was WIPED OUT counts, which is right: either way
- * there is nobody there to fight beside.
+ * that the first only ever grows (`Brain.team`), so a departed seat stays in the denominator.
+ * "Gone" is a seat whose game is OVER (`PlusHost.playerOut`: `RemovePlayer`, reached by leaving
+ * and by defeat alike) or one with nothing left on the map — NOT merely a seat that stopped
+ * playing, because a leaver in a team game leaves its units behind: `MeleeTriggerActionPlayerLeft`
+ * calls `ShareEverythingWithTeam` while an ally is alive, and the units stay the leaver's. Read
+ * off the field alone, a teammate who quit looked exactly like one still playing, and this rule
+ * never fired. A teammate who was WIPED OUT counts too: either way there is nobody there to
+ * fight beside.
  *
- * Half or MORE, against the team as it started: two of four concedes, one of three does not.
- * An empty team is a 1v1 or a free-for-all and can never concede for this reason.
- *
- * The bar is all this is. The measurement under it — `goneShare`, the share of the team that is
- * no longer playing — is also a term of the weighed reading (`DESPAIR.teamGone`), so the two
- * rules are one reading of the team taken at two heights: below half a departure LEANS on the
- * decision, at half it settles it by itself. They cannot disagree about who has gone.
+ * Half or MORE, against the team as it started, and only on a team of TWO or more teammates:
+ * one of two (a 3v3) concedes, one of three (a 4v4) does not. A 2v2's partner is left to the
+ * weighed reading instead — the developer's own ruling, that the one departure there is worth
+ * `DESPAIR.teamGone` (half a defeat) "by itself" rather than the whole of one — so a computer
+ * whose partner quits concedes the moment anything else about its game is going wrong, and
+ * plays on while it is not. An empty team is a 1v1 or a free-for-all and scores nothing.
  */
-export function goneShare(team: readonly number[], allies: readonly number[]): number {
-  if (!team.length) return 0;
+export function goneCount(team: readonly number[], allies: readonly number[]): number {
   let gone = 0;
   for (const p of team) if (!allies.includes(p)) gone++;
-  return gone / team.length;
+  return gone;
+}
+
+export function goneShare(team: readonly number[], allies: readonly number[]): number {
+  return team.length ? goneCount(team, allies) / team.length : 0;
 }
 
 export function teamLost(team: readonly number[], allies: readonly number[]): boolean {
-  return team.length > 0 && goneShare(team, allies) >= 0.5;
+  return team.length >= 2 && goneShare(team, allies) >= 0.5;
 }
 
 /**
@@ -219,14 +224,15 @@ export function teamLost(team: readonly number[], allies: readonly number[]): bo
  *  • `teamGone` — the TEAM, and the only term that is not about this player's own board at all.
  *    A teammate who quits or concedes is one fewer army on our side of a map that was drawn for
  *    two of them, and it makes the game harder for everyone left in a way none of the other
- *    terms can see. It is `goneShare` — the share of the starting team no longer playing —
- *    scaled, which is deliberately the SAME measurement `teamLost` is a bar on: below half, a
- *    departure leans on the decision; at half `teamLost` settles it outright, and does so
- *    exempt from `CONCEDE_NOT_BEFORE`. So this term's own ceiling in practice is just under
- *    `teamGone / 2`, and it bites only where the hard rule says nothing — a 4v4 down one of
- *    three, a 6v6 down two of five. A 1v1 and a free-for-all have no team and score 0.
- *    "Gone" is nothing on the map, so a teammate who was WIPED OUT counts alongside one who
- *    left: either way there is nobody there to fight beside (see `teamLost`).
+ *    terms can see. It is PER HEAD — `DESPAIR.teamGone` for EACH teammate gone (`goneCount`) —
+ *    and not a share of the team, as the developer asked: every departure makes a computer more
+ *    eager to go, and a 2v2 partner leaving is 0.5 by itself. It used to be 0.7 × the share,
+ *    which put one of three in a 4v4 at 0.23 — not enough to tip anything but a position
+ *    already lost. Where `teamLost` applies it settles the game outright first; this is what
+ *    speaks for the teams it does not — a 2v2, and a 4v4 or larger below half — and it cannot
+ *    carry a concession alone until TWO have gone. A 1v1 and a free-for-all have no team and
+ *    score 0. "Gone" includes a teammate who was WIPED OUT: either way there is nobody there to
+ *    fight beside (see `teamLost`).
  *  • `heroDeathsBehind` / `firstHeroBehind` — the two 1v1 readings, asked for by the developer in
  *    as many words: our heroes have died `HERO_DEATHS_BEHIND` (2) or more times more than the
  *    opponent's, and the opponent's FIRST hero is `FIRST_HERO_LEVELS_BEHIND` (2) or more levels
@@ -250,7 +256,7 @@ export const DESPAIR = {
   invaderHero: 0.1,
   workersShort: 0.2,
   broke: 0.15,
-  teamGone: 0.7,
+  teamGone: 0.5,
   heroDeathsBehind: 0.25,
   firstHeroBehind: 0.25,
 } as const;

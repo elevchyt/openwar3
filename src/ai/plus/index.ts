@@ -12,7 +12,7 @@ import { PlusCaster } from "./casting";
 import { EnemyMemory, counterScore, type EnemyRead } from "./counter";
 import {
   CONCEDE_NOT_BEFORE, CONCESSIONS, GREETINGS, GREET_AT, GREET_SPREAD, GREET_STAGGER, LEAVE_AFTER,
-  goneShare, hopeless, teamLost,
+  goneCount, hopeless, teamLost,
   type Standing,
 } from "./chatter";
 import { PlusItems, type ItemCtx } from "./items";
@@ -27,6 +27,7 @@ import {
   namedColour, namedPlayer, playerNames,
   openerLine, readAllyCall, switchLine,
   RALLY_ACCEPT_LINES, RALLY_ALREADY_LINES, RALLY_ANSWER_GAP, RALLY_BUSY_LINES,
+  ESCORT_HOLD, ESCORT_NEAR, ESCORT_STAGE, ESCORT_WAIT, TEAM_FOCUS,
   type PlayerName, type SwitchReason,
 } from "./teamchat";
 import { plusProfile, type PlusProfile } from "./profile";
@@ -92,8 +93,9 @@ export interface PlusHost extends AiHost {
    * choice — it ships as JASS inside a map, and a script's only way to end its own player is to
    * satisfy the defeat condition, which is "your team owns no structures". We are not
    * constrained that way, because the engine is ours: raising the event runs Blizzard's own
-   * `MeleeTriggerActionPlayerLeft`, which hands the units to Neutral Passive
-   * (`MakeUnitsPassiveForTeam`) and calls `MeleeDoLeave`. Nothing is destroyed, and the
+   * `MeleeTriggerActionPlayerLeft`, which shares the units with a surviving ally
+   * (`ShareEverythingWithTeam`) or, with none, hands them to Neutral Passive
+   * (`MakeUnitsPassiveForTeam`), and calls `MeleeDoLeave`. Nothing is destroyed, and the
    * remaining player is declared the winner by the map's own victory check rather than by us.
    */
   leave(player: number): void;
@@ -133,7 +135,25 @@ export interface PlusHost extends AiHost {
    * answer.
    */
   playerRace(player: number): PlayableRace | null;
+  /**
+   * Is this seat's game OVER — defeated, or gone? Blizzard.j's `RemovePlayer` (reached through
+   * `MeleeDoLeave` and the defeat check alike) is the one door every such seat goes out of.
+   *
+   * It has to be ASKED, because the field does not say it: a player who leaves a TEAM game
+   * leaves their units behind. `MeleeTriggerActionPlayerLeft` hands a leaver's units to
+   * Neutral Passive only when no ally is left; with one it calls `ShareEverythingWithTeam`,
+   * the units stay the leaver's and stay co-allied, and a teammate who quit reads exactly like
+   * one who is still playing. Optional so a headless host that seats no script answers "no".
+   */
+  playerOut?(player: number): boolean;
 }
+
+/** How many of an ally's soldiers beside our captain make its army "here" for `awaitEscort`
+ *  when its hero is not among them. Ours. */
+const ESCORT_BODIES = 4;
+/** …and how close something hostile has to be to the waiting party for it to be in a fight
+ *  rather than waiting outside one — a little over a tower's 700 reach. Ours. */
+const ESCORT_CONTACT = 900;
 
 /** How often the manners pass runs — greeting, conceding, leaving. Cheap, and none of it is
  *  time-critical, so it does not need the profile's reaction clock. */
@@ -1262,6 +1282,45 @@ export function freezeStalled(
 const REGROUP_PATIENCE = 45;
 
 /**
+ * THE HERO'S HEAL TRIP — a captain below `HEAL_TRIP_HP` out on the map goes HOME to heal,
+ * sometimes. Asked for in as many words: "Computer+ AI players whose hero is very low on health
+ * (below 40%) must choose to go back to base and heal sometimes."
+ *
+ * "Sometimes" is a coin, `HEAL_TRIP_CHANCE`, tossed ONCE per wound (`Brain.healRoll`): a hero
+ * that drops under the line out of a fight either takes the whole party home or plays on, and
+ * the same wound is never asked about again until the hero is back above it — which is what
+ * keeps a party from turning round between every two camps. It is never taken IN a fight (the
+ * hurt hero is walked out of one by `pullPass`, and a lost one is `fightLost`'s) and never from
+ * inside our own towns, where the hero already is home.
+ *
+ * The trip is the ordinary `retreating` walk with `retreatFrom` "heal", and it is not a lost
+ * fight: no Scroll of Town Portal is spent on it (`itemCtx`), and it ends when the hero is back
+ * to `HEAL_TRIP_DONE` — or after `HEAL_TRIP_PATIENCE`, since a hero regenerates a couple of hit
+ * points a second and waiting for every one of them is a player out of the game. All four
+ * numbers are ours; 40 % is the developer's, and is also `HERO_KILL_HP` — the line at which
+ * our own targeting would start treating a hero as a kill.
+ */
+const HEAL_TRIP_HP = HERO_KILL_HP;
+const HEAL_TRIP_CHANCE = 0.5;
+const HEAL_TRIP_DONE = 0.8;
+const HEAL_TRIP_PATIENCE = 90;
+
+/**
+ * One pass of the heal-trip decision, pure so it can be pinned (tools/ai-plus-army-test.cjs).
+ * `roll` is `Brain.healRoll` (-1 unasked, 0 stays, 1 goes, 2 gone), `hp` the captain's share
+ * of its life, `away` whether it is outside our towns, and `coin` the one toss per wound.
+ */
+export function healTripStep(
+  roll: number, hp: number, away: boolean, fighting: boolean, coin: () => boolean,
+): { roll: number; go: boolean } {
+  if (hp >= HEAL_TRIP_HP) return { roll: -1, go: false }; // past the line: the next wound is fresh
+  if (roll === 0 || roll === 2) return { roll, go: false }; // this wound is already decided
+  if (!away || fighting) return { roll, go: false }; // home already, or not now
+  if (roll < 0 && !coin()) return { roll: 0, go: false };
+  return { roll: 2, go: true }; // spent: one wound, one trip
+}
+
+/**
  * CONTACT: how near the army an enemy PLAYER's fighters have to be before the party has to make
  * a decision about them, and how much stronger than them it has to be to take the fight.
  *
@@ -1996,7 +2055,7 @@ interface Brain {
   gatherSince: number;
   /** WHAT this retreat is running from, which is what decides whether the hero spends its
    *  Scroll of Town Portal on it. Null while nothing is retreating. */
-  retreatFrom: "creeps" | "player" | "stuck" | null;
+  retreatFrom: "creeps" | "player" | "stuck" | "heal" | null;
   /** When this retreat began — the deadline on it (`REGROUP_PATIENCE`). */
   retreatSince: number;
   /** The CLOSEST the group has been to its objective (-1 = no reading yet), and when. The
@@ -2181,6 +2240,18 @@ interface Brain {
    *  runs out on. */
   joining: number;
   joinUntil: number;
+  /** The opponent an ally last said it was attacking (-1 = none), and when — what `teamFocus`
+   *  steers our own next wave at for `TEAM_FOCUS` seconds. */
+  allyFoe: number;
+  allyFoeAt: number;
+  /** An ally that answered OUR announcement with "im coming with you" (null = none): who, when
+   *  it said so, and when this wave began waiting for it at the staging point (-1 = not yet).
+   *  See `awaitEscort`. */
+  escort: { ally: number; at: number; holdSince: number } | null;
+  /** The heal trip's roll for the hero's CURRENT spell under `HEAL_TRIP_HP`: -1 not rolled, 0
+   *  it stays, 1 it goes home. Re-armed only once the captain is back above the line, so one
+   *  wound is one decision — see `healTrip`. */
+  healRoll: number;
   /** The ally this relief wave is for (-1 = none), and the clock it gives up on. */
   helping: number;
   helpUntil: number;
@@ -2428,6 +2499,10 @@ export class ComputerPlusAi {
       rallyAnsweredAt: -Infinity,
       joining: -1,
       joinUntil: 0,
+      allyFoe: -1,
+      allyFoeAt: -Infinity,
+      escort: null,
+      healRoll: -1,
       helping: -1,
       helpUntil: 0,
       helpSince: 0,
@@ -2465,6 +2540,20 @@ export class ComputerPlusAi {
    */
   heard(line: ChatLine, recipients: readonly number[]): void {
     const call = readAllyCall(line.text);
+    // "im coming with you" — an ally answering an attack. Only the computer whose wave is out at
+    // a PLAYER has anything to do with it: it will wait for them short of the target
+    // (`awaitEscort`). Every such listener takes it; the one that did not announce anything is
+    // simply not attacking, and the latest announcer is the one it is almost always meant for.
+    if (call === "joining") {
+      for (const b of this.brains) {
+        if (b.gone || b.concededAt >= 0) continue;
+        const me = b.ai.player;
+        if (line.from === me || !recipients.includes(me) || !this.host.coAllied(me, line.from)) continue;
+        if (b.mode !== "attacking" || b.creeping || this.targetOwner(b) < 0) continue;
+        b.escort = { ally: line.from, at: b.clock, holdSince: -1 };
+      }
+      return;
+    }
     if (call !== "help" && call !== "attack" && call !== "rally") return;
     // WHO an attack announcement named, resolved once for every listener. The RACE is what these
     // computers say ("the undead at the top", `playerNames`) and a COLOUR is what a person still
@@ -2498,6 +2587,12 @@ export class ComputerPlusAi {
       // computer is also at war with. An ally announcing a target we are allied to is not an
       // invitation to break an alliance.
       if (foe >= 0 && (foe === me || this.host.coAllied(me, foe))) continue;
+      // Whoever it named is the TEAM's target now, whether or not this computer can come — its
+      // next wave goes there too (`teamFocus`).
+      if (foe >= 0) {
+        b.allyFoe = foe;
+        b.allyFoeAt = b.clock;
+      }
       b.joinCall = { from: line.from, foe, ask: call === "rally" };
       b.joinAt = b.clock + JOIN_STAGGER * turn++;
     }
@@ -2749,7 +2844,9 @@ export class ComputerPlusAi {
       home: b.ai.home(),
       // Either the group is walking home broken, or this wave is already over and what is left
       // of it is standing in somebody else's base.
-      losing: b.mode === "retreating",
+      // A HEAL TRIP is neither (see `HEAL_TRIP_HP`): nothing is lost, the hero is just walking
+      // home to get its life back, and a 350-gold scroll is not spent to save the walk.
+      losing: b.mode === "retreating" && b.retreatFrom !== "heal",
       // …and whether that retreat is worth a Scroll of Town Portal, which turns entirely on
       // WHAT it is running from (see `ItemCtx.portalWorthIt` and `Brain.retreatFrom`). Creeps
       // do not chase; an army does.
@@ -4325,6 +4422,9 @@ export class ComputerPlusAi {
    * map, or when there is nothing left to take.
    */
   private massing(b: Brain): void {
+    // A party MUSTERING IN THE FIELD between two camps may take its hurt hero home as well — the
+    // moment the heal trip is most often wanted, since a camp has just been fought.
+    if (b.afield && this.healTrip(b)) return void this.retreat(b, "heal");
     // Asked BEFORE the rally orders, because what it answers is what those orders are for.
     const camp = this.creepNext(b);
     const rally = this.muster(b, camp);
@@ -4802,7 +4902,7 @@ export class ComputerPlusAi {
   /** Break off, and REMEMBER WHAT FROM — the one thing the hero's Scroll of Town Portal turns
    *  on (`itemCtx`). Creeps do not chase and will still be there in two minutes; an army does,
    *  and a hero walking away from one usually does not get home. */
-  private retreat(b: Brain, from: "creeps" | "player" | "stuck"): void {
+  private retreat(b: Brain, from: "creeps" | "player" | "stuck" | "heal"): void {
     b.press = null; // a push that has to turn round is over
     b.resume = null;
     b.retreatFrom = from;
@@ -4837,6 +4937,8 @@ export class ComputerPlusAi {
       this.retreat(b, b.creeping ? "creeps" : "player");
       return;
     }
+    // …and a hero low enough that it would rather go home and heal — sometimes. See `healTrip`.
+    if (this.healTrip(b)) return void this.retreat(b, "heal");
     const target = b.target;
     if (!target) return void this.endWave(b);
     if (b.creeping) {
@@ -4872,6 +4974,10 @@ export class ComputerPlusAi {
     } else if (this.atGoal(b, target) && !this.enemyNear(b, target.x, target.y, CLEARED_RADIUS)) {
       return void this.objectiveDone(b);
     }
+    // …an ally that said it is coming is WAITED FOR, short of the target — see `awaitEscort`.
+    // Above the watchdog, which it would otherwise trip by design: a party standing still on
+    // purpose is not a party that cannot get anywhere.
+    if (!b.creeping && target.id && this.awaitEscort(b, target)) return;
     // …AND NOTHING WAITS FOR EVER. Every end condition above is a statement about the objective,
     // and none of them can answer "we are never going to get there" — see `PUSH_STUCK_AFTER`.
     if (this.stalled(b, target)) return void this.abandon(b);
@@ -5119,12 +5225,36 @@ export class ComputerPlusAi {
         this.issue(b, { c: "order", unitId: u.id, order: { kind: "move", x: aim.x, y: aim.y }, queued: false });
       }
     }
-    if (!b.squad.size || (allHome && this.readiness(b) >= REGROUP_HP_FRACTION)) return void this.endWave(b);
+    // A HEAL TRIP is over when the HERO is healed, which is what it came home for — the army's
+    // pooled health is not the question (`HEAL_TRIP_DONE`).
+    const trip = b.retreatFrom === "heal";
+    const hero = trip ? this.squadHero(b) : null;
+    const healed = !hero || hero.hp / Math.max(1, hero.maxHp) >= HEAL_TRIP_DONE;
+    if (!b.squad.size || (allHome && healed && this.readiness(b) >= REGROUP_HP_FRACTION)) return void this.endWave(b);
     // …AND IT GIVES UP WAITING, for the same reason `gathered` does — see `REGROUP_PATIENCE`
     // for the two ways this state never ends on its own. `massing` is not "go and attack": it
     // is where the decision to creep, to attack or to keep waiting is taken, and every one of
     // those gates is still in front of a party that got here broken.
-    if (b.clock - b.retreatSince >= REGROUP_PATIENCE) this.endWave(b);
+    if (b.clock - b.retreatSince >= (trip ? HEAL_TRIP_PATIENCE : REGROUP_PATIENCE)) this.endWave(b);
+  }
+
+  /**
+   * DOES THE HERO GO HOME TO HEAL? — see `HEAL_TRIP_HP`. True once per wound, on the pass the
+   * trip should start.
+   */
+  private healTrip(b: Brain): boolean {
+    const hero = this.squadHero(b);
+    if (!hero) return false;
+    const home = b.ai.home();
+    const step = healTripStep(
+      b.healRoll,
+      hero.hp / Math.max(1, hero.maxHp),
+      Math.hypot(hero.x - home.x, hero.y - home.y) > TOWN_RADIUS,
+      this.fighting(b),
+      () => b.ai.randomInt(1, 100) <= HEAL_TRIP_CHANCE * 100,
+    );
+    b.healRoll = step.roll;
+    return step.go;
   }
 
   /**
@@ -6046,7 +6176,11 @@ export class ComputerPlusAi {
     }
     // 2 and 3: an enemy EXPANSION we know about, most of the time, else the main — see
     // `baseTarget`, which the press after a won fight asks too.
-    const base = this.baseTarget(b, -1);
+    //
+    // THE TEAM'S TARGET FIRST — the opponent an ally has just said it is hitting (`teamFocus`),
+    // and anybody only when that player has nothing we can go at.
+    const focus = this.teamFocus(b);
+    const base = (focus >= 0 ? this.baseTarget(b, focus) : null) ?? this.baseTarget(b, -1);
     if (base) return base;
     // 4. …AND WHEN THERE IS NOTHING IT CAN GET TO, IT GOES CREEPING ANYWAY.
     //
@@ -6248,6 +6382,8 @@ export class ComputerPlusAi {
     // next creep run gets its own attempt at throwing one.
     b.vanguardUntil = 0;
     b.vanguardDone = false;
+    // …and a promised escort belongs to the wave it was promised to.
+    b.escort = null;
     // A general retreat and a rally both SUPERSEDE one soldier's errand: both states issue a
     // destination of their own for every unit in the squad, and a stale pull-back entry would
     // either fight that order or hold the unit out of the wave that forms next.
@@ -6960,7 +7096,8 @@ export class ComputerPlusAi {
    * The rule itself is `teamLost` in plus/chatter.ts, beside `hopeless`, and it is pinned by
    * `tools/ai-plus-concede-test.cjs`. This half is the two lists it reads: the ROSTER is
    * `b.team` — every seat that has ever been an ally of ours, which only ever grows — and who
-   * is still IN it is `b.allies`, derived from what is standing on the field.
+   * is still IN it is `b.allies`, derived from what is standing on the field less the seats
+   * whose game is over (`PlusHost.playerOut` — a leaver's units stay on the field, shared).
    */
   private teamCollapsed(b: Brain): boolean {
     return teamLost(b.team, b.allies);
@@ -6976,10 +7113,13 @@ export class ComputerPlusAi {
   /** Once a second, with the rest of the manners. */
   private teamPass(b: Brain): void {
     if (b.clock - b.alliesAt >= ALLY_REFRESH) {
-      b.allies = this.alliesOf(b);
+      const mates = this.alliesOf(b);
+      b.allies = mates.filter((p) => !this.host.playerOut?.(p));
       b.alliesAt = b.clock;
-      // The roster only ever grows — see `Brain.team` and `teamCollapsed`.
-      for (const p of b.allies) if (!b.team.includes(p)) b.team.push(p);
+      // The roster only ever grows — see `Brain.team` and `teamCollapsed` — and it takes the
+      // seats that have gone as well as the ones still playing: a teammate who quit before our
+      // first look is still a teammate we lost, and its units are still standing to say so.
+      for (const p of mates) if (!b.team.includes(p)) b.team.push(p);
     }
     if (!b.allies.length) {
       b.called = -1; // nobody to have called; a stale one must not fire if a team forms later
@@ -7002,7 +7142,9 @@ export class ComputerPlusAi {
    * `coAllied` rather than a team number, for the reason src/game/chat.ts states at length — an
    * alliance is a directed matrix and a one-way passive grant is not an alliance. Derived from
    * the units on the field rather than from a roster because that is also the useful question:
-   * a teammate who has been wiped out is not somebody to tell about your build.
+   * a teammate who has been wiped out is not somebody to tell about your build. It does NOT
+   * leave out a teammate who has LEFT — whose units stay on the field, shared with the team
+   * (`ShareEverythingWithTeam`) — which is `teamPass`'s job, through `PlusHost.playerOut`.
    */
   private alliesOf(b: Brain): number[] {
     const me = b.ai.player;
@@ -7326,11 +7468,20 @@ export class ComputerPlusAi {
     // of its own to go early: only the difficulty's earliest attack still stands — the FLOOR,
     // not this seat's own roll of `firstAttackSpread` — (and an army big enough to be one —
     // `rallyBusy`'s "small").
-    if (ask ? b.clock < b.profile.firstAttack : !this.waveReady(b)) return decline(RALLY_BUSY_LINES.notReady);
+    //
+    // …and an ANNOUNCEMENT is now held to the same bar, because hitting together is the point
+    // (see "hitting together" in plus/teamchat.ts). Waiting for this computer's OWN wave clock —
+    // `waveGap` since its last push, its army mustered, its hero levelled past the opening —
+    // meant an ally's attack was joined only when the two clocks happened to line up, which in a
+    // 2v2 was almost never: two computers walked at two bases a minute apart. The army-size half
+    // is `rallyBusy`'s "small", already asked above.
+    if (b.clock < b.profile.firstAttack) return decline(RALLY_BUSY_LINES.notReady);
     const spot = this.foeBase(b, foe);
     if (!spot) return;
     b.joining = foe;
     b.joinUntil = b.clock + JOIN_TIMEOUT;
+    b.allyFoe = foe;
+    b.allyFoeAt = b.clock;
     b.creeping = false;
     b.target = { id: 0, x: spot.x, y: spot.y };
     // Announced as OUR attack as well, so the third teammate hears one plan rather than two:
@@ -7387,6 +7538,90 @@ export class ComputerPlusAi {
   private joinWave(b: Brain): void {
     if (b.joining < 0) return;
     if (b.mode !== "attacking" || b.clock > b.joinUntil) b.joining = -1;
+  }
+
+  /**
+   * THE TEAM'S TARGET — the opponent an ally named in the last `TEAM_FOCUS` seconds, or -1.
+   *
+   * Heard, never read: it is what an ally SAID (`heard` records every named attack and rally,
+   * and `answerAttack` the ones this computer joined), so a person typing "hit blue" steers it
+   * exactly as another computer's announcement does. Dropped once that player has nothing left
+   * on the field or has become somebody we are not at war with.
+   */
+  private teamFocus(b: Brain): number {
+    const foe = b.allyFoe;
+    if (foe < 0 || b.clock - b.allyFoeAt > TEAM_FOCUS || !b.allies.length) return -1;
+    if (this.host.coAllied(b.ai.player, foe) || this.host.playerOut?.(foe)) return -1;
+    for (const u of this.host.world.units.values()) if (u.owner === foe && u.hp > 0) return foe;
+    return -1;
+  }
+
+  /**
+   * WAIT FOR THE ALLY THAT IS COMING — true while this wave is holding for it.
+   *
+   * An ally that answered our announcement with "im coming with you" (`Brain.escort`) set off
+   * from ITS base when it heard it, which is a march behind ours; walking on into the target
+   * is two attacks a minute apart, each met by the whole defence in turn. So once the party is
+   * within `ESCORT_STAGE` of the objective it stops, and goes in when the ally's army is within
+   * `ESCORT_NEAR` of ours — a hero of theirs, or a few soldiers, since an army is not the mean
+   * of its units (the centroid of one standing at home and one here is a point nobody is on).
+   *
+   * Everything that ends the wait ends it for good (`escort` is cleared): the ally arriving;
+   * `ESCORT_HOLD` running out, since an ally that is not there by then is not coming; the ally
+   * leaving the game; the promise going stale before we reached the staging point
+   * (`ESCORT_WAIT`); and CONTACT — anything that can hurt the party within `ESCORT_CONTACT` of
+   * the captain (`escortContact`) means the fight has started, and a party standing still in it is a party being shot. The army
+   * is STOPPED once, at the start of the hold (a unit already swinging is left to swing), and
+   * the push watchdog is re-armed at the end, so the time spent waiting is not counted against
+   * the march.
+   */
+  /** Is something that can hurt the party close enough to it that standing still is being shot —
+   *  a known hostile soldier, or a building that carries a weapon (a tower), within
+   *  `ESCORT_CONTACT`. A farm on the edge of the base it is waiting outside is not a fight. */
+  private escortContact(b: Brain, at: { x: number; y: number }): boolean {
+    for (const u of this.host.world.units.values()) {
+      if (u.hp <= 0 || u.owner === b.ai.player) continue;
+      if (Math.hypot(u.x - at.x, u.y - at.y) > ESCORT_CONTACT) continue;
+      if (u.building && !u.weapons.length) continue;
+      if (b.ai.hostileTo(u) && b.ai.knows(u)) return true;
+    }
+    return false;
+  }
+
+  private awaitEscort(b: Brain, target: { x: number; y: number }): boolean {
+    const e = b.escort;
+    if (!e) return false;
+    const done = (): false => {
+      b.escort = null;
+      b.push.gap = -1;
+      b.push.since = b.clock;
+      b.reissueIn = 0; // go in at once, not on the next re-issue clock
+      return false;
+    };
+    if (!b.allies.includes(e.ally)) return done();
+    const anchor = this.squadHero(b) ?? this.squadCentre(b);
+    if (!anchor) return done();
+    if (e.holdSince < 0) {
+      if (b.clock - e.at > ESCORT_WAIT) return done();
+      if (Math.hypot(anchor.x - target.x, anchor.y - target.y) > ESCORT_STAGE) return false; // still walking up
+    }
+    if (this.fighting(b) || this.escortContact(b, anchor)) return done();
+    let soldiers = 0;
+    for (const u of this.host.world.units.values()) {
+      if (u.owner !== e.ally || u.hp <= 0 || u.building || u.isPeon) continue;
+      if (Math.hypot(u.x - anchor.x, u.y - anchor.y) > ESCORT_NEAR) continue;
+      if (u.isHero) return done();
+      if (++soldiers >= ESCORT_BODIES) return done();
+    }
+    if (e.holdSince < 0) {
+      e.holdSince = b.clock;
+      for (const u of this.squadUnits(b)) {
+        if (u.inCombat || u.swingLeft >= 0) continue;
+        this.issue(b, { c: "order", unitId: u.id, order: { kind: "stop" }, queued: false });
+      }
+    }
+    if (b.clock - e.holdSince > ESCORT_HOLD) return done();
+    return true;
   }
 
   /**
@@ -7904,7 +8139,7 @@ export class ComputerPlusAi {
       heroesLost: fallen.length,
       // The same two lists `teamCollapsed` reads, through the same helper — so the weight and
       // the bar can never disagree about who is still playing. 0 on a 1v1 and a free-for-all.
-      teamGone: goneShare(b.team, b.allies),
+      teamGone: goneCount(b.team, b.allies),
       ...this.duelStanding(b),
     };
   }

@@ -4192,6 +4192,10 @@ export class MapViewerScene {
       // (AMAI has to destroy its own buildings to leave, because a JASS script's only way out
       // is the defeat condition; we are not constrained that way.)
       this.rts.onPlayerLeft = (player) => this.mapScript?.interp.firePlayerEvent(player, EVENT_PLAYER_LEAVE);
+      // …and who has gone out of that door (or been defeated) — `RemovePlayer`, recorded by
+      // `playerGameOver` and by `peerLeft`. A leaver's units stay on the field shared with its
+      // team, so this is the only way a Computer+ teammate can tell somebody has left.
+      this.rts.isPlayerOut = (player) => this.playersOut.has(player);
       // …and the same split for the pause: the host judges an ask, a client obeys a ruling.
       this.rts.onPauseAsked = (player, on) => this.rulePause(player, on);
       this.rts.onPauseRuled = (on, by, left, denied) => this.takePauseRuling(on, by, left, denied);

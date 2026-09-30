@@ -3040,6 +3040,21 @@ about: **item abilities are not in `SimUnit.abilities`**. They hang off the inve
 dispatch through `useItem`, so the caster's ability walk cannot see one — it is a second walk, not
 more rows in the caster's table.
 
+#### Three presses and two sales added together
+
+* **Wand of the Wind** (`wcyc`, `[AIcy] code = Acyc`) is the `disable` rung, right under the
+  hero's own potion: thrown IN a fight at an enemy **hero** first — the highest level in its
+  600 range — and never at one under `HERO_KILL_HP`, because Cyclone is also an invulnerability
+  and throwing it at a hero the army is finishing rescues it (`windTarget`). With no hero in
+  reach, the biggest body over `WIND_BODY_HP` (800, a Knight) in a fight of `CLUSTER` — the
+  creeping trick. Nothing it would be refused at: flyers, the mechanical, anything already
+  stunned, invulnerable or magic-immune.
+* **Scroll of Healing as an emergency.** A hero under `SCROLL_EMERGENCY_HP` (20 %) reads its own
+  INSTANT area heal (`AIha`, `AIra`) in the middle of a fight; a pour (`AIrg`) is never an
+  emergency heal, since the next blow cancels it.
+* **Crystal Ball and Sentry Wards are JUNK** — nothing on the ladder is a reveal — so they are
+  pawned like the Wand of Lightning Shield.
+
 #### The alias/code trap, which broke almost the whole belt
 
 Reported from a real game: *"orc is not able to use healing salves (it buys them though)."* It was
@@ -3693,6 +3708,19 @@ Two consequences that are not obvious from the rule and each of which is a bug i
   that soldier out of the next wave (it does not count toward `squadFood` while it is out, for the
   same reason a healing one does not).
 
+### The hero goes home to heal — sometimes
+
+*"Computer+ AI players whose hero is very low on health (below 40%) must choose to go back to base
+and heal sometimes."* `healTrip` / `healTripStep`: a captain under `HEAL_TRIP_HP` (40 %, which is
+also `HERO_KILL_HP`) outside our towns and not in a fight tosses ONE coin per wound
+(`HEAL_TRIP_CHANCE` 0.5, `Brain.healRoll`) — heads, the whole party walks home (`retreat(b,
+"heal")`); tails, it plays on, and that wound is not asked about again until the hero is back
+above the line. Asked in `attacking` (below `fightLost` and `retreatHp`) and in `massing` while
+the party is mustering in the field between camps. It is the ordinary `retreating` walk, but it is
+not a lost fight: `itemCtx.losing` is false for it (no Town Portal is read to save the walk), and
+it ends when the HERO is at `HEAL_TRIP_DONE` (80 %) rather than on the army's pooled health, or
+after `HEAL_TRIP_PATIENCE` (90 s). Pinned in tools/ai-plus-army-test.cjs.
+
 ### The wounded, and where they heal
 
 A unit that is HEALING is not sent to fight. Three sources, one rule (`recovering`): a **Healing
@@ -3969,7 +3997,7 @@ whole defeat) is the line.
 | `invaderHero` | 0.1 | …and one of them is a hero |
 | `workersShort` | ≤0.2 | the economy — see below, the one term that is not a boolean |
 | `broke` | 0.15 | not the gold for a hall, which is what makes losing one permanent |
-| `teamGone` | ≤0.7 | × the share of the starting team no longer playing — see below |
+| `teamGone` | **0.5** each | per teammate no longer playing — see below |
 | `heroDeathsBehind` | 0.25 | **1v1 only:** our heroes have died `HERO_DEATHS_BEHIND` (2) or more times more than theirs |
 | `firstHeroBehind` | 0.25 | **1v1 only:** their first hero is `FIRST_HERO_LEVELS_BEHIND` (2) or more levels above ours |
 
@@ -4040,19 +4068,17 @@ are only ever true of a match being lost.
 
 **`teamGone` is the only term that is not about this player's own board.** A teammate who quits
 or concedes is one fewer army on our side of a map drawn for two of them, and that makes the game
-harder for everyone left in a way no other term can see. It is `goneShare` — the share of the
-starting team no longer playing — and that is *deliberately the same measurement `teamLost` is a
-bar on*, so the weight and the bar can never disagree about who is still playing. Read at two
-heights: below half a departure **leans** on the decision, at half `teamLost` settles it outright
-(and does so exempt from `CONCEDE_NOT_BEFORE`). Which means this term's practical ceiling is just
-under `0.7 / 2`, and it bites exactly where the hard rule says nothing — a 4v4 down one of three
-(0.23), a 6v6 down two of five (0.28). A 1v1 and a free-for-all have no team and score 0.
+harder for everyone left in a way no other term can see. It is **per head** — 0.5 for EACH
+teammate gone (`goneCount`) — which is the developer's ruling: every departure makes a computer
+more eager to go, and in a 2v2 the partner leaving is worth 0.5 *by itself*. It used to be 0.7 ×
+the share of the team, which put one of three gone in a 4v4 at 0.23 and could tip nothing but a
+position that was already lost.
 
-That 0.23 is worth what it looks like: a 4v4 player with no hero left alive and no army on the
-field sits at 0.8 and plays on, and the same position with one teammate walked out is 1.03 and
-says gg. As with the roster, "gone" is *nothing on the map*, so a teammate who was wiped out
-counts alongside one who quit — either way there is nobody there to fight beside. And it carries
-nothing on its own: a healthy player on a broken team is still playing a game.
+So a 2v2 computer whose partner left concedes the moment anything heavy goes wrong beside it (its
+heroes down: 1.0; its hall razed: 1.0) and plays on while nothing does; a 4v4 down one of three is
+the same; and two departures carry a concession alone (a 6v6 down two of five). A 1v1 and a
+free-for-all have no team and score 0. "Gone" counts a teammate who was WIPED OUT as well as one
+who quit — either way there is nobody there to fight beside.
 
 What makes the lower bar safe is the same thing that makes clause 4 safe — the **dwell**, not the
 reading. Every term un-latches the instant the position recovers: a hall that goes back up, a
@@ -4090,24 +4116,28 @@ AI still stops playing — it simply stands there, like a player who alt-tabbed.
 
 ### …and the concession that is not a reading of the board at all
 
-**If half or more of the team has gone, the rest concede.** `teamCollapsed`, and it is
-deliberately not run through `hopeless()`: that reading is about *this* player's base, army and
-heroes, and a computer whose two teammates walked out can be sitting on a perfectly healthy
-economy while the match is over. A 3v3 that is now a 1v3 is not a game anybody plays out. For the
-same reason it is exempt from `CONCEDE_NOT_BEFORE` — a teammate leaving at ninety seconds has
-decided the game every bit as thoroughly as one leaving at ten minutes.
+**If half or more of the team has gone, the rest concede** — on a team of two teammates or more
+(a 3v3 and up). `teamCollapsed`, and it is deliberately not run through `hopeless()`: that reading
+is about *this* player's base, army and heroes, and a computer whose two teammates walked out can
+be sitting on a perfectly healthy economy while the match is over. A 3v3 that is now a 1v3 is not
+a game anybody plays out. For the same reason it is exempt from `CONCEDE_NOT_BEFORE` — a teammate
+leaving at ninety seconds has decided the game every bit as thoroughly as one leaving at ten
+minutes. A **2v2** is not settled by it: the developer's ruling is that the partner leaving is
+worth `DESPAIR.teamGone` (half a defeat) by itself, so it goes through the weighed reading.
 
-"Left" is *no longer playing*, and there is no separate signal for it: leaving runs
-`MeleeTriggerActionPlayerLeft`, which hands the leaver's units to Neutral Passive, so a player
-who quit and a player who was wiped out are the same thing seen from the field — and both are
-equally not somebody to fight beside. So it is asked of `Brain.allies`, which is derived from
-what is standing.
+**"Left" has to be ASKED — the field does not say it.** `MeleeTriggerActionPlayerLeft` hands a
+leaver's units to Neutral Passive only when no ally is left; with one it calls
+`ShareEverythingWithTeam`, and the units stay the leaver's and stay co-allied. This rule used to
+read "left" as *nothing on the map*, so a teammate who quit looked exactly like one still playing
+and it never fired. `PlusHost.playerOut` is the answer: the seats `RemovePlayer` has taken out of
+the match (the viewer's `playersOut`, written by the script's `playerGameOver` hook and by
+`peerLeft`) — leaving and defeat alike. `teamPass` takes them out of `Brain.allies`.
 
-The denominator has to be **latched**. `Brain.team` is every seat that has ever been in `allies`
-and it only grows, because the seat that leaves drops out of `allies` — if the roster were
-re-derived each pass (from the alliance matrix, or from who is on the field) the departing player
-would leave the denominator along with the numerator and the ratio would never move. Half or
-more, counted against the team as it started: two of four concedes, one of three does not.
+The denominator has to be **latched**. `Brain.team` is every seat that has ever been a teammate
+and it only grows — including a seat that had already left by our first look, since its units are
+still standing to say it was there — because if the roster were re-derived each pass the departing
+player would leave the denominator along with the numerator and the ratio would never move. Half
+or more, counted against the team as it started: one of two concedes, one of three does not.
 
 ## Team games: talking to your allies, and scouting once
 
@@ -4357,6 +4387,29 @@ call with an `HELP_ANSWER_STAGGER` (2.5 s) offset per computer that actually hea
 answer in order — and the second one decides whether to come while the first one's army is already
 walking, which is also the honest order to decide in.
 
+### Hitting together
+
+Asked for in as many words: Computer+ players *"should also organize hits/attacks together
+(especially in 2v2)"*. Announcing a target and answering "im coming with you" already existed,
+and it rarely produced one attack: the joiner only came when its OWN wave clock (`waveReady` —
+`waveGap` since its last push, its army mustered, its hero past the opening) happened to be open
+on the second it heard the line, and when it did come it set off from its own base a march behind
+the announcer. Two computers walked at two bases a minute apart. Three pieces
+(plus/teamchat.ts "hitting together", all ours):
+
+* **The same player.** Every named attack or rally an ally says is remembered (`Brain.allyFoe`)
+  and for `TEAM_FOCUS` (120 s) our own next wave at a player goes at THAT player's bases
+  (`teamFocus` → `baseTarget(b, focus)`), anybody only when that one has nothing we can go at.
+  Heard, never read out of the other computer — so a person typing "hit blue" steers it too.
+* **Joining it.** An announcement is answered on a rally's bar — an army big enough to be one
+  (`rallyBusy`'s "small") and the difficulty's `firstAttack` floor — instead of on `waveReady`.
+* **Arriving together.** The announcer that hears "im coming with you" (`readAllyCall` →
+  `"joining"`) stops `ESCORT_STAGE` (1800) short of its objective and waits for that ally's hero,
+  or `ESCORT_BODIES` (4) of its soldiers, to be within `ESCORT_NEAR` (1200) — for at most
+  `ESCORT_HOLD` (30 s), and never once anything that can hurt the party is within
+  `ESCORT_CONTACT` (900) of it (`awaitEscort`, `escortContact`). The hold sits above the push
+  watchdog and re-arms it when it ends, so standing still on purpose is not read as stuck.
+
 ### Scouting intelligence: the team scouts once
 
 Not chat, and it lives at the sighting instead (`ComputerPlusAi.scoutEnemy` / `teammates`): every
@@ -4385,7 +4438,8 @@ lines (a team game with three computers is three of these at once and the messag
 `HELP_CALL_GAP` 60 s, `HELP_ANSWER_GAP` 30 s (a second "help" inside it is the same emergency and
 the army is already walking), `HELP_TIMEOUT` 90 s, `SWITCH_MARGIN` 1.25, `HELP_CALL_FOES` 2,
 `OVERRUN_EDGE` 1.5 and `OVERRUN_BODIES` 2, `ATTACK_TELL_GAP` 45 s, `JOIN_STAGGER` 2.5 s,
-`JOIN_TIMEOUT` 75 s.
+`JOIN_TIMEOUT` 75 s, `TEAM_FOCUS` 120 s, `ESCORT_STAGE` 1800, `ESCORT_NEAR` 1200, `ESCORT_HOLD`
+30 s, `ESCORT_WAIT` 120 s.
 
 The one thing here that *is* the install's is `COLOUR_NAMES` — twelve words, in twelve places,
 straight off `UI\TriggerData.txt`'s `playercolor` enum. `RACE_WORDS` beside it is only the four

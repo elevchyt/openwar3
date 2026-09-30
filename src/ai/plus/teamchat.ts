@@ -820,6 +820,34 @@ export const JOIN_STAGGER = 2.5;
  *  first thing the wave sees on the way. */
 export const JOIN_TIMEOUT = 75;
 
+// --- hitting together ------------------------------------------------------------------------
+// Asked for in as many words: Computer+ players "should also organize hits/attacks together
+// (especially in 2v2)". Three pieces, all OURS — nothing in the install describes an AI team:
+//
+//   · the SAME PLAYER. An ally's announcement names an opponent, and for `TEAM_FOCUS` seconds
+//     after it a wave of ours that sets off at a player goes at THAT one (`teamFocus`). Two
+//     armies on two bases is two half-attacks; two on one is an attack.
+//   · JOINING IT. An announcement is answered on the same bar a rally is — an army big enough
+//     to be one, and the difficulty's earliest attack — rather than only when this computer's
+//     own wave clock happened to be open at that second (`answerAttack`).
+//   · ARRIVING TOGETHER. The announcer that hears "im coming with you" stops `ESCORT_STAGE` short
+//     of the target and waits for that ally's army to be within `ESCORT_NEAR` of its own — for
+//     at most `ESCORT_HOLD` — so the two waves go in as one instead of one after the other
+//     (`awaitEscort`). The promise itself is only good for `ESCORT_WAIT`: a wave that has not
+//     reached the staging point by then has been doing something else.
+
+/** How long an ally's named target steers where OUR waves go. About the length of one push. */
+export const TEAM_FOCUS = 120;
+/** How far short of the objective an announcer waits for an ally that said it is coming — past
+ *  a tower's reach (Guard Tower 700, Spirit Tower 700) and a base's own spread. */
+export const ESCORT_STAGE = 1800;
+/** …how close the ally's army has to be for the two to be "together". */
+export const ESCORT_NEAR = 1200;
+/** …the longest the announcer holds for it. An ally that is not there by then is not coming. */
+export const ESCORT_HOLD = 30;
+/** …and how long a "coming with you" stays a reason to hold at all. */
+export const ESCORT_WAIT = 120;
+
 /**
  * How much stronger than everything we have at home the enemy standing IN it has to be before
  * one opponent counts as OVERRUN.

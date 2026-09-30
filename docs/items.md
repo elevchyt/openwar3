@@ -185,6 +185,10 @@ Three homes, chosen by what the effect needs to see:
    the Tome of Retraining (hero progression), the glyphs (the tech graph), the Soul Gem.
 3. **A derivation** — the carried passives above, plus `itemBonuses` for the flat stats and
    `tickCarriedItems` for the two that need a clock (Cloak of Flames, Amulet of Spell Shield).
+   The Cloak of Flames is also WORN: its buff row `[BIcf]` carries Immolation's own
+   `Targetart = …\NightElf\Immolation\ImmolationTarget.mdl`, so the carrier holds a timeless
+   `BIcf` mark (group `cloakOfFlames`) while the cloak burns — off when it leaves the belt, and
+   off while Immolation is lit, which already wears the same fire.
 
 Two `SpellApi` methods exist only because items need them:
 `revealArea` (the Crystal Ball, the Flare Gun, the Potion of Omniscience, the Wand of
