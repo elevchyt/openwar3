@@ -32,6 +32,9 @@ const ROC_AMBIENCE = "GlueScreenWind";
 
 /** UISounds.slk row for a menu button press. */
 export const GLUE_CLICK = "GlueScreenClick";
+/** UISounds.slk row for one second of a chat room's countdown — `ChatroomTimerTick` →
+ *  Sound\Interface\BattleNetTick.wav (volume 80), the tick under each "Game starting in %d". */
+export const COUNTDOWN_TICK = "ChatroomTimerTick";
 
 /** The main menu's music + ambience bed, and the sounds its screens make. */
 export class GlueAudio {
@@ -92,6 +95,11 @@ export class GlueAudio {
   /** A menu button was pressed. */
   click(): void {
     this.sounds.playUi(GLUE_CLICK);
+  }
+
+  /** A line of the game lobby's start countdown was printed. */
+  countdownTick(): void {
+    this.sounds.playUi(COUNTDOWN_TICK);
   }
 
   /** A panel-chrome SND event came due (MenuScene.onSound) — its 4-char AnimLookups code. */

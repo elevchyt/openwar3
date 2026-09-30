@@ -377,6 +377,7 @@ function lanLobbyScreen(
     mount: () => mountLanLobbyScreen(ui, vfs, editionMaps(), lanSession().lobby, map, {
       onCancel: () => void glue.goTo(lanScreen(vfs)),
       onStart: (path, info, config, link) => void startGame(mapFileFor(path), info, config, link),
+      onCountdownTick: () => glueAudio?.countdownTick(),
     }, advanced),
   };
 }

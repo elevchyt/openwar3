@@ -104,6 +104,8 @@ export interface LanLobbyHandlers {
    *  the host's `start` lands. Both are handed the same map and config, plus the match's own
    *  end of the wire (assembled here, because the lobby does not outlive this screen). */
   onStart: (mapPath: string, info: MapInfo, config: MeleeConfig, link: MatchLinkSetup) => void;
+  /** One line of the start countdown was printed — the tick that goes with it (GlueAudio). */
+  onCountdownTick?: () => void;
 }
 
 /**
@@ -387,6 +389,7 @@ export async function mountLanLobbyScreen(
   /** Print one countdown line, wherever it came from — our own clock or the host's message. */
   const countdownLine = (n: number): void => {
     append((strings?.string("TIMER_COUNTDOWN") ?? "Game starting in %d ...").replace("%d", String(n)));
+    h.onCountdownTick?.(); // …and every line ticks (UISounds `ChatroomTimerTick`)
   };
 
   /**
