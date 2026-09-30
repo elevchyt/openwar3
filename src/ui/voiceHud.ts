@@ -15,6 +15,19 @@ export interface VoiceEntry {
   tint: string | null;
 }
 
+/** A white loudspeaker with two sound waves — the far-left mark of every plate. Ours: the
+ *  game has no voice art, so it is drawn rather than read from the install. */
+function speakerIcon(): SVGSVGElement {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("class", "hud-voice-icon");
+  svg.innerHTML =
+    '<path fill="#fff" d="M3 9h4l5-4v14l-5-4H3z"/>' +
+    '<path fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/>';
+  return svg;
+}
+
 export class VoiceHud {
   readonly el: HTMLDivElement;
   private shown = "";
@@ -38,12 +51,18 @@ export class VoiceHud {
     const plate = document.createElement("div");
     plate.className = "hud-voice-plate";
     if (e.tint) plate.style.setProperty("--voice-tint", `#${e.tint}`);
+    plate.append(speakerIcon());
     if (e.symbol) {
       const img = document.createElement("img");
       img.className = "hud-voice-race";
       img.src = e.symbol;
       img.alt = "";
       plate.append(img);
+    } else {
+      // Keep the symbol's slot, so every plate is the same width whether or not a race is known.
+      const gap = document.createElement("span");
+      gap.className = "hud-voice-race";
+      plate.append(gap);
     }
     const name = document.createElement("span");
     name.className = "hud-voice-name";

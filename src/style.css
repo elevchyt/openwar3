@@ -3992,7 +3992,7 @@ body.in-game .load-gate { display: none; }
   display: flex;
   align-items: center;
   gap: calc(var(--voice-h) * 0.22);
-  max-width: 100%;
+  flex: none;
   height: var(--voice-h);
   padding: 0 calc(var(--voice-h) * 0.4) 0 calc(var(--voice-h) * 0.15);
   border-radius: calc(var(--voice-h) * 0.12);
@@ -4002,12 +4002,22 @@ body.in-game .load-gate { display: none; }
   line-height: 1;
   text-shadow: 0 0 2px #000;
 }
+.hud-voice-icon {
+  flex: none;
+  height: 64%;
+  aspect-ratio: 1;
+}
 .hud-voice-race {
+  flex: none;
   height: 78%;
   aspect-ratio: 1;
   object-fit: contain;
 }
 .hud-voice-name {
+  /* Every plate is the same width: the name always takes 18 characters of room, and a longer
+     one is cut with an ellipsis (issue #133). */
+  flex: none;
+  width: 18ch;
   color: #fff;
   white-space: nowrap;
   overflow: hidden;

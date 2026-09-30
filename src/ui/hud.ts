@@ -872,7 +872,7 @@ const VOICE_AREA = {
   /** Just above the console band's top edge, so the plates float over the world beside the
    *  command card rather than covering a button. */
   bottom: CONSOLE_BAND_H + 0.012,
-  width: 0.2,
+  width: 0.26,
   plate: 0.026,
   gap: 0.004,
 } as const;
