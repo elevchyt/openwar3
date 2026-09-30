@@ -1467,6 +1467,8 @@ export class MapViewerScene {
   private allTalk = false;
   /** Every seat's race as the match resolved it — the voice plates wear the speaker's symbol. */
   private matchRaces = new Map<number, PlayableRace>();
+  /** Seats that picked Random: their plate wears a question mark, not the race they rolled. */
+  private randomSeats = new Set<number>();
   /** Voice chat (issue #133): the microphone + speakers, who is talking, the plates' clock. */
   private readonly voiceChat = new VoiceChat();
   private readonly talkers = new Talkers();
@@ -2615,6 +2617,7 @@ export class MapViewerScene {
     const races = new Map(config.slots.map((s) => [s.id, resolveRace(s.race)]));
     this.localRace = races.get(this.localPlayer) ?? "human";
     this.matchRaces = races;
+    this.randomSeats = new Set(config.slots.filter((s) => s.random || s.race === "random").map((s) => s.id));
     this.meleeTeams = new Map(config.slots.map((s) => [s.id, s.team]));
     // Who an observer watches (issue #168): every seat in the match, with the race it resolved
     // to. Handed to the controller on BOTH sides of the wire — the host builds a watcher's lane
@@ -9483,7 +9486,9 @@ export class MapViewerScene {
         return {
           player: p,
           name: this.playerLabel(p),
-          symbol: race ? this.blpIcon(`UI\\Glues\\Loading\\Backgrounds\\Campaigns\\${RACE_SYMBOL[race]}Symbol.blp`) : "",
+          symbol: this.randomSeats.has(p)
+            ? this.blpIcon("UI\\Widgets\\Glues\\dialogbox-question.blp")
+            : race ? this.blpIcon(`UI\\Glues\\Loading\\Backgrounds\\Campaigns\\${RACE_SYMBOL[race]}Symbol.blp`) : "",
           tint: hex(teamColorHex(this.vfs, this.rts?.unitColor(p) ?? p)),
         };
       }),

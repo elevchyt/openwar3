@@ -17,6 +17,10 @@ export interface SlotConfig {
   id: number;
   controller: Controller;
   race: Race;
+  /** The seat chose Random, so the voice plates show a question mark rather than its race
+   *  (issue #133). A LAN start rolls `race` on the host and says so here; a skirmish leaves
+   *  `race` as "random" itself, which reads the same. */
+  random?: boolean;
   team: number;
   /**
    * The colour the seat plays in — a PLAYER_COLORS index (ui/hud.ts), applied through the

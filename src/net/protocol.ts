@@ -113,6 +113,9 @@ export interface StartMatch {
     id: number;
     controller: "user" | "computer";
     race: string;
+    /** The seat CHOSE Random (or the host rolled every race): `race` is what it rolled, and this
+     *  says the player is shown as a question mark on the voice plates (issue #133). */
+    random?: boolean;
     team: number;
     /** The colour the lobby gave the seat (a PLAYER_COLORS index — `SetPlayerColor`). Absent
      *  reads as the slot's own index, WC3's default. */

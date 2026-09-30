@@ -493,6 +493,7 @@ export function buildStart(
         id: s.id,
         controller: s.kind === "player" ? ("user" as const) : ("computer" as const),
         race: advanced.randomRaces ? rollRace("random") : rollRace(s.race),
+        ...(advanced.randomRaces || s.race === "random" ? { random: true } : {}),
         team: s.team,
         color: s.color,
         startX: s.startX,

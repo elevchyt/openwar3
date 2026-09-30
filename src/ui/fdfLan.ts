@@ -293,6 +293,7 @@ export function toConfig(msg: StartMatch, me: number | undefined, mapExplored: b
     id: s.id,
     controller: s.controller,
     race: s.race as Race,
+    ...(s.random ? { random: true } : {}),
     team: s.team,
     startX: s.startX,
     startY: s.startY,
