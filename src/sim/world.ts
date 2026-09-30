@@ -1392,11 +1392,19 @@ export interface Alert {
   killer?: { properName: string; typeId: string };
 }
 
+/** A running spell field as the renderer sees it (SimWorld.activeSpellFields). */
+export interface SpellFieldView { code: string; x: number; y: number; loopSound: string; shake: boolean; casterId: number; casterArt: string }
+/** A teleport being channelled, as the renderer sees it (SimWorld.activeTeleports). */
+export interface TeleportView { casterId: number; destId: number; art: string }
+
 /** What the host tells each recipient that only the sim's tick produces (SimWorld.noticeWire). */
 export interface WireNotices {
   alerts: Alert[];
   built: Array<{ buildingId: number; owner: number }>;
   researched: Array<{ buildingId: number; upgradeId: string; level: number; owner: number }>;
+  /** A hero's level-up nova, with where it happened — it is anybody's to see who has eyes on
+   *  the hero, so it is fog-gated rather than owner-gated. */
+  levelUps: Array<{ unitId: number; level: number; x: number; y: number }>;
 }
 
 /** A structure's construction reaching a milestone (EVENT_(PLAYER_)UNIT_CONSTRUCT_*):
@@ -3928,6 +3936,41 @@ export class SimWorld {
     return mine;
   }
 
+  /**
+   * A gold mine a SCRIPT made mid-game — `CreateUnit(…, 'ngol', …)`. In WC3 a mine is a unit,
+   * and a map that raises one expects to mine it; here a mine is a record in `mines` (see
+   * jassHooks MINE_ID_BASE), and the create used to make an ordinary unit of type `ngol`
+   * instead — drawn and selectable, and on nobody's machine a mine: no harvest, no gold for
+   * `GetResourceAmount`. It is a real record now, queued for the renderer to give a body
+   * (`drainAddedMines`: the model, the footprint, the ground splat) the way the map's own
+   * mines get theirs at load.
+   */
+  addScriptMine(x: number, y: number, gold: number, radius: number): SimMine {
+    const mine = this.addMine(x, y, gold, radius);
+    this.addedMines.push(mine);
+    return mine;
+  }
+
+  /** Client side: a mine the authority lists that this machine has no record of — a script's,
+   *  made on the host (`addScriptMine`). Created under the HOST's id, since every later payload
+   *  names it by that, and queued for a body exactly as the host's own was. */
+  adoptMine(m: { id: number; x: number; y: number; radius: number; gold: number }): void {
+    if (this.mines.has(m.id)) return;
+    const mine: SimMine = { id: m.id, x: m.x, y: m.y, radius: m.radius, gold: Math.max(0, m.gold), busy: false, busyBy: 0, entangledBy: 0 };
+    this.mines.set(mine.id, mine);
+    this.nextNodeId = Math.max(this.nextNodeId, m.id + 1); // never mint that id locally again
+    this.addedMines.push(mine);
+  }
+
+  private addedMines: SimMine[] = [];
+  /** Mines raised since the last drain that still need a body (`addScriptMine`, `adoptMine`). */
+  drainAddedMines(): SimMine[] {
+    if (!this.addedMines.length) return this.addedMines;
+    const out = this.addedMines;
+    this.addedMines = [];
+    return out;
+  }
+
   addTree(x: number, y: number, lumber = TREE_LUMBER, blockRadius = 64): SimTree {
     const tree: SimTree = { id: this.nextNodeId++, x, y, lumber, hp: TREE_HP, blockRadius };
     this.trees.set(tree.id, tree);
@@ -4965,6 +5008,12 @@ export class SimWorld {
   }
 
   /** Announcements since the last drain (renderer turns each into text + sound + ping). */
+  /** A level-up nova — the renderer's queue, and on a LAN host the wire's. */
+  private noteLevelUp(u: SimUnit): void {
+    this.levelUps.push({ unitId: u.id, level: u.level });
+    this.noticeWire?.levelUps.push({ unitId: u.id, level: u.level, x: u.x, y: u.y });
+  }
+
   /** Every alert goes through here: the renderer's queue, and on a LAN host the wire's. */
   private noteAlert(a: Alert): void {
     this.alerts.push(a);
@@ -4981,8 +5030,8 @@ export class SimWorld {
   /** Host side: the notices since the last ask (`MatchLink`'s notices lane). The first ask
    *  switches the tap on. */
   drainNoticesForWire(): WireNotices {
-    const out = this.noticeWire ?? { alerts: [], built: [], researched: [] };
-    this.noticeWire = { alerts: [], built: [], researched: [] };
+    const out = this.noticeWire ?? { alerts: [], built: [], researched: [], levelUps: [] };
+    this.noticeWire = { alerts: [], built: [], researched: [], levelUps: [] };
     return out;
   }
 
@@ -4992,6 +5041,7 @@ export class SimWorld {
     if (n.alerts) this.alerts.push(...n.alerts);
     if (n.built) this.buildCompletions.push(...n.built);
     if (n.researched) this.researchCompletions.push(...n.researched);
+    if (n.levelUps) for (const l of n.levelUps) this.levelUps.push({ unitId: l.unitId, level: l.level });
   }
 
   drainAlerts(): Alert[] {
@@ -15938,7 +15988,7 @@ export class SimWorld {
     // recomputeStats carries the current pool up with it in proportion — a hero who dings at
     // 100/1000 comes out at 105/1050, not healed to full. A level-up is not an escape.
     this.recomputeStats(hero); // new maxHp/maxMana/attributes, current pool scaled with them
-    if (eyeCandy) this.levelUps.push({ unitId: hero.id, level: hero.level }); // renderer: level-up nova
+    if (eyeCandy) this.noteLevelUp(hero); // renderer: level-up nova
     // EVENT_(PLAYER_)HERO_LEVEL for the trigger engine (7.17) — a separate queue from
     // the renderer's, since each side drains its own.
     if (this.captureHeroEvents) this.heroEvents.push({ hero: eventInfo(hero), phase: "level", level: hero.level, abilityId: "" });
@@ -15999,7 +16049,7 @@ export class SimWorld {
     this.recomputeStats(im); // new maxHp/maxMana/attributes off the level
     // …and the same silence when the hero's own was withheld: a nova on the copies alone would
     // point straight at which of the four is not the original (docs/illusions.md).
-    if (eyeCandy) this.levelUps.push({ unitId: im.id, level: im.level }); // the same nova, on every image
+    if (eyeCandy) this.noteLevelUp(im); // the same nova, on every image
   }
 
   /**
@@ -18242,7 +18292,8 @@ export class SimWorld {
    *  drain* channels this is a live view, not a one-shot queue: the renderer polls it
    *  each frame to sustain a channel's looping bed and to stop it the moment the field
    *  ends — whether it exhausted its waves or the caster was interrupted. */
-  activeSpellFields(): Array<{ code: string; x: number; y: number; loopSound: string; shake: boolean; casterId: number; casterArt: string }> {
+  activeSpellFields(): SpellFieldView[] {
+    if (this.clientLive) return this.clientLive.fields; // a client: the host's list (setClientLiveViews)
     return this.spellFields.map((f) => ({ code: f.code, x: f.x, y: f.y, loopSound: f.loopSound ?? "", shake: f.shake ?? false, casterId: f.casterId, casterArt: f.casterArt ?? "" }));
   }
 
@@ -22355,6 +22406,17 @@ export class SimWorld {
     return this.deathReveals;
   }
 
+  /** Client side: the reveals the authority says this recipient's side is holding open right
+   *  now (WorldSnapshot.reveals) — both are filed by the host's COMBAT (a blow from the fog, a
+   *  death), which a client never runs, so its fog opened neither: an enemy shooting from the
+   *  dark stayed dark and a unit's last look as it fell never happened. STATE, not events —
+   *  each payload replaces the lists, and the host's clocks age them. */
+  setClientReveals(attack: readonly AttackReveal[], death: readonly DeathReveal[]): void {
+    this.attackReveals.clear();
+    attack.forEach((r, i) => this.attackReveals.set(`w${i}`, r));
+    this.deathReveals = [...death];
+  }
+
   /** Open a patch of fog for a player (see ItemReveal and SpellApi.revealArea). */
   addItemReveal(owner: number, team: number, o: { x: number; y: number; radius: number; seconds: number; detect?: boolean; follow?: number; untilBuffGone?: string }): void {
     if (o.radius <= 0 || o.seconds <= 0) return;
@@ -24423,6 +24485,17 @@ export class SimWorld {
     }
   }
 
+  /** Client side: the two LIVE VIEWS the renderer polls every frame, as the authority last
+   *  listed them for this recipient (WorldSnapshot.live). Both are held by the host's sim —
+   *  a running Blizzard, Earthquake or Starfall (its looping bed, the camera shake, the
+   *  caster's art) and a Town Portal / Mass Teleport being channelled (the swirl at both ends)
+   *  — and a client's sim never runs one, so a joiner saw and heard none of them. Once set,
+   *  the two accessors answer from here and not from the local sim. */
+  private clientLive: { fields: SpellFieldView[]; teleports: TeleportView[] } | null = null;
+  setClientLiveViews(fields: SpellFieldView[], teleports: TeleportView[]): void {
+    this.clientLive = { fields, teleports };
+  }
+
   /** Ids with a teleport channel running (`portalLeft`), so `activeTeleports` costs nothing on
    *  the overwhelming majority of frames where nobody is teleporting. Self-healing: an id whose
    *  unit has left the world is dropped by the reader. */
@@ -24435,7 +24508,8 @@ export class SimWorld {
    *
    *  `destId` is 0 while there is nothing to arrive at — the scroll re-asks `nearestHall` every
    *  frame, so a town hall knocked down mid-channel takes its half of the art down with it. */
-  activeTeleports(): Array<{ casterId: number; destId: number; art: string }> {
+  activeTeleports(): TeleportView[] {
+    if (this.clientLive) return this.clientLive.teleports; // a client: the host's list (setClientLiveViews)
     const out: Array<{ casterId: number; destId: number; art: string }> = [];
     if (!this.teleportChannels.size) return out;
     for (const id of this.teleportChannels) {

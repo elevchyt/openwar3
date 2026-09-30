@@ -1322,6 +1322,10 @@ export class MapViewerScene {
    *  anybody's). STICKY: it outlives the menu that set it, which is the whole difference
    *  between that button and Return to Game. */
   private playerPaused = false;
+  /** Whose timeout the running player pause is (the authority's record), -1 for none — so the
+   *  pause can be lifted when that player LEAVES (`peerLeft`) rather than holding the room
+   *  until somebody else thinks to press Resume. */
+  private pausedBy = -1;
   /** Anything at all stopping the world. */
   private get paused(): boolean {
     return this.panelPaused || this.scriptPaused || this.playerPaused;
@@ -2338,6 +2342,14 @@ export class MapViewerScene {
     if (meta && this.grid) {
       unstampFootprint(this.grid, meta.fp, meta.x, meta.y);
       this.nodeFootprints.delete(nodeId);
+    }
+    // A mine a script raised is not a map widget: its body is its own (raiseScriptMine).
+    const body = this.scriptMineBodies.get(nodeId);
+    if (body) {
+      this.scriptMineBodies.delete(nodeId);
+      const wasShown = body.instance.rendered !== false;
+      body.instance.hide();
+      return { widget: body, wasShown };
     }
     let best: HideableWidget | null = null;
     let bestD = 128; // match within a tile
@@ -4699,12 +4711,11 @@ export class MapViewerScene {
    * standing, and the second loop here is what puts it back.
    */
   private raiseEntangledMines(world: SimWorld): void {
-    const map = this.viewer.map;
     for (const e of world.drainEntangleRequests()) {
       const d = this.registry.get(e.unitId);
       const mine = world.mines.get(e.mineId);
       if (!d || !mine) continue;
-      const widget = map ? this.nearestDoodadWidget(e.x, e.y, map.units as unknown as HideableWidget[]) : null;
+      const widget = this.mineWidget(e.mineId, e.x, e.y);
       const mineId = e.mineId;
       // The roots do not snap shut. An Entangled Gold Mine is CONSTRUCTED — `egol` carries a
       // UnitBalance `bldtm` of 60, and it serves it the way every other structure does, from a
@@ -5000,8 +5011,7 @@ export class MapViewerScene {
         mine.entangledBy = -1; // claimed while the model is in flight (see SimWorld.entangleMine)
         const workerId = w.id;
         const mineId = pb.mineId;
-        const vmap = this.viewer.map;
-        const widget = vmap ? this.nearestDoodadWidget(mine.x, mine.y, vmap.units as unknown as HideableWidget[]) : null;
+        const widget = this.mineWidget(mineId, mine.x, mine.y);
         this.buildSpawning.add(workerId);
         void this.spawnUnit(def, mine.x, mine.y, w.owner, this.teamOf(w.owner), def.buildTime || 60).then((simId) => {
           this.buildSpawning.delete(workerId);
@@ -7476,6 +7486,57 @@ export class MapViewerScene {
 
   /** The doodad widget closest to (x,y) within a tile — used to map a sim tree back to
    *  its rendered instance (harvest blink, chop wobble, fell death, AoE highlight). */
+  /** The model standing for a gold mine — a script's own body (raiseScriptMine), else the map
+   *  widget placed there. What a building raised OVER a mine hides (claimMineWidget). */
+  private mineWidget(mineId: number, x: number, y: number): HideableWidget | null {
+    const body = this.scriptMineBodies.get(mineId);
+    if (body) return body;
+    const map = this.viewer.map;
+    return map ? this.nearestDoodadWidget(x, y, map.units as unknown as HideableWidget[]) : null;
+  }
+
+  /** Bodies of the mines a SCRIPT raised (SimWorld.addScriptMine / adoptMine), by mine id. */
+  private readonly scriptMineBodies = new Map<number, HideableWidget>();
+
+  /**
+   * Give a script-raised gold mine what the map's own mines get at load: its footprint on the
+   * pathing grid (and remembered, so running dry takes it back off — removeNodeVisual), its
+   * NGOL ground splat, and its model standing in its Stand clip. The model is an instance of
+   * its own rather than a map widget, which is the whole difference, and `scriptMineBodies`
+   * is how the three places that look a mine's model up (a haunting, an entangling, its
+   * collapse) find it.
+   */
+  private async raiseScriptMine(m: { id: number; x: number; y: number }): Promise<void> {
+    const def = this.registry.get(GOLD_MINE_ID);
+    const map = this.viewer.map;
+    if (!def || !map) return;
+    const fp = def.pathTex ? this.footprintFor(def.pathTex) : null;
+    if (fp && this.grid) {
+      stampFootprint(this.grid, fp, m.x, m.y);
+      this.nodeFootprints.set(m.id, { fp, x: m.x, y: m.y });
+    }
+    this.addBuildingSplat(`m${m.id}`, def, m.x, m.y);
+    const model = ((await this.viewer.load(def.model, this.solver)) as SpawnModel | undefined) ?? null;
+    const world = this.rts?.simWorld;
+    if (!model || !this.viewer.map || !world?.mines.has(m.id)) return; // mined out while it loaded
+    const inst = model.addInstance();
+    inst.setScene(this.viewer.map.worldScene);
+    this.loc3[0] = m.x;
+    this.loc3[1] = m.y;
+    this.loc3[2] = this.rts!.groundHeightAt(m.x, m.y);
+    inst.setLocation(this.loc3);
+    const stand = this.seqIndex(inst, /^stand/i);
+    if (stand >= 0) {
+      inst.setSequence(stand);
+      inst.setSequenceLoopMode(2);
+    }
+    inst.show();
+    const widget = { instance: inst } as unknown as HideableWidget;
+    this.scriptMineBodies.set(m.id, widget);
+    // A building may already be standing on it — raised while this model loaded.
+    if (world.mines.get(m.id)?.entangledBy) this.claimMineWidget(world.mines.get(m.id)!.entangledBy, m.id, widget);
+  }
+
   private nearestDoodadWidget(x: number, y: number, doodads: HideableWidget[]): HideableWidget | null {
     let best: HideableWidget | null = null;
     let bestD = 96;
@@ -9697,7 +9758,15 @@ export class MapViewerScene {
     if (seat === undefined) return;
     const s = (key: string, fallback: string): string => this.globalStrings?.strings.get(key) ?? fallback;
     this.announce(fillSlots(s("PLAYER_LEFT_GAME", "%s has left the game."), [this.playerLabel(seat)]));
-    if (this.rts?.frozenClient || this.playersOut.has(seat)) return;
+    if (this.rts?.frozenClient) return;
+    // The game they had paused is not theirs to hold any more: the pause lifts with them. Ruled
+    // by NOBODY (-1), so no machine prints "has resumed the game." over a player who is gone.
+    if (this.playerPaused && this.pausedBy === seat) {
+      this.playerPaused = false;
+      this.pausedBy = -1;
+      this.rts?.matchLinkHandle?.rulePause({ k: "pause", on: false, by: -1, left: 0 });
+    }
+    if (this.playersOut.has(seat)) return;
     this.playersOut.add(seat);
     const interp = this.mapScript?.interp;
     if (!interp) return;
@@ -10275,6 +10344,7 @@ export class MapViewerScene {
       this.pauseTimeouts.set(player, left - 1);
     }
     this.playerPaused = on;
+    this.pausedBy = on ? player : -1;
     this.rts?.matchLinkHandle?.rulePause({ k: "pause", on, by: player, left: this.timeoutsFor(player) });
     this.notePause(player, on, this.timeoutsFor(player));
   }
@@ -10287,7 +10357,7 @@ export class MapViewerScene {
       this.sayOutOfTimeouts();
       return;
     }
-    this.pauseTimeouts.set(by, left);
+    if (by >= 0) this.pauseTimeouts.set(by, left); // -1: lifted by nobody (peerLeft)
     if (on === this.playerPaused) return;
     this.playerPaused = on;
     this.notePause(by, on, left);
@@ -10308,6 +10378,7 @@ export class MapViewerScene {
    * one with the tally.
    */
   private notePause(player: number, on: boolean, left: number): void {
+    if (player < 0) return; // lifted by nobody — its pauser left the game (peerLeft)
     const key = on ? (this.multiplayerMatch ? "PAUSE_GAME_NOTIFY" : "PAUSE_GAME_NOTIFY_NO_TIMEOUT") : "RESUME_GAME_NOTIFY";
     const fallback = on ? (this.multiplayerMatch ? "%s paused the game. <%u timeouts remaining>" : "%s paused the game.") : "%s has resumed the game.";
     const text = (this.globalStrings?.strings.get(key) ?? fallback)
@@ -13184,10 +13255,8 @@ export class MapViewerScene {
         // (BuildingSnapshot.mineId); the widget is this machine's own.
         const mineId = s.building?.mineId ?? 0;
         const mine = mineId ? world.mines.get(mineId) : undefined;
-        const vmap = this.viewer.map;
         if (mine && world.units.has(s.id) && !this.entangledMines.has(s.id)) {
-          const widget = vmap ? this.nearestDoodadWidget(mine.x, mine.y, vmap.units as unknown as HideableWidget[]) : null;
-          this.claimMineWidget(s.id, mineId, widget);
+          this.claimMineWidget(s.id, mineId, this.mineWidget(mineId, mine.x, mine.y));
         }
       });
     }
@@ -13218,6 +13287,8 @@ export class MapViewerScene {
     // model — the same swap the host's own drainMorphs runs, minus the upgrade chime (that
     // is the owner's, and remodelUnit's own localPlayer check keeps it so).
     for (const m of this.rts?.drainSnapshotMorphs() ?? []) void this.remodelUnit(m.id, m.to);
+    // Mines a script raised (host) or the authority listed that we had no record of (client).
+    for (const m of world.drainAddedMines()) void this.raiseScriptMine(m);
     // Felled trees CREATE nothing, so they are drained on a frozen client too — there the
     // queue is filled by the authority's word (WorldSnapshot.felledTrees → SimWorld.fellTree).
     const map = this.viewer.map;
@@ -14383,6 +14454,7 @@ export class MapViewerScene {
     this.linkSeats = [];
     this.playersOut.clear();
     this.panelPaused = this.scriptPaused = this.playerPaused = false;
+    this.pausedBy = -1;
     this.pauseVeil?.remove();
     this.pauseVeil = null;
     this.ghost?.remove();

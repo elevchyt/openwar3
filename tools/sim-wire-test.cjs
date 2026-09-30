@@ -66,7 +66,7 @@ const base = () => ({
   x: 0, y: 0, facing: 0, flyHeight: 0, speed: 270, radius: 16, flying: false,
   order: "idle", moving: false, inCombat: false, working: false, ringSlot: 0,
   swingSeq: 0, chopSeq: 0, swingBroken: false, swingFollowThrough: false, swingSlam: false, altModel: false, altFormLeft: 0, hexForm: "",
-  uprooted: false, morphT: 0, portalLeft: 0, immolation: "",
+  uprooted: false, morphT: 0, portalLeft: 0, immolation: "", asleep: false,
   spawning: 0, constructing: 0, repair: null,
   inMine: false, insideBuild: false, inBurrow: false, devouredBy: 0, vanished: false, hidden: false,
   invisible: false, ethereal: false,
@@ -90,7 +90,7 @@ const hero = () => ({
   properName: "Grom Hellscream", x: -1204, y: 887, facing: Math.PI / 2, flyHeight: 90.5,
   speed: 320, radius: 24, flying: true, order: "attack", moving: true, inCombat: true,
   swingSeq: 17, chopSeq: 3, swingBroken: true, swingFollowThrough: true, swingSlam: true, altModel: true, altFormLeft: 32.5, hexForm: "nshf",
-  uprooted: true, morphT: 1.5, portalLeft: 3.25, immolation: "AEim", sightDay: 1800, sightNight: 1800,
+  uprooted: true, morphT: 1.5, portalLeft: 3.25, immolation: "AEim", asleep: true, sightDay: 1800, sightNight: 1800,
   spawning: 0.75, constructing: 0, repair: { active: true },
   // `hidden` rides the CHOP counter's top bit (the flags word is full) — set beside a non-zero
   // counter, so a mask that ate either one shows up as a diff.
@@ -223,6 +223,11 @@ console.log("decode(encode(snap)) is the same payload, field for field");
   const creep = { ...richSnapshot(), units: [{ ...peon(), owner: -1, team: -1, isCreep: true }] };
   const cb = decodeSnapshot(encodeSnapshot(creep)).units[0];
   check("a creep's owner and team stay -1 (signed, not 255)", [cb.owner, cb.team], [-1, -1]);
+  // A client prices its own casts off the mana it was sent, so it must be the host's figure.
+  const shy = decodeSnapshot(encodeSnapshot({ ...richSnapshot(), units: [{ ...hero(), mana: 74.5 }] })).units[0];
+  check("mana crosses unrounded", shy.mana, 74.5);
+  const named = decodeSnapshot(encodeSnapshot({ ...richSnapshot(), units: [{ ...hero(), nameOverride: "Grom the Bold", inventory: [{ id: 9, itemId: "pghe", charges: 300, cooldownLeft: 0 }] }] })).units[0];
+  check("a script-set name and a 300-charge item cross", [named.nameOverride, named.inventory[0].charges], ["Grom the Bold", 300]);
   check("encoding did not mutate the source payload", firstDiff(snap, richSnapshot()), null);
 }
 

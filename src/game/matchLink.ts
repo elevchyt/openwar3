@@ -3,7 +3,7 @@ import { decodeSnapshot, encodeSnapshot, type WireSnapshot } from "./snapshotWir
 import { divergence, describeDivergence, type Divergence } from "./divergence";
 import { commandMessage, isCommandMessage, type CommandMessage } from "../net/commandLink";
 import type { Command } from "./commands";
-import type { WireNotices } from "../sim/world";
+import type { WireNotices, AttackReveal, DeathReveal, SpellFieldView, TeleportView } from "../sim/world";
 import type { ChatLine, ChatTarget } from "./chat";
 
 /**
@@ -362,6 +362,12 @@ export interface HostSources {
    *  recipient hears. Optional for the stub reason. */
   drainNotices?(): WireNotices;
   coAllied?(a: number, b: number): boolean;
+  /** The attack and death reveals this recipient's side is owed right now (WorldSnapshot.
+   *  reveals). Optional for the stub reason. */
+  revealsFor?(player: number): { attack: AttackReveal[]; death: DeathReveal[] };
+  /** The spell fields and teleport channels this recipient has eyes on (WorldSnapshot.live).
+   *  Optional for the stub reason. */
+  liveViewsFor?(player: number): { fields: SpellFieldView[]; teleports: TeleportView[] };
   /** The observer lane (`WorldSnapshot.watched`) for this recipient, or null when the
    *  recipient is a player — a player is told nobody else's bank. Optional for the stub reason. */
   watchedFor?(player: number): WatchedPlayer[] | null;
@@ -732,6 +738,7 @@ export class MatchLink {
       this.noticeBuf.alerts.push(...notices.alerts);
       this.noticeBuf.built.push(...notices.built);
       this.noticeBuf.researched.push(...notices.researched);
+      this.noticeBuf.levelUps.push(...notices.levelUps);
     }
     const felled = sources.drainFelledTrees?.();
     if (felled?.length) {
@@ -779,17 +786,22 @@ export class MatchLink {
         // allies' — no fog test, since being told your ally's base is under attack is the point
         // — and a completion is only ever the owner's.
         const b = this.noticeBuf;
-        if (b.alerts.length || b.built.length || b.researched.length) {
+        if (b.alerts.length || b.built.length || b.researched.length || b.levelUps.length) {
           const alerts = b.alerts.filter((a) => a.player === player || (sources.coAllied?.(a.player, player) ?? false));
           const built = b.built.filter((c) => c.owner === player);
           const researched = b.researched.filter((c) => c.owner === player);
-          if (alerts.length || built.length || researched.length) snap.notices = { alerts, built, researched };
+          const levelUps = b.levelUps.filter((l) => !viewer.fogBlocksAt(l));
+          if (alerts.length || built.length || researched.length || levelUps.length) snap.notices = { alerts, built, researched, levelUps };
         }
       }
       // Deaths ride EVERY send — the record's absence does too, and the death must never
       // arrive after the silent retire it exists to prevent. Idempotent on the client, so
       // the repeat between an expedited send and the due broadcast costs nothing.
       snap.deaths = this.deathBuf.filter((d) => !viewer.fogBlocksAt(d));
+      const reveals = sources.revealsFor?.(player);
+      if (reveals && (reveals.attack.length || reveals.death.length)) snap.reveals = reveals;
+      const live = sources.liveViewsFor?.(player);
+      if (live && (live.fields.length || live.teleports.length)) snap.live = live;
       // Felled trees: every one this recipient has not been told of yet and now has eyes on
       // (WorldSnapshot.felledTrees). The log is the whole match's, so a tree that fell in the
       // dark is told the first payload after somebody on that side looks at the spot.
@@ -817,7 +829,7 @@ export class MatchLink {
     if (due) {
       this.fxBuf = { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [], texts: [] };
       this.deathBuf = [];
-      this.noticeBuf = { alerts: [], built: [], researched: [] };
+      this.noticeBuf = { alerts: [], built: [], researched: [], levelUps: [] };
     }
     // Cleared whether or not a seat was found for them: an unseated peer is a routing bug to
     // notice elsewhere, not a debt to keep re-paying every tick for the rest of the match.
@@ -827,7 +839,7 @@ export class MatchLink {
 
   private fxBuf: FxSnapshot = { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [], texts: [] };
   private deathBuf: Array<{ id: number; x: number; y: number }> = [];
-  private noticeBuf: WireNotices = { alerts: [], built: [], researched: [] };
+  private noticeBuf: WireNotices = { alerts: [], built: [], researched: [], levelUps: [] };
   /** Every tree felled this match, and per PEER the ones it has not yet been told of
    *  (WorldSnapshot.felledTrees). A returning peer starts again from the whole log
    *  (`onPeerRejoin`) — a repeat is a no-op on a client, a miss is a tree that stands for ever. */
@@ -891,15 +903,16 @@ export class MatchLink {
       this.pendingNotices.alerts.push(...(n.alerts ?? []));
       this.pendingNotices.built.push(...(n.built ?? []));
       this.pendingNotices.researched.push(...(n.researched ?? []));
+      this.pendingNotices.levelUps.push(...(n.levelUps ?? []));
     }
   }
 
-  private pendingNotices: WireNotices = { alerts: [], built: [], researched: [] };
+  private pendingNotices: WireNotices = { alerts: [], built: [], researched: [], levelUps: [] };
 
   /** Client side: every notice received since the last take, across all payloads. */
   takeNotices(): WireNotices {
     const out = this.pendingNotices;
-    this.pendingNotices = { alerts: [], built: [], researched: [] };
+    this.pendingNotices = { alerts: [], built: [], researched: [], levelUps: [] };
     return out;
   }
 

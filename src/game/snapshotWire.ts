@@ -11,7 +11,7 @@ import type { BuffFx } from "../data/abilities";
  * them at every send. At the 60 Hz cadence the sim already runs, that is what capped the
  * wire at 30 (see `SNAPSHOT_INTERVAL`'s history). So the two hot arrays cross as a
  * fixed-layout binary record instead — positions quantized to i16 world units, facing to
- * u16 of 2π, hp to u32 and mana to u16, every boolean packed into one flags word, every string
+ * u16 of 2π, hp to u32 and mana to f32, every boolean packed into one flags word, every string
  * interned once in a per-payload table — and everything else (stash, research, creepCamps,
  * fx, deaths, corpses, mines, items) stays JSON: tiny, rare, not worth hand-packing.
  *
@@ -51,7 +51,7 @@ export type WireSnapshot = Omit<WorldSnapshot, "units" | "projectiles"> & { hot:
 /** Bumped when the binary layout changes. Carried in the blob so a mismatched decode fails
  *  loudly at the header rather than as garbage fields three units in. The relay's
  *  `PROTOCOL_VERSION` still gates the SESSION; this gates the blob. */
-const CODEC_VERSION = 10; // 10: a second flags byte carries uprooted/morphT/portalLeft/immolation, the unit's sight rides beside it, and hp/maxHp are u32 (9: owner/team are SIGNED bytes (the neutrals are -1), and a building carries the gold mine it stands on (8: a buff's art carries the node its holder RIDES and the carrier's loop (7: a projectile carries its `Missilearc` (6: a buff carries the duration it started at (the denominator of an expiry bar) (5: a unit carries its Hex critter skin; 4: a buff's art carries its SIZE variant; 3: a pending build's `paid` flag; 2: buffs carry their `B….` row id)
+const CODEC_VERSION = 11; // 11: mana is f32, item charges u16, and the second flags byte adds asleep + a script-set name (10: a second flags byte carries uprooted/morphT/portalLeft/immolation, the unit's sight rides beside it, and hp/maxHp are u32 (9: owner/team are SIGNED bytes (the neutrals are -1), and a building carries the gold mine it stands on (8: a buff's art carries the node its holder RIDES and the carrier's loop (7: a projectile carries its `Missilearc` (6: a buff carries the duration it started at (the denominator of an expiry bar) (5: a unit carries its Hex critter skin; 4: a buff's art carries its SIZE variant; 3: a pending build's `paid` flag; 2: buffs carry their `B….` row id)
 
 const TWO_PI = Math.PI * 2;
 
@@ -340,7 +340,10 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
   // clamped its bar to full until it had lost everything above that.
   w.u32(quantU32(s.hp));
   w.u32(quantU32(s.maxHp));
-  w.u16(quantU16(s.mana));
+  // MANA as it is, not rounded: a client runs its own cost check before it sends a cast
+  // (RtsController.execute), and a whole-number copy let it press a spell it was up to half a
+  // point short of — the host, which has the real figure, refused it and nothing happened.
+  w.f32(s.mana);
   w.u16(quantU16(s.maxMana));
   w.f32(s.armor);
   w.f32(s.bonusArmor);
@@ -455,7 +458,7 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
     if (!it) continue;
     w.u32(it.id);
     w.u16(w.intern(it.itemId));
-    w.u8(Math.min(255, it.charges));
+    w.u16(Math.min(65535, Math.max(0, it.charges))); // a map's item may carry more than 255
     w.f32(it.cooldownLeft);
   }
 
@@ -476,7 +479,7 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
   // A second, small flags byte for the predicted-then-stuck state (UnitSnapshot.uprooted): the
   // first word is full, and all four are zero on almost every unit, so one byte and nothing
   // else is what a footman pays.
-  const ex = (s.uprooted ? 1 : 0) | (s.morphT > 0 ? 2 : 0) | (s.portalLeft > 0 ? 4 : 0) | (s.immolation ? 8 : 0) | (s.sightDay !== undefined ? 16 : 0);
+  const ex = (s.uprooted ? 1 : 0) | (s.morphT > 0 ? 2 : 0) | (s.portalLeft > 0 ? 4 : 0) | (s.immolation ? 8 : 0) | (s.sightDay !== undefined ? 16 : 0) | (s.asleep ? 32 : 0) | (s.nameOverride !== undefined ? 64 : 0);
   w.u8(ex);
   // Sight crosses only where the payload carries it — the recipient's own eyes (UnitSnapshot.sightDay).
   if (ex & 16) {
@@ -486,6 +489,7 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
   if (ex & 2) w.f32(s.morphT);
   if (ex & 4) w.f32(s.portalLeft);
   if (ex & 8) w.u16(w.intern(s.immolation));
+  if (ex & 64) w.u16(w.intern(s.nameOverride ?? ""));
 }
 
 function readUnit(r: Reader): UnitSnapshot {
@@ -576,6 +580,7 @@ function readUnit(r: Reader): UnitSnapshot {
     morphT: 0,
     portalLeft: 0,
     immolation: "",
+    asleep: false,
   };
   // The fixed block, in the writer's exact order. Kept as assignments rather than inlined
   // into the literal above because argument evaluation order is the one thing that must
@@ -599,7 +604,7 @@ function readUnit(r: Reader): UnitSnapshot {
   if (flags & F_DEVOURED) s.devouredBy = r.u32();
   s.hp = r.u32();
   s.maxHp = r.u32();
-  s.mana = r.u16();
+  s.mana = r.f32();
   s.maxMana = r.u16();
   s.armor = r.f32();
   s.bonusArmor = r.f32();
@@ -711,7 +716,7 @@ function readUnit(r: Reader): UnitSnapshot {
       s.inventory.push(null);
       continue;
     }
-    const it: HeldItem = { id: r.u32(), itemId: r.str(), charges: r.u8(), cooldownLeft: 0 };
+    const it: HeldItem = { id: r.u32(), itemId: r.str(), charges: r.u16(), cooldownLeft: 0 };
     it.cooldownLeft = r.f32();
     s.inventory.push(it);
   }
@@ -725,6 +730,7 @@ function readUnit(r: Reader): UnitSnapshot {
   s.hexForm = r.str();
   const ex = r.u8();
   s.uprooted = (ex & 1) !== 0;
+  s.asleep = (ex & 32) !== 0;
   if (ex & 16) {
     s.sightDay = r.u16();
     s.sightNight = r.u16();
@@ -732,6 +738,7 @@ function readUnit(r: Reader): UnitSnapshot {
   if (ex & 2) s.morphT = r.f32();
   if (ex & 4) s.portalLeft = r.f32();
   if (ex & 8) s.immolation = r.str();
+  if (ex & 64) s.nameOverride = r.str();
 
   return s;
 }

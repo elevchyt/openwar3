@@ -85,6 +85,8 @@ export function writeUnitSnapshot(u: SimUnit, s: UnitSnapshot): void {
   if (s.sightDay !== undefined) u.sightDay = s.sightDay;
   if (s.sightNight !== undefined) u.sightNight = s.sightNight;
   u.immolation = s.immolation;
+  u.asleep = s.asleep;
+  u.nameOverride = s.nameOverride;
 
   // Pose. `prev*` is rolled forward first so anything reading "where was it last frame"
   // sees the previous payload's position rather than garbage.

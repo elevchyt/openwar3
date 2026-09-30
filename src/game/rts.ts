@@ -4,10 +4,11 @@ import { KNOWN_ABILITIES, NO_AOE_CURSOR, TREE_UPGRADE_ABILITY, aoeCursorRadius }
 import type { Command } from "./commands";
 import { PATHING_CELL, footprintCells, type PathingGrid } from "../sim/pathing";
 import { flyHeight } from "../sim/missile";
-import type { PlacedFootprint, Footprint } from "../sim/destructibles";
+import { footprintRadius, type PlacedFootprint, type Footprint } from "../sim/destructibles";
+import { GOLD_MINE_ID } from "../world/mapUnits";
 import { PlacedIndex, type PlacedRef } from "./placement";
 import { Authority } from "./authority";
-import { simHooks, authorityHooks, visionHooks, rosterHooks, mineForScript } from "./jassHooks";
+import { simHooks, authorityHooks, visionHooks, rosterHooks, mineForScript, MINE_ID_BASE } from "./jassHooks";
 import type { EngineHooks } from "../jass/runtime";
 import { armorSoundFrom } from "../data/unitFieldCodes";
 import type { SimView } from "./simView";
@@ -2550,6 +2551,7 @@ export class RtsController {
   createScriptUnit(player: number, typeId: string, x: number, y: number, facingDeg: number, teamOf: (p: number) => number): number {
     const def = this.registry.get(typeId);
     if (!def) return -1;
+    if (typeId === GOLD_MINE_ID) return this.createScriptMine(def, x, y);
     const grid = this.sim.grid;
     const fp = def.isBuilding && def.pathTex ? this.footprintOf(def.pathTex) : null;
     if (fp) [x, y] = grid.snapForBuildingRect(x, y, fp.w, fp.h);
@@ -2611,6 +2613,23 @@ export class RtsController {
     }
     this.scriptSpawns.push({ typeId, x, y, facing, player: owner, team, simId }); // …gets a body later
     return simId;
+  }
+
+  /**
+   * `CreateUnit(…, 'ngol', …)` — a gold mine, which to the sim is a record in `mines` and not a
+   * unit (SimWorld.addScriptMine). Placed as a building is (snapped to its footprint's grid),
+   * sized as the map's own mines are (the footprint's BLOCKED extent — registerResourceNodes),
+   * and filled with the gold a mine is born holding: `[Agld]` Gold Mine's `DataA1` = 12500,
+   * which is also the World Editor's own default for the amount
+   * (`UI\TriggerData.txt` `_SetResourceAmount_Defaults=_,12500`). The handle is the mine's
+   * (MINE_ID_BASE), so the `SetResourceAmount` a script writes next lands on the gold.
+   */
+  private createScriptMine(def: UnitDef, x: number, y: number): number {
+    const fp = def.pathTex ? this.footprintOf(def.pathTex) : null;
+    if (fp) [x, y] = this.sim.grid.snapForBuildingRect(x, y, fp.w, fp.h);
+    const gold = this.abilities.get("Agld")?.levelData[0]?.data[0] || 12500;
+    const radius = fp ? footprintRadius(fp) || 96 : 96;
+    return MINE_ID_BASE + this.sim.addScriptMine(x, y, gold, radius).id;
   }
 
   /**
@@ -8307,6 +8326,10 @@ export class RtsController {
     // …and the engine's announcements that are ours to hear (WorldSnapshot.notices).
     const notices = this.matchLink?.takeNotices();
     if (notices) this.sim.receiveNotices(notices);
+    // …and the fog the host's combat is lending our side right now (WorldSnapshot.reveals).
+    this.sim.setClientReveals(snap.reveals?.attack ?? [], snap.reveals?.death ?? []);
+    // …and the channels running in our sight (WorldSnapshot.live).
+    this.sim.setClientLiveViews(snap.live?.fields ?? [], snap.live?.teleports ?? []);
     // A gold mine the payload no longer lists has run dry (every live one is always sent —
     // snapshot.ts). Collapsed once OUR eyes are on it rather than the moment it goes, for the
     // fog's reason: a mine emptied in the dark stands in memory until somebody looks. An empty
@@ -8316,6 +8339,9 @@ export class RtsController {
       for (const m of [...this.sim.mines.values()]) {
         if (!listed.has(m.id) && !this.local.fogBlocksAt(m)) this.sim.dropMine(m.id);
       }
+      // …and one we have NO record of is a mine a script raised on the host mid-game
+      // (SimWorld.addScriptMine) — the map's own are loaded identically on every machine.
+      for (const m of snap.mines) if (!this.sim.mines.has(m.id)) this.sim.adoptMine(m);
     }
     // Records whose type changed in place (Scout Tower → Arcane Tower): the renderer owes
     // each the other model, exactly the host's own morph drain shape.
@@ -8659,6 +8685,26 @@ export class RtsController {
         drainFelledTrees: () => this.sim.drainFelledForWire(),
         drainNotices: () => this.sim.drainNoticesForWire(),
         coAllied: (a, b) => this.playersAreCoAllied(a, b),
+        revealsFor: (p) => {
+          const vp = this.viewpoints.viewpointFor(p);
+          return {
+            attack: [...this.sim.activeAttackReveals()].filter((r) => r.team === vp.team),
+            death: [...this.sim.activeDeathReveals()].filter((r) => vp.revealsForOwner(r.owner, r.team)),
+          };
+        },
+        liveViewsFor: (p) => {
+          const vp = this.viewpoints.viewpointFor(p);
+          // A field is where it is aimed; a teleport is seen if either END is — the hero
+          // leaving, or the hall the swirl opens over.
+          const seen = (id: number): boolean => {
+            const u = this.sim.units.get(id);
+            return !!u && !vp.fogBlocksAt(u);
+          };
+          return {
+            fields: this.sim.activeSpellFields().filter((f) => !vp.fogBlocksAt(f)),
+            teleports: this.sim.activeTeleports().filter((t) => seen(t.casterId) || (t.destId > 0 && seen(t.destId))),
+          };
+        },
         watchedFor: (p) => this.watchedFor(p),
       }, this.matchTime);
     } else if (link.latest()) {

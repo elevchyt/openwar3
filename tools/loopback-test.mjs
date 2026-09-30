@@ -388,7 +388,7 @@ function worldAt(hp) {
     // and not to this unit fails these checks with the new field's name in them — which is the
     // signal to add it here, not to loosen the check.
     ringSlot: 0, altFormLeft: 0, attackUpgrade: 0, armorUpgrade: 0,
-    hexForm: "", uprooted: false, morphT: 0, portalLeft: 0, immolation: "",
+    hexForm: "", uprooted: false, morphT: 0, portalLeft: 0, immolation: "", asleep: false,
     swingFollowThrough: false, hidden: false,
   };
   return { units: new Map([[1, u]]), mines: new Map(), items: new Map(), timeOfDay: 12, dawnDusk: true, stashOf: () => ({ gold: 500, lumber: 150 }) };
@@ -963,12 +963,14 @@ console.log("a felled tree waits for the recipient's eyes; a notice goes to whos
     ],
     built: [{ buildingId: 5, owner: 1 }, { buildingId: 6, owner: 0 }],
     researched: [{ buildingId: 5, upgradeId: "Rhme", level: 1, owner: 0 }],
+    // An enemy hero's nova is anybody's who can SEE it: one in view, one in the dark.
+    levelUps: [{ unitId: 30, level: 2, x: 100, y: 0 }, { unitId: 31, level: 2, x: 9000, y: 0 }],
   }];
   const src = {
     ...sources,
     viewers: () => [{ player: 0, viewer: seer }, { player: 1, viewer: eyes }],
     drainFelledTrees: () => felledQ.shift() ?? [],
-    drainNotices: () => noticesQ.shift() ?? { alerts: [], built: [], researched: [] },
+    drainNotices: () => noticesQ.shift() ?? { alerts: [], built: [], researched: [], levelUps: [] },
     coAllied: () => false,
   };
   hostLink.tickHost(1 / 20, worldAt(420), src, 1);
@@ -977,6 +979,7 @@ console.log("a felled tree waits for the recipient's eyes; a notice goes to whos
   const n = peerLink.takeNotices();
   check("an enemy's alert is not its news", n.alerts.map((a) => a.player), [1]);
   check("…nor an enemy's finished building or research", [n.built.map((c) => c.buildingId), n.researched], [[5], []]);
+  check("a level-up nova is seen where there are eyes on it", n.levelUps.map((l) => l.unitId), [30]);
   sightEdge = 10000; // it walks up to the stump
   hostLink.tickHost(1 / 20, worldAt(420), src, 2);
   await tick();

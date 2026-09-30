@@ -1,4 +1,4 @@
-import { isOffField, type SimSpellEffect, type SimUnit, type SimMine, type SimItem, type BuildJob, type SimBuff, type SimAbility, type HeldItem, type SimProjectile, type SimCorpse, type SimLightning, type CombatText, type FallenHero, type WireNotices } from "../sim/world";
+import { isOffField, type SimSpellEffect, type SimUnit, type SimMine, type SimItem, type BuildJob, type SimBuff, type SimAbility, type HeldItem, type SimProjectile, type SimCorpse, type SimLightning, type CombatText, type FallenHero, type WireNotices, type AttackReveal, type DeathReveal, type SpellFieldView, type TeleportView } from "../sim/world";
 
 /**
  * What one client is TOLD about the world (docs/multiplayer.md Phase E item 5).
@@ -319,6 +319,12 @@ export interface UnitSnapshot {
   sightNight?: number;
   portalLeft: number;
   immolation: string;
+  /** A creep dozing at its post (SimUnit.asleep) — set and cleared by the host's creep AI,
+   *  and the whole of what draws the Zzz over it (MapViewerScene.collectSleepFx). */
+  asleep: boolean;
+  /** A name a map's script gave this unit (`BlzSetUnitName`, SimUnit.nameOverride) — what the
+   *  selection panel prints over the type's name. Absent for the type's own. */
+  nameOverride?: string;
   spawning: number;
   constructing: number;
   /** Whether this worker is hammering. Kept as an OBJECT rather than the flat `repairing`
@@ -629,6 +635,14 @@ export interface WorldSnapshot {
    *  the completion cues of their own buildings and research. Filled by `MatchLink` on due
    *  broadcasts like `fx`; absent when there is nothing to say. */
   notices?: Partial<WireNotices>;
+  /** The fog this recipient's side is being lent right now by the host's combat — an enemy
+   *  that struck us from the dark (`AttackReveal`, for the side that was HIT) and our own dead
+   *  still seeing as they fall (`DeathReveal`, for the dead unit's own side and whoever shares
+   *  its vision). State, filled by `MatchLink` on every send; absent means none. */
+  reveals?: { attack: AttackReveal[]; death: DeathReveal[] };
+  /** The spell fields and teleport channels running where this recipient has eyes
+   *  (SimWorld.setClientLiveViews). State, on every send; absent means none. */
+  live?: { fields: SpellFieldView[]; teleports: TeleportView[] };
   /** Corpses under this recipient's eyes (the items' rule — nothing remembered). */
   corpses: CorpseSnapshot[];
   /**
@@ -719,6 +733,7 @@ export function rememberedUnit(u: SimUnit): UnitSnapshot {
     morphT: 0,
     portalLeft: 0,
     immolation: "",
+    asleep: false,
     spawning: 0,
     constructing: 0,
     repair: null,
@@ -861,6 +876,8 @@ export function snapshotFor(
       ...(viewer.seesFor(u.owner) ? { sightDay: u.sightDay, sightNight: u.sightNight } : {}),
       portalLeft: u.portalLeft,
       immolation: u.immolation,
+      asleep: u.asleep,
+      ...(u.nameOverride !== undefined ? { nameOverride: u.nameOverride } : {}),
       spawning: u.spawning,
       constructing: u.constructing,
       repair: u.repair ? { active: u.repair.active } : null,

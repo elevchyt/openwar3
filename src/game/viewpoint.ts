@@ -168,7 +168,7 @@ export class Viewpoint {
   /** The same question asked of a bare owner/team pair, for sight that has outlived its unit:
    *  a dying unit's reveal (issue #126) is filed as a record, not as a SimUnit, and must pass
    *  exactly the test the unit itself passed a moment earlier. */
-  private revealsForOwner(owner: number, team: number): boolean {
+  revealsForOwner(owner: number, team: number): boolean {
     if (this.player < 0) return team === this.team;
     if (owner === this.player) return true;
     return owner >= 0 && this.alliances.sharesVisionWith(owner, this.player);
