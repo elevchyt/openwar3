@@ -529,6 +529,33 @@ const CREEP_SPELL_BODIES = 4;
  *  happened, and the developer's list is nukes and hard disables ("death coil, frost nova,
  *  impale, carrion swarm, war stomp, shockwave"), which is exactly these two. */
 const OFFENSIVE: ReadonlySet<Role> = new Set<Role>(["nuke", "disable"]);
+/**
+ * WHEN A CREEP CAMP IS NO LONGER WORTH A SUMMON — `campSpent`.
+ *
+ * Reported: *"when a creep camp is too weak in terms of enemies and health % left, then heroes
+ * with summoning abilities (far seer's feral spirit, archmage's summon water elemental etc.)
+ * must not waste another summon cast on such a weak camp. However, it's good if they summon
+ * when the camp is still healthy."* A summon is the one offensive press `OFFENSIVE` does not
+ * gate, and rightly — a Water Elemental thrown in at the start of a creep run is most of what
+ * makes an Archmage able to creep at all. But with `Cool1` 20 against a `Dur1` 60 it comes
+ * back mid-run, and pressed again at the last Gnoll on a sliver it buys 125 mana of body for a
+ * fight that is already over, and walks the hero into the next one with an empty bar.
+ *
+ * So a creep camp is judged by the two things a player sees of it — how many are left and how
+ * much of the camp's hit points (`AiPlayer.campStanding`, the dead counted at zero) — and it is
+ * SPENT when either says so:
+ *
+ *  · under `CAMP_SPENT_HP` of its hit points, whatever the count: six creeps at a fifth each
+ *    are a camp the army already on the field finishes;
+ *  · or down to `CAMP_FEW_BODIES` bodies and under `CAMP_FEW_HP` — the last one or two of a
+ *    camp, which the rest of the party is already swinging at. The HEALTH half is what keeps a
+ *    fresh two-Gnoll green camp (two bodies, all of its hit points) worth its opening summon.
+ *
+ * A PLAYER in reach makes it a real fight and the camp is not asked at all. Ours, all three.
+ */
+const CAMP_SPENT_HP = 0.25;
+const CAMP_FEW_BODIES = 2;
+const CAMP_FEW_HP = 0.5;
 /** …and how hurt the CASTER has to be for a panic button. */
 const NEAR_DEATH = 0.5;
 /** Dark Ritual is mana economy: it only makes sense when the caster is actually short. */
@@ -617,6 +644,13 @@ export interface CastCtx {
    * is short (warchasers/heal.ts).
    */
   holds?(u: SimUnit, code: string): boolean;
+  /**
+   * What is left of the creep camp this creep belongs to — its living bodies and the fraction of
+   * the camp's hit points still standing (`AiPlayer.campStanding`) — or null when it is in no
+   * camp. Optional because only the melee Computer+ reads a map's camps; a map AI's enemies are
+   * that map's own and are never priced as one (`campSpent`).
+   */
+  campLeft?(creep: SimUnit): { alive: number; health: number } | null;
 }
 
 /** One Computer+ player's casters. */
@@ -942,6 +976,8 @@ export class PlusCaster {
         if (def.code === "AUdr") return u.maxMana > 0 && u.mana / u.maxMana <= DARK_RITUAL_MANA;
         return engaged;
       case "summon":
+        // NOT ON A CAMP THAT IS ALREADY BEATEN — see `CAMP_SPENT_HP`.
+        return engaged && !this.campSpent(u, foes);
       case "buff":
       case "utility":
         // MIRROR IMAGE IS NOT RE-PRESSED WHILE ITS OWN IMAGES ARE STILL WALKING — see
@@ -950,6 +986,38 @@ export class PlusCaster {
         if (def.code === MIRROR_IMAGE) return engaged && !this.imagesStanding(u);
         return engaged;
     }
+  }
+
+  /**
+   * IS THE CREEP FIGHT IN FRONT OF THIS CASTER ALREADY WON? — the gate on a summon (see
+   * `CAMP_SPENT_HP` for the report and the numbers).
+   *
+   * Read at the same reach and with the same "a player is always a real fight" rule as
+   * `worthTheMana`, but asked EVERY pass rather than rolled once: the whole point is that the
+   * camp that was worth the first summon is not worth the second. The camp is the NEAREST
+   * creep's, found off its guard post (where it was placed, and what the camp table is built
+   * from) rather than off where the fight has dragged it. Two camps pulled into one fight are
+   * the rare case, and the nearer is the one the caster is actually in.
+   */
+  private campSpent(u: SimUnit, foes: SimUnit[]): boolean {
+    if (!this.ctx.campLeft) return false;
+    const look = Math.max(u.weapon?.acquire ?? 0, MIN_LOOK);
+    let nearest: SimUnit | null = null;
+    let nearestD = Infinity;
+    for (const f of foes) {
+      if (f.building || !near(u, f, look)) continue;
+      if (!f.isCreep) {
+        if (f.owner >= 0 && f.owner < MELEE.MAX_PLAYERS) return false; // a player: always worth it
+        continue;
+      }
+      const d = Math.hypot(f.x - u.x, f.y - u.y);
+      if (d < nearestD) { nearestD = d; nearest = f; }
+    }
+    if (!nearest) return false;
+    const camp = this.ctx.campLeft(nearest);
+    if (!camp) return false;
+    if (camp.health < CAMP_SPENT_HP) return true;
+    return camp.alive <= CAMP_FEW_BODIES && camp.health < CAMP_FEW_HP;
   }
 
   /**

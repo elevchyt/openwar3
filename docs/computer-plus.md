@@ -2675,6 +2675,21 @@ engaging enemies"* — so with a fight in reach it is a **bare press**. (`src/ai
 had the bug: its `need` is 0 for anything that is not a `cluster` rule, so only this file's
 `quorum` ever reached the row.)
 
+### …and not on a creep camp that is already beaten
+
+Reported: *"heroes with summoning abilities … must not waste another summon cast on such a weak
+camp. However, it's good if they summon when the camp is still healthy."* A summon is outside the
+`OFFENSIVE` roll on purpose — the opening Water Elemental is most of what lets an Archmage creep
+— but `[AHwe] Cool1` 20 against `Dur1` 60 brings it back mid-run, and it was pressed again at the
+last Gnoll on a sliver. `campSpent` now prices the NEAREST creep's camp by what a player sees of
+it (`AiPlayer.campStanding`: living bodies, and the camp's hit points with the dead — decayed
+ones included — counted at zero), and the summon waits while the camp is under `CAMP_SPENT_HP`
+(25 %) of its hit points, or down to `CAMP_FEW_BODIES` (2) bodies and under `CAMP_FEW_HP` (50 %).
+The health half is what keeps a fresh two-Gnoll camp worth its opening summon, and an enemy
+PLAYER in reach makes it a real fight that is not asked about at all. All three numbers are ours.
+The camp table is handed in through `CastCtx.campLeft`, so a map AI's own enemies (WarChasers)
+are never priced as a camp.
+
 ### …and Force of Nature is aimed at the trees
 
 The same lesson one row along, and the same cause: `[AEfn] targs1` is **"tree"** alone, so the

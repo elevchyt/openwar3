@@ -2282,6 +2282,37 @@ export class AiPlayer {
   }
 
   /**
+   * What is left of the camp AT this spot (`campAt`): its living bodies, and the fraction of
+   * its hit points still standing with the dead counted at zero — or null when there is no camp
+   * there.
+   *
+   * `campHealthAt`'s reading with one difference, which is why it is a second method: a creep
+   * whose corpse has DECAYED is gone from the world, and `campHealthAt` drops it from the
+   * denominator too, so a camp whose first kills have rotted away reads healthier the longer the
+   * fight goes on. Here a missing member still counts, at the mean maximum of the ones that are
+   * left — the roster is fixed map data, so it is known to have been there. Asked by Computer+'s
+   * caster of whether a camp is worth another summon (plus/casting.ts `campSpent`).
+   */
+  campStanding(x: number, y: number, radius = CAMP_MATCH): { alive: number; health: number } | null {
+    const camp = this.campAt(x, y, radius);
+    if (!camp || !camp.members.length) return null;
+    let alive = 0;
+    let hp = 0;
+    let maxHp = 0;
+    let known = 0;
+    for (const id of camp.members) {
+      const u = this.host.world.units.get(id);
+      if (!u) continue;
+      known++;
+      maxHp += Math.max(1, u.maxHp);
+      if (u.hp > 0) { alive++; hp += u.hp; }
+    }
+    if (!known) return { alive: 0, health: 0 };
+    maxHp += (camp.members.length - known) * (maxHp / known);
+    return { alive, health: hp / maxHp };
+  }
+
+  /**
    * The camp AT this spot — the one whose centre is nearest, within `radius` — or null. The same
    * match `campHealthAt` makes, so the two always mean the same camp.
    */

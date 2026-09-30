@@ -2618,7 +2618,13 @@ export class ComputerPlusAi {
         // The belt's one answer the caster needs and cannot reach for itself: Wind Walk's exit
         // is the escape a hero takes when it has no Scroll of Town Portal (plus/casting.ts
         // `windWalkRole`), and an item ability is not in `SimUnit.abilities` at all.
-        b.caster.pass(b.clock, { holdsPortal: (u) => b.items.holdsEscape(u), home: b.ai.home() });
+        // …and the camp a summon is asked against (`campSpent`): a map's creep camps are the
+        // AiPlayer's table, which the caster cannot reach from its view of the world.
+        b.caster.pass(b.clock, {
+          holdsPortal: (u) => b.items.holdsEscape(u),
+          home: b.ai.home(),
+          campLeft: (creep) => b.ai.campStanding(creep.guardX, creep.guardY),
+        });
         simProfile.end("sim.ai.cast");
         simProfile.gauge("aiCastPass", perfNow() - t0);
         // The BELT, on the same clock as the buttons — it is the same kind of decision, and a

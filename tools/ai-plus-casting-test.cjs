@@ -168,7 +168,7 @@ function cast(units, profile = PLUS_INSANE, opts = {}) {
   const t0 = opts.now ?? 100;
   for (let i = 0; i < (opts.passes ?? 1); i++) {
     if (i > 0) orders.length = 0;
-    c.pass(t0 + i * 10, { holdsPortal: () => false, home: { x: 0, y: 0 } });
+    c.pass(t0 + i * 10, { holdsPortal: () => false, home: { x: 0, y: 0 }, campLeft: opts.camp });
   }
   if (opts.all) return orders.filter((o) => o.c === "cast");
   return orders.find((o) => o.c === "cast") ?? null;
@@ -576,6 +576,39 @@ console.log("\n-- a summon's `Area1` is where the body goes, not who is caught -
   const at = (p) => !!cast([caster({ abilId: "AHwe", isHero: true }), unit({ owner: 1, x: 500 })], p, { passes: 2 });
   check("an EASY computer's Archmage summons too", at(PLUS_EASY), true);
   check("…and a NORMAL one", at(PLUS_NORMAL), true);
+}
+
+// ==========================================================================================
+console.log("\n-- a summon is not spent on a creep camp that is already beaten ---------------");
+// ==========================================================================================
+// Reported: *"when a creep camp is too weak in terms of enemies and health % left, then heroes
+// with summoning abilities … must not waste another summon cast on such a weak camp. However,
+// it's good if they summon when the camp is still healthy."* `campLeft` is the AiPlayer's
+// `campStanding`, stubbed here to the reading under test.
+{
+  const summons = (camp, foes) => {
+    const mage = caster({ abilId: "AHwe", isHero: true });
+    const units = [mage, ...foes.map((o) => unit({ owner: 1, isCreep: true, x: 500, ...o }))];
+    return (cast(units, PLUS_INSANE, { camp: () => camp }) ?? {}).code ?? null;
+  };
+  check("a FRESH camp gets its summon", summons({ alive: 4, health: 1 }, [{}, {}, {}, {}]), "AHwe");
+  check("…and so does a fresh TWO-creep green camp (few bodies, all of its hit points)",
+    summons({ alive: 2, health: 1 }, [{}, {}]), "AHwe");
+  check("…and one half-way through with plenty left", summons({ alive: 3, health: 0.55 }, [{}, {}, {}]), "AHwe");
+  check("a camp under a quarter of its hit points gets none, however many are left",
+    summons({ alive: 5, health: 0.2 }, [{}, {}, {}, {}, {}]), null);
+  check("…nor its last two creeps under half", summons({ alive: 2, health: 0.4 }, [{ hp: 300 }, { hp: 500 }]), null);
+  check("…nor its last one", summons({ alive: 1, health: 0.3 }, [{ hp: 300 }]), null);
+  // A PLAYER in reach is a real fight: the camp beside it is not asked.
+  {
+    const mage = caster({ abilId: "AHwe", isHero: true });
+    const units = [mage, unit({ owner: 1, isCreep: true, x: 500, hp: 50 }), unit({ owner: 1, x: 400 })];
+    const cmd = cast(units, PLUS_INSANE, { camp: () => ({ alive: 1, health: 0.05 }) });
+    check("…but an enemy PLAYER beside the dying camp still gets the summon", cmd && cmd.code, "AHwe");
+  }
+  // No camp table (a map AI's own enemies): nothing to price, the summon goes out as before.
+  check("a creep in no camp is fought as before",
+    summons(null, [{ hp: 50 }]), "AHwe");
 }
 
 // ==========================================================================================
