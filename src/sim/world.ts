@@ -1760,6 +1760,26 @@ export interface SimUnit {
    * what the caravan leaving Strahnbrad is doing (see PathDomain's `ghost`).
    */
   pathingOff: boolean;
+  /**
+   * Under WIND WALK (`AOwk`, and the Pandaren's `ANwk`, which is the same code): the unit walks
+   * THROUGH other units, and they through it (issue #169). Derived every tick off the buffs in
+   * `recomputeStats` — the "windwalk" group, `SELF_INVIS_GROUP.AOwk` — so it ends however the
+   * walk ends: the break, the clock, a dispel, death.
+   *
+   * It is the third owner of `ghosting()` and a separate field for the same reason `pathingOff`
+   * is: `noCollision` is cleared by every manual order, and a Blademaster is ordered about the
+   * whole time he walks. And unlike `pathingOff` it leaves the TERRAIN alone — only bodies stop
+   * mattering, which is exactly what the harvester ghost already means, so everything that asks
+   * `ghosting()` (claims, reservations, the separation pass, the pathfinder's body layer, makeWay)
+   * treats him as it treats a gold worker on its round trip.
+   *
+   * It is on from the PRESS, with the speed, not from the fade: the transition window is the one
+   * in which "the unit already has the movement speed and the collision subversion but is still
+   * perfectly targetable" (spells.ts invisTransition, hiveworkshop 370226/332725). It is Wind
+   * Walk's alone and NOT invisibility's — the Sorceress's `Aivs`, the Potions and Shadow Meld
+   * hide a unit and leave its body exactly where it was.
+   */
+  windWalk: boolean;
   constructing: number; // building id this worker is constructing (0 = none)
   repair: RepairState | null; // active repair job (null = not repairing)
   orderQueue: QueuedOrder[]; // shift-queued follow-up orders (drained as each completes)
@@ -2617,11 +2637,12 @@ export function pathDomain(u: SimUnit): PathDomain {
   return u.waterborne ? "water" : "ground";
 }
 
-/** Is this body in anybody's WAY? The two ghost flags answer to different owners — the sim's
- *  own harvester ghost (`noCollision`) and the script's `SetUnitPathing` (`pathingOff`) — and
- *  every "can I stand here / who do I have to walk around" test wants both. */
+/** Is this body in anybody's WAY? The three ghost flags answer to different owners — the sim's
+ *  own harvester ghost (`noCollision`), the script's `SetUnitPathing` (`pathingOff`) and Wind
+ *  Walk (`windWalk`) — and every "can I stand here / who do I have to walk around" test wants
+ *  all three. */
 export function ghosting(u: SimUnit): boolean {
-  return u.noCollision || u.pathingOff;
+  return u.noCollision || u.pathingOff || u.windWalk;
 }
 // Proactive reroute poll (issue #6). A unit's path is computed once, but other
 // units may stop and reserve cells across it while it travels. Rather than let a
@@ -8595,6 +8616,7 @@ export class SimWorld {
       | "atNode"
       | "noCollision"
       | "pathingOff"
+      | "windWalk"
       | "building"
       | "constructing"
       | "repair"
@@ -8881,6 +8903,7 @@ export class SimWorld {
       atNode: false,
       noCollision: false,
       pathingOff: false,
+      windWalk: false,
       building: building ?? null,
       constructing: 0,
       repair: null,
@@ -12197,7 +12220,9 @@ export class SimWorld {
     let invuln = false;
     let magicImmuneBuff = false; // the TIMED kind (Anti-magic Potion); see BuffKind.magicImmune
     let maxHpBonus = 0;
+    let windWalk = false;
     for (const b of u.buffs) {
+      if (b.group === SELF_INVIS_GROUP.AOwk) windWalk = true; // either half — see SimUnit.windWalk
       if (b.kind === "armor") armorBonus += b.value;
       else if (b.kind === "manaRegen") manaRegenBonus += b.value;
       else if (b.kind === "damage") damageBonus += b.value;
@@ -12527,6 +12552,7 @@ export class SimWorld {
     }
     u.invisible = invisible;
     u.cloaked = cloaked;
+    if (windWalk !== u.windWalk) this.setWindWalk(u, windWalk);
     u.invulnerable = invuln || u.baseInvulnerable; // buffs (Divine Shield/Avatar) OR the unit type's Avul (issue #26)
     if (u.vanished) u.invulnerable = true; // whisked off the field mid-effect — nothing can reach it
     // A hero channelling a Town Portal is invulnerable for the whole five seconds — Blizzard's
@@ -16546,6 +16572,32 @@ export class SimWorld {
     if (u.pathingOff) this.releaseClaim(u); // a body nobody has to walk around holds no cells
     else if (u.order === "idle" && u.hp > 0) this.settle(u); // …and one that has a body again takes its ground back where it stands (as ShowUnit does)
     if (u.moving || u.order === "move") this.pathTo(u, u.chaseX, u.chaseY);
+  }
+
+  /**
+   * Wind Walk taking the unit's body away, or giving it back (SimUnit.windWalk). The two edges
+   * are `setPathing`'s, minus the terrain:
+   *
+   * ON, it hands back the ground it holds — a reservation if it cast standing, the block it had
+   * claimed if it cast on the move — since a ghost holds no cells (`claimsCells`) and nobody
+   * should have to walk round one; and a walk in progress is RE-PLANNED, because the route it
+   * is on was drawn around the crowd it may now go straight through. That is the case the
+   * ability is pressed for: Wind Walk is instant (`IMMEDIATE`) and is cast mid-run.
+   *
+   * OFF, a unit standing still takes its ground back where it stands, as `setPathing` and
+   * `setHidden` do. If somebody is on it — the walk ended with him inside another body —
+   * `settle` puts him on the nearest free block, which is the game's own shove out of an
+   * overlap. One still walking claims with its next step (tickMovement's claims pass).
+   */
+  private setWindWalk(u: SimUnit, on: boolean): void {
+    u.windWalk = on;
+    if (on) {
+      this.unsettle(u);
+      this.releaseClaim(u);
+      if (u.moving && u.path.length) this.pathTo(u, u.chaseX, u.chaseY);
+    } else if (!u.moving && u.hp > 0) {
+      this.settle(u);
+    }
   }
 
   /**
