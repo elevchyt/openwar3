@@ -162,6 +162,17 @@ export interface BuffFx {
    * plain one on any model that ships only the one set — which is all but a few of them.
    */
   anim?: string;
+  /**
+   * The node ON THIS MODEL that the holder is hung from — set only on a buff's CARRIER (see
+   * `BuffDef.carrier`), where the relationship runs the other way round from every other buff
+   * model: the effect stands on the ground at the holder's feet, and the holder's BODY rides
+   * one of the effect's own nodes (`["sprite","first"]` → "Sprite First Ref"). Absent on
+   * everything else, which is worn on the holder like ordinary buff art.
+   */
+  carry?: string[];
+  /** `Effectsoundlooped` — the AbilitySounds LABEL of the bed that plays for as long as a
+   *  carrier stands (`[Bcyc] Effectsoundlooped = CycloneLoop`). A label, not a path. */
+  loop?: string;
 }
 
 /** A buff — its own object type in the data, with its own `[B….]` section in the same
@@ -183,6 +194,13 @@ export interface BuffDef {
   name: string; // Bufftip — the tooltip title
   tip: string; // Buffubertip — the tooltip body (WC3 markup intact)
   fx: BuffFx[]; // Targetart(s) — the models it hangs on its holder (see buffFxOf)
+  /**
+   * The model the holder RIDES, when this buff is one that throws its holder into the air
+   * — null for every other buff (see buffCarrierOf). Four rows in the game are shaped like
+   * this, and every one of them is a toss: Cyclone (`Bcyc`, `Bcy2`), Tornado's spin (`Btsp`)
+   * and Impale (`BUim`).
+   */
+  carrier: BuffFx | null;
   /** `EditorSuffix` — what the World Editor prints after the name to tell two rows with the
    *  SAME name apart. Nearly always cosmetic, and load-bearing for exactly one family: the
    *  buffs that come in an AIR twin and a GROUND twin. Ensnare's `buffid1` is `Bena,Beng` and
@@ -1054,6 +1072,10 @@ export class AbilityRegistry {
   buffFx(buffId: string): BuffFx[] {
     return this.buff(buffId)?.fx ?? [];
   }
+  /** The model a given buff id throws its holder onto (BuffDef.carrier), or null. */
+  buffCarrier(buffId: string): BuffFx | null {
+    return this.buff(buffId)?.carrier ?? null;
+  }
 
   /**
    * Of an ability's own buff list, the row for the DOMAIN the target is in — the air twin for
@@ -1335,6 +1357,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       name: rawTip(s ? str(s, "Bufftip") : "") || id,
       tip: rawTip(s ? str(s, "Buffubertip") : ""),
       fx: buffFxOf(func, id),
+      carrier: buffCarrierOf(func, id),
       suffix: s ? str(s, "EditorSuffix") : "",
     });
   }
@@ -1563,6 +1586,42 @@ function buffFxOf(func: MappedData, buffId: string): BuffFx[] {
       .map((t) => t.trim().toLowerCase())
       .filter(Boolean),
   }));
+}
+
+/**
+ * The CARRIER a buff throws its holder onto — the one shape of buff row whose `Effectart` is
+ * not "played when the buff ends" (buffEffectArt) but the thing the holder spends the buff
+ * standing IN:
+ *
+ *     [Bcyc]  Effectart = Abilities\Spells\NightElf\Cyclone\CycloneTarget.mdl
+ *             Targetattach = sprite,first          Effectsoundlooped = CycloneLoop
+ *     [Bcy2]  Effectart = (the same)               Effectattach = sprite,first
+ *     [Btsp]  Effectart = …\Tornado\TornadoElementalSmall.mdl   Effectattach = sprite,first
+ *     [BUim]  Effectart = …\Impale\ImpaleHitTarget.mdl           Effectattach = sprite,first
+ *
+ * What gives it away is the attach naming a node the HOLDER does not have — no unit model
+ * carries a "Sprite First Ref"; the EFFECT does. CycloneTarget.mdx hangs its `Sprite First Ref`
+ * off `dummy move` (the lift: 0 → 440 through Birth, bobbing 440–580 through Stand, down with a
+ * bounce at the end of Death) under `dummy spin` (a whole turn every 667 ms, on a global
+ * sequence), and itself swings ~75 units off the axis through Stand — so a body hung there is
+ * lifted to the top of the funnel, turned about itself AND carried round the funnel's top,
+ * which is the whole of what a cycloned unit does on screen (parsed out of the install).
+ *
+ * `Bcyc` writes the attach as `Targetattach` where the other three write `Effectattach`; it has
+ * no `Targetart` for a Targetattach to belong to, so the two mean the same thing here — and a
+ * row that DOES carry a Targetart keeps its Targetattach for it (BUim's overhead stars).
+ * These four are exactly the rows in the 1.30.4 AbilityFunc files with this shape.
+ */
+function buffCarrierOf(func: MappedData, buffId: string): BuffFx | null {
+  const row = buffRow(func, buffId);
+  if (!row) return null;
+  const path = mdlPath(str(row, "Effectart"));
+  if (!path) return null;
+  const spec = str(row, "Effectattach") || (str(row, "Targetart") ? "" : str(row, "Targetattach"));
+  const carry = spec.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
+  if (carry[0] !== "sprite") return null; // an ordinary end-of-buff Effectart (an unsummon)
+  const loop = str(row, "Effectsoundlooped");
+  return loop ? { path, attach: [], carry, loop } : { path, attach: [], carry };
 }
 
 // Effect-art fields are ".mdl" model paths (comma-lists sometimes). Take the

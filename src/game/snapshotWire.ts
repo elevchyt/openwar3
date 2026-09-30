@@ -1,5 +1,6 @@
 import type { SimAbility, SimBuff, HeldItem } from "../sim/world";
 import type { ProjectileSnapshot, UnitSnapshot, WeaponSnapshot, WorldSnapshot } from "./snapshot";
+import type { BuffFx } from "../data/abilities";
 
 /**
  * The binary HOT LANE (docs/multiplayer.md Phase G — the wire after the whistle).
@@ -50,7 +51,7 @@ export type WireSnapshot = Omit<WorldSnapshot, "units" | "projectiles"> & { hot:
 /** Bumped when the binary layout changes. Carried in the blob so a mismatched decode fails
  *  loudly at the header rather than as garbage fields three units in. The relay's
  *  `PROTOCOL_VERSION` still gates the SESSION; this gates the blob. */
-const CODEC_VERSION = 7; // 7: a projectile carries its `Missilearc` (6: a buff carries the duration it started at (the denominator of an expiry bar) (5: a unit carries its Hex critter skin; 4: a buff's art carries its SIZE variant; 3: a pending build's `paid` flag; 2: buffs carry their `B….` row id)
+const CODEC_VERSION = 8; // 8: a buff's art carries the node its holder RIDES and the carrier's loop (7: a projectile carries its `Missilearc` (6: a buff carries the duration it started at (the denominator of an expiry bar) (5: a unit carries its Hex critter skin; 4: a buff's art carries its SIZE variant; 3: a pending build's `paid` flag; 2: buffs carry their `B….` row id)
 
 const TWO_PI = Math.PI * 2;
 
@@ -430,6 +431,10 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
       w.u16(w.intern(fx.anim ?? ""));
       w.u8(fx.attach.length);
       for (const at of fx.attach) w.u16(w.intern(at));
+      // A CARRIER's node and bed (BuffFx.carry/loop — Cyclone's funnel). Empty on all the rest.
+      w.u8(fx.carry?.length ?? 0);
+      for (const c of fx.carry ?? []) w.u16(w.intern(c));
+      w.u16(w.intern(fx.loop ?? ""));
     }
   }
 
@@ -655,9 +660,18 @@ function readUnit(r: Reader): UnitSnapshot {
       const attach: string[] = [];
       const nAt = r.u8();
       for (let k = 0; k < nAt; k++) attach.push(r.str());
-      // …set only when there is one, so a decoded buff deep-equals the sim's own (the sim
-      // leaves the key off everywhere but the ensnare family).
-      b.fx.push(anim ? { path, attach, anim } : { path, attach });
+      const carry: string[] = [];
+      const nCarry = r.u8();
+      for (let k = 0; k < nCarry; k++) carry.push(r.str());
+      const loop = r.str();
+      // …each set only when there is one, so a decoded buff deep-equals the sim's own (the sim
+      // leaves `anim` off everywhere but the ensnare family, and `carry`/`loop` off everything
+      // but a carrier).
+      const f: BuffFx = { path, attach };
+      if (anim) f.anim = anim;
+      if (nCarry) f.carry = carry;
+      if (loop) f.loop = loop;
+      b.fx.push(f);
     }
     s.buffs.push(b);
   }

@@ -182,6 +182,9 @@ export interface SpellApi {
    *  several buffs picks between them off its own numbers, and the role matters as much as
    *  the flavour: the Drain's nine are caster/target/icon × life/mana/both. */
   buffFxOf(buffId: string): BuffFx[];
+  /** The model a given BUFF row throws its holder onto — Cyclone's funnel — or null for every
+   *  buff that is simply worn (`BuffDef.carrier`). */
+  buffCarrierOf(buffId: string): BuffFx | null;
   /** Of an ability's own `buffid1` list, the row for the domain a target is in — the AIR twin
    *  for a flyer, the GROUND twin for anything else (`AbilityRegistry.domainBuff`). Ensnare's
    *  `Bena,Beng` and Web's `Bwea,Bweb` are the whole family, and they wear different models. */
@@ -3613,21 +3616,33 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     });
   },
 
-  // Cyclone (`AIcy`, Wand of the Wind) — "tosses a target enemy unit into the air, rendering
-  // it unable to attack, move or cast spells", 20 seconds, ground units only. The row's one
-  // Data column is `DataA "Can Be Dispelled"` = 1, so everything else about it is the engine's.
+  // Cyclone (`Acyc` — the Druid of the Talon's, the Naga's `Acny`, the Harpy Queen's `ACcy`,
+  // Cenarius's `SCc1` and the Wand of the Wind's `AIcy` are all this code) — "Tosses a target
+  // non-mechanical enemy unit into the air, rendering it unable to move, attack or cast
+  // spells, and stopping others from attacking or casting on it" (`[Acyc] Ubertip`). Dur1 20,
+  // HeroDur1 6 (5.6 on the wand); `targs1` = ground,enemy,neutral,organic, which is what keeps
+  // it off a Siege Engine (Liquipedia's patch history: "no longer affects mechanical units",
+  // 1.10). The row's one Data column is `DataA "Can Be Dispelled"` = 1.
   //
-  // Being IN THE AIR is what the buff models: a cycloned unit cannot act, and nothing on the
-  // ground can reach it. Both halves are carried as a stun plus an invulnerability rather
-  // than by changing what the unit IS — flipping `flying` would re-settle its pathing and
-  // hand it a flyer's collision for the duration. The simplification this leaves is that a
-  // real cyclone can still be shot at by AIR units; ours cannot be shot at by anything.
+  // The two halves of "into the air" are carried as a stun plus an invulnerability rather than
+  // by changing what the unit IS: flipping `flying` would re-settle its pathing and hand it a
+  // flyer's collision for the duration, and the unit is meant to keep its place on the ground —
+  // its pathing footprint, its click volumes and its selection circle all stay where it was
+  // standing. "Stopping others from attacking or casting on it" is total: an air unit cannot
+  // shoot it either.
+  //
+  // The toss itself is DRAWN, and is data: the buff row's carrier (`[Bcyc] Effectart =
+  // CycloneTarget.mdl`, `Targetattach = sprite,first` — see `buffCarrierOf`) stands on the
+  // ground at the unit's feet and the unit's MODEL rides the funnel's own `Sprite First Ref`,
+  // which the funnel lifts, spins and swings round its top (docs/spell-fx.md § Carriers).
   Acyc: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t || !api.hostile(caster, t)) return;
     const lvl = lv(def, rank);
     const time = dur(lvl, t) || 20;
-    api.applyBuff(t, { kind: "stun", group: "cyclone", timeLeft: time, sourceId: caster.id, ...fx(def) });
+    const worn = fx(def);
+    const carrier = api.buffCarrierOf(worn.buffId);
+    api.applyBuff(t, { kind: "stun", group: "cyclone", timeLeft: time, sourceId: caster.id, ...worn, fx: carrier ? [...worn.fx, carrier] : worn.fx });
     api.applyBuff(t, { kind: "invuln", group: "cyclone", timeLeft: time, sourceId: caster.id });
   },
 

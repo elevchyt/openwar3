@@ -736,6 +736,25 @@ export class SoundBoard {
    * resort in playSpellSound) was handing one of those to the cast: Fan of Knives announced
    * itself with the sound of a knife landing.
    */
+  /**
+   * Play every ability SND event a model parks in the frame window [from, to] — what the
+   * engine does as a clip it is driving passes over them. For an effect whose clips WE start
+   * (a carrier: CycloneTarget.mdx fires `SNDXACYB` → "CycloneBirth" → CycloneBirth1.wav on the
+   * first frame of Birth, and `SNDXACYD` → CycloneDeath1.wav on the first frame of Death).
+   */
+  playModelEventsIn(modelArt: string, from: number, to: number, at?: SoundPos): boolean {
+    if (!modelArt) return false;
+    const ms = this.resolveModelSounds(modelArt);
+    let played = false;
+    for (const [code, times] of ms.eventTimes) {
+      const clip = ms.abilityByCode.get(code);
+      if (!clip || !times.some((t) => t >= from && t <= to)) continue;
+      this.playPool(clip, "spell", at);
+      played = true;
+    }
+    return played;
+  }
+
   playModelAbilityEvent(modelArt: string, code: string, at?: SoundPos): boolean {
     if (!modelArt || !code) return false;
     const clip = this.resolveModelSounds(modelArt).abilityByCode.get(code.toUpperCase());
@@ -855,7 +874,10 @@ export class SoundBoard {
     for (const evt of model.eventObjects) {
       // Event-object names are "SND" + a 1-char separator + a 4-char code ("SNDXKRIF").
       if (evt.name.substring(0, 3) !== "SND") continue;
-      const id = evt.name.substring(4);
+      // TRIMMED: some models pad the name — CycloneTarget.mdx's are "SNDXACYB " and
+      // "SNDXACYD ", and with the space kept the code missed its AnimLookups row and the
+      // Cyclone's birth and death sounds were silent.
+      const id = evt.name.substring(4).trim();
       const cat = id[0]; // K = attack, M = missile, D = death, A = ability
       if (cat !== "K" && cat !== "M" && cat !== "A" && cat !== "D") continue;
       const label = this.animLabel(id);

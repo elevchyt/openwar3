@@ -44,7 +44,7 @@ import { SnapshotIndex } from "./renderView";
 import type { FogArea, FogModifier } from "./fog";
 import { AllianceTable, AllianceType } from "../sim/alliances";
 import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
-import { modelPickVolumes, rayVolume, type CollisionShapeNode, type PickVolume } from "../render/modelCollision";
+import { modelPickVolumes, rayVolume, rebaseVolumes, type CollisionShapeNode, type PickVolume } from "../render/modelCollision";
 import { autoArmed, type UnitRegistry, type UnitDef } from "../data/units";
 import { ArmorType, AttackType, isNeutralSlot, MoveType, neutralSlot, PlayerSlot, PrimaryAttribute } from "../data/enums";
 import { MELEE, gameNum, xpToReachLevel } from "../data/gameplayConstants";
@@ -287,6 +287,18 @@ interface Entry {
    *  the ground through its Morph clip and climbs over the row's Altitude Adjustment Duration
    *  (SimWorld.shiftAltitude) instead of popping 240 units up the frame the type swaps. */
   liftFromSim?: boolean;
+  /**
+   * The body is RIDING a carrier (docs/spell-fx.md § Carriers — Cyclone's funnel): its model
+   * is drawn `off` from where the unit stands and turned by `turn` on top of its own facing,
+   * both handed over by the renderer every frame (`setRide`). Only the PICTURE moves — the
+   * unit's position, its pathing, its selection circle, the drag box and the click volumes
+   * (`pickVolumes` puts them back) all stay where it stands. Absent on nearly everything.
+   */
+  ride?: { off: Float32Array; turn: Float32Array } | null;
+  /** Where syncEntries last stood this unit's model — the pose a ride is measured FROM, and
+   *  the one its click volumes are put back onto. Kept only for a riding unit. */
+  standLoc?: Float32Array;
+  standQuat?: Float32Array;
   // Building footprint half-extents in WORLD units (0 for mobile units). When set, the
   // render Z seats the structure on the tallest terrain its footprint spans (issue #15).
   footHalfW: number;
@@ -4849,7 +4861,8 @@ export class RtsController {
       if (e.floats) this.loc[2] = Math.max(this.loc[2], this.waterAt(u.x, u.y)); // a hull rides the surface, not the sea floor
       this.loc[2] += e.moveHeight;
       setZQuat(this.quat, u.facing);
-      placeInstance(e.unit.instance, this.loc, this.quat);
+      if (e.ride) this.placeRiding(e, this.loc, this.quat);
+      else placeInstance(e.unit.instance, this.loc, this.quat);
       // Workers inside a gold mine vanish; enemy units vanish in the fog of war.
       this.applyVisibility(e, u, this.modelHidden(e.simId), dt);
       // A building the fog has swallowed is a STILL PICTURE: no construction scrub, no
@@ -5227,6 +5240,9 @@ export class RtsController {
     // reads the instance, so the Death clip, the corpse and the decay are the unit's and not the
     // critter's. The sim has already taken the hex off and played the poof (SimWorld.kill).
     if (e.skinPath && def) this.unskin(simId, def);
+    // A body killed while riding a carrier (a trigger's KillUnit on a cycloned unit) dies where
+    // it STANDS: the corpse is the unit's, and the funnel it was hanging from plays out alone.
+    if (e.ride) this.setRide(simId, null);
     // Death cry rings out from where the unit fell (its model's last location)…
     const loc = e.unit.instance.localLocation;
     // …and only if the player has eyes on that spot. A scream out of unscouted fog is a
@@ -5678,6 +5694,56 @@ export class RtsController {
   unitInstance(simId: number): Instance | undefined {
     return this.byId.get(simId)?.unit.instance;
   }
+
+  /**
+   * Hang a unit's MODEL on a carrier for this frame (docs/spell-fx.md § Carriers), or take it
+   * off (`off` null). `off` is how far the body is drawn from where it stands and `turn` the
+   * rotation laid over its own facing — both measured by the renderer off the carrier's node
+   * (mapViewer.updateRiders), which calls this every frame so the ride stays smooth on frames
+   * the sim does not step. Nothing but the picture moves: see `Entry.ride`.
+   */
+  setRide(simId: number, off: ArrayLike<number> | null, turn?: ArrayLike<number>): void {
+    const e = this.byId.get(simId);
+    if (!e) return;
+    if (!off) {
+      if (!e.ride) return;
+      e.ride = null;
+      // Back on its feet NOW, rather than on the next frame the sim happens to step.
+      if (e.standLoc && e.standQuat) placeInstance(e.unit.instance, e.standLoc, e.standQuat);
+      return;
+    }
+    const r = (e.ride ??= { off: new Float32Array(3), turn: new Float32Array([0, 0, 0, 1]) });
+    r.off.set(off);
+    if (turn) r.turn.set(turn);
+    if (e.standLoc && e.standQuat) this.placeRiding(e, e.standLoc, e.standQuat);
+  }
+
+  /** Is this unit's model riding a carrier right now (`setRide`)? */
+  riding(simId: number): boolean {
+    return !!this.byId.get(simId)?.ride;
+  }
+
+  /** Draw a riding body: its standing pose (kept for the click volumes and the ride's next
+   *  frame) with the carrier's offset added and its turn laid over the unit's own facing. */
+  private placeRiding(e: Entry, loc: Float32Array, quat: Float32Array): void {
+    const r = e.ride!;
+    if (loc !== e.standLoc) (e.standLoc ??= new Float32Array(3)).set(loc);
+    if (quat !== e.standQuat) (e.standQuat ??= new Float32Array(4)).set(quat);
+    const s = e.standLoc!, q = e.standQuat!;
+    this.rideLoc[0] = s[0] + r.off[0];
+    this.rideLoc[1] = s[1] + r.off[1];
+    this.rideLoc[2] = s[2] + r.off[2];
+    // turn × facing: the facing is applied in the body's own frame, the carrier's turn over it.
+    const [ax, ay, az, aw] = r.turn;
+    const [bx, by, bz, bw] = q;
+    this.rideQuat[0] = aw * bx + ax * bw + ay * bz - az * by;
+    this.rideQuat[1] = aw * by - ax * bz + ay * bw + az * bx;
+    this.rideQuat[2] = aw * bz + ax * by - ay * bx + az * bw;
+    this.rideQuat[3] = aw * bw - ax * bx - ay * by - az * bz;
+    placeInstance(e.unit.instance, this.rideLoc, this.rideQuat);
+  }
+  private readonly rideLoc = new Float32Array(3);
+  private readonly rideQuat = new Float32Array(4);
 
   /** Whether a unit's model is currently hidden (fog of war, or a worker inside a
    *  gold mine) — so attached effects can hide/show along with it. */
@@ -9733,7 +9799,15 @@ export class RtsController {
     // A hexed unit keeps its OWN hitbox: the critter is a picture over it, and a Tauren turned
     // into a frog is no harder to click than the Tauren was. So not the critter's shapes — the
     // sphere below, sized off the unit's own ring and hull.
-    if (!e.skinPath && modelPickVolumes(inst, out) > 0) return;
+    const from = out.length;
+    if (!e.skinPath && modelPickVolumes(inst, out) > 0) {
+      // A body riding a carrier is DRAWN in the air and CLICKED where it stands: the shapes
+      // are read off the model where it is drawn and carried back onto its standing pose.
+      if (e.ride && e.standLoc && e.standQuat) {
+        rebaseVolumes(out, from, inst.localLocation, inst.localRotation, e.standLoc, e.standQuat);
+      }
+      return;
+    }
     const baseZ = this.standZ(e, u.x, u.y) + e.moveHeight;
     if (u.building && (e.footHalfW > 0 || e.footHalfH > 0)) {
       out.push({
@@ -9886,8 +9960,9 @@ export class RtsController {
       specs.push({
         x: u.x,
         y: u.y,
-        // Bar floats at the unit's drawn base — for air units, their altitude.
-        z: this.standZ(e, u.x, u.y) + e.moveHeight,
+        // Bar floats at the unit's drawn base — for air units, their altitude, and for a body
+        // riding a carrier (Cyclone) the height it has been carried up to.
+        z: this.standZ(e, u.x, u.y) + e.moveHeight + (e.ride ? e.ride.off[2] : 0),
         selRadius: e.selRadius,
         hpFrac: u.maxHp > 0 ? Math.max(0, Math.min(1, u.hp / u.maxHp)) : 0,
         manaFrac: u.maxMana > 0 ? Math.max(0, Math.min(1, u.mana / u.maxMana)) : null,

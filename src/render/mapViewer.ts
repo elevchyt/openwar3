@@ -273,6 +273,28 @@ function argbOfParts([a, r, g, b]: readonly number[]): number {
 function argbOf(css: string): number {
   return (0xff000000 | parseInt(css.slice(1), 16)) >>> 0;
 }
+/**
+ * The frame of a CARRIER's Death clip at which it has set its rider back on the ground — read
+ * off the carrier's node tracks, keyed by the model's path (lower-cased, as `rides` keys it).
+ *
+ * `CycloneTarget.mdx` Death is [13467, 18467]. Its `dummy move` hovers (439–578) exactly as
+ * Stand does until 17633, drops to 23.7 at 17933, bounces to 50.4 at 18100 and is on the ground
+ * at **18233**. Parsed out of the install. The Death clip is authored as four more seconds of
+ * Stand with the descent at its end, and that is what makes it possible to START it early, so
+ * the body touches down on the frame the buff runs out (trackCarrier). The alternatives — cut
+ * to the descent when the buff ends, or let go and fall — were recorded beside it and the
+ * developer picked this one (issue #157).
+ */
+const CARRIER_LANDING: Record<string, number> = {
+  "abilities\\spells\\nightelf\\cyclone\\cyclonetarget.mdx": 18233,
+};
+/** How fast a body a carrier has LET GO of falls, in world units/s² — only when the buff was
+ *  taken off early (dispelled) and there is no Death clip to ride down. OURS: nothing in the
+ *  install says; from the top of a cyclone (~550) it is on the ground in about 0.6 s. */
+const CARRIER_FALL_G = 3000;
+/** How far past a clip's start frame (ms) a carrier's SND event still counts as "on it". */
+const CARRIER_EVENT_SLACK = 50;
+
 /** The shop indicator: the team-coloured arrow over whoever will receive the next purchase.
  *  `Targetattach=overhead` in the ability data, hence the attach token. See collectShopArrows
  *  for why this is AneuTarget and not the AneuCaster the data names first. */
@@ -5954,7 +5976,11 @@ export class MapViewerScene {
           const key = b.art || b.fx[0].path;
           if (seen.has("b:" + key)) continue;
           seen.add("b:" + key);
-          b.fx.forEach((fx, i) => this.trackBuffFx(active, `${u.id}|${key}|${i}`, fx, u.id));
+          b.fx.forEach((fx, i) =>
+            fx.carry
+              ? this.trackCarrier(active, `${u.id}|${key}|${i}`, fx, u.id, b.timeLeft)
+              : this.trackBuffFx(active, `${u.id}|${key}|${i}`, fx, u.id),
+          );
         }
       }
     }
@@ -6333,7 +6359,193 @@ export class MapViewerScene {
     this.buffFxParented.delete(key);
     const anim = this.buffFxAnim.get(key);
     this.buffFxAnim.delete(key);
+    if (this.carrierLoops.delete(key)) this.sounds?.setPathLoop(key, "", false);
+    const ride = [...this.rides.values()].find((r) => r.key === key);
+    if (ride && this.endCarrier(ride)) return;
     this.fadeOutFx(inst, anim);
+  }
+
+  // --- Carriers: a buff model the holder RIDES (docs/spell-fx.md § Carriers) -------------
+  //
+  // Every other buff model is worn ON its holder. A carrier is the other way round: it stands
+  // on the ground at the holder's feet, and the holder's MODEL hangs from one of the carrier's
+  // own nodes — Cyclone's `[Bcyc] Targetattach = sprite,first` is `CycloneTarget.mdx`'s
+  // "Sprite First Ref", which the funnel lifts (`dummy move`), spins (`dummy spin`, a whole turn
+  // every 667 ms on a global sequence) and swings ~75 units round its top through Stand. So the
+  // unit is lifted to the top of the cyclone, turns about itself and circles the funnel's top,
+  // all of it the model's own animation rather than a number of ours.
+  //
+  // Only the PICTURE rides: the unit keeps its place, its pathing, its selection circle and its
+  // click volumes on the ground (RtsController.setRide / pickVolumes).
+
+  /** Bodies riding a carrier, by sim id. `phase` is what the ride is doing: `ride` hangs off
+   *  the node, `land` is still hanging off it while the carrier's Death clip sets it down, and
+   *  `fall` has let go and drops the body under OUR gravity (CARRIER_FALL_G). */
+  private rides = new Map<number, {
+    key: string;
+    inst: SpawnInstance;
+    node: { pivot: ArrayLike<number>; worldLocation: ArrayLike<number>; worldRotation: ArrayLike<number> };
+    path: string;
+    phase: "ride" | "land" | "fall";
+    off: Float32Array;
+    turn: Float32Array;
+    fallV: number;
+    fallFrom: number;
+    simId: number;
+  }>();
+  /** Carrier keys whose looping bed (`BuffFx.loop` — CycloneLoop) is playing. */
+  private carrierLoops = new Set<string>();
+
+  /** A carrier buff model, live this frame: stood at the holder's feet (`ground`), with the
+   *  holder hung from its node once it has loaded. `timeLeft` is the buff's own clock, which is
+   *  what times the set-down (see CARRIER_LANDING). */
+  private trackCarrier(active: Set<string>, key: string, fx: BuffFx, simId: number, timeLeft: number): void {
+    // A body the fog hides is not flying about in a funnel for everybody to see either — the
+    // same answer the unit's own model gets.
+    if (this.rts?.unitHidden(simId)) return;
+    this.trackBuffFx(active, key, fx, simId, undefined, true);
+    const inst = this.buffFx.get(key);
+    if (!inst) return; // still loading
+    let ride = this.rides.get(simId);
+    if (!ride || ride.inst !== inst) {
+      const node = this.attachmentNode(inst, fx.carry ?? []) as { pivot: ArrayLike<number>; worldLocation: ArrayLike<number>; worldRotation: ArrayLike<number> } | undefined;
+      if (!node?.worldLocation) return;
+      ride = { key, inst, node, path: fx.path.toLowerCase(), phase: "ride", off: new Float32Array(3), turn: new Float32Array([0, 0, 0, 1]), fallV: 0, fallFrom: 0, simId };
+      this.rides.set(simId, ride);
+      // The toss's own sound: the SND event the model parks on Birth's first frame
+      // (`SNDXACYB` → CycloneBirth1.wav). We start this clip, so we sound what it passes over.
+      const birth = inst.model.sequences[inst.sequence]?.interval;
+      if (birth && /^birth/i.test(inst.model.sequences[inst.sequence].name)) this.carrierSound(ride, birth[0], birth[0] + CARRIER_EVENT_SLACK);
+    }
+    if (fx.loop && !this.carrierLoops.has(key)) {
+      const wav = this.sounds?.abilityLoopPath(fx.loop) ?? "";
+      const u = this.rts?.simView.units.get(simId);
+      if (wav && u) {
+        this.carrierLoops.add(key);
+        this.sounds?.setPathLoop(key, wav, true, { x: u.x, y: u.y, z: this.rts!.groundHeightAt(u.x, u.y) });
+      }
+    }
+    // The Death clip is STARTED EARLY, so that the body it sets down touches the ground on the
+    // frame the buff runs out (CARRIER_LANDING).
+    const land = CARRIER_LANDING[ride.path];
+    if (land !== undefined && ride.phase !== "fall" && Number.isFinite(timeLeft)) {
+      const death = this.sizedSeq(inst, "death");
+      const iv = inst.model.sequences[death]?.interval;
+      if (death >= 0 && iv) {
+        const lead = (land - iv[0]) / 1000;
+        if (ride.phase === "land" && timeLeft > lead + 0.25) {
+          // Cast AGAIN while it was being set down: back up into the funnel's Stand.
+          const stand = this.sizedSeq(inst, "stand");
+          if (stand >= 0) {
+            inst.setSequence(stand);
+            inst.setSequenceLoopMode(2);
+          }
+          ride.phase = "ride";
+        } else if (ride.phase === "ride" && timeLeft <= lead) {
+          this.buffFxBirthing.delete(key);
+          inst.setSequence(death);
+          inst.setSequenceLoopMode(0);
+          inst.frame = iv[0] + Math.max(0, lead - timeLeft) * 1000;
+          ride.phase = "land";
+          // …and the wind-down's (`SNDXACYD` → CycloneDeath1.wav, on Death's first frame).
+          this.carrierSound(ride, iv[0], inst.frame + CARRIER_EVENT_SLACK);
+        }
+      }
+    }
+  }
+
+  /**
+   * The carrier's buff is gone: decide what the model and its rider do now. Returns true when
+   * it has taken the model's end over itself (so dropBuffFx must not restart its Death clip).
+   */
+  private endCarrier(ride: { inst: SpawnInstance; path: string; phase: string; fallV: number; fallFrom: number; off: Float32Array; simId: number }): boolean {
+    const inst = ride.inst;
+    const death = this.sizedSeq(inst, "death");
+    const iv = death >= 0 ? inst.model.sequences[death]?.interval : undefined;
+    // Already setting the body down on time: the Death clip is running, let it finish.
+    if (ride.phase === "land" && iv) {
+      this.dyingFx.push({ inst, ttl: Math.max(0, iv[1] - inst.frame) / 1000 + 0.5 });
+      return true;
+    }
+    // Otherwise the buff was taken off EARLY (a dispel): the carrier lets go and plays its own
+    // Death clip out alone while the body falls — sounding it, as fadeOutFx starts it at its top.
+    if (iv) this.carrierSound(ride, iv[0], iv[0] + CARRIER_EVENT_SLACK);
+    ride.phase = "fall";
+    ride.fallV = 0;
+    ride.fallFrom = ride.off[2];
+    return false;
+  }
+
+  /** Sound the carrier's SND events in a frame window, at its rider's feet. Only reached for a
+   *  rider the fog is not hiding (trackCarrier), which is the same gate its picture has. */
+  private carrierSound(ride: { inst: SpawnInstance; path: string; simId: number }, from: number, to: number): void {
+    const u = this.rts?.simView.units.get(ride.simId);
+    if (!u || this.rts?.unitHidden(ride.simId)) return;
+    this.sounds?.playModelEventsIn(ride.path, from, to, { x: u.x, y: u.y, z: this.rts!.groundHeightAt(u.x, u.y) });
+  }
+
+  /** Hand every rider's pose to the controller for this frame (RtsController.setRide). */
+  private updateRiders(dt: number): void {
+    const rts = this.rts;
+    if (!rts) return;
+    for (const [id, r] of this.rides) {
+      const u = rts.simView.units.get(id);
+      if (!u || u.hp <= 0) {
+        rts.setRide(id, null);
+        this.rides.delete(id);
+        continue;
+      }
+      if (r.phase === "fall") {
+        r.fallV += CARRIER_FALL_G * dt;
+        const z = r.off[2] - r.fallV * dt;
+        if (z <= 0 || r.fallFrom <= 0) {
+          rts.setRide(id, null);
+          this.rides.delete(id);
+          continue;
+        }
+        // Straight down onto its own feet: the orbit's sideways offset and the spin both run
+        // out in step with the height, so it lands facing the way the unit faces.
+        const k = z / r.off[2];
+        r.off[0] *= k;
+        r.off[1] *= k;
+        r.off[2] = z;
+        this.nlerpToIdentity(r.turn, k);
+        rts.setRide(id, r.off, r.turn);
+        continue;
+      }
+      const land = CARRIER_LANDING[r.path];
+      if (r.phase === "land" && (r.inst.sequenceEnded || (land !== undefined && r.inst.frame >= land))) {
+        rts.setRide(id, null);
+        this.rides.delete(id);
+        continue;
+      }
+      // Where the node is, against where it sits in the model at rest: the carrier stands
+      // unturned at the unit's feet, so its rest point is its own location plus the pivot.
+      const n = r.node, at = r.inst.localLocation;
+      // …once the viewer has posed it. A carrier that has only just been spawned has never been
+      // updated, and its node still sits at the world origin — read then, the body was flung
+      // five hundred units into the ground for one frame.
+      if (n.worldLocation[0] === 0 && n.worldLocation[1] === 0 && n.worldLocation[2] === 0) continue;
+      r.off[0] = n.worldLocation[0] - (at[0] + n.pivot[0]);
+      r.off[1] = n.worldLocation[1] - (at[1] + n.pivot[1]);
+      r.off[2] = n.worldLocation[2] - (at[2] + n.pivot[2]);
+      r.turn.set(n.worldRotation as Float32Array);
+      rts.setRide(id, r.off, r.turn);
+    }
+  }
+
+  /** Blend a unit quaternion toward identity: `k` = 1 leaves it, 0 lands on identity. */
+  private nlerpToIdentity(q: Float32Array, k: number): void {
+    const sign = q[3] < 0 ? -1 : 1; // the short way round
+    q[0] *= k;
+    q[1] *= k;
+    q[2] *= k;
+    q[3] = q[3] * k + sign * (1 - k);
+    const len = Math.hypot(q[0], q[1], q[2], q[3]) || 1;
+    q[0] /= len;
+    q[1] /= len;
+    q[2] /= len;
+    q[3] /= len;
   }
 
   /** Mark a persistent buff model live this frame: (re)position an existing instance,
@@ -13257,6 +13469,7 @@ export class MapViewerScene {
       this.lightning?.update(wdt / 1000); // age the live bolts; expired ones retire themselves
       this.updateMirrorMissiles(wdt / 1000);
       this.updateAuraEffects();
+      this.updateRiders(wdt / 1000); // bodies riding a carrier (Cyclone): after the carriers are tracked
       this.updateSpecialFx(wdt / 1000); // script effects: age them, settle Birth→Stand, fog-gate
       this.updateDyingFx(wdt / 1000); // buff art + script effects playing out their Death clip
       this.updateTreePulses(wdt / 1000);

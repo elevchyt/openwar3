@@ -12600,7 +12600,11 @@ export class SimWorld {
    *
    * Two survivors, both for the same reason `dispelUnit` keeps the second: taking them would
    * unmake an ability the game states outright.
-   *   - the `invuln` buff ITSELF, or the shield would end the instant it began;
+   *   - the `invuln` buff ITSELF, or the shield would end the instant it began — and every
+   *     buff of its own GROUP beside it, which is the same cast. Cyclone is the one that needs
+   *     it: its invulnerability and its stun are two halves of one toss (spells.ts `Acyc`), and
+   *     with only the `invuln` spared the stun it was applied with went in the same breath, so
+   *     a cycloned unit walked off untouchable instead of spinning in the air;
    *   - an `undispellable` one — Doom, whose Ubertip is "This spell cannot be dispelled". A
    *     Doomed unit is going to die, and a Divine Shield does not buy its way out of that.
    * Auras are taken like everything else and are back on the next `applyAuras` pass, exactly
@@ -12608,7 +12612,8 @@ export class SimWorld {
    */
   private clearStatusForInvulnerable(u: SimUnit): void {
     const before = u.buffs.length;
-    u.buffs = u.buffs.filter((b) => b.kind === "invuln" || b.undispellable);
+    const own = new Set(u.buffs.filter((b) => b.kind === "invuln" && b.group).map((b) => b.group));
+    u.buffs = u.buffs.filter((b) => b.kind === "invuln" || b.undispellable || own.has(b.group));
     // Re-derive off what is LEFT — the pass that called this read the old list, so every
     // number it just wrote (armour, move speed, the stun) still carries the stripped buffs.
     // Safe from recursion: `u.invulnerable` is already true, so the edge cannot fire twice.
@@ -17620,6 +17625,7 @@ export class SimWorld {
       if (tag) this.spellLightningStops.push(tag);
     },
     buffFxOf: (buffId) => (buffId ? (this.abilities?.buffFx?.(buffId) ?? []) : []),
+    buffCarrierOf: (buffId) => (buffId ? (this.abilities?.buffCarrier?.(buffId) ?? null) : null),
     // Optional-called, like `buffFx` above: a headless test hands the world a hand-built
     // registry with only the rows it cares about, and a stub with no such method must read as
     // "this install has nothing to say" rather than crash the tick.

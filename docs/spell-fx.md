@@ -120,6 +120,66 @@ game. The size CLASS is the unit's own UnitFunc `Attachmentanimprops` ("Art - Re
 Animation Names - Attachments": `medium`, `large`, or nothing for the small set) — see
 docs/creeps.md.
 
+### Carriers — the buff model the holder RIDES
+
+Four buff rows turn the usual relationship round: the model stands on the ground at the
+holder's feet, and the holder's **body** hangs from one of the model's own nodes. They are
+exactly the rows whose `Effectart` comes with a `sprite,first` attach (`buffCarrierOf`,
+`BuffDef.carrier`), and every one of them throws its holder into the air:
+
+    [Bcyc]  Effectart = …\NightElf\Cyclone\CycloneTarget.mdl   Targetattach = sprite,first   Effectsoundlooped = CycloneLoop
+    [Bcy2]  (the same model)                                   Effectattach = sprite,first
+    [Btsp]  Effectart = …\Tornado\TornadoElementalSmall.mdl    Effectattach = sprite,first
+    [BUim]  Effectart = …\Impale\ImpaleHitTarget.mdl           Effectattach = sprite,first
+
+No unit model has a "Sprite First Ref"; the EFFECT does. That is what gives the shape away, and
+why this `Effectart` is not the usual end-of-buff one (`buffEffectArt`, an unsummon). Only
+**Cyclone** is wired to it so far (spells.ts `Acyc` adds the carrier to its stun's `fx`); Tornado
+and Impale are the same mechanism waiting for a handler to ask.
+
+`CycloneTarget.mdx`, parsed out of the install, is the whole of what a cycloned unit does on
+screen: `Sprite First Ref` hangs off `dummy move` (the lift — 0 → 440 through Birth, bobbing
+440–580 through Stand, down with a small bounce at the end of Death) under `dummy spin` (a whole
+turn every 667 ms, on a global sequence), and itself swings ~75 units off the axis through
+Stand. So the body is lifted to the top of the funnel, turns about itself **and** circles the
+funnel's top. Nothing of that is a number of ours.
+
+How it is drawn (`MapViewerScene.trackCarrier` / `updateRiders`, `RtsController.setRide`):
+
+- The carrier is ordinary buff art pinned to the GROUND (`trackBuffFx(…, ground = true)`) and
+  plays Birth → Stand → Death like any other.
+- Every frame the renderer reads the node's world position against its rest position (the
+  carrier's own location + the node's pivot) and its world rotation, and hands both to the
+  controller, which draws the unit's model at its standing pose **plus** that offset and turned
+  by that rotation over its own facing. It is pushed every frame, not only on sim steps, so the
+  spin stays smooth at any frame rate; the node is read after the viewer last posed it, which is
+  one frame behind and invisible.
+- **Only the picture moves.** The sim unit, its pathing, its selection circle, the drag box and
+  the click volumes stay where it stands: `pickVolumes` reads the model's collision shapes where
+  they are drawn and carries them back onto the standing pose (`rebaseVolumes`). The health bar
+  rides up with the body.
+- **The landing is timed to the buff.** Death is authored as ~4 s more of Stand's hovering with
+  the descent at its end (on the ground at frame 18233 of [13467, 18467] — `CARRIER_LANDING`),
+  so the renderer starts it early, `(18233 − 13467) / 1000` s before the buff's clock runs out,
+  and the body touches down on the frame it becomes free to act. Recast while it is coming down
+  and the funnel goes back to Stand. Taken off EARLY (a dispel), there is no Death clip to ride:
+  the carrier lets go, plays its Death alone, and the body falls under `CARRIER_FALL_G` (ours).
+  Three endings were recorded side by side for issue #157 and this is the one the developer
+  picked.
+- Sound is the model's and the row's: `SNDXACYB` on Birth's first frame (→ CycloneBirth1.wav),
+  `SNDXACYD` on Death's (→ CycloneDeath1.wav — so it sounds as the funnel starts to wind down,
+  ~4.8 s before touchdown, exactly as the clip parks it), and `CycloneLoop` (→ CycloneLoop1.wav)
+  held for as long as the carrier stands. The event names in this model are PADDED ("SNDXACYB ")
+  — `resolveModelSounds` trims them, or the codes miss AnimLookups and the toss is silent.
+- A fogged holder has no carrier either (`unitHidden`), and a body killed mid-air dies where it
+  stands.
+
+A trap that made Cyclone do nothing at all for a long time, and that is not art: becoming
+invulnerable wipes a unit's buffs (`clearStatusForInvulnerable`, the Divine Shield rule), and
+Cyclone's invulnerability and stun are one cast. The wipe now spares every buff of the
+invulnerability's own GROUP; before, the stun went in the same breath and a cycloned unit walked
+off untouchable (`tools/sim-invulnerability-test.cjs`).
+
 ## 3. Lightning — a ribbon, not a model
 
 Chain Lightning, Healing Wave, Finger of Death, Forked Lightning, Mana Burn, Spirit Link,

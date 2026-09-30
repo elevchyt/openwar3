@@ -156,6 +156,66 @@ export function modelPickVolumes(inst: CollisionHost, out: PickVolume[]): number
   return n;
 }
 
+/** Rotate (x,y,z) by the unit quaternion q, into `out`. */
+function qRotate(q: ArrayLike<number>, x: number, y: number, z: number, out: number[]): number[] {
+  const qx = q[0], qy = q[1], qz = q[2], qw = q[3];
+  // t = 2·(q.xyz × v); v' = v + w·t + q.xyz × t
+  const tx = 2 * (qy * z - qz * y), ty = 2 * (qz * x - qx * z), tz = 2 * (qx * y - qy * x);
+  out[0] = x + qw * tx + (qy * tz - qz * ty);
+  out[1] = y + qw * ty + (qz * tx - qx * tz);
+  out[2] = z + qw * tz + (qx * ty - qy * tx);
+  return out;
+}
+
+/**
+ * Carry the volumes `out[from..]` rigidly from one pose of their body to another: every point
+ * `p` goes to `toLoc + toRot · fromRot⁻¹ · (p − fromLoc)`, every axis is turned the same way,
+ * and no size changes. How a body riding a carrier (a cycloned unit, drawn at the top of the
+ * funnel) is clicked where it STANDS: its shapes are read off the model where it is drawn and
+ * put back on the ground under it, still in whatever pose its animation holds.
+ */
+export function rebaseVolumes(
+  out: PickVolume[],
+  from: number,
+  fromLoc: ArrayLike<number>,
+  fromRot: ArrayLike<number>,
+  toLoc: ArrayLike<number>,
+  toRot: ArrayLike<number>,
+): void {
+  // rel = toRot · conj(fromRot)
+  const ax = toRot[0], ay = toRot[1], az = toRot[2], aw = toRot[3];
+  const bx = -fromRot[0], by = -fromRot[1], bz = -fromRot[2], bw = fromRot[3];
+  const rel = [
+    aw * bx + ax * bw + ay * bz - az * by,
+    aw * by - ax * bz + ay * bw + az * bx,
+    aw * bz + ax * by - ay * bx + az * bw,
+    aw * bw - ax * bx - ay * by - az * bz,
+  ];
+  const point = (x: number, y: number, z: number): number[] => {
+    qRotate(rel, x - fromLoc[0], y - fromLoc[1], z - fromLoc[2], P0);
+    P0[0] += toLoc[0];
+    P0[1] += toLoc[1];
+    P0[2] += toLoc[2];
+    return P0;
+  };
+  for (let i = from; i < out.length; i++) {
+    const v = out[i];
+    if (v.kind === "capsule") {
+      const a = point(v.x0, v.y0, v.z0);
+      [v.x0, v.y0, v.z0] = a;
+      const b = point(v.x1, v.y1, v.z1);
+      [v.x1, v.y1, v.z1] = b;
+      continue;
+    }
+    [v.x, v.y, v.z] = point(v.x, v.y, v.z);
+    if (v.kind === "box") {
+      v.ax = [...qRotate(rel, v.ax[0], v.ax[1], v.ax[2], P1)];
+      v.ay = [...qRotate(rel, v.ay[0], v.ay[1], v.ay[2], P1)];
+      v.az = [...qRotate(rel, v.az[0], v.az[1], v.az[2], P1)];
+    }
+  }
+}
+
 /**
  * Where the ray `o + t·d` first enters `v`, or -1 for a miss. `t` is in the ray's own
  * parameter (the caller hands in near→far, so t runs 0..1 across the frustum) and a ray that
