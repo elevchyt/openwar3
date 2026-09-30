@@ -11421,6 +11421,7 @@ export class MapViewerScene {
       // Same call the mobile card makes, so an upgrade-gated one (`[Adts] Requires=Rhse`) only
       // appears once that research lands, exactly as it does on a unit.
       if (!foreignShop) this.pushAbilityButtons(sel, out);
+      else this.pushNeutralCastButtons(sel.id, out); // …the Goblin Laboratory's Reveal, for a patron
       return out;
     }
 
@@ -11727,6 +11728,45 @@ export class MapViewerScene {
   /** Append a movable unit's learned/innate abilities (and a hero's Learn Skill
    *  button) to its command card. Auras show as passive (disabled) indicators;
    *  autocast abilities (Heal/Slow) toggle; the rest arm a target or fire. */
+  /** A NEUTRAL building's ability on a card the player does not own — the Goblin Laboratory's
+   *  Reveal (`[ngad] abilList = Ane2,Andt,Avul`; NeutralAbilityFunc [Andt] Art=BTNReveal,
+   *  Buttonpos=0,0, Hotkey=R). Its price is the row's `Ndt1`/`Ndt2` (DataA gold, DataB
+   *  lumber), drawn where a trainee's is; pressing it arms a bare reticle (armNeutralCast)
+   *  that the world or the minimap then aims. */
+  private pushNeutralCastButtons(shopId: number, out: CommandButton[]): void {
+    const world = this.rts?.simWorld;
+    const found = world?.neutralCastAbility(shopId);
+    if (!world || !found) return;
+    const { ab, def } = found;
+    const lvl = def.levelData[0];
+    const gold = lvl?.data[0] || 0;
+    const lumber = lvl?.data[1] || 0;
+    const stash = this.rts!.stashFor(this.localPlayer);
+    const onCd = ab.cooldownLeft > 0;
+    // The row asks for 0,0 — and so does every one of the lab's three wares (NeutralUnitFunc
+    // [ngsp]/[nzep]/[ngir]), which have already flowed left to right across the top row
+    // (pushTrainButtons). The Reveal takes the next free cell by the same rule.
+    const used = new Set(out.map((b) => `${b.col},${b.row}`));
+    let i = def.buttonY * 4 + def.buttonX;
+    while (i < 11 && used.has(`${i % 4},${Math.floor(i / 4)}`)) i++;
+    const col = i % 4;
+    const row = Math.floor(i / 4);
+    out.push(this.cmd({
+      id: `neutral:${ab.id}`,
+      icon: this.blpIcon(iconAt(def, 1)),
+      name: def.name,
+      hotkey: def.hotkey || "",
+      tip: this.abilityTip(def, 1),
+      desc: this.abilityDesc(def, 1),
+      gold, lumber,
+      cantAfford: stash.gold < gold || stash.lumber < lumber,
+      col, row,
+      active: this.rts!.orderMode === "cast" && this.rts!.armedCast?.shopId === shopId,
+      cooldownLeft: onCd ? ab.cooldownLeft : 0,
+      cooldownFrac: onCd && lvl?.cooldown ? Math.max(0, Math.min(1, ab.cooldownLeft / lvl.cooldown)) : 0,
+    }));
+  }
+
   private pushAbilityButtons(sel: { id: number; isHero: boolean }, out: CommandButton[]): void {
     if (!this.rts) return;
     const su = this.rts.simView.units.get(sel.id);
@@ -11974,6 +12014,12 @@ export class MapViewerScene {
     if (id === "move" || id === "attack" || id === "attackground" || id === "patrol" || id === "rally" || id === "repair") {
       this.rts.orderMode = id;
       this.hud?.setArmed(true);
+      return;
+    }
+    // --- a neutral building's ability, pressed by a patron (the Goblin Laboratory's Reveal) ---
+    if (id.startsWith("neutral:")) {
+      const sel = this.rts.selectedInfo();
+      if (sel && this.rts.armNeutralCast(sel.id, id.slice(8))) this.hud?.setArmed(true);
       return;
     }
     // --- spells ---

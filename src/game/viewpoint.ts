@@ -48,7 +48,7 @@ export interface VisionWorld {
   /** True Sight is a TEAM property in WC3 — one Shade uncovers a hero for the whole army —
    *  so this is the sim's own answer rather than one re-derived here. That keeps what you
    *  can shoot and what you can see the same answer. */
-  teamDetects(team: number, x: number, y: number): boolean;
+  teamDetects(team: number, x: number, y: number, unit?: SimUnit): boolean;
 }
 
 /** Fog rebuild cadence — 10 Hz, as it has always been. Cheap enough that N of them is a
@@ -288,7 +288,7 @@ export class Viewpoint {
     // A WATCHER is everybody's ally (`setWatcher`): every invisible unit is drawn to it the way
     // it is drawn to its own side — faded, never gone.
     if (this.watcher) return false;
-    return !this.world.teamDetects(this.team, u.x, u.y);
+    return !this.world.teamDetects(this.team, u.x, u.y, u); // …or a Dust of Appearance mark on it
   }
 
   // --- rebuilding the grid -------------------------------------------------------------
@@ -363,8 +363,8 @@ export class Viewpoint {
       if (!this.revealsForOwner(r.owner, r.team)) continue;
       this.vision.reveal(r.x, r.y, r.radius, r.flying);
     }
-    // Fog an ITEM is holding open (issue #130): a Crystal Ball's circle, a Flare Gun's flare,
-    // Dust of Appearance round the hero, a Potion of Omniscience's whole map, the Wand of
+    // Fog an ITEM is holding open (issue #130): a Crystal Ball's circle (and Far Sight's and
+    // Reveal's), a Flare Gun's flare, a Potion of Omniscience's whole map, the Wand of
     // Shadowsight's eye riding an enemy unit. Revealed as a FLYER sees — a flare hangs over
     // the treeline and a crystal ball is not standing behind anything, so neither is shadowed
     // by terrain the way a unit's own sight is.

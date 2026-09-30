@@ -23,6 +23,8 @@ import type { SimUnit, BuffKind, ClaimedCorpse, CorpseClaim, EffectAnim } from "
 export interface EffectOpts {
   sound?: boolean;
   anim?: EffectAnim;
+  /** Seen by every player, fog or no fog — see SimSpellEffect.global. */
+  global?: boolean;
 }
 
 export interface SpellApi {
@@ -540,6 +542,11 @@ export interface CastContext {
    *  SpellApi.launchWave): `targetId` is the unit the front just swept over, and `budget`
    *  is the wave's remaining total-damage allowance, which the handler spends. */
   wave?: { budget: number };
+  /** Set when a NEUTRAL building's ability is used by a player who does not own it — the
+   *  Goblin Laboratory's Reveal (`Andt`), pressed by whoever has a unit at its door
+   *  (SimWorld.neutralCast). The building is still the caster; what it does is done FOR this
+   *  player and their side, and paid for by them. */
+  onBehalfOf?: { owner: number; team: number };
 }
 
 type Handler = (api: SpellApi, caster: SimUnit, def: AbilityDef, rank: number, ctx: CastContext) => void;
@@ -563,6 +570,26 @@ const FIELD_ART: Record<string, string> = {
  * the same shape as FIELD_ART above: art the engine knows and the table does not.
  */
 const IMPALE_CASTER_ART = "Abilities\\Spells\\Undead\\Impale\\ImpaleCaster.mdx";
+
+/**
+ * The marker a REVEAL plants at the centre of the ground it lights — the Crystal Ball, Far
+ * Sight, and the Reveal of an Arcane Tower or a Goblin Laboratory: `AItbTarget.mdx`, the Dust
+ * of Appearance's own puff (`[AItb] Casterart`), its one Stand clip LOOPED for as long as the
+ * reveal holds. This is the developer's reading of the original client, and it is taken over
+ * the one the tables suggest: all four rows name `EfctID1 = Xbdt`, whose `Effectart` is
+ * `Andt\Andt.mdl` (CommonAbilityFunc [Xbdt]) — a model that is in the install (Birth + Stand)
+ * but is not what the developer sees the original play there.
+ * Seen by EVERY player (`global`), whose fog it ignores: being scouted is the news it carries.
+ */
+const REVEAL_TARGET_ART = "Abilities\\Spells\\Items\\AItb\\AItbTarget.mdx";
+
+/** One reveal: light `radius` round (x, y) for `seconds`, for this player's side, uncovering
+ *  the invisible units inside it for as long as it lasts (ItemReveal.detect), and plant its
+ *  marker there for the same length (REVEAL_TARGET_ART). */
+function revealPlace(api: SpellApi, owner: number, team: number, x: number, y: number, radius: number, seconds: number): void {
+  api.revealArea(owner, team, { x, y, radius, seconds, detect: true });
+  api.emitEffect(REVEAL_TARGET_ART, x, y, 0, seconds, undefined, { anim: "hold", global: true });
+}
 /** The group of the short stun a hurled unit spends in the AIR (spells.ts `AUim`). */
 const IMPALE_AIR_GROUP = "impaleAir";
 
@@ -2950,10 +2977,12 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.applyBuff(t, { kind: "armor", group: "frostarmor", timeLeft: lvl.duration || 60, sourceId: caster.id, value: d(lvl, 1, 3), ...fx(def) });
   },
 
-  // Far Sight (Far Seer) — reveal an area of the map. We have no fog of war yet, so
-  // this only plays its effect; it exists so the Far Seer can learn all 4 skills.
-  AOfs: (api, _caster, def, _rank, ctx) => {
-    if (def.areaArt || def.targetArt) api.emitEffect(def.areaArt || def.targetArt, ctx.x, ctx.y, 0);
+  // Far Sight (Far Seer) — "Reveals the area of the map that it is cast upon for <AOfs,Dur1>
+  // seconds. Also reveals invisible units." (OrcAbilityStrings [AOfs]). Area1 is the radius
+  // per level and Dur1 the clock; the row names no Casterart, so nothing rides the Far Seer.
+  AOfs: (api, caster, def, rank, ctx) => {
+    const lvl = lv(def, rank);
+    revealPlace(api, caster.owner, caster.team, ctx.x, ctx.y, lvl.area || 900, dur(lvl, caster) || 8);
   },
 
   // Mana Shield (Naga) — absorb incoming damage into mana (dataA mana per hp).
@@ -3488,23 +3517,58 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.applyBuff(caster, { kind: "magicImmune", group: "item:antimagic", timeLeft: dur(lvl, caster) || 15, sourceId: caster.id, ...fx(def) });
   },
 
-  // Dust of Appearance (`AItb`) — "Reveals enemy invisible units in an area around the Hero",
-  // Area1 1000, Dur1 20. `DataA "Detection Type"` = 3 is the enum every detector in the game
-  // carries (True Sight's is 3 too); it is not a radius, which `Area1` is.
+  // Dust of Appearance (`AItb`) — "sprays fine powder in a target area. This makes any
+  // invisible enemy units or units using shadowmeld/wind walk within that area visible to your
+  // team" (classic.battle.net, charged items; Liquipedia). It is NOT a reveal: it lights no fog
+  // at all. It MARKS the bodies it lands on — the `Bdet` buff (`BuffID1`, "The Dust of
+  // Appearance reveals invisible units to enemy players.", ItemAbilityStrings [Bdet]) — and a
+  // marked unit is detected by the duster's side wherever it walks for `Dur1` = 20 seconds
+  // (teamDetects). Who it lands on is the row's own Targets Allowed (`air,ground,ward,enemy,
+  // neutral,vuln,invu`) inside `Area1` = 1000 round the user, and only the ones that are
+  // actually hidden: the powder is what shows them. `DataA "Detection Type"` = 3 is the enum
+  // every detector carries, not a radius.
+  //
+  // Its art is `[AItb] Casterart = AItbTarget.mdl` with no Casterattach: the puff on the user,
+  // its one Stand played ONCE (the model has no Birth). The item's `[Bdet]` (ItemAbilityFunc)
+  // names no model to wear, so the mark is worn bare — the second `[Bdet]` in
+  // CommonAbilityFunc.txt carries the Magic Lariat's icon and the Aerial Shackles model, a
+  // different buff's art, and is not what a dusted unit wears.
   AItb: (api, caster, def, rank) => {
     const lvl = lv(def, rank);
-    api.revealArea(caster.owner, caster.team, { x: caster.x, y: caster.y, radius: lvl.area || 1000, seconds: dur(lvl, caster) || 20, detect: true });
-    if (def.targetArt) api.emitEffect(def.targetArt, caster.x, caster.y, 0, dur(lvl, caster) || 20);
+    const radius = lvl.area || 1000;
+    for (const t of api.unitsInArea(caster.x, caster.y, radius)) {
+      if (!t.invisible || t.hp <= 0 || !api.hostile(caster, t)) continue;
+      if (!api.admits(def, t) || !api.allows(caster, def, t)) continue;
+      api.applyBuff(t, { kind: "dusted", group: "dust", timeLeft: dur(lvl, t) || 20, sourceId: caster.id, value: caster.team, art: "", fx: [], buffId: buffIdOf(def) || "Bdet" });
+    }
+    if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, caster.id, 0, def.casterAttach, { anim: "stand" });
   },
 
   // Crystal Ball (`AIta`, "ItemDetectAoe") — "Reveals a targeted area. Invisible units are
   // also revealed." Area1 900 is what it lights, `DataA "Detection Radius"` = 3 is the same
   // enum again (the metadata calls this one a radius, but the value is the type — reading it
   // as a distance gives a three-unit circle, which is the trap True Sight already fell into).
+  // The Arcane Tower's Reveal (`AHta`) is this code too, and brings its own row's numbers.
+  //
+  // `Casterart = CrystalBallCaster.mdl`, `Casterattach = overhead` (ItemAbilityFunc [AIta],
+  // HumanAbilityFunc [AHta]): the ball hangs over the user's head for as long as it is
+  // looking — Birth, its Stand held for the whole `Dur1`, then its Death (the "hold" shape).
   AIta: (api, caster, def, rank, ctx) => {
     const lvl = lv(def, rank);
-    api.revealArea(caster.owner, caster.team, { x: ctx.x, y: ctx.y, radius: lvl.area || 900, seconds: dur(lvl, caster) || 10, detect: true });
-    if (def.targetArt) api.emitEffect(def.targetArt, ctx.x, ctx.y, 0, dur(lvl, caster) || 10);
+    const seconds = dur(lvl, caster) || 10;
+    revealPlace(api, caster.owner, caster.team, ctx.x, ctx.y, lvl.area || 900, seconds);
+    if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, caster.id, seconds, def.casterAttach, { anim: "hold" });
+  },
+
+  // Reveal (`Andt`, "Neutral Detection (Reveal ability)") — the Goblin Laboratory's: "Reveals
+  // an area of the map. |nDetects invisible units. |nLasts <Andt,Dur1> seconds."
+  // (NeutralAbilityStrings [Andt]). Area1 900, Dur1 6. The lab is Neutral Passive, so the
+  // side that sees is the one that PAID (`ctx.onBehalfOf`, SimWorld.neutralCast); its price is
+  // `Ndt1`/`Ndt2` (DataA/DataB, gold 50 / lumber 0), charged there rather than here.
+  Andt: (api, caster, def, rank, ctx) => {
+    const lvl = lv(def, rank);
+    const by = ctx.onBehalfOf ?? caster;
+    revealPlace(api, by.owner, by.team, ctx.x, ctx.y, lvl.area || 900, dur(lvl, caster) || 6);
   },
 
   // Potion / Glyph of Omniscience (`AIrv`, "ItemRevealMap") — "Reveals the entire map for

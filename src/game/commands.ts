@@ -193,4 +193,12 @@ export type Command =
    * the recipient. `purchaseItem` itself re-judges everything (stock, tech, range, patron,
    * cost) and charges, exactly as it always did.
    */
-  | { c: "buyitem"; shopId: number; itemId: string };
+  | { c: "buyitem"; shopId: number; itemId: string }
+  /**
+   * Press a NEUTRAL building's ability aimed at a point — the Goblin Laboratory's Reveal
+   * (`Andt`), bought by anybody with a unit at its door. Not a `cast`: the building is not the
+   * issuer's, so `cast`'s ownership gate refuses it, and what it does is done for the ISSUER'S
+   * side and charged to the issuer (SimWorld.neutralCast, which re-judges the door, the price
+   * and the cooldown).
+   */
+  | { c: "neutralcast"; shopId: number; abilityId: string; x: number; y: number };

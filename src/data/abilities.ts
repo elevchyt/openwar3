@@ -477,11 +477,27 @@ export const NO_AOE_CURSOR = new Set<string>([
   "AUcs", "ACca", // Carrion Swarm (+ creep)
   "ANbf", "ACbc", "ACbf", "ACcv", // Breath of Fire/Frost, Crushing Wave
   "AUim", "ACmp", // Impale (+ creep)
-  // 2 — an Area that is not an effect on units
+  // 2 — an Area that is not an effect on units: the REVEALS (see REVEAL_CODES)
   "AOfs", // Far Sight — `Area1` is the radius of map it reveals
+  "AIta", // Crystal Ball, and the Arcane Tower's Reveal (`AHta`, code AIta) — the same radius
+  "Andt", // Reveal — the Goblin Laboratory's, the same again
+  "AIfa", // Flare Gun — "Reveals a target area on the map", a lit patch with no detection
   // 3 — an Area measured around the caster, not at the click
   "AItp", // Scroll of Town Portal — `Area1` is the escort that travels with the Hero
 ]);
+
+/**
+ * The REVEALS — point abilities whose whole effect is to look at a PLACE: Far Sight, the
+ * Crystal Ball (and the Arcane Tower's Reveal, which is its code), the Goblin Laboratory's
+ * Reveal and the Flare Gun. They share two things no other point spell has, both for the
+ * reason the second clause of NO_AOE_CURSOR gives — nothing on the ground is caught:
+ *
+ *  · a bare reticle, no `SpellAreaOfEffect` splat (all four are in NO_AOE_CURSOR);
+ *  · they may be aimed ON THE MINIMAP (RtsController.minimapClick), because the place they are
+ *    looking at is by definition one the player cannot see — which is the minimap's whole job,
+ *    and why every one of them carries `Rng1` 99999 (`Andt` `-`: anywhere).
+ */
+export const REVEAL_CODES: ReadonlySet<string> = new Set(["AOfs", "AIta", "Andt", "AIfa"]);
 
 /**
  * The radius of the `SpellAreaOfEffect` circle an ability arms with — 0 for "a bare cursor".
@@ -571,6 +587,7 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   AOww: { target: "none" }, // Bladestorm — self PBAoE damage field
   // -- Far Seer --
   AOfs: { target: "point" }, // Far Sight — reveal an area
+  Andt: { target: "point" }, // Reveal (Goblin Laboratory) — the same, bought by a patron
   AOsf: { target: "none" }, // Feral Spirit — summon wolves
   AOcl: { target: "unit" }, // Chain Lightning — bouncing bolt
   AOeq: { target: "point" }, // Earthquake — point field: damage buildings + slow

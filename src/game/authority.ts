@@ -1098,6 +1098,10 @@ export class Authority {
         if (!buyer) return false;
         return this.sim.purchaseItem(cmd.shopId, buyer.id, cmd.itemId, player) === "ok";
       }
+      case "neutralcast":
+        // No ownership gate, for the reason `buyitem` has none: the Goblin Laboratory is
+        // Neutral Passive. neutralCast judges who it serves, the patron at its door and the bill.
+        return this.sim.neutralCast(cmd.shopId, player, cmd.abilityId, cmd.x, cmd.y);
     }
   }
 

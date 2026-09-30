@@ -768,7 +768,7 @@ export class MatchLink {
       // eyes-on-the-spot — the same "in your eyes or absent" rule items and missiles use.
       if (due) {
         snap.fx = {
-          effects: this.fxBuf.effects.filter((e) => !viewer.fogBlocksAt(e)),
+          effects: this.fxBuf.effects.filter((e) => e.global || !viewer.fogBlocksAt(e)), // …a reveal's marker to everybody
           splats: this.fxBuf.splats.filter((e) => !viewer.fogBlocksAt(e)),
           // A bolt is AoI-tested at its caster's end (`sx`/`sy`) — the same eyes-on-the-spot
           // rule as everything else here, applied to the end the spell was cast from.

@@ -93,7 +93,7 @@ place the splat, the tint and the tree highlight ask. Before that they read `arm
 and every one of those items aimed with a **bare cursor**.
 
 The exclusions are a LIST, not a rule, and `NO_AOE_CURSOR` holds them: a directional wave's
-`Area` is its width at the caster, Far Sight's is a radius of revealed map, and the Scroll of
+`Area` is its width at the caster, Far Sight's (and every other reveal's) is a radius of revealed map, and the Scroll of
 Town Portal's `Area1` = 1100 is *"the Hero and any of its **nearby** troops"* — an escort
 measured around the caster while the click lands anywhere on the map (`Rng1` = 99999). `targs1`
 cannot stand in for the list: Blizzard (`AHbz`), the spell the circle exists for, carries
@@ -187,10 +187,38 @@ Three homes, chosen by what the effect needs to see:
    `tickCarriedItems` for the two that need a clock (Cloak of Flames, Amulet of Spell Shield).
 
 Two `SpellApi` methods exist only because items need them:
-`revealArea` (the Crystal Ball, the Flare Gun, Dust of Appearance, the Potion of Omniscience,
-the Wand of Shadowsight — the only effects in the game that touch vision without putting a unit
-on the map) and `createIllusion` (the Wand of Illusion copies its **target**, where Mirror Image
-copies the caster).
+`revealArea` (the Crystal Ball, the Flare Gun, the Potion of Omniscience, the Wand of
+Shadowsight — and, borrowing it, Far Sight and the Reveal of the Arcane Tower and the Goblin
+Laboratory: the only effects in the game that touch vision without putting a unit on the map)
+and `createIllusion` (the Wand of Illusion copies its **target**, where Mirror Image copies the
+caster).
+
+## Reveals, and the Dust that is not one
+
+The **reveals** — `REVEAL_CODES` in [`src/data/abilities.ts`](../src/data/abilities.ts): Far
+Sight, the Crystal Ball (and the Arcane Tower's Reveal, `AHta`, which is its code), the Goblin
+Laboratory's Reveal (`Andt`) and the Flare Gun — look at a PLACE. So they aim with a **bare
+reticle** (no `SpellAreaOfEffect` splat: nothing on the ground is caught) and they may be aimed
+**on the minimap** (`RtsController.minimapReveal`). All but the flare also **detect**: invisible
+units inside the circle are uncovered for the reveal's whole `Dur1`. Each plants
+`AItbTarget.mdx` at its centre, its Stand looped for the reveal's length and seen by **every**
+player whatever their fog (`SimSpellEffect.global`) — the developer's reading of the original,
+taken over the tables' `EfctID1 = Xbdt` → `Andt.mdl`. The Crystal Ball's own row adds
+`Casterart = CrystalBallCaster.mdl`, `Casterattach = overhead`: Birth, Stand for `Dur1`, Death,
+over the user's head (the "hold" effect).
+
+The Goblin Laboratory is Neutral Passive, so its Reveal is pressed by a player who does not own
+it: the `neutralcast` command, one of the player's units inside the lab's `Ane2` radius, and
+`Ndt1` = 50 gold charged to the player (`SimWorld.neutralCast`). The building casts; the
+reveal is the BUYER's side's (`CastContext.onBehalfOf`).
+
+**Dust of Appearance lights no fog.** It marks the hidden enemies in `Area1` = 1000 round the
+user with `Bdet` (the `dusted` buff, `value` = the duster's team), and a marked unit is detected
+by that side wherever it walks for `Dur1` = 20 s (`SimWorld.teamDetects`, which takes the UNIT
+for exactly this). Its art is `[AItb] Casterart = AItbTarget.mdl` on the user, the Stand played
+once. The mark is worn bare: `Bdet` is filed twice, and the second copy (CommonAbilityFunc.txt)
+carries a Magic Lariat's Aerial Shackles model that key-by-key merging would otherwise put on
+every dusted unit. `tools/sim-reveal-test.cjs` pins all of this.
 
 ## The one item that is not instant
 

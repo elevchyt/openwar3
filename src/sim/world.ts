@@ -487,7 +487,7 @@ export interface BuffQuery {
 /** The kinds that are harmful whoever cast them — polarity's fallback when a buff's source is
  *  gone (SimWorld.buffIsPositive). */
 const NEGATIVE_BUFF_KINDS: ReadonlySet<BuffKind> = new Set<BuffKind>([
-  "stun", "slow", "dot", "sleep", "silence", "hex", "root", "vuln", "miss", "mark", "ethereal",
+  "stun", "slow", "dot", "sleep", "silence", "hex", "root", "vuln", "miss", "mark", "ethereal", "dusted",
 ]);
 
 export interface SimBuff {
@@ -610,6 +610,13 @@ export type BuffKind =
   | "spellShield" // Spell Shield (`ANss` on the Amulet, `ANse` on the Rune of Shielding):
   //                 BLOCKS the next negative spell an enemy casts on the holder, then goes.
   //                 Spent rather than merely read, like `spellAbsorb` — see spellShieldBlocks.
+  | "dusted" // Dust of Appearance (`Bdet`): the holder stays INVISIBLE — its owner still sees it
+  //            faded, it still draws no aggro from anybody else — but the side that dusted it
+  //            DETECTS it wherever it goes for the buff's clock. `value` is that side's TEAM.
+  //            A mark on the unit rather than a hole in the fog: "sprays fine powder … makes
+  //            any invisible enemy units … within that area visible to your team" (Liquipedia,
+  //            classic.battle.net's charged-items page), and the powder travels with the body
+  //            it landed on. See teamDetects.
   | "invisible"; // Wind Walk/Invisibility: the holder renders half-faded (see u.invisible).
   //             CONCEALMENT is modelled — canSee() refuses an invisible unit, so it draws no
   //             aggro down any automatic path — and so is its counterpart, True Sight
@@ -3362,9 +3369,9 @@ export interface DeathReveal {
 }
 
 /**
- * Ground an ITEM lit up for a player (issue #130) — the only effect in the game that touches
- * vision without putting a unit on the map. A Crystal Ball's targeted circle, a Flare Gun's
- * flare, Dust of Appearance around the hero, a Potion of Omniscience's whole map, and the
+ * Ground an ITEM (or a reveal SPELL) lit up for a player (issue #130) — the only effect in the
+ * game that touches vision without putting a unit on the map. A Crystal Ball's targeted circle,
+ * Far Sight's and Reveal's, a Flare Gun's flare, a Potion of Omniscience's whole map, and the
  * Wand of Shadowsight's eye riding an enemy unit are all one record with different fields.
  *
  * Unlike an AttackReveal, this is the OWNER's sight, so an ally sharing vision gets it too
@@ -3377,8 +3384,9 @@ export interface ItemReveal {
   owner: number;
   team: number;
   timeLeft: number; // Infinity for one that ends some other way (see untilBuffGone)
-  /** …and strips INVISIBILITY inside it, not merely fog: Dust of Appearance and the Crystal
-   *  Ball both buy detection, a Flare Gun does not. See teamDetects. */
+  /** …and strips INVISIBILITY inside it, not merely fog: the Crystal Ball, Far Sight and
+   *  Reveal all buy detection, a Flare Gun does not. (Dust of Appearance is not a reveal at
+   *  all — it marks the bodies it lands on; see the `dusted` buff.) See teamDetects. */
   detect: boolean;
   /** >0: the circle rides this unit rather than sitting at (x, y) — the Wand of Shadowsight. */
   unitId: number;
@@ -3445,6 +3453,12 @@ export interface SimSpellEffect {
   soundFile?: string;
   anim?: EffectAnim;
   attach?: string[];
+  /** Seen by EVERY player whatever their fog — never withheld at the fog door (rts
+   *  drainFxEffects, the wire's per-recipient filter). The marker a reveal plants at the
+   *  centre of the ground it lights (Crystal Ball, Far Sight, Reveal): the side that cast it
+   *  sees it because it is looking there, and the side being looked at sees it because being
+   *  scouted is exactly what it is there to tell them. */
+  global?: boolean;
 }
 
 /** A hidden attacker's position, given away to one team for a moment. */
@@ -4901,6 +4915,72 @@ export class SimWorld {
     // mercenary, so an army of Footmen parked outside the camp must still draw the aggro.
     this.notifyCreepsOfShopUse(shop, this.nearestUnitOf(player, shop), miscGame("UnitSaleAggroRange") as number);
     return "ok";
+  }
+
+  /** The NEUTRAL building's ability a player may press without owning the building, on this
+   *  building — or undefined. One code so far: the Goblin Laboratory's Reveal (`Andt`,
+   *  `[ngad] abilList = Ane2,Andt,Avul`), which anybody with a unit at its door may buy for
+   *  `Ndt1` gold. Read off the unit's own sheet, so a map that grants `Andt` to a building of
+   *  its own gets the same button. */
+  neutralCastAbility(shopId: number, abilityId?: string): { ab: SimAbility; def: AbilityDef } | undefined {
+    const shop = this.units.get(shopId);
+    if (!shop) return undefined;
+    for (const ab of shop.abilities) {
+      if (!SimWorld.NEUTRAL_CAST_CODES.has(ab.code) || (abilityId && ab.id !== abilityId)) continue;
+      const def = this.abilityDefOf(ab);
+      if (def) return { ab, def };
+    }
+    return undefined;
+  }
+  static readonly NEUTRAL_CAST_CODES: ReadonlySet<string> = new Set(["Andt"]);
+
+  /** Why `player` may not press that neutral building's ability right now, as a
+   *  CommandStrings [Errors] key — or null. The building must serve them (an enemy's never
+   *  does), one of their units must stand inside its interact radius — the same `Ane2` reach
+   *  a shop's patron is held to, "A valid patron must be nearby." — and they must be able to
+   *  pay `Ndt1`/`Ndt2` (DataA gold, DataB lumber; AbilityMetaData.slk). */
+  neutralCastRefusal(shopId: number, player: number, abilityId: string): string | null {
+    const shop = this.units.get(shopId);
+    const found = this.neutralCastAbility(shopId, abilityId);
+    // An enemy's building has no patrons of yours (shopPatrons says the same), so a forged
+    // press at one is refused in the same words as an empty doorstep.
+    if (!shop || !found || !this.shopServes(shopId, player)) return "Neednearbypatron";
+    if (!this.neutralPatron(shop, player)) return "Neednearbypatron";
+    if (found.ab.cooldownLeft > 0) return "Cooldown";
+    const lvl = found.def.levelData[0];
+    const stash = this.stashOf(player);
+    if (stash.gold < (lvl?.data[0] || 0)) return "Nogold";
+    if (stash.lumber < (lvl?.data[1] || 0)) return "Nolumber";
+    return null;
+  }
+
+  /** Any living unit of `player` standing at this building's door — a Footman will do: the
+   *  Reveal is delivered to nobody, so it needs no inventory to take delivery (isPatron). */
+  private neutralPatron(shop: SimUnit, player: number): SimUnit | null {
+    for (const u of this.units.values()) {
+      if (u.owner !== player || u.hp <= 0 || u.building || isOffField(u)) continue;
+      if (this.inShopRange(shop, u)) return u;
+    }
+    return null;
+  }
+
+  /** `player` presses a NEUTRAL building's ability aimed at (x, y): the Goblin Laboratory's
+   *  Reveal, bought for 50 gold and seen by the buyer's side (CastContext.onBehalfOf). The
+   *  building is the caster — it is what `Andt` is on — but the reveal is the buyer's, and so
+   *  is the bill. `Rng1` is `-`: the whole map, as Far Sight's 99999 is. */
+  neutralCast(shopId: number, player: number, abilityId: string, x: number, y: number): boolean {
+    if (this.neutralCastRefusal(shopId, player, abilityId) !== null) return false;
+    if (!this.inPlayableArea(x, y)) return false;
+    const shop = this.units.get(shopId)!;
+    const { ab, def } = this.neutralCastAbility(shopId, abilityId)!;
+    const patron = this.neutralPatron(shop, player)!;
+    const lvl = def.levelData[0];
+    const stash = this.stashOf(player);
+    stash.gold -= lvl?.data[0] || 0;
+    stash.lumber -= lvl?.data[1] || 0;
+    ab.cooldownLeft = lvl?.cooldown || 0;
+    this.applySpellEffect(ab.code, 1, shop, { targetId: 0, x, y, onBehalfOf: { owner: player, team: patron.team } }, def);
+    return true;
   }
 
   /** The player's live unit closest to `to`, or null — who the creeps come for. */
@@ -17843,7 +17923,7 @@ export class SimWorld {
       }
     },
     emitEffect: (art, x, y, targetId, life, attach, opts) => {
-      if (art) this.spellEffects.push({ art, x, y, targetId, z: 0, life, ...(attach?.length ? { attach } : {}), ...(opts?.sound ? { sound: true } : {}), ...(opts?.anim ? { anim: opts.anim } : {}) });
+      if (art) this.spellEffects.push({ art, x, y, targetId, z: 0, life, ...(attach?.length ? { attach } : {}), ...(opts?.sound ? { sound: true } : {}), ...(opts?.anim ? { anim: opts.anim } : {}), ...(opts?.global ? { global: true } : {}) });
     },
     emitSplat: (splatId, x, y) => {
       if (splatId) this.spellSplats.push({ splatId, x, y });
@@ -18406,7 +18486,7 @@ export class SimWorld {
    *     on a client nothing did, so a building finishing or a hall becoming a Keep left the
    *     requirement checks stale (buttons grey, and refused by the client's own authority)
    *     until some unrelated record happened to be created;
-   *   · the item reveals — a Crystal Ball, Flare Gun or Dust the client used is predicted onto
+   *   · the item reveals — a Crystal Ball or Flare Gun the client used is predicted onto
    *     its OWN records (RtsController.execute runs a command locally first), and only this
    *     ages it, so the veil stayed lifted for the rest of the match;
    *   · blight — painted off finished buildings, which are exactly the records the payload
@@ -18437,7 +18517,7 @@ export class SimWorld {
     simProfile.begin("sim.world.pre");
     this.tickAttackReveals(dt);
     this.tickDeathReveals(dt); // …and the eyes a body keeps while it falls (issue #126)
-    this.tickItemReveals(dt); // …and the ground a Crystal Ball / flare / Dust is holding open
+    this.tickItemReveals(dt); // …and the ground a Crystal Ball / flare / Far Sight is holding open
     this.tickMoonstone(dt); // …and the eclipse a Moonstone is holding over the map
     this.tickSoulGems(); // …and the hero a Soul Gem is holding off it
     this.tickBuildings(dt);
@@ -19767,15 +19847,20 @@ export class SimWorld {
    *  each caller's range test, so the ray is only cast for a target already worth it. */
   /** Does any living unit on `team` have True Sight covering (x, y)? Detection is shared
    *  across the team, so one Shade or one Sentry Ward uncovers a Wind Walking hero for
-   *  every unit that side owns. */
-  teamDetects(team: number, x: number, y: number): boolean {
+   *  every unit that side owns.
+   *
+   *  `unit` is who is standing at (x, y), when the question is about a body rather than a
+   *  spot: a unit that has been DUSTED by this side (`Bdet`, the `dusted` buff) is detected
+   *  wherever it has walked since, with nothing covering it at all. */
+  teamDetects(team: number, x: number, y: number, unit?: SimUnit): boolean {
+    if (unit?.buffs.some((b) => b.kind === "dusted" && b.value === team)) return true;
     for (const d of this.units.values()) {
       if (d.team !== team || d.hp <= 0 || d.detectRadius <= 0) continue;
       if (Math.hypot(d.x - x, d.y - y) <= d.detectRadius) return true;
     }
-    // …and detection an ITEM bought rather than a unit carries: Dust of Appearance and the
-    // Crystal Ball reveal invisible units inside their circle for as long as it lasts, with
-    // nothing standing there to do the seeing (see ItemReveal.detect).
+    // …and detection a REVEAL carries: the Crystal Ball, Far Sight and the Reveal of an Arcane
+    // Tower or a Goblin Laboratory uncover invisible units inside their circle for as long as
+    // it lasts, with nothing standing there to do the seeing (see ItemReveal.detect).
     for (const r of this.itemReveals) {
       if (!r.detect || r.team !== team) continue;
       if (Math.hypot(r.x - x, r.y - y) <= r.radius) return true;
@@ -19793,7 +19878,7 @@ export class SimWorld {
     // …unless somebody on the watcher's side has TRUE SIGHT over it. Detection is a team
     // property in WC3, not a personal one: the Shade stands at the back and the whole army
     // sees what it uncovers, which is the entire reason the unit exists.
-    if (t.invisible && !this.teamDetects(u.team, t.x, t.y)) return false;
+    if (t.invisible && !this.teamDetects(u.team, t.x, t.y, t)) return false;
     if (Math.hypot(t.x - u.x, t.y - u.y) - t.radius > this.sightOf(u)) return false;
     if (!this.visibleToTeam(u.team, t.x, t.y)) return false;
     return this.lineOfSight(u.x, u.y, t.x, t.y, u.flying || t.flying);
@@ -20651,7 +20736,7 @@ export class SimWorld {
     // Such a missile does not simply vanish mid-air, either: it has lost the UNIT, not the
     // shot, so it carries on to the last place its side saw the target and dissipates there
     // (`lost`, tickLostProjectile) — which is what makes a Wind Walk read as a dodge.
-    if (p.sourceTeam !== undefined && t.team !== p.sourceTeam && t.invisible && !this.teamDetects(p.sourceTeam, t.x, t.y)) return { x: t.x, y: t.y };
+    if (p.sourceTeam !== undefined && t.team !== p.sourceTeam && t.invisible && !this.teamDetects(p.sourceTeam, t.x, t.y, t)) return { x: t.x, y: t.y };
     // INVULNERABLE — a Divine Shield, a potion, the Town Portal ward — and here we part with
     // the letter of the page. Liquipedia files invulnerability one line above the miss list,
     // as "the missile will deal no damage, if the target is invulnerable, when the missile

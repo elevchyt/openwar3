@@ -1,6 +1,6 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
 import { SimWorld, weaponsFromDef, inventoryCapacity, isOffField, CREEP_CAMP_ACQUIRE_RANGE, BUILD_START_HP_FRAC, ANIM_FOR_DURATION, HERO_FADE_TIME, HERO_DISSIPATE_TIME, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText, type FallenHero, type SimSpellEffect, type StoredUnitState } from "../sim/world";
-import { KNOWN_ABILITIES, NO_AOE_CURSOR, TREE_UPGRADE_ABILITY, aoeCursorRadius } from "../data/abilities";
+import { KNOWN_ABILITIES, NO_AOE_CURSOR, REVEAL_CODES, TREE_UPGRADE_ABILITY, aoeCursorRadius } from "../data/abilities";
 import type { Command } from "./commands";
 import { PATHING_CELL, footprintCells, type PathingGrid } from "../sim/pathing";
 import { flyHeight } from "../sim/missile";
@@ -6163,8 +6163,11 @@ export class RtsController {
    *  the SELECTION is the thing being ordered TO and the click names the unit that acts. */
   armedLoad: { hostId: number } | null = null;
   /** The spell armed for targeting when orderMode === "cast". `area` (>0) shows an
-   *  AoE cast circle at the cursor for point-target area spells. */
-  armedCast: { code: string; target: "unit" | "point"; area?: number } | null = null;
+   *  AoE cast circle at the cursor for point-target area spells. `shopId` marks a NEUTRAL
+   *  building's ability pressed by a patron (the Goblin Laboratory's Reveal, armNeutralCast):
+   *  nobody in the selection is casting it, so it leaves as a `neutralcast` rather than
+   *  through castFromSelection. */
+  armedCast: { code: string; target: "unit" | "point"; area?: number; shopId?: number; abilityId?: string } | null = null;
   /** An armed order was dropped by the WORLD rather than by a click or a key (disarmOnCast) —
    *  the host takes the armed cursor down with it. */
   onDisarmed: (() => void) | null = null;
@@ -6461,6 +6464,14 @@ export class RtsController {
       this.armedLoad = null;
       return true;
     }
+    // …and a NEUTRAL building's Reveal is armed over a selection of nothing controllable (the
+    // Goblin Laboratory), so it is the one cast that must not fall through the gate below.
+    const neutral = this.orderMode === "cast" && this.armedCast?.shopId ? this.armedCast : null;
+    if (neutral) {
+      const hit = this.groundHitAt(cssX, cssY);
+      if (!hit) return this.refuseOrder("Canttargetloc");
+      return this.fireNeutralCast(neutral, hit[0], hit[1]);
+    }
     if (!this.orderMode || this.selected.size === 0 || !this.hasControllable()) {
       this.orderMode = null;
       return false;
@@ -6715,7 +6726,9 @@ export class RtsController {
    *
    *  A SPELL (or an item) is never aimed at the minimap — the real game won't let you fire
    *  one blind at a map pixel, and neither do we: the click is swallowed and the spell stays
-   *  armed, waiting for a real target in the world.
+   *  armed, waiting for a real target in the world. The exceptions are the journeys (Town
+   *  Portal, Mass Teleport — minimapTeleport) and the REVEALS (minimapReveal), whose whole
+   *  point is a place the player is not looking at.
    *
    *  "ordered" → the click became a command (the HUD clears its armed highlight and must
    *  NOT pan); "ignored" → consumed, and whatever is armed stays armed (the click does
@@ -6738,6 +6751,10 @@ export class RtsController {
       this.armedUnload = null;
       return "ordered";
     }
+    // A NEUTRAL building's Reveal is armed with the Goblin Laboratory selected — nothing the
+    // player controls — so it is aimed before the gate that would disarm it.
+    const neutral = mode === "cast" && this.armedCast?.shopId ? this.armedCast : null;
+    if (neutral) return this.fireNeutralCast(neutral, wx, wy) ? "ordered" : "ignored";
     if (!this.selected.size || !this.hasControllable()) {
       if (mode) {
         this.orderMode = null;
@@ -6753,6 +6770,10 @@ export class RtsController {
     // both are journeys to wherever the army is NOT, which is what the minimap is for.
     const teleport = this.minimapTeleport(wx, wy, queued);
     if (teleport) return teleport;
+    // …and a REVEAL is the other: it looks at a place, and the places worth looking at are the
+    // ones the player cannot see (REVEAL_CODES).
+    const reveal = this.minimapReveal(wx, wy, queued);
+    if (reveal) return reveal;
     // A spell, an item, a repair, a GATHER or a shop's purchaser pick is aimed at a thing in
     // the WORLD, never at the minimap — swallow the click and leave it armed (right-click,
     // above, is how you back out of one). A tree or a mine on the minimap is a pixel, not a
@@ -6823,6 +6844,44 @@ export class RtsController {
     }
     const item = this.orderMode === "item" ? this.armedItem : null;
     if (item?.mode === "usepoint" && this.abilities.get(item.abilityId ?? "")?.code === "AItp") {
+      const id = this.primary;
+      if (id === null || !this.controls(id)) {
+        this.orderMode = null;
+        this.armedItem = null;
+        return "ordered";
+      }
+      const err = this.sim.itemReadyError(id, item.slot) ?? (this.sim.inPlayableArea(wx, wy) ? null : "Outofbounds");
+      if (err !== null) {
+        this.refuseOrder(err);
+        return "ignored";
+      }
+      this.orderMode = null;
+      this.armedItem = null;
+      this.execute(this.localPlayer, { c: "useitem", unitId: id, slot: item.slot, targetId: 0, x: wx, y: wy });
+      return "ordered";
+    }
+    return null;
+  }
+
+  /** A REVEAL aimed on the minimap (REVEAL_CODES: Far Sight, the Crystal Ball and the Arcane
+   *  Tower's Reveal, the Flare Gun) — or null when what is armed is none of them. The spell is
+   *  a point order already, so the minimap's point is simply its point; a refusal keeps it
+   *  armed and says why, exactly as the same click in the world does. */
+  private minimapReveal(wx: number, wy: number, queued: boolean): "ordered" | "ignored" | null {
+    const cast = this.orderMode === "cast" ? this.armedCast : null;
+    if (cast && !cast.shopId && REVEAL_CODES.has(cast.code)) {
+      const err = this.castRefusal(cast.code, 0, wx, wy) ?? (this.sim.inPlayableArea(wx, wy) ? null : "Outofbounds");
+      if (err !== null) {
+        this.refuseOrder(err);
+        return "ignored";
+      }
+      this.orderMode = null;
+      this.armedCast = null;
+      this.castFromSelection(cast.code, 0, wx, wy, queued);
+      return "ordered";
+    }
+    const item = this.orderMode === "item" ? this.armedItem : null;
+    if (item?.mode === "usepoint" && REVEAL_CODES.has(this.abilities.get(item.abilityId ?? "")?.code ?? "")) {
       const id = this.primary;
       if (id === null || !this.controls(id)) {
         this.orderMode = null;
@@ -6990,6 +7049,32 @@ export class RtsController {
       this.onDisarmed?.();
       return;
     }
+  }
+
+  /** Arm a NEUTRAL building's point ability for the local player — the Goblin Laboratory's
+   *  Reveal. Refused at the press, as a cast with no mana is, when the player has nobody at
+   *  the door or cannot pay (SimWorld.neutralCastRefusal). Aimed with a bare reticle (it is a
+   *  REVEAL, NO_AOE_CURSOR) in the world or on the minimap. */
+  armNeutralCast(shopId: number, abilityId: string): boolean {
+    const found = this.sim.neutralCastAbility(shopId, abilityId);
+    if (!found) return false;
+    const err = this.sim.neutralCastRefusal(shopId, this.localPlayer, abilityId);
+    if (err !== null) return this.refuseOrder(err);
+    this.armedCast = { code: found.ab.code, target: "point", area: 0, shopId, abilityId };
+    this.orderMode = "cast";
+    return true;
+  }
+
+  /** Spend an armed neutral press (armNeutralCast) at a world point. Refusals keep it armed. */
+  private fireNeutralCast(cast: { shopId?: number; abilityId?: string }, x: number, y: number): boolean {
+    const shopId = cast.shopId ?? 0;
+    const abilityId = cast.abilityId ?? "";
+    const err = this.sim.neutralCastRefusal(shopId, this.localPlayer, abilityId) ?? (this.sim.inPlayableArea(x, y) ? null : "Outofbounds");
+    if (err !== null) return this.refuseOrder(err);
+    this.orderMode = null;
+    this.armedCast = null;
+    this.execute(this.localPlayer, { c: "neutralcast", shopId, abilityId, x, y });
+    return true;
   }
 
   armCast(code: string, target: "unit" | "point", area = 0): boolean {
@@ -8509,7 +8594,8 @@ export class RtsController {
   drainFxEffects(): typeof this.fxEffects {
     if (this.fxEffects.length > 400) this.fxEffects.splice(0, this.fxEffects.length - 400);
     if (!this.fxEffects.length) return this.fxEffects;
-    const out = this.fxEffects.filter((e) => this.fxShown(this.fxEffectAt(e)));
+    // A `global` effect (a reveal's marker, SimSpellEffect.global) is everybody's, fog or no fog.
+    const out = this.fxEffects.filter((e) => e.global || this.fxShown(this.fxEffectAt(e)));
     this.fxEffects = [];
     return out;
   }
