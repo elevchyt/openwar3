@@ -72,6 +72,16 @@ const TOP_BAR = "UI\\Glues\\ScoreScreen\\ScoreScreen-TopBar\\ScoreScreen-TopBar.
  *  second; looping it is what keeps it on screen. */
 const LOOP = 2;
 
+/**
+ * How far each row's bar is moved TOWARD the camera, in world units. The models' own z puts the
+ * strips (0.217…) over the race art (0.123), but the viewer does not draw by vertex z: it sorts
+ * INSTANCES by their location's distance to the near plane and draws translucent layers back to
+ * front, and with every instance sitting at z 0 that is a tie — which the art won, painting the
+ * victory picture over the coloured strips while the DOM figures stayed on top. Lifting the bars
+ * breaks the tie in the authored order; under the orthographic camera it moves nothing on screen.
+ */
+const BAR_LIFT = 0.01;
+
 /** One player row's place and colour. */
 export interface ScoreBar {
   /** World y of the bar's BOTTOM edge, in the 0.8 × 0.6 box (y up). */
@@ -145,7 +155,7 @@ export class ScoreScreenScene {
       const want = `teamcolor${String(bar.color).padStart(2, "0")}`;
       const seq = model.sequences.findIndex((s) => s.name.toLowerCase().startsWith(want));
       inst.setSequence(Math.max(0, seq));
-      inst.setLocation([0, bar.y, 0]);
+      inst.setLocation([0, bar.y, BAR_LIFT]);
       this.bars.push(inst);
     }
   }
