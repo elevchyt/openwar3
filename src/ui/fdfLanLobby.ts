@@ -313,14 +313,17 @@ export async function mountLanLobbyScreen(
    */
   const enter = (msg: StartMatch): void => {
     const me = lobby.snapshot.you?.id;
-    // The bench is seated on the link too — a watcher is addressed snapshots like anybody.
-    const link = matchLinkFrom(lobby, isHost(), msg.slots, me, hostPeer() ?? 1, observerSeats(msg));
+    const host = hostPeer() ?? 1;
     alive = false;
     stopCountdown();
     lobby.handOff();
     lobby.onChange = () => {};
     lobby.onStart = () => {};
     lobby.onPeerData = () => {};
+    // The bench is seated on the link too — a watcher is addressed snapshots like anybody.
+    // Assembled AFTER the screen lets go of the lobby's hooks: the direct links install their
+    // own on it (src/net/directLink.ts), and the line above would unhook them.
+    const link = matchLinkFrom(lobby, isHost(), msg.slots, me, host, observerSeats(msg));
     h.onStart(msg.mapPath, map.info, toConfig(msg, me, startsExplored(map.info.classification.flags)), link);
   };
 

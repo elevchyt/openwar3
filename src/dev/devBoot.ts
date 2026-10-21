@@ -19,6 +19,7 @@ import { matchLinkFrom, type MatchLinkSetup } from "../game/matchLink";
 import { MELEE_INSANE, MELEE_NEWBIE, MELEE_NORMAL } from "../ai/ids";
 import { edition, setEdition, type Edition } from "../data/edition";
 import { patchLevel, setPatchLevel } from "../patches";
+import { DirectLinks } from "../net/directLink";
 
 /**
  * Scripted boot for automated testing — the load gate without the human
@@ -49,6 +50,10 @@ import { patchLevel, setPatchLevel } from "../patches";
  *   ?dev&edition=roc                        boot the Reign of Chaos client (`tft` for the expansion)
  *   ?dev&patch=1.32.10                      play on an EARLIER balance patch (`1.30.4` = the install
  *                                            untouched) — the developer's rollback, docs/patches.md
+ *   ?dev&map=EchoIsles&lan=host&direct=0    a two-client LAN match kept on the RELAY alone, with no
+ *                                            direct WebRTC link — src/net/directLink.ts
+ *   ?dev&map=EchoIsles&lan=host&relay=ws://localhost:8799   …through a relay somewhere else (a
+ *                                            stand-in for a distant one), not the dev server's own
  *
  * `player` and `seed` are what make two-client testing possible: point two browser contexts at
  * the same map and seed with different slots and they are in the same world looking at it from
@@ -319,6 +324,7 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   // lobby — which is exactly why it builds no link — so this is a separate branch.
   const lan = params.get("lan"); // "host" | "join"
   if (lan === "host" || lan === "join") {
+    if (params.get("direct") === "0") DirectLinks.enabled = false;
     await devLanBoot(hooks, lan, mapPath, info, file, seed, fog);
     return;
   }
@@ -362,8 +368,9 @@ async function devLanBoot(
   fog: FogMode,
 ): Promise<void> {
   const lobby = new LanLobby(() => new WebSocketTransport());
+  const relay = new URLSearchParams(location.search).get("relay") ?? undefined;
   log(`LAN ${side}: connecting to the relay…`);
-  await lobby.connect(); // ws://<page origin>/relay — served by the dev server itself
+  await lobby.connect(relay); // by default ws://<page origin>/relay — served by the dev server itself
 
   let start: StartMatchMsg;
   if (side === "host") {
