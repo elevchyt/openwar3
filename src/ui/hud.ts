@@ -1921,12 +1921,15 @@ export class GameHud {
       if (e.key === "Tab") e.preventDefault();
       return;
     }
-    // Enter opens the chat entry line to everyone, Ctrl+Enter to your allies — the game's
-    // own two send keys. Ctrl is read here rather than left to a modal picker because that
-    // is the binding: there is no "switch target" step in the middle.
+    // Enter opens the chat entry line to the default audience, Shift+Enter to everyone and
+    // Ctrl+Enter to your allies — the game's own three send keys (UI\HelpStrings.txt:
+    // 'Activate message prompt to "All" players', and GlobalStrings.fdf UPPER_BUTTON_CHAT_UBER,
+    // "SHIFT-ENTER: Send message to Everyone"). The modifiers OVERRIDE the default, which in a
+    // team game is the allies. They are read here rather than left to a modal picker because
+    // that is the binding: there is no "switch target" step in the middle.
     if (e.key === "Enter") {
       e.preventDefault();
-      this.openChat(e.ctrlKey ? { scope: "allies" } : this.defaultChatTarget());
+      this.openChat(e.ctrlKey ? { scope: "allies" } : e.shiftKey ? { scope: "all" } : this.defaultChatTarget());
       return;
     }
     if (e.key === "Tab") {
@@ -2343,7 +2346,7 @@ export class GameHud {
     return target.scope === "allies" && !this.driver.chatHasAllies() ? { scope: "all" } : target;
   }
 
-  /** Open the chat entry line addressed at `target` (Enter → the default, Ctrl+Enter → allies). */
+  /** Open the chat entry line addressed at `target` (Enter → the default, Shift+Enter → all, Ctrl+Enter → allies). */
   openChat(target: ChatTarget): void {
     this.chatTarget = this.clampChatTarget(target);
     this.chatPromptEl.textContent = this.driver.chatPrompt(this.chatTarget);
