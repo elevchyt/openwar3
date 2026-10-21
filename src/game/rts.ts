@@ -621,6 +621,11 @@ const ITEM_RING_RADIUS = 40; // yellow selection/hover ring radius under a groun
 // bunching up (a body-and-a-half wider than the tight gold-mine approach).
 const SPEED_BUILD_SPREAD = 48;
 const MINE_APPROACH_SPREAD = 16; // gentle widening of the gold-mine approach ring
+// How long a LAN client holds its own prediction on the HUD waiting for the host to report
+// it heard the command (WorldSnapshot.ack). Ours, not the game's: several round trips at any
+// ping a match is playable on, and short enough that a command lost on the wire costs one
+// stale card for a second rather than a frozen one.
+const ACK_PATIENCE_MS = 1000;
 // Order-confirmation arrow tints (Confirmation.mdx): green = move, red = a-move.
 const MOVE_ARROW: [number, number, number] = [0.1, 1, 0.1];
 const ATTACK_ARROW: [number, number, number] = [1, 0.15, 0.1];
@@ -8664,6 +8669,8 @@ export class RtsController {
     // A watcher's lane (issue #168): kept as sent, read by `observerView` — it describes other
     // players' ledgers, which this client's own ledgers are not the place for.
     if (snap.watched) this.watchedLane = new Map(snap.watched.map((w) => [w.player, w]));
+    // An older host stamps no count: treat everything sent as heard, so nothing is ever held.
+    this.commandsAcked = snap.ack ?? this.commandsSent;
     const res = applyWorldSnapshot(this.sim, snap, (s) => {
       const def = this.registry.get(s.typeId);
       if (!def) return null;
@@ -9301,9 +9308,52 @@ export class RtsController {
     // `execute` above already reached the real sim. Gated on the local player because triggers
     // and the renderer emit commands too, and only a human's own input crosses the wire.
     if (applied && this.matchLink && !this.matchLinkIsHost && player === this.localPlayer) {
+      if (!this.awaitingAck) this.ackWaitSince = performance.now();
+      this.commandsSent++;
+      this.sentTotal++;
+      // The bank as WE now believe it, held on the readout until the host has heard us.
+      const stash = this.stashFor(player);
+      this.sentStash = { gold: stash.gold, lumber: stash.lumber };
       this.matchLink.sendCommand(cmd);
     }
     return applied;
+  }
+
+  /** Client side: our commands sent to the host, and the host's count of them off the newest
+   *  APPLIED payload (WorldSnapshot.ack). */
+  private commandsSent = 0;
+  private commandsAcked = 0;
+  private ackWaitSince = 0;
+  private sentStash: { gold: number; lumber: number } | null = null;
+  private sentTotal = 0;
+
+  /** Bumped by every command sent to the host and never rebased — so a caller can tell
+   *  whether something it just did went down the wire. */
+  get sendSeq(): number {
+    return this.sentTotal;
+  }
+
+  /**
+   * Does the world we last applied predate one of our own commands? While it does, the HUD
+   * holds what the command predicted (the card, the gold) rather than let a payload that
+   * crossed the click on the wire undo it for a round trip — see WorldSnapshot.ack.
+   *
+   * A command lost on the wire (a dropped link, then a rejoin) is never heard, so the wait
+   * gives up after `ACK_PATIENCE_MS` and REBASES on the host's count: from then on the next
+   * command is measured from what the host actually has, instead of every later click holding
+   * the card for the full patience.
+   */
+  get awaitingAck(): boolean {
+    if (this.commandsSent <= this.commandsAcked) return false;
+    if (performance.now() - this.ackWaitSince <= ACK_PATIENCE_MS) return true;
+    this.commandsSent = this.commandsAcked;
+    return false;
+  }
+
+  /** The gold and lumber to SHOW: our prediction while a command is unanswered, else the bank. */
+  shownStash(player: number): { gold: number; lumber: number } {
+    if (player === this.localPlayer && this.sentStash && this.awaitingAck) return this.sentStash;
+    return this.stashFor(player);
   }
 
   /**

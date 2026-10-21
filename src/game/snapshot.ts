@@ -617,6 +617,20 @@ export interface WorldSnapshot {
    *  somebody who is not in the match. Food is absent on purpose: it is DERIVED from the units
    *  (`Authority.foodFor`), and an observer's payload already carries every unit live. */
   watched?: WatchedPlayer[];
+  /**
+   * How many commands the host had RECEIVED from this recipient when it built the payload —
+   * refused ones included, since a refusal is an answer too (`MatchLink.heard`).
+   *
+   * The client applies its own commands the instant they are issued and the host a round trip
+   * later, so every payload already in flight at the click describes the world WITHOUT it and
+   * writes the client's prediction back out: a learned skill unlearns, a queued research
+   * un-queues, the gold comes back — and a payload later all of it happens again. That was the
+   * command card flashing on every learn/research click at 130 ms ping. Compared against
+   * `RtsController.commandsSent`, this says which payloads predate our latest command, so the
+   * card and the gold readout can hold the prediction until one that does not arrives. Absent
+   * from an older host, which reads as "nothing outstanding".
+   */
+  ack?: number;
   /** Creep-camp difficulty markers, as THIS recipient's minimap should paint them — computed
    *  on the authority with the same `CreepCamps.markers(viewpoint)` rule the host's own map
    *  uses (map-public at match start, yields to a visible member, gone once cleared). Carried

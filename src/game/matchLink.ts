@@ -537,6 +537,10 @@ export class MatchLink {
   /** Client side: the host's table, answering our `scorereq`. */
   onScores: (scores: ScoreTable) => void = () => {};
 
+  /** Host side: commands received per peer, stamped into that peer's payloads as
+   *  `WorldSnapshot.ack`. Per PEER, not per player — it counts what came down that wire. */
+  private readonly heard = new Map<number, number>();
+
   /** The last measured round trip to each peer, in ms — see PingMessage. */
   private readonly rtts = new Map<number, number>();
   private pingAccum = PING_EVERY; // the first probe goes out on the first tick
@@ -594,7 +598,12 @@ export class MatchLink {
     channel.onPeerData = (from, data) => {
       if (isWireSnapshotMessage(data)) this.receive(decodeSnapshot(data.snap));
       else if (isSnapshotMessage(data)) this.receive(data.snap);
-      else if (isCommandMessage(data)) this.onCommand(from, data);
+      else if (isCommandMessage(data)) {
+        // Counted BEFORE it is judged: a dropped or refused command is still one the client
+        // is no longer waiting on (WorldSnapshot.ack).
+        this.heard.set(from, (this.heard.get(from) ?? 0) + 1);
+        this.onCommand(from, data);
+      }
       else if (isDialogMessage(data)) this.onDialog(data);
       else if (isRefusalMessage(data)) this.onRefusal(data);
       // Host side: a client asking to say something. The sender is the RELAY's stamp, never
@@ -817,6 +826,7 @@ export class MatchLink {
       const snap = snapshotFor(world, viewer, player, time, sources.ghostsFor(player), sources.commandsApplied(), sources.creepCampsFor?.(player) ?? []);
       const watched = sources.watchedFor?.(player);
       if (watched) snap.watched = watched;
+      snap.ack = this.heard.get(peer) ?? 0;
       // Fx ride DUE broadcasts only: an expedited or rejoin catch-up send would otherwise
       // replay the same burst again at the next cadence. Filtered per recipient by
       // eyes-on-the-spot — the same "in your eyes or absent" rule items and missiles use.

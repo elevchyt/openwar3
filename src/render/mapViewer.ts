@@ -9575,7 +9575,9 @@ export class MapViewerScene {
     const driver: HudDriver = {
       resources: () => {
         const food = this.rts?.foodFor(this.localPlayer) ?? { used: 0, made: 0 };
-        const stash = this.rts?.stashFor(this.localPlayer) ?? { gold: 0, lumber: 0 };
+        // `shownStash`, not the bank: on a LAN client a payload that crossed our purchase on the
+        // wire would otherwise refund it for a round trip and charge it again (WorldSnapshot.ack).
+        const stash = this.rts?.shownStash(this.localPlayer) ?? { gold: 0, lumber: 0 };
         this.noteUpkeep(food.used); // the one place the local player's food is already read
         return {
           gold: stash.gold,
@@ -11897,9 +11899,32 @@ export class MapViewerScene {
     return !(mode === "item" && this.rts?.armedItem?.mode === "move");
   }
 
+  /**
+   * The card a LAN client drew from its own prediction the moment a press went to the host, and
+   * what it was drawn FOR. Payloads already on the wire at the click were built without it, and
+   * each one writes the prediction back out — a learned skill unlearns, a research un-queues —
+   * until the host's answer lands a round trip later: the button blinked off, on and off again
+   * (WorldSnapshot.ack). So the card is HELD, but only while the selection, the page and the
+   * aiming are the ones it was drawn for; anything the player does to the card itself shows.
+   */
+  private heldCard: { key: string; card: CommandButton[] } | null = null;
+
+  /** What a held card must still match to be shown. */
+  private cardHoldKey(): string {
+    return `${this.rts?.selectedId ?? -1}|${this.cardPage}|${this.isTargeting()}`;
+  }
+
+  /** The command card to SHOW: the held one while the host has yet to hear our press. */
+  private commandCard(): CommandButton[] {
+    const held = this.heldCard;
+    if (held && this.rts?.awaitingAck && held.key === this.cardHoldKey()) return held.card;
+    this.heldCard = null;
+    return this.liveCommandCard();
+  }
+
   /** The command card for the current selection, with every button's grid slot resolved
    *  (see `layoutCard` — two buttons may WANT the same cell). */
-  private commandCard(): CommandButton[] {
+  private liveCommandCard(): CommandButton[] {
     const card = this.layoutCard(this.buildCommandCard());
     // A unit channelling a Town Portal / Mass Teleport can press NOTHING: "the Hero cannot do
     // any action (such as move, attack, use any other item nor his spell)", and "under no
@@ -12726,6 +12751,17 @@ export class MapViewerScene {
   }
 
   private runCommand(id: string): void {
+    const rts = this.rts;
+    if (!rts) return;
+    const sent = rts.sendSeq;
+    this.pressCommand(id);
+    // A press that went to the host: draw the card NOW, off the prediction the command just
+    // made, and hold it until the host has heard us (see heldCard). Drawn here rather than next
+    // frame because next frame applies the payload that undoes it first.
+    if (rts.sendSeq !== sent) this.heldCard = { key: this.cardHoldKey(), card: this.liveCommandCard() };
+  }
+
+  private pressCommand(id: string): void {
     if (!this.rts) return;
     if (id === "noop") return;
     this.sounds?.playUi("InterfaceClick"); // WC3 command-card button click

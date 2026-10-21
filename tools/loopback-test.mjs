@@ -756,6 +756,20 @@ console.log("\na client's command crosses the wire to the host, and the host lea
   // (item 9) — so the host bills the order to player 1 and to unit 77.
   check("the host applied it for the real sender", applied, [[1, 77]]);
 
+  // …and every payload it builds from then on says so (WorldSnapshot.ack): the count of what
+  // came down THIS client's wire, which is how the client tells a payload that crossed its
+  // click on the way from one that answers it, and holds its own prediction on the HUD till then.
+  hostLink.tickHost(1, worldAt(420), sources, 5);
+  await tick();
+  check("the payload acks the one command heard", clientLink.latest()?.ack, 1);
+  // A command the router throws out (no such seat for a forged unit is fine — it is the wire
+  // count, refused or not) is still one the client stops waiting on.
+  clientLink.sendCommand({ c: "order", unitId: 78, order: { kind: "stop" }, queued: false });
+  await tick();
+  hostLink.tickHost(1, worldAt(420), sources, 6);
+  await tick();
+  check("a second command moves the ack on", clientLink.latest()?.ack, 2);
+
   // And a SECOND client must not receive it. A command is aimed at the host, not broadcast,
   // because the model is authoritative-host: only the host applies it, and other clients see
   // the effect through their snapshot. Broadcasting would make every client's onCommand fire
