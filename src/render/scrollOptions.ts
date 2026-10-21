@@ -42,10 +42,5 @@ export function keyScrollScale(): number {
  *  Scroll" is ticked. One number rather than a scale plus a flag, because the caller's
  *  question is the same either way: how far does the edge move the camera this frame. */
 export function edgeScrollScale(): number {
-  return mouseOn ? mouseScale * EDGE_PAN_BASE : 0;
+  return mouseOn ? mouseScale : 0;
 }
-
-/** The edge pan's own baseline under the slider: a touch slower than the arrow keys at the same
- *  notch. OURS, like the curve above — the developer asked for the default edge scroll "a tiny
- *  bit slower" than the speed the middle notch used to give. */
-const EDGE_PAN_BASE = 0.85;

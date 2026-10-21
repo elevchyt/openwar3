@@ -16117,7 +16117,12 @@ export class MapViewerScene {
     // the arrow keys. Under EnableUserControl(false) — cinematic mode — the player has no
     // camera at all: the script owns it, and an arrow key must not fight the shot.
     const letters = !this.hud;
-    const speed = this.distance * 0.9 * (1 / 60);
+    // The pan RATE is 0.9 × the camera distance per SECOND, and a frame moves it by that much
+    // of its own duration. It used to be `× 1/60` — a fixed step per FRAME — so the camera
+    // crossed the map 2.4× as fast on a 144 Hz screen as on a 60 Hz one and stalled when the
+    // frame rate dropped in a fight. The same 100 ms clamp as the camera's other clocks, so a
+    // hitch (a tab switch, a GC pause) is not a jump across the map.
+    const speed = this.distance * 0.9 * (Math.min(dtMs, 100) / 1000);
     const fwd: [number, number] = [Math.cos(this.yaw), Math.sin(this.yaw)];
     const right: [number, number] = [fwd[1], -fwd[0]];
     // …and a STOPPED match has no camera either: the arrow keys and the screen edges are the
