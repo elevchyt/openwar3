@@ -203,6 +203,9 @@ export interface SelectionInfo {
   trainProgress: number; // 0..1 of the unit currently training (queue[0])
   secondsLeft: number; // seconds remaining on the active construction/training job
   queueLength: number;
+  /** The local player OWNS it, so its production queue is theirs to cancel. A team-mate's
+   *  building shows its queue (readsSideOf) but every slot in it is somebody else's. */
+  queueOwned: boolean;
   queue: Array<{ icon: string; name: string; kind: string; desc: string }>; // the queue, head first (HudSelection.queue)
   icon: string; // the selected thing's own command-card icon (BLP path)
   /** The worker HIDDEN inside this structure while it goes up — an Orc peon, and only an Orc
@@ -7637,7 +7640,7 @@ export class RtsController {
       attackType: AttackType.None, armorType: ArmorType.Unknown, attackUpgrade: -1, armorUpgrade: -1, attackUpgradeName: "", armorUpgradeName: "", armorTotal: 0, attackRange: 0, attackCooldown: 0, moveSpeed: 0, isHero: false, isIllusion: false, altModel: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
       agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: PrimaryAttribute.None,
       model: def?.model ?? "", isWorker: false, isBuilding: false,
-      underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
+      underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0, queueOwned: false,
       queue: [], icon: def?.icon ?? "", builderId: 0, builderIcon: "", carryGold: 0, carryLumber: 0,
       isMine: false, goldRemaining: 0,
       // The info panel prints the item's short `Description`, not the Ubertip a shop button raises.
@@ -7665,7 +7668,7 @@ export class RtsController {
       attackType: AttackType.None, armorType: ArmorType.Unknown, attackUpgrade: -1, armorUpgrade: -1, attackUpgradeName: "", armorUpgradeName: "", armorTotal: 0, attackRange: 0, attackCooldown: 0, moveSpeed: 0, isHero: false, isIllusion: false, altModel: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
       agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: PrimaryAttribute.None,
       model: def?.model ?? "", isWorker: false, isBuilding: false,
-      underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
+      underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0, queueOwned: false,
       queue: [], icon: def?.icon ?? "", builderId: 0, builderIcon: "", carryGold: 0, carryLumber: 0,
       isMine: true, goldRemaining: m.gold,
       isItem: false, description: "",
@@ -7905,6 +7908,7 @@ export class RtsController {
       trainProgress: status && q.length && q[0].buildTime > 0 ? 1 - q[0].timeLeft / q[0].buildTime : 0,
       secondsLeft: !status ? 0 : b && b.constructionLeft > 0 ? b.constructionLeft : q.length ? q[0].timeLeft : 0,
       queueLength: status ? q.length : 0,
+      queueOwned: u.owner === this.localPlayer,
       // A queue slot may hold a unit, a research or a structure upgrade — pull each one's icon
       // from the registry that owns it. Research uses the icon of the LEVEL being researched
       // (Steel Forged Swords has its own art), which is why the level rides on the job.

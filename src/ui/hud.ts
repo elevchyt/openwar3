@@ -199,6 +199,7 @@ export interface HudSelection {
   trainProgress: number; // 0..1 (unit currently training)
   secondsLeft: number; // seconds left on the active job (for the progress label)
   queueLength: number;
+  queueOwned: boolean; // the local player's own queue (an ally's is shown, not cancellable)
   /** The queue, head first: each job's icon, name and `BuildJob` kind (unit / research /
    *  upgrade / revive — which verb the observer's readout words it with). */
   queue: Array<{ icon: string; name: string; kind: string; desc: string }>;
@@ -1413,7 +1414,8 @@ export class GameHud {
   private progressFill!: HTMLDivElement;
   private queueRow!: HTMLDivElement;
   private queueSlots: HTMLDivElement[] = [];
-  private queueTrainable = false; // status icon shows a cancellable training job (not construction)
+  private queueTrainable = false; // status icon shows a training job (not construction)
+  private queueCancellable = false; // …and the queue is the local player's own, so a click cancels it
   // The cargo panel: one pocket per seat of the selected hold, rebuilt when the seat count
   // changes and refreshed in place every frame (docs/transports.md).
   private cargoGrid!: HTMLDivElement;
@@ -3222,7 +3224,7 @@ export class GameHud {
     // slot 0) — only when it's a training job, never a building under construction. The
     // "Cancel" hint at the cursor is set with the job (updateTexts), for the same reason.
     this.statusIcon.onclick = () => {
-      if (this.queueTrainable) this.driver.runCommand("cancelqueue:0");
+      if (this.queueCancellable) this.driver.runCommand("cancelqueue:0");
     };
     this.bindQueueTooltip(this.statusIcon, 0);
     // The builder's button, under the building's own icon. An Orc peon builds from INSIDE the
@@ -3261,7 +3263,7 @@ export class GameHud {
       // Queue slots hold positions 2..7 → queue indices 1..6. Clicking a filled
       // slot cancels that unit and refunds it.
       slot.onclick = () => {
-        if (slot.classList.contains("filled")) this.driver.runCommand(`cancelqueue:${i + 1}`);
+        if (this.queueCancellable && slot.classList.contains("filled")) this.driver.runCommand(`cancelqueue:${i + 1}`);
       };
       this.bindQueueTooltip(slot, i + 1);
       this.queueSlots.push(slot);
@@ -3970,7 +3972,11 @@ export class GameHud {
       this.xpBar.hidden = true; // only the hero-stats branch below re-shows it
       const constructing = sel.underConstruction;
       const training = sel.isBuilding && !constructing && sel.queueLength > 0;
+      // A team-mate's building shows its queue too, but no slot in it is ours to cancel: no
+      // click, no hand cursor and no "Cancel" at the pointer — only the job's own name slab.
+      const cancellable = training && sel.queueOwned;
       this.queueTrainable = training; // reset every frame so a stale flag can't fire a cancel
+      this.queueCancellable = cancellable;
       if (sel.isItem) {
         // Ground item: show its name (set above) + description instead of any stats.
         this.progressWrap.hidden = true;
@@ -4018,15 +4024,16 @@ export class GameHud {
         this.progressFill.style.width = `${frac * 100}%`;
         // Status icon: the building (constructing) or the unit being trained.
         // Only a training job's icon is click-to-cancel (construction has its own
-        // Cancel button) — queueTrainable (set above) gates the click handler.
+        // Cancel button), and only on the local player's own building — queueCancellable (set
+        // above) gates the click handler.
         const iconPath = constructing ? sel.icon : sel.queue[0]?.icon ?? sel.icon;
         const url = iconPath ? this.driver.blpUrl(iconPath) : null;
         this.statusIcon.style.backgroundImage = url ? `url(${url})` : "";
         this.statusIcon.style.visibility = url ? "visible" : "hidden";
-        this.statusIcon.classList.toggle("clickable", training);
-        if (this.queueTipped !== training) {
-          this.queueTipped = training;
-          setGameTip(this.statusIcon, training ? "Cancel" : null);
+        this.statusIcon.classList.toggle("clickable", cancellable);
+        if (this.queueTipped !== cancellable) {
+          this.queueTipped = cancellable;
+          setGameTip(this.statusIcon, cancellable ? "Cancel" : null);
         }
         // The peon walled into the site (Orc only — nothing else builds from inside), as a
         // button that selects it. Its art is the icon's own, frame included, so there is no
@@ -4042,8 +4049,12 @@ export class GameHud {
             const q = rest[i];
             const qUrl = q?.icon ? this.driver.blpUrl(q.icon) : null;
             // A filled slot is a cancel button exactly as the status icon is, and says so at
-            // the cursor; an empty one is a number and says nothing.
-            if (!!qUrl !== slot.classList.contains("filled")) setGameTip(slot, qUrl ? "Cancel" : null);
+            // the cursor; an empty one is a number and says nothing, and so does an ally's.
+            const tip = !!qUrl && cancellable;
+            if (tip !== slot.classList.contains("clickable")) {
+              slot.classList.toggle("clickable", tip);
+              setGameTip(slot, tip ? "Cancel" : null);
+            }
             if (qUrl) {
               slot.style.backgroundImage = `url(${qUrl})`;
               slot.textContent = "";
