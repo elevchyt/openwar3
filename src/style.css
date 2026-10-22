@@ -3393,6 +3393,24 @@ body.in-game #ui {
   }
 }
 
+/* Options -> Video -> "4:3 Menus": the same box on ANY window, so a wide screen gets black bars
+   at the sides — how 1.30.4 draws its menus there (ui/widescreen.ts `setFixedMenuAspect`, which
+   also hands the box's aspect to the corrections that would otherwise widen the chrome). Its own
+   pair of lengths, because out of a match on a wide window --stage-w is the 16:9 one. */
+body.menus-4x3:not(.in-game) {
+  background: #000;
+}
+
+body.menus-4x3:not(.in-game) #ui,
+body.menus-4x3:not(.in-game) #menubg {
+  inset: auto;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(100vw, calc(100vh * 4 / 3));
+  height: min(100vh, calc(100vw * 3 / 4));
+}
+
 /* Same for the in-game FDF screens (multiboard, leaderboard, dialogs): they anchor frames
    to the corners of the GAME's frame, as the real game does — not to the browser window's.
    They fit themselves to whatever box this lands them in (mountFdfScreen measures its own

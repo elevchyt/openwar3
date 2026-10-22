@@ -219,6 +219,12 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   // browser tab, whose vsync is the browser's.
   // ON by default: tear-free is what a new player should meet, and vsync off is an opt-in.
   { key: "vsync", frame: "VsyncCheckBox", kind: "bool", panel: "video", def: true },
+  // "4:3 Menus" — the glue screens in a 4:3 box with black bars at the sides, the way 1.30.4
+  // draws them on a wide screen. Ours (no 1.30.4 row does this), on a frame of ours sharing the
+  // Vertical Sync row. OFF by default, so nobody's menus change shape under them; live through
+  // `applyVideoOptions` → `setFixedMenuAspect` (ui/widescreen.ts), which re-lays the screen the
+  // player is looking at, so ticking it previews itself like Gamma does.
+  { key: "menus43", frame: "Menus43CheckBox", kind: "bool", panel: "video", def: false },
 
   // --- Sound (all live-applied through applyAudioOptions) ---
   { key: "soundEnabled", frame: "SoundCheckBox", kind: "bool", panel: "sound", def: true },

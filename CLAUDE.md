@@ -158,6 +158,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   `settings.json` owns it and OK offers to RELAUNCH the game to apply it (nothing in Electron
   changes it on a running window); with it off the page caps itself
   at 300 fps (`src/render/frameCap.ts`), and in a browser tab the box is greyed.
+  **4:3 MENUS** (ours, off by default, sharing the Vertical Sync row) boxes the GLUE screens to
+  4:3 on black, which is what 1.30.4 itself does on a wide screen (checked under Wine at
+  1920×1080); the match is untouched. `windowAspect()` reads the box, so every `widescreen()`
+  correction drops to its 4:3 value by itself.
   **LOW PERFORMANCE MODE** (issue #161, the row under Resolution, also `?lowperf`) is ONE SWITCH
   over the rows below it — `LOW_PERF_FORCED` — and is FORCED AT APPLY TIME, never written to the
   store, which is the whole of why unticking it gives the player their seven values back.

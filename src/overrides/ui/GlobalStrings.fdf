@@ -85,6 +85,13 @@ StringList {
     // answer is a tick, not a value, so it takes no colon.
     LOW_PERFORMANCE_MODE        "Low Performance Mode",
 
+    // ...and the row beside "Vertical Sync": the menus drawn in a 4:3 box with black bars at the
+    // sides, as 1.30.4 itself draws them on a wide screen (docs/video-options.md). The game's
+    // table has COLON_FIXED_ASPECT_RATIO ("Fixed Aspect Ratio:") for a row its own FDF commented
+    // out in 1.29, but nothing says what that row would have fixed, and this one fixes only the
+    // menus -- so the string is ours, punctuated like the panel's other checkbox rows.
+    MENUS_4_3                   "4:3 Menus",
+
     // LAN → Create Game, the row under the map list: which relay the game is announced on
     // (src/overrides/ui/LocalMultiplayerCreate.fdf). The game broadcast its LAN games and never
     // had to ask; the nearest thing in its table is Battle.net's COLON_SELECTED_REALM

@@ -1,5 +1,6 @@
 import type { Options } from "../data/options";
 import { stageAspect } from "../ui/stage";
+import { setFixedMenuAspect } from "../ui/widescreen";
 
 // The Video panel, wired to the engine (issue #81 follow-up).
 //
@@ -322,6 +323,10 @@ export function applyVideoOptions(options: Options): void {
   b.sharedPoses = current.lowPerf;
   b.poseBucket = POSE_BUCKET_MS;
   applyGamma(current.gamma);
+  // "4:3 Menus" is a layout switch rather than a renderer one, but it is a Video row and so it
+  // arrives here, live, with the rest (ui/widescreen.ts). Not part of Low Performance Mode: the
+  // shape of the menus is the player's, like the resolution.
+  setFixedMenuAspect(options.menus43 === true);
 }
 
 // ---------------------------------------------------------------------------

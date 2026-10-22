@@ -467,6 +467,46 @@ the bottom). To measure it, use Electron's `cursor-changed` in a **frameless** w
 test window on this desktop hides ~25 px of the page that `innerHeight` still counts, and every
 edge reading comes out wrong by exactly that.
 
+## 4:3 Menus
+
+**What the real client does.** Checked against 1.30.4 itself (run under Wine, launched at
+1920×1080 with `reswidth`/`resheight` set in `HKCU\Software\Blizzard Entertainment\Warcraft
+III\Video`): the main menu and the Single Player Profiles screen fill the **middle 1440×1080**
+and the rest is black. The glue is never widened — it is drawn in the 4:3 box its FDFs and chrome
+models are authored for. OpenWar3 spreads the menus to the window's edges by default instead,
+and `src/ui/widescreen.ts` takes up the extra width (issue #151). This row is the way back to the
+original. It is **off by default**, so nobody's menus change shape under them.
+
+A second detail from the real client: the same registry key carries `fixedaspect` (0), and the
+shipped `OptionsMenu.fdf` has a `FixedAspectRatioCheckBox` row commented out ("Disabled for 1.29,
+needs some work") with the string `COLON_FIXED_ASPECT_RATIO`. Nothing says what that row would
+have fixed, and this one fixes only the menus, so the string here is ours (`MENUS_4_3`, "4:3
+Menus").
+
+**Only the menus.** The match keeps the stage's own aspect (`src/ui/stage.ts`), which is what
+1.30.4 does with a match too. Both halves of the switch stand down while `body.in-game` is set:
+
+- **The box** is CSS: `body.menus-4x3:not(.in-game)` puts `#ui` and `#menubg` in the largest 4:3
+  box the window holds, on black. This is the rule a window narrower than 4:3 already got. It
+  needs its own pair of lengths, because out of a match on a wide window `--stage-w` is the 16:9
+  one.
+- **The aspect** is `windowAspect()`, which reads the box's aspect while the switch is on.
+  `widescreen()` asks it, so the chrome stretch, the button widths and the map-info nudges come
+  out at their 4:3 value (none) without anything else knowing the row exists.
+
+**Live.** `applyVideoOptions` calls `setFixedMenuAspect`. That toggles the class and fires a
+`resize`, because the FDF screens re-fit on `resize` and a class change does not fire one. So
+ticking the box re-lays the Options screen the player is looking at, the way Gamma previews
+itself. The F10 panel has no such row: nothing in a match is a menu.
+
+**Where it sits.** The panel has no height left, so the row SHARES the Vertical Sync row and
+stands in the pulldown column. Its box is anchored off `OcclusionBackdrop` (0.012 in, the
+pulldowns' own text inset, and 0.00975 up, measured in the running screen). It is not anchored
+off the Vertical Sync box, because the gap between the two columns is a label's text width.
+
+Not boxed: the loading screen and the score screen, which share the loading layer outside `#ui`
+(docs/loading-screens.md). Neither was checked against the real client.
+
 ## Verifying a change
 
 `tools/sim-options-test.cjs` (run by `pnpm sim:test`) pins the applier: every rung's number,

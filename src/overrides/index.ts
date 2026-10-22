@@ -156,6 +156,9 @@ export const OPTIONS_MENU_OVERRIDE: FdfOverride = {
     { frame: "LowPerfLabel", into: "VideoPanel" },
     { frame: "VsyncCheckBox", into: "VideoPanel" },
     { frame: "VsyncLabel", into: "VideoPanel" },
+    // …and "4:3 Menus" on the Vertical Sync row, in the pulldown column.
+    { frame: "Menus43CheckBox", into: "VideoPanel" },
+    { frame: "Menus43Label", into: "VideoPanel" },
   ],
 };
 

@@ -216,6 +216,30 @@ Frame "TEXT" "VsyncLabel" INHERITS "StandardInfoTextTemplate" {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Video panel: "4:3 Menus", the glue screens boxed to 4:3 with black bars at the sides — which
+// is how 1.30.4 itself draws its menus on a wide screen (checked against the real client at
+// 1920x1080: the main menu fills the middle 1440x1080 and nothing else). Out of the box OpenWar3
+// spreads them to the window's edges instead (src/ui/widescreen.ts); this row is the way back to
+// the original. It touches the MENUS only — a match keeps the stage's own aspect (src/ui/stage.ts).
+//
+// The panel has no height left to give a row (the "Low Performance Mode" note above), so this
+// one SHARES the "Vertical Sync" row, standing in the PULLDOWN column where that row leaves
+// nothing: its box's left edge is the pulldowns' text column (`OptionsPopupMenuTemplate` sits
+// 0.012 inside its backdrop) and its top is the Vertical Sync box's, which measured in the
+// running screen is 0.00975 above the bottom of the Occlusion backdrop — the label column and
+// the pulldown column are tied by the backdrop's -0.00125 off its label's centre, so that number
+// holds at every aspect. Anchored off the backdrop, not off the Vertical Sync box, because the
+// gap between the two columns is the width of a LABEL's text, which is a string and can change.
+Frame "GLUECHECKBOX" "Menus43CheckBox" INHERITS WITHCHILDREN "StandardCheckBoxTemplate" {
+    SetPoint TOPLEFT, "OcclusionBackdrop", BOTTOMLEFT, 0.012, 0.00975,
+}
+
+Frame "TEXT" "Menus43Label" INHERITS "StandardInfoTextTemplate" {
+    SetPoint LEFT, "Menus43CheckBox", RIGHT, 0.01, 0.0,
+    Text "MENUS_4_3",
+}
+
+// ---------------------------------------------------------------------------------------------
 // Gameplay panel: "Detect Gamepad" (issue #162), a button under "Show hotkeys on command
 // buttons" — the panel's last row. Nothing in 1.30.4 knows a controller exists, so the row is
 // ours. Pressing it LISTENS for ten seconds and pairs whichever pad presses a button in that

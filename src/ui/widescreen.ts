@@ -37,7 +37,30 @@ export function widescreen(at169: number, at43 = 0, aspect: number = windowAspec
 }
 
 /** The glue screens fill the WINDOW (only a match re-boxes #ui to the game frame), so this is
- *  the aspect a glue screen is laid out at. */
+ *  the aspect a glue screen is laid out at — unless "4:3 Menus" has boxed them, in which case
+ *  it is that box's, and every correction above comes out at its 4:3 value by itself. */
 export function windowAspect(): number {
-  return window.innerHeight > 0 ? window.innerWidth / window.innerHeight : TUNED_ASPECT;
+  const aspect = window.innerHeight > 0 ? window.innerWidth / window.innerHeight : TUNED_ASPECT;
+  const boxed = fixedMenuAspect && !document.body.classList.contains("in-game");
+  return boxed ? Math.min(aspect, AUTHORED_ASPECT) : aspect;
+}
+
+// Options → Video → "4:3 Menus". 1.30.4 draws its glue screens in a 4:3 box with black bars at
+// the sides on a wide screen — measured off the real client at 1920x1080, where the main menu
+// fills the middle 1440x1080 and the rest is black — while OpenWar3 spreads them to the window's
+// edges and lets the corrections above take up the extra width. The row puts the original back.
+// The box itself is CSS (`body.menus-4x3` in style.css, the same rule a window narrower than 4:3
+// already gets); this flag is the half that tells `windowAspect` so.
+let fixedMenuAspect = false;
+
+/** Box the menus to 4:3 (or stop). Re-lays whatever glue screen is up: every FDF screen and the
+ *  menu scene measure their own element, and the screens re-fit on `resize`, which a class
+ *  change does not fire by itself. A match is untouched — the rule and `windowAspect` both stand
+ *  down while `body.in-game` is set. */
+export function setFixedMenuAspect(on: boolean): void {
+  if (typeof document === "undefined") return; // headless (the options test compiles this file)
+  if (on === fixedMenuAspect) return;
+  fixedMenuAspect = on;
+  document.body.classList.toggle("menus-4x3", on);
+  window.dispatchEvent(new Event("resize"));
 }
