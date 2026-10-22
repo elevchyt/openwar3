@@ -3787,26 +3787,27 @@ body.in-game .fdf-screen.fdf-ingame {
 .quest-req-done { color: #808080; }
 
 /* The Allies dialog's gold / lumber gift fields. The FDF declares them as TEXT frames over
-   the AllianceGold / AllianceLumber textures and leaves the editing to the engine, so the
-   input wears the frame's own font and sits inside the art the file drew. Right-aligned,
+   the AllianceGold / AllianceLumber textures and leaves interaction to the engine, so the
+   button wears the frame's own font and sits inside the art the file drew. Right-aligned,
    because that is the justification AllianceSlot.fdf gives GoldText and LumberText. */
-.fdf-gift-input {
+.fdf-gift-button {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   box-sizing: border-box;
-  padding-right: 0.5em;
+  padding: 0 0.5em 0 0;
   background: transparent;
   border: 0;
   outline: none;
   pointer-events: auto;
   text-align: right;
+  user-select: none;
   font-family: var(--ui-font, "Trajan Pro", "Cinzel", "Palatino Linotype", serif);
   color: #fff;
   text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.9);
 }
-.fdf-gift-input:disabled { color: #808080; }
+.fdf-gift-button:disabled { color: #808080; }
 
 /* --- FDF text area: the message log, the chat history, a quest's description. The chrome
    is the FDF's backdrop; this is only the scrolling column of lines inside it, whose pitch,

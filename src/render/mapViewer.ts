@@ -9918,6 +9918,7 @@ export class MapViewerScene {
       set: (other, type, value) => this.rts?.setPlayerAlliance(this.localPlayer, other, type, value),
       stash: () => this.rts?.stashFor(this.localPlayer) ?? { gold: 0, lumber: 0 },
       trade: (other, gold, lumber) => this.giveResources(other, gold, lumber),
+      resourceClick: () => this.sounds?.playUi("InterfaceClick"),
       // A LAN client cannot write: see AllianceModel.writable.
       writable: !(this.rts?.frozenClient ?? false),
       // …and under Lock Teams nobody can, host included: see AllianceModel.lockedTeams.

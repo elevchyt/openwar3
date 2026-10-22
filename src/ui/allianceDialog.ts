@@ -75,6 +75,8 @@ export interface AllianceModel {
   stash(): { gold: number; lumber: number };
   /** Hand resources to an ally (the dialog's Gold / Lumber fields). */
   trade(other: number, gold: number, lumber: number): void;
+  /** Resource-field click sound, distinct from the dialog's Accept / Cancel buttons. */
+  resourceClick(): void;
   /**
    * False on a LAN client. Every write here is PLAYER-scoped, and the command protocol
    * (src/game/commands.ts) is entirely unit-scoped — there is no message that carries "player
@@ -100,7 +102,7 @@ export class AllianceDialogOverlay {
   private mounting = false;
   /** Pending edits, committed by Accept and dropped by Cancel: `${player}:${type}` → value. */
   private pending = new Map<string, boolean>();
-  /** Pending gifts, likewise: player → the amounts typed into its two fields. */
+  /** Pending gifts, likewise: player → the amounts selected in its two fields. */
   private gifts = new Map<number, { gold: number; lumber: number }>();
   private onEscape: (e: KeyboardEvent) => void;
 
@@ -270,28 +272,55 @@ export class AllianceDialogOverlay {
   /**
    * The gold / lumber gift fields. The FDF declares them as TEXT frames over the
    * `AllianceGold` / `AllianceLumber` textures, not as EDITBOXes — the engine attaches the
-   * editing itself, exactly as it supplies a list's rows — so an input goes into the frame
+   * interaction itself, exactly as it supplies a list's rows — so a button goes into the frame
    * the file drew and wears its font.
    */
   private wireGift(screen: FdfScreen, player: number, kind: "Gold" | "Lumber"): void {
     const el = screen.frame(`${kind}Text${player}`);
     if (!el) return;
-    const input = document.createElement("input");
-    input.type = "text";
-    input.inputMode = "numeric";
-    input.className = "fdf-gift-input";
-    input.value = String(this.gifts.get(player)?.[kind === "Gold" ? "gold" : "lumber"] ?? 0);
-    input.disabled = !this.model.writable;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "fdf-gift-button";
+    const resource = kind === "Gold" ? "gold" : "lumber";
+    button.textContent = String(this.gifts.get(player)?.[resource] ?? 0);
+    button.disabled = !this.model.writable;
     const style = getComputedStyle(el);
-    input.style.fontSize = style.fontSize;
-    el.replaceChildren(input);
-    input.addEventListener("input", () => {
-      const amount = Math.max(0, Number.parseInt(input.value.replace(/\D/g, ""), 10) || 0);
+    button.style.fontSize = style.fontSize;
+    el.replaceChildren(button);
+    /** Match HUD buttons: mouse interaction must not leave Enter/Space activating the field. */
+    button.addEventListener("mousedown", (e) => e.preventDefault());
+    /** WC3 trading controls: ±100, capped at the current treasury (issue #218) */
+    const adjust = (delta: number) => {
+      if (!this.model.writable) return;
       const gift = this.gifts.get(player) ?? { gold: 0, lumber: 0 };
-      if (kind === "Gold") gift.gold = amount;
-      else gift.lumber = amount;
+      // One treasury feeds every row: what the other allies' rows already hold is spoken
+      // for, or 500 gold could be pledged to two players at once and Accept would quietly
+      // drop the second gift.
+      let pledged = 0;
+      for (const [other, g] of this.gifts) if (other !== player) pledged += g[resource];
+      const max = Math.max(0, this.model.stash()[resource] - pledged);
+      // The cap only ever stops a raise: if the bank shrank while the dialog was open, a
+      // left-click must not be what pulls a row down to it.
+      const amount = delta > 0 ? Math.min(max, gift[resource] + delta) : Math.max(0, gift[resource] + delta);
+      if (delta > 0 ? amount <= gift[resource] : amount === gift[resource]) return;
+      gift[resource] = amount;
+
       this.gifts.set(player, gift);
+      button.textContent = String(gift[resource]);
+      this.model.resourceClick();
+    };
+    button.addEventListener("click", () => {
+      adjust(100);
     });
+    button.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      adjust(-100);
+    });
+    button.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      if (e.deltaY === 0) return;
+      adjust(e.deltaY < 0 ? 100 : -100);
+    }, { passive: false });
   }
 
   /** Commit the pending alliance changes and gifts, then close — the Accept button. */
@@ -301,8 +330,9 @@ export class AllianceDialogOverlay {
       const [player, type] = k.split(":").map(Number);
       this.model.set(player, type as AllianceType, value);
     }
-    // Gifts are capped at what is actually in the bank, and spent in row order — the same
-    // first-come rule the game applies when two gifts together exceed the treasury.
+    // The fields already share one treasury between them, but the bank can shrink while the
+    // dialog is open, so gifts are still capped at what is actually in it and spent in row
+    // order — the same first-come rule the game applies when two gifts exceed the treasury.
     for (const [player, gift] of this.gifts) {
       const have = this.model.stash();
       const gold = Math.min(gift.gold, have.gold);
