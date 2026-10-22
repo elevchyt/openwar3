@@ -2196,7 +2196,8 @@ export class MapViewerScene {
       // for this one alone.
       this.rts.onAllianceChange = (source, other, type, value) => {
         if (other !== this.localPlayer || type !== AllianceType.SharedControl) return;
-        this.announce(fillSlots(this.strings.forRace(value ? "Controlgranted" : "Controlrevoked", this.localRace), [this.playerLabel(source)]));
+        // The giver named as a chat line names its speaker: the dot, then the Ally Color Mode's colour.
+        this.announce(fillSlots(this.strings.forRace(value ? "Controlgranted" : "Controlrevoked", this.localRace), [this.colouredName(source, true)]));
       };
       // Ally Color Mode changed (the button right of the minimap, Alt-A, or a script's
       // SetAllyColorFilterState): the field has already been re-tinted by the controller —
