@@ -334,7 +334,7 @@ export class AllianceDialogOverlay {
       const muted = this.model.isMuted(player);
       button.classList.toggle("muted", muted);
       button.setAttribute("aria-pressed", String(muted));
-      setGameTip(button, muted ? "Unmute voice and chat" : "Mute voice and chat");
+      setGameTip(button, muted ? "Unmute" : "Mute");
       button.replaceChildren(speakerIcon("fdf-mute-art", muted));
     };
     draw();
