@@ -1,4 +1,5 @@
 import type { DataSource } from "../vfs/types";
+import { unhintTrueType } from "./unhintFont";
 
 // The game's own typeface (issue #72). Warcraft III renders every piece of text —
 // menus, HUD, tooltips, floating text — in Friz Quadrata TT, which ships INSIDE the
@@ -93,9 +94,10 @@ export function applyGameFont(vfs: DataSource): void {
     const bytes = vfs.rawBytes(path);
     if (!bytes) continue;
     try {
-      // Copy into a plain ArrayBuffer — the VFS hands back a view into the archive's
-      // buffer, and FontFace takes the WHOLE buffer, not the view's slice.
-      const face = new FontFace(family, bytes.slice().buffer as ArrayBuffer);
+      // Unhinted, or Windows grid-fits these 90s faces into visibly thinner strokes than Linux
+      // draws (unhintFont.ts). Either way a plain ArrayBuffer copy — the VFS hands back a view
+      // into the archive's buffer, and FontFace takes the WHOLE buffer, not the view's slice.
+      const face = new FontFace(family, (unhintTrueType(bytes) ?? bytes.slice()).buffer as ArrayBuffer);
       pending.push(
         face.load().then(
           (f) => { document.fonts.add(f); },
