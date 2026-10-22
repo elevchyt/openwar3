@@ -1434,8 +1434,8 @@ export interface SpellEvent {
  *
  * The sim raises them; the renderer decides who is told what. It has to be that way
  * round for the ally variants — the same blow is "Our town is under siege!" to the
- * owner and "%s's city is under siege!" to their ally, and only the renderer knows
- * which one is watching (see MapViewerScene.showAlert).
+ * owner and only the ally's voice and a minimap flash to their ally, and only the
+ * renderer knows which one is watching (see MapViewerScene.showAlert).
  */
 export interface Alert {
   kind: "attack" | "townattack" | "herodeath" | "minelow" | "minedestroyed";

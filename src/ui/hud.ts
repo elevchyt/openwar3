@@ -364,8 +364,8 @@ export interface HudDriver {
    *  "ordered" → it became a command (clear the armed highlight, do NOT pan); "ignored" →
    *  consumed, armed order still stands; "none" → not a command (left-click pans). */
   minimapClick(wx: number, wy: number, right: boolean, queued: boolean): "ordered" | "ignored" | "none";
-  /** Alt-click on the minimap: mark a spot for your allies (`Allyminimapping`, "%s has
-   *  marked the way."). The binding is ours — no data file names a key for it. */
+  /** Alt-click on the minimap: mark a spot for your allies (a ping and a sound, no line).
+   *  The binding is ours — no data file names a key for it. */
   minimapPing(wx: number, wy: number): void;
   /** Arm the Minimap Signal's target: the next left-click on the world or the minimap spends it. */
   armSignal(): void;

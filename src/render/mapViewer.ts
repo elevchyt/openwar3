@@ -10362,8 +10362,7 @@ export class MapViewerScene {
   }
 
   /**
-   * Mark a spot on the minimap for the team, and — when somebody else is the one marking —
-   * say so ("%s has marked the way.").
+   * Mark a spot on the minimap for the team (a ping and a sound, no line — see `showSignal`).
    *
    * Raised by the Minimap Signal button (Alt-G, then a click on the world or the minimap) and by
    * Alt+left-click on either. It reaches the signaller and their allies and nobody else, over
@@ -10396,8 +10395,10 @@ export class MapViewerScene {
     this.showSignal(from, x, y);
   }
 
-  /** Put a signal on this machine's minimap, with its sound and — when an ally raised it —
-   *  "%s has marked the way." An enemy's signal is not ours to see. */
+  /** Put a signal on this machine's minimap, with its sound. An enemy's signal is not ours to
+   *  see. No line goes with it: the data carries `Allyminimapping` ("%s has marked the way."),
+   *  but the real client never prints it (the developer's ruling, off the game) — the ping and
+   *  its colour say who. */
   private showSignal(from: number, x: number, y: number): void {
     const co = from === this.localPlayer || (this.rts?.playersAreCoAllied(from, this.localPlayer) ?? false);
     if (!co) return;
@@ -10406,9 +10407,6 @@ export class MapViewerScene {
     // `UI\SoundInfo\UISounds.slk` MapPing (Sound\Interface\MapPing.wav) — every signal sounds,
     // yours included, which is how you hear that the one you just placed went out.
     this.sounds?.playUi("MapPing");
-    if (from !== this.localPlayer) {
-      this.announce(fillSlots(this.strings.forRace("Allyminimapping", this.localRace), [this.colouredName(from, true)]));
-    }
   }
 
   /**
@@ -13428,9 +13426,11 @@ export class MapViewerScene {
         // view can hold the warning for a second skirmish within 1250 units of it.
         if (!own && !town) return; // an ally's field battles are their own business
         if (own && !town && this.onScreen(a.x, a.y)) return; // you are already looking at it
-        key = own ? (town ? "Townattack" : "Unitattack") : "Allytownattack";
+        // An ally's raid is HEARD and not read: the data carries an `Allytownattack` line ("%s's
+        // city is under siege!"), but the real client never prints it (the developer's ruling,
+        // off the game) — the race's voice and the red flash on the minimap are the whole of it.
+        key = own ? (town ? "Townattack" : "Unitattack") : "";
         sound = own ? (town ? "TownAttack" : "UnderAttack") : "AllyTownUnderAttack";
-        if (!own) args.push(this.playerLabel(a.player)); // "%s's city is under siege!" — the possessive names a PLAYER
         // …and the minimap flashes where the blow landed, which is how you find a raid you
         // cannot see. Observed behaviour rather than a data field: no table carries a colour
         // for it, so it takes the ping's own WC3 default duration and alarm red.
@@ -13459,7 +13459,7 @@ export class MapViewerScene {
     }
     // forRace on every key: the four-way rows (Goldminelow, Goldminedestroyed, Herodeath)
     // are indexed by it and the rest come back whole, exactly as `refuse` relies on.
-    this.hud?.showError(fillSlots(this.strings.forRace(key, this.localRace), args));
+    if (key) this.hud?.showError(fillSlots(this.strings.forRace(key, this.localRace), args));
     this.sounds?.playUi(`${sound}${UI_SOUND_RACE[this.localRace]}`);
   }
 
