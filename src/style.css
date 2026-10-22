@@ -3789,14 +3789,17 @@ body.in-game .fdf-screen.fdf-ingame {
 /* The Allies dialog's gold / lumber gift fields. The FDF declares them as TEXT frames over
    the AllianceGold / AllianceLumber textures and leaves interaction to the engine, so the
    button wears the frame's own font and sits inside the art the file drew. Right-aligned,
-   because that is the justification AllianceSlot.fdf gives GoldText and LumberText. */
+   because that is the justification AllianceSlot.fdf gives GoldText and LumberText — and
+   with NO padding of its own: the frame is already inset 0.007 from the backdrop's right
+   edge (`SetPoint RIGHT, "GoldBackdrop", RIGHT, -0.007`), and a second inset on top of it
+   left the digits floating in the middle of the field. */
 .fdf-gift-button {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   box-sizing: border-box;
-  padding: 0 0.5em 0 0;
+  padding: 0;
   background: transparent;
   border: 0;
   outline: none;
