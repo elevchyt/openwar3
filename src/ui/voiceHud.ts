@@ -16,15 +16,19 @@ export interface VoiceEntry {
 }
 
 /** A white loudspeaker with two sound waves — the far-left mark of every plate. Ours: the
- *  game has no voice art, so it is drawn rather than read from the install. */
-function speakerIcon(): SVGSVGElement {
+ *  game has no voice art, so it is drawn rather than read from the install. `muted` swaps the
+ *  waves for a red cross: the Allies dialog's mute toggle (ui/allianceDialog.ts) is this same
+ *  speaker, so the two read as one control. */
+export function speakerIcon(className = "hud-voice-icon", muted = false): SVGSVGElement {
   const ns = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(ns, "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("class", "hud-voice-icon");
+  svg.setAttribute("class", className);
   svg.innerHTML =
     '<path fill="#fff" d="M3 9h4l5-4v14l-5-4H3z"/>' +
-    '<path fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/>';
+    (muted
+      ? '<path fill="none" stroke="#e02020" stroke-width="2.6" stroke-linecap="round" d="M15.5 8.5l6 7M21.5 8.5l-6 7"/>'
+      : '<path fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/>');
   return svg;
 }
 

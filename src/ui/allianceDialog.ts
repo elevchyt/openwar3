@@ -39,6 +39,8 @@ import type { DataSource } from "../vfs/types";
 import type { Arg, FdfFrame, FdfProp } from "./fdf/parser";
 import { cloneNamespaced, type FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, playFdfClick, type FdfScreen } from "./fdf/render";
+import { setGameTip } from "./gameTip";
+import { speakerIcon } from "./voiceHud";
 
 const ALLIANCE_FDF = "UI\\FrameDef\\UI\\AllianceDialog.fdf";
 const ALLIANCE_SLOT_FDF = "UI\\FrameDef\\UI\\AllianceSlot.fdf";
@@ -69,6 +71,12 @@ export interface AlliancePeer {
   id: number;
   /** The lobby's label ("Player 2", "Computer (Normal)"). */
   name: string;
+  /** Race symbol beside the name — the voice plate's (ui/voiceHud.ts), a data URL; "" or
+   *  null while unknown. Ours: the 2003 row has no frame for it. */
+  symbol?: string | null;
+  /** …and its hover hint: the race's name, or "Random" for a seat that picked Random
+   *  (GlobalStrings.fdf's HUMAN / ORC / UNDEAD / NIGHT_ELF / RANDOM). */
+  raceName?: string;
 }
 
 export interface AllianceModel {
@@ -88,6 +96,12 @@ export interface AllianceModel {
   trade(other: number, gold: number, lumber: number): void;
   /** Resource-field click sound, distinct from the dialog's Accept / Cancel buttons. */
   resourceClick(): void;
+  /** Whether a row offers MUTE — a multiplayer match only: nobody in single player talks. */
+  mutable(): boolean;
+  /** Whether that player's chat and voice are being dropped on this machine. */
+  isMuted(player: number): boolean;
+  /** Mute or unmute — immediate, and this machine's alone (Battle.net's /squelch). */
+  setMuted(player: number, on: boolean): void;
   /**
    * False on a LAN client. Every write here is PLAYER-scoped, and the command protocol
    * (src/game/commands.ts) is entirely unit-scoped — there is no message that carries "player
@@ -256,6 +270,8 @@ export class AllianceDialogOverlay {
   private onBuild(screen: FdfScreen): void {
     for (const peer of this.model.peers()) {
       this.paintSwatch(screen, peer.id);
+      this.paintRace(screen, peer);
+      if (this.model.mutable()) this.paintMute(screen, peer.id);
       const ally = this.model.isAlly(peer.id);
       for (const col of COLUMNS) {
         const box = screen.checkBox(`${col.frame}${peer.id}`);
@@ -279,6 +295,56 @@ export class AllianceDialogOverlay {
     const el = screen.frame(`ColorBackdrop${player}`);
     const color = teamColorCss(this.vfs, this.model.colorOf(player));
     if (el && color) el.style.background = color;
+  }
+
+  /**
+   * The race symbol, right after the name's text. Inside the label rather than a frame of its
+   * own, so it follows the name however wide that renders; the name gives way (ellipsis)
+   * before the symbol does, since the label's 0.205 ends at the Ally column.
+   */
+  private paintRace(screen: FdfScreen, peer: AlliancePeer): void {
+    const label = screen.frame(`PlayerNameLabel${peer.id}`);
+    if (!label || !peer.symbol) return;
+    const name = label.firstElementChild as HTMLElement | null;
+    if (name) name.classList.add("fdf-alliance-name");
+    const img = document.createElement("img");
+    img.className = "fdf-alliance-race";
+    img.src = peer.symbol;
+    img.alt = "";
+    if (peer.raceName) setGameTip(img, peer.raceName);
+    label.append(img);
+  }
+
+  /**
+   * The MUTE toggle at the row's far left, beside the colour swatch (multiplayer only): the
+   * push-to-talk plate's own speaker, struck through in red while muted. Battle.net's word for
+   * it is SQUELCH — "ignores messages from that user" — and like /squelch it is not an
+   * alliance, so it is not held for Accept: it takes effect on the click.
+   */
+  private paintMute(screen: FdfScreen, player: number): void {
+    // Hung off the swatch rather than given a frame: the FDF chains the whole row — name, check
+    // boxes, gift fields — off ColorBackdrop, so moving the swatch would walk every column out
+    // from under its header. The row's 0.015 inset to its left is the room it takes.
+    const swatch = screen.frame(`ColorBackdrop${player}`);
+    if (!swatch) return;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "fdf-alliance-mute";
+    const draw = (): void => {
+      const muted = this.model.isMuted(player);
+      button.classList.toggle("muted", muted);
+      button.setAttribute("aria-pressed", String(muted));
+      setGameTip(button, muted ? "Unmute voice and chat" : "Mute voice and chat");
+      button.replaceChildren(speakerIcon("fdf-mute-art", muted));
+    };
+    draw();
+    button.addEventListener("mousedown", (e) => e.preventDefault());
+    button.addEventListener("click", () => {
+      playFdfClick();
+      this.model.setMuted(player, !this.model.isMuted(player));
+      draw();
+    });
+    swatch.append(button);
   }
 
   /**

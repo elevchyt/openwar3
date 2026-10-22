@@ -1075,6 +1075,10 @@ interface FogDoodadTable {
 /** The campaign screens' race stamps (`UI\Glues\Loading\Backgrounds\Campaigns\<X>Symbol.blp`) —
  *  what the voice plates wear beside a name. */
 const RACE_SYMBOL: Record<PlayableRace, string> = { human: "Human", orc: "Orc", undead: "Undead", nightelf: "NightElf" };
+/** A race's name in GlobalStrings.fdf (the Allies dialog's hover on its symbol). */
+const RACE_STRING_KEY: Record<PlayableRace | "random", string> = {
+  human: "HUMAN", orc: "ORC", undead: "UNDEAD", nightelf: "NIGHT_ELF", random: "RANDOM",
+};
 
 export class MapViewerScene {
   // The game camera's shape — what the view opens at and what ResetToGameCamera returns to
@@ -1587,6 +1591,9 @@ export class MapViewerScene {
   private matchRaces = new Map<number, PlayableRace>();
   /** Seats that picked Random: their plate wears a question mark, not the race they rolled. */
   private randomSeats = new Set<number>();
+  /** Players muted from the Allies dialog: their chat lines and voice never reach this
+   *  machine's screen or speakers. Local, and per match. */
+  private mutedPlayers = new Set<number>();
   /** Voice chat (issue #133): the microphone + speakers, who is talking, the plates' clock. */
   private readonly voiceChat = new VoiceChat();
   private readonly talkers = new Talkers();
@@ -4386,6 +4393,7 @@ export class MapViewerScene {
     this.portraitTalkKey = "";
     this.destructibleDeaths = []; // …and out of any gate the last one broke
     this.chatHistory = []; // last match's conversation is not this one's
+    this.mutedPlayers.clear(); // …nor its mutes
     // Chat arriving over the wire lands in the same place a locally typed line does.
     if (this.rts) {
       this.rts.onChatSaid = (line) =>
@@ -9971,13 +9979,21 @@ export class MapViewerScene {
       peers: () => [...this.meleeTeams.keys()]
         .filter((id) => id !== this.localPlayer)
         .sort((a, b) => a - b)
-        .map((id) => ({ id, name: this.playerNames.get(id) ?? `Player ${id + 1}` })),
+        .map((id) => ({
+          id,
+          name: this.playerNames.get(id) ?? `Player ${id + 1}`,
+          symbol: this.raceSymbol(id),
+          raceName: this.raceName(id),
+        })),
       isAlly: (other) => this.rts?.playersAreCoAllied(this.localPlayer, other) ?? false,
       get: (other, type) => this.rts?.getPlayerAlliance(this.localPlayer, other, type) ?? false,
       set: (other, type, value) => this.rts?.setPlayerAlliance(this.localPlayer, other, type, value),
       stash: () => this.rts?.stashFor(this.localPlayer) ?? { gold: 0, lumber: 0 },
       trade: (other, gold, lumber) => this.giveResources(other, gold, lumber),
       resourceClick: () => this.sounds?.playUi("InterfaceClick"),
+      mutable: () => !!this.rts?.matchLinkHandle,
+      isMuted: (p) => this.mutedPlayers.has(p),
+      setMuted: (p, on) => void (on ? this.mutedPlayers.add(p) : this.mutedPlayers.delete(p)),
       // A LAN client cannot write: see AllianceModel.writable.
       writable: !(this.rts?.frozenClient ?? false),
       // …and under Lock Teams nobody can, host included: see AllianceModel.lockedTeams.
@@ -10179,6 +10195,7 @@ export class MapViewerScene {
   /** Put a line on screen and in the history. No routing, no triggers — either this machine
    *  is the authority and has already done both, or the authority has done them for us. */
   private showChat(line: ChatLine): void {
+    if (this.mutedPlayers.has(line.from)) return; // muted in the Allies dialog: not even history
     this.chatHistory.push(line);
     if (this.chatHistory.length > MapViewerScene.CHAT_HISTORY_MAX) this.chatHistory.shift();
     // Chat has a display of ITS OWN (the engine's CChatDisplay / ORIGIN_FRAME_CHAT_MSG), not
@@ -10247,6 +10264,7 @@ export class MapViewerScene {
 
   /** A slice we are meant to hear (or, from ourselves, to see on the plates). */
   private hearVoice(from: number, data: string): void {
+    if (this.mutedPlayers.has(from)) return; // muted: no sound, and no plate either
     this.talkers.heard(from, performance.now() / 1000);
     this.startVoiceTimer();
     if (from !== this.localPlayer) this.voiceChat.play(from, voiceFromBase64(data));
@@ -10272,17 +10290,31 @@ export class MapViewerScene {
     const hex = (c: string | null): string | null => (c ? c.slice(2) : null);
     this.hud?.setVoice(
       active.map((p) => {
-        const race = this.matchRaces.get(p);
         return {
           player: p,
           name: this.playerLabel(p),
-          symbol: this.randomSeats.has(p)
-            ? this.blpIcon("UI\\Widgets\\Glues\\dialogbox-question.blp")
-            : race ? this.blpIcon(`UI\\Glues\\Loading\\Backgrounds\\Campaigns\\${RACE_SYMBOL[race]}Symbol.blp`) : "",
+          symbol: this.raceSymbol(p),
           tint: hex(teamColorHex(this.vfs, this.rts?.unitColor(p) ?? p)),
         };
       }),
     );
+  }
+
+  /** The symbol's hover hint — GlobalStrings.fdf's race name, "Random" for a random seat. */
+  private raceName(p: number): string | undefined {
+    const race = this.randomSeats.has(p) ? "random" : this.matchRaces.get(p);
+    if (!race) return undefined;
+    const key = RACE_STRING_KEY[race];
+    return this.globalStrings?.strings.get(key) ?? key;
+  }
+
+  /** A player's race symbol (the one the campaign screens are stamped with) as a data URL —
+   *  the voice plate's and the Allies dialog's. A RANDOM seat shows the question mark the
+   *  lobby gave it, never the race it rolled; "" while the race is unknown. */
+  private raceSymbol(p: number): string | null {
+    if (this.randomSeats.has(p)) return this.blpIcon("UI\\Widgets\\Glues\\dialogbox-question.blp");
+    const race = this.matchRaces.get(p);
+    return race ? this.blpIcon(`UI\\Glues\\Loading\\Backgrounds\\Campaigns\\${RACE_SYMBOL[race]}Symbol.blp`) : "";
   }
 
   /** Push-to-talk keys, wired once per match next to the other window listeners. */

@@ -4283,6 +4283,34 @@ body.in-game .load-gate { display: none; }
   text-overflow: ellipsis;
 }
 
+/* The Allies dialog's race symbol (ui/allianceDialog.ts paintRace): the voice plate's symbol,
+   right after the name inside its label, sized off the label's font. */
+.fdf-alliance-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fdf-alliance-race {
+  flex: none;
+  height: 1.5em;
+  aspect-ratio: 1;
+  margin-left: 0.4em;
+  object-fit: contain;
+  pointer-events: auto; /* a text frame takes no pointer, and the symbol has a hover hint */
+}
+
+/* …and the MUTE toggle (paintMute), hung off the left of the colour swatch: sized and spaced in
+   the swatch's own box, clear of the -0.005 frame the swatch wears. */
+.fdf-alliance-mute {
+  position: absolute;
+  top: 50%;
+  right: 140%;
+  height: 85%;
+  aspect-ratio: 1;
+  transform: translateY(-50%);
+  padding: 0;
+  border: 0;
+  background: none;
+  pointer-events: auto;
+}
+.fdf-mute-art { position: absolute; inset: 8%; width: 84%; height: 84%; }
+
 /* The SCORE SCREEN (issue #199) shares the loading screen's layer and canvas (main.ts
    showScoreScreen): its DOM sits over the canvas exactly as the loading screen's does. */
 .fdf-screen.fdf-score { z-index: 9; }
