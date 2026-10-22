@@ -22,6 +22,14 @@
 //     Share Vision → ALLIANCE_SHARED_VISION
 //     Share Units  → ALLIANCE_SHARED_CONTROL
 //
+// What a row may CHANGE depends on whose row it is (issue #217). An ENEMY's row is dead from
+// end to end — no box and no gift field, or the panel is a door for handing gold, lumber, sight
+// and an army to the other side. An ALLY's row keeps Ally and Share Vision as the match set
+// them (on, from the lobby's own Team column — `AllianceMatrix.seedFromTeams`) and greyed, so
+// a team cannot be broken up or blinded from here; Share Units and the two gifts are the
+// choices left to make. "Ally" is blizzard.j's `PlayersAreCoAllied`, the same reading the
+// chat's "To Allies" asks.
+//
 // Nothing is committed until Accept, which is the FDF's own Accept / Cancel pair doing what
 // it says — and is also why a click can't half-apply an alliance.
 
@@ -48,11 +56,12 @@ const word = (v: string): Arg => ({ s: v, n: null, str: false });
 const num = (v: number): Arg => ({ s: String(v), n: v, str: false });
 const prop = (key: string, ...args: Arg[]): FdfProp => ({ key, args });
 
-/** The three columns, in the order the FDF's headers run. */
-const COLUMNS: Array<{ frame: string; type: AllianceType }> = [
-  { frame: "AllyCheckBox", type: AllianceType.Passive },
-  { frame: "VisionCheckBox", type: AllianceType.SharedVision },
-  { frame: "UnitsCheckBox", type: AllianceType.SharedControl },
+/** The three columns, in the order the FDF's headers run. `fixed`: never changeable from
+ *  here, an ally's row included — see the header (issue #217). */
+const COLUMNS: Array<{ frame: string; type: AllianceType; fixed: boolean }> = [
+  { frame: "AllyCheckBox", type: AllianceType.Passive, fixed: true },
+  { frame: "VisionCheckBox", type: AllianceType.SharedVision, fixed: true },
+  { frame: "UnitsCheckBox", type: AllianceType.SharedControl, fixed: false },
 ];
 
 /** One other player in the match — the local player has no row of their own. */
@@ -67,6 +76,8 @@ export interface AllianceModel {
   /** A slot's COLOUR index — not its slot, which SetPlayerColor can move (see Rts.playerColor). */
   colorOf(player: number): number;
   peers(): AlliancePeer[];
+  /** blizzard.j's PlayersAreCoAllied(local, other) — whether this row is a teammate's. */
+  isAlly(other: number): boolean;
   /** GetPlayerAlliance(local, other, type). */
   get(other: number, type: AllianceType): boolean;
   /** SetPlayerAlliance(local, other, type, value) — only ever called on Accept. */
@@ -245,15 +256,16 @@ export class AllianceDialogOverlay {
   private onBuild(screen: FdfScreen): void {
     for (const peer of this.model.peers()) {
       this.paintSwatch(screen, peer.id);
+      const ally = this.model.isAlly(peer.id);
       for (const col of COLUMNS) {
         const box = screen.checkBox(`${col.frame}${peer.id}`);
         if (!box) continue;
         box.checked = this.pending.get(key(peer.id, col.type)) ?? this.model.get(peer.id, col.type);
-        box.setEnabled(this.model.writable && !this.model.lockedTeams);
+        box.setEnabled(this.model.writable && !this.model.lockedTeams && ally && !col.fixed);
         box.onChange = (on) => this.pending.set(key(peer.id, col.type), on);
       }
-      this.wireGift(screen, peer.id, "Gold");
-      this.wireGift(screen, peer.id, "Lumber");
+      this.wireGift(screen, peer.id, "Gold", ally);
+      this.wireGift(screen, peer.id, "Lumber", ally);
     }
     // Allied Victory is a PLAYER STATE (`PLAYER_STATE_ALLIED_VICTORY`), not an alliancetype —
     // a melee game grants it to every player with a teammate (Runtime.applyLobby) and the
@@ -275,7 +287,7 @@ export class AllianceDialogOverlay {
    * interaction itself, exactly as it supplies a list's rows — so a button goes into the frame
    * the file drew and wears its font.
    */
-  private wireGift(screen: FdfScreen, player: number, kind: "Gold" | "Lumber"): void {
+  private wireGift(screen: FdfScreen, player: number, kind: "Gold" | "Lumber", ally: boolean): void {
     const el = screen.frame(`${kind}Text${player}`);
     if (!el) return;
     const button = document.createElement("button");
@@ -283,7 +295,9 @@ export class AllianceDialogOverlay {
     button.className = "fdf-gift-button";
     const resource = kind === "Gold" ? "gold" : "lumber";
     button.textContent = String(this.gifts.get(player)?.[resource] ?? 0);
-    button.disabled = !this.model.writable;
+    // Resources go to a teammate or nowhere (issue #217).
+    const live = this.model.writable && ally;
+    button.disabled = !live;
     const style = getComputedStyle(el);
     button.style.fontSize = style.fontSize;
     el.replaceChildren(button);
@@ -291,7 +305,7 @@ export class AllianceDialogOverlay {
     button.addEventListener("mousedown", (e) => e.preventDefault());
     /** WC3 trading controls: ±100, capped at the current treasury (issue #218) */
     const adjust = (delta: number) => {
-      if (!this.model.writable) return;
+      if (!live) return;
       const gift = this.gifts.get(player) ?? { gold: 0, lumber: 0 };
       // One treasury feeds every row: what the other allies' rows already hold is spoken
       // for, or 500 gold could be pledged to two players at once and Accept would quietly
@@ -326,14 +340,18 @@ export class AllianceDialogOverlay {
   /** Commit the pending alliance changes and gifts, then close — the Accept button. */
   private accept(): void {
     if (!this.model.writable) return;
+    // The rows already refuse these edits; the commit asks again, since an ally can have
+    // become an enemy (a script's SetPlayerAlliance) while the dialog stood open.
     for (const [k, value] of this.pending) {
       const [player, type] = k.split(":").map(Number);
+      if (!this.model.isAlly(player) || COLUMNS.find((c) => c.type === type)?.fixed) continue;
       this.model.set(player, type as AllianceType, value);
     }
     // The fields already share one treasury between them, but the bank can shrink while the
     // dialog is open, so gifts are still capped at what is actually in it and spent in row
     // order — the same first-come rule the game applies when two gifts exceed the treasury.
     for (const [player, gift] of this.gifts) {
+      if (!this.model.isAlly(player)) continue;
       const have = this.model.stash();
       const gold = Math.min(gift.gold, have.gold);
       const lumber = Math.min(gift.lumber, have.lumber);

@@ -9972,6 +9972,7 @@ export class MapViewerScene {
         .filter((id) => id !== this.localPlayer)
         .sort((a, b) => a - b)
         .map((id) => ({ id, name: this.playerNames.get(id) ?? `Player ${id + 1}` })),
+      isAlly: (other) => this.rts?.playersAreCoAllied(this.localPlayer, other) ?? false,
       get: (other, type) => this.rts?.getPlayerAlliance(this.localPlayer, other, type) ?? false,
       set: (other, type, value) => this.rts?.setPlayerAlliance(this.localPlayer, other, type, value),
       stash: () => this.rts?.stashFor(this.localPlayer) ?? { gold: 0, lumber: 0 },
@@ -10306,8 +10307,11 @@ export class MapViewerScene {
    * Straight onto the sim's stashes, because this machine is the authority whenever the
    * dialog can be written at all (AllianceModel.writable gates a LAN client out entirely).
    * The amounts have already been clamped to what the treasury holds, so this can't overdraw.
+   * And only ever to an ALLY: the dialog greys an enemy's fields, and this is the last door
+   * before the stash (issue #217).
    */
   private giveResources(other: number, gold: number, lumber: number): void {
+    if (!this.rts?.playersAreCoAllied(this.localPlayer, other)) return;
     this.transferResources(this.localPlayer, other, gold, lumber);
   }
 
