@@ -10356,8 +10356,10 @@ export class MapViewerScene {
     const l = Math.floor(lumber);
     if (g <= 0 && l <= 0) return;
     const who = this.colouredName(from, true); // named as a chat line names its speaker
+    // The amounts in the game's own gold markup — the `|cffffcc00` every stock Tip gilds with.
+    const gilt = (n: number): string => `|cffffcc00${n}|r`;
     const key = g > 0 && l > 0 ? "Goldandlumberfromally" : g > 0 ? "Goldfromally" : "Lumberfromally";
-    const args = g > 0 && l > 0 ? [g, l, who] : [g > 0 ? g : l, who];
+    const args = g > 0 && l > 0 ? [gilt(g), gilt(l), who] : [gilt(g > 0 ? g : l), who];
     this.announce(fillSlots(this.strings.forRace(key, this.localRace), args));
   }
 
