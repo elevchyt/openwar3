@@ -106,7 +106,7 @@ import { QuestDialogOverlay, primeQuestStrings } from "../ui/questDialog";
 import { ConsoleUi, type ConsolePanel } from "../ui/consoleUi";
 import { parseMapInfo } from "../world/mapInfo";
 import {
-  chatPrompt, chatRecipients, chatShowsPlayerDot, formatChatLine, hasChatAllies, observerLine,
+  CHAT_PLAYER_DOT, chatPrompt, chatRecipients, chatShowsPlayerDot, formatChatLine, hasChatAllies, observerLine,
   type ChatLine, type ChatTarget, type ChatWorld,
 } from "../game/chat";
 import { neutralTeamColor, teamColorCss, teamColorHex, teamColorRgb } from "./teamColor";
@@ -10502,18 +10502,24 @@ export class MapViewerScene {
     const format = s("PLAYER_LEFT_GAME", "%s has left the game.");
     // The script's copy of the line is uncoloured, and that is the text it is matched on.
     this.goneLines.add(fillSlots(format, [this.playerLabel(seat)]));
-    this.announce(fillSlots(format, [this.colouredName(seat)]));
+    this.announce(fillSlots(format, [this.colouredName(seat, true)]));
   }
 
   /**
    * A player's name in the colour their units wear NOW — under the Ally Color Mode (Alt-A), the
    * team's — exactly as a chat line names its speaker (`renderChat`). For the lines this machine
    * composes about a player: "has left the game.", "has lost connection", "Waiting for players...".
+   *
+   * `dot` puts the chat's own player dot in front (`CHAT_PLAYER_DOT`, in the colour the player
+   * PICKED, which the filter never moves), under the chat's own rule for when one is worth
+   * drawing (`chatShowsPlayerDot`: more than two people playing). The waiting dialog asks for
+   * none — its swatch already is one.
    */
-  private colouredName(seat: number): string {
-    const hex = teamColorHex(this.vfs, this.rts?.unitColor(seat) ?? seat);
-    const name = this.playerLabel(seat);
-    return hex ? `|c${hex}${name}|r` : name;
+  private colouredName(seat: number, dot = false): string {
+    const paint = (text: string, hex: string | null): string => (hex ? `|c${hex}${text}|r` : text);
+    const name = paint(this.playerLabel(seat), teamColorHex(this.vfs, this.rts?.unitColor(seat) ?? seat));
+    if (!dot || !chatShowsPlayerDot({ from: seat, text: "", target: { scope: "all" } }, this.chatWorld())) return name;
+    return `${paint(CHAT_PLAYER_DOT, teamColorHex(this.vfs, this.rts?.playerColor(seat) ?? seat))} ${name}`;
   }
   /** The leave lines `announceGone` printed, which the map's own leave trigger is about to
    *  print again (`displayText`). */
@@ -10644,7 +10650,7 @@ export class MapViewerScene {
     for (const [seat, at] of this.heldUntil) {
       const left = Math.max(0, Math.ceil((at - now) / 1000));
       // Re-coloured every frame along with the count, so Alt-A repaints a line that is already up.
-      this.hud?.setStickyMessage(`lost:${seat}`, `${this.colouredName(seat)} has lost connection (Time to reconnect ${left}s...)`);
+      this.hud?.setStickyMessage(`lost:${seat}`, `${this.colouredName(seat, true)} has lost connection (Time to reconnect ${left}s...)`);
       this.lostLines.add(seat);
     }
   }
