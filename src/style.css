@@ -4039,11 +4039,11 @@ body.in-game .fdf-screen.fdf-ingame {
 .fdf-list-row:hover .fdf-list-action { color: rgba(255, 255, 255, 0.75); }
 .fdf-list-action:hover { color: #ff8080; }
 
-/* Ctrl+F on a map list (ui/mapFind.ts) — ours, as no 2003 screen has a search box. Its colours
-   are the list's own: white type on black in an iron-and-gold edge, the selected row the list's
-   saturated blue with gold text. Every length is an em of the list's type, which mapFind sets
-   on the box, so it scales with the screen like the rows do. Three variants (A docked over the
-   top of the list as a filter, B a floating palette, C a find bar docked under it). */
+/* The map list's search box (ui/mapFind.ts) — ours, as no 2003 screen has one. Always on show
+   across the top of the list, inside its border; the rows and the scrollbar move down to make
+   room. Its colours are the list's own: white type on black in an iron-and-gold edge that turns
+   gold while the box has the keyboard. Every length is an em of the list's type, which mapFind
+   sets on the box, so it scales with the screen like the rows do. */
 .ow3-find {
   position: absolute;
   z-index: 5;
@@ -4059,19 +4059,20 @@ body.in-game .fdf-screen.fdf-ingame {
   padding: 0 0.35em 0 0.5em;
   box-sizing: border-box;
   background: rgba(0, 0, 0, 0.92);
-  border: 1px solid #6e5a2c;
-  box-shadow: inset 0 0 0 1px #000, 0 0 0 1px rgba(0, 0, 0, 0.85);
+  border-bottom: 1px solid #6e5a2c;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
 }
-.ow3-find:focus-within .ow3-find-box { border-color: #b8952f; }
-.ow3-find-miss .ow3-find-box { border-color: #9c3a2a; }
-/* A magnifier in two strokes: the ring, and the handle as its ::after. */
+.ow3-find:focus-within .ow3-find-box { border-bottom-color: #b8952f; }
+.ow3-find-miss .ow3-find-box { border-bottom-color: #9c3a2a; }
+/* A magnifier in two strokes: the ring, and the handle as its ::after. Dim until the box has
+   the keyboard, so an idle box reads as a field rather than as a lit control. */
 .ow3-find-glass {
   position: relative;
   flex: 0 0 auto;
   width: 0.62em;
   height: 0.62em;
   margin: 0 0.18em 0.12em 0;
-  border: 0.12em solid #fcd312;
+  border: 0.12em solid #9c8a4a;
   border-radius: 50%;
 }
 .ow3-find-glass::after {
@@ -4081,10 +4082,12 @@ body.in-game .fdf-screen.fdf-ingame {
   top: 82%;
   width: 0.36em;
   height: 0.12em;
-  background: #fcd312;
+  background: #9c8a4a;
   transform: rotate(45deg);
   transform-origin: 0 50%;
 }
+.ow3-find:focus-within .ow3-find-glass { border-color: #fcd312; }
+.ow3-find:focus-within .ow3-find-glass::after { background: #fcd312; }
 .ow3-find-input {
   flex: 1 1 auto;
   min-width: 0;
@@ -4098,14 +4101,6 @@ body.in-game .fdf-screen.fdf-ingame {
   font: inherit;
 }
 .ow3-find-input::placeholder { color: rgba(255, 255, 255, 0.38); }
-.ow3-find-count {
-  flex: 0 0 auto;
-  color: #fcd312;
-  font-size: 0.85em;
-  white-space: nowrap;
-}
-.ow3-find-miss .ow3-find-count { color: #ff8070; }
-.ow3-find-step,
 .ow3-find-close {
   flex: 0 0 auto;
   display: grid;
@@ -4117,57 +4112,16 @@ body.in-game .fdf-screen.fdf-ingame {
   background: none;
   color: #c9a53a;
   font: inherit;
+  font-size: 1.25em;
   line-height: 1;
 }
-.ow3-find-step { font-size: 0.75em; width: 1.7em; height: 1.7em; }
-.ow3-find-close { font-size: 1.25em; }
-.ow3-find-step:hover,
+.ow3-find-close[hidden] { display: none; }
 .ow3-find-close:hover { color: #fff3a0; }
-/* A and C dock inside the list's border; the list's rows and scrollbar make room for them. */
-.ow3-find-a .ow3-find-box,
-.ow3-find-c .ow3-find-box { border-left: 0; border-right: 0; }
-.fdf-list.ow3-find-docked-top > .fdf-list-rows,
-.fdf-list.ow3-find-docked-top > .fdf-scrollbar { top: var(--ow3-find-h) !important; }
-.fdf-list.ow3-find-docked-bottom > .fdf-list-rows,
-.fdf-list.ow3-find-docked-bottom > .fdf-scrollbar { bottom: var(--ow3-find-h) !important; }
-/* B: a scrim over the whole screen, and the palette on it a third of the way down. */
-.ow3-find-b {
-  inset: 0;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-  padding-top: 18%;
-  background: rgba(0, 0, 0, 0.45);
-}
-.ow3-find-panel {
-  width: 26em;
-  max-width: 80%;
-  padding: 0.7em 0.8em 0.6em;
-  background: rgba(10, 10, 14, 0.95);
-  border: 1px solid #b8952f;
-  box-shadow: 0 0 0 2px #000, 0 0.6em 2em rgba(0, 0, 0, 0.7);
-}
-.ow3-find-title {
-  margin-bottom: 0.45em;
-  color: #fcd312;
-  font-size: 1.1em;
-  text-shadow: 1px 1px 0 #000;
-}
-.ow3-find-rows { margin-top: 0.4em; }
-.ow3-find-row,
-.ow3-find-none {
-  display: flex;
-  align-items: center;
-  gap: 0.45em;
-  padding: 0.15em 0.4em;
-  white-space: nowrap;
-}
-.ow3-find-row.selected { background: #0707a2; color: #fcd312; }
-.ow3-find-none { color: rgba(255, 255, 255, 0.5); }
-.ow3-find-icon { width: 1.45em; height: 1.45em; flex: 0 0 auto; }
-.ow3-find-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
-.ow3-find-folder { flex: 0 0 auto; color: rgba(255, 255, 255, 0.45); font-size: 0.85em; }
-.ow3-find-row.selected .ow3-find-folder { color: rgba(252, 211, 18, 0.7); }
+.fdf-list.ow3-find-docked > .fdf-list-rows,
+.fdf-list.ow3-find-docked > .fdf-scrollbar { top: var(--ow3-find-h) !important; }
+/* The scrollbar's track art is baked at the list's full height (ui/fdf/widgets.ts), so on the
+   shorter bar it is clipped rather than left hanging out of the bottom of the list. */
+.fdf-list.ow3-find-docked > .fdf-scrollbar { overflow: hidden; }
 
 /* The list's scrollbar is the FDF's own (ui/fdf/widgets.ts draws its four pieces from the
    SCROLLBAR frame's art), so the browser's must go. */

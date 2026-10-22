@@ -205,10 +205,11 @@ Frame "TEXT" "LowPerfLabel" INHERITS "StandardInfoTextTemplate" {
 // Chromium LAUNCH switch, applied by the relaunch OK offers (electron/main.mjs,
 // src/ui/fdfOptions.ts). Spaced like the "Low Performance Mode" row above (see there for why
 // this panel's checkbox rows tuck closer under their labels than the Gameplay panel's -0.02075
-// does), plus 0.003 the developer asked for once "4:3 Menus" joined this row: 0.0115 sat the pair
-// tight under the Occlusion pulldown, and the panel's bottom rail still clears them at 0.0145.
+// does), plus 0.007 the developer asked for, in two steps, once "4:3 Menus" joined this row:
+// 0.0115 sat the pair tight under the Occlusion pulldown, and the panel's bottom rail still
+// clears them at 0.0185.
 Frame "GLUECHECKBOX" "VsyncCheckBox" INHERITS WITHCHILDREN "StandardCheckBoxTemplate" {
-    SetPoint TOPLEFT, "OcclusionLabel", BOTTOMLEFT, 0.0, -0.0145,
+    SetPoint TOPLEFT, "OcclusionLabel", BOTTOMLEFT, 0.0, -0.0185,
 }
 
 Frame "TEXT" "VsyncLabel" INHERITS "StandardInfoTextTemplate" {
@@ -227,12 +228,12 @@ Frame "TEXT" "VsyncLabel" INHERITS "StandardInfoTextTemplate" {
 // one SHARES the "Vertical Sync" row, standing in the PULLDOWN column where that row leaves
 // nothing: its box's left edge is the pulldowns' text column (`OptionsPopupMenuTemplate` sits
 // 0.012 inside its backdrop) and its top is the Vertical Sync box's, which measured in the
-// running screen is 0.00675 above the bottom of the Occlusion backdrop — the label column and
+// running screen is 0.00275 above the bottom of the Occlusion backdrop — the label column and
 // the pulldown column are tied by the backdrop's -0.00125 off its label's centre, so that number
 // holds at every aspect. Anchored off the backdrop, not off the Vertical Sync box, because the
 // gap between the two columns is the width of a LABEL's text, which is a string and can change.
 Frame "GLUECHECKBOX" "Menus43CheckBox" INHERITS WITHCHILDREN "StandardCheckBoxTemplate" {
-    SetPoint TOPLEFT, "OcclusionBackdrop", BOTTOMLEFT, 0.012, 0.00675,
+    SetPoint TOPLEFT, "OcclusionBackdrop", BOTTOMLEFT, 0.012, 0.00275,
 }
 
 Frame "TEXT" "Menus43Label" INHERITS "StandardInfoTextTemplate" {

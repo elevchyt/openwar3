@@ -501,7 +501,7 @@ itself. The F10 panel has no such row: nothing in a match is a menu.
 
 **Where it sits.** The panel has no height left, so the row SHARES the Vertical Sync row and
 stands in the pulldown column. Its box is anchored off `OcclusionBackdrop` (0.012 in, the
-pulldowns' own text inset, and 0.00675 up — the Vertical Sync box's top, which sits 0.0145 under its label). It is not anchored
+pulldowns' own text inset, and 0.00275 up — the Vertical Sync box's top, which sits 0.0185 under its label). It is not anchored
 off the Vertical Sync box, because the gap between the two columns is a label's text width.
 
 **The two panels at 4:3.** With the chrome at its authored width, the right panel's left rail

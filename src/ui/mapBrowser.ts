@@ -128,11 +128,11 @@ export class MapBrowser {
   private preview: MapPreview | null = null; // the selected map's minimap markers
   private listScroll = 0; // where the list stands, kept across the screen's rebuilds
   private alive = true; // cleared on dispose, so background reads stop
-  /** The Ctrl+F search box (ui/mapFind.ts). It took over from the type-ahead, so the screens'
-   *  letter accelerators are theirs again. */
+  /** The search box across the top of the list (ui/mapFind.ts). It took over from the
+   *  type-ahead, so the screens' letter accelerators are theirs again. */
   private readonly finder: MapFind;
-  /** Finder variant A: the maps the list shows INSTEAD of the open folder, best match first —
-   *  null while it shows the folder. */
+  /** What the search box has narrowed the list to: the maps shown INSTEAD of the open folder,
+   *  best match first — null while it shows the folder. */
   private filter: string[] | null = null;
   /** A row the next fill must SCROLL to. A searched-for map is nowhere near the player's
    *  cursor, which is exactly the case `select` deliberately does not scroll for. */
@@ -181,7 +181,7 @@ export class MapBrowser {
     // the bubble phase) rather than racing it.
     window.addEventListener("keydown", this.onKey, true);
     this.finder = new MapFind({
-      results: (q) => this.search(q).map((e) => ({ path: e.path, label: e.label, folder: e.folder, icon: this.icons.map(e.melee, e.players) })),
+      results: (q) => this.search(q).map((e) => e.path),
       pick: (path) => { const e = this.entries.find((x) => x.path === path); if (e) this.jumpTo(e); },
       setFilter: (paths) => { this.filter = paths; this.revealPath = null; this.listScroll = 0; this.onChange(); },
       warm: () => void this.indexAll(),
@@ -226,8 +226,8 @@ export class MapBrowser {
   /** Fill the map list and the summary pane on `s`. Call from the screen's `onBuild`. */
   fill(s: FdfScreen): void {
     this.screen = s;
-    // The search box FIRST: a docked one takes room off the list's rows, and `fillList` scrolls
-    // a found map into view — into the room that is left, not under the box.
+    // The search box FIRST: it takes room off the list's rows, and `fillList` scrolls a found
+    // map into view — into the room that is left, not under the box.
     this.finder.place(s.element, s.frame("MapListBox"));
     this.fillList(s);
     if (this.selected) this.fillInfo(s);
@@ -239,11 +239,9 @@ export class MapBrowser {
   private fillList(s: FdfScreen): void {
     const list = s.list("MapListBox");
     if (!list) return;
-    // Finder variant A's matches stand in for the folder, and come from every folder — so they
+    // The search box's matches stand in for the folder, and come from every folder — so they
     // are ready whatever the open one is doing.
-    const filtered = this.filter && this.filter
-      .map((p) => this.entries.find((e) => e.path === p))
-      .filter((e): e is MapEntry => !!e);
+    const filtered = this.filtered();
     const ready = !!filtered || readFolders.has(this.cwd);
     const upOneLevel = this.strings?.string("UP_ONE_LEVEL") ?? "(up one level)";
     const rows = filtered ?? (ready ? folderRows(this.entries, this.cwd) : []);
@@ -343,18 +341,18 @@ export class MapBrowser {
   // The list's own movement keys, and Ctrl+F for the search box (ui/mapFind.ts). Letters are
   // NOT the list's: they are the screen's button accelerators, as they are on every other glue
   // screen. They used to be a type-ahead search's (issue #137), which is why both screens once
-  // mounted with `noShortcutKeys`; the search now lives in a box the player opens.
+  // mounted with `noShortcutKeys`; the search now lives in a box the player gives the keyboard.
 
   /** A key pressed while the list is up. */
   private readonly onKey = (e: KeyboardEvent): void => {
     if (!this.alive) return;
-    // Ctrl+F (⌘F on a Mac) opens the search box — and is kept from the browser, whose own
-    // find bar would search the page's TEXT, which is not where the maps are.
+    // Ctrl+F (⌘F on a Mac) puts the keyboard in the search box — and is kept from the browser,
+    // whose own find bar would search the page's TEXT, which is not where the maps are.
     if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "f") {
       if (!this.listening(e.target, true)) return;
       e.preventDefault();
       e.stopImmediatePropagation();
-      this.finder.open();
+      this.finder.focus();
       return;
     }
     if (e.altKey || e.ctrlKey || e.metaKey) return;
@@ -378,9 +376,10 @@ export class MapBrowser {
    * was the developer's complaint. A double-click on a map still plays it.
    */
   private onNavKey(key: string): boolean {
-    if (this.filter) return false; // finder A's results: the box's arrows walk them
-    if (!readFolders.has(this.cwd)) return false; // still reading: the list takes nothing
-    const values = folderRows(this.entries, this.cwd)
+    // A list the search box has narrowed is walked as it shows: its matches, best first.
+    const filtered = this.filtered();
+    if (!filtered && !readFolders.has(this.cwd)) return false; // still reading: the list takes nothing
+    const values = (filtered ?? folderRows(this.entries, this.cwd))
       .filter((r) => isFolder(r) || !r.unsupported)
       .map((r) => (isFolder(r) ? folderValue(r) : r.path));
     if (!values.length) return false;
@@ -443,6 +442,13 @@ export class MapBrowser {
     return !!this.screen?.list("MapListBox");
   }
 
+  /** The maps the search box narrowed the list to, or null while it shows the folder. */
+  private filtered(): MapEntry[] | null {
+    return this.filter && this.filter
+      .map((p) => this.entries.find((e) => e.path === p))
+      .filter((e): e is MapEntry => !!e);
+  }
+
   /** Every playable map `q` fits, across every folder, best first — ui/mapSearch.ts ranks. */
   private search(q: string): MapEntry[] {
     return rankMatches(this.entries.filter((e) => !e.invalid && !e.unsupported), q, this.cwd);
@@ -462,11 +468,11 @@ export class MapBrowser {
   }
 
   /**
-   * Read every folder's maps in the background, once the player has opened the search box.
+   * Read every folder's maps in the background, once the player has gone to the search box.
    *
    * A map's OWN name ("Turtle Rock") lives inside the file; until its folder has been read all
    * a search has to go on is the file name ("(4)TurtleRock"), which is close enough to find it
-   * and not close enough for every map. So opening the box starts the read. A folder that lands
+   * and not close enough for every map. So focusing the box starts the read. A folder that lands
    * re-fills the list (`readFolder` → nothing here) but does not re-run the search: the box
    * answers its next keystroke with the names that are in by then, and a selection never moves
    * under a player who has stopped typing.
