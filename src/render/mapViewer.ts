@@ -11192,6 +11192,12 @@ export class MapViewerScene {
    *    The Game Menu survives this one alone, because `GlobalStrings.fdf` keeps
    *    `KEY_RESUME_GAME` next to `KEY_PAUSE_GAME` for one and the same `PauseButton` — the only
    *    way out of a pause is inside that panel, and greying it would strand the match.
+   *
+   * And one that is about the MAP rather than the moment: **a map with no quests** (every
+   * melee map — Blizzard.j's melee init creates none) has nothing for the log to show, so
+   * Quests is dead until its script makes one (issue #216). Counted as the log itself lists
+   * them — every ENABLED quest, discovered or not — and re-asked each frame (syncPauseUi),
+   * so a quest a trigger creates mid-match brings the button back with it.
    */
   private deadPanels(): ReadonlySet<ConsolePanel> {
     const dead = new Set<ConsolePanel>();
@@ -11199,6 +11205,7 @@ export class MapViewerScene {
       dead.add("allies");
       dead.add("chat");
     }
+    if (!this.mapScript?.interp.rt.quests.some((q) => q.enabled)) dead.add("quests");
     if (this.modalUp) for (const p of MapViewerScene.ALL_PANELS) dead.add(p);
     else if (this.hardPaused) for (const p of MapViewerScene.ALL_PANELS) if (p !== "menu") dead.add(p);
     return dead;
