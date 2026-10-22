@@ -10355,7 +10355,7 @@ export class MapViewerScene {
     const g = Math.floor(gold);
     const l = Math.floor(lumber);
     if (g <= 0 && l <= 0) return;
-    const who = this.playerLabel(from);
+    const who = this.colouredName(from, true); // named as a chat line names its speaker
     const key = g > 0 && l > 0 ? "Goldandlumberfromally" : g > 0 ? "Goldfromally" : "Lumberfromally";
     const args = g > 0 && l > 0 ? [g, l, who] : [g > 0 ? g : l, who];
     this.announce(fillSlots(this.strings.forRace(key, this.localRace), args));
@@ -10407,7 +10407,7 @@ export class MapViewerScene {
     // yours included, which is how you hear that the one you just placed went out.
     this.sounds?.playUi("MapPing");
     if (from !== this.localPlayer) {
-      this.announce(fillSlots(this.strings.forRace("Allyminimapping", this.localRace), [this.playerLabel(from)]));
+      this.announce(fillSlots(this.strings.forRace("Allyminimapping", this.localRace), [this.colouredName(from, true)]));
     }
   }
 
@@ -11368,7 +11368,7 @@ export class MapViewerScene {
     const key = on ? (this.multiplayerMatch ? "PAUSE_GAME_NOTIFY" : "PAUSE_GAME_NOTIFY_NO_TIMEOUT") : "RESUME_GAME_NOTIFY";
     const fallback = on ? (this.multiplayerMatch ? "%s paused the game. <%u timeouts remaining>" : "%s paused the game.") : "%s has resumed the game.";
     const text = (this.globalStrings?.strings.get(key) ?? fallback)
-      .replace("%s", this.playerLabel(player))
+      .replace("%s", this.colouredName(player, true)) // named as a chat line names its speaker
       .replace("%u", String(left));
     this.announce(text);
   }
