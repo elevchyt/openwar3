@@ -301,6 +301,31 @@ export interface PlusProfile {
    * it is the same animation-cancelling that seat alone does (`SimWorld.cancelsBackswing`).
    */
   readonly stutterStep: boolean;
+  /**
+   * Does a RANGED soldier walked out of the line (`pullOutHp`) come back the moment it reaches
+   * the spot it was sent to, rather than standing there for `PULL_BACK_HOLD`? The developer's
+   * own ("ranged units that are microed away due to low health must rejoin the fight once they
+   * have reached their kite destination"): an archer at a quarter of its life is a body that
+   * still SHOOTS from 600 units out, and ten seconds stood behind the line is ten seconds of
+   * damage the fight did not get. A melee unit has no such range to hide behind, so it keeps
+   * the hold. Insane only — it is the attentive player's micro. See `pullPass`.
+   */
+  readonly pullRejoin: boolean;
+  /**
+   * Hit-point fraction under which a MELEE soldier is not stepped behind the line but sent all
+   * the way HOME (`pullPass`) — the developer's 12 %: a Grunt that low dies to the first blow it
+   * walks back into, and the base is where it heals (its regeneration, a Moon Well, a statue).
+   * 0 = never, which is every rung but Insane.
+   */
+  readonly sendHomeHp: number;
+  /**
+   * Does it spend its DISPELS on enemy SUMMONS before anything else (`PlusCaster.dispelSummons`)?
+   * A Water Elemental, a Lava Spawn or a pair of Spirit Wolves dies to one Dispel Magic, Purge,
+   * Abolish Magic, Disenchant or Devour Magic (each handler damages or destroys a summon — see
+   * sim/spells.ts), which is the cheapest kill on the field and the one a good player never
+   * leaves standing. Insane only, per the developer.
+   */
+  readonly dispelSummons: boolean;
   /** Does it go and level its hero on creep camps? */
   readonly creeps: boolean;
   /**
@@ -494,7 +519,7 @@ export const PLUS_EASY: PlusProfile = {
   // that are close to its base and that's it".
   // …and it does NOT micro its wounded out of a fight — issue #124's Easy is a player who
   // gives an order and then watches it happen. `pullOutHp` 0 is that in one number.
-  focusFire: false, pullOutHp: 0, stutterStep: false, creeps: true, creepAt: 240, creepFood: 8,
+  focusFire: false, pullOutHp: 0, stutterStep: false, pullRejoin: false, sendHomeHp: 0, dispelSummons: false, creeps: true, creepAt: 240, creepFood: 8,
   creepCamps: 2, creepCampMax: CAMP_GREEN_MAX, creepRange: 3000, creepRest: 0, creepGreenUntil: 0,
   harass: false, roam: false, scout: false, sweepEvery: Infinity, expansionFirst: 0.5,
   shopping: 0, eagerMana: false, itemReserve: Infinity, keepPortal: false, portalToAttack: false,
@@ -561,7 +586,10 @@ export const PLUS_NORMAL: PlusProfile = {
   // whole army. The ceiling prices soldiers only (`armyTarget`), while the plan's own gates
   // (`TIER3_ARMY` 20, `TECH_AFTER` 24) read `PlusCtx.armyFood`, which counts the heroes' food
   // too — so 18 soldiers beside a tier-2 Normal's two heroes still clear every one of them.
-  armyFood: 18, wholeArmyCeiling: true, unlockAt: 1500, lateAttackFood: 30, towers: 1, siegeUnits: 1, heroes: 2, techTier: 3, upgradeRank: 2,
+  // …and 17 on "reduce the target army of the Normal Computer+ AI by one food": still above
+  // `CORE_ARMY_FOOD` (16), so the floor the plan keeps while it saves is untouched, and 17 plus
+  // two heroes' ten still clears `TIER3_ARMY` and `TECH_AFTER`.
+  armyFood: 17, wholeArmyCeiling: true, unlockAt: 1500, lateAttackFood: 30, towers: 1, siegeUnits: 1, heroes: 2, techTier: 3, upgradeRank: 2,
   // Six minutes at the earliest and each seat somewhere in the two after it — it was five on the
   // dot, which is both two minutes sooner than Easy and the "every computer leaves on one tick"
   // habit `firstAttackSpread` was added to Easy to cure. A wave of twelve (the hero's five on top)
@@ -577,7 +605,7 @@ export const PLUS_NORMAL: PlusProfile = {
   // minutes (`creepGreenUntil`).
   // It does not focus-fire, but it DOES pull a soldier out of the line at a quarter health —
   // the one piece of micro a player picks up long before they learn to focus a target.
-  focusFire: false, pullOutHp: 0.25, stutterStep: false, creeps: true, creepAt: 300, creepFood: 10,
+  focusFire: false, pullOutHp: 0.25, stutterStep: false, pullRejoin: false, sendHomeHp: 0, dispelSummons: false, creeps: true, creepAt: 300, creepFood: 10,
   creepCamps: Infinity, creepCampMax: Infinity, creepRange: Infinity, creepRest: 60, creepGreenUntil: 420,
   harass: false, roam: false, scout: true, sweepEvery: 120, expansionFirst: 0.75,
   // A third of a belt, and it keeps 500 gold back for the build order. It DOES keep a Town
@@ -624,7 +652,11 @@ export const PLUS_INSANE: PlusProfile = {
   factoryGold: 800, factoryMax: 4, producersAtTier2: 2,
   // Creeping starts at ninety seconds with the hero and eight food — the ladder's own answer,
   // which is "as soon as the hero walks out of the altar".
-  focusFire: true, pullOutHp: 0.25, stutterStep: true, creeps: true, creepAt: 90, creepFood: 8,
+  // …and its wounded are micro'd both ways from there: an archer is back in the fight the moment
+  // it reaches the spot it was walked to, and a melee soldier under 12 % goes home to heal
+  // instead (`pullRejoin` / `sendHomeHp`, the developer's numbers). It also kills summons with
+  // its dispels first (`dispelSummons`).
+  focusFire: true, pullOutHp: 0.25, stutterStep: true, pullRejoin: true, sendHomeHp: 0.12, dispelSummons: true, creeps: true, creepAt: 90, creepFood: 8,
   creepCamps: Infinity, creepCampMax: Infinity, creepRange: Infinity, creepRest: 0, creepGreenUntil: 0,
   harass: true, roam: true, scout: true, sweepEvery: 75, expansionFirst: 0.85,
   // A full belt and a Town Portal on the hero. Both are what separates a player who has been

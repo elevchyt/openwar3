@@ -555,7 +555,8 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   is measured differently. A THIRD bar is one SOLDIER's, not the army's: above Easy a unit under
   `pullOutHp` (25 %) and standing in a fight is walked `PULL_BACK_DIST` behind the line and back
   in later (`pullPass`), on a PER-UNIT cooldown — without that timer it see-saws in and out of
-  the battle instead of fighting in it — and a withdrawn CAPTAIN stops anchoring cohesion, or one
+  the battle instead of fighting in it; on Insane alone a RANGED one rejoins the moment it arrives
+  (`pullRejoin`) and a MELEE one under 12 % walks HOME instead (`sendHomeHp`) — and a withdrawn CAPTAIN stops anchoring cohesion, or one
   hurt hero drags the whole army home. The Scroll of Town Portal is spent leaving a PLAYER; against
   a CREEP CAMP it is a LAST RESORT at 8 % (`LAST_RESORT_HP`) and nothing above it, because the
   hero has two cheaper answers there — the same walk out of the fight every other unit gets, at
@@ -572,6 +573,11 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   REACH a straggler too: it skipped anything carrying a move or an attack order WHEREVER it
   stood, which is precisely the units that had come apart from it, and a fight in the sim ends
   with the unit still holding its attack order.
+  The FIRST SIX MINUTES are for keeping the army (`EARLY_PRESERVE`, `earlyLost`): against a player
+  the enemy's TOWERS are counted into the other side (`oppositionPower` skips buildings, which is
+  why a wave used to dive a base until its hero's scroll fired at 40 %), and an even fight that
+  has started to cost us, a plainly lost one, a group under 55 % or a captain under 50 % takes the
+  army home — every bar asking about the OTHER side too, so a stray Peasant is still picked off.
   CONTACT with an enemy army is measured against the whole COLUMN and never against the captain
   (`armyFrame`/`inContact`, shared by `contactPass` and `armyInReach` — a body one of them sees
   and the other does not is a column that stops walking without deciding anything): a march is
@@ -647,7 +653,9 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   never spent on a WORKER it cannot finish (`nukeWorthIt`) — Frost Nova's share to the unit it
   hits is 100 at every rank and no worker in the game has that little life — priced off the same
   data columns the sim's own handlers read, and enforced at LEGALITY so the misclick cannot land
-  there either. MANA BURN is the one press aimed at a BAR rather than at a body (`manaBurnValue`):
+  there either. Insane spends its DISPELS on enemy SUMMONS before anything else (`dispelSummons`,
+  `PlusCaster.dispelSummon`) — Abolish Magic is an AUTOCAST the ladder never presses, and its smart
+  autocast leaves summons alone by design. MANA BURN is the one press aimed at a BAR rather than at a body (`manaBurnValue`):
   it is worth what it TAKES, `min(DataA, mana)`, so it goes on whoever has been SAVING their bar
   and never on the wounded — a HERO at 4× anybody else, its premium deliberately NOT scaled by
   `heroFocus` (that dial is the anti-chase rule, and a 300-range press at whoever is already in

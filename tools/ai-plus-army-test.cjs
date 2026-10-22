@@ -641,6 +641,20 @@ console.log("\n-- STUTTER-STEP (Insane's ranged micro between shots) -----------
   check("a melee unit (a Footman) never stutters", stutterAim(archer({ weapon: { ranged: false, range: 90 } }), grunt()), null);
 }
 
+console.log("\n-- INSANE-ONLY MICRO (rejoin on arrival, send home, dispel summons) ------");
+{
+  // The developer's: ranged soldiers walked out at low health rejoin once they reach the spot,
+  // melee ones under 12 % go home, and dispels go on enemy summons — "ONLY the Insane difficulty".
+  check("Insane: a ranged pull-out rejoins on arrival", PLUS_INSANE.pullRejoin, true);
+  check("Insane: a melee soldier under 12 % goes home", PLUS_INSANE.sendHomeHp, 0.12);
+  check("…below the pull-out bar, so it is the later of the two", PLUS_INSANE.sendHomeHp < PLUS_INSANE.pullOutHp, true);
+  check("Insane: dispels kill enemy summons", PLUS_INSANE.dispelSummons, true);
+  for (const [name, p] of [["Normal", PLUS_NORMAL], ["Easy", PLUS_EASY]]) {
+    check(`${name} does none of the three`, p.pullRejoin || p.sendHomeHp > 0 || p.dispelSummons, false);
+  }
+  check("Normal's whole-army ceiling is 17 food", PLUS_NORMAL.armyFood, 17);
+}
+
 
 // NORMAL'S CEILING COMES OFF AT 25:00 (`liveProfile`, `PlusProfile.unlockAt`) — the developer's
 // "remove the food cap after minute 25 … so that games can finish in all-out brawls". Before it

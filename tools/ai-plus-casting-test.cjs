@@ -36,6 +36,10 @@ function check(what, got, want) {
 // them (`friendlySpell` answers false for both).
 const lvl = (o = {}) => ({ area: 0, castRange: 800, cost: 0, duration: 0, heroDuration: 0, data: [200, NaN], buffs: [], summon: "", ...o });
 const ABILS = {
+  // ABOLISH MAGIC, with its real row: `[Aadm] targs1` "air,ground,ward,vuln,invu,tree", `Rng1`
+  // 500, `DataB1` 300 "Summoned Unit Damage" — and an AUTOCAST, which is why the ladder never
+  // presses it by hand and why its smart autocast leaves summons alone.
+  Aadm: { code: "Aadm", target: "unit", autocast: true, targetFlags: ["air", "ground", "ward", "vuln", "invu", "tree"], levelData: [lvl({ castRange: 500, data: [0, 300] })] },
   AHhb: { code: "AHhb", target: "unit", autocast: false, targetFlags: ["air", "ground", "organic", "notself", "vuln", "invu", "nonancient"], levelData: [lvl()] },
   AUdc: { code: "AUdc", target: "unit", autocast: false, targetFlags: ["air", "ground", "organic", "notself", "vuln", "invu", "nonancient"], levelData: [lvl()] },
   // A plain single-target nuke, for the mana gate: Storm Bolt is a `disable`, Frost Nova a `nuke`.
@@ -140,6 +144,7 @@ function cast(units, profile = PLUS_INSANE, opts = {}) {
       .sort((a, b) => Math.hypot(a.x - x, a.y - y) - Math.hypot(b.x - x, b.y - y))
       .slice(0, Math.max(1, limit)),
     techMeets: () => true,
+    unitMeets: () => true,
     castUseError: () => null,
     targsAdmit: () => true,
     castError: (casterId, code, targetId) => {
@@ -860,6 +865,41 @@ const druid = (o = {}) => unit({
   const hurt = unit({ hp: 350, x: 200, race: "nightelf" });
   check("a druid rejuvenates a hurt soldier beside it", cast([d, hurt])?.code, "Arej");
   check("…aimed at it", cast([d, hurt])?.targetId, hurt.id);
+}
+
+// ==========================================================================================
+console.log("\n-- Insane kills enemy SUMMONS with its dispels ---------------------------------");
+// ==========================================================================================
+// The developer's: Insane "must use its dispel abilities … on enemy summoned units to kill them
+// fast (like water elementals, lava spawns etc.)" — and ONLY Insane (`dispelSummons`).
+{
+  const dryad = caster({ abilId: "Aadm", isHero: false });
+  const elemental = unit({ owner: 1, x: 400, hp: 525, maxHp: 525, summonLeft: 40, isSummon: true });
+  const grunt = unit({ owner: 1, x: 200 });
+  const cmd = cast([dryad, elemental, grunt]);
+  check("an Insane Dryad Abolishes the Water Elemental (an AUTOCAST, pressed by hand)", cmd && cmd.code, "Aadm");
+  check("…aimed at the summon", cmd && cmd.targetId, elemental.id);
+  const d2 = caster({ abilId: "Aadm", isHero: false });
+  check("a NORMAL Dryad leaves it to her autocast", cast([d2, unit({ ...elemental, id: nextId++ })], PLUS_NORMAL, { passes: 2 }), null);
+}
+{
+  // …a summon a short walk OUTSIDE the cast range is still gone after (`DISPEL_REACH`)…
+  const dryad = caster({ abilId: "Aadm", isHero: false });
+  const far = unit({ owner: 1, x: 700, summonLeft: 40, isSummon: true });
+  check("…a step outside its range too", cast([dryad, far])?.targetId, far.id);
+  const d2 = caster({ abilId: "Aadm", isHero: false });
+  check("…but not across the field", cast([d2, unit({ owner: 1, x: 1400, summonLeft: 40, isSummon: true })]), null);
+}
+{
+  // The AREA dispel goes where it catches the most summon, never over our own.
+  const p = caster({ abilId: "Adis", isHero: false });
+  const lone = unit({ owner: 1, x: 300, y: 300, hp: 200, maxHp: 200, summonLeft: 40, isSummon: true });
+  const wolves = [unit({ owner: 1, x: 500, hp: 200, maxHp: 200, summonLeft: 40, isSummon: true }), unit({ owner: 1, x: 540, hp: 200, maxHp: 200, summonLeft: 40, isSummon: true })];
+  check("a Priest's Dispel goes on the pair of wolves, not the lone one", spotOf(cast([p, lone, ...wolves])), { x: 500, y: 0 });
+  const p2 = caster({ abilId: "Adis", isHero: false });
+  const theirs = unit({ owner: 1, x: 400, hp: 200, maxHp: 200, summonLeft: 40, isSummon: true });
+  const ours = unit({ x: 420, hp: 525, maxHp: 525, summonLeft: 40, isSummon: true });
+  check("…and never where it would take our own elemental with it", cast([p2, theirs, ours]), null);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

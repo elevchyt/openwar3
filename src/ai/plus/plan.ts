@@ -397,6 +397,10 @@ export function buildPlan(c: PlusCtx): void {
   altar(c);
   firstHero(c);
   barracks(c);
+  // …and AT TIER 2, THE SECOND HERO — straight after the opening's own three rows, once the army
+  // has something on the field for it to lead. See `heroBanked`: below this point every row was
+  // spending the hero's gold a soldier at a time.
+  if (heroBanked(c)) c.ai.setBuildUnit(1, c.ai.heroId2);
   // SAVING FOR A MISSING TOWN PORTAL — see `portalSaving` for why HERE.
   portalSaving(c);
   // …and NOW the REST of the economy — the profile's full worker count, whatever it is. This is
@@ -809,6 +813,7 @@ function extraHeroes(c: PlusCtx): void {
 function tierTwoHero(c: PlusCtx): void {
   const { ai, profile, table, tier } = c;
   if (profile.heroes < 2) return;
+  if (heroBanked(c)) return; // already asked, near the top of the ladder — never twice (see `extraHeroes`)
   if (ai.countDone(table.altar) < 1 || ai.count(ai.heroId) < 1) return;
   if (ai.count(ai.heroId2) >= 1) return;
   if (tier >= 2) return void ai.setBuildUnit(1, ai.heroId2);
@@ -817,6 +822,46 @@ function tierTwoHero(c: PlusCtx): void {
   if (!table.halls[1] || ai.count(table.halls[1]) < 1) return;
   const hero = c.defOf(ai.heroId2);
   if (hero) ai.reserveGold(hero.goldCost, hero.lumberCost);
+}
+
+/**
+ * IS THE SECOND HERO THE NEXT THING BOUGHT? — true from the moment the tier-2 hall stands, the
+ * hero is legal and the army already fields `HERO2_ARMY`, until the hero is in the altar's queue.
+ *
+ * Reported: an Insane human "took quite a lot to train its second hero after reaching Tier 2".
+ * `tierTwoHero` sits directly under `army(coreArmy)`, and at tier 2 the core army's floor rises
+ * to 24 food — an `army` row is `SetBuildNext`, one more soldier per row per pass, so every
+ * pass spent the running budget on another soldier before the hero row was read and the hero
+ * waited for the whole core army to fill. The workers and the shop above it took their share
+ * the same way. A ladder player clicks the altar the moment the Keep lands and keeps the
+ * gold for it in the bank until then.
+ *
+ * So once the army has soldiers to lead — the same `HERO2_ARMY` the tier-1 row asks — the row
+ * moves to just under the opening (crews, hall, supply, altar, first hero, Barracks), where its
+ * halt BANKS everything the rows below would have spent: the next soldier, the next worker, the
+ * shop. The halt is one purchase long (`ai.count` counts the hero the moment it is queued) and
+ * `AiPlayer.releaseStall` still lets the ladder past a row that stops getting nearer its price,
+ * so a broken base is not locked out of an army. Below `HERO2_ARMY` it stays under the core army,
+ * which is the one thing never saved through. Every rung that fields a second hero.
+ */
+/**
+ * …and the GOLD that row is holding, for the one buyer outside the ladder — the hero's belt
+ * (plus/items.ts shops out of `ItemView.gold`). The second hero's price while `heroBanked` is
+ * up, or while the Keep is in the hall's queue (`tierTwoHero`'s own reserve), and 0 otherwise.
+ */
+export function secondHeroHold(c: PlusCtx): number {
+  const { ai, profile, table, tier } = c;
+  const keepGoingUp = tier < 2 && profile.heroes >= 2 && !!table.halls[1] && ai.count(table.halls[1]) >= 1
+    && ai.countDone(table.altar) >= 1 && ai.count(ai.heroId) >= 1 && ai.count(ai.heroId2) < 1;
+  if (!heroBanked(c) && !keepGoingUp) return 0;
+  return c.defOf(ai.heroId2)?.goldCost ?? 0;
+}
+
+function heroBanked(c: PlusCtx): boolean {
+  const { ai, profile, table, tier, armyFood } = c;
+  if (profile.heroes < 2 || tier < 2 || armyFood < HERO2_ARMY) return false;
+  if (ai.countDone(table.altar) < 1 || ai.count(ai.heroId) < 1 || ai.count(ai.heroId2) >= 1) return false;
+  return ai.heroLegal?.(ai.heroId2) ?? true;
 }
 
 /**

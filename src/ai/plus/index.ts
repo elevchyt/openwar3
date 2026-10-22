@@ -17,7 +17,7 @@ import {
 } from "./chatter";
 import { PlusItems, type ItemCtx } from "./items";
 import {
-  LUMBER_FLOOR, armyTarget, buildPlan, buildableMix, expansionOpen, harvestPlan, openingUnit, type PlusCtx,
+  LUMBER_FLOOR, armyTarget, buildPlan, buildableMix, expansionOpen, harvestPlan, openingUnit, secondHeroHold, type PlusCtx,
 } from "./plan";
 import {
   ATTACK_TELL_GAP, BUSY_LINES, COLOUR_NAMES, COMING_LINES, COUNTER_TELL, HELP_ANSWER_GAP,
@@ -1537,6 +1537,42 @@ const LOSING_RATIO = 1.3;
 const LOSING_BLED = 0.8;
 
 /**
+ * THE EARLY GAME IS FOR KEEPING THE ARMY — the developer's: "especially within the first 6
+ * minutes the Computer+ AI's main goal is to preserve its army (of course, it shouldn't avoid
+ * picking off easy enemy units etc.)". Reported against it: a wave that "fully commits into the
+ * enemy base until its hero is hurt enough to trigger a scroll of town portal" — the scroll's
+ * 40 % (plus/items.ts `ESCAPE_HP`) was in practice the first bar it ever met, because every rule
+ * above it was measured too late for a fight in somebody's base:
+ *
+ *  · the two armies were compared WITHOUT THE TOWERS — `oppositionPower` skips buildings, so a
+ *    Guard Tower shooting the wave was not in the fight at all, and a defence of three Footmen
+ *    under two towers read as three Footmen;
+ *  · `contactPass` hands a base assault to `fightLost` wholesale (`assaulting`), and `fightLost`
+ *    waited for a fifth of the power brought (`LOSING_BLED`) AND a 1.3× deficit, or for the group
+ *    under 40 % / the hero under 20 % (`ABORT_GROUP_HP` / `ABORT_HERO_HP`).
+ *
+ * So for the first `EARLY_PRESERVE` seconds (`preserving`), against a PLAYER, on every rung that
+ * retreats at all (`retreatHp` > 0 — Easy is the player who watches): the towers are counted,
+ * an EVEN fight that has started to cost us is broken off (`EARLY_LOSING_RATIO` /
+ * `EARLY_LOSING_BLED`), one we are plainly outgunned in is left before it costs anything
+ * (`EARLY_OUTGUNNED`), the group leaves at `EARLY_RETREAT_HP` while anything is still shooting
+ * at it, and a captain under `EARLY_HERO_HP` takes the army home while the other side still
+ * holds `EARLY_HERO_CONTEST` of ours — a hero down at minute five is the game. Every one of
+ * those asks about the OTHER side as well, which is what keeps "picking off easy units": a
+ * stray Peasant, a lone scout or a fight we are clearly winning trips none of them. The tower is
+ * counted only where it can actually reach the column — its own range plus `EARLY_TOWER_SLACK`.
+ * All OURS.
+ */
+const EARLY_PRESERVE = 360;
+const EARLY_LOSING_RATIO = 1.0;
+const EARLY_LOSING_BLED = 0.9;
+const EARLY_OUTGUNNED = 1.25;
+const EARLY_RETREAT_HP = 0.55;
+const EARLY_HERO_HP = 0.5;
+const EARLY_HERO_CONTEST = 0.75;
+const EARLY_TOWER_SLACK = 300;
+
+/**
  * An enemy hall further than this from every start location is an EXPANSION (`noteHalls`).
  * A melee start location is the spot the main hall is placed on, so its own hall stands within
  * a few hundred of it; the nearest other mine on any melee map is several thousand away.
@@ -1761,6 +1797,21 @@ const PULL_BACK_AGAIN = 45;
 const PULL_BACK_ARRIVE = 200;
 
 /**
+ * A MELEE soldier under `PlusProfile.sendHomeHp` goes HOME instead of behind the line — and these
+ * are that trip's clocks. All OURS.
+ *
+ * `SEND_HOME_NEAR` is how close to the hall counts as already home (a unit defending its own base
+ * is not sent to the spot it is standing on). `SEND_HOME_REST` is how long it stands there AFTER
+ * the walk before it may rejoin, unless it heals past `RECOVER_TO` first: a Grunt's own 0.25 hit
+ * points a second is slow, so the trip is bounded rather than left to the bar, or a night elf
+ * soldier by day (no regeneration at all) would sit in the base for the rest of the match. The
+ * walk itself is priced off the unit's own speed, so a Knight and a Ghoul both arrive with the
+ * same rest in hand.
+ */
+const SEND_HOME_NEAR = 1200;
+const SEND_HOME_REST = 45;
+
+/**
  * …and the same two clocks for a HERO walked out of a CREEP CAMP, which is a different
  * withdrawal (`pullBar`).
  *
@@ -1834,6 +1885,9 @@ export interface PullBack {
   readonly until: number;
   /** …and the earliest `clock` at which it may be pulled out a SECOND time. */
   readonly next: number;
+  /** A melee soldier sent all the way HOME rather than behind the line (`sendHomeHp`) — held
+   *  out until it has healed or `until` runs out, and never re-ordered off a well it is drinking at. */
+  readonly home?: boolean;
 }
 
 /** Is this unit currently OUT of the line? The one question `commit` and `squadFood` ask, so
@@ -2140,6 +2194,13 @@ interface Brain {
   /** Ranged soldiers mid STUTTER-STEP (`stutterPass`): unit → what to go back to when the
    *  weapon is ready — the target it was shooting, and the order it was on. */
   readonly stutters: Map<number, Stutter>;
+  /**
+   * The SECOND HERO's gold while the build order banks for it (plus/plan.ts `secondHeroHold`) —
+   * 0 the rest of the time. The belt shops out of the bank minus this, because the shop is the
+   * one buyer that never reads the build ladder: a hero who wandered to a shop while the plan was
+   * holding 425 gold for the altar spent it on potions, and the hero row waited another lap.
+   */
+  readonly heroHold: { gold: number };
   /** Who is standing still WAITING for the rest of the army to catch up (`strayed` → "wait"),
    *  and WHEN each of them was stopped.
    *
@@ -2514,6 +2575,9 @@ export class ComputerPlusAi {
     // with itself.
     const allied = (u: SimUnit): boolean =>
       u.owner !== player && u.owner >= 0 && u.owner < MELEE.MAX_PLAYERS && this.host.coAllied(player, u.owner);
+    // The gold the build order is BANKING for the second hero (`heroHold`), written by each
+    // build pass and read by the belt below — see `Brain.heroHold`.
+    const heroHold = { gold: 0 };
     this.brains.push({
       ai, profile, table, strategy,
       memory: new EnemyMemory(),
@@ -2544,7 +2608,7 @@ export class ComputerPlusAi {
           const t = this.host.tech.get(typeId);
           return [...t.makeitems, ...t.sellitems];
         },
-        gold: () => ai.gold(),
+        gold: () => Math.max(0, ai.gold() - heroHold.gold),
         // WHOSE SHELF this is — the race's own first buys (plus/items.ts `RACE_FIRST`).
       }, profile, race),
       clock: 0,
@@ -2583,6 +2647,7 @@ export class ComputerPlusAi {
       freeze: { was: null, since: 0 },
       pulls: new Map(),
       stutters: new Map(),
+      heroHold,
       waiting: new Map(),
       afield: false,
       target: null,
@@ -3000,6 +3065,7 @@ export class ComputerPlusAi {
     // a harvest order. See `AiPlayer.kickStalledMines` for the match it was seen in.
     ai.kickStalledMines(b.clock);
     buildPlan(ctx);
+    b.heroHold.gold = secondHeroHold(ctx);
     // What it is building is worth telling a TEAMMATE, and this is where the answer is already
     // in hand. Said after the plan rather than before it, so the line and the build array are
     // the same decision read twice.
@@ -4241,7 +4307,11 @@ export class ComputerPlusAi {
     if (b.contactSince < 0) b.contactSince = b.clock;
     if (b.clock - b.contactSince < b.profile.defendDelay) return false;
     b.contactSince = -1;
-    if (this.powerOf(foes) * CONTACT_ENGAGE <= this.powerOf(this.squadUnits(b))) {
+    // …and in the first six minutes the TOWERS they are standing under are part of what we would
+    // be fighting (`EARLY_PRESERVE`): a defence that has fallen back under its Guard Towers is
+    // not the same fight as one standing in the open.
+    const theirs = this.preserving(b) ? this.powerWithTowers(foes, this.towersOnUs(b)) : this.powerOf(foes);
+    if (theirs * CONTACT_ENGAGE <= this.powerOf(this.squadUnits(b))) {
       // Remember the base this wave was on its way to, if it was — see `Brain.resume`.
       if (b.mode === "attacking" && !b.creeping && b.target?.id) b.resume = { ...b.target };
       b.creeping = false;
@@ -5348,6 +5418,9 @@ export class ComputerPlusAi {
     if (b.mode !== "attacking") return false;
     const force = this.creepForce(b);
     if (force.health < ABORT_GROUP_HP) return true;
+    // THE FIRST SIX MINUTES — see `EARLY_PRESERVE`. Before every later bar, because each of
+    // these is a stricter version of one of them.
+    if (this.preserving(b) && this.earlyLost(b, force)) return true;
     // AGAINST A PLAYER, THE TWO ARMIES ARE COMPARED — see `LOSING_RATIO`. Our own hit points
     // are a late reading: an army that has met one twice its size is losing long before it is
     // under 40 %, and waiting for that is waiting until there is nothing left to bring home.
@@ -5363,9 +5436,66 @@ export class ComputerPlusAi {
     return this.oppositionHealthy(b);
   }
 
+  /** Are we in the early game, against a player, on a rung that retreats? — `EARLY_PRESERVE`. */
+  private preserving(b: Brain): boolean {
+    return b.profile.retreatHp > 0 && !b.creeping && b.clock < EARLY_PRESERVE;
+  }
+
+  /**
+   * The early game's own `fightLost` — the four stricter bars `EARLY_PRESERVE` lists, every one
+   * of them read against the other side WITH ITS TOWERS. Nothing in front of us (or nothing that
+   * can hurt us) is never a reason to leave: that is the "picking off easy units" half.
+   */
+  private earlyLost(b: Brain, force: CreepForce): boolean {
+    const ours = this.powerOf(this.squadUnits(b));
+    const theirs = this.oppositionPower(b, true);
+    if (theirs <= 0) return false;
+    if (theirs > ours * EARLY_OUTGUNNED) return true;
+    const brought = Math.max(ours, b.battle?.ours ?? 0);
+    if (theirs > ours * EARLY_LOSING_RATIO && ours < brought * EARLY_LOSING_BLED) return true;
+    if (force.health < EARLY_RETREAT_HP && theirs >= ours * EARLY_HERO_CONTEST) return true;
+    return force.heroLevel >= 1 && force.heroHealth < EARLY_HERO_HP && theirs >= ours * EARLY_HERO_CONTEST;
+  }
+
+  /**
+   * The enemy's armed BUILDINGS that can reach the column — a tower within its own range (plus
+   * `EARLY_TOWER_SLACK`) of any of our soldiers, standing, finished, and under our own eyes. The
+   * towers `EARLY_PRESERVE` counts into the other side.
+   */
+  private towersOnUs(b: Brain): SimUnit[] {
+    const out: SimUnit[] = [];
+    const ours = [...this.squadUnits(b)].filter((u) => !u.isPeon && !isCopy(u) && u.hp > 0);
+    if (!ours.length) return out;
+    for (const t of this.host.world.units.values()) {
+      if (t.hp <= 0 || !t.building || t.owner === b.ai.player) continue;
+      if (t.building.constructionLeft > 0) continue;
+      const w = t.weapons.find((x) => x.enabled);
+      if (!w) continue;
+      const reach = w.range + EARLY_TOWER_SLACK;
+      if (!ours.some((u) => Math.abs(u.x - t.x) <= reach && Math.abs(u.y - t.y) <= reach && Math.hypot(u.x - t.x, u.y - t.y) <= reach)) continue;
+      if (!b.ai.hostileTo(t) || !b.ai.knows(t)) continue;
+      out.push(t);
+    }
+    return out;
+  }
+
+  /** `powerOf` with the TOWERS in it — the one reading of an enemy army that counts the
+   *  buildings shooting at us (`EARLY_PRESERVE`). The same `armyPower` metric, so the two
+   *  sides are still priced alike. */
+  private powerWithTowers(units: Iterable<SimUnit>, towers: readonly SimUnit[]): number {
+    const fighters: Fighter[] = [];
+    for (const u of units) {
+      if (isCopy(u) || u.isPeon || u.building || u.hp <= 0) continue;
+      fighters.push({ dps: this.dpsOf(u), hp: Math.max(0, u.hp), maxHp: Math.max(1, u.maxHp) });
+    }
+    for (const t of towers) fighters.push({ dps: this.dpsOf(t), hp: Math.max(0, t.hp), maxHp: Math.max(1, t.maxHp) });
+    return armyPower(fighters);
+  }
+
   /** The power of the enemy we can see around the group — `oppositionHealthy`'s reading, as a
-   *  number, for `losingFight`. Players only: a creep that wandered in is not their army. */
-  private oppositionPower(b: Brain): number {
+   *  number, for `losingFight`. Players only: a creep that wandered in is not their army.
+   *  `towers` adds the buildings shooting at us (`EARLY_PRESERVE`). */
+  private oppositionPower(b: Brain, towers = false): number {
     const centre = this.armyAnchor(b) ?? this.squadCentre(b);
     if (!centre) return 0;
     const frame = this.armyFrame(b, centre);
@@ -5377,7 +5507,7 @@ export class ComputerPlusAi {
       if (isCopy(u) || !b.ai.hostileTo(u) || !b.ai.knows(u)) continue;
       foes.push(u);
     }
-    return this.powerOf(foes);
+    return towers ? this.powerWithTowers(foes, this.towersOnUs(b)) : this.powerOf(foes);
   }
 
   /**
@@ -7214,11 +7344,34 @@ export class ComputerPlusAi {
     const anchor = this.armyAnchor(b);
     for (const u of this.squadUnits(b)) {
       const entry = b.pulls.get(u.id);
+      // THE TRIP HOME (`sendHomeHp`, Insane): a melee soldier too hurt to be worth stepping back
+      // into the line. Asked BEFORE the ordinary pull-out, and of a unit already standing behind
+      // the line too — a Grunt pulled at 24 % that took one more blow on the way out is the
+      // same Grunt at 10 %.
+      if (entry?.home && pulledOut(entry, b.clock)) {
+        this.homeTrip(b, u, entry);
+        continue;
+      }
+      if (this.sendHome(b, u, entry)) continue;
       if (pulledOut(entry, b.clock)) {
+        const there = !!entry && Math.hypot(u.x - entry.x, u.y - entry.y) <= PULL_BACK_ARRIVE;
+        // A RANGED SOLDIER IS BACK IN THE FIGHT THE MOMENT IT GETS THERE (`pullRejoin`, Insane):
+        // its weapon reaches from where it is standing, so the step out of the melee was the
+        // whole of the rescue and the rest of `PULL_BACK_HOLD` is damage the fight goes without.
+        // The see-saw guard is left as it was (`next`), so it is not pulled again at once — and
+        // it goes back on an ATTACK-MOVE, at whatever it was walked away from if that is still
+        // near, so it shoots its way in rather than walking through the line to the captain.
+        if (entry && there && b.profile.pullRejoin && u.weapon?.ranged && !u.isHero) {
+          b.pulls.set(u.id, { ...entry, until: b.clock });
+          const foe = this.foeBeside(b, u, PULL_BACK_DIST + COHESION_COMBAT);
+          const to = foe ?? anchor;
+          if (to) this.issue(b, { c: "order", unitId: u.id, order: { kind: "attackmove", x: to.x, y: to.y }, queued: false });
+          continue;
+        }
         // Already out: keep it walking there, and nothing else. A unit that arrived is left
         // alone rather than re-ordered — a fresh move order restarts the path search, which is
         // the same cost `commit` guards against.
-        if (entry && u.order !== "move" && Math.hypot(u.x - entry.x, u.y - entry.y) > PULL_BACK_ARRIVE) {
+        if (entry && u.order !== "move" && !there) {
           this.issue(b, { c: "order", unitId: u.id, order: { kind: "move", x: entry.x, y: entry.y }, queued: false });
         }
         continue;
@@ -7246,6 +7399,50 @@ export class ComputerPlusAi {
         next: b.clock + (heroOut ? HERO_PULL_HOLD : PULL_BACK_AGAIN),
       });
       this.issue(b, { c: "order", unitId: u.id, order: { kind: "move", x: spot.x, y: spot.y }, queued: false });
+    }
+  }
+
+  /**
+   * SEND A MELEE SOLDIER HOME — the developer's "melee ones must run back to the Computer+ AI
+   * player's base if they have less than 12% health", Insane alone (`PlusProfile.sendHomeHp`).
+   *
+   * A step behind the line (`pullBackSpot`) is a rescue for a unit that can come back and fight;
+   * a melee soldier this low is one blow from dead the moment it does, and it has no range to
+   * fight from the back with. So it walks to the hall, out of the army's orders (`pulls`, the
+   * same channel every withdrawal uses — `commit` skips it and `squadFood` does not count it),
+   * and heals there: its own regeneration, a Moon Well (`wellPass` may still send it to one), an
+   * Obsidian Statue. Asked whether it is in a fight or not — a soldier at a tenth of its life
+   * marching to the NEXT fight is the same loss a few seconds later — but never of one already
+   * at home (`SEND_HOME_NEAR`), a worker, a hero (whose exits are the scroll and `pullBar`), a
+   * copy, or a unit already being healed.
+   */
+  private sendHome(b: Brain, u: SimUnit, entry: PullBack | undefined): boolean {
+    const bar = b.profile.sendHomeHp;
+    if (bar <= 0 || u.hp / Math.max(1, u.maxHp) >= bar) return false;
+    // One trip, then a see-saw guard like every other withdrawal: a unit whose rest ran out
+    // before it healed (a night elf soldier by day regenerates nothing) is let go with the army
+    // rather than turned round the moment it is `SEND_HOME_NEAR` out of the base.
+    if (entry?.home && b.clock < entry.next) return false;
+    if (u.isHero || u.isPeon || isCopy(u) || !u.weapon || u.weapon.ranged || this.recovering(u)) return false;
+    const home = b.ai.home();
+    const dist = Math.hypot(u.x - home.x, u.y - home.y);
+    if (dist <= SEND_HOME_NEAR) return false;
+    const spot = this.standSpot(u, home);
+    const until = b.clock + dist / Math.max(100, u.speed) + SEND_HOME_REST;
+    b.pulls.set(u.id, { x: spot.x, y: spot.y, until, next: until + PULL_BACK_AGAIN, home: true });
+    this.issue(b, { c: "order", unitId: u.id, order: { kind: "move", x: spot.x, y: spot.y }, queued: false });
+    return true;
+  }
+
+  /** …and keep it on the way there until it has healed or its clock runs out. */
+  private homeTrip(b: Brain, u: SimUnit, entry: PullBack): void {
+    if (u.hp / Math.max(1, u.maxHp) >= RECOVER_TO) {
+      b.pulls.set(u.id, { ...entry, until: b.clock });
+      return;
+    }
+    if (u.drinkWellId > 0 || this.recovering(u)) return; // a well is pouring into it — let it
+    if (u.order !== "move" && Math.hypot(u.x - entry.x, u.y - entry.y) > PULL_BACK_ARRIVE) {
+      this.issue(b, { c: "order", unitId: u.id, order: { kind: "move", x: entry.x, y: entry.y }, queued: false });
     }
   }
 

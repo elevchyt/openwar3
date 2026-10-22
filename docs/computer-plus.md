@@ -385,7 +385,7 @@ Blizzard's unless a comment says otherwise) every value here is ours.
 | waits this long into a fight before casting | 2.5 s | 1 s | 0 |
 | workers per town | 8 | 11 | 14 |
 | expansions | **never** | 1, after 10 min | 3, after 5 min |
-| **army food ceiling** | **12** | 20 (was 30, then 26 — see below), **lifted at 25:00** | 80 (`UPKEEP_TIER2`) |
+| **army food ceiling** | **12** | 17 (was 30, then 26, 20, 18 — see below), **lifted at 25:00** | 80 (`UPKEEP_TIER2`) |
 | towers | **0** | 1 | 4 |
 | siege units at tier 2 | **0** | 1 | 2 |
 | heroes | 1 | 2 | 3 |
@@ -393,6 +393,8 @@ Blizzard's unless a comment says otherwise) every value here is ours.
 | upgrade rank | 1 | 2 | 3 |
 | animation-cancels | no | no | **yes** |
 | stutter-steps its ranged units | no | no | **yes** |
+| a ranged pull-out rejoins on ARRIVAL; a melee one under 12 % goes HOME | no | no | **yes** |
+| kills enemy summons with its dispels first | no | no | **yes** |
 | first attack | 7–10 min, rolled per seat | 6–8 min, rolled per seat | 2½–3 min, rolled per seat |
 | army food that makes a wave | 10 | 12 (**30 from 25:00**) | 16, **+10 per hall tier** (26 / 36) |
 | quiet time between waves (rolled ±25 % per wave) | 150 s | 120 s (half after a won fight) | 30 s (half after a won fight) |
@@ -433,7 +435,7 @@ caster and the belt.
 **Normal was brought towards Easy.** Reported: the step from Easy to Normal was "quite a massive
 difference … not very friendly for beginners" — and read off the table it was, because nearly every
 dial on Normal sat nearer Insane's value than Easy's. The cut is in what a beginner FEELS: the army
-ceiling (26 → 20, against Easy's 12; later 17, "just a little less"; then back to 20 counted over the WHOLE army — `wholeArmyCeiling`, issue #210 — because the ceiling had been spent per row of the mix and the late game stood on up to 31 food of soldiers beside it), the first wave (5 min on the dot → 6–8 min rolled per seat, so
+ceiling (26 → 20, against Easy's 12; later 17, "just a little less"; then back to 20 counted over the WHOLE army — `wholeArmyCeiling`, issue #210 — because the ceiling had been spent per row of the mix and the late game stood on up to 31 food of soldiers beside it; then 18, and now 17 — one food off each time it was asked), the first wave (5 min on the dot → 6–8 min rolled per seat, so
 a table of Normal computers no longer leaves on one tick either), the gap between waves (90 → 120 s),
 the hero (creeping from 4 min instead of 2½, which is what put a level-3–4 hero with a belt of
 potions in the first fight against a level-1 Easy one; two belt slots instead of four, and 500 gold
@@ -1305,6 +1307,36 @@ less assault is lost whenever the opposition still outweighs it. The retreat its
 the WHOLE squad — `retreating` re-orders every unit that is not home, whatever it was doing, and
 units still on their way to the fight are in the squad — so the fix is in noticing sooner.
 
+### The first six minutes are for KEEPING the army
+
+*"Make Computer+ AI smarter when it comes to falling its entire army back (or teleporting). Right
+now, it seems to really like to fully commit into the enemy base until its hero is hurt enough to
+trigger a scroll of town portal … within the first 6 minutes the Computer+ AI's main goal is to
+preserve its army (of course, it shouldn't avoid picking off easy enemy units etc.)."* The
+scroll's 40 % (`ESCAPE_HP`) was in practice the first bar such a wave met, for two reasons: the
+armies were compared **without the towers** (`oppositionPower` skips buildings, so three Footmen
+under two Guard Towers read as three Footmen), and a base assault is handed by `contactPass` to
+`fightLost` wholesale, whose bars are a fifth of the army bled *and* a 1.3× deficit, or the group
+at 40 % / the hero at 20 %.
+
+For the first `EARLY_PRESERVE` (360 s), against a player, on every rung that retreats at all
+(`retreatHp` > 0 — Easy is the player who watches), `earlyLost` runs ahead of those bars with the
+TOWERS counted (`towersOnUs`: an armed, finished enemy building within its own range plus
+`EARLY_TOWER_SLACK` of a soldier, under our own eyes, priced by the same `armyPower`):
+
+| leave when | ours |
+| --- | --- |
+| plainly outgunned, before it costs anything | theirs > 1.25 × ours (`EARLY_OUTGUNNED`) |
+| an even fight that has started to cost us | theirs > ours **and** ours < 90 % of what we brought |
+| the group under 55 % of its hit points | …while they still hold 75 % of our power |
+| the captain under 50 % | …while they still hold 75 % of our power |
+
+`contactPass` counts the towers too in that window, so a defence fallen back under its towers is
+not mistaken for one in the open. Every bar also asks about the OTHER side, which is the
+developer's "picking off easy units": a scout, a stray Peasant, or a fight we are clearly winning
+trips none of them. The retreat is the ordinary one (`retreat(b, "player")`), so the hero's Scroll
+of Town Portal is on the table for it exactly as for any lost fight against a player.
+
 ### It goes at the EXPANSION — and it goes and LOOKS for one
 
 Reported: *"more keen towards scouting for enemy expansions and choosing to attack the enemy's
@@ -1492,6 +1524,17 @@ began once the Keep was finished. `tierTwoHero` now sits directly under `army(co
 the upgrade is in the hall's queue it emits a reserve row for the hero's gold AND lumber
 (`AiPlayer.reserveGold(gold, wood)` — the reserve row grew a lumber half for this). After: every
 Insane build asks for it 0–16 s after the Keep, pinned at 30 s.
+
+**…and once the Keep stands it is BANKED for, above the army.** Reported: an Insane human *"took
+quite a lot to train its second hero after reaching tier 2"*. Under `army(coreArmy)` it waited for
+the core army to fill — at tier 2 that floor rises to 24 food, and an `army` row is `SetBuildNext`,
+one more soldier per row per pass, so every pass bought a soldier with the hero's gold — and the
+hero's belt shopped out of the same bank without ever reading the ladder. So once the army fields
+`HERO2_ARMY` (`heroBanked`), the row moves up to just under the opening (crews, hall, supply,
+altar, first hero, Barracks), where its halt banks what the workers, the shop and the army rows
+below would have spent; and `secondHeroHold` takes the hero's price out of the gold the belt sees
+(`Brain.heroHold`) for as long as the build order is saving it, the Keep's construction included.
+Below `HERO2_ARMY` it stays under the core army, as before. Every rung that fields a second hero.
 
 The halt is bounded in both directions besides: it is **one** purchase (nothing re-asks once the
 hero is queued — `ai.count` counts a job in a queue), and `releaseStall` lets the ladder past a row
@@ -3156,6 +3199,27 @@ Three places ask it:
 The classic Blizzard-transcription caster keeps its own coarser reading (`dispellable`: a summon
 or any timed buff, quoted from the observation thread) — it reproduces that AI, warts included.
 
+### Insane kills summons with its dispels FIRST
+
+*"Computer+ Insane AI must use its dispel abilities (Priest's Dispel Magic, Dryad Abolish Magic,
+Spirit Walker Disenchant, Destroyer Devour Magic etc.) on enemy summoned units to kill them fast
+(like water elementals, lava spawns etc.). Again, this should ONLY be done by the Insane
+difficulty."* `PlusProfile.dispelSummons`, and `PlusCaster.dispelSummon` runs ABOVE the whole role
+ladder for that rung. The rules above already reached some of these buttons, but on their own
+terms: Dispel Magic is a `debuff` (the last rung before utility), and **Abolish Magic is an
+AUTOCAST** — the ladder never presses an autocast by hand, and its autocast is the *smart* one that
+leaves summons alone on purpose (`AbolishMagicDispelSmart`). So a Dryad stood next to a Water
+Elemental and never touched it.
+
+Every member of the family ends a summon by its own handler, read with the same column and default
+the sim reads (`summonBlow`): Purge destroys it outright, Dispel Magic / Disenchant deal `DataB`
+(200), Abolish Magic `DataB` (300), Devour Magic `DataE` (160). A single-target dispel goes on the
+summon it finishes, else the biggest in reach; an area one goes where it catches the most enemy
+summon hit points and never where it would catch as much of our own. The caster may walk
+`DISPEL_REACH` (250) past its range to reach one — a short step, not a Priest marched out in front
+of the army for a Spirit Wolf. Legality is still the click's (`castUseError` / `castError`).
+Pinned in tools/ai-plus-casting-test.cjs.
+
 ### A fight has to be worth the mana
 
 Reported: *"it feels like the AI is spending too much mana on small creep camps"* — a Death
@@ -4005,6 +4069,22 @@ Three gates, and each one answers a different way of getting this wrong:
 and pinned). That is what makes it *behind the owner's army* rather than merely *away from the
 enemy*: a soldier that had run out in front walks all the way back past the line, and one already
 at the back does not walk another nine hundred units for nothing.
+
+**Insane micros it both ways from there** (the developer's, and Insane's alone):
+
+* **A RANGED soldier rejoins the moment it arrives** (`pullRejoin`). Its weapon reaches from where
+  it is standing, so the step out of the melee was the whole rescue and the rest of
+  `PULL_BACK_HOLD` was damage the fight went without. It goes back on an attack-move at what it
+  was walked away from (else the anchor), so it shoots its way in rather than walking through the
+  line; the see-saw guard (`next`) is untouched. Heroes keep their own rules.
+* **A MELEE soldier under 12 % goes HOME** (`sendHomeHp`, `sendHome` / `homeTrip`). A step back
+  is no rescue for a Grunt one blow from dead with no range to fight from — it walks to the hall
+  and heals there (its regeneration, a Moon Well — `wellPass` may still send it to one, and the
+  trip never re-orders it off a well — or a statue). Asked whether it is in a fight or not, never
+  of one already within `SEND_HOME_NEAR` (1200) of home, and converted from an ordinary pull-out
+  too (a Grunt pulled at 24 % that took one more blow on the way out). It rejoins when healed to
+  `RECOVER_TO` or after the walk plus `SEND_HOME_REST` (45 s) — bounded, because a night elf
+  soldier by day regenerates nothing — and is not sent again for `PULL_BACK_AGAIN` after that.
 
 Two consequences that are not obvious from the rule and each of which is a bug if missed:
 

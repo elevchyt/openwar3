@@ -677,6 +677,26 @@ const HOLY_LIGHT = "AHhb";
 const HOLY_LIGHT_RICH = 0.5;
 const HOLY_LIGHT_TOPUP = 0.9;
 
+/** How far past a dispel's own `Rng1` an enemy summon may stand and still be gone after
+ *  (`dispelSummon`) — a short walk, the way a player's click on it walks the caster into range,
+ *  and no further, or a Priest is walked out in front of the army for a Spirit Wolf. Ours. */
+const DISPEL_REACH = 250;
+
+/**
+ * What a dispel does to ONE summon, by base code — the column each handler in sim/spells.ts
+ * reads, with the same default beside it, so this and the sim agree about whether the press
+ * finishes the body. Purge destroys a summon outright (its handler deals 100000).
+ */
+function summonBlow(code: string, lvl: AbilityLevel): number {
+  switch (code) {
+    case "Aprg": return Infinity;
+    case "Adis": return dat(lvl, 1, 200);
+    case "Aadm": return dat(lvl, 1, 300);
+    case "Advm": return dat(lvl, 4, 160);
+    default: return 0;
+  }
+}
+
 /** Sentry Ward's base code — the Witch Doctor's `[Aeye]` and the item `[AIsw]` alike. Its
  *  planting is spaced out (`wardsWatching`). */
 const SENTRY_WARD = "Aeye";
@@ -951,6 +971,10 @@ export class PlusCaster {
   private tryCast(u: SimUnit, friends: SimUnit[], foes: SimUnit[]): boolean {
     const engaged = this.engaged(u, foes);
     this.trackFight(u, engaged, foes);
+    // ENEMY SUMMONS FIRST, on the rung that does it (`PlusProfile.dispelSummons`) — see
+    // `dispelSummon`. Above the whole ladder, because the button is the cheapest kill there is
+    // and the summon is only on the field for its own short clock.
+    if (this.profile.dispelSummons && this.dispelSummon(u, friends, foes)) return true;
     const cards: Array<{ role: Role; ab: SimUnit["abilities"][number]; def: AbilityDef; lvl: AbilityLevel }> = [];
     for (const ab of u.abilities) {
       if (ab.level < 1 || ab.cooldownLeft > 0) continue;
@@ -976,6 +1000,85 @@ export class PlusCaster {
       if (this.ctx.holds?.(u, card.ab.code)) continue;
       if (!this.wants(u, card.def, card.role, friends, foes, engaged)) continue;
       if (this.aim(u, card.ab.code, card.def, card.lvl, card.role, friends, foes)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * KILL THE ENEMY'S SUMMONS WITH A DISPEL — the developer's: Insane "must use its dispel
+   * abilities (Priest's Dispel Magic, Dryad Abolish Magic, Spirit Walker Disenchant, Destroyer
+   * Devour Magic etc.) on enemy summoned units to kill them fast (like water elementals, lava
+   * spawns etc.)".
+   *
+   * Every member of the family (`DISPEL_CODES`; Disenchant is `Adcn` on the `Adis` code) ends a
+   * summon by its own handler (sim/spells.ts): Purge destroys it outright, Dispel Magic and
+   * Disenchant deal `DataB`, Abolish Magic `DataB`, Devour Magic `DataE` — 200 / 300 / 160 at
+   * rank 1, which is a Water Elemental or a Lava Spawn gone in one press. The ordinary ladder
+   * already reaches some of these buttons, but on its own terms: Dispel Magic is a `debuff`,
+   * the last rung before utility, and Abolish Magic is an AUTOCAST the ladder never presses at
+   * all — and its autocast is the SMART dispel that leaves summons alone by design
+   * (`AbolishMagicDispelSmart`, see `worthDispelling`). So a Dryad standing next to a Water
+   * Elemental never touched it. This is the manual press a player makes instead.
+   *
+   * A single-target dispel goes on the summon it kills, else the biggest one in reach; an area
+   * one goes where it catches the most enemy summon hit points, and never where it would catch
+   * as much of OUR OWN — the handlers do not ask allegiance, and our Water Elemental dies to our
+   * Priest's Dispel exactly as theirs does. `DISPEL_REACH` lets the caster walk a little way to
+   * it, as a player's click does. Legality is the click's own (`castUseError` / `castError`).
+   */
+  private dispelSummon(u: SimUnit, friends: SimUnit[], foes: SimUnit[]): boolean {
+    const theirs = foes.filter((f) => f.isSummon && f.hp > 0 && !f.invulnerable && !f.building);
+    if (!theirs.length) return false;
+    const ours = friends.filter((f) => f.isSummon && f.hp > 0);
+    for (const ab of u.abilities) {
+      if (ab.level < 1 || ab.cooldownLeft > 0) continue;
+      const def = this.view.def(ab.id);
+      if (!def || !DISPEL_CODES.has(def.code)) continue;
+      const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
+      if (!lvl) continue;
+      if (this.view.world.castUseError(u.id, ab.code) !== null) continue;
+      if (this.ctx.holds?.(u, ab.code)) continue;
+      const reach = lvl.castRange + DISPEL_REACH;
+      if (def.target === "unit") {
+        let best: SimUnit | null = null;
+        let bestScore = -Infinity;
+        for (const t of theirs) {
+          if (!near(u, t, reach)) continue;
+          if (this.view.world.castError(u.id, ab.code, t.id) !== null) continue;
+          if (this.view.refuses?.(u, ab.code, t)) continue;
+          // What the press ENDS — a body it finishes outright is worth its whole life; one it
+          // only hurts, the damage. Distance breaks ties, as everywhere else in this file.
+          const blow = summonBlow(def.code, lvl);
+          const s = Math.min(t.hp, blow) * 10 + t.maxHp - Math.hypot(t.x - u.x, t.y - u.y) * 0.01;
+          if (s > bestScore) { bestScore = s; best = t; }
+        }
+        if (best && this.view.order({ c: "cast", unitId: u.id, code: ab.code, targetId: best.id, x: 0, y: 0, queued: false })) return true;
+        continue;
+      }
+      if (def.target !== "point") continue;
+      const area = lvl.area || 200;
+      const blow = summonBlow(def.code, lvl);
+      const caught = (x: number, y: number, pool: SimUnit[]): number => {
+        let hp = 0;
+        for (const t of pool) {
+          if (Math.hypot(t.x - x, t.y - y) > area + t.radius) continue;
+          if (!this.view.world.targsAdmit(t, def.targetFlags)) continue;
+          hp += Math.min(t.hp, blow);
+        }
+        return hp;
+      };
+      let spot: { x: number; y: number } | null = null;
+      let bestValue = 0;
+      for (const t of theirs) {
+        if (!near(u, t, reach)) continue;
+        const gain = caught(t.x, t.y, theirs);
+        if (gain <= 0 || caught(t.x, t.y, ours) >= gain) continue;
+        if (gain <= bestValue) continue;
+        if (this.view.world.castError(u.id, ab.code, 0, t.x, t.y) !== null) continue;
+        bestValue = gain;
+        spot = { x: t.x, y: t.y };
+      }
+      if (spot && this.view.order({ c: "cast", unitId: u.id, code: ab.code, targetId: 0, x: spot.x, y: spot.y, queued: false })) return true;
     }
     return false;
   }
