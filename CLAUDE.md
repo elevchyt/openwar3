@@ -96,6 +96,13 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   per call — ~24% of a 287-unit frame, more than the whole renderer cost by then. `targetFlagSet`
   (data/abilities.ts) normalises once per array and keeps it in a WeakMap: **−23% in Low
   Performance Mode and −26% at full quality**, exact, with `TargetFlagCache.enabled` to re-measure.
+- **Direct links:** read [`docs/multiplayer.md`](docs/multiplayer.md) "Direct links (WebRTC)"
+  before touching [`src/net/directLink.ts`](src/net/directLink.ts) or `matchLinkFrom`. In a match
+  each client opens ONE ordered, reliable `RTCDataChannel` to the host and the relay is left
+  signaling and catching what cannot go direct — no server change, no protocol bump. The cutover
+  is ORDERED (a `cut` marker over the relay; direct traffic is held until it lands), because a
+  direct message overtakes a relayed one and the host counts commands. Do not make the lane
+  unreliable while a snapshot still carries one-shot EVENTS (fx, notices, felled trees).
 - **Fog rebuild:** the per-seat vision rebuild (`sim.fog`) is the largest sub-phase of the sim
   after the world step in a team game, and `SightStamps` in [`src/sim/vision.ts`](src/sim/vision.ts)
   is why it is no longer. A sight's footprint is a fact about the TERRAIN, not about who is

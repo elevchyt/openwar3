@@ -1,6 +1,7 @@
 import type { ScoreTable } from "./scoreTable";
 import { snapshotFor, type FxSnapshot, type SnapshotViewer, type SnapshotWorld, type UnitSnapshot, type WatchedPlayer, type WorldSnapshot } from "./snapshot";
 import { decodeSnapshot, encodeSnapshot, type WireSnapshot } from "./snapshotWire";
+import { withDirectLinks } from "../net/directLink";
 import { divergence, describeDivergence, type Divergence } from "./divergence";
 import { commandMessage, isCommandMessage, type CommandMessage } from "../net/commandLink";
 import type { Command } from "./commands";
@@ -305,8 +306,8 @@ export function isPauseStateMessage(data: unknown): data is PauseStateMessage {
  * A round-trip probe, and its echo. Every peer broadcasts a `ping` once a second carrying its
  * OWN clock; whoever hears it answers `pong` with that clock untouched, addressed back; the
  * sender reads the difference. What the metrics strip prints as "ping" is the WORST of the
- * links this machine is on — on a client that is the host (and anybody else in the room), on
- * the host the slowest client — because the slowest link is the one every order waits for.
+ * links this machine is on — on a client that is the host, on the host the slowest client —
+ * because the slowest link is the one every order waits for.
  * `at` is never read on the echoing side beyond being copied back, so a peer that lies in it
  * can only lie to itself.
  */
@@ -409,9 +410,9 @@ export interface HostSources {
  *  at 30 for a while was the WIRE — until the binary hot lane (`snapshotWire.ts`,
  *  PROTOCOL_VERSION 10) shrank a payload 7–9x and 60 Hz cost less than 30 Hz JSON had. It came
  *  back DOWN to 20 when the OpenWar3 server (src/net/officialServer.ts) made the wire a BILL:
- *  every payload now goes host → relay → player, the relay's egress is what Railway charges
- *  for, and the host's own upload carries one stream per player — a third of the cadence is a
- *  third of both.
+ *  every payload a player has no direct link for (src/net/directLink.ts) goes host → relay →
+ *  player, the relay's egress is what Railway charges for, and the host's own upload carries one
+ *  stream per player either way — a third of the cadence is a third of both.
  *
  *  What keeps 20 Hz from LOOKING like 20 Hz is the client's pose buffer (src/game/poseInterp.ts):
  *  measured over a simulated wire (tools/pose-interp-test.cjs), a unit walks steadier at 20 Hz
@@ -474,8 +475,11 @@ export function matchLinkFrom(
   observers: ReadonlyArray<{ id: number; peer: number }> = [],
 ): MatchLinkSetup {
   const seats = [...slots.map((s) => ({ id: s.id, peer: s.peer })), ...observers.map((o) => ({ id: o.id, peer: o.peer }))];
+  // Every other person in the match, for the direct links (src/net/directLink.ts): each client
+  // opens one to the host, and a broadcast is sent to each of these by whichever path it has.
+  const peers = [...new Set(seats.map((s) => s.peer).filter((p): p is number => p !== undefined && p !== myPeer))];
   return {
-    channel,
+    channel: myPeer === undefined ? channel : withDirectLinks(channel, { self: myPeer, hostPeer, isHost, peers }),
     localPlayer: seats.find((s) => s.peer === myPeer)?.id ?? myPeer ?? 0,
     seats,
     isHost,
@@ -546,12 +550,16 @@ export class MatchLink {
   private pingAccum = PING_EVERY; // the first probe goes out on the first tick
 
   /** Send the periodic probe. Called every sim step on host and client alike — a link is
-   *  measured from both ends, since both are waiting on it. */
+   *  measured from both ends, since both are waiting on it. A CLIENT probes the host alone: every
+   *  order it gives and every payload it draws travels that one link, and a link to another
+   *  client stays on the relay (src/net/directLink.ts), where its round trip says nothing about
+   *  how this machine plays. */
   tickPing(dt: number): void {
     this.pingAccum += dt;
     if (this.pingAccum < PING_EVERY) return;
     this.pingAccum = 0;
-    this.channel.send({ k: "ping", at: nowMs() } satisfies PingMessage);
+    const host = this.seats.find((s) => s.id === this.localPlayer)?.peer === this.hostPeer;
+    this.channel.send({ k: "ping", at: nowMs() } satisfies PingMessage, host ? undefined : this.hostPeer);
   }
 
   /** The slowest link this machine is on, in ms, or null before the first echo has come home. */

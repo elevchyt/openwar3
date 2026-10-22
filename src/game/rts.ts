@@ -8688,7 +8688,9 @@ export class RtsController {
     for (const s of snap.units) {
       if (s.remembered) continue;
       live.add(s.id);
-      this.poses.push(s.id, snap.time, s.x, s.y, s.facing, s.flyHeight);
+      // Our OWN units skip the buffer when they set off from rest (poseInterp.ts): that start is
+      // the delay between a click and the unit moving, and the one the player is waiting on.
+      this.poses.push(s.id, snap.time, s.x, s.y, s.facing, s.flyHeight, s.owner === this.localPlayer);
     }
     this.poses.retain((id) => live.has(id));
     // Bodies owed (item 2c): entries for `removed` retire through the ordinary removal

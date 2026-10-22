@@ -198,6 +198,97 @@ for (const key of Object.keys(NETS)) {
     check(`${NETS[key].name}: the walk clip never drops to a stand mid-walk (${after.flips} flips)`, after.flips === 0);
   }
 }
+// ---- setting off from rest: an EAGER unit (our own) skips the dead time in the buffer ---------
+//
+// The host stands a unit still, applies an order at a random moment, and EXPEDITES the payload
+// that carries its first step (matchLink.ts `expedite`) as well as keeping its cadence. Two
+// buffers are fed the SAME arrivals — one pushes the unit as ours (`eager`), one does not — and
+// for each order we measure how long after the moving payload LANDED the unit visibly moves
+// (`moves`) and is drawn with its walk clip (`walk clip`, rts.ts's gate), how many steps it then
+// stops again for in its first second (`stops` — running out of poses shows as exactly that) and
+// how often that drops the clip back to a stand, and whether the eager unit is ever drawn BEHIND
+// the plain one (it must not be: it may only ever be earlier).
+function simulateStart({ net, trials = 200, seed = 11 }) {
+  const R = rng(seed);
+  const interval = 1 / 20;
+  const ideal = SPEED * SIM_DT;
+  const res = { plain: { wait: 0, walk: 0, stops: 0, flips: 0 }, eager: { wait: 0, walk: 0, stops: 0, flips: 0 }, behind: 0, overrun: 0 };
+  for (let k = 0; k < trials; k++) {
+    const order = 1 + R() * interval; // host sim time the order is applied at
+    const payloads = [];
+    let wall = 0, simT = 0, acc = 0, sendAcc = 0, moveLanded = Infinity;
+    while (simT < order + 2) {
+      const frame = SIM_DT * (0.6 + 0.8 * R());
+      wall += frame;
+      acc += frame;
+      while (acc >= SIM_DT) {
+        acc -= SIM_DT;
+        const was = simT;
+        simT += SIM_DT;
+        sendAcc += SIM_DT;
+        const due = sendAcc >= interval - 1e-6;
+        if (due) sendAcc = 0;
+        const expedite = was < order && simT >= order; // the tick the order is applied
+        if (due || expedite) {
+          const spike = R() < net.spikeRate ? net.spike : 0;
+          const arrives = wall + net.latency + net.jitter * R() + spike;
+          const x = simT <= order ? 0 : SPEED * (simT - order);
+          payloads.push({ t: simT, x, arrives });
+          if (x > 0 && arrives < moveLanded) moveLanded = arrives;
+        }
+      }
+    }
+    payloads.sort((a, b) => a.arrives - b.arrives);
+    const make = (eager) => ({ p: new PoseInterpolator(interval), out: { x: 0, y: 0, f: 0, h: 0, gliding: false }, eager, x: 0, set: -1, walk: -1, ema: 0, stops: 0, flips: 0, prev: 0 });
+    const both = [make(false), make(true)];
+    let next = 0, newest = null, applied = null;
+    for (let i = 0; i * SIM_DT < order + 2; i++) {
+      const now = i * SIM_DT;
+      while (next < payloads.length && payloads[next].arrives <= now) {
+        const p = payloads[next++];
+        if (!newest || p.t > newest.t) newest = p;
+      }
+      for (const b of both) {
+        if (newest && newest !== applied) { b.p.arrive(newest.t); b.p.push(1, newest.t, newest.x, 0, 0, 0, b.eager); }
+        b.p.advance(SIM_DT);
+        if (b.p.sample(1, b.out)) b.x = b.out.x;
+        const d = b.x - b.prev;
+        b.ema += (Math.min(d / ideal, 1) - b.ema) * 0.25; // rts.ts's walk-clip gate
+        if (b.set < 0 && b.x > 0.5) b.set = now;
+        if (b.walk < 0 && b.ema >= 0.2) b.walk = now;
+        else if (b.walk >= 0 && now - b.walk < 1) {
+          if (d < 0.2 * ideal) b.stops++;
+          if (b.ema < 0.2) b.flips++;
+        }
+        b.prev = b.x;
+      }
+      if (newest) applied = newest;
+      if (both[1].x < both[0].x - 1e-6) res.behind++;
+      if (newest && both[1].x > newest.x + 1e-6) res.overrun++;
+    }
+    for (const [i, key] of [[0, "plain"], [1, "eager"]]) {
+      res[key].wait += both[i].set - moveLanded;
+      res[key].walk += both[i].walk - moveLanded;
+      res[key].stops += both[i].stops;
+      res[key].flips += both[i].flips;
+    }
+  }
+  for (const b of [res.plain, res.eager]) { b.wait = (b.wait / trials) * 1000; b.walk = (b.walk / trials) * 1000; b.stops /= trials; b.flips /= trials; }
+  return res;
+}
+
+console.log("\nsetting off from rest — ms from the payload that moves it landing (200 orders per wire)");
+console.log("  wire                       moves plain/eager   walk clip plain/eager   stops/1s plain/eager   clip drops plain/eager");
+for (const [key, net] of Object.entries(NETS)) {
+  const r = simulateStart({ net });
+  console.log(`  ${net.name.padEnd(26)} ${r.plain.wait.toFixed(0).padStart(6)} / ${r.eager.wait.toFixed(0).padEnd(6)}  ${r.plain.walk.toFixed(0).padStart(10)} / ${r.eager.walk.toFixed(0).padEnd(10)}  ${r.plain.stops.toFixed(2).padStart(10)} / ${r.eager.stops.toFixed(2).padEnd(10)}  ${r.plain.flips.toFixed(2).padStart(8)} / ${r.eager.flips.toFixed(2)}`);
+  check(`${net.name}: our own unit sets off sooner (${r.eager.wait.toFixed(0)} ms < ${r.plain.wait.toFixed(0)} ms)`, r.eager.wait < r.plain.wait);
+  check(`${net.name}: …and is drawn WALKING sooner (${r.eager.walk.toFixed(0)} ms < ${r.plain.walk.toFixed(0)} ms)`, r.eager.walk < r.plain.walk);
+  check(`${net.name}: …and is never drawn behind where the shared clock would put it (${r.behind} steps)`, r.behind === 0);
+  check(`${net.name}: …nor past the newest pose the host has sent (${r.overrun} steps)`, r.overrun === 0);
+  if (key !== "bad") check(`${net.name}: …without stopping again once it has set off (${r.eager.stops.toFixed(2)} ≤ ${r.plain.stops.toFixed(2)} + 0.1)`, r.eager.stops <= r.plain.stops + 0.1);
+}
+
 {
   // The other half of the claim: a unit that ARRIVES is drawn where it arrived, teleports jump.
   const p = new PoseInterpolator(1 / 20);

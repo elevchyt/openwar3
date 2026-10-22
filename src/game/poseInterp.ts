@@ -24,6 +24,19 @@
 // answer as they were. `PoseOut.gliding` is how the clip picker squares the two: a unit still
 // sliding the last of its walk is still walking, and its swing waits until it has arrived.
 //
+// One exception to the shared clock: a unit of OUR OWN starting to move from rest (`push`'s
+// `eager`). Everything in the buffer between where such a unit is drawn and the payload that
+// moved it is the same standing pose, so waiting the full delay for it buys nothing but latency —
+// and it is the latency the player FEELS, the one between a click and the unit setting off. That
+// unit is drawn on a clock of its own, started at its last standing sample (so it sets off on the
+// next frame, from exactly where it stood) and run JUST IN TIME: fast enough to reach the newest
+// pose when the next payload is due to land — the host's cadence says when (`lastDue`), the
+// jitter margin says how late — and never faster than `1 - CLOCK_RATE` of real time, which is how
+// it falls back onto the shared clock and leaves it. The payload that carries an order is
+// EXPEDITED, off the cadence (matchLink.ts), so the next one is often only a few milliseconds of
+// motion away and the unit sets off slowly; it is at full stride by the payload after. It is never
+// drawn behind where the shared clock would have put it, so it is never later than before.
+//
 // Pure and DOM-free, so the headless test can drive it.
 
 /** One unit's pose in one payload, at the host time the payload was built. */
@@ -75,6 +88,16 @@ const CLOCK_SNAP = 0.25;
  *  sample is not a unit still walking. */
 const ARRIVED = 0.5;
 
+/** Below this two facings are the same (radians): a standing unit's facing is copied, not
+ *  recomputed, so anything past float noise is a unit turning to set off. */
+const SAME_FACING = 0.01;
+
+/** One client sim step (seconds). */
+const STEP = 1 / 60;
+
+/** Within this of the shared clock an eager unit has rejoined it (seconds). */
+const REJOINED = 0.002;
+
 export class PoseInterpolator {
   private readonly samples = new Map<number, PoseSample[]>();
   /** The host time the frame is drawn at. NaN until the first payload. */
@@ -86,6 +109,14 @@ export class PoseInterpolator {
   private lastLocal = Number.NaN;
   private lastHost = Number.NaN;
   private jitterEma = 0;
+  /** Units drawn AHEAD of the shared clock, and the host time each is drawn at — see the file
+   *  header's last paragraph. Always at or after `drawTime`, never after the unit's newest pose. */
+  private readonly ahead = new Map<number, number>();
+  /** The host time of the newest payload that came ON the cadence — an expedited one is off it —
+   *  so the next is due one interval after this. */
+  private lastDue = Number.NaN;
+  /** `localNow` when the newest payload arrived. */
+  private newestAt = 0;
 
   constructor(
     /** The host's cadence — the spacing the arrivals SHOULD have. */
@@ -119,11 +150,22 @@ export class PoseInterpolator {
     }
     this.lastLocal = this.localNow;
     this.lastHost = hostTime;
-    if (!(hostTime <= this.newest)) this.newest = hostTime;
+    if (!(hostTime <= this.newest)) {
+      this.newest = hostTime;
+      this.newestAt = this.localNow;
+    }
+    // A payload a whole interval after the last one on the cadence is on it; anything sooner was
+    // sent off it (an order's expedited answer, a rejoin's catch-up). The millisecond of slack is
+    // the host's own epsilon (three 1/60 steps fall a whisker short of 1/20).
+    if (!(hostTime - this.lastDue < this.interval - 1e-3)) this.lastDue = hostTime;
   }
 
-  /** One unit's pose in the payload `arrive` was just told about. */
-  push(id: number, t: number, x: number, y: number, f: number, h: number): void {
+  /**
+   * One unit's pose in the payload `arrive` was just told about. `eager` says the unit is one
+   * whose setting off the player is waiting to see — the caller passes it for the local
+   * player's own units — and lets a start from rest skip the buffer (see the file header).
+   */
+  push(id: number, t: number, x: number, y: number, f: number, h: number, eager = false): void {
     let list = this.samples.get(id);
     if (!list) {
       list = [];
@@ -131,13 +173,43 @@ export class PoseInterpolator {
     }
     const last = list[list.length - 1];
     if (last && t <= last.t) return; // an older payload's pose never rewrites a newer one
+    if (eager && last && this.setsOff(id, list, x, y, f)) this.ahead.set(id, last.t);
     list.push({ t, x, y, f, h });
     if (list.length > HISTORY) list.shift();
   }
 
+  /**
+   * Is a pose at (x, y, f) this unit SETTING OFF: drawn standing now, standing in every sample
+   * from here to its newest, and moved or turned in the new one? Only then is everything
+   * between the shared clock and the new pose dead time. A unit already walking is drawn
+   * somewhere along its path, and putting it ahead would jump it forward; a teleport is drawn
+   * whole at its own sample either way.
+   */
+  private setsOff(id: number, list: readonly PoseSample[], x: number, y: number, f: number): boolean {
+    if (this.ahead.has(id) || Number.isNaN(this.drawTime)) return false;
+    const last = list[list.length - 1];
+    if (last.t <= this.drawTime) return false; // already drawn at its newest pose: nothing to skip
+    const dx = Math.abs(x - last.x);
+    const dy = Math.abs(y - last.y);
+    if (Math.hypot(dx, dy) > POSE_SNAP_DIST) return false;
+    if (dx <= ARRIVED && dy <= ARRIVED && Math.abs(f - last.f) <= SAME_FACING) return false; // still standing
+    let i = list.length - 1;
+    while (i > 0 && standsWith(list[i - 1], last)) i--;
+    return list[i].t <= this.drawTime;
+  }
+
   /** Drop every unit `keep` says no — the ones the payload no longer carries (fog, death). */
   retain(keep: (id: number) => boolean): void {
-    for (const id of this.samples.keys()) if (!keep(id)) this.samples.delete(id);
+    for (const id of this.samples.keys()) {
+      if (keep(id)) continue;
+      this.samples.delete(id);
+      this.ahead.delete(id);
+    }
+  }
+
+  /** Is this unit drawn ahead of the shared clock right now? For the test. */
+  isAhead(id: number): boolean {
+    return this.ahead.has(id);
   }
 
   /** Advance the draw clock by one step of `dt` seconds. */
@@ -155,13 +227,40 @@ export class PoseInterpolator {
     // units where the host last put them. Never extrapolate — a guess the next payload
     // contradicts is a unit that visibly backs up.
     if (this.drawTime > this.newest) this.drawTime = this.newest;
+    this.advanceAhead(dt);
+  }
+
+  /** Run every eager unit's own clock just in time for the next payload, capped a little short
+   *  of real time, until the shared clock has caught up with it. */
+  private advanceAhead(dt: number): void {
+    if (this.ahead.size === 0) return;
+    // Local seconds until the next payload should be here and the newest pose stops being the
+    // last thing we know: the rest of the gap to the next payload on the cadence, plus the same
+    // jitter margin the shared clock keeps, plus one client step — a payload is only SEEN at the
+    // step after it lands, the reason `MIN_MARGIN` exists. Measured (tools/pose-interp-test.cjs):
+    // without that step the unit stopped again for a frame after one order in four on the EU
+    // wire; with it, as often as on the shared clock.
+    const margin = this.delay - this.interval + STEP;
+    const untilNext = Math.max(dt, this.lastDue + this.interval - this.newest + margin - (this.localNow - this.newestAt));
+    for (const [id, at] of this.ahead) {
+      const list = this.samples.get(id);
+      const newest = list?.[list.length - 1]?.t;
+      if (newest === undefined || Number.isNaN(this.drawTime)) {
+        this.ahead.delete(id);
+        continue;
+      }
+      const rate = Math.max(0, Math.min(1 - CLOCK_RATE, (newest - at) / untilNext));
+      const next = Math.min(newest, at + dt * rate);
+      if (next <= this.drawTime + REJOINED) this.ahead.delete(id);
+      else this.ahead.set(id, next);
+    }
   }
 
   /** Where to draw unit `id` now. False when it has no poses at all (nothing is written). */
   sample(id: number, out: PoseOut): boolean {
     const list = this.samples.get(id);
     if (!list || list.length === 0) return false;
-    const t = this.drawTime;
+    const t = this.ahead.get(id) ?? this.drawTime;
     const last = list[list.length - 1];
     let a = last;
     let b = last;
@@ -190,4 +289,9 @@ export class PoseInterpolator {
     out.gliding = !jump && (Math.abs(last.x - out.x) > ARRIVED || Math.abs(last.y - out.y) > ARRIVED);
     return true;
   }
+}
+
+/** Two samples of a unit standing in one place, facing one way. */
+function standsWith(a: PoseSample, b: PoseSample): boolean {
+  return Math.abs(a.x - b.x) <= ARRIVED && Math.abs(a.y - b.y) <= ARRIVED && Math.abs(a.f - b.f) <= SAME_FACING;
 }
