@@ -12,7 +12,7 @@ import { DEFAULT_PROFILE } from "../vfs/profiles";
 const BUTTONS = [
   "Single Player",
   "Online",
-  "Local Area Network",
+  "Multiplayer", // the game's "Local Area Network" — see ui/fdfMainMenu.ts
   "Options",
   "Credits",
 ] as const;

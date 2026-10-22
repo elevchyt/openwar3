@@ -21,7 +21,7 @@ import {
 } from "./mapBrowser";
 import { widescreen } from "./widescreen";
 
-// The Local Area Network screen, built from the game's own
+// The Multiplayer screen (the game's "Local Area Network"), built from the game's own
 // UI\FrameDef\Glue\LocalMultiplayerJoin.fdf.
 //
 // WC3's LAN screen lists GAMES on the network, not room codes — and that maps exactly onto
@@ -129,7 +129,7 @@ export async function mountLanScreen(
     overrides: [OW3_STRINGS, LAN_JOIN_OVERRIDE],
     // The engine's own strings assume Blizzard's LAN browser; ours says what it does.
     textOverrides: {
-      CustomCreateTitle: "Local Area Network",
+      CustomCreateTitle: "Multiplayer",
       CustomCreateInfo: "Games on your network appear below.",
       GameListTitle: "Network Games",
       CreateButtonText: "Create Game",

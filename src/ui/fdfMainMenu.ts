@@ -2,7 +2,7 @@ import type { DataSource } from "../vfs/types";
 import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
-import { arg, num, setProp, str } from "./mapBrowser";
+import { arg, findFrame, num, setProp, str } from "./mapBrowser";
 import { isRoc } from "../data/edition";
 
 // The main menu, constructed from the game's own UI\FrameDef\Glue\MainMenu.fdf
@@ -108,7 +108,7 @@ export function mountFdfMainMenu(
       SinglePlayerButton: h.onSinglePlayer,
       EditionButton: h.onEdition ?? log("Edition"),
       BattleNetButton: h.onOnline ?? log("Online"),
-      LocalAreaNetworkButton: h.onLan ?? log("Local Area Network"),
+      LocalAreaNetworkButton: h.onLan ?? log("Multiplayer"),
       OptionsButton: h.onOptions ?? log("Options"),
       CreditsButton: h.onCredits ?? log("Credits"),
       ExitButton: h.onQuit ?? (() => window.close()),
@@ -138,6 +138,14 @@ function buildMainMenuRoot(lib: FdfLibrary): FdfFrame {
   if (!root) throw new Error("MainMenu.fdf: no MainMenuFrame frame");
 
   wearOtherEdition(root);
+
+  // "Local Area Network" is "Multiplayer": the relay-backed game list (docs/multiplayer.md)
+  // reaches past the local network, so the 2003 name says the wrong thing. The caption and its
+  // letter are the game's OWN — GlobalStrings.fdf ships `KEY_MULTIPLAYER`
+  // ("|CffffffffM|Rultiplayer") with `KEY_MULTIPLAYER_SHORTCUT` "M" beside it — so the frame is
+  // simply pointed at those keys, and the gilded letter and the accelerator move together.
+  setProp(findFrame(root, "LocalAreaNetworkButtonText"), "Text", [str("KEY_MULTIPLAYER")]);
+  setProp(findFrame(root, "LocalAreaNetworkButton"), "ControlShortcutKey", [str("KEY_MULTIPLAYER_SHORTCUT")]);
 
   const line = lib.resolveRoot("StandardSmallTitleTextTemplate");
   if (line) {

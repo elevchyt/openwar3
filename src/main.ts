@@ -447,7 +447,7 @@ function endLanSession(): void {
   lan = null;
 }
 
-/** Local Area Network: the relay-backed game list (src/net/, docs/multiplayer.md).
+/** Multiplayer (the game's Local Area Network): the relay-backed game list (src/net/, docs/multiplayer.md).
  *
  *  Chrome `BattlenetCustom` — read out of the panel model's own sequence table. The game
  *  has no LAN-specific chrome: LocalMultiplayerJoin.fdf is the transport-swapped twin of
