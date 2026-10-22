@@ -15,6 +15,7 @@ import { bestMatch, norm } from "./mapSearch";
 import { gameFontsReady, onGameFontsReady } from "./gameFont";
 import type { ListItem } from "./fdf/widgets";
 import { mountWorking } from "./workingIndicator";
+import { modalOver } from "./modal";
 
 // The map browser: the folder-browsing map list (MapListBox.fdf) and the map summary pane
 // (MapInfoPane.fdf), which are the SAME two widgets on every screen that picks a map.
@@ -140,6 +141,9 @@ export class MapBrowser {
   /** A row the next fill must SCROLL to. A searched-for map is nowhere near the player's
    *  cursor, which is exactly the case `select` deliberately does not scroll for. */
   private revealPath: string | null = null;
+  /** The row the arrow keys stand on. Usually the picked map, but a FOLDER row can be stood on
+   *  too (it is only ever opened, never picked), and Enter then walks into it. */
+  private cursor: string | null = null;
   /** The screen this browser last filled — the type-ahead only takes keys while it is up. */
   private screen: FdfScreen | null = null;
   private indexing = false; // the background read of every folder is running
@@ -191,6 +195,7 @@ export class MapBrowser {
     const file = this.maps.get(path);
     const info = await readMapInfo(this.maps, path);
     if (!file || !info || !this.alive) return;
+    this.cursor = path;
     this.selected = { path, file, info };
     this.readPreview(path, file);
     this.onChange();
@@ -207,6 +212,7 @@ export class MapBrowser {
    */
   async openFolder(folder: string): Promise<void> {
     this.cwd = folder;
+    this.cursor = null;
     this.listScroll = 0; // a new folder starts at its top
     this.onChange(); // empty + disabled: this folder has not been read yet
     await this.readFolder(folder);
@@ -236,7 +242,10 @@ export class MapBrowser {
     const host = s.frame("MapListBox");
     host?.querySelector(":scope > .ow3-working")?.remove();
     if (host && !ready) mountWorking(host);
-    if (this.selected) list.select(this.selected.path);
+    // A folder row the arrow keys are standing on keeps its band across a rebuild; otherwise
+    // the band is the picked map's.
+    if (ready && this.cursor?.startsWith("folder:")) list.select(this.cursor);
+    else if (this.selected) list.select(this.selected.path);
     list.scrollTop = this.listScroll;
     // A row the search landed on is brought into view — and then it IS where the list
     // stands, or the next rebuild would scroll back to where the player last clicked.
@@ -248,7 +257,7 @@ export class MapBrowser {
     // A single click only ever SELECTS a row. Opening one takes a second click: a folder
     // is walked into on a double-click, a map is played on one.
     list.onChange = (value) => {
-      if (value.startsWith("folder:")) return;
+      if (value.startsWith("folder:")) { this.cursor = value; return; }
       // The whole screen may be rebuilt from onChange (the Custom Game screen's rows are
       // frames, and there are now a different number of them), which throws the list's DOM
       // away with it. Remember where it stood so it comes back exactly there.
@@ -337,6 +346,11 @@ export class MapBrowser {
   private readonly onKey = (e: KeyboardEvent): void => {
     if (!this.alive || e.altKey || e.ctrlKey || e.metaKey) return;
     if (!this.listening(e.target)) return;
+    if (this.navigable(e) && this.onNavKey(e.key)) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     // Escape abandons a half-typed search and is passed on — it is nobody else's key on
     // these screens today, and dropping the buffer is what it means to a list either way.
     if (e.key === "Escape") { this.query = ""; return; }
@@ -364,6 +378,67 @@ export class MapBrowser {
     void this.indexAll(); // the first search warms the folders nobody has opened
   };
 
+  /**
+   * The list's own movement keys: Up/Down step a row, Page Up/Down a boxful, Home/End to either
+   * end, and Enter opens the row — walks into a folder, or is the screen's "play this one",
+   * exactly as a double-click is. Stepping onto a map PICKS it, as a click does, so the summary
+   * pane follows the cursor; a folder row is only stood on. Unplayable rows are stepped over,
+   * as a click on one does nothing. Returns whether the key was the list's.
+   */
+  private onNavKey(key: string): boolean {
+    if (!readFolders.has(this.cwd)) return false; // still reading: the list takes nothing
+    const values = folderRows(this.entries, this.cwd)
+      .filter((r) => isFolder(r) || !r.unsupported)
+      .map((r) => (isFolder(r) ? folderValue(r) : r.path));
+    if (!values.length) return false;
+    const at = values.indexOf(this.cursor ?? this.selected?.path ?? "");
+    // Enter is also the only way to Start / Create Game from the keyboard on these screens:
+    // the buttons' own letter accelerators belong to the search. A picked map the cursor is not
+    // on (it is in another folder) is still the one Enter plays.
+    if (key === "Enter") {
+      const value = at < 0 ? null : values[at];
+      if (value?.startsWith("folder:")) void this.openFolder(value.slice("folder:".length));
+      else if (this.selected) this.onActivate();
+      else return false;
+      return true;
+    }
+    const list = this.screen?.list("MapListBox");
+    // A page is the box's height in rows, less one so the row stepped from stays in view.
+    const box = this.screen?.frame("MapListBox")?.querySelector<HTMLElement>(".fdf-list-rows");
+    const rowH = box?.querySelector<HTMLElement>(".fdf-list-row")?.offsetHeight ?? 0;
+    const page = rowH && box ? Math.max(1, Math.floor(box.clientHeight / rowH) - 1) : 10;
+    const step: Record<string, number> = { ArrowDown: 1, ArrowUp: -1, PageDown: page, PageUp: -page };
+    let to: number;
+    if (key === "Home") to = 0;
+    else if (key === "End") to = values.length - 1;
+    else if (key in step) to = at < 0 ? 0 : Math.max(0, Math.min(values.length - 1, at + step[key]));
+    else return false;
+    if (to === at) return true;
+    const value = values[to];
+    this.cursor = value;
+    this.revealPath = value;
+    if (value.startsWith("folder:")) {
+      // Nothing to pick, so nothing re-fills the screen: band and scroll the row here.
+      list?.select(value);
+      list?.reveal(value);
+      this.listScroll = list?.scrollTop ?? this.listScroll;
+      this.revealPath = null;
+    } else {
+      void this.choose(value);
+    }
+    return true;
+  }
+
+  /** Whether a movement key is the list's rather than the focused control's: Enter on a
+   *  focused button presses THAT button (ui/fdf/render.ts), and a focused slider takes the
+   *  arrows as its own (ui/fdf/widgets.ts). With nothing focused every one is the list's. */
+  private navigable(e: KeyboardEvent): boolean {
+    const to = e.target as HTMLElement | null;
+    if (!to || to === document.body || !to.closest) return true;
+    if (e.key === "Enter") return !to.closest("[role=button], button, a");
+    return !to.closest(".fdf-slider");
+  }
+
   /** Whether a keystroke is the list's to read: its screen is up, live and not typed into. */
   private listening(target: EventTarget | null): boolean {
     const el = this.screen?.element;
@@ -373,6 +448,8 @@ export class MapBrowser {
     if (el.classList.contains("fdf-screen-inert")) return false; // not landed yet
     const to = target as HTMLElement | null;
     if (to && (to.tagName === "INPUT" || to.tagName === "TEXTAREA" || to.isContentEditable)) return false;
+    // A dialog over the screen owns the keyboard (ui/modal.ts) — Enter there is ITS button.
+    if (modalOver(el)) return false;
     return !!this.screen?.list("MapListBox");
   }
 
