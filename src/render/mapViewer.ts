@@ -10499,9 +10499,21 @@ export class MapViewerScene {
     if (this.announcedGone.has(seat)) return;
     this.announcedGone.add(seat);
     const s = (key: string, fallback: string): string => this.globalStrings?.strings.get(key) ?? fallback;
-    const line = fillSlots(s("PLAYER_LEFT_GAME", "%s has left the game."), [this.playerLabel(seat)]);
-    this.goneLines.add(line);
-    this.announce(line);
+    const format = s("PLAYER_LEFT_GAME", "%s has left the game.");
+    // The script's copy of the line is uncoloured, and that is the text it is matched on.
+    this.goneLines.add(fillSlots(format, [this.playerLabel(seat)]));
+    this.announce(fillSlots(format, [this.colouredName(seat)]));
+  }
+
+  /**
+   * A player's name in the colour their units wear NOW — under the Ally Color Mode (Alt-A), the
+   * team's — exactly as a chat line names its speaker (`renderChat`). For the lines this machine
+   * composes about a player: "has left the game.", "has lost connection", "Waiting for players...".
+   */
+  private colouredName(seat: number): string {
+    const hex = teamColorHex(this.vfs, this.rts?.unitColor(seat) ?? seat);
+    const name = this.playerLabel(seat);
+    return hex ? `|c${hex}${name}|r` : name;
   }
   /** The leave lines `announceGone` printed, which the map's own leave trigger is about to
    *  print again (`displayText`). */
@@ -10631,13 +10643,16 @@ export class MapViewerScene {
     if (this.matchEnded) return;
     for (const [seat, at] of this.heldUntil) {
       const left = Math.max(0, Math.ceil((at - now) / 1000));
-      this.hud?.setStickyMessage(`lost:${seat}`, `${this.playerLabel(seat)} has lost connection (Time to reconnect ${left}s...)`);
+      // Re-coloured every frame along with the count, so Alt-A repaints a line that is already up.
+      this.hud?.setStickyMessage(`lost:${seat}`, `${this.colouredName(seat)} has lost connection (Time to reconnect ${left}s...)`);
       this.lostLines.add(seat);
     }
   }
 
+  /** The swatch is the colour the player PICKED and stays it in every mode, as the dot in front
+   *  of a chat name does; the name wears the Ally Color Mode's colour, as the chat name does. */
   private suspendRow(seat: number): SuspendRow {
-    return { name: this.playerLabel(seat), color: teamColorCss(this.vfs, this.rts?.playerColor(seat) ?? seat) };
+    return { name: this.colouredName(seat), color: teamColorCss(this.vfs, this.rts?.playerColor(seat) ?? seat) };
   }
 
   /** OUR connection dropped (LanLobby `onLinkLost`): stop, and say why, while it re-dials. */
