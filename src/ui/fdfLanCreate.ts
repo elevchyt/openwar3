@@ -129,9 +129,8 @@ export async function mountLanCreateScreen(
     container,
     vfs,
     fdfPath: "UI\\FrameDef\\Glue\\LocalMultiplayerCreate.fdf",
-    // Every letter belongs to the map list's type-ahead search here (issue #137) — a map's
-    // name is spelled with the same letters this screen's buttons answer to.
-    noShortcutKeys: true,
+    // The buttons keep their letter accelerators: the map search is a box the player opens with
+    // Ctrl+F (ui/mapFind.ts), not every letter typed at the list, as it was for issue #137.
     rootFrame: "LocalMultiplayerCreate",
     includeFdf: [MAP_LIST_FDF, MAP_INFO_FDF, ADVANCED_OPTIONS_FDF, BLURB_SCROLLBAR_FDF],
     // …and our own layer on the Advanced Options pane: the Computer+ switch, which the 2003 UI

@@ -9,7 +9,7 @@
 const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
-const { bestMatch, norm } = require(join(REPO, ".sim-build", "src", "ui", "mapSearch.js"));
+const { bestMatch, rankMatches, norm } = require(join(REPO, ".sim-build", "src", "ui", "mapSearch.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -69,6 +69,14 @@ check("…and the same query from the other side", found("isles", "FrozenThrone"
 // …but it does not let a loose match beat a tighter one: "harvest" IS a whole map's name in
 // Scenario, while the open folder has nothing of the sort.
 check("a tighter match elsewhere still wins", found("harvest", "Custom Maps"), "Maps\\Scenario\\(2)Harvest.w3x");
+
+console.log("map search — every match, best first (the Ctrl+F finder)");
+const ranked = (q, cwd) => rankMatches(MAPS, q, cwd).map((e) => e.path);
+check("both Echo maps, the closer fit first", ranked("echo", "FrozenThrone"),
+  ["Maps\\FrozenThrone\\(2)EchoIsles.w3x", "Maps\\Download\\(4)EchoIslesExtreme.w3x"]);
+check("its first row is bestMatch's answer", ranked("ock", "FrozenThrone")[0], found("ock", "FrozenThrone"));
+check("nothing for nothing", ranked("  ", "FrozenThrone"), []);
+check("nothing for no match", ranked("zzzz", "FrozenThrone"), []);
 
 console.log("map search — normalisation");
 check("norm strips and folds", norm(" (2)Echo Isles!"), "2echoisles");

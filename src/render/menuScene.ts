@@ -150,6 +150,24 @@ const LEFT_FRAMING: Partial<Record<GlueChrome, { cy: number; halfY: number }>> =
   MultiplayerPreGameChat: { cy: -0.21, halfY: 0.3 },
 };
 
+/**
+ * Screens whose RIGHT panel is drawn a little narrower at 4:3, so it clears the left one.
+ *
+ * At 4:3 both layers are drawn at the aspect they were authored at (ui/widescreen.ts), and on
+ * these screens that puts the right panel's left rail ON TOP of the left panel's right rail — the
+ * two frames share a seam instead of standing apart, which the developer flagged on the LAN and
+ * Custom Game screens with "4:3 Menus" ticked. The right layer is right-anchored, so a narrower
+ * viewport pulls its left edge rightwards while its right edge stays on the screen's edge; the
+ * value is the share of the authored width kept, measured in the running screen until a sliver
+ * of backdrop shows between the rails. Blended back to 1 by 16:9 with the rest of the widescreen
+ * corrections, where the panels already stand apart. It changes between a screen's Death and the
+ * next one's Birth, while the chrome is away, so it never jumps on screen. Ours, not the game's.
+ */
+const RIGHT_SQUEEZE_43: Partial<Record<GlueChrome, number>> = {
+  BattlenetCustom: 0.975,
+  SinglePlayerSkirmish: 0.975,
+};
+
 /** How long a screen's chrome takes to leave / arrive, in ms — read from the model's
  *  own sequence intervals, so the DOM panels can be animated over the same window. */
 export interface ChromeTiming { death: number; birth: number }
@@ -1450,7 +1468,8 @@ export class MenuScene {
     // The stretch is the 16:9 one blended back to 1 at the window's aspect (ui/widescreen.ts):
     // a 4:3 screen draws the chrome at the aspect it was authored at, because a 4:3 screen has
     // no extra width for it to take up — stretched anyway, the right panel runs over the left.
-    const pVw = h * (t.panelHalfX / t.panelHalfY) * widescreen(t.panelStretchX, 1, w / h);
+    const squeeze = RIGHT_SQUEEZE_43[this.chrome] ?? 1; // see RIGHT_SQUEEZE_43
+    const pVw = h * (t.panelHalfX / t.panelHalfY) * widescreen(t.panelStretchX, squeeze, w / h);
     this.scenePanel.camera.ortho(t.panelCx - t.panelHalfX, t.panelCx + t.panelHalfX, t.panelCy - t.panelHalfY, t.panelCy + t.panelHalfY, 1, 2000);
     this.scenePanel.camera.moveToAndFace(
       new Float32Array([0.5, 0.5, 1000]),

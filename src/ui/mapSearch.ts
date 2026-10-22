@@ -1,14 +1,14 @@
 import { wc3StripMarkup } from "./wc3Text";
 
-// Type-ahead map search (issue #137) — the ranking behind "start typing a map's name at the
-// map list and it goes there", on the Custom Game and LAN create screens (ui/mapBrowser.ts).
+// Map search — the ranking behind the Ctrl+F box on the Custom Game and LAN create screens
+// (ui/mapFind.ts, over ui/mapBrowser.ts). It began as issue #137's type-ahead ("start typing a
+// map's name at the map list and it goes there"), and the ranking is still that one.
 //
-// The list has no search box and the reference has none either: you type at the list, the way
-// you type at any list of files. What we do differently from a plain list type-ahead is search
-// EVERY folder rather than only the open one — the install keeps its melee maps in
-// FrozenThrone, its scenarios in Scenario and whatever the player downloaded in Download, so
-// "turtle rock" is a fair thing to type at a list that happens to be showing the wrong folder.
-// The folder the player IS in still wins a tie, because that is where they were looking.
+// What it does differently from a plain list search is search EVERY folder rather than only
+// the open one — the install keeps its melee maps in FrozenThrone, its scenarios in Scenario and
+// whatever the player downloaded in Download, so "turtle rock" is a fair thing to type at a list
+// that happens to be showing the wrong folder. The folder the player IS in still wins a tie,
+// because that is where they were looking.
 //
 // Pure ranking, no DOM: tools/map-search-test.cjs drives it headlessly.
 
@@ -80,6 +80,19 @@ export function bestMatch<T extends SearchEntry>(entries: T[], query: string, cw
     if (s > score) { best = e; score = s; }
   }
   return best;
+}
+
+/** EVERY map `query` fits, best first — the Ctrl+F finder's results (ui/mapFind.ts), where
+ *  `bestMatch` is only its first row. A tie keeps the entries' own order, so a folder that
+ *  lists by player count lists its matches by player count too. */
+export function rankMatches<T extends SearchEntry>(entries: T[], query: string, cwd: string): T[] {
+  const q = norm(query);
+  if (!q) return [];
+  return entries
+    .map((e, i) => ({ e, i, s: matchScore(e, q, e.folder === cwd) }))
+    .filter((r) => r.s > 0)
+    .sort((a, b) => b.s - a.s || a.i - b.i)
+    .map((r) => r.e);
 }
 
 /** A map file's name without its extension and without the "(4)" the maps are shipped with —

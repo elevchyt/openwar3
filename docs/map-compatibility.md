@@ -265,7 +265,7 @@ all three corpus maps now parse; the probe reports the base ids that have no row
 
 **Step 4 — say so when a map cannot run. DONE.** `unsupportedReason` is the one place that
 decides, the row is LISTED and greyed with the reason on hover (`ListItem.disabled`/`title`,
-`.fdf-list-row.disabled`), and the type-ahead skips it. A map that cannot run is now a sentence
+`.fdf-list-row.disabled`), and the map search (Ctrl+F, `ui/mapFind.ts`) skips it. A map that cannot run is now a sentence
 instead of a missing file.
 
 **Step 5 — the script API. DONE, in the shape the data asked for rather than the one the plan

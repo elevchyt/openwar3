@@ -10,6 +10,7 @@ import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { fadePanels } from "./fdf/anim";
 import { showGlueDialog } from "./glueDialog";
 import { adopt, findFrame, nudgeX, setProp } from "./mapBrowser";
+import { widescreen } from "./widescreen";
 
 // The Single Player menu (issues #61, #80), built from the game's own
 // UI\FrameDef\Glue\SinglePlayerMenu.fdf. That file holds BOTH halves of the screen, as the
@@ -80,8 +81,15 @@ const LIST_FDF = "UI\\FrameDef\\Glue\\ListBoxWar3.fdf";
  * in — so the name landed 5px LEFT of the bar's interior, printing over its border. Measured
  * against the live render: the bar's interior starts 0.045 in from the backdrop's left edge and
  * the FDF puts the name at 0.04, and the reference sets the name a further ~0.011 inside that.
+ *
+ * That was measured at 16:9, and the bar is the chrome's: at 4:3 the chrome is drawn at its
+ * authored width (ui/widescreen.ts), its bar starts further LEFT, and the flat 0.016 put the name
+ * ~0.015 deeper into the bar than the reference sets it (the developer saw it with "4:3 Menus"
+ * ticked). So it is a widescreen correction like the others — this at 16:9, `NAME_NUDGE_43` at
+ * 4:3, blended between — and the 4:3 end was measured the same way, off the live render.
  */
 const NAME_NUDGE = 0.016;
+const NAME_NUDGE_43 = 0.002;
 
 /** Move one of the 3D chrome panels and say how long the clip runs — `MenuScene.sidePanel`,
  *  handed in so this screen never reaches into the renderer itself. */
@@ -336,6 +344,6 @@ function buildSinglePlayerRoot(lib: FdfLibrary): FdfFrame {
     adopt(root, "ProfileListContainer", [profileList]);
   }
 
-  nudgeX(findFrame(root, "ProfileNameText"), NAME_NUDGE);
+  nudgeX(findFrame(root, "ProfileNameText"), widescreen(NAME_NUDGE, NAME_NUDGE_43));
   return root;
 }

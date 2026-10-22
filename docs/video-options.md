@@ -501,8 +501,18 @@ itself. The F10 panel has no such row: nothing in a match is a menu.
 
 **Where it sits.** The panel has no height left, so the row SHARES the Vertical Sync row and
 stands in the pulldown column. Its box is anchored off `OcclusionBackdrop` (0.012 in, the
-pulldowns' own text inset, and 0.00975 up, measured in the running screen). It is not anchored
+pulldowns' own text inset, and 0.00675 up — the Vertical Sync box's top, which sits 0.0145 under its label). It is not anchored
 off the Vertical Sync box, because the gap between the two columns is a label's text width.
+
+**The two panels at 4:3.** With the chrome at its authored width, the right panel's left rail
+lands ON the left panel's right rail on the LAN screens (`BattlenetCustom` chrome) and Custom Game
+(`SinglePlayerSkirmish`). `RIGHT_SQUEEZE_43` in `src/render/menuScene.ts` draws those screens'
+right layer at 0.975 of its width at 4:3 (blended back to 1 by 16:9, where they already stand
+apart). The layer is right-anchored, so that pulls its left edge in and leaves a gap of a few
+pixels. The value is ours. It changes between one screen's Death and the next one's Birth, so it
+never jumps on screen. The Single Player screen's profile name had the same problem the other
+way round: its 0.016 nudge was measured at 16:9 and is now blended to 0.002 at 4:3
+(`NAME_NUDGE_43`).
 
 Not boxed: the loading screen and the score screen, which share the loading layer outside `#ui`
 (docs/loading-screens.md). Neither was checked against the real client.

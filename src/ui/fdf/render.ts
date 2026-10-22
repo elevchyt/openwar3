@@ -126,11 +126,9 @@ export interface FdfScreenOptions {
   /**
    * Turn this screen's one-letter button accelerators OFF (issue #137).
    *
-   * For the two screens whose main widget is the MAP LIST: typing a map's name at the list is
-   * how you find one there, and a name is made of the same letters `KEY_START_GAME_SHORTCUT`
-   * ("S") and `KEY_CANCEL_SHORTCUT` ("a") are. The two cannot both have the keys, and a
-   * keystroke that starts the match while the player is spelling "Secret Valley" is the worse
-   * of the two ways to be wrong. The buttons keep their gilded letter and their click.
+   * For a screen whose letters are something else's: the hotkey editor's key box takes them.
+   * (The two map-list screens once mounted with it too, while typing at the list was the map
+   * search; the search is a Ctrl+F box now — ui/mapFind.ts — and their buttons answer again.)
    */
   noShortcutKeys?: boolean;
   /** Optional SPRITE frameName → BLP path, to draw a static stand-in for a 3D sprite. */
@@ -419,7 +417,7 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     if (modalOver(overlay)) return;
     const target = e.target as HTMLElement | null;
     if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
-    if (opts.noShortcutKeys) return; // the map-list screens: every letter is the search's
+    if (opts.noShortcutKeys) return; // a screen whose letters are typed into something
     const h = shortcuts.get(e.key.toLowerCase());
     if (h) { e.preventDefault(); h(); }
   };
