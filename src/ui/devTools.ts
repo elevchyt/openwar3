@@ -75,6 +75,11 @@ export class DevToolsDrawer {
   private readonly nowBtn = el("button", "dev-btn", "At camera");
   private readonly iconObserver: IntersectionObserver;
 
+  // --- the Overlays tab's concede readout: beside the drawer, outside it, so it stays up
+  // whichever tab is open (and hides with the whole thing, since it is a child of `root`).
+  private readonly concedeBox = el("div", "dev-concede");
+  private concedeTimer = 0;
+
   constructor(private readonly driver: HudDriver) {
     this.root = el("div", "dev-tools");
     this.root.hidden = true;
@@ -88,7 +93,8 @@ export class DevToolsDrawer {
     this.drawer = el("div", "dev-drawer");
     this.handle = el("button", "dev-handle", "Dev Tools");
     this.handle.onclick = () => this.setExpanded(true);
-    this.root.append(this.drawer, this.handle);
+    this.concedeBox.hidden = true;
+    this.root.append(this.drawer, this.handle, this.concedeBox);
 
     // An icon is a BLP decoded to a data URL on first ask, so a list of several hundred rows
     // only decodes the ones scrolled into view.
@@ -126,6 +132,7 @@ export class DevToolsDrawer {
 
   dispose(): void {
     window.removeEventListener("keydown", this.onKey, true);
+    window.clearInterval(this.concedeTimer);
     this.iconObserver.disconnect();
     this.disarm();
   }
@@ -503,16 +510,81 @@ export class DevToolsDrawer {
     const regions = toggle("Show Regions", () => this.driver.toggleRegions());
     // "Show Regions": the map's named trigger regions (gg_rct_*) with their name inside each.
     setGameTip(regions, "Outline the map's named trigger regions (gg_rct_*)");
+    // "Show Concede": every Computer+ seat's concession reading, live. OFF by default.
+    const concede = toggle("Show Concede", () => this.toggleConcede());
+    setGameTip(concede, "Show each Computer+ player's concede reading (despair against the line, and the dwell)");
     page.append(
       this.section("Overlays", [
         toggle("Show Colliders", () => this.driver.toggleColliders(), colliders),
         toggle("Show Pathing", () => this.driver.togglePathing(), pathing),
         regions,
+        concede,
       ]),
       colliders,
       pathing,
     );
     return page;
+  }
+
+  /** Flip the concede readout. Polled rather than pushed: it is a debug view of a reading the
+   *  AI takes once a second, so four times a second is plenty and costs nothing while off. */
+  private toggleConcede(): boolean {
+    const on = this.concedeBox.hidden;
+    this.concedeBox.hidden = !on;
+    window.clearInterval(this.concedeTimer);
+    this.concedeTimer = 0;
+    if (on) {
+      this.renderConcede();
+      this.concedeTimer = window.setInterval(() => this.renderConcede(), 250);
+    }
+    return on;
+  }
+
+  private renderConcede(): void {
+    if (this.root.hidden) return;
+    const readings = this.driver.concedeReadings();
+    const owners = new Map(this.driver.spawnOwners().map((o) => [o.player, o]));
+    const box = this.concedeBox;
+    box.replaceChildren(el("div", "dev-concede-title", "Concede — Computer+"));
+    if (!readings.length) {
+      box.append(el("div", "dev-concede-none", "No Computer+ players"));
+      return;
+    }
+    const secs = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+    for (const r of readings) {
+      const owner = owners.get(r.player);
+      const row = el("div", "dev-concede-row");
+      const head = el("div", "dev-concede-head");
+      const sw = el("span", "dev-legend-swatch");
+      sw.style.background = owner?.color ?? "#808080";
+      const value = el("span", "dev-concede-value", `${r.despair.toFixed(2)} / ${r.concedeAt.toFixed(2)}`);
+      head.append(sw, el("span", "dev-concede-name", owner?.name ?? `Player ${r.player + 1}`), value);
+      const bar = el("div", "dev-concede-bar");
+      const fill = el("div", "dev-concede-fill");
+      fill.style.width = `${Math.min(1, r.despair / r.concedeAt) * 100}%`;
+      bar.append(fill);
+      const terms = r.terms.length
+        ? r.terms.map(([k, w]) => `${k} ${w.toFixed(2)}`).join(" · ")
+        : "no terms live";
+      // What `mannersPass` would do with this reading, in its own order of tests.
+      let state: string;
+      let tone = "";
+      if (r.gone) state = "left the game";
+      else if (r.conceded) { state = "conceded — leaving"; tone = "hot"; }
+      else if (r.teamLost) { state = "half the team gone — concedes now"; tone = "hot"; }
+      else if (r.clock < r.notBefore) state = `nothing decided before ${secs(r.notBefore)} (now ${secs(r.clock)})`;
+      else if (r.hopeless) {
+        const why = r.clause ? `clause ${r.clause}` : "despair";
+        state = r.dwell >= 0
+          ? `hopeless (${why}) ${r.dwell.toFixed(1)} / ${r.concedeAfter} s`
+          : `hopeless (${why}) — dwell starts next pass`;
+        tone = "warm";
+      } else state = "playing on";
+      const status = el("div", "dev-concede-state", state);
+      if (tone) { row.classList.add(`dev-concede-${tone}`); }
+      row.append(head, bar, el("div", "dev-concede-terms", terms), status);
+      box.append(row);
+    }
   }
 
   private section(title: string, buttons: HTMLElement[]): HTMLElement {

@@ -9902,6 +9902,7 @@ export class MapViewerScene {
         return this.showRegions;
       },
       spawnCatalog: () => this.spawnCatalog(),
+      concedeReadings: () => this.rts?.computerPlusConcede() ?? [],
       spawnOwners: () => this.spawnOwners(),
       spawnCounts: () => {
         const out = new Map<string, number>();

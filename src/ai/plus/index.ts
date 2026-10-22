@@ -11,8 +11,8 @@ import { AiPlayer, type AiHost, REGROUP_HP_FRACTION, TOWN_RADIUS } from "../aiPl
 import { PlusCaster } from "./casting";
 import { EnemyMemory, counterScore, type EnemyRead } from "./counter";
 import {
-  CONCEDE_NOT_BEFORE, CONCESSIONS, GREETINGS, GREET_AT, GREET_SPREAD, GREET_STAGGER, LEAVE_AFTER,
-  goneCount, hopeless, teamLost,
+  CONCEDE_AT, CONCEDE_NOT_BEFORE, CONCESSIONS, DESPAIR, GREETINGS, GREET_AT, GREET_SPREAD, GREET_STAGGER,
+  LEAVE_AFTER, despairTerms, goneCount, hopeless, hopelessClause, teamLost,
   type Standing,
 } from "./chatter";
 import { PlusItems, type ItemCtx } from "./items";
@@ -2426,6 +2426,29 @@ const HELD_UNLESS_DANGER: ReadonlySet<string> = new Set(["AHdr"]);
 const SIPHON_LET_GO_HP = 0.5;
 
 /** Every Computer+ player in the match. */
+/** One Computer+ seat's concession state — `ComputerPlusAi.concedeReport`. */
+export interface ConcedeReading {
+  player: number;
+  /** The weighed reading (`despair`), against `concedeAt`. */
+  despair: number;
+  concedeAt: number;
+  /** The live `DESPAIR` terms that make up `despair`. */
+  terms: Array<[keyof typeof DESPAIR, number]>;
+  /** The `hopeless` clause that holds (1-5), or 0. */
+  clause: number;
+  hopeless: boolean;
+  /** Half the team gone — the concession that skips the reading (`teamCollapsed`). */
+  teamLost: boolean;
+  clock: number;
+  /** `CONCEDE_NOT_BEFORE`: nothing but `teamLost` is decided before it. */
+  notBefore: number;
+  /** Seconds the position has held hopeless (-1 = it doesn't), against `concedeAfter`. */
+  dwell: number;
+  concedeAfter: number;
+  conceded: boolean;
+  gone: boolean;
+}
+
 export class ComputerPlusAi {
   private readonly brains: Brain[] = [];
 
@@ -2634,6 +2657,35 @@ export class ComputerPlusAi {
 
   get active(): boolean {
     return this.brains.some((b) => !b.gone);
+  }
+
+  /**
+   * Every seat's concession reading as `mannersPass` would make it this instant — for the dev
+   * tools' concede readout (ui/devTools.ts) and nothing else. Read-only: it asks `standing` and
+   * the pure rules in plus/chatter.ts, and touches no clock, so looking cannot change when a
+   * computer says gg.
+   */
+  concedeReport(): ConcedeReading[] {
+    return this.brains.map((b) => {
+      const s = this.standing(b);
+      const hallCost = this.host.registry.get(b.table.halls[0])?.goldCost ?? 0;
+      const terms = despairTerms(s, hallCost);
+      return {
+        player: b.ai.player,
+        despair: terms.reduce((d, [, w]) => d + w, 0),
+        concedeAt: CONCEDE_AT,
+        terms,
+        clause: hopelessClause(s, hallCost),
+        hopeless: hopeless(s, hallCost),
+        teamLost: teamLost(b.team, b.allies),
+        clock: b.clock,
+        notBefore: CONCEDE_NOT_BEFORE,
+        dwell: b.hopelessSince >= 0 ? b.clock - b.hopelessSince : -1,
+        concedeAfter: b.profile.concedeAfter,
+        conceded: b.concededAt >= 0,
+        gone: b.gone,
+      };
+    });
   }
 
   /**

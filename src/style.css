@@ -1090,6 +1090,46 @@ body:not(.hud-tooltip-skinned) .dev-drawer { outline: 1px solid rgba(200, 160, 5
   border: 1px solid rgba(0, 0, 0, 0.6);
   flex: none;
 }
+/* The Overlays tab's concede readout (ui/devTools.ts `renderConcede`): hung off the drawer's
+   LEFT edge at its top, in the drawer's own tooltip dress, so it stays up whichever tab is open. */
+.dev-concede {
+  position: absolute;
+  top: 0;
+  right: calc(100% + 14px);
+  width: 300px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 9px 11px;
+  pointer-events: none;
+  font-size: 11px;
+  background: var(--hud-tooltip-fill, rgba(24, 34, 49, 0.9));
+  border-radius: calc(var(--tt-band, 10px) * 0.4);
+}
+.dev-concede::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--tt-bg-inset, 3px) * -1);
+  border: var(--tt-band, 10px) solid transparent;
+  border-image: var(--hud-tooltip-border) 16 / var(--tt-band, 10px) round;
+  pointer-events: none;
+}
+body:not(.hud-tooltip-skinned) .dev-concede { outline: 1px solid rgba(200, 160, 50, 0.7); }
+.dev-concede-title { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #a9a48f; }
+.dev-concede-none { color: #a9a48f; }
+.dev-concede-row { display: flex; flex-direction: column; gap: 2px; }
+.dev-concede-head { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.dev-concede-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dev-concede-value { color: #ffcc00; font-variant-numeric: tabular-nums; }
+.dev-concede-bar { height: 4px; background: rgba(0, 0, 0, 0.5); border-radius: 2px; overflow: hidden; }
+.dev-concede-fill { height: 100%; background: #6fd05a; }
+.dev-concede-warm .dev-concede-fill { background: #ffb02e; }
+.dev-concede-hot .dev-concede-fill { background: #ff4a33; }
+.dev-concede-terms { color: #c9c3ab; }
+.dev-concede-state { color: #a9a48f; }
+.dev-concede-warm .dev-concede-state { color: #ffb02e; }
+.dev-concede-hot .dev-concede-state { color: #ff6a50; }
 
 /* The day/night medallion. It fills the hole the console strip leaves between its two runs,
    and ui/topBar.ts is what sizes and places it — only the strip knows where that hole is,

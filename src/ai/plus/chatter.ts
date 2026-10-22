@@ -281,22 +281,33 @@ export const CONCEDE_AT = 1;
 /** How lost this position is, in `DESPAIR`'s units. Pure, and 0 for a healthy player. */
 export function despair(s: Standing, hallCost: number): number {
   let d = 0;
-  if (s.heroes - s.heroesReviving === 0 && s.heroesLost > 0) {
-    d += (s.heroesReviving > 0 ? DESPAIR.heroesReviving : DESPAIR.heroesDead)
-      + DESPAIR.heroEach * Math.min(s.heroesLost - 1, 2);
-  }
-  if (s.halls === 0) d += DESPAIR.hallDown;
-  if (s.armyUnits < ARMY_REMNANT) d += DESPAIR.armyGone;
-  if (s.invaders > 0) d += DESPAIR.invaded;
-  if (s.invaderHeroes > 0) d += DESPAIR.invaderHero;
-  if (s.workers < WORKER_ECONOMY) {
-    d += DESPAIR.workersShort * ((WORKER_ECONOMY - s.workers) / WORKER_ECONOMY);
-  }
-  if (s.gold < hallCost) d += DESPAIR.broke;
-  d += DESPAIR.teamGone * s.teamGone;
-  if (s.heroDeathLead >= HERO_DEATHS_BEHIND) d += DESPAIR.heroDeathsBehind;
-  if (s.firstHeroGap >= FIRST_HERO_LEVELS_BEHIND) d += DESPAIR.firstHeroBehind;
+  for (const [, w] of despairTerms(s, hallCost)) d += w;
   return d;
+}
+
+/** `despair`, term by term: each `DESPAIR` key that is live in this position with what it adds,
+ *  in the order the sum is taken (so `despair` is exactly their total). Only live terms are
+ *  listed. Kept apart so the dev tools' concede readout (ui/devTools.ts) shows the very terms the
+ *  decision is made of, rather than a second copy of the rules that could drift from them. */
+export function despairTerms(s: Standing, hallCost: number): Array<[keyof typeof DESPAIR, number]> {
+  const out: Array<[keyof typeof DESPAIR, number]> = [];
+  if (s.heroes - s.heroesReviving === 0 && s.heroesLost > 0) {
+    out.push([s.heroesReviving > 0 ? "heroesReviving" : "heroesDead",
+      (s.heroesReviving > 0 ? DESPAIR.heroesReviving : DESPAIR.heroesDead)
+      + DESPAIR.heroEach * Math.min(s.heroesLost - 1, 2)]);
+  }
+  if (s.halls === 0) out.push(["hallDown", DESPAIR.hallDown]);
+  if (s.armyUnits < ARMY_REMNANT) out.push(["armyGone", DESPAIR.armyGone]);
+  if (s.invaders > 0) out.push(["invaded", DESPAIR.invaded]);
+  if (s.invaderHeroes > 0) out.push(["invaderHero", DESPAIR.invaderHero]);
+  if (s.workers < WORKER_ECONOMY) {
+    out.push(["workersShort", DESPAIR.workersShort * ((WORKER_ECONOMY - s.workers) / WORKER_ECONOMY)]);
+  }
+  if (s.gold < hallCost) out.push(["broke", DESPAIR.broke]);
+  if (s.teamGone > 0) out.push(["teamGone", DESPAIR.teamGone * s.teamGone]);
+  if (s.heroDeathLead >= HERO_DEATHS_BEHIND) out.push(["heroDeathsBehind", DESPAIR.heroDeathsBehind]);
+  if (s.firstHeroGap >= FIRST_HERO_LEVELS_BEHIND) out.push(["firstHeroBehind", DESPAIR.firstHeroBehind]);
+  return out;
 }
 
 /**
@@ -380,11 +391,18 @@ export function despair(s: Standing, hallCost: number): number {
  * question on every race.
  */
 export function hopeless(s: Standing, hallCost: number): boolean {
-  if (s.halls === 0 && (s.workers === 0 || s.gold < hallCost)) return true;
-  if (s.invaders > 0 && s.armyFood === 0 && s.workers === 0) return true;
-  if (s.invaders > 0 && s.armyFood === 0 && s.halls === 0) return true;
-  if (s.heroesLost > 0 && s.heroes === 0 && s.invaderHeroes > 0) return true;
-  if (s.heroesLost > 0 && s.heroes === 0 && s.armyFood === 0 && s.invaders > 0) return true;
+  if (hopelessClause(s, hallCost) > 0) return true;
   // …and the positions no single clause describes but every one of them is partly true of.
   return despair(s, hallCost) >= CONCEDE_AT;
+}
+
+/** Which of `hopeless`'s five clauses holds (1-5, numbered as its header numbers them), or 0
+ *  for none — the first that fires, as `hopeless` reads them. */
+export function hopelessClause(s: Standing, hallCost: number): number {
+  if (s.halls === 0 && (s.workers === 0 || s.gold < hallCost)) return 1;
+  if (s.invaders > 0 && s.armyFood === 0 && s.workers === 0) return 2;
+  if (s.invaders > 0 && s.armyFood === 0 && s.halls === 0) return 3;
+  if (s.heroesLost > 0 && s.heroes === 0 && s.invaderHeroes > 0) return 4;
+  if (s.heroesLost > 0 && s.heroes === 0 && s.armyFood === 0 && s.invaders > 0) return 5;
+  return 0;
 }

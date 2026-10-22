@@ -61,7 +61,7 @@ import { type ItemRegistry } from "../data/items";
 import { workerProfileFor, harvestAbilityOf, depotRoleFor, isHarvestCode, type PlayableRace } from "../data/races";
 import { MeleeAi, AI_SCRIPT_RACES } from "../ai";
 import { CreepCaster } from "../ai/creeps";
-import { ComputerPlusAi, type PlusHost } from "../ai/plus";
+import { ComputerPlusAi, type ConcedeReading, type PlusHost } from "../ai/plus";
 import { CandyWarAi, type CandyHost } from "../ai/plus/candy";
 import { WarChasersAi } from "../ai/plus/warchasers";
 import { type TechRegistry } from "../data/techtree";
@@ -9187,6 +9187,12 @@ export class RtsController {
    */
   get simWorld(): SimWorld {
     return this.sim;
+  }
+
+  /** Each Computer+ seat's concession reading — the dev tools' concede readout. Empty with no
+   *  Computer+ seat, and on a client (the AI runs where the authority does). */
+  computerPlusConcede(): ConcedeReading[] {
+    return this.computerPlus?.concedeReport() ?? [];
   }
 
   /**

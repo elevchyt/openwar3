@@ -15,6 +15,7 @@ import { DevToolsDrawer } from "./devTools";
 
 import { CHAT_MAX_LENGTH, sanitizeChat, type ChatTarget } from "../game/chat";
 import type { CheatKind, HeroBarEntry } from "../game/rts";
+import type { ConcedeReading } from "../ai/plus";
 import { allyButtonSkin, type AllyColorMode } from "../game/allyColor";
 import type { MinimapDot } from "../game/minimapView";
 import { CONSOLE_BAND_H, type ConsoleResources } from "./consoleUi";
@@ -526,6 +527,9 @@ export interface HudDriver {
   /** Toggle the "Show Regions" overlay (the map's named gg_rct_* trigger regions,
    *  outlined with a name label inside each). Returns the resulting on/off state. */
   toggleRegions(): boolean;
+  /** Each Computer+ seat's concession reading (ai/plus `concedeReport`), for the dev drawer's
+   *  "Show Concede" overlay. Empty when no seat is Computer+. */
+  concedeReadings(): ConcedeReading[];
   /** Everything the dev drawer's Spawn tab can make (ui/devTools.ts): every unit, hero and
    *  building type in the registry and every item type, the map's own included. */
   spawnCatalog(): SpawnEntry[];
