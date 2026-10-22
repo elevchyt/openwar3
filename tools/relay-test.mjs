@@ -257,6 +257,66 @@ try {
     check("…and one reclaimed in time is not", !leaves.includes(3));
   }
 
+  console.log("the host lets a dropped seat go (\"Waiting for players...\" ran out)");
+  {
+    // The host's countdown is shorter than the relay's hold, and a `drop` ends the hold early:
+    // every peer hears the same `peer-leave` the hold's own timer would have sent, and the
+    // player who comes back afterwards is REFUSED rather than seated as a newcomer in the
+    // middle of a match that has already counted them out.
+    const { RelayCore } = await import(join(REPO, "server", "rooms.mjs"));
+    const core = new RelayCore({ holdMs: 60_000 });
+    const conn = () => { const c = { got: [], send: (m) => c.got.push(m) }; core.connect(c); return c; };
+    const hostC = conn();
+    core.handle(hostC, { t: "create", name: "Drop", playerName: "Host", mapPath: MAP_PATH, maxPlayers: 3 });
+    const roomId = hostC.got.find((m) => m.t === "created").room.id;
+    const live = conn();
+    core.handle(live, { t: "join", roomId, playerName: "Live" });
+    const gone = conn();
+    core.handle(gone, { t: "join", roomId, playerName: "Gone" });
+    const goneToken = gone.got.find((m) => m.t === "joined").token;
+    core.disconnect(gone);
+    check("the host is told the seat dropped", hostC.got.some((m) => m.t === "peer-drop" && m.peerId === 3));
+    core.handle(live, { t: "drop", peerId: 3 }); // a CLIENT may not drop anybody
+    check("a client's drop is ignored", !hostC.got.some((m) => m.t === "peer-leave"));
+    core.handle(hostC, { t: "drop", peerId: 2 }); // nor may the host drop a LIVE peer
+    check("a drop of a live peer is ignored", !live.got.some((m) => m.t === "peer-leave"));
+    core.handle(hostC, { t: "drop", peerId: 3 });
+    check("the host's drop is a leave, at once, for everyone", live.got.some((m) => m.t === "peer-leave" && m.peerId === 3));
+    const late = conn();
+    core.handle(late, { t: "join", roomId, playerName: "Gone", token: goneToken });
+    const refusal = late.got.find((m) => m.t === "error");
+    const DROPPED = /export const DROPPED_MESSAGE\s*=\s*"([^"]+)"/.exec(readFileSync(join(REPO, "src", "net", "protocol.ts"), "utf8"))?.[1];
+    check("a rejoin after the drop is refused with the client's DROPPED_MESSAGE", refusal?.message === DROPPED && !late.got.some((m) => m.t === "joined"));
+    check("…and the refused player was not seated", hostC.got.filter((m) => m.t === "peer-join").length === 2);
+  }
+
+  console.log("from the main menu: is my seat still held, and No gives it up");
+  {
+    const { RelayCore } = await import(join(REPO, "server", "rooms.mjs"));
+    const core = new RelayCore({ holdMs: 60_000 });
+    const conn = () => { const c = { got: [], send: (m) => c.got.push(m) }; core.connect(c); return c; };
+    const hostC = conn();
+    core.handle(hostC, { t: "create", name: "Menu", playerName: "Host", mapPath: MAP_PATH, maxPlayers: 4 });
+    const roomId = hostC.got.find((m) => m.t === "created").room.id;
+    const mate = conn();
+    core.handle(mate, { t: "join", roomId, playerName: "Mate" });
+    const gone = conn();
+    core.handle(gone, { t: "join", roomId, playerName: "Gone" });
+    const token = gone.got.find((m) => m.t === "joined").token;
+    const menu = conn();
+    core.handle(menu, { t: "seat", roomId, token });
+    check("a LIVE seat is not offered back", menu.got.at(-1)?.held === false);
+    core.disconnect(gone);
+    core.handle(menu, { t: "seat", roomId, token });
+    check("a held seat is", menu.got.at(-1)?.held === true);
+    core.handle(menu, { t: "seat", roomId, token: "nope" });
+    check("…but not to a wrong token", menu.got.at(-1)?.held === false);
+    core.handle(menu, { t: "abandon", roomId, token });
+    check("No is a leave, to everybody", mate.got.some((m) => m.t === "peer-leave" && m.peerId === 3));
+    core.handle(menu, { t: "seat", roomId, token });
+    check("…and the seat is gone after it", menu.got.at(-1)?.held === false);
+  }
+
   console.log("a socket that dies WITHOUT closing is reaped");
   // The failure this covers was seen live: the games list advertised a room whose both tabs
   // had been shut minutes earlier. `ws.on("close")` never fired for them, because a tab that

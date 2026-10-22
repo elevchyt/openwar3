@@ -376,6 +376,58 @@ read 153 ms. Direct: 1 ms (both on one machine), with **zero** match messages th
 after the link opened. With the host's links switched off, the joiner's offers went unanswered,
 it stayed on the relay at 150 ms, and the match played on.
 
+### A player who drops
+
+Two ways out of a match, and they are told apart on purpose. A player who CHOSE to go — Quit,
+End Game, Exit Program, the window or the tab closed, Alt+F4 — says `leave` on the way out and is
+gone at once: `peer-leave`, the map's own `EVENT_PLAYER_LEAVE`, and in a 1v1 the other player's
+victory. The window close is held by the desktop shell until the page has said it
+(`ow3native.onClosing`, `CLOSE_GRACE_MS`), and a browser tab says it in `pagehide` with a whole
+`LanLobby.close()` — a bare `leave` sent from there was lost with the page, and the room heard a
+drop. A player whose CONNECTION went (a crash, a power cut, the wifi) says nothing, and the relay
+holds the seat (`peer-drop`).
+
+**Everybody waits ten seconds.** The host stops the match behind WC3's own
+`UI\FrameDef\UI\SuspendDialog.fdf` ("Waiting for players...", the player's swatch and name, a
+countdown) — a fourth owner of the pause ([pause.md](pause.md)), ruled by the host and broadcast
+as `suspend`, so a client never freezes on a drop the host has already answered. The dialog's
+"Drop players" button is taken OUT (the developer's call: nobody has to decide anything), and
+`MapViewerScene.WAIT_FOR_DROPPED_S` is the developer's figure; its job is the wifi blinking. The
+dropped client meanwhile re-dials for `REJOIN_PATIENCE_MS` behind "Waiting for host..." — one
+re-dial used to be all it got, and a two-second dip lost the game.
+
+**At zero the answer depends on whether the player has a side** (`hasAllyPlaying`):
+
+- **Nobody on their side still playing** (a 1v1, a free-for-all) — they have LEFT. The host sends
+  the relay `drop`, which frees the seat at once, and the same door a quitter goes out of ends the
+  game. A rejoin after that is refused (`DROPPED_MESSAGE`) rather than seated as a newcomer, which
+  is what a stale token used to get.
+- **A teammate still playing** — the match resumes and the seat is HELD for the rest of the relay's
+  hold (`HOLD_MS`, two minutes from the drop). Every machine shows "X has lost connection (Time to
+  reconnect 87s...)" (`HudOverlay.setStickyMessage`, rewritten in place), counted off the relay's
+  own clock (`peer-drop` carries `holdMs`). The player is back on the MAIN MENU by then, and the
+  menu asks: the relay is asked whether the seat is still held (`seat`, which answers with the
+  milliseconds left), and only then does the game's own message box put up "Reconnect?" with the
+  same countdown. **Yes** loads the map as that client and reclaims the seat only once the world
+  stands (`startGame`'s `rejoin`) — the host answers a rejoin with a full snapshot at once, and a
+  world still loading would drop it. **No** is a leave (`abandon`), said to the room now rather
+  than left to the hold, so the team learns at once that nobody is coming.
+
+What makes the menu prompt possible is that a client's `RejoinSession` carries the MATCH beside
+the token (`match`: the relay URL, the start message, its own peer and the host's), and that the
+session is KEPT when the match ends because the wire could not be got back (`giveUp(…, true)`)
+— and cleared by every chosen departure. Covered by `pnpm relay:test` (the drop, the refused late
+rejoin, `seat`/`abandon`) and `tools/lobby-test.cjs` (the re-dial, the kept session).
+
+**Measured live** (two headless Chromes, `?dev&lan=host|join`, `&allies` seats both people on one
+team): a killed joiner in an Echo Isles 1v1 stops the host for 0:10 and then loses; a 4-second cut
+of the joiner's socket stops both for that long and the match carries on; a closed tab is an
+immediate leave. On Lost Temple with `&allies`, the killed joiner is held, relaunched to the menu,
+offered "Reconnect?" with ~95 s left, and is back in its own base on the host's clock; No hands
+its units to the teammate (`ShareEverythingWithTeam`). The relaunch needs the map MOUNTED —
+`?dev&maps=(4)LostTemple.w3m`; a bare `?dev` mounts none. Not covered live: the desktop shell's
+held window close.
+
 ## Where we are
 
 Progress tracker — update this when a phase moves. Everything below it is the plan; this is the

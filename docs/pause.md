@@ -49,7 +49,13 @@ owners, and folding them into one flag makes them clobber each other:
 all of them EXCEPT `panelPaused` — the state where the mouse stops issuing orders, the camera
 stops moving and the HUD's own hotkeys stand down (`body.game-paused`).
 
-There used to be a fourth, `matchPaused`, for a match that ended out from under us (the host
+A fourth owner arrived with dropped players: `waitPaused` — the match is WAITING for somebody
+whose connection went (`waitingFor`, the host's "Waiting for players..." countdown) or this
+machine's own wire is down (`linkDownAt`). It counts toward both `paused` and `hardPaused`, it is
+ruled by the HOST over the wire (`suspend`) exactly as a player's pause is, and it spends nobody's
+timeouts. See [multiplayer.md "A player who drops"](multiplayer.md#a-player-who-drops).
+
+There used to be a different fourth, `matchPaused`, for a match that ended out from under us (the host
 left). It is gone: that ending is now the ordinary victory screen (`showMatchOver`), and
 `MeleeVictoryDialogBJ` never calls `PauseGame` — Continue Game leaves the player in the world.
 A player's pause is dropped at the same moment, because nobody is left to rule its resume. Panel pause is left out

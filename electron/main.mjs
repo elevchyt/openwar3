@@ -166,9 +166,43 @@ function createWindow(url) {
     void shell.openExternal(target);
     return { action: "deny" };
   });
+  // Closing the window (Alt+F4, the title bar's X, Exit Program) is a CHOSEN departure, and a
+  // player in a LAN game has to say so before the socket goes: a bare close reads to the relay
+  // as a DROP, and the room stops behind "Waiting for players..." for somebody who is not coming
+  // back (docs/multiplayer.md "A player who drops"). So the close is held while the page sends
+  // its `leave` (`ow3native.onClosing`), and goes through on its answer — or after
+  // `CLOSE_GRACE_MS` regardless, so a page that is hung or never asked to listen cannot keep
+  // the window open.
+  let closeAsked = false;
+  win.on("close", (event) => {
+    if (closeAsked) return;
+    closeAsked = true;
+    event.preventDefault();
+    const close = () => {
+      ipcMain.off("ow3:close-ready", ready);
+      clearTimeout(timer);
+      if (!win.isDestroyed()) win.close();
+    };
+    const ready = (ev) => {
+      if (ev.sender === win.webContents) close();
+    };
+    ipcMain.on("ow3:close-ready", ready);
+    const timer = setTimeout(close, CLOSE_GRACE_MS);
+    win.webContents.send("ow3:closing");
+  });
+  // Holding a close cancels a QUIT that was closing it (Electron aborts `app.quit()` when a
+  // window refuses to close), so a quit that met the hold is asked for again once it is through.
+  win.on("closed", () => {
+    if (quitting) app.quit();
+  });
   void win.loadURL(url);
   return win;
 }
+
+/** How long a window close waits for the page to say goodbye to its game (ours). */
+const CLOSE_GRACE_MS = 1000;
+/** A quit is under way (`before-quit`); see the window's `closed` handler. */
+let quitting = false;
 
 let server = null;
 let beacon = null;
@@ -363,6 +397,7 @@ app.on("window-all-closed", () => {
 // letting the process die takes every socket down cleanly, so a client is told rather than left
 // to a heartbeat.
 app.on("before-quit", async (e) => {
+  quitting = true;
   if (!server) return;
   const closing = server;
   server = null;

@@ -2433,6 +2433,30 @@ export class GameHud {
     this.pushLine(this.msgLog, this.msgTimers, "hud-msgline", MSG_MAX, text, duration);
   }
 
+  /**
+   * A line in the message area that STAYS and is rewritten in place until the caller takes it
+   * down with `null` — a countdown, which a stack of fresh lines a second apart would bury the
+   * log under ("Joiner has lost connection (Time to reconnect 87s...)"). Keyed by the caller.
+   */
+  setStickyMessage(key: string, text: string | null): void {
+    let line = this.stickyLines.get(key);
+    if (text === null) {
+      line?.remove();
+      this.stickyLines.delete(key);
+      return;
+    }
+    // A full log may have pushed it off the top; it comes back as the newest line.
+    if (!line || !line.isConnected) {
+      line = document.createElement("div");
+      line.className = "hud-msgline";
+      this.msgLog.append(line);
+      this.stickyLines.set(key, line);
+    }
+    const html = formatColorCodes(text);
+    if (line.innerHTML !== html) line.innerHTML = html;
+  }
+  private readonly stickyLines = new Map<string, HTMLDivElement>();
+
   /** Show one line of player chat. It goes to the CHAT display, never to the message area —
    *  two frames in the engine (CChatDisplay vs CMessageFrame, ORIGIN_FRAME_CHAT_MSG vs
    *  ORIGIN_FRAME_UNIT_MSG), so what a player says cannot shove the map's own text around.

@@ -324,6 +324,9 @@ export async function mountLanLobbyScreen(
     // Assembled AFTER the screen lets go of the lobby's hooks: the direct links install their
     // own on it (src/net/directLink.ts), and the line above would unhook them.
     const link = matchLinkFrom(lobby, isHost(), msg.slots, me, host, observerSeats(msg));
+    // A client keeps the match with its rejoin token, so the main menu can offer the way back
+    // in after a crash or a wire that would not come back (LanLobby.rememberMatch).
+    if (!isHost()) lobby.rememberMatch(msg, host);
     h.onStart(msg.mapPath, map.info, toConfig(msg, me, startsExplored(map.info.classification.flags)), link);
   };
 

@@ -124,6 +124,10 @@ export class DirectChannel implements MatchChannel {
   onPeerRejoin: (peer: number) => void = () => {};
   onPeerLeave: (peer: number) => void = () => {};
   onRoomClosed: (reason: string) => void = () => {};
+  onPeerDrop: (peer: number, holdMs?: number) => void = () => {};
+  onLinkLost: () => void = () => {};
+  onRejoined: () => void = () => {};
+  onDisconnected: () => void = () => {};
 
   private readonly links = new Map<number, Link>();
   private readonly rtc: RtcFactory;
@@ -153,6 +157,16 @@ export class DirectChannel implements MatchChannel {
       this.shutDown();
       this.onRoomClosed(reason);
     };
+    // The connection news a dropped player turns on ("Waiting for players..."), passed straight
+    // through: it is the RELAY's word on who is connected to it, which a direct lane neither
+    // knows nor changes.
+    inner.onPeerDrop = (peer, holdMs) => this.onPeerDrop(peer, holdMs);
+    inner.onLinkLost = () => this.onLinkLost();
+    inner.onRejoined = () => this.onRejoined();
+    inner.onDisconnected = () => {
+      this.shutDown();
+      this.onDisconnected();
+    };
     if (!setup.isHost) this.offer();
   }
 
@@ -177,6 +191,11 @@ export class DirectChannel implements MatchChannel {
   close(): void {
     this.shutDown();
     this.inner.close?.();
+  }
+
+  dropPeer(peer: number): void {
+    this.drop(peer);
+    this.inner.dropPeer?.(peer);
   }
 
   private sendTo(peer: number, data: unknown): void {

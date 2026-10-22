@@ -63,6 +63,13 @@ export type ClientMessage =
    *  for a first-time join. */
   | { t: "join"; roomId: string; playerName: string; token?: string }
   | { t: "leave" }
+  /** HOST only: let a dropped player's held seat go now, rather than when the relay's hold runs
+   *  out — WC3's "Waiting for players..." countdown reached zero. Ignored for a live peer. */
+  | { t: "drop"; peerId: number }
+  /** From the MAIN MENU after a drop: is the seat this token opens still held? Answered `seat`. */
+  | { t: "seat"; roomId: string; token: string }
+  /** …and the player's No to reconnecting: give that held seat up now (a leave, to the room). */
+  | { t: "abandon"; roomId: string; token: string }
   /** Opaque game traffic. `to` omitted = everyone else in the room. */
   | { t: "relay"; to?: number; data: unknown };
 
@@ -78,9 +85,11 @@ export type ServerMessage =
   | { t: "joined"; room: RoomInfo; you: PeerInfo; peers: PeerInfo[]; token: string }
   | { t: "peer-join"; peer: PeerInfo }
   | { t: "peer-leave"; peerId: number }
+  /** The answer to `seat`: the seat is still held for this token, for `left` ms more. */
+  | { t: "seat"; held: boolean; left?: number }
   /** A peer's connection DROPPED (item 11). Its slot is HELD for reconnect, not freed — this
    *  is distinct from `peer-leave`, which is a chosen departure. A roster may show "reconnecting". */
-  | { t: "peer-drop"; peerId: number }
+  | { t: "peer-drop"; peerId: number; holdMs?: number }
   /** A dropped peer came back on its token, reclaiming the SAME id it had before. */
   | { t: "peer-rejoin"; peer: PeerInfo }
   /** The host vanished. The match cannot continue — v1 has no host migration. */
@@ -167,7 +176,11 @@ export type GameMessage =
 
 /** Bumped whenever the shapes above change incompatibly; the client refuses a mismatch
  *  rather than failing in a confusing way three messages later. */
-export const PROTOCOL_VERSION = 13; // 13: observers, colours, advanced options — 12: per-slot AI difficulty
+export const PROTOCOL_VERSION = 14; // 14: `drop`/`seat`/`abandon`, a refused stale rejoin — 13: observers, colours, advanced options
+
+/** What the relay answers a rejoin whose seat has been let go (server/rooms.mjs `DROPPED`).
+ *  The one refusal the client must recognise: it means "you were disconnected", not "try again". */
+export const DROPPED_MESSAGE = "You were dropped from the game.";
 
 /**
  * What the relay knows about ITS OWN reachability, sent with the handshake.

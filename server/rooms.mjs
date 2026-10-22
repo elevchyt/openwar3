@@ -25,7 +25,7 @@
 // therefore not a degraded lobby, it is no lobby at all: 12 landed on the client alone once and
 // every LAN game died at "Connection to the game host was lost." `pnpm relay:test` now reads
 // protocol.ts and compares, so the next bump that forgets this line fails a test instead.
-export const PROTOCOL_VERSION = 13; // 13: observers, colours, advanced options — 12: per-slot AI difficulty
+export const PROTOCOL_VERSION = 14; // 14: `drop`/`seat`/`abandon`, a refused stale rejoin — 13: observers, colours, advanced options
 
 /** The game list entry, as LocalMultiplayerJoin.fdf wants it. */
 const roomInfo = (r) => ({
@@ -61,11 +61,19 @@ const mkToken = () => globalThis.crypto.randomUUID();
  * stayed "disconnected" in the room for the rest of the match, the host was never told it had
  * gone, and so the map's own `EVENT_PLAYER_LEAVE` never fired — its units stood there under a
  * player who was not coming back and the victory check never ran. The client's reconnect is a
- * single re-dial of the socket (LanLobby.onLost), plus whatever a reloaded tab does on its
- * way back in; a minute covers both with room to spare. Ours, not the game's: WC3's own
- * "waiting for players" countdown is a different mechanism (it PAUSES the game).
+ * few seconds of re-dialling (LanLobby.onLost). Ours, not the game's.
+ *
+ * In a MATCH the host's "Waiting for players..." countdown comes first (`SuspendDialog.fdf`, a
+ * few seconds with the game PAUSED). A player with nobody on their side is then let go with a
+ * `drop` (below); one with a TEAM is held for the rest of THIS, and may come back through the
+ * main menu's "Reconnect?" prompt (`seat`/`abandon` below) — two minutes is the developer's
+ * figure (docs/multiplayer.md "A player who drops").
  */
-const HOLD_MS = 60_000;
+const HOLD_MS = 120_000;
+
+/** The refusal a dropped player's rejoin gets. MUST equal `DROPPED_MESSAGE` in
+ *  src/net/protocol.ts — the client tells it apart from every other refusal by this text. */
+const DROPPED = "You were dropped from the game.";
 
 export class RelayCore {
   /**
@@ -148,7 +156,10 @@ export class RelayCore {
     // A non-host client dropped and others are still here: hold the slot for its return.
     peer.disconnected = true;
     peer.conn = null; // the old connection is gone; a rejoin reattaches a fresh one
-    this.inRoom(room, { t: "peer-drop", peerId: peer.id });
+    peer.droppedAt = Date.now();
+    // With the hold's length, so a TEAM game can count down "Time to reconnect" off the
+    // relay's own clock rather than a copy of the number that might disagree with it.
+    this.inRoom(room, { t: "peer-drop", peerId: peer.id, holdMs: this.holdMs });
     this.broadcastRooms();
     // …but not for ever (HOLD_MS). The seat is let go exactly as a chosen `leave` would let it
     // go, so every peer — the host above all — hears the same `peer-leave` either way.
@@ -252,6 +263,12 @@ export class RelayCore {
           return;
         }
 
+        // A token that opens NOTHING is a player coming back to a seat that was let go — dropped
+        // by the host's countdown, or by the hold running out. That is not a first join: it is
+        // somebody who was in this game and is not any more, and seating them as a new peer
+        // would put them in the middle of a match that has already ruled them out. Refused, and
+        // the client takes this answer to mean "you were disconnected".
+        if (msg.token) return conn.send({ t: "error", message: DROPPED });
         if (room.peers.size >= room.maxPlayers) return conn.send({ t: "error", message: "That game is full." });
         const peer = { id: room.nextPeerId++, name: msg.playerName || "Player", host: false, conn, token: mkToken(), disconnected: false };
         room.peers.set(peer.id, peer);
@@ -271,6 +288,51 @@ export class RelayCore {
 
       case "leave":
         return this.leaveRoom(conn);
+
+      // A player back on the MAIN MENU after a drop asks whether the seat is still theirs to
+      // reclaim — the menu's "Reconnect?" prompt is put up only when it is. Answered on the
+      // token alone, from a connection in no room: nothing about the room is told but yes/no.
+      case "seat": {
+        const room = this.rooms.get(msg.roomId);
+        const seat = msg.token && room && [...room.peers.values()].find((p) => p.disconnected && p.token === msg.token);
+        // …and how long it will stay so, for the prompt's own "Time to reconnect".
+        const left = seat ? Math.max(0, seat.droppedAt + this.holdMs - Date.now()) : 0;
+        return conn.send({ t: "seat", held: !!seat, left });
+      }
+
+      // …and its No: give the held seat up now. A LEAVE in every respect but the connection it
+      // arrives on — the seat is freed and every peer is told `peer-leave`, which the host turns
+      // into the map's EVENT_PLAYER_LEAVE.
+      case "abandon": {
+        const room = this.rooms.get(msg.roomId);
+        const held = msg.token && room && [...room.peers.values()].find((p) => p.disconnected && p.token === msg.token);
+        if (!held) return;
+        clearTimeout(held.dropTimer);
+        held.dropTimer = null;
+        room.peers.delete(held.id);
+        if ([...room.peers.values()].some((p) => !p.disconnected)) this.inRoom(room, { t: "peer-leave", peerId: held.id });
+        else this.rooms.delete(room.id);
+        this.broadcastRooms();
+        return;
+      }
+
+      // The HOST lets a dropped seat go before its hold runs out — WC3's "Waiting for
+      // players..." countdown reached zero (docs/multiplayer.md "A player who drops"). It does
+      // exactly what the hold's own timer does, a moment sooner, so every peer hears the same
+      // `peer-leave` either way. Only the host may ask, and only of a seat that IS held: a
+      // live connection is never thrown out by this, and a client cannot drop anybody.
+      case "drop": {
+        const room = this.rooms.get(conn.roomId);
+        if (!room || !room.peers.get(conn.peerId)?.host) return;
+        const held = room.peers.get(msg.peerId);
+        if (!held?.disconnected) return;
+        clearTimeout(held.dropTimer);
+        held.dropTimer = null;
+        room.peers.delete(held.id);
+        this.inRoom(room, { t: "peer-leave", peerId: held.id });
+        this.broadcastRooms();
+        return;
+      }
 
       // Opaque game traffic. The relay does not look inside `data` — that payload is the
       // authority's business, and keeping it opaque is what lets the netcode evolve

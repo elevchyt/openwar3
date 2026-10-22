@@ -114,6 +114,7 @@ import { GameDialogOverlay } from "../ui/gameDialog";
 import { LeaderboardOverlay } from "../ui/leaderboard";
 import { MultiboardOverlay } from "../ui/multiboard";
 import { TimerDialogOverlay } from "../ui/timerDialog";
+import { SuspendDialogOverlay, type SuspendRow } from "../ui/suspendDialog";
 import { CinematicPanelOverlay } from "../ui/cinematicPanel";
 import { ScriptCamera, type CameraState } from "./scriptCamera";
 import { AutoCamera } from "../game/autoCamera";
@@ -1351,6 +1352,43 @@ export class MapViewerScene {
   /** Seats whose game is already over — `RemovePlayer` (a defeat, a leave) — so a defeated
    *  player hanging up afterwards is not made to leave a second time (`peerLeft`). */
   private playersOut = new Set<number>();
+  /** Seats already announced as gone ("%s has left the game."). A dropped player is said to
+   *  have left when the host's countdown runs out, and the relay's `peer-leave` for the same
+   *  seat lands a moment later — the same news, said once. */
+  private announcedGone = new Set<number>();
+  /**
+   * WC3's "Waiting for players..." (`SuspendDialog.fdf`): the seats whose CONNECTION dropped
+   * and that the match is stopped for, each with the `performance.now()` its countdown runs out
+   * at. On the host this is the ruling (`peerDropped`, `tickSuspend`); on a client, its copy of
+   * the host's (`takeSuspend`). Non-empty stops the world — a fourth owner of the pause, beside
+   * the panel, the script and the player (docs/pause.md).
+   */
+  private readonly waitingFor = new Map<number, number>();
+  /**
+   * The TEAM game's seats played on without (`tickSuspend` at zero): a dropped player who has a
+   * side still playing, with the `performance.now()` the relay lets the seat go at. Every
+   * machine shows "X has lost connection (Time to reconnect 87s...)" off it; host and client
+   * alike, the host's being the ruling (`ruleSuspend`) and a client's its copy.
+   */
+  private readonly heldUntil = new Map<number, number>();
+  /** HOST: when the relay lets each dropped seat go — the drop's moment plus the hold the relay
+   *  said it keeps (`peer-drop`'s `holdMs`). */
+  private readonly relayLetsGo = new Map<number, number>();
+  /** The seats a "has lost connection" line is up for, so a seat that is no longer held has its
+   *  line taken down. */
+  private readonly lostLines = new Set<number>();
+  /** OUR connection is down and being re-dialled (LanLobby `onLinkLost`), since this
+   *  `performance.now()`; null while the wire is up. The world stops while it is, with the
+   *  same panel up, waiting on the host. */
+  private linkDownAt: number | null = null;
+  /**
+   * How long the match waits for a player whose connection dropped before they are let go —
+   * and a player let go has LEFT, exactly as if they had quit: `EVENT_PLAYER_LEAVE`, so a melee
+   * map's `MeleeTriggerActionPlayerLeft` ends a 1v1 and shares a team player's units with the
+   * team. Ten seconds is the developer's figure, and its only job is the wifi blinking; WC3's
+   * own countdown is longer because it has no reconnect at all.
+   */
+  static readonly WAIT_FOR_DROPPED_S = 10;
   /** Each seat's `PLAYER_GAME_RESULT_*` as `RemovePlayer` stated it — which name plate the
    *  score screen gives it (issue #199). */
   private gameResults = new Map<number, number>();
@@ -1383,14 +1421,18 @@ export class MapViewerScene {
   private pausedBy = -1;
   /** Anything at all stopping the world. */
   private get paused(): boolean {
-    return this.panelPaused || this.scriptPaused || this.playerPaused;
+    return this.panelPaused || this.scriptPaused || this.playerPaused || this.waitPaused;
+  }
+  /** Stopped for a player whose connection is down — theirs (`waitingFor`) or ours (`linkDownAt`). */
+  private get waitPaused(): boolean {
+    return this.waitingFor.size > 0 || this.linkDownAt !== null;
   }
   /** Stopped for a reason that is NOT "a panel is open on top of it" — the state the console's
    *  buttons and the F-keys go dead for. Panel pause is excluded on purpose: the panel that
    *  caused it is covering those buttons anyway (`.fdf-dialog-scrim`), and keying them on it
    *  would mean F11 could not swap the open Quest Log for the Allies dialog. */
   private get hardPaused(): boolean {
-    return this.scriptPaused || this.playerPaused;
+    return this.scriptPaused || this.playerPaused || this.waitPaused;
   }
   /** The two paused-nesses the UI was last dressed for, so `syncPauseUi` is free to call per
    *  frame. Both, because they move independently: opening the F10 panel over an already
@@ -1454,6 +1496,7 @@ export class MapViewerScene {
   private originHidden = false;
   private multiboard: MultiboardOverlay | null = null; // CreateMultiboard — the grid scoreboard (7.22)
   private timerDialogs: TimerDialogOverlay | null = null; // CreateTimerDialog — the countdown windows (7.21)
+  private suspendDialog: SuspendDialogOverlay | null = null; // "Waiting for players..." (`waitingFor`)
   private cinematic: CinematicPanelOverlay | null = null; // the letterbox + transmissions + the fade (7.24)
   // The two switches CinematicModeBJ throws, tracked so they can be restored: the HUD is on
   // screen only when BOTH the interface (ShowInterface) and the UI (EnableUserUI) are on —
@@ -2871,6 +2914,11 @@ export class MapViewerScene {
     this.hostSeat = setup.isHost ? null : (setup.seats.find((s) => s.peer === setup.hostPeer)?.id ?? null);
     this.linkSeats = setup.seats;
     this.playersOut.clear();
+    this.announcedGone.clear();
+    this.waitingFor.clear();
+    this.heldUntil.clear();
+    this.relayLetsGo.clear();
+    this.linkDownAt = null;
     // A client turns the authority's payload back into the same `DialogObj` its own script
     // would have built, so `GameDialog` renders the real screen off the game's own FDF and the
     // two engine button behaviours (any click closes; a quit button leaves) work unchanged.
@@ -3513,7 +3561,12 @@ export class MapViewerScene {
       ...world,
       // `duration` is seconds (timed action) or < 0 (untimed) — showMessage handles both.
       displayText: (player, msg, duration) => {
-        if (player === this.localPlayer) this.hud?.showMessage(msg, duration);
+        if (player !== this.localPlayer) return;
+        // A melee map's leave runs `RemovePlayerPreserveUnitsBJ(…, true)`, whose CustomDefeatBJ
+        // prints "%s has left the game." itself — the very line `announceGone` has just printed
+        // for every map, scripted or not. Said once.
+        if (this.goneLines.delete(msg)) return;
+        this.hud?.showMessage(msg, duration);
       },
       clearText: (player) => {
         if (player === this.localPlayer) this.hud?.clearMessages();
@@ -4367,6 +4420,7 @@ export class MapViewerScene {
         if (table) this.rts?.sendScores(player, table);
       };
       this.rts.onPauseRuled = (on, by, left, denied) => this.takePauseRuling(on, by, left, denied);
+      this.rts.onSuspend = (msg) => this.takeSuspend(msg.seats, msg.gone ?? [], msg.held ?? []);
     }
     // Everybody starts the match with a full allowance of pause timeouts.
     this.pauseTimeouts.clear();
@@ -4389,6 +4443,7 @@ export class MapViewerScene {
       this.mapScript?.interp.fireFrameEvent(frame, event, this.localPlayer));
     this.multiboard = new MultiboardOverlay(ui, this.vfs, skin);
     this.timerDialogs = new TimerDialogOverlay(ui, this.vfs, skin);
+    this.suspendDialog = new SuspendDialogOverlay(ui, this.vfs, skin);
     this.cinematic = new CinematicPanelOverlay(ui, this.vfs, skin);
     this.dialog = new GameDialogOverlay(ui, this.vfs, skin, {
       // WC3 closes a dialog on ANY button click, and a QUIT button additionally ends the
@@ -9889,6 +9944,8 @@ export class MapViewerScene {
       // host's relay down cleanly. A browser tab cannot close itself unless a script opened
       // it, so there the button does the nearest honest thing and leaves the match.
       onExitProgram: () => (isDesktopApp() ? window.close() : endGame(false)),
+      // (In a LAN match the window's close says `leave` to the room before it goes — main.ts
+      // `onShellClosing` — so leaving this way is a departure, never a dropped connection.)
       // Pause Game / Resume Game — ONE button, and in a LAN match the request crosses the
       // wire before anything here moves (see `askPause`).
       onPause: () => {
@@ -10410,8 +10467,17 @@ export class MapViewerScene {
     if (this.matchEnded) return; // our own game is over — nobody here is waiting on them
     const seat = this.linkSeats.find((s) => s.peer === peer)?.id;
     if (seat === undefined) return;
-    const s = (key: string, fallback: string): string => this.globalStrings?.strings.get(key) ?? fallback;
-    this.announce(fillSlots(s("PLAYER_LEFT_GAME", "%s has left the game."), [this.playerLabel(seat)]));
+    // Gone while the room was waiting for them (the relay's own hold, on a host that never
+    // asked for the seat back): stop waiting.
+    this.relayLetsGo.delete(seat);
+    const waited = this.waitingFor.delete(seat);
+    if ((this.heldUntil.delete(seat) || waited) && !this.rts?.frozenClient) this.ruleSuspend([]);
+    this.seatLeft(seat);
+  }
+
+  /** `peerLeft`'s body, by SEAT — also where a dropped player whose countdown ran out goes. */
+  private seatLeft(seat: number): void {
+    this.announceGone(seat);
     if (this.rts?.frozenClient) return;
     // The game they had paused is not theirs to hold any more: the pause lifts with them. Ruled
     // by NOBODY (-1), so no machine prints "has resumed the game." over a player who is gone.
@@ -10426,6 +10492,188 @@ export class MapViewerScene {
     if (!interp) return;
     interp.rt.ensurePlayer(seat).slotState = 2; // PLAYER_SLOT_STATE_LEFT
     interp.firePlayerEvent(seat, EVENT_PLAYER_LEAVE);
+  }
+
+  /** "%s has left the game." — once per seat, whichever of the routes that say it gets there first. */
+  private announceGone(seat: number): void {
+    if (this.announcedGone.has(seat)) return;
+    this.announcedGone.add(seat);
+    const s = (key: string, fallback: string): string => this.globalStrings?.strings.get(key) ?? fallback;
+    const line = fillSlots(s("PLAYER_LEFT_GAME", "%s has left the game."), [this.playerLabel(seat)]);
+    this.goneLines.add(line);
+    this.announce(line);
+  }
+  /** The leave lines `announceGone` printed, which the map's own leave trigger is about to
+   *  print again (`displayText`). */
+  private readonly goneLines = new Set<string>();
+
+  // --- a player whose connection DROPS ("Waiting for players...") ------------------------
+  //
+  // docs/multiplayer.md "A player who drops". A player who CHOSE to go (Quit, Exit Program, the
+  // window closed) said `leave` on the way out and is gone at once — `peerLeft`. One whose
+  // connection simply went is held by the relay (`peer-drop`), and the match STOPS for them,
+  // every machine behind the game's own SuspendDialog with a countdown. Back inside it, the
+  // game carries on as if nothing happened (the host's catch-up snapshot does the rest); not
+  // back, and the host lets the seat go at the relay and the player has LEFT, by exactly the
+  // door a quitter goes out of — which in a 1v1 is the other player's victory.
+
+  /** HOST: a player's connection dropped. Start waiting for them. */
+  peerDropped(peer: number, holdMs = 120_000): void {
+    // A client obeys the host's ruling (`takeSuspend`) and never starts a wait of its own: a
+    // drop the host has already answered must not freeze it.
+    if (this.matchEnded || this.rts?.frozenClient) return;
+    const seat = this.linkSeats.find((s) => s.peer === peer)?.id;
+    if (seat === undefined) return;
+    // Nobody stops a match for a seat whose game is already over, or for a watcher: neither
+    // has anything left to do in it. The relay's hold lets those go on its own.
+    if (this.playersOut.has(seat) || this.observers.some((o) => o.id === seat)) return;
+    this.waitingFor.set(seat, performance.now() + MapViewerScene.WAIT_FOR_DROPPED_S * 1000);
+    this.relayLetsGo.set(seat, performance.now() + holdMs);
+    this.ruleSuspend([]);
+  }
+
+  /** HOST: a dropped player is back in their seat — stop waiting. The catch-up snapshot is
+   *  MatchLink's (`owed`), and it goes out on the first tick of the world running again. */
+  peerRejoined(peer: number): void {
+    if (this.rts?.frozenClient) return;
+    const seat = this.linkSeats.find((s) => s.peer === peer)?.id;
+    if (seat === undefined) return;
+    this.relayLetsGo.delete(seat);
+    const waited = this.waitingFor.delete(seat);
+    if (this.heldUntil.delete(seat) || waited) this.ruleSuspend([]);
+  }
+
+  /** Is anybody on this seat's side still playing — a teammate, human or computer, whose game
+   *  is not over? What decides whether a dropped player is let go or held (`tickSuspend`). */
+  private hasAllyPlaying(seat: number): boolean {
+    return this.scoreSeats.some(
+      (s) => s.id !== seat && !this.playersOut.has(s.id) && (this.rts?.playersAreCoAllied(seat, s.id) ?? false),
+    );
+  }
+
+  /** HOST: tell the room who it is waiting for, and for how long — and who it has just let go. */
+  private ruleSuspend(gone: number[]): void {
+    const now = performance.now();
+    const seats = [...this.waitingFor].map(([seat, at]) => ({ seat, left: Math.max(0, (at - now) / 1000) }));
+    const held = [...this.heldUntil].map(([seat, at]) => ({ seat, left: Math.max(0, (at - now) / 1000) }));
+    this.rts?.matchLinkHandle?.ruleSuspend({ k: "suspend", seats, ...(gone.length ? { gone } : {}), ...(held.length ? { held } : {}) });
+  }
+
+  /** CLIENT: the host's ruling on who the room is waiting for. */
+  private takeSuspend(seats: { seat: number; left: number }[], gone: number[], held: { seat: number; left: number }[]): void {
+    if (this.matchEnded) return;
+    const now = performance.now();
+    this.waitingFor.clear();
+    for (const { seat, left } of seats) this.waitingFor.set(seat, now + left * 1000);
+    this.heldUntil.clear();
+    for (const { seat, left } of held) this.heldUntil.set(seat, now + left * 1000);
+    for (const seat of gone) this.announceGone(seat);
+  }
+
+  /**
+   * Every frame: run the host's countdown, and keep the panel in step with whatever the match
+   * is waiting on. On the host a countdown at zero lets that player go — at the relay first
+   * (`dropPlayer`, so the seat is freed and a late rejoin is refused), then out of the match.
+   */
+  private tickSuspend(): void {
+    const now = performance.now();
+    if (this.waitingFor.size && !this.rts?.frozenClient && !this.matchEnded) {
+      const due = [...this.waitingFor].filter(([, at]) => now >= at).map(([seat]) => seat);
+      if (due.length) {
+        for (const seat of due) this.waitingFor.delete(seat);
+        // Two answers at zero, and which one is the developer's rule: a player with NOBODY on
+        // their side still in the game (a 1v1, a free-for-all) is let go — they have LEFT, and
+        // in a 1v1 that is the other player's victory. A player with a TEAM is not: the team
+        // plays on, the seat stays theirs with their units standing in it, and they have until
+        // the relay's hold runs out (server/rooms.mjs HOLD_MS) to come back through the menu's
+        // Reconnect prompt — or to say No to it, which is a leave like any other.
+        const gone = due.filter((seat) => !this.hasAllyPlaying(seat));
+        for (const seat of due) {
+          if (!gone.includes(seat)) this.heldUntil.set(seat, this.relayLetsGo.get(seat) ?? now + 110_000);
+        }
+        this.ruleSuspend(gone);
+        for (const seat of gone) {
+          this.rts?.matchLinkHandle?.dropPlayer(seat);
+          this.seatLeft(seat);
+        }
+      }
+    }
+    this.syncLostLines(now);
+    if (!this.suspendDialog) return;
+    if (this.linkDownAt !== null) {
+      // Our own wire is the one down: we are waiting on the HOST, so the host is the row. A
+      // host whose wire went has nobody to wait for (its room is gone), and gets no row.
+      const host = this.hostSeat;
+      const rows = host === null ? [] : [this.suspendRow(host)];
+      const left = MapViewerScene.WAIT_FOR_DROPPED_S - (now - this.linkDownAt) / 1000;
+      this.suspendDialog.update(rows, left, "WAITING_FOR_HOST");
+    } else if (this.waitingFor.size) {
+      const rows = [...this.waitingFor.keys()].sort((a, b) => a - b).map((seat) => this.suspendRow(seat));
+      // The soonest to run out is the number that matters: it is when the match next moves.
+      const left = (Math.min(...this.waitingFor.values()) - now) / 1000;
+      this.suspendDialog.update(rows, left);
+    } else {
+      this.suspendDialog.update(null, 0);
+    }
+  }
+
+  /**
+   * "X has lost connection (Time to reconnect 87s...)" — one line per held seat, kept up in the
+   * message area and rewritten each second until the player is back or gone. The wording is the
+   * developer's: WC3 has nothing to say here, because it has no reconnect.
+   */
+  private syncLostLines(now: number): void {
+    for (const seat of [...this.lostLines]) {
+      if (this.heldUntil.has(seat) && !this.matchEnded) continue;
+      this.hud?.setStickyMessage(`lost:${seat}`, null);
+      this.lostLines.delete(seat);
+    }
+    if (this.matchEnded) return;
+    for (const [seat, at] of this.heldUntil) {
+      const left = Math.max(0, Math.ceil((at - now) / 1000));
+      this.hud?.setStickyMessage(`lost:${seat}`, `${this.playerLabel(seat)} has lost connection (Time to reconnect ${left}s...)`);
+      this.lostLines.add(seat);
+    }
+  }
+
+  private suspendRow(seat: number): SuspendRow {
+    return { name: this.playerLabel(seat), color: teamColorCss(this.vfs, this.rts?.playerColor(seat) ?? seat) };
+  }
+
+  /** OUR connection dropped (LanLobby `onLinkLost`): stop, and say why, while it re-dials. */
+  linkLost(): void {
+    if (this.matchEnded) return;
+    this.linkDownAt = performance.now();
+  }
+
+  /** …and it is back: carry on. The host's catch-up snapshot puts the world right. */
+  linkRestored(): void {
+    this.linkDownAt = null;
+  }
+
+  /**
+   * We are not getting back in (LanLobby `onDisconnected`) — the relay could not be reached in
+   * time, or the host let our seat go while we were away. To the rest of the room we have left;
+   * to us it is WC3's own `GAMEOVER_DISCONNECTED`, "You were disconnected.", over a quit button.
+   */
+  showDisconnected(): void {
+    this.linkDownAt = null;
+    this.waitingFor.clear();
+    this.heldUntil.clear();
+    if (this.matchEnded) return;
+    this.matchEnded = true;
+    const sim = this.rts?.simWorld;
+    if (sim && !this.rts?.frozenClient) sim.stats.freeze(sim.elapsed);
+    this.playerPaused = false;
+    const s = (key: string, fallback: string): string => this.globalStrings?.strings.get(key) ?? fallback;
+    const quit = s("GAMEOVER_QUIT_GAME", "Quit Game");
+    this.remoteDialog = {
+      handleId: -1, message: s("GAMEOVER_DISCONNECTED", "You were disconnected."),
+      buttons: [{ handleId: -2, dialogId: -1, text: quit, hotkey: localizedHotkey(quit), quit: true, doScoreScreen: true }],
+      visibleFor: new Set([this.localPlayer]), revision: 0,
+    };
+    this.sounds?.playUi("QuestFailed");
+    this.showDialog(this.remoteDialog);
   }
 
   /**
@@ -10456,6 +10704,11 @@ export class MapViewerScene {
     // second `room-closed` not a second screen.
     if (this.matchEnded) return;
     this.matchEnded = true;
+    // Nobody is waiting for anybody in a game that is over.
+    this.waitingFor.clear();
+    this.heldUntil.clear();
+    this.relayLetsGo.clear();
+    this.linkDownAt = null;
     // The match is over however it ended, so the score screen stops counting (MatchStats.endedAt).
     const sim = this.rts?.simWorld;
     if (sim && !this.rts?.frozenClient) sim.stats.freeze(sim.elapsed);
@@ -10464,7 +10717,7 @@ export class MapViewerScene {
     if (this.remoteDialog?.buttons.some((b) => b.quit)) return; // already an ending
     const s = (key: string, fallback: string): string => this.globalStrings?.strings.get(key) ?? fallback;
     // "%s has left the game." — said of the leaver by every route that removes one.
-    if (this.hostSeat !== null) this.announce(fillSlots(s("PLAYER_LEFT_GAME", "%s has left the game."), [this.playerLabel(this.hostSeat)]));
+    if (this.hostSeat !== null) this.announceGone(this.hostSeat);
     const quit = (text: string): DialogObj["buttons"][number] =>
       ({ handleId: -3, dialogId: -1, text, hotkey: localizedHotkey(text), quit: true, doScoreScreen: true });
     if (this.observer) {
@@ -14404,6 +14657,9 @@ export class MapViewerScene {
     this.bgPump.onmessage = () => {
       const now = performance.now();
       if (now - this.lastFrameAt < 200) return; // rAF is alive — it is the driver
+      // The "Waiting for players..." countdown is the host's to run, covered window or not —
+      // or a host whose tab is behind another holds the whole room stopped for ever.
+      this.tickSuspend();
       this.advanceSim(now);
       const world = this.rts?.simWorld;
       if (world) this.drainWorldSpawns(world);
@@ -14602,6 +14858,7 @@ export class MapViewerScene {
       // counter) and to the debug overlays: those are not the world, and freezing them would
       // only make a paused game look broken.
       perfLog.begin("ui");
+      this.tickSuspend();
       this.syncPauseUi();
       // …and scaled by the Game Speed, so a clip plays at the rate the sim under it walks.
       const wdt = this.paused ? 0 : dt * this.speedRate;
@@ -15280,6 +15537,8 @@ export class MapViewerScene {
     this.leaderboard = null;
     this.timerDialogs?.dispose();
     this.timerDialogs = null;
+    this.suspendDialog?.dispose();
+    this.suspendDialog = null;
     this.dialog?.dispose();
     this.dialog = null;
     // The cinematic surface (7.24) — the one piece mountScriptUi tore down at the START of
@@ -15324,6 +15583,11 @@ export class MapViewerScene {
     this.hostSeat = null;
     this.linkSeats = [];
     this.playersOut.clear();
+    this.announcedGone.clear();
+    this.waitingFor.clear();
+    this.heldUntil.clear();
+    this.relayLetsGo.clear();
+    this.linkDownAt = null;
     this.panelPaused = this.scriptPaused = this.playerPaused = false;
     this.pausedBy = -1;
     this.pauseVeil?.remove();

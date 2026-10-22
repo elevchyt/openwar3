@@ -37,6 +37,8 @@ interface NativeBridge {
     set(on: boolean): Promise<void>;
   };
   relaunch?(): Promise<void>;
+  /** The window is closing; the shell waits for `fn` before it does. Absent on an older shell. */
+  onClosing?(fn: () => Promise<void> | void): void;
   /** Write the install's CustomKeys.txt (issue #156). Absent on a shell older than the editor. */
   saveCustomKeys?(bytes: Uint8Array): Promise<void>;
   update: {
@@ -109,6 +111,12 @@ export function onServersFound(fn: (urls: string[]) => void): () => void {
 
 /** Running inside the desktop app. */
 export const isDesktopApp = (): boolean => bridge() !== null;
+
+/** Say goodbye before the desktop window closes (`ow3native.onClosing`). A no-op in a browser,
+ *  where `pagehide` is all there is (LanLobby's constructor). */
+export function onShellClosing(fn: () => Promise<void> | void): void {
+  bridge()?.onClosing?.(fn);
+}
 
 /** The remembered folder, and why it is not usable when it is not. A folder that has been MOVED
  *  and one that has been PATCHED to another Warcraft III are both `valid: false` and are not the

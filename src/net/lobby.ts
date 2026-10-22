@@ -1,7 +1,7 @@
-import { DEFAULT_RELAY_PORT, RELAY_PATH, type GameMessage, type HostInfo, type PeerInfo, type RoomInfo, type ServerMessage } from "./protocol";
+import { DEFAULT_RELAY_PORT, RELAY_PATH, type StartMatch, type GameMessage, type HostInfo, type PeerInfo, type RoomInfo, type ServerMessage } from "./protocol";
 import { edition } from "../data/edition";
 import type { Transport } from "./transportTypes";
-import { localStorageStore, reconnectPlan, type SessionStore } from "./reconnect";
+import { localStorageStore, reconnectPlan, type RejoinSession, type SessionStore } from "./reconnect";
 
 // Client-side LAN lobby state: the game list, the room you are in, and who is in it.
 //
@@ -270,6 +270,18 @@ export class LanLobby {
    *  progress it is the end of the game, and nothing else will ever say so: the wire simply
    *  goes quiet and a client would otherwise keep simulating alone against it (item F6). */
   onRoomClosed: (reason: string) => void = () => {};
+  /** A peer's CONNECTION dropped and the relay is holding its seat (`peer-drop`). In a match
+   *  this is the start of WC3's "Waiting for players..." countdown, which the host runs. */
+  onPeerDrop: (peer: number, holdMs?: number) => void = () => {};
+  /** OUR connection dropped and we are dialling back (`onLost`). In a match the world stops
+   *  arriving from this moment, and the screen says why rather than freezing without a word. */
+  onLinkLost: () => void = () => {};
+  /** …and we are back in our seat: the reconnect landed. */
+  onRejoined: () => void = () => {};
+  /** We are not getting back in — the relay could not be reached in time, the room is gone, or
+   *  the seat was let go while we were away (`DROPPED_MESSAGE`). For a match in progress this is
+   *  WC3's `GAMEOVER_DISCONNECTED`, "You were disconnected." */
+  onDisconnected: () => void = () => {};
 
   constructor(
     /** How to make a transport. Injected so the lobby carries no value dependency on
@@ -282,8 +294,11 @@ export class LanLobby {
     // Closing the tab or the window is a departure too, and the one that gets no `close()`:
     // best effort, since the page may be gone before the frame is, and the relay's hold on a
     // dropped seat (server/rooms.mjs HOLD_MS) is the backstop when it is.
+    // The whole `close()`, not a bare `leave`: a socket the page is torn down under is a socket
+    // that never says anything, while one closed on purpose sends its `leave` and then a close
+    // frame behind it, which is the shape the relay reads as a departure.
     globalThis.addEventListener?.("pagehide", () => {
-      if (this.state.room) this.transport?.send({ t: "leave" });
+      if (this.state.room) this.close();
     });
   }
 
@@ -306,7 +321,12 @@ export class LanLobby {
     if (this.transport) return;
     const t = this.newTransport();
     t.onMessage = (m) => this.handle(m);
-    t.onClose = (reason) => this.onLost(reason);
+    // Only the connection we are ON can be lost. A dial that never connected closes too (its
+    // error is the rejection below), and taken for a loss it started a second re-dial loop
+    // beside the one that made it.
+    t.onClose = (reason) => {
+      if (this.transport === t) this.onLost(reason);
+    };
     await t.connect(url ?? this.primaryUrl);
     this.transport = t;
     this.primaryUrl = url ?? this.primaryUrl;
@@ -335,14 +355,54 @@ export class LanLobby {
     }
     this.reconnecting = true;
     this.set({ error: "Reconnecting…" });
+    this.onLinkLost();
     // Re-open the socket. On success the relay sends the game list, and `handle` consults it for
-    // our room (`reconnectPlan`); on failure the game is truly unreachable, so give up cleanly.
-    void this.connect(this.primaryUrl).catch(() => {
-      this.reconnecting = false;
-      this.store.save(null);
-      this.state = { ...EMPTY, error: reason };
-      this.onChange(this.state);
-    });
+    // our room (`reconnectPlan`). A failure is RETRIED until `REJOIN_PATIENCE_MS` is spent: the
+    // drop worth surviving is the wifi blinking, and while it blinks the very first re-dial fails
+    // too — one attempt made a two-second dip a lost game. Past that the host has let the seat
+    // go anyway (its countdown is shorter), so give up cleanly.
+    const giveUpAt = Date.now() + LanLobby.REJOIN_PATIENCE_MS;
+    const attempt = (): void => {
+      void this.connect(this.primaryUrl).catch(() => {
+        if (!this.reconnecting) return; // closed (or rejoined) while this dial was in flight
+        if (Date.now() < giveUpAt) {
+          this.redial = setTimeout(attempt, LanLobby.REDIAL_MS);
+          return;
+        }
+        // Out of patience, but not refused: in a TEAM game the host holds the seat a good while
+        // longer (server/rooms.mjs HOLD_MS), so the session is KEPT for the main menu's
+        // "Reconnect?" prompt. Whether the seat is really still there is the relay's to say then.
+        this.giveUp(reason, true);
+      });
+    };
+    attempt();
+  }
+
+  /** How long a dropped connection keeps re-dialling before it gives up (ours). Longer than the
+   *  host's "Waiting for players..." countdown on purpose: a player who comes back just after
+   *  it should hear the relay say they were dropped, not time out wondering. */
+  private static readonly REJOIN_PATIENCE_MS = 15_000;
+  /** The pause between two re-dials that failed (ours). */
+  private static readonly REDIAL_MS = 1_000;
+  /** `close()` leaves the stored session alone: the match ended because we could not get back,
+   *  not because anybody chose to go, and the menu may yet offer the way back in. */
+  private keepSession = false;
+  /** A `reclaimSeat` is in flight. */
+  private reclaiming = false;
+  /** The answer a `probeSeat` is waiting for. */
+  private seatAsked: ((held: boolean, left: number) => void) | null = null;
+  /** The pending re-dial, so `close()` can stop it. */
+  private redial: ReturnType<typeof setTimeout> | null = null;
+
+  /** The reconnect is over and we are not back in. The match hears it as "You were
+   *  disconnected."; the LAN screen as `reason`. */
+  private giveUp(reason: string, keepSession = false): void {
+    this.reconnecting = false;
+    this.keepSession = keepSession;
+    if (!keepSession) this.store.save(null);
+    this.state = { ...EMPTY, error: reason };
+    this.onChange(this.state);
+    this.onDisconnected();
   }
 
   /**
@@ -597,6 +657,75 @@ export class LanLobby {
     this.transport?.send({ t: "relay", to, data });
   }
 
+  /**
+   * The match has started and we are a CLIENT in it: remember it alongside the token, so a
+   * player thrown out of it — a crash, a closed window, a wire that would not come back — can
+   * be offered the way back in from the main menu (`RejoinSession.match`).
+   */
+  rememberMatch(start: StartMatch, hostPeer: number): void {
+    const s = this.store.load();
+    const me = this.state.you?.id;
+    if (!s || me === undefined) return;
+    this.store.save({ ...s, match: { ...(this.primaryUrl ? { url: this.primaryUrl } : {}), start, peer: me, hostPeer } });
+  }
+
+  /** The session the menu would offer to reconnect (`RejoinSession`), if it is one for a MATCH. */
+  pendingMatch(): RejoinSession | null {
+    const s = this.store.load();
+    return s?.match ? s : null;
+  }
+
+  /** Forget it — the relay says the seat is gone, or there is no relay to ask. */
+  forgetMatch(): void {
+    this.store.save(null);
+  }
+
+  /** From the main menu: how much longer is the seat our session names held, in ms? 0 = not
+   *  held, or any doubt. Needs a connection (`connect(session.match.url)`), and asks nothing of
+   *  the room but that. */
+  probeSeat(): Promise<number> {
+    const s = this.store.load();
+    if (!s || !this.transport) return Promise.resolve(0);
+    this.seatAsked?.(false, 0);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.seatAsked = null;
+        resolve(0);
+      }, LanLobby.PROBE_MS);
+      this.seatAsked = (held, left) => {
+        clearTimeout(timer);
+        resolve(held ? Math.max(1, left) : 0);
+      };
+      this.transport!.send({ t: "seat", roomId: s.roomId, token: s.token });
+    });
+  }
+  /** How long `probeSeat` waits for the relay (ours). */
+  private static readonly PROBE_MS = 5_000;
+
+  /** The player's No: give the held seat up — to the room, a leave — and forget the session. */
+  abandonSeat(): void {
+    const s = this.store.load();
+    if (s) this.transport?.send({ t: "abandon", roomId: s.roomId, token: s.token });
+    this.store.save(null);
+  }
+
+  /** The player's Yes, once the match is loaded: walk back into the seat. `joined` lands it
+   *  (`onRejoined`); a refusal ends it (`onDisconnected`). */
+  reclaimSeat(): void {
+    const s = this.store.load();
+    if (!s || !this.transport) return this.giveUp("The game has ended.");
+    // Its own flag, not `reconnecting`: that one also answers every game list that arrives with
+    // a rejoin of its own (`tryRejoin`), and a second `join` in flight is refused.
+    this.reclaiming = true;
+    this.transport.send({ t: "join", roomId: s.roomId, playerName: s.playerName, token: s.token });
+  }
+
+  /** Host only: let a dropped player's held seat go now — the "Waiting for players..."
+   *  countdown ran out (server/rooms.mjs `drop`). Every peer is then told `peer-leave`. */
+  dropPeer(peer: number): void {
+    this.transport?.send({ t: "drop", peerId: peer });
+  }
+
   /** Host only: tell the room to load the map and play. */
   startMatch(msg: GameMessage & { k: "start" }): void {
     this.send(msg);
@@ -620,13 +749,21 @@ export class LanLobby {
   /** End the wire, whoever owns it. The match's teardown (`exitToMenu`) calls this; before a
    *  hand-off, `dispose()` does. */
   close(): void {
-    this.store.save(null); // the match is over on our end; a fresh game starts a fresh session
+    // The match is over on our end; a fresh game starts a fresh session — unless it is over
+    // because the wire could not be got back (`giveUp`), which the menu may still mend.
+    if (!this.keepSession) this.store.save(null);
+    this.keepSession = false;
+    this.reclaiming = false;
+    this.seatAsked?.(false, 0);
+    this.seatAsked = null;
     // SAY so before hanging up. Every caller of this is a chosen departure (End Game, Quit
     // Mission, Exit Program, a finished match, a screen going away), and a bare socket close
     // reads to the relay as a DROP — a seat held for a player who might come back — so the host
     // heard nothing until the hold ran out. A `leave` frees the seat at once and every peer is
     // told `peer-leave`, which is what the match turns into the map's own EVENT_PLAYER_LEAVE.
     if (this.state.room) this.transport?.send({ t: "leave" });
+    if (this.redial !== null) clearTimeout(this.redial);
+    this.redial = null;
     // Silently, like `promote`'s: the close event of a socket we ended is not news, and landing
     // after the reset below it would paint "Connection to the game host was lost." on whatever
     // screen is up next.
@@ -658,12 +795,19 @@ export class LanLobby {
       case "created":
         this.store.save({ roomId: m.room.id, token: m.token, playerName: m.you.name });
         return this.set({ phase: "hosting", room: m.room, you: m.you, peers: [m.you], error: null });
-      case "joined":
+      case "joined": {
         // Both a first join and a rejoin land here; remember the token either way (a rejoin
         // carries the same one). The reconnect, if any, is complete: we are back in.
-        this.reconnecting = false;
-        this.store.save({ roomId: m.room.id, token: m.token, playerName: m.you.name });
-        return this.set({ phase: "joined", room: m.room, you: m.you, peers: m.peers, error: null });
+        const rejoined = this.reconnecting || this.reclaiming;
+        this.reconnecting = this.reclaiming = false;
+        // A rejoin keeps what the session knew about the MATCH (`RejoinSession.match`).
+        const was = this.store.load();
+        const match = was?.roomId === m.room.id ? was.match : undefined;
+        this.store.save({ roomId: m.room.id, token: m.token, playerName: m.you.name, ...(match ? { match } : {}) });
+        this.set({ phase: "joined", room: m.room, you: m.you, peers: m.peers, error: null });
+        if (rejoined) this.onRejoined();
+        return;
+      }
       case "peer-join":
         return this.set({ peers: [...this.state.peers, m.peer] });
       case "peer-leave":
@@ -675,7 +819,8 @@ export class LanLobby {
       case "peer-drop":
         // A peer dropped but its slot is HELD (item 11a). Keep it in the roster — it may be
         // back — rather than removing it as a leave does. The screen may grey it as "reconnecting".
-        return;
+        // In a match the host starts counting down (`onPeerDrop`).
+        return this.onPeerDrop(m.peerId, m.holdMs);
       case "peer-rejoin":
         // The dropped peer reclaimed its slot; ensure it is present (it never left our roster on
         // a drop, so this is a no-op unless we missed the drop, in which case it heals).
@@ -702,8 +847,17 @@ export class LanLobby {
         return this.onPeerData(m.from, m.data);
       }
       case "error":
-        this.reconnecting = false; // a refused rejoin (room full, wrong token) stops the attempt
+        // A refused rejoin (room full, the seat let go) ends the attempt — and for a match, the
+        // game: there is nothing left to wait for.
+        if (this.reconnecting || this.reclaiming) {
+          this.reclaiming = false;
+          return this.giveUp(m.message);
+        }
         return this.set({ error: m.message });
+      case "seat":
+        this.seatAsked?.(m.held, m.left ?? 0);
+        this.seatAsked = null;
+        return;
       case "hello":
         // The version check is the transport's (it must fail before a lobby exists). What the
         // screen wants from the handshake is the reachability report beside it.
@@ -721,6 +875,7 @@ export class LanLobby {
       this.reconnecting = false;
       this.store.save(null);
       this.set({ ...EMPTY, phase: "browsing", error: "The game has ended." });
+      this.onDisconnected();
     }
   }
 }

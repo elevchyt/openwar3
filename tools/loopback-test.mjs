@@ -217,12 +217,13 @@ console.log("a held slot is kept even against a full room, but a wrong token is 
   await tick();
   check("the token holder still gets back in", back.last("joined")?.you.id, 2);
 
-  // A wrong token is just a new join (and now the room really is full again).
+  // A wrong token opens nothing, and is REFUSED as a seat that was let go — never seated as a
+  // newcomer, which in a match would drop a stranger into the middle of it.
   const wrong = relay.connect("wrong");
   await tick();
   wrong.send({ t: "join", roomId, playerName: "Wrong", token: "not-the-token" });
   await tick();
-  check("a wrong token does not reclaim the slot", wrong.last("error")?.message, "That game is full.");
+  check("a wrong token does not reclaim the slot", wrong.last("error")?.message, "You were dropped from the game.");
 }
 
 console.log("a chosen LEAVE frees the slot; only a DROP holds it");
@@ -235,12 +236,17 @@ console.log("a chosen LEAVE frees the slot; only a DROP holds it");
   check("a leave is announced as a leave", host.last("peer-leave")?.peerId, 2);
   check("and not as a drop", host.seen("peer-drop").length, 0);
 
-  // The slot is GONE: the token no longer opens it, and rejoining is an ordinary new join.
+  // The slot is GONE: the token no longer opens it, and coming back on it is refused — a player
+  // who left a game is not seated in it again as somebody new (docs/multiplayer.md "A player
+  // who drops"). A tokenless join is still an ordinary one.
   const back = relay.connect("back");
   await tick();
   back.send({ t: "join", roomId, playerName: "Joiner", token });
   await tick();
-  check("the freed slot cannot be reclaimed on the old token", back.last("joined")?.you.id, 3);
+  check("the freed slot cannot be reclaimed on the old token", back.last("error")?.message, "You were dropped from the game.");
+  back.send({ t: "join", roomId, playerName: "Joiner" });
+  await tick();
+  check("…while a fresh join is an ordinary new seat", back.last("joined")?.you.id, 3);
 }
 
 console.log("the host dropping still ends the room — no host migration in v1");

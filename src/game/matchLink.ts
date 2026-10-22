@@ -68,6 +68,21 @@ export interface MatchChannel {
    */
   onRoomClosed: (reason: string) => void;
   /**
+   * A peer's CONNECTION dropped and its seat is held (`peer-drop`). Optional, like the four
+   * below it, because a loopback pair or a test fake has no connection to lose — and `LanLobby`
+   * has them all. Together they are WC3's "Waiting for players..." (docs/multiplayer.md "A
+   * player who drops").
+   */
+  onPeerDrop?: (peer: number, holdMs?: number) => void;
+  /** HOST: let a dropped peer's held seat go now — the countdown ran out. */
+  dropPeer?(peer: number): void;
+  /** OUR connection dropped; we are dialling back. */
+  onLinkLost?: () => void;
+  /** …and we got back into our seat. */
+  onRejoined?: () => void;
+  /** …or we did not, and are out of the game: "You were disconnected." */
+  onDisconnected?: () => void;
+  /**
    * End the wire — the match is over.
    *
    * Optional because a channel that outlives nothing (a test fake, a loopback pair) has nothing
@@ -303,6 +318,37 @@ export function isPauseStateMessage(data: unknown): data is PauseStateMessage {
 }
 
 /**
+ * **"Waiting for players..."** — WC3's `SuspendDialog.fdf`, ruled by the host.
+ *
+ * A player whose connection drops is not gone yet: the host stops the match and counts down
+ * (`MapViewerScene.WAIT_FOR_DROPPED_S`), and this is the whole room's picture of it — who is
+ * being waited for and how long each has left, in seconds, as the host reads its own clock. An
+ * empty `seats` lifts it. Broadcast and authoritative, like `pause`: every machine stops when
+ * this arrives, never when it heard `peer-drop` itself, so a client cannot be frozen by a drop
+ * the host has already answered.
+ *
+ * `held` is the team game's other answer at zero: seats the match plays on without, each still
+ * the player's to come back to until the relay's hold runs out.
+ *
+ * `gone` names the seats whose countdown just ran out. They have LEFT, and each machine says so
+ * now rather than when the relay's `peer-leave` lands — which is the same news, a moment later,
+ * and is then not said twice.
+ */
+export interface SuspendMessage {
+  k: "suspend";
+  seats: { seat: number; left: number }[];
+  gone?: number[];
+  /** The seats a TEAM game plays on without, each with the seconds left before the relay
+   *  lets it go — "X has lost connection (Time to reconnect 87s...)". */
+  held?: { seat: number; left: number }[];
+}
+
+export function isSuspendMessage(data: unknown): data is SuspendMessage {
+  const d = data as { k?: unknown; seats?: unknown } | null;
+  return typeof d === "object" && d !== null && d.k === "suspend" && Array.isArray(d.seats);
+}
+
+/**
  * A round-trip probe, and its echo. Every peer broadcasts a `ping` once a second carrying its
  * OWN clock; whoever hears it answers `pong` with that clock untouched, addressed back; the
  * sender reads the difference. What the metrics strip prints as "ping" is the WORST of the
@@ -535,6 +581,9 @@ export class MatchLink {
   /** Client side: the host's ruling on the pause. Take it as given. */
   onPauseRuled: (msg: PauseStateMessage) => void = () => {};
 
+  /** Client side: who the host is waiting for (`SuspendMessage`). Heard from the HOST only. */
+  onSuspend: (msg: SuspendMessage) => void = () => {};
+
   /** Host side: this player is leaving and wants the score screen's table (`scorereq`). */
   onScoresAsked: (player: number) => void = () => {};
 
@@ -640,6 +689,11 @@ export class MatchLink {
       }
       // Client side: it IS stopped (or running again), and here is who did it.
       else if (isPauseStateMessage(data)) this.onPauseRuled(data);
+      // Client side: the host is waiting for a dropped player. Only the host may say so — a
+      // client that could freeze the room with a forged one could hold the match hostage.
+      else if (isSuspendMessage(data)) {
+        if (from === this.hostPeer) this.onSuspend(data);
+      }
       // Host side: a player on their way out asking for the score table. Stamped, like chat.
       else if (isScoreRequestMessage(data)) {
         const player = this.seats.find((s) => s.peer === from)?.id;
@@ -716,6 +770,17 @@ export class MatchLink {
    *  refusal: a pause is the one thing everybody is inside of at once. */
   rulePause(msg: PauseStateMessage): void {
     this.channel.send(msg);
+  }
+
+  /** Host side: tell the room who it is waiting for. Broadcast, like the pause. */
+  ruleSuspend(msg: SuspendMessage): void {
+    this.channel.send(msg);
+  }
+
+  /** Host side: the countdown for this player ran out — let their held seat go at the relay. */
+  dropPlayer(player: number): void {
+    const peer = this.peerFor(player);
+    if (peer !== undefined) this.channel.dropPeer?.(peer);
   }
 
   /** Host side: tell ONE player their pause was refused. Addressed, like a dialog — being out

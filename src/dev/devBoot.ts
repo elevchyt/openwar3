@@ -386,6 +386,12 @@ async function devLanBoot(
     // human host would have picked Open or Computer per row.
     const seated = seatPeers(newSetup(mapPath, info.name, "dev-lan", info), lobby.snapshot.peers).setup;
     for (const slot of seated.slots) if (slot.kind === "open") slot.kind = "computer";
+    // `&allies` — every PERSON on one team, against the computers: the team game a dropped
+    // player is HELD in rather than let go (docs/multiplayer.md "A player who drops").
+    if (new URLSearchParams(location.search).has("allies")) {
+      for (const slot of seated.slots) if (slot.kind === "player") slot.team = 0;
+      for (const slot of seated.slots) if (slot.kind === "computer") slot.team = 1;
+    }
     // `&speed=0..3` — the create screen's Game Speed slider (src/data/gameSpeed.ts).
     const speed = new URLSearchParams(location.search).get("speed");
     if (speed !== null) seated.advanced = { ...seated.advanced, gameSpeed: toGameSpeed(speed) };
@@ -414,6 +420,7 @@ async function devLanBoot(
   const me = lobby.snapshot.you?.id;
   const hostPeer = lobby.snapshot.peers.find((p) => p.host)?.id ?? 1;
   const link = matchLinkFrom(lobby, lobby.isHost, start.slots, me, hostPeer, observerSeats(start));
+  if (!lobby.isHost) lobby.rememberMatch(start, hostPeer); // as fdfLanLobby does — the menu's Reconnect
   const config = { ...toConfig(start, me, startsExplored(info.classification.flags)), fog };
   await hooks.startGame(file, info, config, link);
 }

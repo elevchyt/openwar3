@@ -19,7 +19,7 @@ import { isRoc, setEdition, setMapDataSet } from "./data/edition";
 import {
   isCampaignOpen, loadDifficulty, markMissionComplete, saveDifficulty, type Difficulty,
 } from "./data/campaignProgress";
-import { mountLanScreen, savedPlayerName } from "./ui/fdfLan";
+import { mountLanScreen, observerSeats, savedPlayerName, toConfig } from "./ui/fdfLan";
 import { mountLanCreateScreen } from "./ui/fdfLanCreate";
 import { mountLanLobbyScreen } from "./ui/fdfLanLobby";
 import { LanLobby } from "./net/lobby";
@@ -27,7 +27,7 @@ import { OFFICIAL_SERVER_ADDRESS } from "./net/officialServer";
 import { observerSlots } from "./net/lobbySetup";
 import type { AdvancedOptions } from "./net/advancedOptions";
 import { WebSocketTransport } from "./net/transport";
-import { onServersFound } from "./assets/nativeInstall";
+import { onServersFound, onShellClosing } from "./assets/nativeInstall";
 import { watchForUpdates } from "./ui/updatePrompt";
 import { startGamepad } from "./ui/gamepad";
 import { mountOptions } from "./ui/fdfOptions";
@@ -50,7 +50,9 @@ import { GlueAudio } from "./ui/glueAudio";
 import { SoundBoard } from "./audio/sounds";
 import type { DataSource } from "./vfs/types";
 import type { MeleeConfig, SlotConfig } from "./ui/lobby";
-import { readMapPreviewBytes } from "./ui/mapBrowser";
+import { readMapInfo, readMapPreviewBytes } from "./ui/mapBrowser";
+import { showGlueDialog } from "./ui/glueDialog";
+import { startsExplored } from "./world/mapKind";
 import type { MapPreview } from "./world/mapPreview";
 import { parseMapInfo, type MapInfo, type NeutralPlayer, type PlayerSlot } from "./world/mapInfo";
 import { TerrainScene } from "./render/scene";
@@ -60,7 +62,7 @@ import { loadMapBytes } from "./world/map";
 import { readMapBytes } from "./vfs/mapArchive";
 import { ModelViewerScene, type SequenceInfo } from "./render/modelViewer";
 import { MapViewerScene } from "./render/mapViewer";
-import type { MatchLinkSetup } from "./game/matchLink";
+import { matchLinkFrom, type MatchLinkSetup } from "./game/matchLink";
 import { LoadGate } from "./game/loadGate";
 import { MenuScene } from "./render/menuScene";
 import { applyMenuCursor } from "./ui/cursor";
@@ -229,15 +231,112 @@ async function enterMap(bytes: Uint8Array, name: string): Promise<string> {
 function mainMenuScreen(vfs: DataSource): { chrome: "MainMenu"; mount: () => Promise<FdfScreen> } {
   return {
     chrome: "MainMenu",
-    mount: () => mountFdfMainMenu(ui, vfs, {
-      onSinglePlayer: () => void glue.goTo(singlePlayerScreen(vfs)),
-      onEdition: () => void switchEdition(vfs),
-      onLan: () => void glue.goTo(lanScreen(vfs)),
-      onOptions: () => void glue.goTo(optionsScreen(vfs)),
-      onCredits: () => void startCredits(vfs),
-      onQuit: () => window.close(),
-    }),
+    mount: async () => {
+      const screen = await mountFdfMainMenu(ui, vfs, {
+        onSinglePlayer: () => void glue.goTo(singlePlayerScreen(vfs)),
+        onEdition: () => void switchEdition(vfs),
+        onLan: () => void glue.goTo(lanScreen(vfs)),
+        onOptions: () => void glue.goTo(optionsScreen(vfs)),
+        onCredits: () => void startCredits(vfs),
+        onQuit: () => window.close(),
+      });
+      void offerReconnect(vfs);
+      return screen;
+    },
   };
+}
+
+/** A reconnect prompt is being asked (or the relay asked whether to put one up) — once at a time. */
+let reconnectAsking = false;
+
+/**
+ * "Reconnect?" — asked on the MAIN MENU of a player who was thrown out of a LAN game that may
+ * still be holding their seat (docs/multiplayer.md "A player who drops"): the game crashed, the
+ * window was killed, or the wire would not come back inside the match's own countdown. In a TEAM
+ * game the host holds such a seat for the relay's whole hold (server/rooms.mjs HOLD_MS), so there
+ * is a game to go back to; the relay is asked first (`probeSeat`) and nothing is shown when it
+ * says no — a 1v1 is decided the moment its countdown runs out.
+ *
+ * Yes loads the map as that client and walks back into the seat once it stands (`startGame`'s
+ * `rejoin`). No is a LEAVE, said to the room now (`abandonSeat`) rather than left to the hold —
+ * the player's team learns at once that nobody is coming. Asked in the game's own message box,
+ * like the update prompt; the words are ours, since the game has no reconnect to word.
+ */
+async function offerReconnect(vfs: DataSource): Promise<void> {
+  if (reconnectAsking || matchLink) return;
+  const lobby = new LanLobby(() => new WebSocketTransport());
+  const session = lobby.pendingMatch();
+  if (!session?.match) return;
+  reconnectAsking = true;
+  try {
+    try {
+      await lobby.connect(session.match.url);
+    } catch {
+      lobby.forgetMatch(); // its relay is gone, and the game with it
+      return;
+    }
+    const leftMs = await lobby.probeSeat();
+    if (!leftMs) {
+      lobby.forgetMatch();
+      lobby.close();
+      return;
+    }
+    const { start, peer, hostPeer } = session.match;
+    // The time the relay will still hold the seat, counted down in the prompt itself — the same
+    // clock the players still in the match are reading "Time to reconnect" off. At zero the seat
+    // is gone, and so is the question.
+    const deadline = performance.now() + leftMs;
+    const secondsLeft = (): number => Math.max(0, Math.ceil((deadline - performance.now()) / 1000));
+    const timeLine = (n: number): string => `Time to reconnect ${n}s...`;
+    let ticker: ReturnType<typeof setInterval> | null = null;
+    const yes = await new Promise<boolean | null>((resolve) => {
+      void showGlueDialog({
+        container: ui, vfs, buttons: "yesno", dimmed: true,
+        text: `Disconnected from |cffffcc00${start.mapName ?? "a LAN game"}|r|n|n${timeLine(secondsLeft())}|n|nReconnect?`,
+        onConfirm: () => resolve(true),
+        onCancel: () => resolve(false),
+      }).then((dialog) => {
+        // The FDF painted the message once; the number in it is rewritten where it stands.
+        const text = dialog.frame("DialogText");
+        ticker = setInterval(() => {
+          const n = secondsLeft();
+          if (text) {
+            const walker = document.createTreeWalker(text, NodeFilter.SHOW_TEXT);
+            for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+              if (node.textContent?.includes("Time to reconnect")) node.textContent = node.textContent.replace(/\d+s\.\.\./, `${n}s...`);
+            }
+          }
+          if (n <= 0) {
+            dialog.close();
+            resolve(null);
+          }
+        }, 250);
+      });
+    });
+    if (ticker !== null) clearInterval(ticker);
+    if (yes === null) {
+      lobby.forgetMatch(); // the relay has let the seat go
+      lobby.close();
+      return;
+    }
+    if (!yes) {
+      lobby.abandonSeat();
+      // A beat for the frame to leave before the socket does (as `onShellClosing`).
+      setTimeout(() => lobby.close(), 150);
+      return;
+    }
+    const info = installMaps.has(start.mapPath) ? await readMapInfo(editionMaps(), start.mapPath) : null;
+    if (!info) {
+      lobby.abandonSeat(); // the map is not in this install any more: there is no way back in
+      lobby.close();
+      return;
+    }
+    lobby.handOff();
+    const link = matchLinkFrom(lobby, false, start.slots, peer, hostPeer, observerSeats(start));
+    void startGame(mapFileFor(start.mapPath), info, toConfig(start, peer, startsExplored(info.classification.flags)), link, lobby);
+  } finally {
+    reconnectAsking = false;
+  }
 }
 
 /**
@@ -293,6 +392,18 @@ function optionsScreen(vfs: DataSource): { chrome: "Options"; mount: () => Promi
 /** The live relay connection, and the promise that says whether it came up. Null while we
  *  are nowhere near the LAN screens. */
 let lan: { lobby: LanLobby; connected: Promise<void>; stopListening: () => void } | null = null;
+
+// The desktop window closing (Alt+F4, the X, Exit Program) is a CHOSEN departure: say `leave`
+// on the way out, or the room hears a dropped connection and stops behind "Waiting for
+// players..." for a player who is not coming back (docs/multiplayer.md "A player who drops").
+// The match's wire if there is one, else the LAN screens'; then a beat for the frame to leave
+// before the shell is told it may close the window.
+onShellClosing(async () => {
+  const wire = matchLink?.channel ?? lan?.lobby;
+  if (!wire) return;
+  wire.close?.();
+  await new Promise((resolve) => setTimeout(resolve, 150));
+});
 
 function lanSession(): { lobby: LanLobby; connected: Promise<void> } {
   if (!lan) {
@@ -784,6 +895,9 @@ async function startGame(
   info: MapInfo,
   config: MeleeConfig,
   link?: MatchLinkSetup,
+  /** Coming BACK into a match already under way, from the main menu's "Reconnect?" — the lobby
+   *  whose seat is reclaimed once the map is loaded (`reconnectFromMenu`). */
+  rejoin?: LanLobby,
 ): Promise<void> {
   meleeConfig = config;
   matchLink = link ?? null;
@@ -806,7 +920,8 @@ async function startGame(
   // faster disk finishes while we are still inside `loadMap` — one long synchronous call — and
   // its message lands on whatever `onPeerData` is installed at that moment, which is nothing
   // until the link is attached further down. Installed here, it catches them all.
-  const gate = link ? new LoadGate(link.channel, remotePeers(link)) : null;
+  // Not for a player coming back: everybody else loaded long ago and is not going to say so again.
+  const gate = link && !rejoin ? new LoadGate(link.channel, remotePeers(link)) : null;
 
   // The LOADING SCREEN (issue #78) goes up before a byte of the map is read and comes down
   // when the match is standing. Every step below is a `step()`, and `step` yields to the
@@ -874,6 +989,20 @@ async function startGame(
       // …and a CLIENT leaving is the departure nothing else reports: the relay's `peer-leave`
       // is the only word of it, and the host is the one machine that must act on it.
       link.channel.onPeerLeave = (peer) => mapScene?.peerLeft(peer);
+      // …and a connection that DROPPED rather than left: the match stops behind "Waiting for
+      // players..." while the host counts down (docs/multiplayer.md "A player who drops"). The
+      // rejoin is chained onto MatchLink's own handler, which owes the returner a catch-up.
+      link.channel.onPeerDrop = (peer, holdMs) => mapScene?.peerDropped(peer, holdMs);
+      const rejoined = link.channel.onPeerRejoin;
+      link.channel.onPeerRejoin = (peer) => {
+        rejoined(peer);
+        mapScene?.peerRejoined(peer);
+      };
+      // Our OWN connection, from this end: stop while it re-dials, carry on if it gets back in,
+      // and "You were disconnected." if it does not.
+      link.channel.onLinkLost = () => mapScene?.linkLost();
+      link.channel.onRejoined = () => mapScene?.linkRestored();
+      link.channel.onDisconnected = () => mapScene?.showDisconnected();
     }
     // The last stretch of the bar is a REAL load rather than a number climbing on its own: the
     // models and icons the opening minutes will ask for, fetched now instead of hitching the
@@ -889,6 +1018,13 @@ async function startGame(
     if (gate) {
       gate.announce();
       await gate.waitForAll();
+    }
+    // Back into the seat only NOW, with the world standing: the host answers a returning player
+    // with a full snapshot at once (MatchLink `owed`), and a world still loading would drop it.
+    // Until it lands the match waits on the host behind "Waiting for host..." (`linkLost`).
+    if (rejoin) {
+      mapScene?.linkLost();
+      rejoin.reclaimSeat();
     }
     // A SINGLE-PLAYER game does not begin on its own. The reference holds the finished screen
     // on `LOADING_PRESS_A_KEY` ("PRESS ANY KEY TO CONTINUE") and starts the match on the

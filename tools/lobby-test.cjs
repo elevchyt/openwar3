@@ -137,6 +137,90 @@ const ME = { id: 2, name: "Joiner", host: false };
     check("and the dead token is forgotten", store.load(), null);
   }
 
+  console.log("\na drop that cannot re-dial at first KEEPS dialling (the wifi blinked), and the match is told");
+  {
+    // The private clocks, wound down so the test does not sit through a real wifi dip.
+    LanLobby.REDIAL_MS = 5;
+    LanLobby.REJOIN_PATIENCE_MS = 200;
+    const store = memoryStore();
+    const made = [];
+    let refuse = 2; // the first two re-dials find no network
+    const lobby = new LanLobby(() => {
+      const t = fakeTransport(made.length > 0 && refuse-- > 0);
+      made.push(t);
+      return t;
+    }, store);
+    const heard = [];
+    lobby.onLinkLost = () => heard.push("lost");
+    lobby.onRejoined = () => heard.push("back");
+    lobby.onDisconnected = () => heard.push("disconnected");
+    await lobby.connect();
+    made[0].onMessage({ t: "joined", room: ROOM, you: ME, peers: [ME], token: "tok" });
+    made[0].drop("lost");
+    await new Promise((r) => setTimeout(r, 60));
+    check("it dialled again after the failures, not once", made.length, 4);
+    made[3].onMessage({ t: "rooms", rooms: [ROOM] });
+    made[3].onMessage({ t: "joined", room: ROOM, you: ME, peers: [ME], token: "tok" });
+    check("the match heard the link go and come back, and nothing else", heard, ["lost", "back"]);
+  }
+
+  console.log("\n…and gives up in the end: the match hears \"You were disconnected.\"");
+  {
+    const store = memoryStore();
+    const made = [];
+    const lobby = new LanLobby(() => {
+      const t = fakeTransport(made.length > 0);
+      made.push(t);
+      return t;
+    }, store);
+    const heard = [];
+    lobby.onDisconnected = () => heard.push("disconnected");
+    await lobby.connect();
+    made[0].onMessage({ t: "joined", room: ROOM, you: ME, peers: [ME], token: "tok" });
+    made[0].drop("lost");
+    await new Promise((r) => setTimeout(r, 400));
+    check("the match is told once, when the patience runs out", heard, ["disconnected"]);
+    // KEPT: a team game holds the seat far longer than we dialled for, and the main menu's
+    // "Reconnect?" asks the relay whether it still does — even after the match's own Quit.
+    check("…and the token is KEPT for the menu's Reconnect prompt", store.load()?.token, "tok");
+    lobby.close();
+    check("…through the match's own teardown, too", store.load()?.token, "tok");
+    const dials = made.length;
+    await new Promise((r) => setTimeout(r, 50));
+    check("…and nothing dials any more", made.length, dials);
+  }
+
+  console.log("\na rejoin REFUSED because the host let the seat go ends the match for us");
+  {
+    const store = memoryStore();
+    const made = [];
+    const lobby = new LanLobby(() => {
+      const t = fakeTransport();
+      made.push(t);
+      return t;
+    }, store);
+    const heard = [];
+    lobby.onDisconnected = () => heard.push("disconnected");
+    await lobby.connect();
+    made[0].onMessage({ t: "joined", room: ROOM, you: ME, peers: [ME], token: "tok" });
+    made[0].drop("lost");
+    await tick();
+    made[1].onMessage({ t: "rooms", rooms: [ROOM] });
+    made[1].onMessage({ t: "error", message: "You were dropped from the game." });
+    check("the refusal is the end of it", [heard, store.load()], [["disconnected"], null]);
+  }
+
+  console.log("\na dropped peer is passed to the match, and the host can let it go");
+  {
+    const { lobby, t } = await joinedLobby();
+    const drops = [];
+    lobby.onPeerDrop = (peer) => drops.push(peer);
+    t().onMessage({ t: "peer-drop", peerId: 3 });
+    check("the match hears the drop", drops, [3]);
+    lobby.dropPeer(3);
+    check("the host's drop goes to the relay", t().sent.at(-1), { t: "drop", peerId: 3 });
+  }
+
   console.log("\na drop while merely BROWSING is a plain disconnect, not a reconnect");
   {
     const store = memoryStore(); // no session

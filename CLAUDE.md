@@ -103,6 +103,13 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   is ORDERED (a `cut` marker over the relay; direct traffic is held until it lands), because a
   direct message overtakes a relayed one and the host counts commands. Do not make the lane
   unreliable while a snapshot still carries one-shot EVENTS (fx, notices, felled trees).
+- **Dropped players:** read [`docs/multiplayer.md`](docs/multiplayer.md) "A player who drops"
+  before touching `peer-drop`/`drop`/`seat`/`abandon`, `LanLobby.onLost` or `waitingFor` in
+  `mapViewer.ts`. A CHOSEN exit (Quit, Exit Program, closing the window or tab) is a `leave` and
+  is immediate; a lost CONNECTION pauses everybody 10 s behind WC3's own SuspendDialog (no Drop
+  button). At zero a player with no side still playing has LEFT (a 1v1 ends), while a team
+  player's seat is HELD for the relay's 120 s with "X has lost connection (Time to reconnect
+  87s...)", and the main menu offers "Reconnect?" off the session the client keeps.
 - **Fog rebuild:** the per-seat vision rebuild (`sim.fog`) is the largest sub-phase of the sim
   after the world step in a team game, and `SightStamps` in [`src/sim/vision.ts`](src/sim/vision.ts)
   is why it is no longer. A sight's footprint is a fact about the TERRAIN, not about who is

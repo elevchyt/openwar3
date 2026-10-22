@@ -1,4 +1,4 @@
-import type { RoomInfo } from "./protocol";
+import type { RoomInfo, StartMatch } from "./protocol";
 
 // The client half of reconnect (docs/multiplayer.md item 11a-client). Deliberately free of any
 // transport or DOM import, so `LanLobby` can be driven headlessly through it and the one piece
@@ -20,6 +20,14 @@ export interface RejoinSession {
   token: string;
   /** The name to rejoin under, so the roster reads the same after the round trip. */
   playerName: string;
+  /**
+   * What it takes to come back from the MAIN MENU rather than from inside a running match —
+   * a crash, a closed window, a re-dial that ran out of patience (docs/multiplayer.md "A
+   * player who drops"). Set once the match has started; absent, there is only the lobby to
+   * reconnect to. `url` is the relay the room is on (absent: this page's own), `start` the
+   * match exactly as the host started it, and `peer`/`hostPeer` our seat and the authority's.
+   */
+  match?: { url?: string; start: StartMatch; peer: number; hostPeer: number };
 }
 
 /** Where a session lives between a drop and a rejoin. localStorage in the browser, a plain

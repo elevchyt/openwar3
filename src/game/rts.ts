@@ -32,7 +32,7 @@ import { groupTargets, ringTargets, followOffsets } from "./formations";
 import { VisionMap, FogState, fogStateOf } from "../sim/vision";
 import { Viewpoint, VisionSet } from "./viewpoint";
 import { GhostMemory } from "./ghosts";
-import { MatchLink, SNAPSHOT_INTERVAL, type DialogMessage, type MatchLinkSetup } from "./matchLink";
+import { MatchLink, SNAPSHOT_INTERVAL, type DialogMessage, type MatchLinkSetup, type SuspendMessage } from "./matchLink";
 import { PoseInterpolator, type PoseOut } from "./poseInterp";
 import type { ChatLine } from "./chat";
 import { applyWorldSnapshot } from "./snapshotApply";
@@ -8546,6 +8546,8 @@ export class RtsController {
     // renderer, which owns the world's clock — so both are passed straight through.
     link.onPauseAsked = (player, on) => this.onPauseAsked?.(player, on);
     link.onPauseRuled = (msg) => this.onPauseRuled?.(msg.on, msg.by, msg.left, msg.denied === true);
+    // "Waiting for players..." — the host's countdown for a dropped player, obeyed the same way.
+    link.onSuspend = (msg) => this.onSuspend?.(msg);
     // The score table for a client leaving mid-match (issue #199): asked of the host, answered
     // by the renderer, which owns the seat facts the table is built with.
     link.onScoresAsked = (player) => this.onScoresAsked?.(player);
@@ -8617,6 +8619,9 @@ export class RtsController {
 
   /** CLIENT: the host ruled. See mapViewer.takePauseRuling. */
   onPauseRuled: ((on: boolean, by: number, left: number, denied: boolean) => void) | null = null;
+
+  /** CLIENT: who the host is waiting for. See mapViewer.takeSuspend. */
+  onSuspend: ((msg: SuspendMessage) => void) | null = null;
 
   /** HOST: a client is leaving and wants the score table (MatchLink `scorereq`). */
   onScoresAsked: ((player: number) => void) | null = null;

@@ -24,6 +24,20 @@ contextBridge.exposeInMainWorld("ow3native", {
     get: () => ipcRenderer.invoke("ow3:vsync-get"),
     set: (on) => ipcRenderer.invoke("ow3:vsync-set", on === true),
   },
+  /**
+   * The window is closing (Alt+F4, the X, Exit Program). `fn` is the page's goodbye — a LAN
+   * player's `leave` to the relay, so the room hears a departure rather than a drop — and the
+   * shell holds the close until it settles (electron/main.mjs `CLOSE_GRACE_MS` at most).
+   */
+  onClosing: (fn) => {
+    ipcRenderer.on("ow3:closing", async () => {
+      try {
+        await fn();
+      } finally {
+        ipcRenderer.send("ow3:close-ready");
+      }
+    });
+  },
   /** Quit and start the game again — how a saved vsync choice is applied without the player
    *  having to do it by hand. */
   relaunch: () => ipcRenderer.invoke("ow3:relaunch"),
