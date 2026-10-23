@@ -38,6 +38,7 @@ import type { Arg, FdfFrame, FdfProp } from "./fdf/parser";
 import { type FdfLibrary } from "./fdf/library";
 import { UI_HEIGHT, UI_WIDTH } from "./fdf/layout";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
+import { fitLine } from "./fdf/widgets";
 import type { ResourceKind } from "./hud";
 import { setGameTip } from "./gameTip";
 
@@ -309,6 +310,12 @@ export class ConsoleUi {
     screen.setText("ResourceBarLumberText", r.lumber);
     screen.setText("ResourceBarSupplyText", r.supply);
     screen.setText("ResourceBarUpkeepText", r.upkeep); // its colour is in the string
+    // The upkeep label is the one readout a MAP rewrites (war3mapSkin.txt [FrameDef]
+    // `UPKEEP_NONE`…), and its frame is a fixed 0.0758 × 0.0164 box: one line. DotA puts its
+    // version there ("v6.77b AI 1.1.7 Fun 2.7c"), which wrapped onto a second line the box
+    // has no room for. Same policy as every one-line label: shrink to fit, ellipsis last.
+    const upkeep = screen.frame("ResourceBarUpkeepText");
+    if (upkeep) fitLine(upkeep);
   }
 
   /**
