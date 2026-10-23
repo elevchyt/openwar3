@@ -3239,6 +3239,37 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.emitLightning(def.lightning[flavour] ?? def.lightning[0] ?? "", caster, t, d0, 0, drainTag(caster.id));
   },
 
+  // Phase Shift (`Apsh`, the Faerie Dragon's) — the caster shifts out of existence for `Dur1`
+  // (0.75s): untouchable, and doing nothing itself, wearing `[Apsh] Specialart =
+  // …\FaerieDragonInvis\FaerieDragon_Invis.mdl`. Pressed by hand here; the stock dragon's
+  // shift-when-struck autocast is not modelled. DotA's Puck casts it as a plain button.
+  Apsh: (api, caster, def, rank) => {
+    const lvl = def.levelData[rank - 1];
+    const d0 = lvl.duration || 0.75;
+    if (def.specialArt) api.emitEffect(def.specialArt, caster.x, caster.y, caster.id, d0, def.specialAttach);
+    api.applyBuff(caster, { kind: "invuln", group: "Apsh", timeLeft: d0, sourceId: caster.id });
+    api.applyBuff(caster, { kind: "stun", group: "Apsh", timeLeft: d0, sourceId: caster.id });
+  },
+
+  // Magic Leash / Aerial Shackles (`Amls`) — a CHANNEL that holds its target where it is: it
+  // can neither move nor attack for as long as the caster keeps it up (`Dur1`/`HeroDur1`), and
+  // takes `mls1` (DataA) "Damage per Second" all the while. The stock row is the Dragonhawk
+  // Rider's, aimed at flyers; a custom map points it at the ground too — DotA's Shackles,
+  // Fiend's Grip and Dismember are all this row with their own numbers, and their triggers add
+  // the rest off the spell events. Built like a drain (world.ts tickDrains): its hold, its
+  // damage and its `LightningEffect` (`LEAS`, the leash) all live on the channel, so stopping
+  // the caster lets the target go at once.
+  Amls: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t) return;
+    const lvl = def.levelData[rank - 1];
+    const d0 = dur(lvl, t) || lvl.duration || 5;
+    api.applyBuff(t, { kind: "stun", group: DRAIN_GROUP, timeLeft: d0, sourceId: caster.id, ...fx(def) });
+    const dps = d(lvl, 0, 0);
+    if (dps > 0) api.applyBuff(t, { kind: "dot", group: DRAIN_GROUP, timeLeft: d0, sourceId: caster.id, value: dps });
+    api.emitLightning(def.lightning[0] ?? "LEAS", caster, t, d0, 0, drainTag(caster.id));
+  },
+
   // Death Pact (Death Knight) — sacrifice a friendly non-hero unit to heal the
   // caster for its remaining hit points.
   AUdp: (api, caster, def, _rank, ctx) => {

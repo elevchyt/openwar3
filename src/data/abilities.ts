@@ -260,6 +260,9 @@ export interface AbilityDef {
    *  the ability being USED; an invisible Channel is how a map gives a unit a spell only its
    *  own triggers or AI ever order. */
   buttonHidden?: boolean;
+  /** A SPELLBOOK's contents (`Aspb`, `spb1` = DataA "Spell List"): the abilities the book holds,
+   *  owned by the unit while it has the book and shown only on the book's own page. */
+  bookSpells?: string[];
   targetFlags: string[]; // targs1 — air/ground/enemy/friend/organic/notself/…
   autocast: boolean; // can toggle autocast (Heal, Slow, …)
   name: string;
@@ -798,6 +801,34 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   Afzy: { target: "none", autocast: true }, // Frenzy — the quillbeasts' self-Bloodlust (Orderon/Orderoff)
   Assk: { target: "passive" }, // Hardened Skin — Mountain Giant / Dragon Turtle: ignore DataC of every attack
   ANpi: { target: "passive" }, // Permanent Immolation — the Infernal's fire, alight from birth
+  Apig: { target: "passive" }, // Permanent Immolation (Graphic) — the same burn (world.ts PERMANENT_IMMOLATION)
+  // Ghost (the Shade) and Permanent Invisibility — always invisible, fading back in `Dur1`
+  // after an attack or a cast (world.ts PERMANENT_INVIS).
+  Agho: { target: "passive" },
+  Apiv: { target: "passive" },
+  // Stock abilities a custom map builds a HERO skill on, whose effect is the stock one plus
+  // whatever the map's triggers add off the spell events. Dropped as unknown codes, every such
+  // skill vanished from its hero (DotA: Spell Shield, Necromastery, Requiem of Souls, Darkness,
+  // Purification, Guardian Angel, Spawn Spiderlings, Incapacitating Bite, Moon Glaive…). Aimed
+  // as the stock rows aim them; an item code cast off a unit's own list runs the item's own
+  // effect (SimWorld.resolveCast → applyItemAbility).
+  AIdd: { target: "passive" }, // Defend (item) — on a unit, pierceTaken/magicTaken (Elune's Grace, Spell Shield)
+  AIde: { target: "passive" }, // Item Armor Bonus
+  AIsb: { target: "passive" }, // Item Spell Bonus
+  Amgl: { target: "passive" }, // Moon Glaive
+  ANic: { target: "passive" }, // Incinerate
+  ANde: { target: "passive" }, // Demolish
+  Aphx: { target: "passive" }, // Phoenix morphing
+  AIct: { target: "none" }, // Moonstone — artificial night
+  AIha: { target: "none" }, // Area heal (Scroll of Healing)
+  AIda: { target: "none" }, // Item area armor
+  AUfa: { target: "unit" }, // Frost Armor
+  ANbr: { target: "none" }, // Battle Roar
+  ANpa: { target: "unit" }, // Parasite
+  Amls: { target: "unit" }, // Magic Leash / Aerial Shackles — a channelled hold (spells.ts)
+  Apsh: { target: "none" }, // Phase Shift — out of existence for Dur1 (spells.ts)
+  // Spellbook — a button that opens a page of the abilities it holds (`bookSpells`); not a cast.
+  Aspb: { target: "none" },
   ACrn: { target: "passive" }, // Reincarnation (creep) — the Centaur Khan / Sasquatch / Wendigo row
   ANin: { target: "point" }, // Inferno (creep/Pit Lord) — the Dreadlord's `AUin` under its own code
   Asal: { target: "passive" }, // Pillage — gold on building attacks (gated on the Ropg upgrade)
@@ -1411,7 +1442,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       orderOff: (f ? str(f, "Orderoff") : "").trim().toLowerCase(),
     });
   }
-  for (const def of defs.values()) if (def.code === "ANcl") shapeChannel(def);
+  for (const def of defs.values()) shapeRow(def);
   for (const id of UI_BUTTON_IDS) addUiButton(defs, id, func, strs);
   const triggerOrders = fillIntrinsicOrders(defs, vfs);
 
@@ -1746,6 +1777,16 @@ function parseButtonPos(v: string): [number, number] {
  * `GetSpellTargetUnit` reads. Called again after a map's w3a edits (objectData), which may
  * rewrite any of these.
  */
+/** The row-shaped codes — Channel and the Spellbook — read their own columns into the def. Run
+ *  by the loader and again after a map's w3a edits, which may rewrite any of them. */
+export function shapeRow(def: AbilityDef): void {
+  if (def.code === "ANcl") shapeChannel(def);
+  else if (def.code === "Aspb") {
+    // `spb1` "Spell List" — a comma list of ability ids, kept verbatim in dataStr.
+    def.bookSpells = (def.levelData[0]?.dataStr[0] ?? "").split(",").map((s) => s.trim()).filter((s) => s.length === 4);
+  }
+}
+
 export function shapeChannel(def: AbilityDef): void {
   const lvl = def.levelData[0];
   if (!lvl) return;

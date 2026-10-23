@@ -975,6 +975,22 @@ code is ambiguous: `SimWorld.findAbility` resolves an ID or a code, the cast doo
 the row's base code, the card presses the ID when two of the unit's abilities share a code, and
 a script's order by string casts the exact row (`Authority.castOrder`).
 
+The rest of what DotA builds its heroes on is stock abilities a map uses as BASES, whose stock
+effect runs and whose triggers add the rest — and each one was simply an unknown code, dropped
+from the hero:
+
+| code | stock ability | what the engine now does |
+| --- | --- | --- |
+| `Amls` | Magic Leash / Aerial Shackles | a channelled hold: `stun` + `mls1` damage per second + the `LEAS` tether, all torn down with the channel (the drain record, `tickDrains`) |
+| `Aspb` | Spellbook | a button that opens a page of `spb1`'s abilities, which the unit owns while it has the book (`syncBookAbilities`, `SimAbility.book`, card page `book:<id>`) |
+| `Agho` / `Apiv` | Ghost / Permanent Invisibility | always invisible; an attack or a cast gives it away and it fades back after `Dur1` (`PERMANENT_INVIS`) |
+| `Apig` | Permanent Immolation (Graphic) | the Infernal's `ANpi` burn (`PERMANENT_IMMOLATION`) |
+| `Apsh` | Phase Shift | invulnerable and out of action for `Dur1`, wearing its `Specialart` |
+| `AI**` | item abilities on a unit's OWN list | passives apply as on a carrier (`AIdd` is Elune's Grace's `pierceTaken`/`magicTaken` — Spell Shield); an active item code cast off the list runs the item's effect (`AIct` = the Moonstone's night — Darkness) |
+| `AUfa` `ANbr` `ANpa` `AIha` `AIda` `AIde` `AIsb` `Amgl` `ANic` `ANde` `Aphx` | dummy bases | castable / passive as the stock row aims them; the map's triggers do the effect |
+
+`tools/sim-map-tables-test.cjs` asserts every DotA hero skill's base code is known.
+
 Two more numbers a map's script keys on and the engine never reads: a unit type's **Point
 Value** (`UnitData.slk points`, `upoi`; `GetUnitPointValue[ByType]`) — DotA's shops sell dummy
 UNITS and its sell trigger turns one into an item only when the sold unit is worth 200–499 —

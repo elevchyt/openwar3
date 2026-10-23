@@ -446,6 +446,9 @@ export interface SimAbility {
    *  of Shadows' Shadow Meld (see `syncCarriedAbilities`), taken off again with the item. Host
    *  bookkeeping only: it does not cross the wire, and nothing but the sync reads it. */
   carried?: true;
+  /** Held in a SPELLBOOK — the id of the `Aspb` ability whose page shows it (syncBookAbilities).
+   *  Owned and castable like any other ability, but off the unit's own card. */
+  book?: string;
   /** `BlzUnitDisableAbility` / `BlzUnitHideAbility` — two COUNTERS, not flags (docs/map-
    *  compatibility.md pass 9). Each call moves one by one, and the state flips only across zero:
    *  "BlzUnitHideAbility & BlzUnitDisableAbility increase/decrease counters on each usage. The
@@ -3058,6 +3061,14 @@ const VOODOO_REFRESH = 0.25;
  *  Named beside the other buff groups because two places have to agree about it: the tick
  *  that lays it exactly once, and the test that asks whether it is already down. */
 const MINE_CLOAK_GROUP = "mine";
+// PERMANENT INVISIBILITY: `Agho` (Ghost — the Shade) and `Apiv` (Permanent Invisibility, which
+// DotA's Stealth Assassin learns). One meta column between them (`Gho1`, AbilityMetaData lists
+// `Agho,Apiv`), and `Dur1` is the FADE: an attack or a cast gives the unit away exactly as it does
+// a Wind Walker (breakInvisibility), and it melts back out after `Dur1` of not doing either. Kept
+// as the land mine's cloak is: one timeless buff, laid again with its transition whenever it is
+// gone (tickPermanentInvisibility).
+const PERMANENT_INVIS = new Set(["Agho", "Apiv"]);
+const PERMANENT_INVIS_GROUP = "permInvis";
 const FACING_CAST_EPS = 0.4; // must roughly face a unit target to cast
 // Channelled abilities (base code): the caster stands locked for the channel and a
 // new order stops it AND the remaining ticks (unlike a backswing, which is free to
@@ -3081,7 +3092,7 @@ const FACING_CAST_EPS = 0.4; // must roughly face a unit target to cast
 // torn down by tickBuffs the tick the channel breaks. classic.battle.net's Ghoul and
 // Abomination pages confirm the lock from the other side: "Group orders won't apply to Ghouls
 // (and Abominations) that are busy Cannibalizing corpses" — which is holdsChannel.
-const CHANNELED = new Set(["AHbz", "ANrf", "AEsf", "AEtq", "AUdd", "ANst", "AOeq", "AHdr", "AOvd", "Acan", "ANcl"]);
+const CHANNELED = new Set(["AHbz", "ANrf", "AEsf", "AEtq", "AUdd", "ANst", "AOeq", "AHdr", "AOvd", "Acan", "ANcl", "Amls"]);
 // Delayed-strike abilities that drop their Effectart (a ground "beware" warning) the
 // moment the cast WIND-UP begins — not when it lands — so it charges up in place and
 // REMAINS visible even if the cast is interrupted before ignition. Flame Strike's
@@ -3223,6 +3234,10 @@ function altFormOf(lvl: AbilityLevel | undefined): string {
 //     its mana was charged TWICE (once at the commit, once in the toggle). See castCost for
 //     the other half: switching it OFF is free.
 const IMMEDIATE = new Set(["AHds", "ACds", "AOwk", "Amil", "Amic", "AEim"]);
+// The two PERMANENT immolations: the Infernal's `ANpi`, and `Apig` "Permanent Immolation
+// (Graphic)" — the same Eim1..Eim3 columns (AbilityMetaData lists `AEim,ACim,ANpi,Apmf,Apig`
+// for all three), alight from birth, costing nothing. DotA's Red Dragon Hide is an `Apig`.
+const PERMANENT_IMMOLATION = new Set(["ANpi", "Apig"]);
 
 /** The abilities a CARRIED item puts on its carrier's command card (see
  *  SimWorld.syncCarriedAbilities): `[clsd] abilList = Ashm`, the Cloak of Shadows — `AIhm`
@@ -8626,6 +8641,26 @@ export class SimWorld {
     this.applyBuffInternal(u, { kind: "mark", group: "immolation", timeLeft: Infinity, sourceId: u.id, ...this.buffArtOf(def) });
   }
 
+  /** Lay the PERMANENT invisibility back on (see PERMANENT_INVIS) whenever it is not there —
+   *  at birth, at learning, and after an attack or a cast stripped it. Its transition is the
+   *  row's `Dur1`, so the unit stays visible for that long after it last gave itself away; a
+   *  swing during the fade breaks it again (breakInvisibility) and the clock starts over. */
+  private tickPermanentInvisibility(u: SimUnit): void {
+    if (u.hp <= 0 || u.buffs.some((b) => b.kind === "invisible" && b.group === PERMANENT_INVIS_GROUP)) return;
+    const ab = u.abilities.find((a) => PERMANENT_INVIS.has(a.code) && a.level >= 1);
+    const def = ab && this.abilityDefOf(ab);
+    const lvl = def?.levelData[Math.min(ab!.level, def.levelData.length) - 1];
+    if (!lvl) return;
+    this.applyBuffInternal(u, {
+      kind: "invisible",
+      group: PERMANENT_INVIS_GROUP,
+      timeLeft: Infinity,
+      sourceId: u.id,
+      delay: invisTransition(lvl.duration), // Dur1 — the Fade Time
+      undispellable: true,
+    });
+  }
+
   /** Put Immolation out — by the player's hand, by an empty mana bar, or by death. */
   private douseImmolation(u: SimUnit): void {
     u.immolation = "";
@@ -8645,7 +8680,7 @@ export class SimWorld {
     // A PERMANENT one pays nothing and can never go out (see recomputeStats). Skipping both
     // clauses is not a shortcut: its `DataB`/`DataC` are 0, so the buffer test would read
     // "mana ≤ 0" and douse the Infernal's fire on the first tick — it has no mana pool at all.
-    if (def.code !== "ANpi") {
+    if (!PERMANENT_IMMOLATION.has(def.code)) {
       u.mana -= this.dataOf(lvl, 1, 7) * dt; // DataB "Mana Drained per Second"
       // DataC "Buffer Mana Required": it goes out on its own once the pool is this low, which
       // is what stops Immolation draining a Demon Hunter to zero and leaving him spell-less.
@@ -13481,7 +13516,7 @@ export class SimWorld {
     // ALIGHT FROM BIRTH rather than a second copy of it — lit here because this is where every
     // other property of the ability list is derived, so a morph or a map's own unit gets it too.
     if (!u.immolation) {
-      const perm = u.abilities.find((a) => a.code === "ANpi" && a.level >= 1);
+      const perm = u.abilities.find((a) => PERMANENT_IMMOLATION.has(a.code) && a.level >= 1);
       if (perm) u.immolation = perm.id;
     }
     // True Sight, likewise a property of the ability list. Three separate base codes do the
@@ -15854,7 +15889,13 @@ export class SimWorld {
       this.spawnSpellProjectile(u, pc.targetId, def, pc.rank);
       return;
     }
-    this.applySpellEffect(pc.code, pc.rank, u, { targetId: pc.targetId, x: pc.x, y: pc.y }, def);
+    // An ITEM ability on a unit's own list is the item's effect, cast: a map that hands a hero
+    // `AIct` (the Moonstone) gets its artificial night — DotA's Night Stalker's Darkness is
+    // exactly that row — and one that hands it `AIha` gets the Scroll of Healing's heal. The
+    // one item dispatcher answers (applyItemAbility), as it does for the three item doors; a
+    // code with a spell handler of its own still goes the spell way.
+    if (!SPELL_HANDLERS[pc.code] && def.code.startsWith("AI")) this.applyItemAbility(u, def, null, pc.targetId, pc.x, pc.y);
+    else this.applySpellEffect(pc.code, pc.rank, u, { targetId: pc.targetId, x: pc.x, y: pc.y }, def);
     // A self-invisibility ends the caster's fight as it lands — see dropAggression. Here
     // rather than in the handler because it is an ORDER change and not an effect, and here
     // rather than at each caller because every route into a cast (a click, an autocast, a
@@ -16583,7 +16624,7 @@ export class SimWorld {
     // recorded here — the one place that knows the caster AND the victim — for tickDrains to
     // tear down if the channel breaks. Re-casting replaces the caster's own entry: WC3 lets
     // one drain per caster, and the old buffs are re-applied over rather than stacked.
-    if (code === "AHdr" && ctx.targetId > 0) {
+    if ((code === "AHdr" || code === "Amls") && ctx.targetId > 0) {
       this.drains = this.drains.filter((x) => x.casterId !== caster.id);
       // …with its LEASH, which is the row's `Area1`: 800 on both the Blood Mage's `[AHdr]` and
       // the Dark Ranger's `[ANdr]`, against a cast range (`Rng1`) of only 600 / 500. A drain
@@ -16592,7 +16633,7 @@ export class SimWorld {
       // "will keep draining mana until the target is at a distance of 80[0]… If the enemy
       // passes out of range, the spell will end prematurely."
       const lvl = d.levelData[Math.max(1, rank) - 1];
-      this.drains.push({ casterId: caster.id, targetId: ctx.targetId, leash: lvl && Number.isFinite(lvl.area) ? lvl.area : 0 });
+      this.drains.push({ code, casterId: caster.id, targetId: ctx.targetId, leash: lvl && Number.isFinite(lvl.area) ? lvl.area : 0 });
     }
   }
 
@@ -16609,7 +16650,7 @@ export class SimWorld {
    *
    *  A channel that simply ran out is not an interrupt: `channelLeft` has reached 0 and the
    *  buffs expire on their own clock the same tick, so they are left alone. */
-  private drains: Array<{ casterId: number; targetId: number; leash: number }> = [];
+  private drains: Array<{ code: string; casterId: number; targetId: number; leash: number }> = [];
 
   /**
    * Spend an Anti-magic Shell's pool against incoming SPELL damage and return what is left to
@@ -16712,7 +16753,9 @@ export class SimWorld {
       const caster = this.units.get(dr.casterId);
       const target = this.units.get(dr.targetId);
       const pc = caster?.pendingCast;
-      const channelling = !!caster && caster.hp > 0 && !!pc && pc.code === "AHdr" && pc.channelLeft > 0 && caster.order === "cast";
+      // …of THIS link's own spell: a drain and a Magic Leash are the same shape (a channel whose
+      // effect lives on the two units), so one record serves both.
+      const channelling = !!caster && caster.hp > 0 && !!pc && pc.code === dr.code && pc.channelLeft > 0 && caster.order === "cast";
       // The leash is measured the way the cast range was (castGap, hull to hull), so a link
       // made at the edge of `Rng1` has exactly `Area1 - Rng1` of slack before it snaps.
       const leashed = !caster || !target || dr.leash <= 0 || this.castGap(caster, target.x, target.y, target) <= dr.leash;
@@ -19448,10 +19491,12 @@ export class SimWorld {
       if (this.tickBuffs(u, dt)) continue; // decay timed effects (a DoT may kill)
       this.tickRevive(u, dt); // a reincarnating unit counting down to standing up again
       this.syncCarriedAbilities(u); // a Cloak of Shadows' Shadow Meld comes and goes with the cloak
+      this.syncBookAbilities(u); // …and a spellbook's spells with the book
       this.tickMeld(u); // Shadow Meld holds only while the unit is still and the sun is down
       this.tickAutoMeld(u); // …and a unit standing about at night takes it by itself
       this.tickAltForm(u, dt); // a timed form (militia) running out and reverting
       this.tickImmolation(u, dt); // Immolation burns whatever it is standing next to, and pays for it
+      this.tickPermanentInvisibility(u); // Ghost / Permanent Invisibility fades back in after a break
       this.tickVoodoo(u, dt); // …and Big Bad Voodoo renews its circle for as long as the ritual holds
       this.tickExhume(u, dt); // …and a Meat Wagon with the upgrade grows its own bodies
       this.tickCarriedItems(u, dt); // …and an Amulet of Spell Shield regrowing its shield
@@ -21482,6 +21527,32 @@ export class SimWorld {
         const group = SELF_INVIS_GROUP[code];
         if (group && u.buffs.some((b) => b.kind === "invisible" && b.group === group)) this.breakInvisibility(u);
       }
+    }
+  }
+
+  /** A SPELLBOOK (`Aspb`) holds abilities its unit OWNS: they are on its sheet — castable by
+   *  the book's page, by a script's order, by an AI — for as long as the book is (at rank 1+),
+   *  and gone with it. Synced here rather than at each door a book can come through (the
+   *  type's list, a hero learning it, `UnitAddAbility`, a morph), so every door gets it. */
+  private syncBookAbilities(u: SimUnit): void {
+    let books: SimAbility[] | null = null;
+    for (const a of u.abilities) if (a.code === "Aspb" && a.level >= 1) (books ??= []).push(a);
+    if (!books && !u.abilities.some((a) => a.book)) return;
+    const want = new Map<string, string>(); // spell id → book id
+    for (const b of books ?? []) {
+      for (const id of this.abilityDefOf(b)?.bookSpells ?? []) if (!want.has(id)) want.set(id, b.id);
+    }
+    for (let i = u.abilities.length - 1; i >= 0; i--) {
+      const a = u.abilities[i];
+      if (!a.book || want.get(a.id) === a.book) continue;
+      u.abilities.splice(i, 1);
+      if (u.pendingCast?.abilityId === a.id) this.stop(u.id);
+    }
+    for (const [id, book] of want) {
+      if (u.abilities.some((a) => a.id === id)) continue;
+      const def = this.abilities?.get(id);
+      if (!def || !KNOWN_ABILITIES[def.code]) continue;
+      u.abilities.push({ id, code: def.code, level: 1, cooldownLeft: 0, autocastOn: false, book });
     }
   }
 

@@ -122,6 +122,15 @@ if (!fs.existsSync(DOTA) || !fs.existsSync(join(EXTRACT, "Units", "UnitData.slk"
     [ch("A07Z"), ch("A26N"), ch("A2ML")], [["none", "channel", false], ["unit", "thunderbolt", false], ["point", "creepheal", false]]);
   // A skill with no Researchbuttonpos sits at 0,0 on the learn page, not at its Buttonpos.
   check("Forked Lightning (no Researchbuttonpos) learns from the top-left cell", [abilities.get("A010")?.learnX, abilities.get("A010")?.learnY], [0, 0]);
+  // Every hero skill DotA defines is built on a base code the engine knows — Channel, Magic
+  // Leash, the Spellbook, Phase Shift, Permanent Invisibility/Immolation and the item codes a
+  // map hands a hero (Spell Shield's AIdd, Darkness' AIct…); an unknown code is dropped from the
+  // hero (RtsController.buildInitialAbilities), which is how 200 skills were missing.
+  const { KNOWN_ABILITIES } = B("data", "abilities.js");
+  const unknown = new Set();
+  for (const d of units.all()) if (d.isHero) for (const id of d.heroAbilities) { const ab = abilities.get(id); if (ab && !KNOWN_ABILITIES[ab.code]) unknown.add(ab.code); }
+  check("every DotA hero skill's base code is one the engine casts or applies", [...unknown], []);
+  check("a spellbook's contents come off its row (Job Change)", abilities.get("A5OZ")?.bookSpells?.slice(0, 3), ["A5PH", "A5PI", "A5QV"]);
   // …and a type's Point Value, which DotA routes every shop purchase on.
   check("a sold dummy unit carries its Point Value (UnitData.slk points)", units.get("h02G")?.points, 200);
 }

@@ -1675,7 +1675,9 @@ export class MapViewerScene {
    *  SIM_DT steps, and 0 while paused). The follow moves on this clock rather than the render
    *  one — see `followHeld`. */
   private lastSimStep = 0;
-  private cardPage: "root" | "build" | "learn" = "root";
+  /** Which page of the command card is up. `book:<id>` is a SPELLBOOK's page — the abilities
+   *  the `Aspb` ability with that id holds (SimAbility.book). */
+  private cardPage: "root" | "build" | "learn" | `book:${string}` = "root";
   private lastSelected: number | null = null;
   /** The building riding the cursor, waiting for the click that puts it down.
    *
@@ -12631,6 +12633,17 @@ export class MapViewerScene {
       return out;
     }
 
+    // A SPELLBOOK's page: the abilities the book holds, in their own cells, and Cancel.
+    if (this.cardPage.startsWith("book:")) {
+      this.pushAbilityButtons(sel, out);
+      out.push(this.cmd({
+        id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
+        ...this.cmdSection("CmdCancel", "Cancel (|cffffcc00ESC|r)",
+          "Drops the current un-issued order and allows you to select a different order."),
+      }));
+      return out;
+    }
+
     // WC3 layout (developer spec): top row = Move, Stop, Hold, Attack; Patrol at
     // (0,1); a worker's Build (or a hero's learn-skill) at (3,1); the bottom row
     // is reserved for learned skills/abilities.
@@ -12908,8 +12921,11 @@ export class MapViewerScene {
       const p = id === su.id ? undefined : this.rts.simView.units.get(id);
       if (p && p.owner === this.localPlayer && !p.isIllusion && p.typeId === su.typeId) peers.push(p);
     }
+    // A spellbook's abilities are on ITS page and nowhere else; that page shows nothing but them.
+    const bookId = this.cardPage.startsWith("book:") ? this.cardPage.slice(5) : null;
     for (const ab of su.abilities) {
       if (ab.level < 1) continue; // unlearned hero abilities don't show as buttons
+      if (bookId ? ab.book !== bookId : ab.book) continue;
       // An ability can be gated by an upgrade — `[Adef] Requires=Rhde` (Defend), `[Acmg]
       // Requires=Rhss` (Control Magic), `[Aweb] Requires=Ruwb` (Web). It sits on the unit from
       // birth and the RESEARCH is what unlocks it, which is the whole job of the six Human
@@ -13110,7 +13126,7 @@ export class MapViewerScene {
     // hiveworkshop 139838, a map author asking how to show points on a hero with none). Test of
     // Balance's heroes are all `uhab=` — their abilities come from the map's own reward dialog —
     // and the Reforged client shows them no Hero Abilities button.
-    if (su.isHero && this.rts.simView.hasHeroSkills(su)) {
+    if (su.isHero && !bookId && this.rts.simView.hasHeroSkills(su)) {
       // Hero Abilities (learn-skill): opens the skill list to spend unspent points.
       // WC3's canonical learn-abilities "Skillz" book art, default hotkey O, and a
       // corner badge showing the points available. The button is on the card for EVERY
@@ -13171,6 +13187,14 @@ export class MapViewerScene {
     // --- spells ---
     if (id.startsWith("ability:")) {
       const code = id.slice(8);
+      // A SPELLBOOK opens its page rather than casting anything; a spell pressed ON that page
+      // is cast as usual and the card goes back to the unit's own.
+      const book = this.rts.selectedSimUnit()?.abilities.find((a) => a.id === code || (a.code === code && a.level >= 1));
+      if (book?.code === "Aspb") {
+        this.cardPage = `book:${book.id}`;
+        return;
+      }
+      if (book?.book) this.cardPage = "root";
       // Renew is drawn as an ability (it is one — `Aren`, with its own art, hotkey, slot and
       // autocast toggle) but ORDERED as a repair: the job outlives any one cast. Same arming
       // the generic Repair button does, so a wisp's click resolves through repairAt.
@@ -13302,7 +13326,7 @@ export class MapViewerScene {
       }
       if (this.placement) {
         this.cancelPlacement();
-      } else if (this.cardPage === "build" || this.cardPage === "learn") {
+      } else if (this.cardPage !== "root") {
         this.cardPage = "root";
       } else {
         const sel = this.rts.selectedInfo();

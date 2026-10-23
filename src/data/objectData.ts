@@ -29,7 +29,7 @@ import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { PrimaryAttribute, toArmorType, toAttackType, toMoveType, toPrimaryAttribute, toRegenType, toWeaponType } from "./enums";
 import { gameNum } from "./gameplayConstants";
 import { syncPrimaryWeapon, type UnitDef, type UnitRegistry, type WeaponSlotDef } from "./units";
-import { emptyAbilityLevel, mdlPath, shapeChannel, normalizeTargetFlags, type AbilityDef, type AbilityLevel, type AbilityRegistry } from "./abilities";
+import { emptyAbilityLevel, mdlPath, shapeRow, normalizeTargetFlags, type AbilityDef, type AbilityLevel, type AbilityRegistry } from "./abilities";
 import { blankItemDef, type ItemDef, type ItemRegistry } from "./items";
 import type { UpgradeDef, UpgradeRegistry } from "./upgrades";
 import type { TechDef, TechRegistry } from "./techtree";
@@ -967,7 +967,7 @@ export function applyMapAbilityData(registry: AbilityRegistry, w3aBytes: Uint8Ar
     if (!base) continue; // base ability unknown — skip (the clone would have no `code`)
     const def = cloneAbility(base, obj.newId);
     applyAbilityMods(def, obj.modifications as AbilMod[], meta, trigStr, registry);
-    if (def.code === "ANcl") shapeChannel(def); // its aim and button are the row's (data/abilities.ts)
+    shapeRow(def); // Channel's aim and button, a spellbook's contents: the row's own (data/abilities.ts)
     registry.setCustom(obj.newId, def);
     count++;
   }
@@ -976,7 +976,7 @@ export function applyMapAbilityData(registry: AbilityRegistry, w3aBytes: Uint8Ar
     if (!base) continue;
     const def = cloneAbility(base, obj.oldId);
     applyAbilityMods(def, obj.modifications as AbilMod[], meta, trigStr, registry);
-    if (def.code === "ANcl") shapeChannel(def); // its aim and button are the row's (data/abilities.ts)
+    shapeRow(def); // Channel's aim and button, a spellbook's contents: the row's own (data/abilities.ts)
     registry.setCustom(obj.oldId, def);
     count++;
   }
