@@ -2059,10 +2059,15 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const swept = lineTargets(api, caster, def, t.x, t.y, d(lvl, 2, 900), lvl.area || 125);
     const targets = [t, ...swept.filter((o) => o !== t)].filter((o) => api.hostile(caster, o));
     // Forked: every target gets its OWN bolt from the caster, all at once — that fan of
-    // bolts is the whole look of the spell.
+    // bolts is the whole look of the spell — and its own IMPACT, which is the row's
+    // `Specialart` (`[ANfl] Specialart=…\Bolt\BoltImpact.mdl`, the spark where each bolt
+    // lands). A map can lean on the impact alone: DotA's Shadow Shaman names a lightning type
+    // (`ETHE`) no LightningData.slk defines, and its whole look is `Specialart` =
+    // `war3mapImported\ForkedLightningOrange.mdx`, so drawing only the bolt drew nothing.
     for (const o of targets.slice(0, d(lvl, 1, 3))) {
       api.spellDamage(o, d(lvl, 0, 85), caster.id);
       api.emitLightning(bolts(def)[0], caster, o);
+      if (def.specialArt) api.emitEffect(def.specialArt, o.x, o.y, o.id, 0, def.specialAttach);
     }
   },
 
