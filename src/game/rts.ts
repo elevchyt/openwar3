@@ -5007,7 +5007,14 @@ export class RtsController {
       // and whose Z is the doodad's, not the terrain's — drive one from the sim and the crate
       // floats. A mobile neutral is neither: a critter, or a cinematic extra a trigger orders
       // across the graveyard, is drawn from the sim like any other unit (see seedNeutral).
-      if (u.neutralPassive && (u.building || e.borrowedBody)) {
+      //
+      // "The viewer already placed that widget" is true only of a structure the MAP placed
+      // (seedNeutral's `seededInstances`): the viewer's own clock re-rolls ITS stand clip. One a
+      // SCRIPT created has no widget behind it, and nothing else picks its next stand — so a
+      // shop wearing a UNIT model (DotA's are villagers, a Muradin, a Wisp), whose stand clips
+      // are one-shot variants the engine is meant to re-roll, played one and froze on its last
+      // frame. Those go through the idle picker below like any other unit.
+      if (u.neutralPassive && (e.borrowedBody || (u.building && this.seededInstances.has(e.unit.instance)))) {
         this.applyVisibility(e, u, this.modelHidden(e.simId), dt); // static & viewer-rendered, but fog still hides/reveals it
         // …and fog still STOPS it: a Fountain of Life in explored fog does not pour. The
         // viewer's own clock drives this instance, so this is the one place it is stopped.
