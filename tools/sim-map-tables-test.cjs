@@ -135,6 +135,59 @@ if (!fs.existsSync(DOTA) || !fs.existsSync(join(EXTRACT, "Units", "UnitData.slk"
   check("a sold dummy unit carries its Point Value (UnitData.slk points)", units.get("h02G")?.points, 200);
 }
 
+// Two maps that keep the install's tables and edit them through their w3u/w3a: every STOCK
+// ability their units and heroes carry is one the engine casts or applies — the melee units' own
+// (Taunt, War Club, Spell Steal, Mana Flare, Phoenix Fire, Sentinel…), Mal'Ganis's two and
+// Monsoon (tools/sim-stock-abilities-test.cjs runs each).
+{
+  const { applyMapUnitData, applyMapAbilityData } = B("data", "objectData.js");
+  const { KNOWN_ABILITIES } = B("data", "abilities.js");
+  const WANTED = ["ANsl", "ANdc", "ANmo", "Atau", "Asps", "Apos", "ANsu", "Aesn", "Assp", "Aspd", "Amfl", "Acor", "Agra", "Afrz",
+    "Apxf", "Asac", "Arng", "Acoi", "Adec", "Abof", "Aflk", "Afsh", "Acha", "Aimp", "Agyv", "Alit", "Awan"];
+  for (const file of ["BleachVsOnepiece13.w3x", "Balanced Hero Survival v0.91.w3x"]) {
+    const path = join(REPO, "Warcraft III", "Maps", "Download", file);
+    if (!fs.existsSync(path) || !fs.existsSync(join(EXTRACT, "Units", "UnitData.slk"))) {
+      console.log(`  skip  no ${file} in Maps\\Download, or no extracted data`);
+      continue;
+    }
+    console.log(`\n${file}`);
+    const onDisk = (p) => {
+      let dir = EXTRACT;
+      for (const part of p.replace(/\//g, "\\").split("\\")) {
+        if (!part) continue;
+        let hit;
+        try { hit = fs.readdirSync(dir).find((n) => n.toLowerCase() === part.toLowerCase()); } catch { return null; }
+        if (!hit) return null;
+        dir = join(dir, hit);
+      }
+      return fs.statSync(dir).isFile() ? dir : null;
+    };
+    const install = { label: "ExtractedData", exists: (p) => onDisk(p) !== null, rawBytes: (p) => { const f = onDisk(p); return f ? new Uint8Array(fs.readFileSync(f)) : null; }, read: async (p) => install.rawBytes(p), list: () => [] };
+    const mpqMod = require("mdx-m3-viewer/dist/cjs/parsers/mpq");
+    const archive = new (mpqMod.default ?? mpqMod).Archive();
+    archive.load(new Uint8Array(fs.readFileSync(path)), true);
+    const get = (p) => archive.get(p)?.bytes() ?? null;
+    const map = { label: "map", exists: (p) => archive.has(p.replace(/\//g, "\\")), rawBytes: (p) => get(p.replace(/\//g, "\\")), read: async (p) => map.rawBytes(p), list: () => archive.getFileNames() };
+    const tables = new MapTableSource(install);
+    tables.setMap(map);
+    const units = loadUnitRegistry(tables);
+    const abilities = loadAbilityRegistry(tables);
+    const wts = get("war3map.wts") ?? undefined;
+    if (get("war3map.w3u")) applyMapUnitData(units, get("war3map.w3u"), wts);
+    if (get("war3map.w3a")) applyMapAbilityData(abilities, get("war3map.w3a"), install.rawBytes("Units\\AbilityMetaData.slk"), wts);
+    const seen = new Set();
+    const unknown = new Set();
+    for (const d of units.all()) for (const id of [...d.abilities, ...d.heroAbilities]) {
+      const ab = abilities.get(id);
+      if (!ab || !WANTED.includes(ab.code)) continue;
+      seen.add(ab.code);
+      if (!KNOWN_ABILITIES[ab.code]) unknown.add(ab.code);
+    }
+    check(`the map's units carry some of them (${seen.size} codes)`, seen.size > 10, true);
+    check("…and every one is a code the engine knows", [...unknown], []);
+  }
+}
+
 if (failed) {
   console.log(`\n${failed} check(s) FAILED`);
   process.exit(1);

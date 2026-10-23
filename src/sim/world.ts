@@ -4,7 +4,7 @@ import { targsKindError } from "./targeting";
 import { corpseAdmits, corpseMissingError, corpseNeed, corpseReach, spawnsFromCorpse, type CorpseNeed, type CorpseOrder } from "./corpses";
 import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, type Footprint } from "./destructibles";
 import { BlightGrid } from "./blight";
-import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isCriticalStrikeCode, isRepairCode, targetFlagSet, requiredHeroLevel, KNOWN_ABILITIES, FELLS_TREES_UNLISTED, morphFlags, MORPH_FLAG_PERMANENT, MORPH_FLAG_REQUIRES_PAYMENT, isStance } from "../data/abilities";
+import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, carriesRally, emptyAbilityLevel, isCriticalStrikeCode, isRepairCode, targetFlagSet, requiredHeroLevel, KNOWN_ABILITIES, FELLS_TREES_UNLISTED, morphFlags, MORPH_FLAG_PERMANENT, MORPH_FLAG_REQUIRES_PAYMENT, isStance } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
 import { cloneAbilityDef, readAbilityField, writeAbilityField } from "../data/objectData";
 import { ATTACK_TYPES, defenseTypeCode, defenseTypeFrom, targetedAsCode, targetedAsFrom } from "../data/unitFieldCodes";
@@ -47,7 +47,7 @@ import {
 import { perfNow, simProfile } from "./profile";
 import { flyHeight, type MissileFlight } from "./missile";
 import { HERO_KILL_VALUE, MatchStats } from "./matchStats";
-import { SPELL_HANDLERS, ITEM_INVULN_GROUP, AURA_BUFFS, SELF_INVIS_GROUP, BLADESTORM_GROUP, FIELD_PIERCES_SPELL_IMMUNITY, POLARITY_SPELLS, HEAL_SPELLS, FIGHTER_BUFFS, MANA_TARGET_SPELLS, NO_SUMMON_TARGET, UNDEAD_TARGET_SPELLS, DISPEL_CODES, REPLENISH_BAR, replenishRefusal, survivesDispel, clockedBuff, worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, spellShieldBuff, drainTag, DRAIN_GROUP, CANNIBALIZE_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
+import { SPELL_HANDLERS, ITEM_INVULN_GROUP, AURA_BUFFS, SELF_INVIS_GROUP, BLADESTORM_GROUP, FIELD_PIERCES_SPELL_IMMUNITY, POLARITY_SPELLS, HEAL_SPELLS, FIGHTER_BUFFS, MANA_TARGET_SPELLS, NO_SUMMON_TARGET, UNDEAD_TARGET_SPELLS, DISPEL_CODES, REPLENISH_BAR, replenishRefusal, survivesDispel, clockedBuff, worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, spellShieldBuff, drainTag, burningOilField, spellStealPlan, DRAIN_GROUP, CANNIBALIZE_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
 /** The buff group a Tornado's toss is applied under — both halves, so the invulnerability's wipe
  *  spares the stun it came with (clearStatusForInvulnerable). See tickTornado. */
 const TORNADO_SPIN_GROUP = "tornadoSpin";
@@ -754,6 +754,9 @@ export interface SummonRequest {
   owner: number;
   team: number;
   summonLeft: number; // >0 = a temporary summon, seconds until it expires
+  /** Arrive at this FRACTION of its life rather than whole — the half of a Hippogryph Rider that
+   *  stands up as a Hippogryph again (SimWorld.decouple) is as hurt as the rider was. */
+  hpFrac?: number;
   /** A SUMMONED unit whatever its clock says — a spell conjured it (requestSummon). A
    *  permanent summon (Carrion Beetles: "permanent until killed", `Dur` 0) is still a summon to
    *  Dispel, Purge and Abolish Magic, to the XP factor and to "Unable to target summoned units":
@@ -2083,6 +2086,15 @@ export interface SimUnit {
   /** `BlzSetUnitWeaponBooleanField(u, UNIT_WEAPON_BF_ATTACKS_ENABLED, i, …)` — the unit's own
    *  "Attacks Enabled" mask, replacing its type's `weapsOn` (recomputeStats). */
   scriptWeaponsOn?: number;
+  /** War Club (`Agra`) in hand: the attack slot it puts DOWN (`DataC` "Disabled Attack Index")
+   *  and the one it picks UP (`DataD` "Enabled Attack Index"), 0-based like the slots, the
+   *  strikes left on the tree (`DataE` "Maximum Attacks") and the seconds until the tree is
+   *  actually in hand (`DataA` "Attach Delay"). See SimWorld.grabTree. */
+  warClub?: { off: number; on: number; strikes: number; armT: number };
+  /** Seconds until this unit next throws Phoenix Fire (`Apxf` Cool1) — tickPhoenixFire. */
+  phoenixT?: number;
+  /** Seconds until a WANDERING unit (`Awan`) next picks somewhere to go — tickWander. */
+  wanderT?: number;
   /** "Ward" in UnitBalance.slk's `type` column — the ten planted, immobile gadgets: Serpent
    *  Ward (`osp1`-`osp4`), Healing Ward (`ohwd`), Sentry Ward (`oeye`), Stasis Trap (`otot`),
    *  Watcher Ward (`nwad`), Monster Lure (`nlur`), Goblin Land Mine (`nglm`). They are units
@@ -3069,6 +3081,16 @@ const MINE_CLOAK_GROUP = "mine";
 // gone (tickPermanentInvisibility).
 const PERMANENT_INVIS = new Set(["Agho", "Apiv"]);
 const PERMANENT_INVIS_GROUP = "permInvis";
+/** Mana Flare's own buff on the Faerie Dragon (`Bmfl`), worn for as long as she channels. */
+const MANA_FLARE_GROUP = "manaflare";
+/** War Club's tree in hand (`Bgra`) — a status mark; the weapon swap is `SimUnit.warClub`. */
+const WAR_CLUB_GROUP = "warclub";
+/** Freezing Breath's hold on a building (`Bfrz`) — a stun, and tickBuildings stops its clocks. */
+const FREEZE_GROUP = "freezingbreath";
+/** WANDER (`Awan`): how far from its post a critter strolls, and roughly how often it sets off.
+ *  OURS — the row carries no columns at all (see tickWander). */
+const WANDER_RADIUS = 400;
+const WANDER_EVERY = 8;
 const FACING_CAST_EPS = 0.4; // must roughly face a unit target to cast
 // Channelled abilities (base code): the caster stands locked for the channel and a
 // new order stops it AND the remaining ticks (unlike a backswing, which is free to
@@ -3092,7 +3114,10 @@ const FACING_CAST_EPS = 0.4; // must roughly face a unit target to cast
 // torn down by tickBuffs the tick the channel breaks. classic.battle.net's Ghoul and
 // Abomination pages confirm the lock from the other side: "Group orders won't apply to Ghouls
 // (and Abominations) that are busy Cannibalizing corpses" — which is holdsChannel.
-const CHANNELED = new Set(["AHbz", "ANrf", "AEsf", "AEtq", "AUdd", "ANst", "AOeq", "AHdr", "AOvd", "Acan", "ANcl", "Amls"]);
+// MANA FLARE (`Amfl`) is the Faerie Dragon's: "Causes the Faerie Dragon to CHANNEL negative
+// magical energies…" (NightElfAbilityStrings), for `Dur1` = 30 — while the channel holds, every
+// enemy spell cast near her is punished (SimWorld.flareStrike), and any order ends it.
+const CHANNELED = new Set(["AHbz", "ANrf", "AEsf", "AEtq", "AUdd", "ANst", "AOeq", "AHdr", "AOvd", "Acan", "ANcl", "Amls", "Amfl"]);
 // Delayed-strike abilities that drop their Effectart (a ground "beware" warning) the
 // moment the cast WIND-UP begins — not when it lands — so it charges up in place and
 // REMAINS visible even if the cast is interrupted before ignition. Flame Strike's
@@ -3292,9 +3317,14 @@ const NO_WINDUP = new Set(["Arpl", "Arpm"]);
  * The art's own name says which: `[Aabs]` Absorb Mana throws `AbsorbManaBirthMissile.mdl`, the
  * mana BORN out of the unit being drained, the same family as Devour Magic's
  * `DevourMagicBirthMissile.mdl`. Sent outbound, the Destroyer lobbed its own mana at the
- * Necromancer it was taking it from.
+ * Necromancer it was taking it from. Spell Steal (`Asps`) is the same picture with a third body
+ * in it: the stolen buff flies from the unit it was taken off to the one it is given to.
  */
-const MISSILE_COMES_BACK = new Set(["Aabs"]);
+const MISSILE_COMES_BACK = new Set(["Aabs", "Asps"]);
+/** Unit-target rows cast by something that cannot walk, where the TARGET walks to the caster
+ *  instead: Sacrifice (`Asac`) — "Target an Acolyte to sacrifice it and turn it into a Shade"
+ *  (UndeadAbilityStrings), `Rng1` 75, cast by the Sacrificial Pit, which has no feet. */
+const TARGET_COMES_TO_CASTER = new Set(["Asac"]);
 /** Abilities that refuse a target for being TOO BIG, with the cap in their own `DataC`.
  *  Transmute is the only one in 1.30 and its Ubertip names both the rule and the column:
  *  "Transmute cannot be used on Heroes, or creeps above level <ANtm,DataC1>" (= 5). The
@@ -7689,6 +7719,9 @@ export class SimWorld {
       // nothing while it walks. The queue is left exactly as it stands rather than refunded —
       // this is a pause, and planting again resumes it where it stopped.
       if (u.uprooted) continue;
+      // …and a FROZEN one (Freezing Breath — "temporarily stops all building activities"): the
+      // queue, the research and the scaffolding all wait, exactly as for an uprooted Ancient.
+      if (u.buffs?.some((x) => x.group === FREEZE_GROUP)) continue;
       if (b.constructionLeft > 0) {
         // Debug cheat: finish in ~1s no matter what (no builder required).
         if (this.fastBuild) {
@@ -8054,7 +8087,7 @@ export class SimWorld {
     });
     // What it produces is a property of the TYPE, so re-derive it: a structure that only gains
     // a training list on upgrade would otherwise never get a rally point.
-    if (u.building && this.techReg) u.building.producesUnits = this.techReg.producesUnits(toTypeId);
+    if (u.building && this.techReg) u.building.producesUnits = this.techReg.producesUnits(toTypeId) || carriesRally(def.abilities, this.abilities);
     // …and so is WHAT IT IS. UnitBalance.slk's `type` column is the whole of these four (the
     // same read RtsController.spawn does at birth), and leaving them behind is what kept a
     // Militia a WORKER: `hpea` is `Peon` and `hmil` is `_`, so a Peasant that answered Call to
@@ -13357,6 +13390,12 @@ export class SimWorld {
       // all it takes to wake it. An OR, never an assignment — the orb adds a way to attack,
       // it never takes the melee away.
       if (item.weaponsOn & (1 << u.weapons.indexOf(w))) w.enabled = true;
+      // …and a War Club in hand puts one slot down and picks another up (SimWorld.grabTree).
+      if (u.warClub && u.warClub.armT <= 0) {
+        const i = u.weapons.indexOf(w);
+        if (i === u.warClub.off) w.enabled = false;
+        if (i === u.warClub.on) w.enabled = true;
+      }
       const base = w.baseDamage + primaryDelta;
       w.damage = Math.max(0, base + damageBonus + item.damage + upg.damage + base * damagePct); // Command/Trueshot add a % of base
       w.dice = w.baseDice + upg.dice; // Forged Swords / Gunpowder add dice, widening the roll
@@ -13526,6 +13565,7 @@ export class SimWorld {
     //   Atru  "Detect (Shade)"           Rng1  900
     //   Adet  "Detect (Sentry Ward)"     Rng1 1100
     //   Adts  "Detect (Magic Sentinel)"  Rng1  900
+    //   Agyv  "Detect (Gyrocopter)"      Rng1  900   — the Flying Machine's, from birth
     //
     // The radius is `Rng1` (castRange), NOT dataA — dataA reads 3 for all three, a
     // detection-TYPE enum that is not a distance at all, while those Rng1 values are exactly
@@ -13542,7 +13582,7 @@ export class SimWorld {
     // map would see through Wind Walk with the research still unbought.
     u.detectRadius = 0;
     for (const a of u.abilities) {
-      if ((a.code !== "Atru" && a.code !== "Adet" && a.code !== "Adts") || a.level < 1) continue;
+      if ((a.code !== "Atru" && a.code !== "Adet" && a.code !== "Adts" && a.code !== "Agyv") || a.level < 1) continue;
       if (!this.unitMeets(u, a.id)) continue;
       const lvl = this.abilityDefOf(a)?.levelData[Math.max(0, a.level - 1)];
       const r = lvl?.castRange;
@@ -15391,6 +15431,12 @@ export class SimWorld {
     // was charged her `castpt` and `castbsw`, which belong to Fan of Knives, on top of the
     // row's own 1.5 s Fade Duration. The handler's Hold Position is still its own business.
     if (code === "Ashm") return this.castImmediate(u, ab, def, lvl);
+    // Mana Flare's other half: `Unorder=manaflareoff` is the same button turned over while the
+    // flare burns, and pressing it puts the flare out rather than lighting another.
+    if (code === "Amfl" && this.channelling(u, "Amfl")) {
+      this.stop(u.id);
+      return true;
+    }
     // The point twin of the target test below, and gated at the same door for the same
     // reason: a spot in the unplayable black is not a spot (issue #117), and `castError` only
     // speaks to the local player's click. A trigger's IssuePointOrder, an order off the wire
@@ -15486,7 +15532,10 @@ export class SimWorld {
    * Ancient's block is bigger than its own hull.
    */
   private aimedBlockRadius(code: string, u: SimUnit, x: number, y: number): number {
-    if (code !== "Aeat") return 0;
+    // Eat Tree and War Club (`Agra`, `Rng1` 32 — "picks up a tree") both reach for the trunk
+    // they are touching, and a Mountain Giant's 48 hull at the edge of a grove can never get
+    // within 32 of a trunk's CENTRE.
+    if (code !== "Aeat" && code !== "Agra") return 0;
     const tree = this.nearestTree(x, y, u.radius);
     return tree ? tree.blockRadius : 0;
   }
@@ -15674,6 +15723,13 @@ export class SimWorld {
           // trunk is where the REST of the grove is, so a goal placed on it lands on a blocked
           // cell, the path "arrives" a body short, and the Ancient stands there with the spell
           // never cast. Walking at the thing itself gets a best-effort path that hugs it.
+          //
+          // …unless it is the TARGET that comes (TARGET_COMES_TO_CASTER): a Sacrificial Pit
+          // cannot walk, and the Acolyte it sacrifices walks into it.
+          if (t && TARGET_COMES_TO_CASTER.has(def.code)) {
+            if (t.order !== "move") this.issueMove(t.id, u.x, u.y);
+            return;
+          }
           this.chasePoint(u, tx, ty);
           return;
         }
@@ -15879,6 +15935,7 @@ export class SimWorld {
   /** Deliver a cast's effect: launch the spell missile (if the ability has one)
    *  or apply the effect immediately (instant / point / no-target). */
   private resolveCast(u: SimUnit, def: AbilityDef, pc: PendingCast): void {
+    this.flareStrike(u, def, pc.rank); // an enemy Faerie Dragon's Mana Flare answers the cast
     // A row that strings a LIGHTNING is delivered by the bolt, not by a missile: `[AOcl]`
     // (and its `ACcl`/`AIcl` twins) also names `Missileart = LightningBoltMissile.mdl`, but
     // the game throws no orb — the CLPB/CLSB ribbon IS the spell (docs/spell-fx.md), and
@@ -16024,6 +16081,22 @@ export class SimWorld {
       if (DISPEL_CODES.has(def.code)) {
         const t = this.dispelAutocastTarget(u, range, def);
         if (t) return this.issueCast(u.id, def.code, t.id, 0, 0, true);
+        continue;
+      }
+      // SPELL STEAL is a dispel that has to have somewhere to PUT what it takes: a target with a
+      // stealable buff on it AND a recipient on the far side of the exchange (spellStealPlan,
+      // the handler's own test), or the 75 mana buys nothing. Nearest first, like a dispel.
+      if (def.code === "Asps") {
+        let best: SimUnit | null = null;
+        let bestD = Infinity;
+        for (const t of this.autocastPool()) {
+          if (t.hp <= 0 || t.building || autocastOutOfReach(u, t, range)) continue;
+          if (this.targetError(u, t, def.targetFlags, def.code) !== null) continue;
+          if (!spellStealPlan(this.spellApi, u, def, ab.level, t)) continue;
+          const dd = Math.hypot(t.x - u.x, t.y - u.y);
+          if (dd < bestD) { bestD = dd; best = t; }
+        }
+        if (best) return this.issueCast(u.id, def.code, best.id, 0, 0, true);
         continue;
       }
       const target = this.autocastTarget(u, range, friendly, def.code, F.has("self"), def.targetFlags, lvl.buffs.map((b) => b.toLowerCase()));
@@ -16733,6 +16806,347 @@ export class SimWorld {
     const before = u.buffs.length;
     u.buffs = u.buffs.filter((b) => b.group !== POSSESSION_GROUP);
     if (u.buffs.length !== before) this.recomputeStats(u);
+  }
+
+  // === Stock unit abilities with a clock of their own =====================================
+  // (docs/map-compatibility.md "Stock abilities a map hands out"). Each is a fact about a unit
+  // or a pair that outlives the tick it was cast on, so it is held here the way the
+  // possessions above are, and every one survives either end dying under it.
+
+  /** Dark Conversions in progress (`ANdc`): the villager asleep, turning when the clock runs out.
+   *  The new owner is taken at the cast — Mal'Ganis need not live to see it. */
+  private conversions: Array<{ targetId: number; owner: number; team: number; typeId: string; left: number; art: string }> = [];
+
+  private tickConversions(dt: number): void {
+    if (!this.conversions.length) return;
+    let w = 0;
+    for (const c of this.conversions) {
+      const t = this.units.get(c.targetId);
+      if (!t || t.hp <= 0) continue; // killed in its sleep: nothing to convert
+      if ((c.left -= dt) > 0) {
+        this.conversions[w++] = c;
+        continue;
+      }
+      t.buffs = t.buffs.filter((b) => b.group !== "darkconversion");
+      if (c.art) this.spellEffects.push({ art: c.art, x: t.x, y: t.y, targetId: t.id, z: 0 });
+      this.morphUnit(t, c.typeId);
+      t.foodFree = true; // converted, not trained — the Charm rule (SimUnit.foodFree)
+      if (t.owner !== c.owner) this.changeUnitOwner(t, c.owner, c.team);
+      this.recomputeStats(t);
+    }
+    this.conversions.length = w;
+  }
+
+  /** Taunts still pulsing (`Atau` DataD "Number of Pulses", DataE apart). */
+  private taunts: Array<{ casterId: number; abilityId: string; rank: number; pulses: number; next: number }> = [];
+
+  private startTaunt(caster: SimUnit, def: AbilityDef, rank: number): void {
+    const lvl = def.levelData[Math.min(rank, def.levelData.length) - 1];
+    if (!lvl) return;
+    this.taunts = this.taunts.filter((t) => t.casterId !== caster.id);
+    this.tauntPulse(caster, def, lvl);
+    const pulses = Math.max(1, Math.round(this.dataOf(lvl, 3, 1)));
+    if (pulses > 1) this.taunts.push({ casterId: caster.id, abilityId: def.id, rank, pulses: pulses - 1, next: this.dataOf(lvl, 4, 3) || 3 });
+  }
+
+  /** One pulse: the closest enemies inside `Area1` that the row's Targets Allowed admits — at
+   *  most `DataA` of them, which is how the tooltip reads it ("The closest <Atau,DataA1>
+   *  enemies"; 0 = no cap) — are put on the Giant. A commanded attack (`ordered`), because a
+   *  taunted unit does not drift back to what it was hitting at the next acquisition scan; a
+   *  player can still order it away, as in the game. */
+  private tauntPulse(caster: SimUnit, def: AbilityDef, lvl: AbilityLevel): void {
+    if (def.casterArt) this.spellEffects.push({ art: def.casterArt, x: caster.x, y: caster.y, targetId: caster.id, z: 0 });
+    const area = lvl.area || 450;
+    const cap = Math.max(0, Math.round(this.dataOf(lvl, 0, 0)));
+    const near: Array<{ t: SimUnit; d: number }> = [];
+    for (const t of this.units.values()) {
+      if (t === caster || t.hp <= 0 || t.building || isOffField(t) || !this.hostile(caster, t)) continue;
+      if (!this.targsAdmit(t, def.targetFlags)) continue;
+      const d = Math.hypot(t.x - caster.x, t.y - caster.y) - t.radius;
+      if (d <= area) near.push({ t, d });
+    }
+    near.sort((a, b) => a.d - b.d);
+    for (const { t } of cap > 0 ? near.slice(0, cap) : near) this.issueAttack(t.id, caster.id, false, true);
+  }
+
+  private tickTaunts(dt: number): void {
+    if (!this.taunts.length) return;
+    let w = 0;
+    for (const t of this.taunts) {
+      const caster = this.units.get(t.casterId);
+      if (!caster || caster.hp <= 0) continue;
+      if ((t.next -= dt) > 0) {
+        this.taunts[w++] = t;
+        continue;
+      }
+      const def = this.abilities?.get(t.abilityId);
+      const lvl = def?.levelData[Math.min(t.rank, def.levelData.length) - 1];
+      if (!def || !lvl) continue;
+      if (!caster.stunned) this.tauntPulse(caster, def, lvl);
+      if (--t.pulses > 0) {
+        t.next = this.dataOf(lvl, 4, 3) || 3;
+        this.taunts[w++] = t;
+      }
+    }
+    this.taunts.length = w;
+  }
+
+  /**
+   * MANA FLARE's sting (`Amfl`): an enemy of a flaring Faerie Dragon has just cast `def`, inside
+   * her `Area1` (750). Every column is the row's own (AbilityMetaData `mfl1..mfl6`):
+   *   DataA "Unit - Damage Per Mana Point" 3    DataC "Unit - Maximum Damage" 90
+   *   DataB "Hero - Damage Per Mana Point" 1    DataD "Hero - Maximum Damage" 50
+   * so a 75-mana Slow costs the Sorceress 90 and a hero's 100-mana nuke costs him 50. The bolt
+   * is the dragon's buff row's own `[Bmfl] LightningEffect = MFPB`, and what lands on the caster
+   * the struck row's (`[Bmfa] Targetart = ManaFlareTarget.mdl`).
+   *
+   * Two columns are not spent. DataF "Caster Only Splash" is 1 — only the caster is hit — and a
+   * 0 there would need a splash radius the row does not carry. DataE "Damage Cooldown" (12) is
+   * worded by the same row's own Ubertip as an ARMOUR bonus ("increases the Faerie Dragon's
+   * armor by <Amfl,DataE1>"), and the two cannot both be right; neither is applied until the
+   * real client says which.
+   */
+  private flareStrike(caster: SimUnit, def: AbilityDef, rank: number): void {
+    const cost = def.levelData[Math.min(rank, def.levelData.length) - 1]?.cost ?? 0;
+    if (cost <= 0 || !this.abilities) return;
+    for (const f of this.units.values()) {
+      if (f === caster || !this.channelling(f, "Amfl") || !this.hostile(f, caster)) continue;
+      const fdef = this.abilities.get(f.pendingCast!.abilityId);
+      const lvl = fdef?.levelData[Math.min(f.pendingCast!.rank, fdef.levelData.length) - 1];
+      if (!fdef || !lvl) continue;
+      if (Math.hypot(caster.x - f.x, caster.y - f.y) - caster.radius > (lvl.area || 750)) continue;
+      const per = caster.isHero ? this.dataOf(lvl, 1, 1) : this.dataOf(lvl, 0, 3);
+      const cap = caster.isHero ? this.dataOf(lvl, 3, 50) : this.dataOf(lvl, 2, 90);
+      const dmg = cap > 0 ? Math.min(cost * per, cap) : cost * per;
+      const bolt = this.abilities.buff(lvl.buffs[0] ?? "")?.lightning;
+      if (bolt) this.spellApi.emitLightning(bolt, f, caster);
+      const hit = this.abilities.buffFx(lvl.buffs[1] ?? "")[0];
+      if (hit) this.spellEffects.push({ art: hit.path, x: caster.x, y: caster.y, targetId: caster.id, z: 0, ...(hit.attach.length ? { attach: hit.attach } : {}) });
+      if (dmg > 0) this.spellApi.spellDamage(caster, dmg, f.id);
+    }
+  }
+
+  /** The flare's own buff (`Bmfl`, `ManaFlareBase.mdl` over the dragon) for exactly as long as
+   *  she is channelling — laid by the handler, taken off here the tick the channel breaks. */
+  private tickFlareMark(u: SimUnit): void {
+    if (!u.buffs.length || this.channelling(u, "Amfl")) return;
+    if (u.buffs.some((b) => b.group === MANA_FLARE_GROUP)) u.buffs = u.buffs.filter((b) => b.group !== MANA_FLARE_GROUP);
+  }
+
+  /**
+   * WAR CLUB (`Agra`, the Mountain Giant): the tree comes out of the ground and the Giant swings
+   * it. Its columns (NightElfAbilityFunc `[Agra]`, AbilityMetaData `Gra1..Gra5`):
+   *   DataA "Attach Delay" 0.8   — the tree is in hand that long after the pull
+   *   DataC "Disabled Attack Index" 0, DataD "Enabled Attack Index" 1 — the slot he puts down
+   *          and the one he picks up. 0-based: `emtg` ships `weapsOn` 1 (slot 0, normal, 128
+   *          range) and a dormant slot 1 that is SIEGE at 250 range, and the Ubertip's "gives the
+   *          Mountain Giant Siege damage, and increased attack range" is that slot exactly.
+   *   DataE "Maximum Attacks" 15 — "Lasts for <Agra,DataE1> strikes."
+   * DataB "Remove Delay" (2.5) is the club being thrown away, which is a clip and not a number
+   * the sim needs. The tree is destroyed outright, as Eat Tree's is — nobody gets its lumber.
+   */
+  private grabTree(caster: SimUnit, def: AbilityDef, rank: number, x: number, y: number): boolean {
+    const lvl = def.levelData[Math.min(rank, def.levelData.length) - 1];
+    if (!lvl) return false;
+    // Measured as the approach measured it (aimedBlockRadius): hull to trunk, `Rng1` plus the
+    // tree's own pathing block.
+    const tree = this.nearestTree(x, y, caster.radius);
+    if (!tree || Math.hypot(tree.x - caster.x, tree.y - caster.y) - caster.radius > (lvl.castRange || 32) + tree.blockRadius + 1) return false;
+    this.trees.delete(tree.id);
+    this.noteFelled(tree);
+    caster.warClub = {
+      off: Math.round(this.dataOf(lvl, 2, 0)),
+      on: Math.round(this.dataOf(lvl, 3, 1)),
+      strikes: Math.max(1, Math.round(this.dataOf(lvl, 4, 15))),
+      armT: this.dataOf(lvl, 0, 0.8),
+    };
+    if (lvl.buffs[0]) this.applyBuffInternal(caster, { kind: "mark", group: WAR_CLUB_GROUP, timeLeft: Infinity, sourceId: caster.id, buffId: lvl.buffs[0] });
+    return true;
+  }
+
+  /** One strike of the club spent (it lands or not — "strikes"); the last one puts it down. */
+  private spendWarClub(u: SimUnit): void {
+    const c = u.warClub;
+    if (!c || c.armT > 0) return;
+    if (--c.strikes > 0) return;
+    u.warClub = undefined;
+    u.buffs = u.buffs.filter((b) => b.group !== WAR_CLUB_GROUP);
+    this.recomputeStats(u);
+  }
+
+  /**
+   * MOUNT HIPPOGRYPH / PICK UP ARCHER (`Acoi`): the nearest partner of the row's DataA type
+   * inside `Area1` (900) comes and the two become `UnitID1`. The FLYER goes to the walker
+   * whichever one pressed the button — a Hippogryph swoops down onto its Archer ("Picks up an
+   * Archer") — and the pair is the caster's own body afterwards (its id, its selection), the
+   * partner leaving the map. Health is carried as the MEAN of the two bodies' fractions: no
+   * source states the rule (Liquipedia and the Warcraft wiki give the three units' hit points
+   * and nothing about the merge), so this is ours until the real client says otherwise.
+   */
+  private couples: Array<{ casterId: number; partnerId: number; into: string }> = [];
+
+  private couple(caster: SimUnit, def: AbilityDef, rank: number): boolean {
+    const lvl = def.levelData[Math.min(rank, def.levelData.length) - 1];
+    const kind = (lvl?.dataStr[0] ?? "").trim();
+    const into = lvl?.summon ?? "";
+    if (!lvl || !kind || !into || !this.unitReg?.get(into)) return false;
+    const area = lvl.area > 0 ? lvl.area : 900;
+    let partner: SimUnit | null = null;
+    let best = Infinity;
+    for (const p of this.units.values()) {
+      if (p === caster || p.owner !== caster.owner || p.typeId !== kind || p.hp <= 0 || isOffField(p)) continue;
+      if (this.couples.some((c) => c.partnerId === p.id || c.casterId === p.id)) continue;
+      const d = Math.hypot(p.x - caster.x, p.y - caster.y);
+      if (d <= area && d < best) { best = d; partner = p; }
+    }
+    if (!partner) return false;
+    this.couples = this.couples.filter((c) => c.casterId !== caster.id);
+    this.couples.push({ casterId: caster.id, partnerId: partner.id, into });
+    const [mover, still] = partner.flying || !caster.flying ? [partner, caster] : [caster, partner];
+    this.stop(still.id);
+    this.issueMove(mover.id, still.x, still.y);
+    return true;
+  }
+
+  private tickCouples(): void {
+    if (!this.couples.length) return;
+    let w = 0;
+    for (const c of this.couples) {
+      const a = this.units.get(c.casterId);
+      const b = this.units.get(c.partnerId);
+      if (!a || !b || a.hp <= 0 || b.hp <= 0) continue;
+      const [mover, still] = b.flying || !a.flying ? [b, a] : [a, b];
+      // Told to do something else on the way: the mount is off.
+      if (mover.order !== "move" && mover.order !== "idle") continue;
+      if (Math.hypot(mover.x - still.x, mover.y - still.y) > mover.radius + still.radius + 48) {
+        if (mover.order === "idle") this.issueMove(mover.id, still.x, still.y);
+        this.couples[w++] = c;
+        continue;
+      }
+      const frac = ((a.maxHp > 0 ? a.hp / a.maxHp : 1) + (b.maxHp > 0 ? b.hp / b.maxHp : 1)) / 2;
+      this.removeUnit(b.id);
+      a.x = still.x;
+      a.y = still.y;
+      this.morphUnit(a, c.into);
+      this.shiftAltitude(a, undefined);
+      a.hp = Math.max(1, a.maxHp * frac);
+      this.stop(a.id);
+    }
+    this.couples.length = w;
+  }
+
+  /** DISMOUNT (`Adec`): the rider becomes DataA (`earc`, the caster's own body) and DataB
+   *  (`ehip`) stands up beside it, both at the rider's health fraction. */
+  private decouple(caster: SimUnit, def: AbilityDef, rank: number): void {
+    const lvl = def.levelData[Math.min(rank, def.levelData.length) - 1];
+    const keep = (lvl?.dataStr[0] ?? "").trim();
+    const other = (lvl?.dataStr[1] ?? "").trim();
+    if (!keep || !this.unitReg?.get(keep)) return;
+    const frac = caster.maxHp > 0 ? caster.hp / caster.maxHp : 1;
+    this.morphUnit(caster, keep);
+    this.shiftAltitude(caster, undefined);
+    if (other && this.unitReg.get(other)) {
+      this.summonRequests.push({ unitId: other, x: caster.x, y: caster.y, facing: caster.facing, owner: caster.owner, team: caster.team, summonLeft: 0, sourceId: 0, summonArt: "", unsummonArt: "", atPoint: false, hpFrac: frac });
+    }
+  }
+
+  /**
+   * PHOENIX FIRE (`Apxf`): every `Cool1` (0.5 s) the Phoenix throws its `Missileart` at an enemy
+   * inside `Area1` (600) that its Targets Allowed admits (`ground,air,enemy`) — one that is not
+   * already burning before one that is, so the fire spreads through a crowd rather than stacking
+   * on one body — and the handler lights it where it lands (spells.ts `Apxf`). Nothing is pressed:
+   * the row has no Order, and the stock Phoenix carries it from birth.
+   */
+  private tickPhoenixFire(u: SimUnit, dt: number): void {
+    if (u.hp <= 0 || u.stunned || isOffField(u)) return;
+    const ab = u.abilities.find((a) => a.code === "Apxf" && a.level >= 1);
+    if (!ab) return;
+    if ((u.phoenixT = (u.phoenixT ?? 0) - dt) > 0) return;
+    const def = this.abilityDefOf(ab);
+    const lvl = def?.levelData[Math.min(ab.level, def.levelData.length) - 1];
+    if (!def || !lvl) return;
+    const area = lvl.area || 600;
+    let pick: SimUnit | null = null;
+    let score = Infinity;
+    for (const t of this.units.values()) {
+      if (t.hp <= 0 || t.invulnerable || isOffField(t) || !this.hostile(u, t) || !this.canSee(u, t)) continue;
+      if (!this.targsAdmit(t, def.targetFlags)) continue;
+      const d = Math.hypot(t.x - u.x, t.y - u.y) - t.radius;
+      if (d > area) continue;
+      const s = d + (t.buffs.some((b) => b.group === "phoenixfire") ? 1e5 : 0);
+      if (s < score) { score = s; pick = t; }
+    }
+    u.phoenixT = lvl.cooldown || 0.5;
+    if (!pick) return;
+    if (def.missileArt) this.spawnSpellProjectile(u, pick.id, def, ab.level);
+    else this.applySpellEffect(def.code, ab.level, u, { targetId: pick.id, x: pick.x, y: pick.y }, def);
+  }
+
+  /**
+   * WANDER (`Awan`) — every critter's (`UnitAbilities.slk`: the Albatross, the Frog, the Sheep,
+   * the Deer…). The row has no columns at all, so how far and how often are not the game's to
+   * read: both are OURS (WANDER_RADIUS, WANDER_EVERY) until a measurement against the real
+   * client says otherwise. A critter left alone strolls to somewhere near the post it was put
+   * at (its guard post, else where it stands now), waits, and goes again; one that has been
+   * given an order, or is fleeing, or is owned by a player who is moving it, is left alone.
+   */
+  private tickWander(u: SimUnit, dt: number): void {
+    if (u.order !== "idle" || u.moving || u.hp <= 0 || u.baseSpeed <= 0 || u.stunned || u.paused) return;
+    if (!u.abilities.some((a) => a.code === "Awan" && a.level >= 1)) return;
+    if ((u.wanderT = (u.wanderT ?? this.rng() * WANDER_EVERY) - dt) > 0) return;
+    u.wanderT = WANDER_EVERY * (0.5 + this.rng());
+    const hx = u.guardX;
+    const hy = u.guardY;
+    const a = this.rng() * Math.PI * 2;
+    const r = WANDER_RADIUS * Math.sqrt(this.rng());
+    const x = hx + Math.cos(a) * r;
+    const y = hy + Math.sin(a) * r;
+    if (!this.inPlayableArea(x, y)) return;
+    this.issueMove(u.id, x, y);
+  }
+
+  /**
+   * The ability-side UNIT SWAP (`Acha` — the Berserker Upgrade `Sbsk`, the six Chaos rows
+   * `Sca1..Sca6`, the Tank Upgrade `Srtt`): a unit wearing it BECOMES its `UnitID1` the moment
+   * the row's own `Requires` is met (`[Sbsk] Requires=Robk`, `[Sca1] Requires=Roch` — the
+   * campaign's "orc chaos conversion"). Robk's own `rtma` already swaps the Headhunters it finds
+   * (applyUnitSwap); this is the same change for the unit that carries the row, which is how the
+   * campaign turns Grom's army Chaos and how a custom map hands it out.
+   */
+  private tickChaos(u: SimUnit): void {
+    if (u.hp <= 0 || !u.abilities.length) return;
+    for (const a of u.abilities) {
+      if (a.code !== "Acha" || a.level < 1) continue;
+      const lvl = this.abilityDefOf(a)?.levelData[0];
+      const into = lvl?.summon ?? "";
+      if (!into || into === u.typeId || !this.unitReg?.get(into)) continue;
+      // …a Requires the row STATES. `[Srtt]` (the Siege Engine's Tank Upgrade) has no Func
+      // section at all — its swap is `[Rhrt] rtma`'s, applyUnitSwap's job — and a row with
+      // nothing to meet is met from birth, which would put every Siege Engine in the game on
+      // rockets the moment it was trained.
+      if (!this.techReg?.get(a.id).requiresTiers.some((t) => t.length)) continue;
+      if (!this.techMeets(u.owner, a.id)) continue;
+      this.morphUnit(u, into);
+      return;
+    }
+  }
+
+  /** SPAWN SPIDERLINGS / SPIDERS / HYDRA (`Assp`, `Aspd` — the Nerubians, the Brood Mother, the
+   *  Hydras): a unit carrying one leaves DataA "Number of Units" of DataB "Unit Type" where it
+   *  died — a Hydra comes apart into two Hydra Hatchlings — owned as it was. */
+  private deathSpawns(u: SimUnit): void {
+    if (!this.abilities || u.isIllusion) return;
+    for (const a of u.abilities) {
+      if ((a.code !== "Assp" && a.code !== "Aspd") || a.level < 1) continue;
+      const lvl = this.abilityDefOf(a)?.levelData[Math.min(a.level, 4) - 1];
+      const kind = (lvl?.dataStr[1] ?? "").trim();
+      if (!lvl || !kind || !this.unitReg?.get(kind)) continue;
+      const n = Math.max(0, Math.round(this.dataOf(lvl, 0, 1)));
+      for (let i = 0; i < n; i++) {
+        const ang = u.facing + (i - (n - 1) / 2) * 0.9;
+        this.summonRequests.push({ unitId: kind, x: u.x + Math.cos(ang) * u.radius, y: u.y + Math.sin(ang) * u.radius, facing: ang, owner: u.owner, team: u.team, summonLeft: 0, sourceId: 0, summonArt: "", unsummonArt: "", atPoint: true });
+      }
+    }
   }
 
   /** The ability whose handler is running right now, if any — see applySpellEffect. Only
@@ -18873,7 +19287,7 @@ export class SimWorld {
     },
     emitEffect: (art, x, y, targetId, life, attach, opts) => {
       if (!art) return;
-      const fx: SimSpellEffect = { art, x, y, targetId, z: 0, life, ...(attach?.length ? { attach } : {}), ...(opts?.sound ? { sound: true } : {}), ...(opts?.anim ? { anim: opts.anim } : {}), ...(opts?.global ? { global: true } : {}), ...(opts?.events ? { events: true } : {}) };
+      const fx: SimSpellEffect = { art, x, y, targetId, z: opts?.z ?? 0, life, ...(attach?.length ? { attach } : {}), ...(opts?.sound ? { sound: true } : {}), ...(opts?.anim ? { anim: opts.anim } : {}), ...(opts?.global ? { global: true } : {}), ...(opts?.events ? { events: true } : {}) };
       if (opts?.delay && opts.delay > 0) this.delayedEffects.push({ t: opts.delay, fx });
       else this.spellEffects.push(fx);
     },
@@ -18920,6 +19334,37 @@ export class SimWorld {
     changeOwner: (u, owner, team) => this.changeUnitOwner(u, owner, team),
     techMeets: (player, id) => this.techMeets(player, id),
     possess: (casterId, targetId, seconds) => this.beginPossession(casterId, targetId, seconds),
+    convert: (casterId, targetId, typeId, seconds, art) => {
+      const caster = this.units.get(casterId);
+      if (!caster) return;
+      this.conversions = this.conversions.filter((c) => c.targetId !== targetId);
+      this.conversions.push({ targetId, owner: caster.owner, team: caster.team, typeId, left: seconds, art });
+    },
+    removeFromGame: (u) => { this.removeUnit(u.id); },
+    transformUnit: (u, typeId) => {
+      this.stop(u.id);
+      this.morphUnit(u, typeId);
+      this.shiftAltitude(u, undefined);
+    },
+    taunt: (caster, def, rank) => this.startTaunt(caster, def, rank),
+    takeBuff: (u, b) => {
+      const before = u.buffs.length;
+      u.buffs = u.buffs.filter((x) => x !== b);
+      if (u.buffs.length !== before) this.recomputeStats(u);
+    },
+    manaFlare: (caster, def, rank) => {
+      const lvl = def.levelData[Math.min(rank, def.levelData.length) - 1];
+      const buffId = lvl?.buffs[0] ?? "";
+      const fx = buffId ? this.abilities?.buffFx(buffId) ?? [] : [];
+      this.applyBuffInternal(caster, { kind: "mark", group: MANA_FLARE_GROUP, timeLeft: this.channelDuration(def, rank) || lvl?.duration || 30, sourceId: caster.id, art: fx[0]?.path ?? "", fx, buffId });
+    },
+    grabTree: (caster, def, rank, x, y) => this.grabTree(caster, def, rank, x, y),
+    treeNear: (from, x, y, reach) => {
+      const tree = this.nearestTree(x, y, reach);
+      return tree && Math.hypot(tree.x - from.x, tree.y - from.y) - from.radius <= reach ? { x: tree.x, y: tree.y } : null;
+    },
+    couple: (caster, def, rank) => this.couple(caster, def, rank),
+    decouple: (caster, def, rank) => this.decouple(caster, def, rank),
     killUnit: (u) => this.kill(u),
     transmute: (target, caster, goldFactor, lumberFactor) => this.transmuteInternal(target, caster, goldFactor, lumberFactor),
     fellTrees: (x, y, radius, max) => this.fellTreesInternal(x, y, radius, max),
@@ -19502,6 +19947,10 @@ export class SimWorld {
       this.tickCarriedItems(u, dt); // …and an Amulet of Spell Shield regrowing its shield
       this.tickTornado(u, dt); // …and a Tornado battering buildings and tossing whoever it passes over
       this.tickMine(u, dt); // …and a Goblin Land Mine hiding itself, arming, and going off
+      this.tickPhoenixFire(u, dt); // …and a Phoenix throwing its fire at whoever is near
+      this.tickFlareMark(u); // …and a Faerie Dragon's flare going out with her channel
+      this.tickChaos(u); // …and a unit whose Acha row's research has landed becoming its UnitID
+      if (u.warClub && u.warClub.armT > 0 && (u.warClub.armT -= dt) <= 0) this.recomputeStats(u); // the tree is in hand
       this.recomputeStats(u); // derive armour/speed/damage/regen/stun/invuln
       this.tickRegen(u, dt); // mana + (hero) hp regeneration
       this.tickReplenish(u, dt); // a Moon Well pouring itself into whoever is drinking
@@ -19654,6 +20103,7 @@ export class SimWorld {
         case "idle":
           // Autocast (toggled-on Heal/Slow/…) gets first refusal, then auto-attack.
           if (!this.tickAutocast(u)) this.tickAcquire(u, dt);
+          if (u.order === "idle") this.tickWander(u, dt); // …and a critter with nothing to do strolls
           break;
       }
     }
@@ -19679,6 +20129,9 @@ export class SimWorld {
     this.tickSpellFields(dt); // Blizzard-style repeating area effects
     this.tickDrains(); // a broken Drain channel takes its buffs and its beam down with it
     this.tickPossessions(dt); // …and a Possession that survived its 4.5s changes hands
+    this.tickConversions(dt); // …and a Dark Conversion's villager waking up a zombie
+    this.tickTaunts(dt); // …and a Mountain Giant's Taunt pulsing again
+    this.tickCouples(); // …and a Hippogryph that has reached its Archer
     this.tickMirrorImage(dt); // Mirror Image's caster effect -> missiles -> illusions
     this.tickLightningShields(dt); // Lightning Shield: damage units around each shielded unit
     this.tickWards(); // Stasis Trap proximity stun (the Healing Ward is an aura — see AURA_BUFFS)
@@ -21700,6 +22153,12 @@ export class SimWorld {
     };
     this.projectiles.set(id, proj);
     this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y, z: proj.z });
+    // Lightning Attack (`Alit` — the Chimaera, the bronze and storm dragons, the lightning
+    // lizards): the shot also strings its row's `LightningEffect` (`CHIM`) from the shooter to
+    // the target, DataA "Graphic Delay" (0.25) after the release and for DataB "Graphic
+    // Duration" (0.25). Presentation only — the damage is the missile's.
+    const li = this.gatedPassive(u, "Alit");
+    if (li?.def.lightning[0]) this.spellApi.emitLightning(li.def.lightning[0], u, t, this.dataOf(li.lvl, 1, 0.25), this.dataOf(li.lvl, 0, 0.25));
   }
 
   /** Where an artillery shell bursts and what its rings are — the SLOT's, carried on the shell
@@ -21985,6 +22444,7 @@ export class SimWorld {
           const dealt = this.applyDamage(t, p.damage, p.sourceId, p.attackType ?? AttackType.None, p.weaponSound ?? "", true);
           this.applyOrbEffect(this.units.get(p.sourceId), t, p.orb, dealt); // the orb this arrow carried
           this.applyLiquidFire(this.units.get(p.sourceId), t); // Batrider: burn a struck building
+          this.applyStrikePassives(this.units.get(p.sourceId), t, p.attackType ?? AttackType.None); // Freezing Breath, Flak Cannons
           const shooter = this.units.get(p.sourceId);
           if (shooter) this.applyPillage(shooter, t, dealt); // ranged Pillage (Raider) off a struck building
           if (p.spill) this.applySpill(p, t); // Storm Hammers / Impaling Bolt carry on down the line
@@ -22116,6 +22576,7 @@ export class SimWorld {
       if (frac === hitShare && !nearest && this.hostile(source, t)) nearest = t;
     }
     if (a.targets.includes("tree")) this.shellTrees(a.aimX, a.aimY, outer, (gap) => p.damage * ring(gap));
+    this.applyShellPassives(shooter, a.aimX, a.aimY, p.attackType ?? AttackType.None); // Fragmentation Shards, Burning Oil
     // Artillery (Line) — the Glaive Thrower — is BOTH: it bursts, and with Impaling Bolt
     // researched the bolt carries on down the line from whoever it hit (see applySpill).
     if (p.spill && nearest) this.applySpill(p, nearest);
@@ -22847,6 +23308,7 @@ export class SimWorld {
     if (target.thorns > 0 && dealt > 0) this.landDamage(attacker, dealt * target.thorns, target.id, false);
     if (dealt > 0) this.applyPulverize(attacker, target); // Tauren passive: chance for a splash
     this.applyOrbEffect(attacker, target, orb, dealt); // the one orb this swing carried
+    this.applyStrikePassives(attacker, target, w.attackType); // War Club's strikes, Freezing Breath
     this.applyPillage(attacker, target, dealt); // Pillage: gold off a struck enemy building
     // Bash: rolled when the swing began (see engage), spent here on the blow that landed.
     if (attacker.swingBash) this.applyBash(attacker, target);
@@ -22896,6 +23358,96 @@ export class SimWorld {
     const buffId = lvl.buffs?.[0] ?? ""; // `BUlf` — one buff row behind both halves (Status row)
     this.applyBuffInternal(target, { kind: "dot", group: "liquidfire", timeLeft: dur, value: this.dataOf(lvl, 0, 8), sourceId: attacker.id, buffId });
     this.applyBuffInternal(target, { kind: "slow", group: "liquidfire-atk", timeLeft: dur, value: 0, value2: this.dataOf(lvl, 2, 0.8), sourceId: attacker.id, buffId });
+  }
+
+  /** An ability of `code` on the unit's OWN sheet, ranked, whose `Requires` its owner meets —
+   *  the research-gated attack passives (Freezing Breath `Rufb`, Flak Cannons `Rhfc`,
+   *  Fragmentation Shards `Rhfs`, Burning Oil `Robf`), which sit on the unit from birth and do
+   *  nothing until the research lands ("abilList membership is not availability"). */
+  private gatedPassive(u: SimUnit, code: string): { def: AbilityDef; lvl: AbilityLevel } | null {
+    for (const a of u.abilities) {
+      if (a.code !== code || a.level < 1 || !this.unitMeets(u, a.id)) continue;
+      const def = this.abilityDefOf(a);
+      const lvl = def?.levelData[Math.min(a.level, def.levelData.length) - 1];
+      if (def && lvl) return { def, lvl };
+    }
+    return null;
+  }
+
+  /**
+   * What a LANDED blow carries besides its damage, for the attack passives that are the unit's
+   * and not an orb's (the orbs compete for one slot; these do not):
+   *
+   *  · War Club (`Agra`) — one strike off the tree (spendWarClub).
+   *  · Freezing Breath (`Afrz`, the Frost Wyrm, `Requires=Rufb`) — "When used on a building,
+   *    temporarily stops all building activities. Lasts <Afrz,Dur1> seconds." (5): the building
+   *    wears `[Bfrz]` (FreezingBreathTargetArt.mdl) and neither trains, researches, builds nor
+   *    shoots while it does (FREEZE_GROUP, tickBuildings). `targs1 = structure,enemy`.
+   *  · Flak Cannons (`Aflk`, the Flying Machine, `Requires=Rhfc`) — "an area effect damage
+   *    attack against air units": every OTHER air unit the row admits (`air,enemy,neutral`)
+   *    round the one struck takes the row's own amounts, ring by ring (AbilityMetaData
+   *    `flk1..flk5`):  Area1 75 → DataC "Full Damage Amount" 7, DataA 150 "Medium Damage Radius"
+   *    → DataD 6, DataB 325 "Small Damage Radius" → DataE 5 — as the weapon's attack type.
+   */
+  private applyStrikePassives(attacker: SimUnit | undefined, target: SimUnit, attackType: AttackType): void {
+    if (!attacker) return;
+    if (attacker.warClub) this.spendWarClub(attacker);
+    if (target.hp > 0 && target.building && this.hostile(attacker, target)) {
+      const fz = this.gatedPassive(attacker, "Afrz");
+      if (fz && this.targsAdmit(target, fz.def.targetFlags)) {
+        const buffId = fz.lvl.buffs[0] ?? "";
+        const fx = this.abilities?.buffFx(buffId) ?? [];
+        this.applyBuffInternal(target, { kind: "stun", group: FREEZE_GROUP, timeLeft: fz.lvl.duration || 5, sourceId: attacker.id, art: fx[0]?.path ?? "", fx, buffId });
+      }
+    }
+    if (target.flying) {
+      const fl = this.gatedPassive(attacker, "Aflk");
+      if (fl) {
+        const full = fl.lvl.area || 75;
+        const mid = this.dataOf(fl.lvl, 0, 150);
+        const small = this.dataOf(fl.lvl, 1, 325);
+        for (const t of this.units.values()) {
+          if (t === target || t.hp <= 0 || t.invulnerable || isOffField(t)) continue;
+          if (!this.targsAdmit(t, fl.def.targetFlags) || !this.allegianceAdmits(attacker, t, fl.def.targetFlags)) continue;
+          const gap = Math.hypot(t.x - target.x, t.y - target.y) - t.radius;
+          const amount = gap <= full ? this.dataOf(fl.lvl, 2, 7) : gap <= mid ? this.dataOf(fl.lvl, 3, 6) : gap <= small ? this.dataOf(fl.lvl, 4, 5) : 0;
+          if (amount > 0) this.applyDamage(t, amount, attacker.id, attackType, "", true, true);
+        }
+      }
+    }
+  }
+
+  /**
+   * What an ARTILLERY shell adds where it comes down, for the two research-gated passives that
+   * ride a burst:
+   *
+   *  · Fragmentation Shards (`Afsh`, the Mortar Team, `Requires=Rhfs`) — "increase the damage
+   *    they deal to Unarmored and Medium armor units" (HumanUpgradeStrings `[Rhfs]`): those two
+   *    armour classes (`none`, `medium`) the row admits (`ground,enemy,neutral`) take the row's
+   *    own amounts ON TOP of the shell, by ring (AbilityMetaData shares `flk1..flk5` with Flak
+   *    Cannons): Area1 100 → DataC 25, DataA 225 → DataD 15, DataB 275 → DataE 10.
+   *  · Burning Oil (`Abof`, the Demolisher, `Requires=Robf`) — "fire rocks smothered in burning
+   *    oil, which causes the ground to burn" (`[Robf]`): Flame Strike's fire at the burst
+   *    (spells.ts burningOilField).
+   */
+  private applyShellPassives(shooter: SimUnit | undefined, x: number, y: number, attackType: AttackType): void {
+    if (!shooter) return;
+    const fs = this.gatedPassive(shooter, "Afsh");
+    if (fs) {
+      const full = fs.lvl.area || 100;
+      const mid = this.dataOf(fs.lvl, 0, 225);
+      const small = this.dataOf(fs.lvl, 1, 275);
+      for (const t of this.units.values()) {
+        if (t.hp <= 0 || t.invulnerable || t.hidden || isOffField(t)) continue;
+        if (t.armorType !== ArmorType.None && t.armorType !== ArmorType.Medium) continue;
+        if (!this.targsAdmit(t, fs.def.targetFlags) || !this.allegianceAdmits(shooter, t, fs.def.targetFlags)) continue;
+        const gap = Math.hypot(t.x - x, t.y - y) - t.radius;
+        const amount = gap <= full ? this.dataOf(fs.lvl, 2, 25) : gap <= mid ? this.dataOf(fs.lvl, 3, 15) : gap <= small ? this.dataOf(fs.lvl, 4, 10) : 0;
+        if (amount > 0) this.applyDamage(t, amount, shooter.id, attackType, "", true, true);
+      }
+    }
+    const bo = this.gatedPassive(shooter, "Abof");
+    if (bo) for (const f of burningOilField(shooter, bo.def, bo.lvl, x, y)) this.spellApi.addSpellField(f);
   }
 
   /** Whether a building is currently burning under Liquid Fire (blocks repair). */
@@ -24377,6 +24929,7 @@ export class SimWorld {
       this.stats.destroyed(credit.owner, value, !!u.building, u.isHero);
     }
     this.deathBlast(u); // `Adda` — goblin land mines and sappers take the neighbours with them
+    this.deathSpawns(u); // `Assp`/`Aspd` — a Hydra comes apart into its hatchlings
     this.orbDeathEffects(u); // Black Arrow raises its minion, Incinerate goes off
     this.clearQueue(u.id); // died before its building went up → refund the cost, and its queued
     // builds go with it: a corpse holding shift-queued orders kept their silhouettes standing

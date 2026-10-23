@@ -998,6 +998,52 @@ and an expired one-shot timer reading exactly **0** (see the timer test).
 Tests: `tools/sim-map-tables-test.cjs` (the source's rules, and DotA's types through it when the
 map is in the install).
 
+### Stock abilities a map hands out
+
+"Bleach vs One Piece" and "Balanced Hero Survival" keep the install's tables and give their units
+and heroes STOCK abilities — and most of what they used was an unknown code too, which means the
+STOCK units that carry them had been missing them in every melee game as well: the Mountain
+Giant's Taunt and War Club, the Huntress' Sentinel, the Spell Breaker's Spell Steal, the Faerie
+Dragon's Mana Flare, the Phoenix's fire, every critter's Wander. Each is the row's own columns
+(AbilityMetaData names them); where a column has no source for what it measures it is left
+unspent and the comment says so.
+
+| code | stock ability | what the engine now does |
+| --- | --- | --- |
+| `ANdc` | Dark Conversion (Mal'Ganis) | a `commoner` (DataA) sleeps `Dur1`, then becomes the caster's `UnitID1` (`nzom`) unless killed first (`conversions`) |
+| `ANsl` | Soul Preservation | the `UnitID1` body leaves the map — no death, no corpse |
+| `ANmo` | Monsoon | a field: DataA every DataB over `Dur1`, DataC to buildings, `XNmo` rain over it and `ANmd`'s bolt on each unit struck |
+| `Atau` | Taunt | the nearest DataA enemies inside `Area1` are put on the caster, DataD pulses DataE apart (`taunts`) |
+| `Agra` | War Club | the tree in reach comes out; slot DataC (0-based) down, DataD up, for DataE strikes — the Giant's "Upgrade" clips (`SimUnit.warClub`) |
+| `Aesn` | Sentinel | the owl on the nearest standing tree, a detecting sight of DataB for DataE |
+| `Asps` | Spell Steal | a buff the target's own side hung goes to the caster's side, a curse the other way; autocast only when there is a recipient (`spellStealPlan`) |
+| `Apos` | Possession (RoC) | `Aps2` with no hold: the soul changes hands as the cast lands |
+| `ANsu` | Submerge | the morph toggle (DataA ⇄ `UnitID1`) |
+| `Amfl` | Mana Flare | a CHANNEL; an enemy cast inside `Area1` costs its caster cost × DataA/DataB, capped DataC/DataD, under `[Bmfl]`'s `MFPB` bolt (`flareStrike`) |
+| `Apxf` | Phoenix Fire | thrown at a nearby enemy every `Cool1`: DataA, then DataB a second for `Dur1`/`HeroDur1` |
+| `Assp` / `Aspd` | Spawn Spiderlings / Spiders / Hydra | DataA of DataB where it died (`deathSpawns`) |
+| `Asac` | Sacrifice | the Acolyte walks INTO the pit (`TARGET_COMES_TO_CASTER`) and becomes a Shade |
+| `Acoi` / `Adec` | Mount / Dismount | the flyer meets the walker and the pair is `UnitID1`; the rider splits back into DataA + DataB |
+| `Afrz` `Aflk` `Afsh` `Abof` | research-gated attack passives | a struck building frozen `Dur1`; flak rings vs air; extra vs Unarmored/Medium under a shell; Flame Strike's burn where it lands |
+| `Alit` | Lightning Attack | the shot strings the row's `LightningEffect` |
+| `Agyv` | Detect (Gyrocopter) | True Sight at `Rng1` |
+| `Awan` | Wander | an idle critter strolls about its post — distance and pace are OURS (no columns) |
+| `Acha` | Berserker / Chaos / Tank Upgrade | the unit becomes `UnitID1` once the row's `Requires` is met |
+| `Acor` `Aimp` | badges | the effect is the research's own (`renw`, the line spill) |
+| `Ahid` | Shadow Meld (Akama) | folded onto `Ashm` at the SLK boundary (`LATER_CODE_TWINS`) |
+| `ARal` | Rally | gives a building that trains nothing the rally button (`carriesRally` — the Pocket Factory) |
+| `Arng` | Revenge | carried, no effect: no tooltip, data or art says what it does |
+
+A spell aimed at a TREE is measured to the trunk's edge with a unit target's one-cell allowance
+(tickCast) — measured to its centre, a Giant at the edge of a grove never got within War Club's 32.
+
+A sky (`SetSkyModel`) is drawn only ABOVE the horizon (render/sky.ts): `FoggedSky.mdx` is a whole
+sphere, and its lower half showed past the edge of the terrain mesh as DotA's lavender rectangle in
+the tavern corner. Past the ground's edge is the void a sky-less map shows there.
+
+`tools/sim-stock-abilities-test.cjs` runs each against the install's own rows;
+`tools/sim-map-tables-test.cjs` asserts both maps' stock codes are known.
+
 ## Traps
 
 * **After editing the viewer patch, restart the dev server AND delete `node_modules/.vite`**, or

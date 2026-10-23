@@ -1,6 +1,6 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
 import { SimWorld, weaponsFromDef, inventoryCapacity, isOffField, CREEP_CAMP_ACQUIRE_RANGE, BUILD_START_HP_FRAC, ANIM_FOR_DURATION, HERO_FADE_TIME, HERO_DISSIPATE_TIME, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText, type FallenHero, type SimSpellEffect, type StoredUnitState } from "../sim/world";
-import { FELLS_TREES_UNLISTED, KNOWN_ABILITIES, NO_AOE_CURSOR, REVEAL_CODES, TREE_UPGRADE_ABILITY, aoeCursorRadius } from "../data/abilities";
+import { FELLS_TREES_UNLISTED, KNOWN_ABILITIES, carriesRally, NO_AOE_CURSOR, REVEAL_CODES, TREE_UPGRADE_ABILITY, aoeCursorRadius } from "../data/abilities";
 import type { Command } from "./commands";
 import { PATHING_CELL, footprintCells, type PathingGrid } from "../sim/pathing";
 import { flyHeight } from "../sim/missile";
@@ -779,12 +779,17 @@ export class RtsController {
   /** Units braced in Defend (`Adef` switched on), which wear the model's "defend" clips — see
    *  applyStanceAnims. By sim id beside `animTags`, because it is the same kind of word. */
   private readonly stancePoses = new Set<number>();
+  /** Mountain Giants with a War Club in hand (`Agra`, its `warclub` buff), which swing the
+   *  model's "Upgrade" clips — MountainGiant.mdx's own names for the tree in hand: "Stand
+   *  Upgrade", "Walk Upgrade", "Attack Upgrade" beside the plain ones. See applyStanceAnims. */
+  private readonly clubPoses = new Set<number>();
 
   /** The clip set for a unit: its type's props, plus whatever its script has tagged it with
    *  (unitAnims.scriptAnimTags). Every rebuild of a unit's clips goes through here. */
   private animSetFor(simId: number, seqs: Array<{ name: string }>, props: string[] | undefined): AnimSet {
     const scripted = this.animTags.get(simId);
-    const tags = this.stancePoses.has(simId) ? [...(scripted ?? []), "defend"] : scripted;
+    let tags = this.stancePoses.has(simId) ? [...(scripted ?? []), "defend"] : scripted;
+    if (this.clubPoses.has(simId)) tags = [...(tags ?? []), "upgrade"];
     if (!tags?.length) return buildAnimSet(seqs, props);
     const tagged = scriptAnimTags(seqs, tags);
     return buildAnimSet(tagged.seqs, [...(props ?? []), ...tagged.props]);
@@ -2274,9 +2279,12 @@ export class RtsController {
    * next line and moves the unit onto it — stand, walk or the next swing. */
   private applyStanceAnims(e: Entry, u: RenderUnit): void {
     const on = u.abilities.some((a) => a.code === "Adef" && a.autocastOn);
-    if (on === this.stancePoses.has(e.simId)) return;
+    const club = u.buffs.some((b) => b.group === "warclub");
+    if (on === this.stancePoses.has(e.simId) && club === this.clubPoses.has(e.simId)) return;
     if (on) this.stancePoses.add(e.simId);
     else this.stancePoses.delete(e.simId);
+    if (club) this.clubPoses.add(e.simId);
+    else this.clubPoses.delete(e.simId);
     const seqs = e.unit.instance.model?.sequences;
     if (!seqs) return; // no body yet — attachInstance builds the set through animSetFor
     e.anims = this.animSetFor(e.simId, seqs, animPropsFor(this.registry.get(e.typeId), u.altModel));
@@ -4232,7 +4240,7 @@ export class RtsController {
     // Structures get building state (construction + a training queue); rally
     // point defaults to just south of the building.
     const building: BuildingState | null = def.isBuilding
-      ? { constructionLeft: constructionTime, buildTimeTotal: constructionTime || 1, builderIds: [], goldCost: def.goldCost, lumberCost: def.lumberCost, queue: [], rallyX: x, rallyY: y - 200, rallyKind: "none", rallyTargetId: 0, producesUnits: this.tech.producesUnits(def.id) }
+      ? { constructionLeft: constructionTime, buildTimeTotal: constructionTime || 1, builderIds: [], goldCost: def.goldCost, lumberCost: def.lumberCost, queue: [], rallyX: x, rallyY: y - 200, rallyKind: "none", rallyTargetId: 0, producesUnits: this.tech.producesUnits(def.id) || carriesRally(def.abilities, this.abilities) }
       : null;
     // A hero is born with a given name drawn from its `Propernames` list (the
     // Demon Hunter's "Painkiller", the Paladin's "Uther"-alikes) — the info panel
@@ -5378,6 +5386,7 @@ export class RtsController {
       if (e) this.dropEntry(e);
       this.animTags.delete(simId);
       this.stancePoses.delete(simId);
+      this.clubPoses.delete(simId);
       return;
     }
     if (!e) return;
@@ -5428,6 +5437,7 @@ export class RtsController {
     this.byId.delete(simId);
     this.animTags.delete(simId);
     this.stancePoses.delete(simId);
+    this.clubPoses.delete(simId);
     this.entries.splice(this.entries.indexOf(e), 1);
     this.deselect(simId);
     e.unit.state = WidgetState.WALK; // keep mdx-m3-viewer from overriding the death sequence

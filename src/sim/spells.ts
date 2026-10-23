@@ -2,7 +2,7 @@ import type { AbilityDef, AbilityLevel, BuffFx } from "../data/abilities";
 import { miscGame } from "../data/gameplayConstants";
 import { corpseNeed, corpseReach } from "./corpses";
 import { slowedAttack, slowedMove } from "./orbs";
-import type { SimUnit, BuffKind, ClaimedCorpse, CorpseClaim, EffectAnim } from "./world";
+import type { SimUnit, SimBuff, BuffKind, ClaimedCorpse, CorpseClaim, EffectAnim } from "./world";
 
 // Spell effect handlers, dispatched on an ability's base `code` (data/abilities).
 // This is the modular seam: the sim executes a cast by looking up the handler for
@@ -29,6 +29,8 @@ export interface EffectOpts {
   events?: boolean;
   /** Seconds before the effect is played at all (a flare's `Fla2` "Effect Delay"). */
   delay?: number;
+  /** Height above the ground it is played at (Sentinel's owl, `DataC` "Hovering Height"). */
+  z?: number;
 }
 
 export interface SpellApi {
@@ -233,6 +235,33 @@ export interface SpellApi {
    *  vulnerability that hold the two of them there are the handler's; this is the clock, and
    *  it lives on the world because either end can die inside it. */
   possess(casterId: number, targetId: number, seconds: number): void;
+  /** Dark Conversion (`ANdc`): after `seconds` asleep, IF the body is still standing it becomes
+   *  a `typeId` of `owner`'s, wearing `art` as it turns. The clock is the world's for the same
+   *  reason a Possession's is — the sleeper can be killed inside it. */
+  convert(casterId: number, targetId: number, typeId: string, seconds: number, art: string): void;
+  /** Take a unit off the map without a death — no corpse, no kill, no bounty (Soul
+   *  Preservation's "into the nether-realm"). */
+  removeFromGame(unit: SimUnit): void;
+  /** Turn a unit into another type IN PLACE, keeping its id, owner, selection and health
+   *  fraction (SimWorld.morphUnit) — Sacrifice's Acolyte becoming a Shade. */
+  transformUnit(unit: SimUnit, typeId: string): void;
+  /** Taunt (`Atau`): the first pulse now, and `DataD` pulses `DataE` apart (SimWorld.tickTaunts). */
+  taunt(caster: SimUnit, def: AbilityDef, rank: number): void;
+  /** Take ONE buff instance off a unit and re-derive its stats — what Spell Steal lifts. */
+  takeBuff(unit: SimUnit, buff: SimBuff): void;
+  /** Mana Flare (`Amfl`): light the flare, or put it out (SimWorld.manaFlare). */
+  manaFlare(caster: SimUnit, def: AbilityDef, rank: number): void;
+  /** War Club (`Agra`): tear up the nearest tree to (x, y) the Giant can reach and swing it
+   *  (SimWorld.grabTree). False when there is no tree in reach. */
+  grabTree(caster: SimUnit, def: AbilityDef, rank: number, x: number, y: number): boolean;
+  /** The nearest STANDING tree to (x, y) within `reach` of `from` — Sentinel's perch, which is
+   *  not felled. Null when there is none. */
+  treeNear(from: SimUnit, x: number, y: number, reach: number): { x: number; y: number } | null;
+  /** Mount (`Acoi`): the nearest partner of the row's type comes to the caster and the two
+   *  become the row's `UnitID1` (SimWorld.couple). False when nobody is in `Area1`. */
+  couple(caster: SimUnit, def: AbilityDef, rank: number): boolean;
+  /** Dismount (`Adec`): the rider splits back into the row's DataA and DataB. */
+  decouple(caster: SimUnit, def: AbilityDef, rank: number): void;
   /** Take a friendly STRUCTURE off the map and pay its salvage back (`Auns` Unsummon).
    *  `ratio` is DataA "Salvage Cost Ratio" and `step` DataB "Accumulation Step". Returns
    *  false when the target is not something this player may unsummon. */
@@ -3960,7 +3989,260 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
       api.applyBuff(t, { kind: "spellShield", group: "spellshield", timeLeft: Infinity, sourceId: caster.id, ...spellShieldBuff(def) });
     }
   },
+
+  // === Mal'Ganis — the campaign Dreadlord (`Umal` heroAbilList, NeutralAbilityFunc) ======
+  //
+  // Dark Conversion (`ANdc`) — "Puts a target villager to sleep and converts it into a
+  // zombie." Every half of that is a column:
+  //   DataA "Race to Convert"  commoner   the only race it takes (UnitBalance `race`)
+  //   Cast1 5                             the wind-up (tickCast), Mal'Ganis gesturing over it
+  //   Dur1 6                              how long the villager sleeps before it turns
+  //   UnitID1 nzom                        what it turns into
+  //   BuffID1 BNdc                        the sleep — `Targetart = …\Sleep\SleepTarget.mdl`, and
+  //                                       `Effectart = …\DarkConversion\ZombifyTarget.mdl` is
+  //                                       the turn itself
+  // The zombie is the CASTER's ("converts"); the sleeper can be killed before it turns, which is
+  // why the turn is the world's clock and not this handler's (SpellApi.convert).
+  ANdc: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t || t.isHero || t.building) return;
+    const lvl = lv(def, rank);
+    const race = (lvl.dataStr[0] ?? "").trim().toLowerCase();
+    if (race && race !== "_" && race !== "-" && t.race.toLowerCase() !== race) return;
+    const into = lvl.summon;
+    if (!into) return;
+    const secs = lvl.duration || 6;
+    api.applyBuff(t, { kind: "sleep", group: "darkconversion", timeLeft: secs, sourceId: caster.id, ...fx(def) });
+    api.convert(caster.id, t.id, into, secs, def.buffEffectArt);
+  },
+
+  // Soul Preservation (`ANsl`) — "Puts a converted zombie into the nether-realm for later use."
+  // `UnitID1 = nzom` is the body it takes, so the row says which units it is FOR; the "later
+  // use" is the campaign's own script, which keeps the count. The unit leaves the map, not the
+  // world's death path: nothing died, so there is no corpse and nobody is credited.
+  ANsl: (api, _caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t) return;
+    const lvl = lv(def, rank);
+    if (lvl.summon && t.typeId !== lvl.summon) return;
+    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, 0);
+    api.removeFromGame(t);
+  },
+
+  // Monsoon (`ANmo`, and the creep `ACmo`) — "Calls down a storm of lightning to strike enemy
+  // units for <ANmo,DataA1> damage in a small target area. Lasts <ANmo,Dur1> seconds."
+  //   DataA "Damage Dealt"  20    DataB "Damage Interval"  1.5    DataC "Building Reduction"  0.35
+  //   Area1 300 (Rng1 500)        Dur1 12 — waves, Dur1 / DataB of them
+  // Its two models are on the two rows it names: `EfctID1 = XNmo` (`MonsoonRain.mdl`, the storm
+  // over the circle, with `Effectsoundlooped = MonsoonLoop`) and `BuffID1 = ANmd`, whose
+  // `Targetart = MonsoonBoltTarget.mdl` at `origin` is the bolt that strikes each unit a wave
+  // reaches (hitArt). Not channelled — no `Animnames = channel` on the row would say so, and its
+  // `Animnames = stand,channel` is the cast gesture's, held for the instant of the cast.
+  ANmo: (api, caster, def, rank, ctx) => {
+    const lvl = lv(def, rank);
+    const interval = d(lvl, 1, 1.5) || 1.5;
+    const waves = Math.max(1, Math.round((lvl.duration || 12) / interval));
+    const bolt = api.buffFxOf(lvl.buffs[0] ?? "")[0];
+    api.addSpellField({
+      code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 300,
+      damagePerWave: d(lvl, 0, 20), waves, interval, casterId: caster.id,
+      buildingReduction: d(lvl, 2, 0),
+      art: fieldArt(def), loopSound: fieldLoop(def),
+      ...(bolt ? { hitArt: bolt.path, hitAttach: bolt.attach } : {}),
+    });
+  },
+
+  // === The melee units' own ================================================================
+  //
+  // Taunt (`Atau`, the Mountain Giant) — "The closest <Atau,DataA1> enemies are forced to attack
+  // this unit. After <Atau,DataE1> seconds Taunt will activate again." (NightElfAbilityStrings)
+  //   DataA "Prefer Hostiles" 10 — read by the tooltip as the COUNT taken, nearest first
+  //   DataD "Number of Pulses" 2      DataE "Interval between Pulses" 3      Area1 450
+  // `Casterart = …\Taunt\TauntCaster.mdl` goes off with each pulse. The pulses are the world's
+  // (tickTaunts), because the second one is three seconds after the press.
+  Atau: (api, caster, def, rank) => {
+    api.taunt(caster, def, rank);
+  },
+
+  // War Club (`Agra`) — "Picks up a tree to give the Mountain Giant Siege damage, and increased
+  // attack range. Lasts for <Agra,DataE1> strikes." The tree is the nearest trunk to the click in
+  // reach of his hands (`Rng1` 32 from the hull, Eat Tree's reach); everything after is the
+  // world's (SimWorld.grabTree): DataA "Attach Delay", DataC/DataD the attack index he puts down
+  // and the one he picks up, DataE "Maximum Attacks".
+  Agra: (api, caster, def, rank, ctx) => { api.grabTree(caster, def, rank, ctx.x, ctx.y); },
+
+  // Sentinel (`Aesn`, the Huntress) — "Send an owl to a nearby tree to reveal the area around it.
+  // Can see invisible units. Lasts <Aesn,DataE1> seconds." (NightElfAbilityStrings)
+  //   DataB "Hovering Sight Radius" 900     DataE "Duration of Owls" 300     Rng1 800
+  //   `[XEsn] Targetart = Units\NightElf\Owl\Owl.mdl` — the owl itself, sitting on the tree
+  // `targs1 = tree`: the tree is not felled, it is a perch, so the nearest STANDING trunk to the
+  // click is where the owl goes (SpellApi.treeNear) and the sight opens there, detecting, with
+  // the owl sitting DataC "Hovering Height" (275) over it. DataA "In Flight Sight Radius" is
+  // the owl's flight out, which this does not model — it is on its perch at once; DataD
+  // "Number of Owls" (1) is one owl a cast.
+  Aesn: (api, caster, def, rank, ctx) => {
+    const lvl = lv(def, rank);
+    const tree = api.treeNear(caster, ctx.x, ctx.y, (lvl.castRange || 800) + caster.radius);
+    if (!tree) return;
+    const secs = d(lvl, 4, 300);
+    api.revealArea(caster.owner, caster.team, { x: tree.x, y: tree.y, radius: d(lvl, 1, 900), seconds: secs, detect: true });
+    // The owl lands a beat after the sight opens: a tree deep in a grove is in its own fog until
+    // then, and an effect played into fog is played to nobody (RtsController.drainFxEffects).
+    const owl = def.fxTargetArt || def.fxArt;
+    if (owl) api.emitEffect(owl, tree.x, tree.y, 0, secs, undefined, { z: d(lvl, 2, 275), delay: 0.25 });
+  },
+
+  // Spell Steal (`Asps`, the Blood Elf Spell Breaker) — "Steals a positive buff from an enemy unit
+  // and applies it to a nearby friendly unit, or takes a negative buff from a friendly unit and
+  // applies it to a nearby enemy unit." (HumanAbilityStrings)
+  //   Rng1 700 — the reach to the unit stolen FROM;  Area1 700 — "nearby", round that unit
+  // What is positive and what negative is who put it there — the rule `worthDispelling` already
+  // reads (a buff hung by the bearer's own side is one it wanted), and only what a dispel could
+  // take is stealable (`stealableBuff`). The buff goes over WHOLE — its kind, its numbers, the
+  // time it has left and its art — with the Spell Breaker as its new source, carried by the
+  // row's `Missileart` from the one body to the other (`SpellStealMissile.mdl`), and lands under
+  // `Targetart = …\SpellStealTarget.mdl` at `overhead`.
+  Asps: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t) return;
+    const plan = spellStealPlan(api, caster, def, rank, t);
+    if (!plan) return;
+    const b = plan.buff;
+    api.takeBuff(t, b);
+    api.applyBuff(plan.to, {
+      kind: b.kind, group: b.group, timeLeft: b.timeLeft, sourceId: caster.id,
+      value: b.value, value2: b.value2, art: b.art, fx: b.fx, buffId: b.buffId,
+      ...(b.nonLethal ? { nonLethal: true } : {}),
+    });
+    api.missileBack(t, plan.to, def);
+    if (def.targetArt) api.emitEffect(def.targetArt, plan.to.x, plan.to.y, plan.to.id, 0, def.targetAttach);
+  },
+
+  // Possession (`Apos`) — the Reign of Chaos Banshee's. The TFT `Aps2` beside it adds the hold
+  // and the vulnerability; this row has neither: `Dur1` 0 and one column, DataA "Maximum Creep
+  // Level" 5. Its `Cast1` 1 is the wind-up (tickCast), and once it lands the soul changes hands
+  // at once — the same world clock (SpellApi.possess) run for no seconds at all.
+  Apos: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t) return;
+    const lvl = lv(def, rank);
+    if (t.isHero || (t.isCreep && t.level > d(lvl, 0, 5))) return;
+    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
+    const hold = lvl.duration || 0;
+    if (hold > 0) {
+      api.applyBuff(t, { kind: "stun", group: POSSESSION_GROUP, timeLeft: hold, sourceId: caster.id, ...fx(def) });
+      api.applyBuff(caster, { kind: "stun", group: POSSESSION_GROUP, timeLeft: hold, sourceId: caster.id });
+    }
+    api.possess(caster.id, t.id, hold);
+  },
+
+  // Submerge (`ANsu` — `Asb1` Myrmidon, `Asb2` Royal Guard, `Asb3` Snap Dragon) — the Burrow
+  // row shape: DataA "Normal Form Unit" (`nmyr`) and `UnitID1` the submerged one (`nmys`), with
+  // `Order=submerge` / `Unorder=unsubmerge` and `Dur1` the morph clip. Gated on `Rnsb`.
+  ANsu: (api, caster, def, rank) => { api.morphToggle(caster, def, rank); },
+
+  // Mana Flare (`Amfl`, the Faerie Dragon) — "Causes the Faerie Dragon to channel negative
+  // magical energies that damage nearby enemies when they cast spells." `Order=manaflareon` and
+  // `Unorder=manaflareoff` are the two halves of one button; the flare itself is the world's
+  // (SimWorld.manaFlare / flareStrike), because what it answers is somebody ELSE's cast.
+  Amfl: (api, caster, def, rank) => { api.manaFlare(caster, def, rank); },
+
+  // Sacrifice (`Asac`, the Sacrificial Pit) — "Target an Acolyte to sacrifice it and turn it into
+  // a Shade. Shades are invisible spirits that can see invisible units." (UndeadAbilityStrings)
+  // `Rng1` 75 is the pit's edge, and the pit cannot walk: the Acolyte comes to IT
+  // (TARGET_COMES_TO_CASTER). The row names no unit — `UnitID1` is blank on `[Asac]` — so the
+  // Shade is the tooltip's, `ushd`, unless a map's own row names another.
+  Asac: (api, _caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t || t.isHero || t.building) return;
+    const into = lv(def, rank).summon || SACRIFICE_SHADE;
+    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
+    api.transformUnit(t, into);
+  },
+
+  // Mount Hippogryph / Pick up Archer (`Acoi` — `Aco2` on the Archer, `Aco3` on the Hippogryph)
+  // and Dismount (`Adec`, the Hippogryph Rider). "Mounts a Hippogryph so that the Archer can
+  // attack from the air." `Aco2`: DataA = the partner (`ehip`), `UnitID1` = what the two become
+  // (`ehpr`), `Area1` 900 how far it will look for one; `Adec`: DataA and DataB = the two it
+  // splits back into (`earc`, `ehip`). The world does the meeting (SimWorld.couple).
+  Acoi: (api, caster, def, rank) => { api.couple(caster, def, rank); },
+  Adec: (api, caster, def, rank) => { api.decouple(caster, def, rank); },
+
+  // Phoenix Fire (`Apxf`) — "Fires down streams of flame, lighting nearby enemies on fire." It is
+  // not pressed: the Phoenix throws one `Missileart` (`Phoenix_Missile_mini.mdl`, 900, homing) at
+  // a nearby enemy every `Cool1` 0.5 s (SimWorld.tickPhoenixFire), and this is the landing:
+  //   DataA "Initial Damage" 20     DataB "Damage Per Second" 2     Dur1 10 / HeroDur1 7
+  Apxf: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t || t.hp <= 0) return;
+    const lvl = lv(def, rank);
+    api.spellDamage(t, d(lvl, 0, 20), caster.id);
+    const dps = d(lvl, 1, 0);
+    if (dps > 0 && t.hp > 0) api.applyBuff(t, { kind: "dot", group: "phoenixfire", timeLeft: dur(lvl, t) || 10, sourceId: caster.id, value: dps, ...fx(def) });
+  },
 };
+
+/** Sacrifice's Shade when the row names none — the tooltip's "turn it into a Shade". */
+const SACRIFICE_SHADE = "ushd";
+
+/**
+ * Which buff Spell Steal would take off `t`, and who it would go to — or null when the cast
+ * would do nothing, which is also what the AUTOCAST asks before it spends 75 mana.
+ *
+ * From an ENEMY a buff its own side hung (one it wanted); from a FRIEND one the other side hung.
+ * Only a CLOCKED buff a dispel could take is stealable (`survivesDispel`, `clockedBuff` — an aura
+ * or a stance comes straight back), and its source must still be on the map to say whose it is,
+ * the rule `worthDispelling` keeps. The recipient is the nearest unit inside `Area1` of `t` on
+ * the far side of the exchange — for a stolen buff one of the caster's own (himself included,
+ * `targs1` lists `self`), for a returned curse an enemy — that the row's Targets Allowed admits.
+ */
+export function spellStealPlan(api: SpellApi, caster: SimUnit, def: AbilityDef, rank: number, t: SimUnit): { buff: SimBuff; to: SimUnit } | null {
+  const fromEnemy = api.hostile(caster, t);
+  let buff: SimBuff | null = null;
+  for (const b of t.buffs) {
+    if (survivesDispel(b) || !clockedBuff(b)) continue;
+    const src = api.getUnit(b.sourceId);
+    if (!src) continue;
+    const theirOwn = src.team === t.team;
+    if (fromEnemy ? theirOwn : !theirOwn) { buff = b; break; }
+  }
+  if (!buff) return null;
+  const area = lv(def, rank)?.area || 700;
+  let to: SimUnit | null = null;
+  let best = Infinity;
+  for (const u of api.unitsInArea(t.x, t.y, area)) {
+    if (u === t || u.hp <= 0 || u.building || u.invulnerable || !api.admits(def, u)) continue;
+    const wanted = fromEnemy ? u === caster || api.ally(caster, u) : api.hostile(caster, u);
+    if (!wanted) continue;
+    const dd = Math.hypot(u.x - t.x, u.y - t.y);
+    if (dd < best) { best = dd; to = u; }
+  }
+  return to ? { buff, to } : null;
+}
+
+/**
+ * Burning Oil's fire on the ground where a shell came down (`Abof`, the Demolisher's — gated on
+ * `Robf`). It is Flame Strike's own column group — AbilityMetaData's `Hfs1..Hfs6` are declared
+ * `useSpecific=AHfs,…,Abof`, so DataA..F mean here exactly what they mean there: "Full Damage
+ * Dealt" 6 every "Full Damage Interval" 0.5, then "Half Damage Dealt" 3 every "Half Damage
+ * Interval" 1, over `Area1` 150 — and the same two-phase reading `AHfs` makes of them, the full
+ * burn for the first third of `Dur1` (2.51) and the half burn for the rest. `[Xbof] Effectart =
+ * …\FlameStrike\FlameStrikeEmbers.mdl` is the fire, with `Effectsoundlooped = HumanFireLarge`.
+ */
+export function burningOilField(caster: SimUnit, def: AbilityDef, lvl: AbilityLevel, x: number, y: number): SpellFieldInit[] {
+  const area = lvl.area || 150;
+  const total = lvl.duration || 2.51;
+  const fullDur = total / 3;
+  const fullInt = d(lvl, 1, 0.5) || 0.5;
+  const halfInt = d(lvl, 3, 1) || 1;
+  const reduction = d(lvl, 4, 1);
+  const base = { code: def.code, x, y, area, casterId: caster.id, buildingReduction: reduction >= 1 ? 0 : reduction };
+  const out: SpellFieldInit[] = [{ ...base, damagePerWave: d(lvl, 0, 6), waves: Math.max(1, Math.round(fullDur / fullInt)), interval: fullInt, art: fieldArt(def), loopSound: fieldLoop(def) }];
+  const half = d(lvl, 2, 0);
+  const halfWaves = Math.max(0, Math.round((total - fullDur) / halfInt));
+  if (half > 0 && halfWaves > 0) out.push({ ...base, damagePerWave: half, waves: halfWaves, interval: halfInt, delay: fullDur, art: "" });
+  return out;
+}
 
 /**
  * The Spell Shield buff (`BNss`) as it is WORN: its status icon and nothing else. The row's

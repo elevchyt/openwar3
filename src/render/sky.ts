@@ -106,11 +106,64 @@ export class SkyDome {
   renderBehind(): void {
     if (!this.instance) return;
     this.scene.startFrame(); // viewport + scissor; `alpha` keeps it from clearing
+    const gl = this.viewer.gl;
+    // ABOVE THE HORIZON ONLY. A sky is a whole sphere — `FoggedSky.mdx`, DotA's, runs from
+    // z −1953 to +2192 round the eye — so below the horizon it is drawn too, and wherever the
+    // world draws nothing over it that half shows: past the edge of the terrain mesh. That is
+    // the lavender rectangle in DotA's top-left corner (the hero taverns sit 1024 units inside
+    // the mesh's edge, and our widest zoom looks 1029 past the camera's focus). What lies past
+    // the edge of the ground is the void the black boundary fades into — what a map with no
+    // sky shows there — so the sky is clipped to the rows above where the ground plane meets
+    // the sky, and the ground's side of that line keeps the frame's own clear.
+    const rows = this.horizonRows();
+    if (rows === 0) {
+      this.clearDepth();
+      return; // looking straight down: no sky in the frame at all
+    }
+    if (rows !== null) {
+      const vp = this.scene.viewport as ArrayLike<number>;
+      gl.scissor(vp[0], vp[1] + vp[3] - rows, vp[2], rows);
+    }
     this.scene.renderOpaque();
     this.scene.renderTranslucent();
+    this.clearDepth();
+  }
+
+  private clearDepth(): void {
     const gl = this.viewer.gl;
     gl.depthMask(true);
     gl.clear(gl.DEPTH_BUFFER_BIT);
+  }
+
+  /** How many viewport rows, counted down from the TOP, lie above the horizon — where a
+   *  direction along the ground lands on screen — or null when the whole frame is sky-side
+   *  (looking up) and nothing need be clipped. A camera with no ROLL (WC3's default, and every
+   *  melee camera) has a level horizon; under a scripted roll the lower of its two ends is
+   *  taken, so the sky is never cut short on the side that dips. */
+  private horizonRows(): number | null {
+    const cam = this.scene.camera as { viewProjectionMatrix: Float32Array; directionZ: Float32Array; fov: number; aspect: number };
+    const vp = this.scene.viewport as ArrayLike<number>;
+    const m = cam.viewProjectionMatrix;
+    // Forward along the ground: the camera looks down its own −Z.
+    const fx = -cam.directionZ[0];
+    const fy = -cam.directionZ[1];
+    const len = Math.hypot(fx, fy);
+    if (len < 1e-6) return 0;
+    // Two ground directions either side of forward, wider than the lens, so their screen
+    // heights bracket a tilted horizon.
+    const spread = Math.atan(Math.tan(cam.fov / 2) * (cam.aspect || 1)) * 1.1;
+    let lowest = Infinity;
+    for (const s of [-spread, spread]) {
+      const c = Math.cos(s);
+      const sn = Math.sin(s);
+      const dx = (fx * c - fy * sn) / len;
+      const dy = (fx * sn + fy * c) / len;
+      const w = m[3] * dx + m[7] * dy;
+      if (w <= 1e-9) return null; // the horizon is behind the lens: leave the sky whole
+      lowest = Math.min(lowest, (m[1] * dx + m[5] * dy) / w);
+    }
+    const fromBottom = (lowest * 0.5 + 0.5) * vp[3];
+    return Math.round(Math.min(vp[3], Math.max(0, vp[3] - fromBottom)));
   }
 
   dispose(): void {

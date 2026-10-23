@@ -12827,6 +12827,7 @@ export class MapViewerScene {
     if (code === "Aroo") return !su.uprooted;
     if (code === "AEim") return !!su.immolation;
     if (code === "ANms") return su.buffs.some((b) => b.kind === "manaShield");
+    if (code === "Amfl") return su.order === "cast" && su.pendingCast?.code === "Amfl" && !!su.pendingCast.fired; // the flare is lit while she channels
     if (isStance(def)) return su.abilities.some((a) => a.code === code && a.autocastOn);
     if (def.autocast) return false;
     const lvl = def.levelData[0];
@@ -14705,6 +14706,8 @@ export class MapViewerScene {
         if (su && s.critterGuise) su.critterGuise = true;
         // …and a Rune of Rebirth's monster eats no food (SimUnit.foodFree).
         if (su && s.foodFree) su.foodFree = true;
+        // …and a body split off a hurt one is as hurt (SummonRequest.hpFrac — Dismount).
+        if (su && s.hpFrac !== undefined) su.hp = Math.max(1, su.maxHp * s.hpFrac);
         this.rts!.beginSummonBirth(simId); // materialize (birth clip + spawn lock)
       });
     }

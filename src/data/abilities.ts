@@ -213,6 +213,10 @@ export interface BuffDef {
    *  `ensnare_AirTarget.mdx` — and this suffix (" (Air)" / " (Ground)") is the only thing in
    *  the data that says which is which. See `AbilityRegistry.domainBuff`. */
   suffix: string;
+  /** `LightningEffect` — a ribbon the buff's EFFECT strings (a LightningData row id, "" for
+   *  nearly all). Mana Flare's is the one that matters: `[Bmfl] LightningEffect = MFPB` is the
+   *  bolt from the Faerie Dragon to the enemy whose cast it punishes. */
+  lightning: string;
 }
 
 /** Per-level numbers pulled from AbilityData's level-indexed columns. */
@@ -426,6 +430,9 @@ export interface AbilityDef {
   fxArt: string; // the effect object's Effectart — the field/area model
   fxSpecialArt: string; // its Specialart — the per-target burst (Healing Spray)
   fxMissileArt: string; // its Missileart (Volcano's rising rock)
+  /** …and its Targetart: the model an effect object PUTS somewhere rather than paints — Sentinel's
+   *  `[XEsn] Targetart = Units\NightElf\Owl\Owl.mdl`, the owl on its tree. */
+  fxTargetArt: string;
   fxLoopSound: string; // Effectsoundlooped — the bed under a running field
   fxSound: string; // Effectsound — the one-shot per wave (BlizzardWave)
   /** AbilityFunc `LightningEffect` — the LightningData row ids this ability strings between
@@ -546,6 +553,15 @@ export function aoeCursorRadius(def: AbilityDef, level: AbilityLevel | undefined
  *  trees carry it (UnitAbilities.slk). Asked by its code, so a map's clone counts. */
 export const TREE_UPGRADE_ABILITY = "Atol";
 
+/** `[ARal]` Rally — the ability a building's Set Rally Point button IS. A building that trains
+ *  anything gets the button by that alone (TechTree.producesUnits); this is the other door, for a
+ *  structure that makes its units some other way and lists the row itself — the Goblin Tinker's
+ *  Pocket Factory (`nfac`, `nfa1`, `nfa2`), which spawns its Clockwerk Goblins on a timer. Asked
+ *  by code, so a map's own building that carries it is given the button too. */
+export function carriesRally(abilityIds: readonly string[], reg: Pick<AbilityRegistry, "get"> | null | undefined): boolean {
+  return !!reg && abilityIds.some((id) => reg.get(id)?.code === "ARal");
+}
+
 /**
  * Base codes a LATER PATCH introduced (src/patches/, docs/patches.md) that are the same ability
  * as a 1.30.4 code with the same row shape — folded onto it at the SLK boundary, so every rule
@@ -557,6 +573,12 @@ export const TREE_UPGRADE_ABILITY = "Atol";
  */
 const LATER_CODE_TWINS: Readonly<Record<string, string>> = {
   AUa2: "AUan",
+  // …and one 1.30.4 row of the same kind: `[Ahid]` "Shadow Meld (Akama)" is `Ashm` under a code
+  // of its own — the same three columns (DataA "Fade Duration" 0.1, DataB "Day/Night Duration",
+  // DataC "Action Duration"), the same `Order=ambush` and the same words ("allowing it to
+  // Shadowmeld and remain unseen at night", NightElfAbilityStrings [Ahid]). Folded, every rule
+  // the stance has (the night gate, the hold, tickMeld, tickAutoMeld) serves Akama's too.
+  Ahid: "Ashm",
 };
 
 /** Ability behaviours we implement, keyed by base `code`. `target` tells the UI/
@@ -1117,6 +1139,52 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   // ever carry it) while the sim's detect derivation still honours the code, so a custom map
   // that hands it out gets the radius the data promises. The Gem of True Seeing (`Adt1`) is
   // what actually hands it out — an ITEM, which is why no unit does (see itemAbilityLevel).
+  //
+  // === The melee units' own buttons, and the campaign heroes' (docs/map-compatibility.md
+  // "Stock abilities a map hands out") ===
+  // Dropped as unknown codes, each of these left a STOCK unit short of a button it has in the
+  // real game — the Mountain Giant's Taunt and War Club, the Huntress' Sentinel, the Spell
+  // Breaker's Spell Steal, the Faerie Dragon's Mana Flare, the Phoenix's fire, every critter's
+  // Wander — and a custom map that builds on them (Bleach vs One Piece, Balanced Hero Survival)
+  // short of the skill. Aims are the Ubertips' (NeutralAbilityStrings, NightElfAbilityStrings…).
+  // -- Mal'Ganis (the campaign Dreadlord) --
+  ANdc: { target: "unit" }, // Dark Conversion — "Puts a target villager to sleep and converts it into a zombie."
+  ANsl: { target: "unit" }, // Soul Preservation — "Puts a converted zombie into the nether-realm for later use."
+  ANmo: { target: "point" }, // Monsoon — "a storm of lightning … in a small target area"
+  // -- units --
+  Atau: { target: "none" }, // Taunt (Mountain Giant) — the closest enemies attack him, in pulses
+  Agra: { target: "point" }, // War Club (Mountain Giant) — `targs1 = tree`, the nearest trunk to the click
+  Aesn: { target: "point" }, // Sentinel (Huntress) — `targs1 = tree`, "Send an owl to a nearby tree"
+  // Spell Steal — autocast with a manual aim (`Orderon=spellstealon` / `Orderoff`), the Heal shape.
+  Asps: { target: "unit", autocast: true },
+  Apos: { target: "unit" }, // Possession — the pre-TFT Banshee row (`Aps2` is the TFT one)
+  ANsu: { target: "none" }, // Submerge (Myrmidon, Royal Guard, Snap Dragon) — a form toggle, `Unorder=unsubmerge`
+  Amfl: { target: "none" }, // Mana Flare (Faerie Dragon) — `Order=manaflareon` / `Unorder=manaflareoff`
+  Asac: { target: "unit" }, // Sacrifice (Sacrificial Pit) — "Target an Acolyte to sacrifice it"
+  Acoi: { target: "none" }, // Mount Hippogryph / Pick up Archer — instant, the partner comes (Area1 900)
+  Adec: { target: "none" }, // Dismount (Hippogryph Rider) — `Order=decouple`
+  // Passives the sim reads off the list (the same trap as the Fountains: a code this table
+  // omits is a code no unit carries, so the effect is off for the whole game).
+  Apxf: { target: "passive" }, // Phoenix Fire — fires at a nearby enemy every `Cool1` (tickPhoenixFire)
+  Assp: { target: "passive" }, // Spawn Spiderlings — on death, DataA of DataB (deathSpawns)
+  Aspd: { target: "passive" }, // Spawn Spiders / Spawn Hydra — the same shape
+  Afrz: { target: "passive" }, // Freezing Breath (Frost Wyrm, `Rufb`) — a struck building stops working
+  Abof: { target: "passive" }, // Burning Oil (Demolisher, `Robf`) — the shell sets the ground alight
+  Aflk: { target: "passive" }, // Flak Cannons (Flying Machine, `Rhfc`) — splash against air
+  Afsh: { target: "passive" }, // Fragmentation Shards (Mortar Team, `Rhfs`) — more vs Unarmored/Medium
+  Alit: { target: "passive" }, // Lightning Attack — the attack wears a lightning ribbon (`LightningEffect`)
+  Agyv: { target: "passive" }, // Detect (Gyrocopter) — True Sight, Rng1 900
+  Awan: { target: "passive" }, // Wander — the critters' (tickWander)
+  Acha: { target: "passive" }, // Berserker Upgrade / Chaos / Tank Upgrade — becomes UnitID1 once `Requires` is met
+  // Badges whose effect is the UPGRADE itself, as Bombs and Storm Hammers are above: Corrosive
+  // Breath is `[Recb] renw 3` (the Chimaera's structure-only slot 1), Impaling Bolt the
+  // Glaive Thrower's line spill (applySpill).
+  Acor: { target: "passive" },
+  Aimp: { target: "passive" },
+  // Revenge (`[Arng]`) — a row with no tooltip, no data and no button art in any file, worn by
+  // a campaign unit; nothing says what it does, so it is carried (a script can ask for it) and
+  // does nothing on its own.
+  Arng: { target: "passive" },
 };
 
 /**
@@ -1432,6 +1500,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       fxArt: mdlPath(buffField(func, str(r, "efctid1"), "Effectart")),
       fxSpecialArt: mdlPath(buffField(func, str(r, "efctid1"), "Specialart")),
       fxMissileArt: mdlPath(buffField(func, str(r, "efctid1"), "Missileart")),
+      fxTargetArt: mdlPath(buffField(func, str(r, "efctid1"), "Targetart")),
       fxLoopSound: buffField(func, str(r, "efctid1"), "Effectsoundlooped"), // a LABEL, not a path
       fxSound: buffField(func, str(r, "efctid1"), "Effectsound"),
       lightning: (f ? str(f, "LightningEffect") : "").split(",").map((s) => s.trim().toUpperCase()).filter(Boolean),
@@ -1474,6 +1543,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       carrier: buffCarrierOf(func, id),
       loop: f ? str(f, "Effectsoundlooped") : "",
       suffix: s ? str(s, "EditorSuffix") : "",
+      lightning: f ? str(f, "LightningEffect").split(",")[0].trim().toUpperCase() : "",
     });
   }
   const reg = new AbilityRegistry(defs, new Map(), buffs);
@@ -1556,6 +1626,7 @@ function addUiButton(defs: Map<string, AbilityDef>, id: string, func: MappedData
     fxArt: "",
     fxSpecialArt: "",
     fxMissileArt: "",
+    fxTargetArt: "",
     fxLoopSound: "",
     fxSound: "",
     lightning: [],
