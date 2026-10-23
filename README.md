@@ -92,10 +92,18 @@ updater actually reads — a release with the AppImage hand-uploaded and no meta
 invisible to it. macOS auto-update additionally needs an Apple developer signature; unsigned mac
 builds install by hand.
 
-Once the release is published (not a draft) and has its notes, `pnpm hive:post` turns them into
-BBCode for the [Hive Workshop thread](https://www.hiveworkshop.com/threads/what-is-openwar3.375387/),
-copies it to the clipboard and opens the reply page — paste, Preview, Post Reply. It does not post
-by itself: Hive sits behind Cloudflare's bot check and its API keys are admin-only.
+The last step of every release is a comment on the
+["What is OpenWar3?"](https://www.hiveworkshop.com/threads/what-is-openwar3.375387/) thread on
+Hive Workshop. Once the release is published (not a draft) and has its notes:
+
+```bash
+pnpm hive:post
+```
+
+turns the notes into BBCode (with a line telling players who already have the game that it updates
+on its next launch, and a download link), copies it to the clipboard and opens the thread's reply
+page — paste, Preview, Post Reply. It does not post by itself: Hive sits behind Cloudflare's bot
+check and its API keys are admin-only.
 
 ### Playing on a LAN
 
