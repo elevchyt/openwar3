@@ -1058,12 +1058,23 @@ export class Interpreter {
       t.elapsedTotal += dt;
       let guard = 0;
       while (t.running && t.remaining <= 0 && guard++ < 10000) {
-        this.expireTimer(t);
-        if (t.periodic && t.timeout > 0) t.remaining += t.timeout;
+        // The timer's own state is settled BEFORE its handler runs, because the handler reads
+        // and writes it. A ONE-SHOT is spent at exactly zero: the step's overshoot is our
+        // clock's granularity, not time the timer has left, and `TimerGetRemaining == 0` is how
+        // a map asks "has it run out" — DotA's game start is `if TimerGetRemaining(PL4)==0`
+        // polled every 0.25 s, so a remainder of −0.0067 meant no game, no creep waves, ever.
+        // And it is switched off FIRST so the handler may re-arm it: `TimerStart(GetExpiredTimer(),
+        // …)` inside its own callback is a standard idiom, and clearing `running` afterwards
+        // stopped the timer the handler had just started.
+        const periodic = t.periodic && t.timeout > 0;
+        if (periodic) t.remaining += t.timeout;
         else {
+          t.elapsedTotal = t.timeout; // …and its elapsed stops at its timeout, not past it
+          t.remaining = 0;
           t.running = false;
-          break;
         }
+        this.expireTimer(t);
+        if (!periodic) break;
       }
     }
     this.pumpThreads(); // waits come due AFTER the clock moved (so a 0s wait costs one tick)
