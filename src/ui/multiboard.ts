@@ -113,6 +113,20 @@ export class MultiboardOverlay {
         skin: this.skin,
         buildRoot: (lib) => this.rootFrame(lib, mb, topOffset),
         textOverrides: { MultiboardTitle: mb.title },
+        // The corner button is the PLAYER's: clicking it opens a minimized board and folds an
+        // open one, on this machine — what minimizing is for, and the only way a board a script
+        // created minimized ever opens. DotA makes its scoreboard that way
+        // (`MultiboardMinimize(E4,true)` right after creating it), so with a dead button the
+        // scoreboard was a title bar for the whole game. It writes the board's own flag, as
+        // `MultiboardMinimize` does, so `IsMultiboardMinimized` reads what is on screen — DotA
+        // saves and restores that around a redraw, and a separate local flag would have been
+        // folded back by every redraw.
+        handlers: {
+          MultiboardMinimizeButton: () => {
+            mb.minimized = !mb.minimized;
+            mb.revision++;
+          },
+        },
         // The cells aren't in the FDF tree, so every rebuild — a RESIZE is a rebuild — drops
         // them. Repaint from the renderer's own post-build hook; a `resize` listener of ours
         // would run BEFORE it and paint into DOM that is about to be thrown away (the same bug
