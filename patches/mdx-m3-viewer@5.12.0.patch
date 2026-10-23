@@ -2181,7 +2181,7 @@ index 3e7460e457fec7d247ebcb2b8641ffb028f47736..6bca9cb85b2e627bb4b110d8f4cc0655
  
    mat3 mv = mat3(u_MV);
 diff --git a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js b/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
-index 235f29101256617d34587316e8f40984a8f95685..5c6b20f33f3737fabbdc213483d3809e15e90b99 100644
+index 235f29101256617d34587316e8f40984a8f95685..efd0ab860407bc107bf5f61eb26f48c2f4915fe8 100644
 --- a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
 +++ b/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
 @@ -11,12 +11,146 @@ uniform sampler2D u_texture;
@@ -2440,7 +2440,7 @@ index 49733805785c0ef269901d8928e47a953ada93a9..f15149f33f353822f4cb73eaf85eb727
    gl_Position = u_VP * vec4(position, 1.0);
  }
 diff --git a/dist/cjs/viewer/handlers/w3x/map.js b/dist/cjs/viewer/handlers/w3x/map.js
-index e4c8ea760e92653ef6423bd34f9111d0b062a901..aca20db2d9ec1c0e3546c002f49bfea2909dd5ef 100644
+index e4c8ea760e92653ef6423bd34f9111d0b062a901..232b99f56f3413e58ff28146608d9e06a45d3689 100644
 --- a/dist/cjs/viewer/handlers/w3x/map.js
 +++ b/dist/cjs/viewer/handlers/w3x/map.js
 @@ -16,6 +16,41 @@ const file_3 = require("../../../parsers/w3x/doo/file");
@@ -2820,7 +2820,17 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..aca20db2d9ec1c0e3546c002f49bfea2
          this.waterBuffer = gl.createBuffer();
          gl.bindBuffer(gl.ARRAY_BUFFER, this.waterBuffer);
          gl.bufferData(gl.ARRAY_BUFFER, waterFlags, gl.STATIC_DRAW);
-@@ -358,7 +557,25 @@ class War3MapViewerMap {
+@@ -354,11 +553,34 @@ class War3MapViewerMap {
+                             promise = this.load(mpqFile.name);
+                         }
+                         else {
+-                            promise = this.load(fileVar);
++                            // OpenWar3: and so may doodads refering to the GAME's models. A map that re-points a
++                            // type with variations at one model of its own choosing (DotA's `AOob` Glowing Obelisk at
++                            // `Obelisk2.mdl`, its `D009` at `FaerieFireTarget.mdl`, both still `numVar` 3-4) asks for
++                            // `Obelisk20.mdx`, which nothing ships; the game draws `Obelisk2.mdx`, every variation alike.
++                            // Custom maps do this all the time, so the unnumbered path is the fallback here too.
++                            promise = this.load(fileVar).then((model) => (model || fileVar === file ? model : this.load(file)));
                          }
                          promise.then((model) => {
                              if (model) {
@@ -2847,7 +2857,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..aca20db2d9ec1c0e3546c002f49bfea2
                              }
                          });
                      }
-@@ -485,6 +702,31 @@ class War3MapViewerMap {
+@@ -485,6 +707,31 @@ class War3MapViewerMap {
              worldScene.renderTranslucent();
          }
      }
@@ -2879,7 +2889,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..aca20db2d9ec1c0e3546c002f49bfea2
      renderGround() {
          if (this.terrainReady) {
              const gl = this.viewer.gl;
-@@ -503,6 +745,8 @@ class War3MapViewerMap {
+@@ -503,6 +750,8 @@ class War3MapViewerMap {
              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
              webgl.useShader(shader);
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -2888,7 +2898,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..aca20db2d9ec1c0e3546c002f49bfea2
              gl.uniform2fv(uniforms['u_offset'], this.centerOffset);
              gl.uniform2f(uniforms['u_size'], this.columns, this.rows);
              gl.uniform1i(uniforms['u_heightMap'], 15);
-@@ -527,7 +771,19 @@ class War3MapViewerMap {
+@@ -527,7 +776,19 @@ class War3MapViewerMap {
                  gl.uniform1i(uniforms[`u_tilesets[${i}]`], i);
                  webgl.bindTexture(tilesetTextures[i], i);
              }
@@ -2909,7 +2919,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..aca20db2d9ec1c0e3546c002f49bfea2
              if (tilesetCount > 15) {
                  gl.uniform1f(uniforms['u_baseTileset'], 15);
                  for (let i = 0, l = tilesetCount - 15; i < l; i++) {
-@@ -535,7 +791,7 @@ class War3MapViewerMap {
+@@ -535,7 +796,7 @@ class War3MapViewerMap {
                      gl.uniform1f(uniforms[`u_extended[${i}]`], isExtended);
                      webgl.bindTexture(tilesetTextures[i + 15], i);
                  }
@@ -2918,7 +2928,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..aca20db2d9ec1c0e3546c002f49bfea2
              }
              instancedArrays.vertexAttribDivisorANGLE(texturesAttrib, 0);
              instancedArrays.vertexAttribDivisorANGLE(variationsAttrib, 0);
-@@ -558,11 +814,17 @@ class War3MapViewerMap {
+@@ -558,11 +819,17 @@ class War3MapViewerMap {
              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
              webgl.useShader(shader);
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -2936,7 +2946,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..aca20db2d9ec1c0e3546c002f49bfea2
              gl.uniform1f(uniforms['u_offsetHeight'], this.waterHeightOffset);
              gl.uniform4fv(uniforms['u_maxDeepColor'], this.maxDeepColor);
              gl.uniform4fv(uniforms['u_minDeepColor'], this.minDeepColor);
-@@ -582,7 +844,14 @@ class War3MapViewerMap {
+@@ -582,7 +849,14 @@ class War3MapViewerMap {
              gl.vertexAttribPointer(isWaterAttrib, 1, gl.UNSIGNED_BYTE, false, 1, 0);
              instancedArrays.vertexAttribDivisorANGLE(isWaterAttrib, 1);
              gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.faceBuffer);
@@ -2952,7 +2962,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..aca20db2d9ec1c0e3546c002f49bfea2
              instancedArrays.vertexAttribDivisorANGLE(isWaterAttrib, 0);
              instancedArrays.vertexAttribDivisorANGLE(instanceAttrib, 0);
          }
-@@ -599,6 +868,8 @@ class War3MapViewerMap {
+@@ -599,6 +873,8 @@ class War3MapViewerMap {
              gl.disable(gl.BLEND);
              shader.use();
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -2961,7 +2971,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..aca20db2d9ec1c0e3546c002f49bfea2
              gl.uniform1i(uniforms['u_heightMap'], 0);
              gl.uniform2f(uniforms['u_pixel'], 1 / (this.columns + 1), 1 / (this.rows + 1));
              gl.uniform2fv(uniforms['u_centerOffset'], this.centerOffset);
-@@ -612,6 +883,23 @@ class War3MapViewerMap {
+@@ -612,6 +888,23 @@ class War3MapViewerMap {
                  gl.activeTexture(gl.TEXTURE2);
                  gl.bindTexture(gl.TEXTURE_2D, this.cliffTextures[1].webglResource);
              }
@@ -2985,7 +2995,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..aca20db2d9ec1c0e3546c002f49bfea2
              // Set instanced attributes.
              if (!vertexArrayObject) {
                  instancedArrays.vertexAttribDivisorANGLE(attribs['a_instancePosition'], 1);
-@@ -671,6 +959,86 @@ class War3MapViewerMap {
+@@ -671,6 +964,86 @@ class War3MapViewerMap {
          const topRight = corners[row + 1][column + 1].layerHeight;
          return bottomLeft !== bottomRight || bottomLeft !== topLeft || bottomLeft !== topRight;
      }
@@ -3072,7 +3082,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..aca20db2d9ec1c0e3546c002f49bfea2
      /**
       * Is the tile at the given column and row water?
       */
-@@ -692,6 +1060,108 @@ class War3MapViewerMap {
+@@ -692,6 +1065,108 @@ class War3MapViewerMap {
          }
          return 0;
      }
@@ -3181,7 +3191,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..aca20db2d9ec1c0e3546c002f49bfea2
      /**
       * Get the ground texture of a corner, whether it's normal ground, a cliff, or a blighted corner.
       */
-@@ -730,17 +1200,37 @@ class War3MapViewerMap {
+@@ -730,17 +1205,37 @@ class War3MapViewerMap {
      applyModificationTable(dataMap, metadataMap, modificationTable) {
          for (const modificationObject of modificationTable.objects) {
              let row;
