@@ -143,6 +143,12 @@ export class MapBrowser {
   /** The screen this browser last filled — the list only takes keys while it is up. */
   private screen: FdfScreen | null = null;
   private indexing = false; // the background read of every folder is running
+  /** The search box is working (ui/mapFind.ts): the list wears its ring over whatever it shows. */
+  private searching = false;
+  /** Whether the list last filled had its rows — a folder still being read has none. */
+  private listReady = false;
+  /** The selected map's preview read, for a search to wait out before it calls itself done. */
+  private previewRead: Promise<void> = Promise.resolve();
   private strings: FdfLibrary | null = null; // for "(up one level)" — GlobalStrings
   private offFontReady: () => void = () => {}; // unsubscribe from the font-ready relayout (issue #82)
 
@@ -182,9 +188,19 @@ export class MapBrowser {
     window.addEventListener("keydown", this.onKey, true);
     this.finder = new MapFind({
       results: (q) => this.search(q).map((e) => e.path),
-      pick: (path) => { const e = this.entries.find((x) => x.path === path); if (e) this.jumpTo(e); },
-      setFilter: (paths) => { this.filter = paths; this.revealPath = null; this.listScroll = 0; this.onChange(); },
+      pick: async (path) => { const e = this.entries.find((x) => x.path === path); if (e) await this.jumpTo(e); },
+      // Narrowing touches the LIST and nothing else, so it refills the list and nothing else:
+      // `onChange` rebuilds the whole screen (the Custom Game screen's player rows hang off the
+      // MAP), which was a half-second stall on every search for rows that had not changed.
+      setFilter: (paths) => {
+        this.filter = paths;
+        this.revealPath = null;
+        this.listScroll = 0;
+        if (this.screen) this.fillList(this.screen);
+        else this.onChange();
+      },
       warm: () => void this.indexAll(),
+      busy: (on) => { this.searching = on; this.paintWorking(); },
     });
   }
 
@@ -249,9 +265,8 @@ export class MapBrowser {
     list.setEnabled(ready);
     // …and while it is empty because its folder is still being read, it SAYS so: an empty,
     // dead list reads as "no maps here" for exactly as long as the reads take.
-    const host = s.frame("MapListBox");
-    host?.querySelector(":scope > .ow3-working")?.remove();
-    if (host && !ready) mountWorking(host);
+    this.listReady = ready;
+    this.paintWorking();
     // A folder row the arrow keys are standing on keeps its band across a rebuild; otherwise
     // the band is the picked map's.
     if (ready && this.cursor?.startsWith("folder:")) list.select(this.cursor);
@@ -280,6 +295,16 @@ export class MapBrowser {
     };
   }
 
+  /** The list's working ring: up while its folder is being read, and while the search box is
+   *  answering — straight onto the DOM, because the ring has to show BEFORE the work it covers,
+   *  and a rebuild to put it up would be that work's first slice. */
+  private paintWorking(): void {
+    const host = this.screen?.frame("MapListBox");
+    if (!host) return;
+    host.querySelector(":scope > .ow3-working")?.remove();
+    if (!this.listReady || this.searching) mountWorking(host);
+  }
+
   /** Paint the chosen map into the summary pane. */
   private fillInfo(s: FdfScreen): void {
     if (this.selected) fillMapInfo(s, this.selected.info, this.preview, this.minimapIcons);
@@ -292,9 +317,9 @@ export class MapBrowser {
    */
   private readPreview(path: string, file: File): void {
     const cached = previewCache.get(path);
-    if (cached !== undefined) { this.preview = cached; return; }
+    if (cached !== undefined) { this.preview = cached; this.previewRead = Promise.resolve(); return; }
     this.preview = null;
-    void (async () => {
+    this.previewRead = (async () => {
       const bytes = new Uint8Array(await file.arrayBuffer());
       registry ??= loadUnitRegistry(this.vfs);
       const read = readMapPreview(bytes, (id) => registry?.get(id)?.minimapIcon ?? false);
@@ -454,17 +479,20 @@ export class MapBrowser {
     return rankMatches(this.entries.filter((e) => !e.invalid && !e.unsupported), q, this.cwd);
   }
 
-  /** Go to a map the search found — walking into its folder first when it is in another. */
-  private jumpTo(e: MapEntry): void {
+  /** Go to a map the search found — walking into its folder first when it is in another.
+   *  Resolves once it is in the summary pane, preview markers and all. */
+  private async jumpTo(e: MapEntry): Promise<void> {
     this.revealPath = e.path;
-    if (e.folder === this.cwd) {
-      if (this.selected?.path === e.path) this.onChange(); // already picked: just show it
-      else void this.choose(e.path);
+    if (e.folder === this.cwd && this.selected?.path === e.path) {
+      this.onChange(); // already picked: just show it
       return;
     }
-    void this.openFolder(e.folder).then(() => {
-      if (this.alive && this.cwd === e.folder) void this.choose(e.path);
-    });
+    if (e.folder !== this.cwd) {
+      await this.openFolder(e.folder);
+      if (!this.alive || this.cwd !== e.folder) return; // the player moved on
+    }
+    await this.choose(e.path);
+    await this.previewRead;
   }
 
   /**
@@ -524,7 +552,10 @@ export function clearMapInfo(s: FdfScreen): void {
   for (const name of VALUES) s.setText(name, "");
   setDescription(s, "");
   const minimap = s.frame("MinimapImage");
-  if (minimap) minimap.style.background = "none"; // the cover frame's empty box, not a black one
+  if (minimap) {
+    minimap.querySelector(":scope > .ow3-minimap")?.remove();
+    minimap.style.background = "none"; // the cover frame's empty box, not a black one
+  }
 }
 
 /** Fill the map-info pane: the badge, minimap, the three stat rows and the blurb. */
@@ -555,9 +586,38 @@ export function fillMapInfo(
   // through the renderer's VFS-path sprite table — paint it straight onto the SPRITE frame.
   const el = s.frame("MinimapImage");
   if (!el) return;
+  el.querySelector(":scope > .ow3-minimap")?.remove();
+  const picture = minimapPicture(info, preview, icons, colorOf);
+  if (picture) el.prepend(picture); // a rebuild's fresh frame takes it from the old one
+  el.style.background = picture ? "none" : "#000";
+}
+
+/**
+ * The summary's minimap picture, markers stamped on — drawn ONCE per map, preview and set of
+ * start colours, and put up AS the canvas it was drawn on (`.ow3-minimap`, style.css). A screen
+ * re-fills this pane on every rebuild, and decoding the BLP, stamping it and encoding it to a
+ * PNG for a CSS background each time was the largest single cost of picking a map — twice per
+ * pick (once for the w3i, once when the markers land), and so twice per answer of the search
+ * box, which is the stall it was fixed for. Nothing is encoded at all now.
+ */
+const minimapPictures = new WeakMap<MapInfo, {
+  preview: MapPreview | null; icons: MinimapIcons; colors: string; canvas: HTMLCanvasElement | null;
+}>();
+function minimapPicture(
+  info: MapInfo,
+  preview: MapPreview | null,
+  icons: MinimapIcons,
+  colorOf?: (slotId: number) => string,
+): HTMLCanvasElement | null {
+  // The lobby paints a start in its seat's PICKED colour, so the colours are part of the key.
+  const colors = colorOf ? info.slots.map((slot) => colorOf(slot.id)).join() : "";
+  const hit = minimapPictures.get(info);
+  if (hit && hit.preview === preview && hit.icons === icons && hit.colors === colors) return hit.canvas;
   const canvas = info.minimap ? blpToCanvas(info.minimap) : null;
   if (canvas && preview) drawPreviewMarkers(canvas, info, preview, icons, colorOf);
-  el.style.background = canvas ? `url(${canvas.toDataURL()}) center/contain no-repeat` : "#000";
+  canvas?.classList.add("ow3-minimap");
+  minimapPictures.set(info, { preview, icons, colors, canvas });
+  return canvas;
 }
 
 /**
@@ -569,6 +629,12 @@ export function fillMapInfo(
  * A name too long for the pane WRAPS ("Funny Bunny's Egg Hunt" wants two lines) and the row
  * grows UPWARDS to hold it — its bottom stays where it was, so the minimap below never moves.
  * (Clipping the overflow, which is what a fixed box does, hid half the name.)
+ *
+ * It grows by TWO lines at most: past that it would climb out of the pane into the chrome, so a
+ * name that still does not fit (a custom map's "DotA v6.77b AI 1.1.7 Fun 2.7c" with a version
+ * string per author) SHRINKS its type until it does — and the fit is checked against what the
+ * box actually holds (`scrollHeight`), because the frame clips: a box sized one line short of
+ * its text cut the first line's top and the last line's bottom off.
  */
 function centreNameRow(s: FdfScreen): void {
   const badge = s.frame("MaxPlayersIcon");
@@ -579,20 +645,43 @@ function centreNameRow(s: FdfScreen): void {
   if (!badge || !name || !author || !pane || !span) return;
 
   // The box the FDF gave the name, kept aside: every fill starts from it, or a two-line name
-  // would leave the row taller for the one-line name after it.
+  // would leave the row taller for the one-line name after it. Its type likewise: a shrunk
+  // name must not leave the next, shorter one small.
   const baseTop = parseFloat(name.dataset.baseTop ?? (name.dataset.baseTop = name.style.top));
   const baseH = parseFloat(name.dataset.baseH ?? (name.dataset.baseH = name.style.height));
+  const baseFont = parseFloat(name.dataset.baseFont ?? (name.dataset.baseFont = name.style.fontSize));
+  // A name measured in the fallback face is the wrong width once Friz Quadrata lands (issue
+  // #82) — fit it again then, whichever screen filled it.
+  if (!gameFontsReady() && !name.dataset.refit) {
+    name.dataset.refit = "1";
+    onGameFontsReady(() => { if (name.isConnected) centreNameRow(s); });
+  }
 
   const gap = badge.offsetWidth * 0.13; // the FDF's 0.0025 against the badge's own 0.01875
-  const room = pane.clientWidth - 2 * (badge.offsetWidth + gap);
+  const room = Math.floor(pane.clientWidth - 2 * (badge.offsetWidth + gap));
+  // Two lines of the FDF's own type (paintText's line-height 1.2), plus the 2 px of slack below.
+  const maxH = Math.max(baseH, Math.ceil(2 * 1.2 * baseFont) + 2);
 
-  span.style.whiteSpace = "nowrap"; // measure the name as ONE line…
-  const natural = Math.ceil(span.getBoundingClientRect().width);
-  span.style.whiteSpace = "";
-  const width = Math.min(natural, Math.floor(room)); // …and give it that, or the room it has
-
-  name.style.width = `${width}px`;
-  const height = Math.max(baseH, Math.ceil(span.getBoundingClientRect().height) + 2);
+  // Layout sizes (offset*/scroll*), never getBoundingClientRect: a client rect is scaled by any
+  // transform above the pane, and is then not the box the text is laid out in.
+  let width = room;
+  let height = baseH;
+  for (let scale = 1; ; scale -= 0.04) {
+    const size = Math.max(8, baseFont * scale);
+    name.style.fontSize = `${size}px`;
+    // Measure the name as ONE line… `pre`, not `nowrap`: the frame lays text out `pre-wrap`,
+    // and `nowrap` collapses the double space a map name often carries ("Uther Party  Ultima-X"),
+    // measuring it a space short — so it then wrapped in a box made for exactly one line.
+    span.style.whiteSpace = "pre";
+    const natural = Math.ceil(span.offsetWidth) + 1;
+    span.style.whiteSpace = "";
+    width = Math.min(natural, room); // …and give it that, or the room it has
+    name.style.width = `${width}px`;
+    name.style.height = "auto"; // let it say how tall it wants to be…
+    height = Math.max(baseH, Math.ceil(span.offsetHeight) + 2);
+    if (height <= maxH || scale <= 0.6 || size <= 8) break; // …and shrink until that fits
+  }
+  height = Math.max(height, name.scrollHeight); // whatever the floor left, never clip it
   name.style.height = `${height}px`;
   name.style.top = `${baseTop + baseH - height}px`; // grow up: the row's BOTTOM is the anchor
 

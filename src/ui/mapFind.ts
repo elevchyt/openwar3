@@ -14,24 +14,39 @@
 // 1.30.4 has a map search, so none of this is the game's — it was the first of three shapes
 // built for the developer to choose from (a docked filter, a floating palette, a find bar).
 //
-// The DOM lives inside the screen's own element, so it hides and leaves with the screen. That
-// element is EMPTIED on every relayout (ui/fdf/render.ts), which picking a map causes, so the
-// browser hands it back through `place` from its `fill` and the box keeps its text and focus.
+// The DOM lives BESIDE the list, inside the list's own panel, so it hides, leaves — and fades
+// IN — with that panel: hung on the screen's root instead, it was on show the instant the
+// screen was, while the list it sits on waited for the chrome to land (ui/fdf/anim.ts, a LATE
+// panel). The screen is EMPTIED on every relayout (ui/fdf/render.ts), which picking a map
+// causes, so the browser hands the box back through `place` from its `fill` and it keeps its
+// text and focus.
 
 /** What the box needs from the map browser it searches. */
 export interface FindHost {
   /** Every playable map `query` fits, best first, by path. */
   results(query: string): string[];
-  /** Go to a map: walk into its folder and pick it, as a click on its row does. */
-  pick(path: string): void;
+  /** Go to a map: walk into its folder and pick it, as a click on its row does. Resolves once
+   *  the map is in the summary pane, preview and all. */
+  pick(path: string): Promise<void>;
   /** Show only these maps in the list, in this order — or the open folder again (null). */
   setFilter(paths: string[] | null): void;
   /** Start reading the folders nobody has opened, so their maps answer by their own names. */
   warm(): void;
+  /** A search is under way (true) or done (false): the list shows its working ring meanwhile. */
+  busy(on: boolean): void;
 }
 
 /** What the empty box says. Ours: the 2003 UI has no search to borrow it from. */
 const PLACEHOLDER = "Search maps (Ctrl+F)";
+
+/**
+ * How long the box waits after a keystroke before it searches. Ours. A search is not free — it
+ * narrows the list (a rebuild of the whole screen), then READS the best match, its w3i and its
+ * preview markers, which for a big custom map is a long stall — and run on every keystroke the
+ * game froze for the length of the word. Typed in a burst, the word is now searched once, and
+ * the list wears its working ring from the first key until the answer is in.
+ */
+const SEARCH_DELAY_MS = 200;
 
 export class MapFind {
   private readonly root: HTMLDivElement;
@@ -43,6 +58,10 @@ export class MapFind {
   private wantFocus = false;
   private screen: HTMLElement | null = null;
   private list: HTMLElement | null = null;
+  /** The search a keystroke has queued (0: none). */
+  private timer = 0;
+  /** Bumped by every keystroke, so a search the player has already typed past ends quietly. */
+  private run = 0;
 
   constructor(private readonly host: FindHost) {
     const root = document.createElement("div");
@@ -62,7 +81,7 @@ export class MapFind {
     input.spellcheck = false;
     input.autocomplete = "off";
     input.setAttribute("aria-label", PLACEHOLDER);
-    input.addEventListener("input", () => this.search());
+    input.addEventListener("input", () => this.queue());
     input.addEventListener("keydown", (e) => this.onKey(e));
     input.addEventListener("focus", () => { this.wantFocus = true; this.host.warm(); });
     const clear = document.createElement("button");
@@ -96,6 +115,8 @@ export class MapFind {
   }
 
   dispose(): void {
+    window.clearTimeout(this.timer);
+    this.run++;
     document.removeEventListener("pointerdown", this.onPointerDown, true);
     this.root.remove();
     this.screen = this.list = null;
@@ -114,19 +135,21 @@ export class MapFind {
   /** Lay the box over the list as it is now laid out. */
   private mount(): void {
     const { root, screen, list } = this;
-    if (!screen || !list) { root.remove(); return; }
-    if (root.parentElement !== screen) screen.appendChild(root);
+    const host = list?.parentElement;
+    if (!screen || !list || !host) { root.remove(); return; }
+    // The list's PARENT, not the list: setItems repaints the list's own children.
+    if (root.parentElement !== host) host.appendChild(root);
     // Every length off the list's own type and border, so the box is the list's size at any
     // window — inside its border, with the rows (and the scrollbar beside them) moved down to
     // make room rather than sitting under it with the first row hidden.
     const rows = list.querySelector<HTMLElement>(".fdf-list-rows");
     if (rows) root.style.fontSize = getComputedStyle(rows).fontSize;
     const inset = rows ? rows.offsetLeft : 0;
-    const s = screen.getBoundingClientRect();
-    const l = list.getBoundingClientRect();
-    root.style.left = `${l.left - s.left + inset}px`;
-    root.style.top = `${l.top - s.top + inset}px`;
-    root.style.width = `${l.width - 2 * inset}px`;
+    // Layout offsets, which are the host's own coordinates (an FDF frame is absolutely placed in
+    // its parent) and are not scaled by anything in flight the way a client rect would be.
+    root.style.left = `${list.offsetLeft + inset}px`;
+    root.style.top = `${list.offsetTop + inset}px`;
+    root.style.width = `${list.offsetWidth - 2 * inset}px`;
     list.style.setProperty("--ow3-find-h", `${root.offsetHeight + inset}px`);
     list.classList.add("ow3-find-docked");
     if (this.wantFocus && document.activeElement !== this.input) {
@@ -136,20 +159,51 @@ export class MapFind {
     }
   }
 
-  private search(): void {
+  /** A keystroke: put the ring up NOW, and search once the player pauses (SEARCH_DELAY_MS). */
+  private queue(): void {
+    window.clearTimeout(this.timer);
+    const run = ++this.run;
+    this.host.busy(true);
+    this.clear.hidden = !this.input.value;
+    this.timer = window.setTimeout(() => void this.search(run), SEARCH_DELAY_MS);
+  }
+
+  /** Run the queued search now, if one is waiting — the keys that act on its answer need it. */
+  private async flush(): Promise<void> {
+    if (!this.timer) return;
+    window.clearTimeout(this.timer);
+    await this.search(this.run);
+  }
+
+  private async search(run = ++this.run): Promise<void> {
+    this.timer = 0;
     const q = this.input.value.trim();
     this.results = q ? this.host.results(q) : [];
     this.at = 0;
     this.host.setFilter(q ? this.results : null);
-    if (this.results[0]) this.host.pick(this.results[0]); // go to the best, as typed
     this.paint();
+    if (this.results[0]) await this.pickAt(run); // go to the best, as typed
+    else if (run === this.run) this.host.busy(false);
+  }
+
+  /** Pick the match the arrows stand on, with the ring up until it is in the summary pane. */
+  private async pickAt(run = ++this.run): Promise<void> {
+    const path = this.results[this.at];
+    if (!path) return;
+    this.host.busy(true);
+    try {
+      await this.host.pick(path);
+    } finally {
+      if (run === this.run) this.host.busy(false); // a later search owns the ring now
+    }
   }
 
   /** Empty the box: the list shows its folder again, with whatever was picked still picked. */
   private empty(): void {
     if (!this.input.value) return;
     this.input.value = "";
-    this.search();
+    window.clearTimeout(this.timer);
+    void this.search();
   }
 
   /** Hand the keyboard back to the screen, whose accelerators are live again. */
@@ -176,16 +230,21 @@ export class MapFind {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") { e.preventDefault(); this.input.select(); return; }
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
+      // Still waiting out its delay: the search runs now and lands on its best match, which
+      // is where the arrows start from anyway.
+      if (this.timer) { void this.flush(); return; }
       const n = this.results.length;
       if (!n) return;
       this.at = (this.at + (e.key === "ArrowDown" ? 1 : -1) + n) % n;
-      this.host.pick(this.results[this.at]);
+      void this.pickAt();
       return;
     }
     if (e.key === "Enter") {
       e.preventDefault();
-      const path = this.results[this.at];
-      if (path) this.host.pick(path);
+      // A search still waiting out its delay is the one the player means: run it first. Its own
+      // pick is the best match, which is what Enter would have picked anyway.
+      if (this.timer) void this.flush();
+      else void this.pickAt();
       this.release(); // the list stays narrowed; the box keeps its text until it is emptied
     }
   }

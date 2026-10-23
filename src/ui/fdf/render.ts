@@ -1312,8 +1312,22 @@ function appendGlow(el: HTMLElement, f: FdfFrame, ctx: RenderCtx): void {
   if (!highCanvas) return;
   const glow = document.createElement("div");
   glow.className = "fdf-button-glow";
-  glow.style.background = `url(${intensityAsAlpha(highCanvas).toDataURL()}) center/100% 100% no-repeat`;
+  glow.style.background = `url(${glowUrl(highCanvas)}) center/100% 100% no-repeat`;
   el.appendChild(glow);
+}
+
+/**
+ * The glow's image, ONCE per decoded texture. Every button on a screen wears the same one or
+ * two highlight files, and re-encoding them on every build — a PNG per button — was most of
+ * what a rebuild cost: two thirds of the half second the Custom Game screen stalled for each
+ * time its map list re-filled under the search box. The source canvas is the screen's cached
+ * decode (`blpCanvas`), so it is the same object build after build and keys this exactly.
+ */
+const glowUrls = new WeakMap<HTMLCanvasElement, string>();
+function glowUrl(src: HTMLCanvasElement): string {
+  let url = glowUrls.get(src);
+  if (url === undefined) glowUrls.set(src, (url = intensityAsAlpha(src).toDataURL()));
+  return url;
 }
 
 /**

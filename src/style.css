@@ -4459,6 +4459,9 @@ body.in-game .load-gate { display: none; }
 
 /* The "working" indicator over a glue list still being filled (ui/workingIndicator.ts): a gold
    ring centred over its host, taking no clicks. */
+/* The map summary's minimap (ui/mapBrowser.ts `minimapPicture`): the drawn canvas itself,
+   laid over its SPRITE frame the way the old `center/contain` background was. Ours. */
+.ow3-minimap { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
 .ow3-working { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
 .ow3-working-ring {
   width: 30px; height: 30px; border-radius: 50%; border: 3px solid rgba(252, 211, 18, 0.18);

@@ -548,6 +548,21 @@ export interface ScrollBarStyle {
   thumb(w: number, h: number): HTMLCanvasElement | null;
 }
 
+
+/**
+ * A row icon's image, encoded ONCE per canvas. A list's rows share a handful of icons (the map
+ * list's folder, its melee and custom badges per player count — ui/mapBrowser.ts caches each),
+ * and re-encoding a PNG for every row on every fill was the whole of what the Custom Game
+ * screen's list cost: two seconds of one search's stall on a software-rendered frame, for
+ * pictures that had not changed.
+ */
+const iconUrls = new WeakMap<HTMLCanvasElement, string>();
+function iconUrl(canvas: HTMLCanvasElement): string {
+  let url = iconUrls.get(canvas);
+  if (url === undefined) iconUrls.set(canvas, (url = canvas.toDataURL()));
+  return url;
+}
+
 /** A scrolling, selectable list inside a CONTROL/LISTBOX frame's chrome. `ListBoxBorder`
  *  (or the edit box's border) insets the rows from the backdrop, as in the FDF. */
 export function buildList(el: HTMLElement, f: FdfFrame, scale: number, bar?: ScrollBarStyle | null): ListControl {
@@ -584,7 +599,7 @@ export function buildList(el: HTMLElement, f: FdfFrame, scale: number, bar?: Scr
       if (it.icon) {
         const icon = document.createElement("img");
         icon.className = "fdf-list-icon";
-        icon.src = it.icon.toDataURL();
+        icon.src = iconUrl(it.icon);
         row.appendChild(icon);
       }
       const label = document.createElement("span");
