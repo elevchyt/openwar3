@@ -178,15 +178,26 @@ reads, and air movement costs exactly what it always did.
 
 `BoundaryObject = 255,0,0,0` and `FoggedBoundaryObject = 255,64,64,96` are the object twins of
 §4's terrain rows, and they follow the same shape: `BoundaryObject` is `BlackMaskedObject` to
-the byte and `FoggedBoundaryObject` is `FoggedObject` to the byte. Alpha 255 on both, which is
-the file saying **replace the colour** rather than dim it — so a tree in the border is a black
-cut-out, not a darker tree.
+the byte and `FoggedBoundaryObject` is `FoggedObject` to the byte. Alpha 255 on both — but the
+file does not say how the row is APPLIED, and the obvious reading is wrong. Read as a flat
+REPLACEMENT colour it made every tree in DotA's border a lavender (64,64,96) cut-out, where the
+real client keeps each tree's shape and shading. So the row **modulates**, read the way a vertex
+colour is (×2, 128 neutral): `FoggedBoundaryObject` is the model at half brightness, pushed
+blue. In sight and remembered both take it — the in-sight row is flat black, and a tree inside
+our own vision turning black beside one just outside it drew a hard line along every edge —
+while NEVER SEEN is `BlackMaskedObject`'s black. This application is OURS, picked by the
+developer by eye from four candidates (flat, modulate, 60 % blend, monochrome); the rows are the
+game's.
 
 This one needs the mdx **SD fragment shader**, because a unit or doodad is drawn by the model
 pipeline and not by the terrain pass. `applyBoundaryTint` samples the mask by world XY (so a
-flyer three hundred units up over the black is blacked out like anything else) and runs LAST,
-after lighting and distance fog. Additive layers (filter mode 3/4) go to black rather than to
-the tint, because black is their identity — a glow inside the boundary has to stop adding.
+flyer three hundred units up over the black is dimmed like anything else) and runs LAST,
+after lighting and distance fog. It is WEIGHTED by the mask's B channel rather than cut at 0.5:
+the mask is LINEAR-filtered and the boundary dilated onto the corner grid, so B ramps 0→1
+across the one playable cell beside the border — the same one-tile fade the ground's floor
+takes — and a model straddling the edge fades instead of being split by a straight line.
+Additive layers (filter mode 3/4) fade to black rather than to the tint, because black is
+their identity — a glow inside the boundary has to stop adding.
 
 Which is why the fog mask is **RGBA** rather than one luminance byte. Three facts have to be
 told apart and folding them into one channel loses two:

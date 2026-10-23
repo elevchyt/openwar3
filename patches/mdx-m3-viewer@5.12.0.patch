@@ -2184,7 +2184,7 @@ diff --git a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js b/dist/cjs/viewer/h
 index 235f29101256617d34587316e8f40984a8f95685..5c6b20f33f3737fabbdc213483d3809e15e90b99 100644
 --- a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
 +++ b/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
-@@ -11,12 +11,131 @@ uniform sampler2D u_texture;
+@@ -11,12 +11,146 @@ uniform sampler2D u_texture;
  uniform float u_filterMode;
  uniform bool u_unshaded;
  
@@ -2246,10 +2246,10 @@ index 235f29101256617d34587316e8f40984a8f95685..5c6b20f33f3737fabbdc213483d3809e
 +
 +// OpenWar3: the map's UNPLAYABLE area, as it applies to the things STANDING on the ground
 +// rather than to the ground itself (issue #117). UI\\MiscData.txt [FogOfWar] keeps a pair of
-+// rows for exactly this, and they are harsher than the terrain's: BoundaryObject = 255,0,0,0,
-+// so a unit or doodad inside the boundary is a full-alpha BLACK SILHOUETTE, and
-+// FoggedBoundaryObject = 255,64,64,96 where the player only remembers the spot. Alpha 255 on
-+// both, which is what makes this a REPLACEMENT rather than the dimming the terrain gets.
++// rows for exactly this: BoundaryObject = 255,0,0,0 (BlackMaskedObject to the byte) and
++// FoggedBoundaryObject = 255,64,64,96 (FoggedObject to the byte). How they are APPLIED is not
++// in the file — read as a flat replacement they made every border tree a cut-out the real
++// client does not draw; see applyBoundaryTint for the modulate we use instead.
 +//
 +// u_boundaryTexture is FogOverlay's per-corner RGBA mask: B says the corner is unplayable and
 +// G carries the FOG-only brightness there (1 in sight, ~0.5 remembered, 0 never seen) — the
@@ -2260,8 +2260,8 @@ index 235f29101256617d34587316e8f40984a8f95685..5c6b20f33f3737fabbdc213483d3809e
 +uniform float u_boundaryEnabled;
 +uniform sampler2D u_boundaryTexture;
 +uniform vec4 u_boundaryParams;
-+uniform vec3 u_boundaryLit;    // BoundaryObject, rgb 0..1
-+uniform vec3 u_boundaryFogged; // FoggedBoundaryObject, rgb 0..1
++uniform vec3 u_boundaryLit;    // BoundaryObject, rgb 0..1 — the never-seen black
++uniform vec3 u_boundaryFogged; // FoggedBoundaryObject, rgb 0..1 — modulates, ×2
 +
  varying vec2 v_uv;
  varying vec3 v_normal;
@@ -2296,27 +2296,42 @@ index 235f29101256617d34587316e8f40984a8f95685..5c6b20f33f3737fabbdc213483d3809e
 +  return color;
 +}
 +
-+// Replace a fragment standing in the unplayable area with its [FogOfWar] object tint.
-+// Sampled by world XY, so a flyer three hundred units up over the black is blacked out like
-+// anything else. Applied LAST, after lighting and distance fog, because it is not a shade of
-+// the model but the statement that the model is not somewhere anyone can see.
++// Dim a fragment standing in the unplayable area with its [FogOfWar] object row. Sampled by
++// world XY, so a flyer three hundred units up over the black is dimmed like anything else.
++// Applied LAST, after lighting and distance fog, because it is not a shade of the model but
++// the statement that the model is not somewhere anyone can play.
++//
++// How the row is APPLIED is ours, picked by eye against the real client (docs/unplayable-area.md
++// §4): the rows are full-alpha, but read as a flat REPLACEMENT colour they turned every tree in
++// the border into a lavender cut-out, where the game keeps the tree's shape and shading. So the
++// row MODULATES, read the way a vertex colour is (×2, 128 neutral): FoggedBoundaryObject's
++// 64,64,96 is the model at half brightness, pushed blue. In sight and remembered both take it —
++// the in-sight row is BoundaryObject's flat black, and a tree inside our own vision going black
++// beside one just outside it was the hard line along every edge — and NEVER SEEN is the black of
++// BlackMaskedObject, which BoundaryObject is to the byte.
++//
++// The mask is LINEAR-filtered and the boundary is dilated onto the corner grid (boundaryCorners),
++// so B ramps 0→1 across the one playable cell beside the border — the same one-tile fade the
++// ground's own boundary floor takes. Weighting by it rather than cutting at 0.5 is what keeps a
++// model that straddles the edge from being split by a straight line.
 +vec3 applyBoundaryTint(vec3 rgb, float filterMode) {
 +  if (u_boundaryEnabled < 0.5) return rgb;
 +  vec2 uv = (v_worldPos.xy - u_boundaryParams.xy) * u_boundaryParams.zw;
 +  vec4 mask = texture2D(u_boundaryTexture, uv);
-+  if (mask.b < 0.5) return rgb; // not in the unplayable area — leave it alone
++  float w = smoothstep(0.0, 1.0, mask.b);
++  if (w <= 0.0) return rgb; // not in (or beside) the unplayable area — leave it alone
 +  // Additive layers (3/4) have BLACK as their identity, so a glow inside the boundary has to
-+  // stop adding rather than add a black — the same reasoning applyDistFog uses above.
-+  if (filterMode >= 3.0 && filterMode <= 4.0) return vec3(0.0);
-+  // Remembered-but-not-seen is the middle of the fog range. In sight and never seen are the
-+  // same flat black at either end of it — BlackMaskedObject is BoundaryObject to the byte.
-+  float fogged = step(0.25, mask.g) * (1.0 - step(0.75, mask.g));
-+  return mix(u_boundaryLit, u_boundaryFogged, fogged);
++  // stop adding rather than add a tint — the same reasoning applyDistFog uses above.
++  if (filterMode >= 3.0 && filterMode <= 4.0) return mix(rgb, vec3(0.0), w);
++  // G is the fog-only brightness: 0 never seen, ~0.5 remembered, 1 in sight.
++  float seen = smoothstep(0.0, 0.25, mask.g);
++  vec3 dimmed = mix(u_boundaryLit, rgb * u_boundaryFogged * 2.0, seen);
++  return mix(rgb, dimmed, w);
 +}
  
  vec4 getDiffuseColor() {
    vec2 uv = v_uv;
-@@ -43,7 +162,7 @@ vec4 getDiffuseColor() {
+@@ -43,7 +177,7 @@ vec4 getDiffuseColor() {
      discard;
    }
  
@@ -2325,7 +2340,7 @@ index 235f29101256617d34587316e8f40984a8f95685..5c6b20f33f3737fabbdc213483d3809e
  }
  
  void onlyTexCoords() {
-@@ -55,19 +174,44 @@ void onlyNormals() {
+@@ -55,19 +189,44 @@ void onlyNormals() {
  }
  
  void onlyDiffuse() {
