@@ -632,6 +632,7 @@ export function rosterHooks(
         case "turnRate": return def.turnRate;
         case "flyHeight": return def.moveHeight;
         case "acquireRange": return def.acquireRange;
+        case "pointValue": return def.points;
       }
     },
     // THIS unit's value where it has one of its own (a script's BlzSetUnit…Field, or the per-unit

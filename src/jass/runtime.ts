@@ -494,7 +494,7 @@ export interface GameCacheObj {
  *  cross-checked against war3mapUnits.doo (the 7.2 oracle) even with no engine
  *  attached, and so bridge lookups can map a unit handle back to our sim id. */
 /** The columns the GetUnitDefault… natives read (natives/world.ts). */
-export type UnitTypeDefault = "moveSpeed" | "turnRate" | "flyHeight" | "acquireRange";
+export type UnitTypeDefault = "moveSpeed" | "turnRate" | "flyHeight" | "acquireRange" | "pointValue";
 
 /** The filter UnitRemoveBuffsEx / UnitCountBuffsEx take, argument for argument (jassbot). */
 export interface BuffFilter {

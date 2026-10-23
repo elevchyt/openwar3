@@ -374,6 +374,16 @@ export function registerWorldNatives(rt: Runtime): void {
   def(rt, "GetUnitDefaultTurnSpeed", typeDefault("turnRate"));
   def(rt, "GetUnitDefaultFlyHeight", typeDefault("flyHeight"));
   def(rt, "GetUnitDefaultAcquireRange", typeDefault("acquireRange"));
+  // The type's "Point Value" (UnitData.slk `points`). No engine system reads it — it exists for
+  // scripts, and DotA routes every shop purchase on it: its shops sell dummy UNITS, and the sell
+  // trigger hands over the item only for a sold unit worth 200–499. Left at the safe default of
+  // 0, every purchase took the gold and gave nothing.
+  def(rt, "GetUnitPointValue", (c, a) => {
+    const u = unit(c, a[0]);
+    return jInt(u ? c.rt.hooks?.unitTypeDefault?.(u.typeId, "pointValue") ?? 0 : 0);
+  });
+  def(rt, "GetUnitPointValueByType", (c, a) =>
+    jInt(c.rt.hooks?.unitTypeDefault?.(intToRawcode(asInt(a[0])), "pointValue") ?? 0));
   def(rt, "GetUnitTypeId", (c, a) => jInt(unit(c, a[0]) ? rawcodeToInt(unit(c, a[0])!.typeId) : 0));
   def(rt, "GetOwningPlayer", (c, a) => c.rt.playerHandle(unit(c, a[0])?.player ?? neutralSlot(PlayerSlot.NeutralPassive)));
   // Position/facing prefer the live sim value (a script-created unit's handle keeps its

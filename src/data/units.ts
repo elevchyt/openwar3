@@ -356,6 +356,11 @@ export interface UnitDef {
    * (see `heroBodyTime`), which is what the altar's revive button waits on.
    */
   deathTime: number;
+  /** UnitData.slk `points` — the type's "Point Value" (`upoi`), which `GetUnitPointValue` and
+   *  `GetUnitPointValueByType` answer. Nothing in the engine reads it: it is a number a SCRIPT
+   *  keys on, and DotA keys its whole item shop on it (a sold unit worth 200–499 is an item
+   *  purchase, see the jass natives). */
+  points: number;
   /** UnitData `deathType` — 0 none, 1 raise, 2 decay, 3 both (UI\\UnitEditorData.txt
    *  [deathType]). Read for UNIT_BF_RAISABLE / _DECAYABLE; the corpse rules themselves still come
    *  from classification (SimWorld.spawnCorpse). */
@@ -755,6 +760,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       sightNight: b ? num(b, "nsight", 0) : 0,
       // UnitData.slk `death` — how long this type takes to die. See UnitDef.deathTime.
       deathTime: d ? num(d, "death", 0) : 0,
+      points: d ? num(d, "points", 0) : 0,
       deathType: d ? num(d, "deathType", 3) : 3,
       hitPoints: isHero && realhp > 0 ? realhp : b ? num(b, "hp", 0) : 0,
       hpRegen: b ? num(b, "regenHP", 0) : 0,
@@ -1163,6 +1169,7 @@ export function destructibleUnitDef(d: {
     sightDay: 0,
     sightNight: 0,
     deathTime: 0,
+    points: 0,
     hitPoints: d.maxLife,
     hpRegen: 0,
     regenType: RegenType.None,
