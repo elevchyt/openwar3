@@ -32,7 +32,8 @@ export interface FindHost {
   setFilter(paths: string[] | null): void;
   /** Start reading the folders nobody has opened, so their maps answer by their own names. */
   warm(): void;
-  /** A search is under way (true) or done (false): the list shows its working ring meanwhile. */
+  /** A search is under way (true) or done (false): the list is empty under its working ring
+   *  meanwhile, and its answer goes up all at once. */
   busy(on: boolean): void;
 }
 
@@ -182,20 +183,18 @@ export class MapFind {
     this.at = 0;
     this.host.setFilter(q ? this.results : null);
     this.paint();
-    if (this.results[0]) await this.pickAt(run); // go to the best, as typed
-    else if (run === this.run) this.host.busy(false);
+    try {
+      if (this.results[0]) await this.host.pick(this.results[0]); // go to the best, as typed
+    } finally {
+      if (run === this.run) this.host.busy(false); // a later keystroke owns the ring now
+    }
   }
 
-  /** Pick the match the arrows stand on, with the ring up until it is in the summary pane. */
-  private async pickAt(run = ++this.run): Promise<void> {
+  /** Pick the match the arrows stand on. No ring: the answer is already on show, and the arrows
+   *  walking it must not empty the list under them at every step. */
+  private pickAt(): void {
     const path = this.results[this.at];
-    if (!path) return;
-    this.host.busy(true);
-    try {
-      await this.host.pick(path);
-    } finally {
-      if (run === this.run) this.host.busy(false); // a later search owns the ring now
-    }
+    if (path) void this.host.pick(path);
   }
 
   /** Empty the box: the list shows its folder again, with whatever was picked still picked. */
@@ -236,7 +235,7 @@ export class MapFind {
       const n = this.results.length;
       if (!n) return;
       this.at = (this.at + (e.key === "ArrowDown" ? 1 : -1) + n) % n;
-      void this.pickAt();
+      this.pickAt();
       return;
     }
     if (e.key === "Enter") {
@@ -244,7 +243,7 @@ export class MapFind {
       // A search still waiting out its delay is the one the player means: run it first. Its own
       // pick is the best match, which is what Enter would have picked anyway.
       if (this.timer) void this.flush();
-      else void this.pickAt();
+      else this.pickAt();
       this.release(); // the list stays narrowed; the box keeps its text until it is emptied
     }
   }

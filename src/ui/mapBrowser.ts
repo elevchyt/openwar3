@@ -143,7 +143,8 @@ export class MapBrowser {
   /** The screen this browser last filled — the list only takes keys while it is up. */
   private screen: FdfScreen | null = null;
   private indexing = false; // the background read of every folder is running
-  /** The search box is working (ui/mapFind.ts): the list wears its ring over whatever it shows. */
+  /** The search box is working (ui/mapFind.ts): the list is EMPTY under its ring until the
+   *  answer is all in, exactly as it is while a folder is read. */
   private searching = false;
   /** Whether the list last filled had its rows — a folder still being read has none. */
   private listReady = false;
@@ -200,7 +201,14 @@ export class MapBrowser {
         else this.onChange();
       },
       warm: () => void this.indexAll(),
-      busy: (on) => { this.searching = on; this.paintWorking(); },
+      // The ring goes up over an EMPTY list, and the answer comes down all at once: rows put up
+      // while the search was still picking a map are rows that move under the player's cursor
+      // (the developer's call — the same reason a folder is read before it is shown).
+      busy: (on) => {
+        if (this.searching === on) return;
+        this.searching = on;
+        if (this.screen) this.fillList(this.screen);
+      },
     });
   }
 
@@ -256,15 +264,16 @@ export class MapBrowser {
     const list = s.list("MapListBox");
     if (!list) return;
     // The search box's matches stand in for the folder, and come from every folder — so they
-    // are ready whatever the open one is doing.
+    // are ready whatever the open one is doing, once the search itself has answered.
     const filtered = this.filtered();
-    const ready = !!filtered || readFolders.has(this.cwd);
+    const ready = !this.searching && (!!filtered || readFolders.has(this.cwd));
     const upOneLevel = this.strings?.string("UP_ONE_LEVEL") ?? "(up one level)";
-    const rows = filtered ?? (ready ? folderRows(this.entries, this.cwd) : []);
+    const rows = !ready ? [] : filtered ?? folderRows(this.entries, this.cwd);
     list.setItems(rows.map((r) => toListItem(r, this.icons, upOneLevel)));
     list.setEnabled(ready);
-    // …and while it is empty because its folder is still being read, it SAYS so: an empty,
-    // dead list reads as "no maps here" for exactly as long as the reads take.
+    // …and while it is empty because its folder is still being read (or the search box is still
+    // answering), it SAYS so: an empty, dead list reads as "no maps here" for exactly as long as
+    // the reads take.
     this.listReady = ready;
     this.paintWorking();
     // A folder row the arrow keys are standing on keeps its band across a rebuild; otherwise
@@ -295,14 +304,13 @@ export class MapBrowser {
     };
   }
 
-  /** The list's working ring: up while its folder is being read, and while the search box is
-   *  answering — straight onto the DOM, because the ring has to show BEFORE the work it covers,
-   *  and a rebuild to put it up would be that work's first slice. */
+  /** The list's working ring: up while its folder is being read or the search box is answering
+   *  (both of which leave the list empty — `fillList`'s `ready`). */
   private paintWorking(): void {
     const host = this.screen?.frame("MapListBox");
     if (!host) return;
     host.querySelector(":scope > .ow3-working")?.remove();
-    if (!this.listReady || this.searching) mountWorking(host);
+    if (!this.listReady) mountWorking(host);
   }
 
   /** Paint the chosen map into the summary pane. */
@@ -527,9 +535,14 @@ export class MapBrowser {
 // --- the map summary pane -----------------------------------------------------------
 
 /** The frames of the pane that are a MAP's: the name row over the minimap (player-count
- *  badge, name, author badge) and the value half of each stat row. Until one is picked the
+ *  badge, name) and the value half of each stat row. Until one is picked the
  *  pane is only its frame and its labels. */
-const NAME_ROW = ["MaxPlayersIcon", "MapNameValue", "AuthIcon"];
+const NAME_ROW = ["MaxPlayersIcon", "MapNameValue"];
+
+/** The FDF's author badge — MapInfoPane's `AuthIcon`, the Blizzard emblem beside the name.
+ *  Taken OUT — the developer's call, not the game's. Hidden rather than removed from the tree,
+ *  so the FDF's chain off it still resolves. */
+const AUTHOR_BADGE = "AuthIcon";
 const VALUES = ["SuggestedPlayersValue", "MapSizeValue", "MapTilesetValue"];
 
 /** Write the blurb. On a pane that made it scrollable (`makeBlurbScrollable`) it is a TEXTAREA
@@ -545,7 +558,7 @@ function setDescription(s: FdfScreen, text: string): void {
  *  the badges that describe one are not either (they are frames, not text, so they are
  *  hidden rather than emptied). */
 export function clearMapInfo(s: FdfScreen): void {
-  for (const name of NAME_ROW) {
+  for (const name of [...NAME_ROW, AUTHOR_BADGE]) {
     const el = s.frame(name);
     if (el) el.style.display = "none";
   }
@@ -572,6 +585,8 @@ export function fillMapInfo(
     const el = s.frame(name);
     if (el) el.style.display = ""; // back from the empty state — and before centreNameRow measures them
   }
+  const author = s.frame(AUTHOR_BADGE);
+  if (author) author.style.display = "none";
   s.setText("MaxPlayersValue", String(info.maxPlayers));
   s.setText("MapNameValue", info.name);
   s.setText("SuggestedPlayersValue", info.recommendedPlayers || `${info.maxPlayers} players`);
@@ -621,7 +636,8 @@ function minimapPicture(
 }
 
 /**
- * Centre the name row — the player-count badge, the map's name, the author's badge — as one
+ * Centre the name row — the player-count badge and the map's name (the author badge is gone,
+ * `AUTHOR_BADGE`) — as one
  * group over the pane. The engine sizes a TEXT frame to its TEXT and then anchors it, so the
  * three sit shoulder to shoulder whatever the name's length; our layout solver gives a text
  * frame a fixed box instead, so the row has to be measured once the name is in.
@@ -639,10 +655,9 @@ function minimapPicture(
 function centreNameRow(s: FdfScreen): void {
   const badge = s.frame("MaxPlayersIcon");
   const name = s.frame("MapNameValue");
-  const author = s.frame("AuthIcon");
   const pane = s.frame("MapInfoPane");
   const span = name?.querySelector("span");
-  if (!badge || !name || !author || !pane || !span) return;
+  if (!badge || !name || !pane || !span) return;
 
   // The box the FDF gave the name, kept aside: every fill starts from it, or a two-line name
   // would leave the row taller for the one-line name after it. Its type likewise: a shrunk
@@ -685,14 +700,12 @@ function centreNameRow(s: FdfScreen): void {
   name.style.height = `${height}px`;
   name.style.top = `${baseTop + baseH - height}px`; // grow up: the row's BOTTOM is the anchor
 
-  const left = Math.round((pane.clientWidth - (badge.offsetWidth + gap + width + gap + author.offsetWidth)) / 2);
+  const left = Math.round((pane.clientWidth - (badge.offsetWidth + gap + width)) / 2);
   badge.style.left = `${left}px`;
   name.style.left = `${left + badge.offsetWidth + gap}px`;
-  author.style.left = `${left + badge.offsetWidth + gap + width + gap}px`;
-  // The badges sit on the middle of the name, however many lines it runs to.
+  // The badge sits on the middle of the name, however many lines it runs to.
   const middle = baseTop + baseH - height / 2;
   badge.style.top = `${middle - badge.offsetHeight / 2}px`;
-  author.style.top = `${middle - author.offsetHeight / 2}px`;
 }
 
 /** Stamp the lobby's markers onto a copy of the map's own minimap picture. */
@@ -984,9 +997,9 @@ export function layoutInfoPane(pane: FdfFrame, box: PaneBox): FdfFrame {
   // zero box rather than clipping it, so the LAN summary wore Echo Isles' description across
   // its map name.)
 
-  // The name row: the player-count badge, then the map's name, then the author badge — the
-  // FDF chains all three to each other, so only the badge needs placing, and the row is
-  // re-centred on the name's real width once it is in (centreNameRow).
+  // The name row: the player-count badge, then the map's name, then the author badge (hidden,
+  // AUTHOR_BADGE) — the FDF chains all three to each other, so only the badge needs placing,
+  // and the row is re-centred on the name's real width once it is in (centreNameRow).
   setProp(findFrame(pane, "MaxPlayersIcon"), "SetPoint", [arg("TOPLEFT"), str("MapInfoPane"), arg("TOPLEFT"), num(0.03), num(-0.004)]);
   size(findFrame(pane, "MapNameValue"), 0.14, 0.019);
   // The count sits INSIDE its badge: the engine sizes the TEXT frame to its digit and then
