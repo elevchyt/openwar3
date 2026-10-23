@@ -163,6 +163,21 @@ export function disabledIconPath(path: string): string | null {
   return `ReplaceableTextures\\CommandButtonsDisabled\\DIS${path.slice(cut + 1)}`;
 }
 
+/**
+ * The files an icon path may be answered by, in the order the game tries them. An `Art` or
+ * `ScoreScreenIcon` names a TEXTURE, not a file: the game draws `.blp` for a path written
+ * `.tga` — the editor emits whichever extension the author typed — and a path written with no
+ * extension at all. DotA v6.77b AI names its Drow Ranger `BTNBansheeRanger.tga` and 31 of its
+ * ability icons with no extension, and every one is a `.blp` in the store; taken literally they
+ * all fell through to BTNTemp. The multiboard's own icon lookup has always made the first swap.
+ */
+export function iconFileCandidates(path: string): string[] {
+  const out = [path];
+  if (/\.tga$/i.test(path)) out.push(path.replace(/\.tga$/i, ".blp"));
+  else if (!/\.[a-z0-9]{3,4}$/i.test(path)) out.push(`${path}.blp`);
+  return out;
+}
+
 /** The placeholder a missing BUTTON icon is drawn as (MapViewerScene.blpIcon, docs/icons.md): `BTNTemp.blp`,
  *  or null when the path is not a live button icon at all — a model's texture, a loading screen,
  *  or a greyed DIS* twin, whose own fallback (`disabledArt`'s caller) is the live art. */

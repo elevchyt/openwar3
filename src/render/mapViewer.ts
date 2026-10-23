@@ -63,7 +63,7 @@ import { specialFxPhaseAt, type SpecialFxClips } from "./specialFxClock";
 import { pickEffectSequence, yawPitchRollQuat } from "./effectAnim";
 import { loadAbilityRegistry, mdlPath, type AbilityRegistry, type AbilityDef, type BuffFx, isRepairCode, KNOWN_ABILITIES, TREE_UPGRADE_ABILITY, requiredHeroLevel, morphFlags, MORPH_FLAG_PERMANENT, MORPH_FLAG_REQUIRES_PAYMENT, type AbilityLevel, iconAt, isStance } from "../data/abilities";
 import { isDesktopApp } from "../assets/nativeInstall";
-import { loadCommandStrings, disabledIconPath, placeholderIcon, type CommandStrings } from "../data/commandStrings";
+import { loadCommandStrings, disabledIconPath, placeholderIcon, iconFileCandidates, type CommandStrings } from "../data/commandStrings";
 import { resolveTipRefs } from "../data/tipRefs";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
 import { CAMERA, MELEE, MINIMAP, MISC_DATA, TEXT_TAG, heroReviveCost, mapMiscEpoch, miscKeyIsRead, setMapMiscOverlay, type ReviveMode } from "../data/gameplayConstants";
@@ -14191,11 +14191,10 @@ export class MapViewerScene {
     // The running map's archive first, as for every other asset (render/assetSolver.ts): a map's
     // units and its war3mapSkin.txt name icons it imports. Such a path is cached under the MOUNT,
     // so the next map's `war3mapImported\x.blp` is never the last one's picture.
-    const map = this.mapFiles.archive;
-    const key = map?.exists(path) ? `map${this.mapFiles.epoch}:${path}` : path;
+    const { key, bytes: read } = this.iconFile(path);
     let url = this.iconCache.get(key);
     if (url === undefined) {
-      const bytes = key === path ? this.vfs.rawBytes(path) : map!.rawBytes(path);
+      const bytes = read();
       url = bytes ? blpToDataUrl(bytes) : null;
       // The LAST RESORT (docs/icons.md): a button icon that is neither in the install nor
       // derivable from it (vfs/derivedArt.ts) is drawn as the engine's own placeholder,
@@ -14209,18 +14208,38 @@ export class MapViewerScene {
     return url;
   }
 
+  /** Where an icon path is read from: the map's archive before the install, each asked for
+   *  every file the path may be answered by (`iconFileCandidates` — a `.tga` or extension-less
+   *  `Art` is a `.blp`). `key` names the source for the icon cache; `bytes` reads lazily, so a
+   *  cache hit costs no decode. */
+  private iconFile(path: string): { key: string; bytes: () => Uint8Array | null } {
+    const files = iconFileCandidates(path);
+    const map = this.mapFiles.archive;
+    const inMap = map ? files.find((f) => map.exists(f)) : undefined;
+    if (inMap) return { key: `map${this.mapFiles.epoch}:${path}`, bytes: () => map!.rawBytes(inMap) };
+    return {
+      key: path,
+      bytes: () => {
+        for (const f of files) {
+          const b = this.vfs.rawBytes(f);
+          if (b) return b;
+        }
+        return null;
+      },
+    };
+  }
+
   /** An illusion's icon in the selection grid: the unit's own art multiplied by
    *  `ILLUSION_TINT`, the SAME wash `applyFogTint` puts on its model and the portrait bust
    *  wears, so the grid tells the images from the original exactly as the field does (the
    *  viewpoint gate is `SelIcon.illusion`'s). No file carries this tint — like the model's, it
    *  is an engine look (docs/illusions.md) — so it is baked per icon and cached beside it. */
   private illusionIcon(path: string): string | null {
-    const map = this.mapFiles.archive;
-    const inMap = map?.exists(path) ?? false;
-    const key = `illus:${inMap ? `map${this.mapFiles.epoch}:` : ""}${path}`;
+    const file = this.iconFile(path);
+    const key = `illus:${file.key}`;
     let url = this.iconCache.get(key);
     if (url === undefined) {
-      const bytes = inMap ? map!.rawBytes(path) : this.vfs.rawBytes(path);
+      const bytes = file.bytes();
       const canvas = bytes ? blpToCanvas(bytes) : null;
       url = null;
       if (canvas) {
