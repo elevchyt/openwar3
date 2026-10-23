@@ -59,14 +59,19 @@ function collect(path) {
 function slkIds(file) {
   const path = join(EXTRACTED, file);
   if (!existsSync(path)) return null;
+  return idsIn(readFileSync(path, 'latin1'));
+}
+/** The row ids an SLK's text carries (`;K"hfoo"` cells). */
+function idsIn(text) {
   const ids = new Set();
-  for (const m of readFileSync(path, 'latin1').matchAll(/;K"([A-Za-z0-9]{4})"/g)) ids.add(m[1]);
+  for (const m of text.matchAll(/;K"([A-Za-z0-9]{4})"/g)) ids.add(m[1]);
   return ids;
 }
-const STOCK = new Set();
-for (const table of ['Units/UnitData.slk', 'Units/ItemData.slk', 'Units/AbilityData.slk',
+const OBJECT_TABLES = ['Units/UnitData.slk', 'Units/ItemData.slk', 'Units/AbilityData.slk',
   'Units/UpgradeData.slk', 'Units/DestructableData.slk', 'Units/AbilityBuffData.slk',
-  'Doodads/Doodads.slk', 'Units/UnitAbilities.slk']) {
+  'Doodads/Doodads.slk', 'Units/UnitAbilities.slk'];
+const STOCK = new Set();
+for (const table of OBJECT_TABLES) {
   const ids = slkIds(table);
   if (ids) for (const id of ids) STOCK.add(id);
 }
@@ -156,6 +161,11 @@ function probe(path) {
   row.obj = null;
   const parsedObjects = [];
   const mapDefines = new Set(); // ids the map itself mints — a custom object may derive from one
+  // …including through its OWN copy of a table, which WC3 reads in place of the install's
+  // (src/vfs/mapTables.ts). An optimised map defines its whole object set that way.
+  const ownTables = OBJECT_TABLES.filter((t) => get(t.replace(/\//g, SEP)));
+  for (const t of ownTables) for (const id of idsIn(new TextDecoder('latin1').decode(get(t.replace(/\//g, SEP))))) mapDefines.add(id);
+  if (ownTables.length) row.notes.push(`ships its own ${ownTables.map((t) => basename(t)).join(', ')} (read over the install's)`);
   for (const [name, Parser] of OBJECT_FILES) {
     const bytes = get(name);
     if (!bytes) continue;

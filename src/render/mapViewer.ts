@@ -4,6 +4,7 @@ import ModelViewer from "mdx-m3-viewer/dist/cjs/viewer/viewer";
 import type { DataSource } from "../vfs/types";
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { MpqDataSource } from "../vfs/mpq";
+import { MapTableSource } from "../vfs/mapTables";
 import { LayeredDataSource } from "../vfs/layered";
 import { tilesetOverlay } from "../vfs/tileset";
 import { createAssetSolver, type MapFileLayer, type Solver } from "./assetSolver";
@@ -1847,6 +1848,7 @@ export class MapViewerScene {
     private viewer: W3xViewer,
     private blobUrls: string[],
     private vfs: DataSource,
+    private tables: MapTableSource,
     private registry: UnitRegistry,
     private abilities: AbilityRegistry,
     private items: ItemRegistry,
@@ -1859,7 +1861,7 @@ export class MapViewerScene {
     // The menu already built a SoundBoard (and with it the page's one AudioContext) to play
     // its theme and its wind — take that same one into the match rather than opening a second.
     this.sounds = shared ?? new SoundBoard(vfs);
-    this.strings = loadCommandStrings(vfs); // the console's refusal lines, out of the archive
+    this.strings = loadCommandStrings(tables); // the console's refusal lines, out of the archive
     this.setupKeyboardLock();
     // When the unit shown in the portrait speaks, mouth it on the 3D bust. Also
     // remember the line: a fresh selection plays its "What" voice while the bust
@@ -1983,7 +1985,10 @@ export class MapViewerScene {
       baseUrls.delete(path);
     }
 
-    return new MapViewerScene(canvas, viewer, created, vfs, loadUnitRegistry(vfs), loadAbilityRegistry(vfs), loadItemRegistry(vfs), loadTechRegistry(vfs), loadUpgradeRegistry(vfs), solver, mapFiles, sounds);
+    // The object tables are read through a source a map can lay its OWN tables over
+    // (src/vfs/mapTables.ts); with no map on it yet it is the install.
+    const tables = new MapTableSource(vfs);
+    return new MapViewerScene(canvas, viewer, created, vfs, tables, loadUnitRegistry(tables), loadAbilityRegistry(tables), loadItemRegistry(tables), loadTechRegistry(tables), loadUpgradeRegistry(tables), solver, mapFiles, sounds);
   }
 
   /**
@@ -1995,23 +2000,36 @@ export class MapViewerScene {
    * path afresh (src/vfs/edition.ts), so re-running the loaders is the whole of the rebuild;
    * nothing else in the scene holds a parsed table, and everything that reads one — the
    * RtsController included — is built after `loadMap` from these same fields.
+   *
+   * The same is true of a map that carries its OWN tables (src/vfs/mapTables.ts): `map` is
+   * laid over the install for the loaders, and the tables are re-read when it shadows any of
+   * them — and once more by the next map that does not, to put the install's back.
    */
-  private syncDataSet(): void {
+  private syncDataSet(map: DataSource): void {
     const want = dataSetFolder();
-    if (want === this.dataSet) return;
+    const shadowed = this.tables.shadows(map);
+    const mapTables = shadowed.length > 0;
+    this.tables.setMap(mapTables ? map : null);
+    if (want === this.dataSet && !mapTables && !this.mapTables) return;
     this.dataSet = want;
-    this.registry = loadUnitRegistry(this.vfs);
-    this.abilities = loadAbilityRegistry(this.vfs);
-    this.items = loadItemRegistry(this.vfs);
-    this.tech = loadTechRegistry(this.vfs);
-    this.upgrades = loadUpgradeRegistry(this.vfs);
-    this.strings = loadCommandStrings(this.vfs);
+    this.mapTables = mapTables;
+    if (mapTables) console.info(`[map] the map ships ${shadowed.length} table(s) of its own, read over the install's: ${shadowed.join(", ")}`);
+    this.registry = loadUnitRegistry(this.tables);
+    this.abilities = loadAbilityRegistry(this.tables);
+    this.items = loadItemRegistry(this.tables);
+    this.tech = loadTechRegistry(this.tables);
+    this.upgrades = loadUpgradeRegistry(this.tables);
+    this.strings = loadCommandStrings(this.tables);
   }
+
+  /** Whether the registries in hand were read with a map's own tables over the install's. */
+  private mapTables = false;
 
   /** Load a .w3x/.w3m (raw archive bytes) and frame the camera on the whole map. */
   loadMap(bytes: Uint8Array): void {
     syncCanvasSize(this.canvas);
-    this.syncDataSet();
+    const archive = new MpqDataSource("map", bytes);
+    this.syncDataSet(archive);
     // Drop the previous map's scene so reloading doesn't stack renders.
     const prev = this.viewer.map?.worldScene;
     if (prev) this.viewer.removeScene(prev);
@@ -2043,6 +2061,7 @@ export class MapViewerScene {
     // The viewer's object-data tables are global and every map merges into them, so give the
     // next map the game's own tables rather than the last map's (see resetObjectData).
     this.resetObjectData();
+    this.layMapTables(archive);
     this.viewer.loadMap(bytes);
     this.repairCustomRowIds(); // …before anything asks a placed unit which type it is
     const map = this.viewer.map;
@@ -2078,7 +2097,6 @@ export class MapViewerScene {
     this.zoomT = 1; // no wheel ease in flight across a map load
 
     // Stand up the simulation: terrain height + pathing from the map's own files.
-    const archive = new MpqDataSource("map", bytes);
     this.mapArchive = archive; // kept so startCustom can read war3map.j (Phase 7 triggers)
     // Laid over the install for every MODEL and texture the scene loads itself — the units a
     // trigger creates, the effects it spawns (see `create`'s solver). Audio's twin is below.
@@ -2691,7 +2709,7 @@ export class MapViewerScene {
   }
 
   private slkText(path: string): string {
-    const bytes = this.vfs.rawBytes(path);
+    const bytes = this.tables.rawBytes(path); // a map's own table first (src/vfs/mapTables.ts)
     return bytes ? new TextDecoder("windows-1252").decode(bytes) : "";
   }
 
@@ -4700,6 +4718,28 @@ export class MapViewerScene {
    * that snapshot and drops the rows a previous map INVENTED (its `h001`-style custom ids). One
    * shallow copy per row, taken once — the tables are ~1100 rows of plain values.
    */
+  /**
+   * The viewer's half of a map that ships its own object tables (src/vfs/mapTables.ts): its
+   * `unitsData`/`doodadsData` are read once from the install's SLKs at boot, so a placed unit
+   * or a doodad whose type only the MAP's `Units\UnitData.slk` or `Doodads\Doodads.slk`
+   * defines would have no row to find its model on. The map's copy is laid over them here,
+   * after `resetObjectData` and before the viewer reads the map's `.w3u`/`.w3d` on top — the
+   * order the game itself applies them in. The rows it adds are ones `resetObjectData` drops
+   * again for the next map.
+   */
+  private layMapTables(map: DataSource): void {
+    const tables: Array<[MappedData, string[]]> = [
+      [this.viewer.unitsData, ["Units\\UnitData.slk", "Units\\UnitUI.slk", "Units\\ItemData.slk"]],
+      [this.viewer.doodadsData, ["Doodads\\Doodads.slk", "Units\\DestructableData.slk"]],
+    ];
+    for (const [table, paths] of tables) {
+      for (const path of paths) {
+        const bytes = map.rawBytes(path);
+        if (bytes?.length) table.load(new TextDecoder("windows-1252").decode(bytes));
+      }
+    }
+  }
+
   private resetObjectData(): void {
     const tables: Array<[string, MappedData]> = [["units", this.viewer.unitsData], ["doodads", this.viewer.doodadsData]];
     for (const [name, table] of tables) {

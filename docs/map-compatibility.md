@@ -928,6 +928,39 @@ Tests: `tools/jass-frames-test.cjs` (the model through the real interpreter, and
 becomes). Verified live: the Info toggle opens the panel, hovering a learned skill shows its
 `BoxedText`.
 
+### A map that ships its own tables
+
+WC3 mounts the map archive ABOVE its own, so a map file at a path the game reads replaces the
+game's copy wholesale — and that includes the object tables. It is how an OPTIMISED map defines
+its objects: Vexorian's Optimizer and W3x2Lni's "slk" mode fold the w3u/w3a/w3t into the map's
+own `Units\UnitData.slk`, `Units\AbilityData.slk`, `Units\ItemData.slk`, the other SLKs and the
+`*Func.txt`/`*Strings.txt` profiles, and leave the w3 files holding little or nothing. Three maps
+in the install's own `Maps\Download` are built that way (DotA v6.77b AI, Uther Party,
+Angel Arena Allstars; BleachVsOnepiece ships an `UpgradeData.slk`), and DotA is the extreme: no
+w3u at all, a w3a whose 769 ORIGINAL rows name ids only its own `AbilityData.slk` defines, and 50
+table files of its own.
+
+Read past the map, every custom id is a type nothing knows. On DotA that was a world of **56**
+units (the script's CreateUnit made nothing for a tower, an Ancient, a creep or a shop), **2**
+abilities out of the w3a, and a Circle of Power with no hero to pick; read through the map it
+is **243** units, **1110** abilities and 258 heroes.
+
+`MapTableSource` ([`src/vfs/mapTables.ts`](../src/vfs/mapTables.ts)) is that layer, scoped to
+the readers handed it — the five registries and the command strings (`syncDataSet`, which
+re-reads them when a map shadows any table and once more for the next map that does not), the
+destructible table `stampMapPathing` reads, and the viewer's own `unitsData`/`doodadsData`
+(`layMapTables`, after `resetObjectData` and before the viewer lays the w3 files on top — the
+order the game applies them in). It learns WHICH files are tables off the readers themselves
+(`shadows` = every path a reader asked that the map carries), so a loader that starts reading one
+more file needs no list updated. Two rules it keeps: the map's copy REPLACES the install's
+rather than merging into it, and a ZERO-byte copy is an answer — DotA's empty
+`CampaignUpgradeFunc.txt` means "no campaign upgrades", not "ask the install".
+
+`tools/map-compat.cjs` counts the ids a map's own tables define as the map's, so such a map no
+longer reads as a thousand rows modifying ids "this install has not got".
+Tests: `tools/sim-map-tables-test.cjs` (the source's rules, and DotA's types through it when the
+map is in the install).
+
 ## Traps
 
 * **After editing the viewer patch, restart the dev server AND delete `node_modules/.vite`**, or
