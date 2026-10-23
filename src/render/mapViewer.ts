@@ -8603,7 +8603,7 @@ export class MapViewerScene {
 
   private armedAbilityArea(code: string): number {
     const su = this.rts?.selectedSimUnit();
-    const ab = su?.abilities.find((a) => a.code === code && a.level >= 1);
+    const ab = su?.abilities.find((a) => a.id === code && a.level >= 1) ?? su?.abilities.find((a) => a.code === code && a.level >= 1);
     const def = ab ? this.abilities.get(ab.id) : undefined;
     // Through `aimArea` rather than off `levelData[…].area` directly, so a spell and an aimed
     // ITEM answer "how big is the circle" the same way (see rts.useInventorySlot) — the
@@ -12950,6 +12950,9 @@ export class MapViewerScene {
       const scriptOff = this.rts.simView.scriptDisabled(ab);
       const def = ab.def ?? this.abilities.get(ab.id); // the unit's own instance, if a script rewrote it
       if (!def) continue;
+      // A Channel whose "Visible" option is clear has no button at all, and is still castable
+      // by the script or the AI that ordered it (data/abilities.ts shapeChannel).
+      if (def.buttonHidden) continue;
       // An ITEM ability a unit carries directly draws no button — the whole Hive trick of
       // hiding a bonus on a unit rests on it, and "Kelen's Daggers of Escape work just fine"
       // while an item-flagged Defend DID show, "due to the fact that Defend is an order-based
@@ -13019,6 +13022,9 @@ export class MapViewerScene {
       const col = reversed ? def.unButtonX : def.buttonX; // the ability's real WC3 card slot
       const row = reversed ? def.unButtonY : def.buttonY;
       const passive = def.target === "passive";
+      // The press names the ROW when another ability on this unit shares its code (several
+      // Channels on one hero); otherwise the code, which every special case below keys on.
+      const pressKey = su.abilities.some((o) => o !== ab && o.code === ab.code) ? ab.id : ab.code;
       // A passive with no `Art` at all gets NO button — the engine has nothing to draw and
       // the row means it. The clear case is Frost Attack: `[Afra]` (Nerubian Tower) carries
       // `PASBTNFrost.blp` at Buttonpos 0,2 and shows, while `[Afrb]` (Frost Wyrm, the Blue
@@ -13054,7 +13060,7 @@ export class MapViewerScene {
         // flipped the autocast rather than raising anything, which is not what either button
         // does in the original. `Amel` (the Meat Wagon's Get Corpse) carries neither pair and
         // stays a toggle, as it is in the game.
-        id: passive ? "noop" : def.autocast && !def.orderOn ? `autocast:${ab.code}` : `ability:${ab.code}`,
+        id: passive ? "noop" : def.autocast && !def.orderOn ? `autocast:${ab.code}` : `ability:${pressKey}`,
         altId: passive || !def.autocast ? undefined : `autocast:${ab.code}`,
         icon: this.blpIcon(reversed ? def.unIcon : iconAt(def, ab.level)),
         // The reverse direction has no `Unname` of its own — the row carries one Name — so
@@ -13087,7 +13093,7 @@ export class MapViewerScene {
         // The green border marks the spell the unit is casting (or has armed) right
         // now — it is NOT the autocast toggle, which is a persistent setting and
         // gets its own indicator, so the two can never both claim the border.
-        active: active === `ability:${ab.code}`,
+        active: active === `ability:${ab.code}` || (pressKey !== ab.code && su.pendingCast?.abilityId === ab.id),
         // …and no autocast sparkle on a button that is not yours yet. The `auto` column arms
         // the toggle from birth (`[ucry] auto = Aweb`) while the upgrade is what unlocks the
         // row, so an un-researched Web read as "on" for an ability that could not fire. The
@@ -13231,7 +13237,12 @@ export class MapViewerScene {
         if (this.rts.armCast(code, "point", 0)) this.hud?.setArmed(true);
         return;
       }
-      const target = KNOWN_ABILITIES[code]?.target;
+      // The AIM is the row's: a Channel (`ANcl`) aims however its own DataB says, so a code's
+      // table entry cannot answer for it (data/abilities.ts shapeChannel). `code` is an ability
+      // ID when the card had to tell two same-code rows apart (`pressKey`).
+      const pressed = this.rts.selectedSimUnit()?.abilities.find((a) => a.id === code)
+        ?? this.rts.selectedSimUnit()?.abilities.find((a) => a.code === code);
+      const target = (pressed ? (pressed.def ?? this.abilities.get(pressed.id))?.target : undefined) ?? KNOWN_ABILITIES[code]?.target;
       if (target === "none") {
         this.rts.castNoTarget(code); // Thunder Clap / Divine Shield / Avatar — fire now
       } else if (target === "unit" || target === "point") {

@@ -115,6 +115,15 @@ if (!fs.existsSync(DOTA) || !fs.existsSync(join(EXTRACT, "Units", "UnitData.slk"
   check("read through the map, its unit types exist", [units.get("u00B") !== undefined, units.get("ncop") !== undefined], [true, true]);
   check("…and so do its abilities", abilities.get("A00Y") !== undefined, true);
   check("…a few hundred heroes' worth of them", units.all().filter((d) => d.isHero).length > 100, true);
+  // Channel (`ANcl`) aims, hides and answers to an order per ROW (data/abilities.ts shapeChannel):
+  // Treant Protector's three are a no-target, a unit-target and a unit-or-point spell.
+  const ch = (id) => { const d = abilities.get(id); return d ? [d.target, d.order, !!d.buttonHidden] : null; };
+  check("a Channel's aim and order come off its own row (Overgrowth / Leech Seed / Living Armor)",
+    [ch("A07Z"), ch("A26N"), ch("A2ML")], [["none", "channel", false], ["unit", "thunderbolt", false], ["point", "creepheal", false]]);
+  // A skill with no Researchbuttonpos sits at 0,0 on the learn page, not at its Buttonpos.
+  check("Forked Lightning (no Researchbuttonpos) learns from the top-left cell", [abilities.get("A010")?.learnX, abilities.get("A010")?.learnY], [0, 0]);
+  // …and a type's Point Value, which DotA routes every shop purchase on.
+  check("a sold dummy unit carries its Point Value (UnitData.slk points)", units.get("h02G")?.points, 200);
 }
 
 if (failed) {

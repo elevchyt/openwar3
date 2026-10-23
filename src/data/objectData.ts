@@ -29,7 +29,7 @@ import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { PrimaryAttribute, toArmorType, toAttackType, toMoveType, toPrimaryAttribute, toRegenType, toWeaponType } from "./enums";
 import { gameNum } from "./gameplayConstants";
 import { syncPrimaryWeapon, type UnitDef, type UnitRegistry, type WeaponSlotDef } from "./units";
-import { emptyAbilityLevel, mdlPath, normalizeTargetFlags, type AbilityDef, type AbilityLevel, type AbilityRegistry } from "./abilities";
+import { emptyAbilityLevel, mdlPath, shapeChannel, normalizeTargetFlags, type AbilityDef, type AbilityLevel, type AbilityRegistry } from "./abilities";
 import { blankItemDef, type ItemDef, type ItemRegistry } from "./items";
 import type { UpgradeDef, UpgradeRegistry } from "./upgrades";
 import type { TechDef, TechRegistry } from "./techtree";
@@ -360,6 +360,7 @@ export const UNIT_SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   // "Stats - Death Time (seconds)". Gameplay, not just art: it is how long a dying unit goes
   // on seeing (SimWorld.kill) and how long a hero's body takes to start dissipating.
   udtm: (d, v) => { d.deathTime = n(v); },
+  upoi: (d, v) => { d.points = n(v); },
   // "Stats - Is a Building". A custom unit that becomes (or stops being) a building changes
   // rally points, repair, the `structure` target key and its whole command card with it.
   ubdg: (d, v) => { d.isBuilding = bool01(v); },
@@ -496,7 +497,6 @@ export const UNIT_FIELD_NOTES: Record<string, string> = {
   // Stats we do not model yet.
   ucbo: "no build-on-top (canBuildOn)", uibo: "no build-on-top (isBuildOn)",
   ufle: "canFlee — no creep flee behaviour (and only 2 stock rows clear it)", ufor: "no formation ranks (formation)",
-  upoi: "no score screen (points)",
   uhhb: "no hero bar hiding (hideHeroBar)", uhhd: "no hero death message (hideHeroDeathMsg)",
   uhhm: "no hero minimap glyph hiding (hideHeroMinimap)", uhom: "hideOnMinimap — 0 on all 836 stock rows; no engine hook",
   unbr: "no random neutral-building rolls (nbrandom)",
@@ -967,6 +967,7 @@ export function applyMapAbilityData(registry: AbilityRegistry, w3aBytes: Uint8Ar
     if (!base) continue; // base ability unknown — skip (the clone would have no `code`)
     const def = cloneAbility(base, obj.newId);
     applyAbilityMods(def, obj.modifications as AbilMod[], meta, trigStr, registry);
+    if (def.code === "ANcl") shapeChannel(def); // its aim and button are the row's (data/abilities.ts)
     registry.setCustom(obj.newId, def);
     count++;
   }
@@ -975,6 +976,7 @@ export function applyMapAbilityData(registry: AbilityRegistry, w3aBytes: Uint8Ar
     if (!base) continue;
     const def = cloneAbility(base, obj.oldId);
     applyAbilityMods(def, obj.modifications as AbilMod[], meta, trigStr, registry);
+    if (def.code === "ANcl") shapeChannel(def); // its aim and button are the row's (data/abilities.ts)
     registry.setCustom(obj.oldId, def);
     count++;
   }

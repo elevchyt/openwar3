@@ -603,7 +603,8 @@ export class Authority {
       if (isHarvestCode(ab.code)) continue;
       const def = this.abilities.get(ab.id);
       if (!def) continue;
-      if (def.order === order) return this.sim.issueCast(unitId, ab.code, targetId, x, y);
+      // By the row's ID, not its code: two Channels on one hero answer to two different orders.
+      if (def.order === order) return this.sim.issueCast(unitId, ab.id, targetId, x, y);
       // "…on"/"…off" are the autocast toggles (Heal's "autocastoff"/"autocaston").
       if (def.orderOn === order || def.orderOff === order) {
         const want = def.orderOn === order;

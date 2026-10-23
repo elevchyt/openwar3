@@ -255,6 +255,11 @@ export interface AbilityDef {
   reqLevel: number; // hero level required for rank 1 (ultimates: 6)
   levelSkip: number; // hero levels between ranks (basics: 2 → learn at 1,3,5)
   target: TargetType; // how it's cast (from KNOWN_ABILITIES; "passive" if unknown)
+  /** The button draws on no card although the ability is there and can be cast — Channel's
+   *  "Visible" option cleared (`shapeChannel`). Distinct from a script's hide, which also stops
+   *  the ability being USED; an invisible Channel is how a map gives a unit a spell only its
+   *  own triggers or AI ever order. */
+  buttonHidden?: boolean;
   targetFlags: string[]; // targs1 — air/ground/enemy/friend/organic/notself/…
   autocast: boolean; // can toggle autocast (Heal, Slow, …)
   name: string;
@@ -663,6 +668,10 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   AEmb: { target: "unit" }, // Mana Burn — burn mana + deal that much damage
   AEim: { target: "none" }, // Immolation — self damage field (toggle)
   AEev: { target: "passive" }, // Evasion — chance to dodge attacks
+  // Channel — the generic SCRIPTED spell: the game casts it (aim, range, mana, cooldown, the
+  // follow-through) and the map's own triggers do whatever it does, off the spell events. Its
+  // aim is the ROW's, not the code's (`shapeChannel`); this entry only says "castable".
+  ANcl: { target: "none" },
   // Attribute Bonus — the campaign's "+N to all stats" hero skill, learned per rank
   // (SimWorld.recomputeStats adds its Iagi/Iint/Istr like an item's). The skill every custom
   // map's "Stats" button is, and the base of DotA's Marksmanship.
@@ -1297,7 +1306,13 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
     const f = func.getRow(id) as Row | undefined;
     const s = strs.getRow(id) as Row | undefined;
     const [bx, by] = f ? parseButtonPos(str(f, "buttonpos") || str(f, "researchbuttonpos")) : [0, 0];
-    const [lx, ly] = f ? parseButtonPos(str(f, "researchbuttonpos") || str(f, "buttonpos")) : [0, 0];
+    // The LEARN page reads `Researchbuttonpos` and nothing else: a skill that names none sits at
+    // 0,0, the value an absent position has, rather than borrowing its cast-card `Buttonpos`.
+    // DotA leaves it off the FIRST skill of many heroes (Shadow Shaman's Forked Lightning
+    // `A010`: Buttonpos=0,2 and no Researchbuttonpos) because 0,0 is where that skill belongs —
+    // borrowing put the hero's first skill on the bottom row. No stock MELEE hero relies on the
+    // borrow: the seven stock hero skills without one are neutral and campaign rows.
+    const [lx, ly] = f ? parseButtonPos(str(f, "researchbuttonpos")) : [0, 0];
     const [ux, uy] = f && str(f, "unbuttonpos") ? parseButtonPos(str(f, "unbuttonpos")) : [bx, by];
     // Aiming is a property of the CODE, with one family of exceptions: the item rows, where
     // Blizzard hung two different aims on one code. `ALIAS_TARGETS` is that override, keyed
@@ -1396,6 +1411,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       orderOff: (f ? str(f, "Orderoff") : "").trim().toLowerCase(),
     });
   }
+  for (const def of defs.values()) if (def.code === "ANcl") shapeChannel(def);
   for (const id of UI_BUTTON_IDS) addUiButton(defs, id, func, strs);
   const triggerOrders = fillIntrinsicOrders(defs, vfs);
 
@@ -1711,6 +1727,34 @@ export function mdlPath(v: string): string {
 function parseButtonPos(v: string): [number, number] {
   const m = /(\d+)\s*,\s*(\d+)/.exec(v || "");
   return m ? [parseInt(m[1], 10), parseInt(m[2], 10)] : [0, 0];
+}
+
+/**
+ * Channel (`ANcl`) — the one ability whose AIM and BUTTON are the row's rather than the code's.
+ * `Units\AbilityMetaData.slk` names its six columns Ncl1..Ncl6 = DataA..DataF, and
+ * `UI\UnitEditorData.txt` spells out the two enums:
+ *
+ *   DataA  Follow Through Time — the caster channels this long (SimWorld.channelDuration)
+ *   DataB  [channelType]  0 instant, 1 unit target, 2 point target, 3 unit OR point target
+ *   DataC  [channelFlags] bit 0 Visible, 1 Targeting Image, 2 Physical, 3 Universal, 4 Unique
+ *   DataF  Base Order ID — the order string the cast answers to (and scripts order it by)
+ *
+ * It is how a custom map makes a spell its triggers carry out: DotA builds 183 of its hero
+ * skills on it, and without it every one of them was missing from the hero. Read at rank 1, as
+ * the editor's own aim and button are one per ability. "Unit or point" aims as a point spell —
+ * a click on a unit still names the unit (the cast keeps its target), which is what the map's
+ * `GetSpellTargetUnit` reads. Called again after a map's w3a edits (objectData), which may
+ * rewrite any of these.
+ */
+export function shapeChannel(def: AbilityDef): void {
+  const lvl = def.levelData[0];
+  if (!lvl) return;
+  const kind = lvl.data[1];
+  def.target = kind === 1 ? "unit" : kind === 2 || kind === 3 ? "point" : "none";
+  const flags = Number.isNaN(lvl.data[2]) ? 1 : lvl.data[2];
+  def.buttonHidden = (flags & 1) === 0;
+  const order = (lvl.dataStr[5] ?? "").trim().toLowerCase();
+  if (order && order !== "-" && order !== "_") def.order = order;
 }
 
 /** An `Art` field as its icons, one per level (usually just the one). */

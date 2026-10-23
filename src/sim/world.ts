@@ -3081,7 +3081,7 @@ const FACING_CAST_EPS = 0.4; // must roughly face a unit target to cast
 // torn down by tickBuffs the tick the channel breaks. classic.battle.net's Ghoul and
 // Abomination pages confirm the lock from the other side: "Group orders won't apply to Ghouls
 // (and Abominations) that are busy Cannibalizing corpses" — which is holdsChannel.
-const CHANNELED = new Set(["AHbz", "ANrf", "AEsf", "AEtq", "AUdd", "ANst", "AOeq", "AHdr", "AOvd", "Acan"]);
+const CHANNELED = new Set(["AHbz", "ANrf", "AEsf", "AEtq", "AUdd", "ANst", "AOeq", "AHdr", "AOvd", "Acan", "ANcl"]);
 // Delayed-strike abilities that drop their Effectart (a ground "beware" warning) the
 // moment the cast WIND-UP begins — not when it lands — so it charges up in place and
 // REMAINS visible even if the cast is interrupted before ignition. Flame Strike's
@@ -14800,9 +14800,13 @@ export class SimWorld {
     return lvl ? this.dataOf(lvl, 2, 25) : 0; // dataC
   }
 
-  /** Look up a learned/innate ability on a unit by its base code. */
+  /** Look up a learned/innate ability on a unit by its base code — or by its own ID, which is
+   *  the only name that tells apart two abilities sharing a code. Channel is why that matters:
+   *  a hero may carry three `ANcl` rows that aim, cost and do entirely different things
+   *  (DotA's Treant Protector: Overgrowth, Leech Seed, Living Armor), so the card and a
+   *  script's order name the ROW and the cast doors below resolve it here. */
   private findAbility(u: SimUnit, code: string): SimAbility | undefined {
-    return u.abilities.find((a) => a.code === code && a.level >= 1);
+    return u.abilities.find((a) => a.id === code && a.level >= 1) ?? u.abilities.find((a) => a.code === code && a.level >= 1);
   }
 
   /** Can a unit target another with a (harmful) spell right now? */
@@ -15091,6 +15095,7 @@ export class SimWorld {
     if (!u || !this.abilities) return "Notthisunit";
     const ab = this.findAbility(u, code);
     if (!ab) return "Notthisunit";
+    code = ab.code; // an ability ID names the row; everything below keys on its base code
     const def = this.abilityDefOf(ab);
     if (!def || def.target === "passive") return "Notthisunit";
     // Silenced/stunned has no string in the data because WC3 never needs one — it greys the
@@ -15239,6 +15244,7 @@ export class SimWorld {
     if (use !== null) return use;
     const u = this.units.get(unitId)!;
     const ab = this.findAbility(u, code)!;
+    code = ab.code; // an ability ID names the row; everything below keys on its base code
     const def = this.abilities!.get(ab.id)!;
     if (def.target === "point") {
       // "Targeted location is outside of the map boundary." — the engine keeps a line for
@@ -15273,6 +15279,7 @@ export class SimWorld {
     if (u.isIllusion) return false;
     const ab = this.findAbility(u, code);
     if (!ab) return false;
+    code = ab.code; // an ability ID names the row; everything below keys on its base code
     // The upgrade gate, at the one door every route in shares — a player's click, an
     // autocast, a JASS `IssueTargetOrder`, a networked command. The command card already
     // refuses the press (the button is drawn unavailable), but a gate that only the UI keeps
@@ -15827,6 +15834,8 @@ export class SimWorld {
   private channelDuration(def: AbilityDef, rank: number): number {
     if (!CHANNELED.has(def.code)) return 0;
     const lvl = def.levelData[Math.min(rank, def.levelData.length) - 1];
+    // Channel's channel is its "Follow Through Time" (`Ncl1`, DataA) — 0 for an instant one.
+    if (def.code === "ANcl") return Number.isNaN(lvl.data[0]) ? 0 : Math.max(0, lvl.data[0]);
     if (lvl.duration > 0 && !WAVE_FIELDS.has(def.code)) return lvl.duration;
     const { waves, interval } = waveSchedule(lvl);
     return waves * interval;

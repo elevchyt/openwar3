@@ -958,6 +958,27 @@ rather than merging into it, and a ZERO-byte copy is an answer — DotA's empty
 
 `tools/map-compat.cjs` counts the ids a map's own tables define as the map's, so such a map no
 longer reads as a thousand rows modifying ids "this install has not got".
+
+### Channel, and the spells a map's triggers carry out
+
+`ANcl` (Channel) is the ability a custom map builds a SCRIPTED spell on: the game casts it — aim,
+range, mana, cooldown, the follow-through — and the map's triggers do whatever it does, off
+`EVENT_PLAYER_UNIT_SPELL_EFFECT`. DotA builds **183** of its hero skills on it, and with the code
+unknown every one of them was dropped from its hero. Its aim, button and order are the ROW's
+(`shapeChannel`, data/abilities.ts; field meanings from `UI\UnitEditorData.txt` [channelType] /
+[channelFlags]): DataB is the target type (instant / unit / point / unit-or-point), DataC bit 0
+"Visible" (clear = no button, still castable by a script or an AI), DataA the follow-through
+the caster channels for, DataF the order string scripts cast it by.
+
+Because a hero may carry several Channels, an ability is addressed by its ROW ID wherever the
+code is ambiguous: `SimWorld.findAbility` resolves an ID or a code, the cast doors carry on with
+the row's base code, the card presses the ID when two of the unit's abilities share a code, and
+a script's order by string casts the exact row (`Authority.castOrder`).
+
+Two more numbers a map's script keys on and the engine never reads: a unit type's **Point
+Value** (`UnitData.slk points`, `upoi`; `GetUnitPointValue[ByType]`) — DotA's shops sell dummy
+UNITS and its sell trigger turns one into an item only when the sold unit is worth 200–499 —
+and an expired one-shot timer reading exactly **0** (see the timer test).
 Tests: `tools/sim-map-tables-test.cjs` (the source's rules, and DotA's types through it when the
 map is in the install).
 
