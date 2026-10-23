@@ -13,6 +13,15 @@ A command-button icon comes from one of four places, in this order:
 Read this before touching `src/vfs/derivedArt.ts`, `src/assets/blpEncode.ts`, `placeholderIcon`
 (src/data/commandStrings.ts) or `iconAt` (src/data/abilities.ts).
 
+At every step the PATH an `Art` names is a texture, not a file (`iconFileCandidates`): the game
+draws the `.blp` for a path written `.tga` — the editor emits whichever extension the author
+typed — and for a path written with no extension at all. DotA v6.77b AI names 20 icons `.tga`
+(Drow Ranger's `BTNBansheeRanger.tga` among them) and 32 with no extension, and every one is a
+`.blp` in the store or the map. `MapViewerScene.iconFile` asks the map's archive for each
+candidate, then the install. What is left over after that is a path the map really never
+shipped (DotA names `PassiveButtons\BTNNaixPoison.blp` but ships `CommandButtons\BTNNaixPoison.blp`),
+which the real client cannot draw either.
+
 ## Deriving a passive icon from its command icon
 
 The game's later patches name art a 1.30.4 install does not have, and nearly all of it is the
