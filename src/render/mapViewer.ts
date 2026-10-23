@@ -3380,7 +3380,9 @@ export class MapViewerScene {
     // main() fires the map's initialization triggers, so its welcome text / quest
     // messages appear in the HUD message log.
     await this.preloadScriptHost();
+    const openedAt = [this.target[0], this.target[1]];
     this.runMapScript({ melee: false, slots: config.slots });
+    this.openOnScriptStart(openedAt);
     // COMPUTER+ ON EXTREME CANDY WAR (src/ai/plus/candy/, docs/candy-war-ai.md). A scenario runs none
     // of the melee library, so no script will ever call `StartMeleeAI` here — the lobby's computers
     // in the map's HERO seats are seated by us, once the script has shown it is this map. The two
@@ -3407,6 +3409,27 @@ export class MapViewerScene {
     }
     this.rts.holdWorld(false); // the map has had its say — let the world run
     console.info(`[openwar3] Custom map: ${seeds.length} pre-placed player unit(s) seeded owned (issue #33)${dummies ? `, plus ${dummies} model-less dummy unit(s)` : ""}.`);
+  }
+
+  /**
+   * Open a custom map's camera on the start location its SCRIPT gave the local player.
+   *
+   * WC3 puts each player's camera on their start location as the game begins, and the start
+   * locations are `config()`'s (`DefineStartLocation` + `SetPlayerStartLocation`), not the
+   * w3i's copy that `beginMatch` aimed at before the script ran. They usually agree; a PROTECTED
+   * map's w3i does not have to — DotA v6.77b AI's stops early, and all ten of its seats start
+   * at (−6990, 6840), the hero taverns, while we opened on the Sentinel base. A camera the
+   * script set itself during init (`SetCameraPosition`, a pan) wins, as it does in the game:
+   * only a view still where `beginMatch` left it is moved.
+   */
+  private openOnScriptStart(openedAt: number[]): void {
+    if (this.observer || this.target[0] !== openedAt[0] || this.target[1] !== openedAt[1]) return;
+    const setup = this.mapScript?.setup;
+    const index = setup?.players.get(this.localPlayer)?.startLocation ?? -1;
+    const at = index >= 0 ? setup?.startLocations.get(index) : undefined;
+    if (!at) return;
+    this.target[0] = at.x;
+    this.target[1] = at.y;
   }
 
   /** The engine bridge the JASS interpreter calls into. A script `CreateUnit` inside
