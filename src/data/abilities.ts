@@ -663,6 +663,10 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   AEmb: { target: "unit" }, // Mana Burn — burn mana + deal that much damage
   AEim: { target: "none" }, // Immolation — self damage field (toggle)
   AEev: { target: "passive" }, // Evasion — chance to dodge attacks
+  // Attribute Bonus — the campaign's "+N to all stats" hero skill, learned per rank
+  // (SimWorld.recomputeStats adds its Iagi/Iint/Istr like an item's). The skill every custom
+  // map's "Stats" button is, and the base of DotA's Marksmanship.
+  Aamk: { target: "passive" },
   AEme: { target: "none" }, // Metamorphosis — self transform buff
   // -- Warden --
   AEbl: { target: "point" }, // Blink — teleport a short distance

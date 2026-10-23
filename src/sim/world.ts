@@ -13127,6 +13127,21 @@ export class SimWorld {
     const wasInvulnerable = u.invulnerable; // for the rising edge — see clearStatusForInvulnerable
     if (u.backpacks) this.openBackpacks(u);
     const item = this.itemBonuses(u);
+    // A LEARNED Attribute Bonus (`Aamk`) adds to the same green "+N" pool an item's stats do. It
+    // is the item stat ability's own row shape — `AbilityMetaData.slk` lists Aamk first among
+    // the codes whose DataA/B/C are Iagi/Iint/Istr, the very columns `AIab` reads above — only
+    // learned per rank by a hero rather than carried. Custom maps build their "Stats" skill on
+    // it, and DotA builds Drow Ranger's Marksmanship on it too.
+    if (u.isHero) {
+      for (const ab of u.abilities) {
+        if (ab.code !== "Aamk" || ab.level < 1) continue;
+        const d = this.abilities?.get(ab.id)?.levelData[ab.level - 1]?.data ?? [];
+        const val = (i: number) => (d[i] === undefined || Number.isNaN(d[i]) ? 0 : d[i]);
+        item.agi += val(0);
+        item.int += val(1);
+        item.str += val(2);
+      }
+    }
     const upg = this.upgradeBonuses(u);
     // `rlev` (sumUpgradeBonuses): a research that sets an ability's level — 1.32's upgrade badges.
     for (const [abilityId, level] of upg.abilityLevels) {
