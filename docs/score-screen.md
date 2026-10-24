@@ -24,6 +24,13 @@ is simply shown the figures as they stand. `MapViewerScene.leave(scores)` is the
 - **F10 → End Game → Quit**, mid-match or after Continue Game;
 - NOT Exit Program (it leaves the game, not the match), Restart, or a chapter's ChangeLevel.
 
+**Leaving it.** OK is the only way out, and it answers **Enter** and **Escape** as well as its own
+"O" (the keys press the button itself, so they sound and behave exactly like a click). The screen
+then FADES TO BLACK where it stands (the edition switch's 700 ms — ours, no file states it) and
+the menu is built under that black, which `Glue.show` lifts as the panels drop in. The screen lives
+on the loading layer, ABOVE the menus' own fade, so it fades with a veil of its own and hands over
+to `Glue.cover` at full black.
+
 **Nothing is counted once the match is DECIDED** (`MatchStats.freeze`, called where `RemovePlayer`
 decides it and where the wire ends it): a winner who presses Continue Game and goes on razing is
 no longer playing the match the screen records, and Elapsed Time stops at the decision too.

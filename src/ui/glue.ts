@@ -40,7 +40,7 @@ const FADE_MS = 260;
  * one is the whole game changing under the player, and a quarter-second blink read as a glitch
  * rather than as a deliberate fade. OURS — the reference's timing is not in any file.
  */
-const WORLD_FADE_MS = 700;
+export const WORLD_FADE_MS = 700;
 
 /** A screen that can be built on demand — the manager mounts it only when navigated to. */
 export interface GlueScreenDef {
@@ -113,8 +113,29 @@ export class GlueManager {
     const next = await def.mount();
     this.current = next;
     const birth = await this.arrive(def);
+    // Arriving from BLACK (`cover` — the score screen leaves that way): lift it the moment the
+    // scene exists and let the screen come up over it, as `crossWorlds` does. A first screen
+    // never leaves the player staring at black.
+    const reveal = this.fade?.classList.contains("glue-fade-on") ? this.toBlack(false, WORLD_FADE_MS) : null;
     await next.animatePanels("in", birth || NO_CHROME_IN_MS);
+    await reveal;
     return next;
+  }
+
+  /**
+   * Put the black up AT ONCE, with nothing on the menu under it — for a full-window picture that
+   * has already faded itself out above the menus' layer (the score screen, on the loading screen's
+   * layer) and is about to be taken down. The black then stands where it stood while the menu is
+   * built underneath, and the next `show` lifts it.
+   */
+  cover(): Promise<void> {
+    return this.toBlack(true, 0);
+  }
+
+  /** Lift a `cover` with no new screen to arrive under it — the menu that was already up is
+   *  simply shown again. */
+  uncover(): Promise<void> {
+    return this.toBlack(false, WORLD_FADE_MS);
   }
 
   /** Bring `def`'s background in — a campaign backdrop, or the panel chrome's Birth — and

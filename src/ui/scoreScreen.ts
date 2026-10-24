@@ -10,6 +10,7 @@ import type { FdfLibrary } from "./fdf/library";
 import type { Arg, FdfFrame } from "./fdf/parser";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { arg, findFrame, num, setProp, str } from "./mapBrowser";
+import { modalOver } from "./modal";
 
 // The SCORE SCREEN (issue #199) — what stands between a FINISHED match and the menu, built from
 // the game's own `UI\FrameDef\Glue\ScoreScreen.fdf` and drawn in its own art.
@@ -261,6 +262,15 @@ export async function mountScoreScreen(opts: ScoreScreenOptions): Promise<ScoreS
     screen?.relayout();
   };
 
+  /** OK, however it was pressed — once. The screen then fades to black under the caller (main.ts
+   *  `showScoreScreen`), and a second Enter or click in that beat must not ask to leave again. */
+  let left = false;
+  const ok = (): void => {
+    if (left) return;
+    left = true;
+    opts.onOk();
+  };
+
   let screen: FdfScreen | null = null;
   const built = await mountFdfScreen({
     container: opts.container,
@@ -279,7 +289,7 @@ export async function mountScoreScreen(opts: ScoreScreenOptions): Promise<ScoreS
     hidden,
     textOverrides: overrides,
     handlers: {
-      ScoreScreenOkButton: () => opts.onOk(),
+      ScoreScreenOkButton: ok,
       ScoreScreenTabButton0: () => { tab = 0; refresh(); },
       ScoreScreenTabButton1: () => { tab = 1; refresh(); },
       ScoreScreenTabButton2: () => { tab = 2; refresh(); },
@@ -290,6 +300,22 @@ export async function mountScoreScreen(opts: ScoreScreenOptions): Promise<ScoreS
   });
   screen = built;
   refresh();
+
+  // OK is the screen's only way out, and it answers ENTER and ESCAPE as well as its own "O"
+  // (the FDF's ControlShortcutKey, wired by the renderer): the dialog's default button and its
+  // cancel are the same button here. Pressed as a CLICK on the button, so the keys make exactly
+  // the sound and take exactly the path the mouse does. In the capture phase, so an Enter with
+  // the button focused is not answered twice (the button's own keydown handler).
+  const onKey = (e: KeyboardEvent): void => {
+    if (e.key !== "Enter" && e.key !== "Escape") return;
+    if (e.altKey || e.ctrlKey || e.metaKey || e.repeat) return;
+    if (modalOver(built.element)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (left) return;
+    built.frame("ScoreScreenOkButton")?.click();
+  };
+  window.addEventListener("keydown", onKey, true);
 
   /** Everything a build needs that is not text: the plates, the marks, the hero icons, and which
    *  header box is ticked. */
@@ -322,6 +348,7 @@ export async function mountScoreScreen(opts: ScoreScreenOptions): Promise<ScoreS
 
   return {
     dispose(): void {
+      window.removeEventListener("keydown", onKey, true);
       scene.dispose();
       built.dispose();
     },

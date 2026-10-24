@@ -41,7 +41,7 @@ import { applyScrollOptions } from "./render/scrollOptions";
 import { applyVoiceOptions, setMenuVoiceHost, voiceHear, voicePrerollState, voiceSay } from "./voice/control";
 import { forgetOldVoiceModels } from "./voice/model";
 import { makeMenuVoiceHost } from "./voice/menu";
-import { GlueManager, type GlueScreenDef } from "./ui/glue";
+import { GlueManager, WORLD_FADE_MS, type GlueScreenDef } from "./ui/glue";
 import { mountLoadingScreen, type LoadingScreen } from "./ui/loadingScreen";
 import { mountScoreScreen, scoreScreenMusic } from "./ui/scoreScreen";
 import type { ScoreTable } from "./game/scoreTable";
@@ -1303,11 +1303,32 @@ async function showScoreScreen(vfs: DataSource, table: ScoreTable): Promise<void
     if (music) sounds?.playMusic(music);
     await ok;
     glueAudio?.click();
+    // Leave through BLACK: the screen fades out where it stands, and the menu's own cover takes
+    // over at full black before the screen comes down — the score screen lives on the loading
+    // screen's layer, above the menus' fade, so the menu is built under black and the black
+    // lifts as its panels arrive (Glue.show). The duration is the edition switch's: this too is
+    // the whole picture changing under the player, not a cut between two screens of one menu.
+    await fadeOutLayer(loadingLayer, WORLD_FADE_MS);
+    await glue.cover();
     screen.dispose();
   } catch (err) {
     console.warn("[OpenWar3] score screen unavailable:", err);
   }
   loadingCanvas.hidden = true;
+  loadingLayer.querySelector(".score-fade")?.remove();
+}
+
+/** Bring a black veil up over everything on `layer` (the loading layer's canvas sits under it
+ *  too) and resolve once it is opaque. The caller removes it. */
+async function fadeOutLayer(layer: HTMLElement, ms: number): Promise<void> {
+  const veil = document.createElement("div");
+  veil.className = "glue-fade score-fade";
+  veil.style.transitionDuration = `${ms}ms`;
+  veil.style.zIndex = "1000"; // over the score screen's own frames, which stack inside this layer
+  layer.appendChild(veil);
+  void veil.offsetWidth; // commit the transparent start, or the fade is a cut
+  veil.classList.add("glue-fade-on");
+  await new Promise((r) => setTimeout(r, ms));
 }
 
 // Boot flow (issue #54): the WC3 menus are constructed from the install's own
@@ -1441,7 +1462,8 @@ if (import.meta.env.DEV && new URLSearchParams(location.search).has("dev")) {
   scoreScreen: (table?: ScoreTable) => {
     const vfs = resolver.installSource;
     const t = table ?? lastScores;
-    return vfs && t ? showScoreScreen(vfs, t) : Promise.resolve();
+    // Over a menu that is already up there is no `show` to lift the black it leaves through.
+    return vfs && t ? showScoreScreen(vfs, t).then(() => glue.uncover()) : Promise.resolve();
   },
   lastScores: () => lastScores,
   // Voice Control's mapping without a microphone (src/voice/control.ts).

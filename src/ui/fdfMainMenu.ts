@@ -4,6 +4,7 @@ import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { arg, findFrame, num, setProp, str } from "./mapBrowser";
 import { isRoc } from "../data/edition";
+import { setGameTip } from "./gameTip";
 
 // The main menu, constructed from the game's own UI\FrameDef\Glue\MainMenu.fdf
 // (issue #54) rather than hand-authored DOM. This is the payoff of the FDF engine:
@@ -118,6 +119,12 @@ export function mountFdfMainMenu(
     onBuild: (s) => {
       linkRepo(s);
       for (const name of OFFLINE_BUTTONS) s.setEnabled(name, false);
+      // The edition button is an emblem with no caption, so it names the game it goes TO in the
+      // tooltip slab — the same edition its art wears (`wearOtherEdition`). The menu is rebuilt
+      // after every switch (Glue.crossWorlds), so this is asked afresh each time. The names are
+      // OURS: no string table in the install spells either edition out.
+      const edition = s.frame("EditionButton");
+      if (edition) setGameTip(edition, isRoc() ? "The Frozen Throne" : "Reign of Chaos");
     },
   });
 }
