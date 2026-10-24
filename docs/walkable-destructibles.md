@@ -138,6 +138,31 @@ draws at ×0.5. `tools/render-walkable-height-test.cjs` pins both halves — the
 own extent, and that `bestStateAt` at that radius turns one dark cell into a lit prop while a
 wholly dark body stays dark.
 
+## A bridge that LOOKS too high is the camera's, not the bridge's
+
+The credits maps' bridges (`LT05`/`LT06` on Reign of Chaos, `YT41`/`YT42` on The Frozen Throne)
+were reported as standing too high above the banks they join. They do not, and this was settled
+against the real 1.30.4 client rather than argued. Every one of them carries `.doo` flag `0x4`
+(the editor's fixed Z, carried by the bridges and by a handful of torches, rocks and water props a
+designer placed by hand), so its `z` is meant literally — and it is what the viewer already uses.
+
+The ruler: a frame of the real TFT credits (Wine, 1600×900, "Game Design" card), seven points
+whose world positions the map states — the four big towers' apexes of `YT41` (the model's
+`CityBridgeLarge45` tops at 447, so 162 + 447 = **609**), the campfire, the snowman and the near
+torch, the last three standing on terrain — and a pinhole camera solved for all six of its
+parameters. It fits to **5.0 px RMS** with the bridge at the record's own z. Shift the four tower
+points by −50 / −100 / +50 and the best fit degrades to 7.6 / 17.1 / 12.3 px. The bridge in the
+real game is where ours is, to well inside 50 units.
+
+What differs is the view of it. The same solve, with the principal point at the middle of the
+area between the letterbox bars and the lens spanning that area's height, returns the credits
+script's own camera almost exactly — rotation **93.3** (the script says 93.3), a 12.0° tilt (AOA
+349.1 = 10.9°) and a 26.6° lens (`fovFromWc3(61)` = 27.1°): **in a cinematic the real client
+projects into the letterbox, not the whole screen.** Its focus also sits ~120–150 above ours
+(~480 against our ground + ZOFFSET = 355). Ours centres the camera on the full stage, so in a
+cinematic the view looks flatter and closer than the client's, and a bridge seen from that low
+shows its piers under the deck — which reads as "too high".
+
 ## What WC3 does not do
 
 You cannot walk *under* a bridge. The engine treats the deck as ground and rejects a fly height

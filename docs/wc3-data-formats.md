@@ -291,6 +291,16 @@ on those three Felwood maps actually paints with `CAc2`.
 
 Both `.doo` files share the "doodad object" container format but different record layouts.
 
+`war3map.doo` ends with a second list, the **cliff doodads** (`terrainDoodads` in the parser;
+`Doodads.slk` category `C`: the caves `LCc*`/`YCc*`/`YCr*`, the collapsed and slid cliff walls,
+the ruined floors `YCx*`). A record there is a TILE, not a point — two uint32s and nothing else —
+and it is the footprint's **bottom-left** tile; the footprint is the model's extent turned by the
+row's `fixedRot` (270 on every row). Like a cliff, the model stands on the footprint's lowest
+layer and bends with the ground under it, and its replaceable texture 11 is the cliff type it is
+cut into. Stock mdx-m3-viewer put it one tile in at z = 0 (the credits maps' cave was a box of
+cliff texture under the campfire); `ow3PlaceCliffDoodads` in the viewer patch's `w3x/map.js` has
+the rule and the maps it was read off.
+
 ### Map info & configuration
 
 | File | Content | OpenWar3 |

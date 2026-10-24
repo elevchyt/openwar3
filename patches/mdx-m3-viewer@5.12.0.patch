@@ -2440,10 +2440,16 @@ index 49733805785c0ef269901d8928e47a953ada93a9..f15149f33f353822f4cb73eaf85eb727
    gl_Position = u_VP * vec4(position, 1.0);
  }
 diff --git a/dist/cjs/viewer/handlers/w3x/map.js b/dist/cjs/viewer/handlers/w3x/map.js
-index e4c8ea760e92653ef6423bd34f9111d0b062a901..232b99f56f3413e58ff28146608d9e06a45d3689 100644
+index e4c8ea760e92653ef6423bd34f9111d0b062a901..d417c0f50c527866c6ffc35954c452d017370105 100644
 --- a/dist/cjs/viewer/handlers/w3x/map.js
 +++ b/dist/cjs/viewer/handlers/w3x/map.js
-@@ -16,6 +16,41 @@ const file_3 = require("../../../parsers/w3x/doo/file");
+@@ -11,11 +11,46 @@ const variations_1 = require("./variations");
+ const terrainmodel_1 = require("./terrainmodel");
+ const unit_1 = require("./unit");
+ const doodad_1 = require("./doodad");
+-const terraindoodad_1 = require("./terraindoodad");
++const model_1 = require("../../../parsers/mdlx/model");
+ const file_3 = require("../../../parsers/w3x/doo/file");
  const file_4 = require("../../../parsers/w3x/unitsdoo/file");
  const normalHeap1 = gl_matrix_1.vec3.create();
  const normalHeap2 = gl_matrix_1.vec3.create();
@@ -2600,7 +2606,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..232b99f56f3413e58ff28146608d9e06
              this.cliffTilesets.push(row);
              cliffTextures.push(this.load(`${row.string('texDir')}\\${row.string('texFile')}${texturesExt}`));
          }
-@@ -199,6 +287,99 @@ class War3MapViewerMap {
+@@ -199,6 +287,102 @@ class War3MapViewerMap {
          const cliffs = {};
          this.columns = columns - 1;
          this.rows = rows - 1;
@@ -2618,6 +2624,9 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..232b99f56f3413e58ff28146608d9e06
 +        // ramp. The host provides viewer.terrainModelExists to check which ramp
 +        // pieces exist (only certain letter combos ship in the MPQs).
 +        const romp = new Uint8Array(instanceCount);
++        // OpenWar3: the tiles a CLIFF DOODAD stands on (ow3PlaceCliffDoodads) — a cave is the
++        // cliff there, so the tile's own cliff model is not drawn under it.
++        const cliffDoodadTiles = await this.ow3PlaceCliffDoodads(corners, columns, rows, centerOffset);
 +        const modelExists = viewer.terrainModelExists;
 +        if (modelExists) {
 +            const rampChar = (corner, base, rise) => corner.ramp
@@ -2700,7 +2709,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..232b99f56f3413e58ff28146608d9e06
          for (let y = 0; y < rows; y++) {
              for (let x = 0; x < columns; x++) {
                  const bottomLeft = corners[y][x];
-@@ -209,8 +390,12 @@ class War3MapViewerMap {
+@@ -209,8 +393,15 @@ class War3MapViewerMap {
                  if (y < rows - 1 && x < columns - 1) {
                      // Water can be used with cliffs and normal corners, so store water state regardless.
                      waterFlags[instance] = this.isWater(x, y);
@@ -2711,11 +2720,14 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..232b99f56f3413e58ff28146608d9e06
 +                    if (romp[instance]) {
 +                        // Covered by a ramp model.
 +                    }
++                    else if (cliffDoodadTiles[instance] && this.isCliff(x, y) && !this.isRampEntrance(x, y)) {
++                        // OpenWar3: covered by a cliff doodad (a cave), which is this tile's cliff.
++                    }
 +                    else if (this.isCliff(x, y) && !this.isRampEntrance(x, y)) {
                          const bottomLeftLayer = bottomLeft.layerHeight;
                          const bottomRightLayer = corners[y][x + 1].layerHeight;
                          const topLeftLayer = corners[y + 1][x].layerHeight;
-@@ -234,38 +419,30 @@ class War3MapViewerMap {
+@@ -234,38 +425,30 @@ class War3MapViewerMap {
                          }
                      }
                      else {
@@ -2773,7 +2785,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..232b99f56f3413e58ff28146608d9e06
          const gl = this.viewer.gl;
          const webgl = this.viewer.webgl;
          this.vertexBuffer = gl.createBuffer();
-@@ -278,10 +455,25 @@ class War3MapViewerMap {
+@@ -278,10 +461,25 @@ class War3MapViewerMap {
          gl.bindTexture(gl.TEXTURE_2D, this.cliffHeightMap);
          webgl.setTextureMode(gl.CLAMP_TO_EDGE, gl.CLAMP_TO_EDGE, gl.NEAREST, gl.NEAREST);
          gl.texImage2D(gl.TEXTURE_2D, 0, gl.ALPHA, columns, rows, 0, gl.ALPHA, gl.FLOAT, cliffHeights);
@@ -2800,7 +2812,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..232b99f56f3413e58ff28146608d9e06
          this.waterHeightMap = gl.createTexture();
          gl.bindTexture(gl.TEXTURE_2D, this.waterHeightMap);
          webgl.setTextureMode(gl.CLAMP_TO_EDGE, gl.CLAMP_TO_EDGE, gl.NEAREST, gl.NEAREST);
-@@ -291,10 +483,17 @@ class War3MapViewerMap {
+@@ -291,10 +489,17 @@ class War3MapViewerMap {
          gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(instanceCount).map((currentValue, index) => index), gl.STATIC_DRAW);
          this.textureBuffer = gl.createBuffer();
          gl.bindBuffer(gl.ARRAY_BUFFER, this.textureBuffer);
@@ -2820,7 +2832,173 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..232b99f56f3413e58ff28146608d9e06
          this.waterBuffer = gl.createBuffer();
          gl.bindBuffer(gl.ARRAY_BUFFER, this.waterBuffer);
          gl.bufferData(gl.ARRAY_BUFFER, waterFlags, gl.STATIC_DRAW);
-@@ -354,11 +553,34 @@ class War3MapViewerMap {
+@@ -315,6 +520,165 @@ class War3MapViewerMap {
+         this.cliffModels = await Promise.all(cliffPromisesForReal);
+         this.cliffsReady = true;
+     }
++    /**
++     * OpenWar3: CLIFF DOODADS — the .doo's "terrain doodads", Doodads.slk category C: the caves
++     * (LCc0/LCc2, YCc*, YCr*), the collapsed and slid cliff walls (YCd*, YCp*, YCs*, YCg*…) and
++     * the ruined floors (YCx*). Stock placed every one of them as an ordinary prop at the corner
++     * one tile in from its record and at z = 0, which on the credits maps put the cave a box of
++     * cliff texture under the trolls' campfire, hundreds of units below the cliff it is cut into.
++     *
++     * The record is a TILE, not a point (`location` is two uint32s), and it is the footprint's
++     * BOTTOM-LEFT tile: the footprint is the model's own extent turned by the row's `fixedRot`
++     * (every category-C row is 270), so a 3x3 cave is centred 1.5 tiles in and a 2x2 floor 1.
++     * Read off the terrain under every stock use of one, not assumed: the RoC and TFT credits'
++     * LCc2 at (25,37) sits exactly on the 3x3 where layer 5 drops to 3, the cave's high side
++     * where the model's is; Ruins of Stratholme's 2x2 and 4x4 YCx floors fill exactly the
++     * sunken road they were laid in; TerenasStand_LV's 1x2 YCp1 collapse sits on the one row of
++     * cliff tiles. A centre one tile in (stock) straddles all three by half a tile.
++     *
++     * Like a cliff, the model stands on the footprint's LOWEST layer and is bent by the ground
++     * under each vertex (the cliff shader's `groundAt`, the raw ground height without layers) —
++     * the mesh is authored flat and its rim has to meet terrain that is not. A plain model
++     * instance cannot sample the height map, so the bend is baked into a copy of the vertices
++     * here, once: a cliff doodad never moves. Its replaceable texture 11 is the CLIFF it was cut
++     * into (the tile's own cliff type, as for a cliff tile), not ReplaceableTextures\Cliff\Cliff0.
++     *
++     * Returns the tiles the doodads cover, so the cliff tiles under a cave draw no cliff model.
++     */
++    async ow3PlaceCliffDoodads(corners, columns, rows, centerOffset) {
++        const tiles = new Uint8Array((columns - 1) * (rows - 1));
++        const mpqFile = this.map.get('war3map.doo');
++        if (!mpqFile) {
++            return tiles;
++        }
++        const parser = new file_3.default();
++        try {
++            parser.load(mpqFile.bytes(), this.buildVersion);
++        }
++        catch (e) {
++            return tiles;
++        }
++        // The raw ground height in units of 128, bilinear between corners — cliffs.vert groundAt.
++        const groundAt = (wx, wy) => {
++            const cx = Math.min(Math.max((wx - centerOffset[0]) / 128, 0), columns - 1);
++            const cy = Math.min(Math.max((wy - centerOffset[1]) / 128, 0), rows - 1);
++            const x0 = Math.min(Math.floor(cx), columns - 2);
++            const y0 = Math.min(Math.floor(cy), rows - 2);
++            const tx = cx - x0;
++            const ty = cy - y0;
++            const h = (x, y) => corners[y][x].groundHeight;
++            return (h(x0, y0) * (1 - tx) + h(x0 + 1, y0) * tx) * (1 - ty) + (h(x0, y0 + 1) * (1 - tx) + h(x0 + 1, y0 + 1) * tx) * ty;
++        };
++        const placed = parser.terrainDoodads.map(async (doodad) => {
++            try {
++                const row = this.viewer.doodadsData.getRow(doodad.id);
++                let file = row && row.string('file');
++                if (!file) {
++                    return;
++                }
++                if (file.endsWith('.mdl')) {
++                    file = file.slice(0, -4);
++                }
++                const path = `${file}.mdx`;
++                const local = this.map.get(path);
++                const buffer = local ? local.arrayBuffer() : (await this.viewer.loadBaseFile(path, 'arrayBuffer'))?.data;
++                if (!buffer) {
++                    return;
++                }
++                const model = new model_1.default();
++                model.load(buffer);
++                const fixedRot = row.number('fixedRot');
++                const angle = (fixedRot >= 0 ? fixedRot : 0) * Math.PI / 180;
++                const cos = Math.cos(angle);
++                const sin = Math.sin(angle);
++                // The footprint, in tiles, from the TURNED extent.
++                const min = model.extent.min;
++                const max = model.extent.max;
++                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
++                for (const [x, y] of [[min[0], min[1]], [max[0], min[1]], [min[0], max[1]], [max[0], max[1]]]) {
++                    const rx = x * cos - y * sin;
++                    const ry = x * sin + y * cos;
++                    minX = Math.min(minX, rx);
++                    maxX = Math.max(maxX, rx);
++                    minY = Math.min(minY, ry);
++                    maxY = Math.max(maxY, ry);
++                }
++                const w = Math.max(1, Math.round((maxX - minX) / 128));
++                const h = Math.max(1, Math.round((maxY - minY) / 128));
++                const [tileX, tileY] = doodad.location;
++                const centerX = (tileX + w / 2) * 128 + centerOffset[0];
++                const centerY = (tileY + h / 2) * 128 + centerOffset[1];
++                let base = Infinity;
++                let cliffTexture = -1;
++                for (let y = tileY; y < tileY + h && y < rows - 1; y++) {
++                    for (let x = tileX; x < tileX + w && x < columns - 1; x++) {
++                        tiles[y * (columns - 1) + x] = 1;
++                        if (cliffTexture === -1 && this.isCliff(x, y)) {
++                            cliffTexture = corners[y][x].cliffTexture;
++                        }
++                    }
++                }
++                for (let y = tileY; y <= tileY + h && y < rows; y++) {
++                    for (let x = tileX; x <= tileX + w && x < columns; x++) {
++                        base = Math.min(base, corners[y][x].layerHeight);
++                    }
++                }
++                if (base === Infinity) {
++                    return;
++                }
++                if (cliffTexture === -1) {
++                    cliffTexture = corners[tileY][tileX].cliffTexture;
++                }
++                if (cliffTexture === 15) {
++                    cliffTexture = 1;
++                }
++                // Bend a COPY of the mesh onto the ground (the parsed arrays may view the file).
++                const lo = [Infinity, Infinity, Infinity];
++                const hi = [-Infinity, -Infinity, -Infinity];
++                for (const geoset of model.geosets) {
++                    const vertices = new Float32Array(geoset.vertices);
++                    for (let i = 0; i < vertices.length; i += 3) {
++                        const x = vertices[i];
++                        const y = vertices[i + 1];
++                        vertices[i + 2] += ((base - 2) + groundAt(centerX + x * cos - y * sin, centerY + x * sin + y * cos)) * 128;
++                        for (let k = 0; k < 3; k++) {
++                            lo[k] = Math.min(lo[k], vertices[i + k]);
++                            hi[k] = Math.max(hi[k], vertices[i + k]);
++                        }
++                    }
++                    geoset.vertices = vertices;
++                }
++                // The bounds the viewer culls by have to move with the mesh.
++                const radius = Math.hypot(Math.max(-lo[0], hi[0]), Math.max(-lo[1], hi[1]), Math.max(-lo[2], hi[2]));
++                for (const extent of [model.extent, ...model.sequences.map((s) => s.extent), ...model.geosets.map((g) => g.extent)]) {
++                    extent.min.set(lo);
++                    extent.max.set(hi);
++                    extent.boundsRadius = radius;
++                }
++                // Only the FOOTPRINT is waited on (the cliff pass needs it); the instance arrives
++                // when its model does, exactly as every other doodad's.
++                this.load(model).then((resource) => {
++                    if (!resource) {
++                        return;
++                    }
++                    const instance = resource.addInstance();
++                    instance.move([centerX, centerY, 0]);
++                    instance.rotateLocal(gl_matrix_1.quat.setAxisAngle(gl_matrix_1.quat.create(), [0, 0, 1], angle));
++                    const index = resource.textures.findIndex((texture) => texture.replaceableId === 11);
++                    if (index !== -1 && this.cliffTextures[cliffTexture]) {
++                        instance.setTexture(index, this.cliffTextures[cliffTexture]);
++                    }
++                    instance.setScene(this.worldScene);
++                    this.terrainDoodads.push({ instance, row });
++                });
++            }
++            catch (e) {
++                console.warn(`Failed to load cliff/terrain doodad ID ${doodad.id}: ${e}`);
++            }
++        });
++        await Promise.all(placed);
++        return tiles;
++    }
+     loadDoodadsAndDestructibles() {
+         const mpqFile = this.map.get('war3map.doo');
+         if (!mpqFile) {
+@@ -354,11 +718,34 @@ class War3MapViewerMap {
                              promise = this.load(mpqFile.name);
                          }
                          else {
@@ -2857,7 +3035,42 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..232b99f56f3413e58ff28146608d9e06
                              }
                          });
                      }
-@@ -485,6 +707,31 @@ class War3MapViewerMap {
+@@ -371,32 +758,8 @@ class War3MapViewerMap {
+                 console.warn(`Failed to load doodad/destructible ID ${doodad.id}: ${e}`);
+             }
+         }
+-        // Cliff/Terrain doodads.
+-        for (const doodad of parser.terrainDoodads) {
+-            try {
+-                const row = this.viewer.doodadsData.getRow(doodad.id);
+-                this.load(`${row.string('file')}.mdx`)
+-                    .then((model) => {
+-                    if (model) {
+-                        this.terrainDoodads.push(new terraindoodad_1.default(this, model, row, doodad));
+-                    }
+-                });
+-                // let pathTexture = <Texture>this.load(row.pathTex);
+-                // pathTexture.whenLoaded(() => {
+-                //   let startx = doodad.location[0];
+-                //   let starty = doodad.location[1];
+-                //   let endx = startx + pathTexture.width / 4;
+-                //   let endy = starty + pathTexture.height / 4;
+-                //   for (let x = startx; x < endx; x++) {
+-                //     for (let y = starty; y < endy; y++) {
+-                //     }
+-                //   }
+-                // });
+-            }
+-            catch (e) {
+-                console.warn(`Failed to load cliff/terrain doodad ID ${doodad.id}: ${e}`);
+-            }
+-        }
++        // OpenWar3: the .doo's cliff/terrain doodads (caves) are placed with the terrain, by
++        // ow3PlaceCliffDoodads — they are part of the cliff mesh, not props standing on it.
+         this.doodadsReady = true;
+         this.anyReady = true;
+     }
+@@ -485,6 +848,31 @@ class War3MapViewerMap {
              worldScene.renderTranslucent();
          }
      }
@@ -2889,7 +3102,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..232b99f56f3413e58ff28146608d9e06
      renderGround() {
          if (this.terrainReady) {
              const gl = this.viewer.gl;
-@@ -503,6 +750,8 @@ class War3MapViewerMap {
+@@ -503,6 +891,8 @@ class War3MapViewerMap {
              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
              webgl.useShader(shader);
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -2898,7 +3111,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..232b99f56f3413e58ff28146608d9e06
              gl.uniform2fv(uniforms['u_offset'], this.centerOffset);
              gl.uniform2f(uniforms['u_size'], this.columns, this.rows);
              gl.uniform1i(uniforms['u_heightMap'], 15);
-@@ -527,7 +776,19 @@ class War3MapViewerMap {
+@@ -527,7 +917,19 @@ class War3MapViewerMap {
                  gl.uniform1i(uniforms[`u_tilesets[${i}]`], i);
                  webgl.bindTexture(tilesetTextures[i], i);
              }
@@ -2919,7 +3132,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..232b99f56f3413e58ff28146608d9e06
              if (tilesetCount > 15) {
                  gl.uniform1f(uniforms['u_baseTileset'], 15);
                  for (let i = 0, l = tilesetCount - 15; i < l; i++) {
-@@ -535,7 +796,7 @@ class War3MapViewerMap {
+@@ -535,7 +937,7 @@ class War3MapViewerMap {
                      gl.uniform1f(uniforms[`u_extended[${i}]`], isExtended);
                      webgl.bindTexture(tilesetTextures[i + 15], i);
                  }
@@ -2928,7 +3141,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..232b99f56f3413e58ff28146608d9e06
              }
              instancedArrays.vertexAttribDivisorANGLE(texturesAttrib, 0);
              instancedArrays.vertexAttribDivisorANGLE(variationsAttrib, 0);
-@@ -558,11 +819,17 @@ class War3MapViewerMap {
+@@ -558,11 +960,17 @@ class War3MapViewerMap {
              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
              webgl.useShader(shader);
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -2946,7 +3159,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..232b99f56f3413e58ff28146608d9e06
              gl.uniform1f(uniforms['u_offsetHeight'], this.waterHeightOffset);
              gl.uniform4fv(uniforms['u_maxDeepColor'], this.maxDeepColor);
              gl.uniform4fv(uniforms['u_minDeepColor'], this.minDeepColor);
-@@ -582,7 +849,14 @@ class War3MapViewerMap {
+@@ -582,7 +990,14 @@ class War3MapViewerMap {
              gl.vertexAttribPointer(isWaterAttrib, 1, gl.UNSIGNED_BYTE, false, 1, 0);
              instancedArrays.vertexAttribDivisorANGLE(isWaterAttrib, 1);
              gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.faceBuffer);
@@ -2962,7 +3175,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..232b99f56f3413e58ff28146608d9e06
              instancedArrays.vertexAttribDivisorANGLE(isWaterAttrib, 0);
              instancedArrays.vertexAttribDivisorANGLE(instanceAttrib, 0);
          }
-@@ -599,6 +873,8 @@ class War3MapViewerMap {
+@@ -599,6 +1014,8 @@ class War3MapViewerMap {
              gl.disable(gl.BLEND);
              shader.use();
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -2971,7 +3184,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..232b99f56f3413e58ff28146608d9e06
              gl.uniform1i(uniforms['u_heightMap'], 0);
              gl.uniform2f(uniforms['u_pixel'], 1 / (this.columns + 1), 1 / (this.rows + 1));
              gl.uniform2fv(uniforms['u_centerOffset'], this.centerOffset);
-@@ -612,6 +888,23 @@ class War3MapViewerMap {
+@@ -612,6 +1029,23 @@ class War3MapViewerMap {
                  gl.activeTexture(gl.TEXTURE2);
                  gl.bindTexture(gl.TEXTURE_2D, this.cliffTextures[1].webglResource);
              }
@@ -2995,7 +3208,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..232b99f56f3413e58ff28146608d9e06
              // Set instanced attributes.
              if (!vertexArrayObject) {
                  instancedArrays.vertexAttribDivisorANGLE(attribs['a_instancePosition'], 1);
-@@ -671,6 +964,86 @@ class War3MapViewerMap {
+@@ -671,6 +1105,86 @@ class War3MapViewerMap {
          const topRight = corners[row + 1][column + 1].layerHeight;
          return bottomLeft !== bottomRight || bottomLeft !== topLeft || bottomLeft !== topRight;
      }
@@ -3082,7 +3295,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..232b99f56f3413e58ff28146608d9e06
      /**
       * Is the tile at the given column and row water?
       */
-@@ -692,6 +1065,108 @@ class War3MapViewerMap {
+@@ -692,6 +1206,108 @@ class War3MapViewerMap {
          }
          return 0;
      }
@@ -3191,7 +3404,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..232b99f56f3413e58ff28146608d9e06
      /**
       * Get the ground texture of a corner, whether it's normal ground, a cliff, or a blighted corner.
       */
-@@ -730,17 +1205,37 @@ class War3MapViewerMap {
+@@ -730,17 +1346,37 @@ class War3MapViewerMap {
      applyModificationTable(dataMap, metadataMap, modificationTable) {
          for (const modificationObject of modificationTable.objects) {
              let row;
