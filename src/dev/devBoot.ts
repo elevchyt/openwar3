@@ -47,6 +47,7 @@ import { DirectLinks } from "../net/directLink";
  *   ?dev&map=EchoIsles&observe              …WATCHED: every seat a computer (at &ai=, Normal
  *                                            by default) and this machine an observer
  *   ?dev&chapter=NightElfX01                start a CAMPAIGN chapter (&difficulty=easy|normal|hard)
+ *   ?dev&credits                            play the edition's CREDITS map, as the main menu's button does
  *   ?dev&edition=roc                        boot the Reign of Chaos client (`tft` for the expansion)
  *   ?dev&patch=1.32.10                      play on an EARLIER balance patch (`1.30.4` = the install
  *                                            untouched) — the developer's rollback, docs/patches.md
@@ -77,6 +78,8 @@ export interface DevBootHooks {
    *  the ARCHIVES rather than the install's Maps\ folder, and it runs on the campaign's own
    *  config (single player in the map's own first human slot, unexplored fog, a difficulty). */
   startChapter(name: string, difficulty: string): Promise<void>;
+  /** Play the main menu's Credits (`?credits`) — a map out of the archives, like a chapter. */
+  startCredits(): Promise<void>;
 }
 
 const log = (msg: string): void => console.info(`[dev-boot] ${msg}`);
@@ -306,6 +309,11 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   if (wantChapter) {
     log(`starting chapter ${wantChapter}`);
     await hooks.startChapter(wantChapter, params.get("difficulty") ?? "normal");
+    return;
+  }
+  if (params.has("credits")) {
+    log("starting the credits");
+    await hooks.startCredits();
     return;
   }
 

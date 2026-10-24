@@ -10,7 +10,7 @@ import { RACE_LABEL, type Race } from "../data/races";
 import type { DataSource } from "../vfs/types";
 import type { MapInfo } from "../world/mapInfo";
 import { cloneNamespaced, FdfLibrary } from "./fdf/library";
-import { UI_HEIGHT } from "./fdf/layout";
+import { stretchBox, UI_HEIGHT } from "./fdf/layout";
 import type { FdfFrame } from "./fdf/parser";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import type { MapPreview } from "../world/mapPreview";
@@ -213,6 +213,7 @@ export async function mountLoadingScreen(opts: LoadingScreenOptions): Promise<Lo
      */
     textOverrides: overrides,
     onBuild: (s) => {
+      stretchIndent(s, overrides.LoadingText ?? ""); // before the fit: the indent moves the wrap
       fitBlurb(s); // custom panel only — it finds no blurb frame on a melee screen
       if (!melee) return;
       paintMinimap(s, info, preview, icons);
@@ -309,6 +310,29 @@ export async function mountLoadingScreen(opts: LoadingScreenOptions): Promise<Lo
       screen.dispose();
     },
   };
+}
+
+/**
+ * Stretch the blurb's INDENT with the screen.
+ *
+ * A map author lays the blurb out with leading spaces — the Frozen Throne credits centre their
+ * one word under the subtitle with 44 of them — and on this screen that is a POSITION, not type:
+ * the box is drawn `xScale` wider than the file says (see the header), while the spaces are set
+ * at `scale` like every glyph. So on a wide window the word kept its 4:3 offset inside a box
+ * that had grown, and sat well left of the centre it was placed on. The missing width goes in
+ * as a first-line `text-indent`, in `em` so `fitBlurb`'s smaller type takes it down with it.
+ */
+function stretchIndent(s: FdfScreen, text: string): void {
+  const el = s.frame("LoadingText");
+  const lead = /^[ \t]*/.exec(text)?.[0] ?? "";
+  if (!el || !lead) return;
+  const box = stretchBox(s.element.clientWidth, s.element.clientHeight);
+  const cs = getComputedStyle(el);
+  const ctx = document.createElement("canvas").getContext("2d");
+  const px = parseFloat(cs.fontSize);
+  if (!ctx || !px) return;
+  ctx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+  el.style.textIndent = `${(ctx.measureText(lead).width / px) * (box.xScale - 1)}em`;
 }
 
 /**
@@ -513,11 +537,15 @@ function captions(
   if (!melee) {
     // The custom panel: the three lines the MAP carries, with the campaign index's title
     // winning where it has one, and the map's own name standing in for a scenario that
-    // filled none of them.
+    // filled none of them. ONLY none of them: the Frozen Throne credits fill the subtitle and
+    // the blurb and leave the title empty, and the real client shows it empty — its map name
+    // ("The Frozen Throne Credits") stood in over "The Frozen Throne" as a line it never has.
+    const subtitle = opts.subtitle || info.loading.subtitle;
+    const untitled = subtitle || info.loading.text.trim() ? "" : info.name;
     return {
       ...bar,
-      LoadingTitleText: opts.title || info.loading.title || info.name,
-      LoadingSubtitleText: opts.subtitle || info.loading.subtitle,
+      LoadingTitleText: opts.title || info.loading.title || untitled,
+      LoadingSubtitleText: subtitle,
       LoadingText: info.loading.text,
     };
   }

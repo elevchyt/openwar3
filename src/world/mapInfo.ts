@@ -257,7 +257,11 @@ export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
       model: info.loadingScreenModel.replace(/\.mdl$/i, ".mdx"),
       title: resolveName(info.loadingScreenTitle, "", strings),
       subtitle: resolveName(info.loadingScreenSubtitle, "", strings),
-      text: resolveName(info.loadingScreenText, "", strings),
+      // The blurb keeps its LEADING whitespace: it is a JUSTIFYLEFT paragraph and an author
+      // lays it out with spaces. The Frozen Throne credits centre their one word that way —
+      // TRIGSTR_736 is 44 spaces and "Credits" — and the real client draws it centred under
+      // the subtitle; trimmed, it sat at the paragraph's left edge.
+      text: resolveName(info.loadingScreenText, "", strings, true),
     },
     classification,
     format,
@@ -272,10 +276,12 @@ function forceOf(info: { forces: Array<{ playerMasks: number }> }, id: number): 
 }
 
 // A w3i string is either literal or a "TRIGSTR_019" key into the map's own war3map.wts.
-// Resolve the key; only a key we can't find falls back.
-function resolveName(value: string, fallback: string, strings: Map<number, string>): string {
+// Resolve the key; only a key we can't find falls back. `keepIndent` drops blank lines and
+// trailing space but keeps the first line's indent (see `loading.text`).
+function resolveName(value: string, fallback: string, strings: Map<number, string>, keepIndent = false): string {
   if (!value) return fallback;
   const m = /^TRIGSTR_(\d+)$/.exec(value.trim());
   if (!m) return value;
-  return strings.get(parseInt(m[1], 10))?.trim() || fallback;
+  const s = strings.get(parseInt(m[1], 10)) ?? "";
+  return (keepIndent ? s.replace(/^(?:[ \t]*\r?\n)+/, "").trimEnd() : s.trim()) || fallback;
 }

@@ -131,6 +131,16 @@ type DOWN from the file's own 0.013 until the paragraph clears the bar:
   neither. No shipped chapter reaches either branch — Rise of the Naga's blurb, the longest of
   them, still fits at the file's own size — but a custom campaign's could.
 
+## 3d. A blurb's leading spaces are LAYOUT, and the title may be empty
+
+`LoadingText` is `JUSTIFYLEFT`, and authors centre a short blurb by hand: the Frozen Throne
+credits' text is `TRIGSTR_736`, 44 spaces and "Credits", and the real client draws it under the
+subtitle exactly where those spaces put it. So the string keeps its indent (`resolveName`'s
+`keepIndent`), and because the box is stretched while the spaces are type, the missing width
+goes back in as a first-line `text-indent` (`stretchIndent`). The same map fills the subtitle
+and the blurb and no title — and the real client shows no title. The map's NAME stands in only
+for a map that fills none of the three.
+
 ## 4. It is a full-WINDOW screen, and `#ui` stops being one mid-load
 
 `body.in-game` puts a **`transform`** on `#ui` to re-box it to the game frame — and a

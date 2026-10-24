@@ -156,6 +156,13 @@ export class CinematicPanelOverlay {
     if (!this.live) this.filterEl.hidden = true;
   }
 
+  /** Whether the map's filter is still on its way DOWN to a darker picture — a fade-out in
+   *  flight. The skip cover asks this before it lifts (`MapViewerScene.tickCinematicSkip`). */
+  get filterDarkening(): boolean {
+    const live = this.live;
+    return !!live && live.t < live.filter.duration && live.filter.end.a > live.filter.start.a;
+  }
+
   /** Whether a scene is on screen — the host gates the portrait model on it. */
   get sceneActive(): boolean {
     return !!this.scene;

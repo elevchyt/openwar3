@@ -120,12 +120,15 @@ export class SkyDome {
       this.clearDepth();
       return; // looking straight down: no sky in the frame at all
     }
-    if (rows !== null) {
-      const vp = this.scene.viewport as ArrayLike<number>;
-      gl.scissor(vp[0], vp[1] + vp[3] - rows, vp[2], rows);
-    }
+    const vp = this.scene.viewport as ArrayLike<number>;
+    if (rows !== null) gl.scissor(vp[0], vp[1] + vp[3] - rows, vp[2], rows);
     this.scene.renderOpaque();
     this.scene.renderTranslucent();
+    // …and give the frame back WHOLE. The world's own startFrame set its scissor before we
+    // ran, and nothing after us sets it again, so a clip left in place clips the WORLD to the
+    // sky's rows too: the Frozen Throne credits look almost level (ANGLE_OF_ATTACK 349.1)
+    // under BlizzardSky, and drew their whole scene in a strip above the horizon over black.
+    if (rows !== null) gl.scissor(vp[0], vp[1], vp[2], vp[3]);
     this.clearDepth();
   }
 

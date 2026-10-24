@@ -17362,6 +17362,14 @@ export class MapViewerScene {
       skip.fired = true;
       this.mapScript?.interp.firePlayerEvent(this.localPlayer, EVENT_PLAYER_END_CINEMATIC);
     }
+    // A map that answers the skip by fading out ITSELF is going to black anyway — the Frozen
+    // Throne credits take 2 s over it (`Trig_End_Actions`) and end the game at the bottom.
+    // Lifting ours on our own clock showed the world again under a fade only a quarter of the
+    // way down, so the player watched the screen go black TWICE, the second time cut short.
+    // Stay black until the map's fade has landed; lifting then reveals the black it ended on.
+    if (skip.fired && skip.t > SKIP_FADE_OUT + SKIP_FADE_HOLD && this.cinematic?.filterDarkening) {
+      skip.t = SKIP_FADE_OUT + SKIP_FADE_HOLD;
+    }
     const back = skip.t - SKIP_FADE_OUT - SKIP_FADE_HOLD;
     const alpha = skip.t < SKIP_FADE_OUT
       ? skip.t / SKIP_FADE_OUT

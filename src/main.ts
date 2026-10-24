@@ -1396,7 +1396,15 @@ startGamepad();
 // route. See src/dev/devBoot.ts and tools/vite-plugin-dev-install.ts.
 if (import.meta.env.DEV && new URLSearchParams(location.search).has("dev")) {
   void import("./dev/devBoot")
-    .then((m) => m.devBoot({ mountInstall, showMenu, startGame, startChapter }))
+    .then((m) =>
+      m.devBoot({
+        mountInstall,
+        showMenu,
+        startGame,
+        startChapter,
+        startCredits: () => startCredits(resolver.installSource!),
+      }),
+    )
     .catch((err) => {
       console.error("[dev-boot] failed:", err);
       gate = mountLoadGate(ui, onFilesLoaded); // fall back to the human path
