@@ -10041,9 +10041,12 @@ export class MapViewerScene {
       inventory: () =>
         (this.rts?.inventorySlots() ?? []).map((s) =>
           // An unavailable pocket wears the icon's DIS* twin, never a tint (see disabledArt).
-          s ? { icon: s.icon ? this.inventoryIcon(s.icon, s.disabled) : null, name: s.name, desc: s.desc, charges: s.charges, cooldownLeft: s.cooldownLeft, cooldownFrac: s.cooldownFrac, usable: s.usable, pawnable: s.pawnable, sellGold: s.sellGold, sellLumber: s.sellLumber, disabled: s.disabled } : null,
+          s ? { icon: s.icon ? this.inventoryIcon(s.icon, s.disabled) : null, name: s.name, desc: s.desc, charges: s.charges, cooldownLeft: s.cooldownLeft, cooldownFrac: s.cooldownFrac, usable: s.usable, pawnable: s.pawnable, sellGold: s.sellGold, sellLumber: s.sellLumber, disabled: s.disabled, patronView: s.patronView } : null,
         ),
       useInventory: (slot) => {
+        // A shop's patron's pockets, shown while the SHOP is selected (rts.inventorySlots): to
+        // be looked at, never pressed — not even the click sound.
+        if (this.rts?.inventorySlots()[slot]?.patronView) return;
         // A press on something that can be USED — a potion, a scroll, a wand, a rod — is a
         // command-card press in every respect and sounds like one: `InterfaceClick`
         // (UISounds.slk: `Sound\Interface\MouseClick1.wav`), the same row runCommand plays.
@@ -10076,7 +10079,9 @@ export class MapViewerScene {
         // game-dll-thread.md, next to CGameUI.cpp). UISounds.slk's `InterfaceClick` row carries
         // only the first, so the row lends its volume and flags and the two are its variants.
         // Only a pocket with something in it: an empty one picks nothing up.
-        if (this.rts?.inventorySlots()[slot]) this.sounds?.playUiVariants("InterfaceClick", INVENTORY_CLICKS);
+        const held = this.rts?.inventorySlots()[slot];
+        if (held?.patronView) return; // a shop's patron's pocket: nothing to pick up (see useInventory)
+        if (held) this.sounds?.playUiVariants("InterfaceClick", INVENTORY_CLICKS);
         this.rts?.moveInventorySlot(slot);
         this.hud?.setArmed(!!this.rts?.orderMode); // enter "target to move" mode
       },

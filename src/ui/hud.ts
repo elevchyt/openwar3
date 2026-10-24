@@ -151,6 +151,10 @@ export interface HudInvSlot {
    *  DIS* twin (the same texture swap the command card makes). Nothing in it may be pressed,
    *  dragged or moved until the carrier can act again. */
   disabled: boolean;
+  /** A SHOP is selected and this is its patron's pocket (the unit of ours that takes
+   *  delivery there). Always `disabled` as well; the tooltip is the item's NAME alone, as the
+   *  real client's is, and the pocket takes no press, drag or move. */
+  patronView?: boolean;
 }
 
 export interface HudSelection {
@@ -3514,6 +3518,12 @@ export class GameHud {
       this.cmdTooltip.hidden = true;
       return;
     }
+    // A shop's patron's pocket: the name and nothing else — no hotkey, no price, no sell or
+    // use hint and no description. The pocket is not ours to press from here.
+    if (s.patronView) {
+      this.setTooltip(`<div class="hud-tooltip-title">${wc3ToHtml(s.name)}</div>`);
+      return;
+    }
     // "%s (…NumPad %u…)" — fill the file's own two slots, in its own order. Under GRID hotkeys
     // (issue #142) the slot answers a LETTER as well, and that is the key the hand on the card
     // is next to — so the hint names it instead. The shape is the file's own (name, then the
@@ -3558,7 +3568,7 @@ export class GameHud {
         cd.hidden = true;
       }
     }
-    const key = inv.map((s) => (s ? `${s.icon ? 1 : 0}:${s.name}:${s.charges}:${s.disabled ? 1 : 0}` : "-")).join("|");
+    const key = inv.map((s) => (s ? `${s.icon ? 1 : 0}:${s.name}:${s.charges}:${s.disabled ? 1 : 0}:${s.patronView ? 1 : 0}` : "-")).join("|");
     if (key === this.invKey) return;
     this.invKey = key;
     for (let i = 0; i < this.invSlots.length; i++) {
@@ -3578,8 +3588,9 @@ export class GameHud {
       }
       btn.classList.remove("empty");
       btn.classList.toggle("disabled", s.disabled);
+      btn.classList.toggle("patron-view", !!s.patronView);
       btn.style.backgroundImage = s.icon ? `url(${s.icon})` : "";
-      btn.draggable = !s.disabled; // a stunned hero's gear stays in its pockets
+      btn.draggable = !s.disabled; // a stunned hero's gear stays in its pockets, as does a patron's
       setCount(this.invCount[i], s.charges > 0 ? String(s.charges) : "");
     }
     // The slot under the cursor just changed (a charge spent, the item swapped or

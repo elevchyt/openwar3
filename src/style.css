@@ -3058,8 +3058,12 @@ body.hud-widget-skinned .hud-queue-slot { color: transparent; }
 /* A press sinks the pocket exactly as it sinks a hero portrait or a command button — the
    slot already goes through the same `onPress`, it just never had the rule. */
 .hud-inv-slot.pressed { transform: scale(0.98); }
-.hud-inv-slot:not(.empty):hover,
-.hud-inv-slot:not(.empty).pad-hover,
+/* A shop's patron's pocket (rts.inventorySlots' `patronView`): shown, never pressed — no
+   pointer, no sink and no gold rim, the DIS* art already saying it is not for clicking. */
+.hud-inv-slot.patron-view { cursor: default; }
+.hud-inv-slot.patron-view.pressed { transform: none; }
+.hud-inv-slot:not(.empty):not(.patron-view):hover,
+.hud-inv-slot:not(.empty):not(.patron-view).pad-hover,
 body.carrying-item .hud-inv-slot:hover,
 body.carrying-item .hud-inv-slot.pad-hover { border-color: var(--gold); }
 .hud-console.hud-console-skinned .hud-inventory .hud-inv-slot { background-color: transparent; }

@@ -7463,21 +7463,44 @@ export class RtsController {
   // --- inventory (hero items) ----------------------------------------------
 
   /** The primary selected hero's 6 inventory slots for the HUD (null = empty). An
-   *  empty array means the selection has no inventory (not a hero). */
-  inventorySlots(): Array<{ itemId: string; icon: string; name: string; desc: string; charges: number; cooldownLeft: number; cooldownFrac: number; usable: boolean; pawnable: boolean; sellGold: number; sellLumber: number; disabled: boolean } | null> {
+   *  empty array means the selection has no inventory (not a hero).
+   *
+   *  A SHOP in the selection shows its PATRON's pockets instead — the unit of OURS that
+   *  takes delivery there (`shopBuyer`, the one the overhead arrow is on), so the player sees
+   *  what room it has before buying. The real client does exactly this and draws every one
+   *  of them DISABLED: the DIS* twin, a tooltip that is the item's name and nothing else, and
+   *  no press, drag or move — the pockets belong to a unit that is not in the selection.
+   *  `shopBuyer` is asked for the LOCAL player only, so two players' heroes at one counter
+   *  each see their own (the nomination map is per player, and derived on every client). */
+  inventorySlots(): Array<{ itemId: string; icon: string; name: string; desc: string; charges: number; cooldownLeft: number; cooldownFrac: number; usable: boolean; pawnable: boolean; sellGold: number; sellLumber: number; disabled: boolean; patronView: boolean } | null> {
     const id = this.primary;
-    const u = id !== null ? this.sim.units.get(id) : undefined;
+    let u = id !== null ? this.sim.units.get(id) : undefined;
+    let patronView = false;
+    if (u && !u.inventory.length) {
+      const patron = this.sim.shopBuyer(u.id, this.localPlayer);
+      if (patron) {
+        u = patron;
+        patronView = true;
+      }
+    }
     if (!u || !u.inventory.length) return [];
     // Stunned or asleep, the whole row is unavailable — the sim's own lock (itemsLocked), read
     // once for the six, so the buttons wear their DIS* art exactly as the command card's do.
-    const disabled = this.sim.itemsLockedFor(u.id);
+    const disabled = patronView || this.sim.itemsLockedFor(u.id);
     return u.inventory.map((held) => {
       if (!held) return null;
       const def = this.items.get(held.itemId);
       const total = def ? this.itemActiveCooldown(def) : 0;
+      if (patronView) {
+        return {
+          itemId: held.itemId, disabled, patronView, icon: def?.icon ?? "", name: def?.name ?? held.itemId, desc: "",
+          charges: held.charges, cooldownLeft: 0, cooldownFrac: 0, usable: false, pawnable: false, sellGold: 0, sellLumber: 0,
+        };
+      }
       return {
         itemId: held.itemId,
         disabled,
+        patronView,
         icon: def?.icon ?? "",
         name: def?.name ?? held.itemId,
         // The item's own Ubertip, with its <ID,Field> value references filled in — the
