@@ -721,6 +721,12 @@ interface Scene {
   // map — a menu backdrop and a portrait bust have no boundary to stand in.
   boundaryMask?: BoundaryMask;
 }
+/** A placed doodad's `row` — the viewer's merged Doodads/DestructableData row it was built
+ *  from (w3x map.js), read for the canopy override a destructible's model is given. */
+interface DestructableRowLike {
+  string(col: string): string | undefined;
+  number?(col: string): number;
+}
 interface HideableWidget {
   instance: {
     localLocation: Float32Array;
@@ -2612,6 +2618,8 @@ export class MapViewerScene {
       // a gate OPENS by dying (see mapDestructibles.ts), which swaps its collider for the
       // `pathTexDeath` one that blocks only the posts.
       this.destructibles = collectMapDestructibles(doodads, (id) => destr.getRow(id) ?? undefined);
+      // …and the ones it placed dead are drawn dead, once their models arrive (poseDeadPlaced).
+      this.deadPlacedAwaitingPose = new Set(this.destructibles.filter((d) => d.life <= 0).map((d) => d.id));
       // A record the editor placed DEAD (the pre-felled trees a few maps scatter) stamps its
       // `pathTexDeath` instead, or nothing at all when its type leaves no wreckage. A gate
       // written with a life of 0 is not one of those — see collectMapDestructibles.
@@ -8166,6 +8174,13 @@ export class MapViewerScene {
       this.removedWidgets.add(w);
       return;
     }
+    this.playActorDeath(a, instant);
+  }
+
+  /** Put a stand-in on its `death` clip for good: played out on our clock, or — `instant` —
+   *  posed straight at its last frame, which is the stump a tree leaves behind. A model with
+   *  no death clip keeps the pose it has; it is dead all the same. */
+  private playActorDeath(a: DoodadActor, instant: boolean): void {
     const death = this.seqByName(a.inst.model.sequences, /death/i);
     if (death >= 0) {
       a.inst.setSequence(death);
@@ -8183,6 +8198,60 @@ export class MapViewerScene {
     }
     a.dead = true;
     a.revertEnd = 0;
+  }
+
+  /**
+   * Destructibles the map placed DEAD (.doo index), waiting for the doodad pass to build their
+   * model so it can be posed as what is left of them.
+   *
+   * The sim has known since the .doo was read — no collider, nothing to chop (see the map
+   * load) — but the viewer's doodad pass ignores the record's life byte and builds every
+   * doodad standing, so a pre-felled tree was a whole tree you could walk through.
+   * (4)LostTemple places 36 of them, `WTst`/`LTlt` around the bases. A tree model has no
+   * "dead" clip to play: the stump IS the last frame of `death`, the same pose a tree felled
+   * in the fog is put in when it is next seen (`dropTreeModel`, instant).
+   */
+  private deadPlacedAwaitingPose = new Set<number>();
+
+  /** Pose every placed-dead destructible whose model has arrived (see deadPlacedAwaitingPose).
+   *  Run from the frame loop, which keeps going while the world is held at the start gate, so
+   *  the stumps are stumps before the loading screen comes down. */
+  private poseDeadPlaced(): void {
+    if (!this.deadPlacedAwaitingPose.size) return;
+    const doodads = this.viewer.map?.doodads as unknown as Array<HideableWidget & { row?: DestructableRowLike }> | undefined;
+    if (!doodads?.length) return;
+    for (const id of this.deadPlacedAwaitingPose) {
+      const d = this.destructibleById(id);
+      if (!d || d.life > 0) {
+        this.deadPlacedAwaitingPose.delete(id); // gone, or a script brought it back first
+        continue;
+      }
+      // ITS widget, at its exact spot — never `nearestDoodadWidget`'s 96-unit reach: until
+      // this record's own model streams in, the nearest thing could be a rock beside it, and
+      // that is what would have been turned into a stump.
+      let w: (HideableWidget & { row?: DestructableRowLike }) | undefined;
+      for (const c of doodads) {
+        const loc = c.instance?.localLocation;
+        if (loc && Math.abs(loc[0] - d.x) < 1 && Math.abs(loc[1] - d.y) < 1) {
+          w = c;
+          break;
+        }
+      }
+      if (!w?.instance?.model) continue; // not built yet
+      // …and wearing its canopy. `doodadActor` copies the placed instance's texture overrides,
+      // and those land asynchronously after the model does — spawned before, a snowy tree's
+      // stump would be the model's default summer one.
+      const texFile = w.row?.string("texFile");
+      if (w.row?.number?.("texID") && texFile && texFile !== "_" && !w.instance.textureOverrides?.size) continue;
+      this.deadPlacedAwaitingPose.delete(id);
+      const a = this.doodadActor(w);
+      if (!a) {
+        w.instance.hide(); // no spawnable model — the best "dead" we can draw is gone
+        this.removedWidgets.add(w);
+        continue;
+      }
+      this.playActorDeath(a, true);
+    }
   }
 
   /** Trees that came down while the local player had no eyes on them, waiting to be taken off
@@ -15111,6 +15180,7 @@ export class MapViewerScene {
       this.updateSpecialFx(wdt / 1000); // script effects: age them, settle Birth→Stand, fog-gate
       this.updateDyingFx(wdt / 1000); // buff art + script effects playing out their Death clip
       this.updateTreePulses(wdt / 1000);
+      this.poseDeadPlaced(); // the stumps the map placed, as their models stream in
       this.updateTreeActors(wdt / 1000); // per-chop "stand hit" wobble + off-camera clip catch-up
       this.updateProjectiles();
       this.updateBloodMageSpheres(wdt / 1000); // Blood Mage orbiting spheres + thrown balls

@@ -522,6 +522,12 @@ while the doodad pass went on drawing a closed gate across the path: a gate you 
 not attack, and could walk through. So a type that cannot be placed dead never is, and stands at
 full life. (`pnpm sim:test` pins it.)
 
+A type that CAN be placed dead is drawn dead, too, and that is the renderer's job rather than the
+sim's: the viewer's doodad pass ignores the life byte and builds every doodad standing.
+`MapViewerScene.poseDeadPlaced` puts each such record's model on the last frame of its `death`
+clip — the stump, since a tree model has no "dead" clip of its own — once its model and its canopy
+override have streamed in, matched at its exact spot. (4)LostTemple has 36 of them by the bases.
+
 ## A ship is a place to stand, and the sea is a place to sail
 
 Chapter one ends its harbour cinematic by putting Illidan on a boat:
