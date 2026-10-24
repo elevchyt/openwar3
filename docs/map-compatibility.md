@@ -1037,9 +1037,12 @@ unspent and the comment says so.
 A spell aimed at a TREE is measured to the trunk's edge with a unit target's one-cell allowance
 (tickCast) — measured to its centre, a Giant at the edge of a grove never got within War Club's 32.
 
-A sky (`SetSkyModel`) is drawn only ABOVE the horizon (render/sky.ts): `FoggedSky.mdx` is a whole
-sphere, and its lower half showed past the edge of the terrain mesh as DotA's lavender rectangle in
-the tavern corner. Past the ground's edge is the void a sky-less map shows there.
+A sky (`SetSkyModel`) is drawn as the WHOLE sphere, below the horizon too (render/sky.ts). It was
+once clipped to the rows above the horizon to hide DotA's `FoggedSky.mdx` showing past the edge of
+the terrain mesh (a lavender rectangle in the tavern corner at our widest zoom), but below the
+horizon is also everything past the camera's FarZ: the Frozen Throne credits look through the arch
+of a far bridge at ground beyond FarZ 4964, and the clip drew it as a black hole where the real
+client shows sky and white fog. The lavender corner is the price.
 
 `tools/sim-stock-abilities-test.cjs` runs each against the install's own rows;
 `tools/sim-map-tables-test.cjs` asserts both maps' stock codes are known.

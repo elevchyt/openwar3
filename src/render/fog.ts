@@ -35,6 +35,11 @@ export function makeFog(start: number, end: number, r: number, g: number, b: num
  * longer run to full — which is exactly `haze × STRENGTH` at every distance inside the original
  * ramp, and nothing renders beyond it (a map's fog end sits at the camera's own FarZ, 5000).
  *
+ * The EDITOR's fog only — the ramp the w3i states, which the World Editor also writes as a
+ * `SetTerrainFogEx` line in `main()`. A ramp a TRIGGER sets is a scene composed to its own
+ * numbers (the Frozen Throne credits fog to white by their FarZ) and is laid on exactly as
+ * written; `setTerrainFog` in mapViewer.ts tells the two apart.
+ *
  * MAP fog only. The glue screens carry hand-tuned fog of their own (`menuScene.ts` — baked
  * against reference shots, see the campaign/menu backdrop work) and must not be re-graded by a
  * knob meant for gameplay.
