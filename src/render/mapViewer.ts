@@ -35,6 +35,7 @@ import { FogOverlay, type BoundaryMask } from "./fogOverlay";
 import { UberSplatOverlay } from "./uberSplatOverlay";
 import { ShadowOverlay } from "./shadowOverlay";
 import { parseTerrainShadows, TerrainShadowOverlay } from "./terrainShadowOverlay";
+import { CameraHeightField } from "./cameraHeight";
 import { LightningOverlay } from "./lightningOverlay";
 import { WeatherOverlay } from "./weather";
 import { loadWeatherRegistry, type WeatherRegistry } from "../data/weather";
@@ -1168,6 +1169,8 @@ export class MapViewerScene {
   // (see followGround) so cresting a cliff glides instead of snapping; `groundSnap` skips the
   // ease for the frame after a teleport (map load, minimap jump, a script camera apply).
   private groundZ = 0;
+  /** The smoothed terrain the focus rides — WC3's, measured (render/cameraHeight.ts). */
+  private cameraHeight: CameraHeightField | null = null;
   private groundSnap = true;
   /** The rect the camera focus is kept inside so it can't scroll off into the black void
    *  (issue #5) — the map's CAMERA BOUNDS, which is neither the terrain grid nor the playable
@@ -2187,6 +2190,7 @@ export class MapViewerScene {
     if (w3e && wpm) {
       const terrain = parseW3E(w3e);
       this.terrainData = terrain; // GetTerrainType reads it, SetTerrainType writes it
+      this.cameraHeight = new CameraHeightField(terrain); // what the camera focus rides (followGround)
       this.mapTileCount = terrain.groundTilesets.length;
       this.tileLoads.clear();
       this.fogTerrain = terrain; // corner grid for the fog overlay mesh
@@ -17241,7 +17245,12 @@ export class MapViewerScene {
   private static readonly GROUND_TELEPORT = 512; // focus jumped ≥ 4 cells in a frame ⇒ no ease
   private lastFocus: [number, number] | null = null;
   private followGround(dtMs: number): void {
-    const ground = this.rts?.groundHeightAt(this.target[0], this.target[1]) ?? 0;
+    // Not the ground under the focus: the terrain SMOOTHED over ~500 units around it, which is
+    // what the real client's focus rides (render/cameraHeight.ts has the measurement).
+    const ground =
+      this.cameraHeight?.heightAt(this.target[0], this.target[1]) ??
+      this.rts?.groundHeightAt(this.target[0], this.target[1]) ??
+      0;
     // Any jump — minimap click, panTo, focus-selection, a script's camera apply — lands on new
     // ground with nothing to ease from. Detected here, once, rather than at every call site.
     const moved = this.lastFocus

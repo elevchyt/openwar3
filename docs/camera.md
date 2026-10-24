@@ -96,13 +96,25 @@ that model's size. The worker spacing doesn't have that failure mode.
 
 WC3 keeps its distance to the **ground under the middle of the screen**, not to the z = 0 plane —
 scroll onto a plateau and the camera climbs with it. `followGround` samples the terrain under the
-focus every frame and sets `target[2] = ground + CAMERA_FIELD_ZOFFSET` (issue #73).
+focus every frame and sets `target[2] = ground + CAMERA_FIELD_ZOFFSET` (issue #73), where the
+ground is a smoothed one (below).
 
 Pinning the focus at z = 0 makes every map pay for its own terrain: on Tirisfal Glades' highest
 plateau (+1268) the eye — only 1650·sin 56° = 1368 above the focus plane — ends up practically in
 the dirt, while a map sitting below the plane frames far too wide. Melee maps mostly open on a
 flat mid-height plateau and custom maps go wherever their author put them, which is exactly the
 "custom maps look different from melee maps" the issue reported.
+
+**The terrain it rides is SMOOTHED.** The real client's focus does not sit on the ground under it:
+it floats over a riverbed, rises before it reaches a cliff and never drops into a pond. Measured
+with a copy of Twisted Meadows whose script tours eight points in cinematic mode (AOA 330,
+distance 1650, ZOFFSET 0, so the focus height is the engine's terrain answer and nothing else),
+each real frame matched against ours with the focus swept in 20-unit steps, plus the Frozen Throne
+credits' own camera: a Gaussian blur of the corner heights with **σ = 4 cells (512 units)** fits all
+eight to 11 units RMS, about the resolution of the measurement, where the raw ground misses by 57
+(the credits' target: ground 204, smoothed 314, measured 314). It is the ground and not the water
+surface. The reach is the data's; the kernel's shape is ours, since a box or a tent of the same
+reach fits nearly as well. `CameraHeightField` (render/cameraHeight.ts) builds it once per map.
 
 The follow is **eased** (`GROUND_EASE`, ~0.12 s), or cresting a cliff would jolt the whole view by
 a 128-unit layer in one frame; a real teleport (map load, minimap jump, a script's camera apply) is
@@ -324,10 +336,8 @@ solve returns the script's camera: rotation 93.3 against 93.3, tilt 12.0° again
 `cinematicLens` (mapViewer.ts) does it as an off-axis frustum on the whole canvas — the vertical
 lens widened by 1/0.72 and `P[9]` shifting the centre — rather than a smaller GL viewport, so
 picking, the frustum cull and every world-to-screen projection read the same matrices as the
-picture. What is still off: with the lens right, the same solve puts the real focus about 100
-units higher than ours (~460 at the credits' target, against ground 204 + ZOFFSET 151 = 355; the
-target is over water, surface 279). Something other than the raw ground under the focus sets the
-camera's height in WC3, and it has not been pinned down yet.
+picture. With the lens right, the same solve put the real focus ~110 units above ground + ZOFFSET
+at the credits' target, which is what led to the smoothed focus height above.
 
 ## Related
 
