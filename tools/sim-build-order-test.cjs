@@ -16,13 +16,11 @@
 // queue can advance. The per-cell test itself (`footprintBuildable`) is checked first, since
 // everything above rests on it agreeing with the stamp cell-for-cell.
 //
-// The MONEY half is the same story told about the stash. A queued build is not asked what it
-// costs at the click — queueing five towers is a statement about the next minute, and the gold
-// for the fifth is meant to come out of the mining that happens while the first four go up — so
-// it is priced when its turn comes (`payPendingBuild`) and simply waits at its site, unpaid,
-// until the stash can answer. What is checked here is that the two halves of that never leak:
-// nothing is taken at the click, nothing is refunded that was never taken, and an outright
-// (unshifted) placement still pays at the click exactly as WC3 does.
+// The MONEY half is the same story told about the stash. A player's placement is bought at the
+// click, shift-queued or not, and clearing the queue refunds every building that never started
+// (the Authority section). The sim still takes an order handed to it UNPAID — priced when its
+// turn comes (`payPendingBuild`), waiting at its site until the stash can answer — and what is
+// checked for those is that nothing is refunded that was never taken.
 //
 // Run: pnpm sim:test
 const { join } = require("node:path");
@@ -146,12 +144,11 @@ console.log("\nan order the ground still allows is left alone");
   check("…and both orders stand", [!!w.buildPending, w.orderQueue.length], [true, 1]);
 }
 
-console.log("\na shift-queued build is priced when its turn comes, not when it was queued");
+console.log("\nan UNPAID build order is priced when its turn comes, not when it was queued");
 {
-  // The queue is a statement about the next minute: five towers queued on one tower's gold is
-  // a normal thing to ask for, because the mining that happens while the first goes up pays
-  // for the second. So a queued `buildnew` carries `paid: false` and takes nothing at the
-  // click; `payPendingBuild` asks the stash at the site, and keeps asking until it can.
+  // A player's builds are bought at the click (the Authority section below); a bare order handed
+  // to the sim with `paid: false` takes nothing until `payPendingBuild` asks the stash at the
+  // site, and keeps asking until it can.
   world.initStash(3, 100, 0);
   const w = worker({ owner: 3 });
   world.queueOrder(w.id, { kind: "buildnew", defId: "hwtw", x: 52 * CELL, y: 52 * CELL, gold: 60, lumber: 0, paid: false });
@@ -205,8 +202,10 @@ console.log("\na build still unaffordable when the worker STANDS on it is refuse
   check("a PAID build is not dropped", [world.dropUnpaidBuilds(w3.id), !!w3.buildPending], [null, true]);
 }
 
-console.log("\nthe AUTHORITY asks the price of an outright build and not of a queued one");
+console.log("\nthe AUTHORITY charges EVERY placement at the click, shift-queued ones included");
 {
+  // WC3: each silhouette a shift-click lays down takes its price out of the stash the moment
+  // it appears, and clearing the queue gives back every one whose construction never started.
   const { Authority } = require(join(REPO, ".sim-build", "src", "game", "authority.js"));
   const def = { id: "hwtw", goldCost: 30, lumberCost: 20 };
   const registry = { get: (id) => (id === "hwtw" ? def : undefined) };
@@ -216,15 +215,35 @@ console.log("\nthe AUTHORITY asks the price of an outright build and not of a qu
   const w = worker({ owner: 6, typeId: "hpea" });
   const at = (x, y, queued) => ({ c: "build", unitId: w.id, defId: "hwtw", x, y, queued });
   check("a build placed outright on an empty stash is refused", auth.execute(6, at(60 * CELL, 8 * CELL, false)), false);
-  // …but the same building SHIFT-queued is taken, because it is not this instant's gold it
-  // is spending. Nothing is charged and nothing is refused; the price is asked at the site.
-  check("…and the same one shift-queued is accepted", auth.execute(6, at(60 * CELL, 8 * CELL, true)), true);
-  check("…taking nothing from the stash, and marked unpaid",
-    [world.stashOf(6).gold, w.orderQueue.map((o) => o.paid)], [10, [false]]);
-  // With the gold in hand the outright build goes through and pays at the click, WC3-style.
-  world.stashOf(6).gold = 100;
-  check("an outright build the player CAN afford still pays at the click",
-    [auth.execute(6, at(56 * CELL, 8 * CELL, false)), world.stashOf(6).gold, w.buildPending.paid], [true, 70, true]);
+  check("…and so is the same one shift-queued", auth.execute(6, at(60 * CELL, 8 * CELL, true)), false);
+  check("…taking nothing, queueing nothing", [world.stashOf(6).gold, w.orderQueue.length], [10, 0]);
+  // Ninety gold buys three towers: one outright, two queued behind it — each paid as it lands.
+  world.stashOf(6).gold = 90;
+  world.stashOf(6).lumber = 100;
+  check("an outright build pays at the click",
+    [auth.execute(6, at(56 * CELL, 8 * CELL, false)), world.stashOf(6).gold, w.buildPending.paid], [true, 60, true]);
+  check("a shift-queued one pays at the click too",
+    [auth.execute(6, at(52 * CELL, 8 * CELL, true)), world.stashOf(6).gold, w.orderQueue.map((o) => o.paid)], [true, 30, [true]]);
+  check("…and the next", [auth.execute(6, at(48 * CELL, 8 * CELL, true)), world.stashOf(6).gold], [true, 0]);
+  check("a fourth the stash cannot cover is refused at the click", auth.execute(6, at(44 * CELL, 8 * CELL, true)), false);
+  check("…leaving the queue at the two it paid for", w.orderQueue.length, 2);
+  // Moving the worker away (any fresh order) clears the queue: all three unstarted buildings
+  // come back, the one it was walking to and the two behind it.
+  check("a fresh order clears the queue…",
+    auth.execute(6, { c: "order", unitId: w.id, order: { kind: "move", x: 30 * CELL, y: 30 * CELL }, queued: false }), true);
+  check("…and refunds every building that never started",
+    [world.stashOf(6).gold, world.stashOf(6).lumber, w.buildPending, w.orderQueue.length], [90, 100, null, 0]);
+  // …and so does the worker dying with a paid queue.
+  auth.execute(6, at(56 * CELL, 8 * CELL, false));
+  auth.execute(6, at(52 * CELL, 8 * CELL, true));
+  check("two more bought", world.stashOf(6).gold, 30);
+  world.clearQueue(w.id); // what SimWorld's death path does with a dead worker's orders
+  check("…both come back when the queue is dropped", [world.stashOf(6).gold, world.stashOf(6).lumber], [90, 100]);
+  // A queue that is FULL takes no more, and the click that found it full is not charged.
+  for (let i = 0; i < 40; i++) w.orderQueue.push({ kind: "hold" });
+  check("a full queue refuses the placement", auth.execute(6, at(40 * CELL, 8 * CELL, true)), false);
+  check("…and the price stays in the stash", world.stashOf(6).gold, 90);
+  w.orderQueue.length = 0;
 }
 
 console.log("\na hall is held off the gold mine's mouth — HALL_MINE_DISTANCE, and who it binds");

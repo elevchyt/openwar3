@@ -1230,10 +1230,10 @@ export type QueuedOrder =
   // no target, because the depot is not a thing the player picks — but a RIGHT-CLICK on one of
   // your own depots is exactly that pick, and `depotId` carries it (SimUnit.returnDepotId).
   | { kind: "returnresources"; depotId?: number }
-  // `paid` is whether the cost has already left the stash. A build placed outright is paid at
-  // the click (the gold drops the instant you put the ghost down); a SHIFT-queued one is not —
-  // it is priced when its turn in the queue comes round, because a building queued behind two
-  // others is meant to be paid for out of the gold those two builds' worth of mining brings in.
+  // `paid` is whether the cost has already left the stash. A player's build is ALWAYS paid at
+  // the click, shift-queued or not — the gold drops the instant each silhouette goes down, and
+  // clearing the queue gives back every one whose construction never started (Authority,
+  // `build`; clearQueue). An unpaid one is priced when its turn comes (payPendingBuild).
   | { kind: "buildnew"; defId: string; x: number; y: number; gold: number; lumber: number; paid: boolean }
   // ax/ay: as above, a distinct spot around the building's footprint to spread builders.
   | { kind: "buildresume"; buildingId: number; ax?: number; ay?: number }
@@ -1905,7 +1905,7 @@ export interface SimUnit {
   orderQueue: QueuedOrder[]; // shift-queued follow-up orders (drained as each completes)
   // Walking to raise a new building; gold/lumber are its cost, refunded if the build is
   // abandoned before construction starts — but only once `paid` says the stash actually
-  // gave it up (see the QueuedOrder note: a queued build is priced when its turn comes).
+  // gave it up (see the QueuedOrder note).
   buildPending: { defId: string; x: number; y: number; gold: number; lumber: number; paid: boolean; mineId?: number; item?: ItemBuild } | null;
   // --- hero / abilities / buffs (spells slice) ---
   isHero: boolean;
@@ -11459,10 +11459,12 @@ export class SimWorld {
 
   /** Append a follow-up order to a unit's queue (WC3 shift-queue, capped at 35).
    *  It runs once the unit's current order — and any orders queued before it —
-   *  finish. Does not interrupt whatever the unit is doing now. */
-  queueOrder(id: number, order: QueuedOrder): void {
+   *  finish. Does not interrupt whatever the unit is doing now. False when the
+   *  queue is full (or the unit gone) and the order was NOT taken — which a caller
+   *  that has already charged for a build needs to know, to give the price back. */
+  queueOrder(id: number, order: QueuedOrder): boolean {
     const u = this.units.get(id);
-    if (!u || u.orderQueue.length >= MAX_QUEUED_ORDERS) return;
+    if (!u || u.orderQueue.length >= MAX_QUEUED_ORDERS) return false;
     // The job the worker goes back to (interruptGatherLoop) is the END of its queue: a
     // further shift-order goes in front of it, and a gather order the player queues IS the
     // job now, so it replaces the remembered one rather than queueing behind a loop that
@@ -11471,9 +11473,10 @@ export class SimWorld {
     if (last?.kind === "harvest" && last.resume) {
       if (order.kind === "harvest") u.orderQueue[u.orderQueue.length - 1] = order;
       else u.orderQueue.splice(u.orderQueue.length - 1, 0, order);
-      return;
+      return true;
     }
     u.orderQueue.push(order);
+    return true;
   }
 
   /**
@@ -11516,10 +11519,10 @@ export class SimWorld {
     const u = this.units.get(id);
     if (!u) return;
     this.refundPendingBuild(u);
-    // …and a build in the queue that was already CHARGED is paid back too. A shift-queued one
-    // is priced when its turn comes and owes nothing, but an outright placement given to a
-    // peon still inside the structure it is raising waits in the queue paid (Authority's
-    // insideBuild door), and dropping it here kept the gold.
+    // …and every build in the queue that was already CHARGED is paid back too — which is all of
+    // a player's: a shift-placed silhouette is bought at the click (Authority, `build`), so a
+    // queue cleared by a fresh order, a Stop or the worker's death hands back every building
+    // whose construction never started. (An UNPAID one never took anything and owes nothing.)
     if (!u.orderQueue?.length) return; // (asked of every death now — most queues are empty)
     for (const o of u.orderQueue) {
       if (o.kind !== "buildnew" || !o.paid) continue;
@@ -11551,11 +11554,12 @@ export class SimWorld {
    * building may now rise: true if it was already paid or the stash could cover it here,
    * false if the player still can't afford it.
    *
-   * This is where a SHIFT-queued build meets its price. The click that queued it asked
-   * nothing of the stash — the whole point of queueing five towers is that you are spending
-   * gold you have not mined yet — so the question is asked at the site instead, while the
-   * silhouette on the ground shows the answer the whole way there (red until the stash can
-   * cover it, see updatePendingBuildGhosts). Asked here, at the site, it is asked for the
+   * A player's build is bought at the click — shift-queued or not (Authority, `build`) — so
+   * for those this is a formality that answers true. It is the door for an order handed to
+   * the sim UNPAID (a "Tiny" building item pays with its charge here; a script or a test may
+   * queue one bare): the question is asked at the site, while the silhouette on the ground
+   * shows the answer the whole way there (red until the stash can cover it, see
+   * updatePendingBuildGhosts). Asked here, at the site, it is asked for the
    * LAST time: a worker that has walked all the way to a building it cannot pay for is told
    * so and the order goes (`dropUnpaidBuilds`), the same way a site whose ground has gone is
    * told and goes. Waiting there indefinitely would be a worker doing nothing with no
@@ -11591,8 +11595,8 @@ export class SimWorld {
    * each. One refusal, one clearing of the queue, and the silhouettes go with the orders.
    *
    * Only UNPAID builds go: one already charged for has its money committed and is owed its
-   * building. (Nothing queues paid today — a queued build is priced when its turn comes —
-   * but the rule belongs with the flag rather than with today's callers.)
+   * building. (A player's builds are all bought at the click, so it is the bare orders this
+   * clears — see payPendingBuild.)
    */
   dropUnpaidBuilds(id: number): "gold" | "lumber" | null {
     const u = this.units.get(id);
@@ -11671,12 +11675,22 @@ export class SimWorld {
    *  renderer raises the foundation on arrival (watches `buildPending`). Used for
    *  immediate (non-shift) placement; the shift path queues a `buildnew` order.
    *  gold/lumber are the cost; `paid` says whether it has already left the stash
-   *  (and so whether abandoning the build refunds anything). An unpaid one tries to
-   *  pay the moment it becomes the worker's live order — the gold drops as the worker
-   *  sets off, WC3-style — and if it can't, it tries again at the site. */
+   *  (and so whether abandoning the build refunds anything) — a player's always has,
+   *  at the click. An unpaid one tries to pay the moment it becomes the worker's live
+   *  order and, if it can't, again at the site. */
   issueBuildNew(id: number, defId: string, x: number, y: number, gold: number, lumber: number, paid: boolean): void {
     const u = this.units.get(id);
-    if (!u || this.castLocked(u)) return;
+    if (!u) return;
+    // A queued build reaching a worker mid-wind-up is dropped (startNextQueued), and a
+    // building bought at the click is never just dropped: its price goes back.
+    if (this.castLocked(u)) {
+      if (paid) {
+        const st = this.stashOf(u.owner);
+        st.gold += gold;
+        st.lumber += lumber;
+      }
+      return;
+    }
     // A Haunted Gold Mine is not placed on GROUND, it is placed on a MINE — so the site is
     // whatever mine the player aimed at, not the pixel they clicked.
     const mine = this.hauntTarget(defId, x, y, u.owner);

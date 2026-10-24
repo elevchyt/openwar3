@@ -779,30 +779,31 @@ export class Authority {
         // it, or anybody's workers in it — SimWorld.mineClaimedByOther). Refused before the gold
         // leaves, so the click costs nothing.
         if (this.sim.hauntsMines(cmd.defId) && !this.sim.hauntTarget(cmd.defId, cmd.x, cmd.y, player)) return false;
-        // A build placed OUTRIGHT must be paid for now — WC3 never lets you put a structure
-        // down you cannot afford, and the gold leaves the stash at the click.
-        //
-        // A SHIFT-queued one is deliberately not asked the question here. Queueing five towers
-        // is a statement about the next minute, not about this instant: the gold for the fourth
-        // is meant to come out of the mining that happens while the first three go up, so
-        // refusing the order for a stash that will have long since refilled by the time the
-        // worker walks over is refusing it on the wrong evidence. The price is asked instead
-        // when the order becomes the worker's live one and again at the site
-        // (`SimWorld.payPendingBuild`), and until it can be met the queued silhouette stands
-        // red on the ground rather than dark blue (see `updatePendingBuildGhosts`).
+        // Every placement is paid for at the click — the SHIFT-queued ones included. WC3 never
+        // lets you put a structure down you cannot afford, and a queue is no exception: each
+        // silhouette a shift-click lays down takes its price out of the stash the moment it
+        // appears, so a fourth tower the stash cannot cover is refused ("Not enough gold.")
+        // rather than queued on the hope of gold to come. The queue is a list of buildings
+        // already BOUGHT, which is what makes clearing it a refund — a move, a Stop, the
+        // worker's death: every building in it whose construction has not started comes back
+        // in full (SimWorld.clearQueue / refundPendingBuild / dropBlockedBuilds).
         const stash = this.sim.stashOf(player);
-        const paid = !cmd.queued;
-        if (paid) {
-          if (stash.gold < def.goldCost || stash.lumber < def.lumberCost) return false;
-          stash.gold -= def.goldCost;
-          stash.lumber -= def.lumberCost;
-        }
-        // The cost rides on the order so the sim can charge it when its turn comes and refund
-        // it if the build is abandoned — but it is OUR figure now, not one the caller handed us.
-        return this.applyOrder(player, cmd.unitId, {
+        if (stash.gold < def.goldCost || stash.lumber < def.lumberCost) return false;
+        stash.gold -= def.goldCost;
+        stash.lumber -= def.lumberCost;
+        // The cost rides on the order so the sim can refund it if the build is abandoned — but
+        // it is OUR figure now, not one the caller handed us. An order the unit does not take
+        // (off the field, a full queue, a cast wind-up) never reached the sim, so the price
+        // goes straight back.
+        const taken = this.applyOrder(player, cmd.unitId, {
           kind: "buildnew", defId: cmd.defId, x: cmd.x, y: cmd.y,
-          gold: def.goldCost, lumber: def.lumberCost, paid,
+          gold: def.goldCost, lumber: def.lumberCost, paid: true,
         }, cmd.queued);
+        if (!taken) {
+          stash.gold += def.goldCost;
+          stash.lumber += def.lumberCost;
+        }
+        return taken;
       }
       case "repair": {
         // Everything the old call site checked CLIENT-side is re-checked here, because none of
@@ -1161,13 +1162,9 @@ export class Authority {
       if (!queued) this.sim.clearQueue(id);
       // Stop is "forget the queue", and in there that is all of it: there is no current order
       // to abort, and a stop left sitting in the queue would only run as a no-op on emerge.
-      if (o.kind !== "stop") this.sim.queueOrder(id, o);
-      return true;
+      return o.kind === "stop" || this.sim.queueOrder(id, o);
     }
-    if (queued) {
-      this.sim.queueOrder(id, o);
-      return true;
-    }
+    if (queued) return this.sim.queueOrder(id, o);
     // A GROUP order does not break a channel: the Archmage raining Blizzard among the Footmen it
     // moves keeps raining, and takes the order when the channel ends. Selected alone (or with
     // only other channellers) the order is meant for him and interrupts as it always has.

@@ -5249,13 +5249,11 @@ export class MapViewerScene {
     // decides, but it can't SAY anything, and a placement that fails on price is otherwise
     // a click that does nothing at all. The ghost stays on the cursor either way.
     //
-    // A SHIFT-queued placement is exempt: it is not spending this instant's gold but the gold
-    // the next minute's mining will bring in, so it is queued whatever the stash says and
-    // priced when the worker gets there (`SimWorld.payPendingBuild`). The refusal is not
-    // skipped, only MOVED: until then the player reads the answer off the silhouette, which
-    // stands red while the stash can't cover it, and if it is still red when the worker
-    // arrives the order is refused out loud there and dropped.
-    if (!queued && !this.canAfford(p.def.goldCost, p.def.lumberCost)) return;
+    // A SHIFT-queued placement is asked too: every silhouette is bought the moment it is put
+    // down (Authority, `build`), so the fourth tower of a row the stash cannot cover is a
+    // "Not enough gold." at the click, with the ghost still on the cursor — and clearing the
+    // queue later hands back every building in it that never started.
+    if (!this.canAfford(p.def.goldCost, p.def.lumberCost)) return;
     // Affordability, the charge and the order are all the authority's now — the renderer
     // used to charge the stash itself and post the price into the order (docs/multiplayer.md).
     if (!this.rts.execute(this.localPlayer, {
@@ -5359,9 +5357,10 @@ export class MapViewerScene {
         }
         continue;
       }
-      // The worker is standing on the site, so this is the moment a shift-queued build is
-      // asked for its money (it was queued without being asked — see Authority's `build`).
-      // Short of it, the build is off: the order goes, every unpaid one queued behind it goes
+      // The worker is standing on the site, so this is the moment an UNPAID build is asked for
+      // its money (a player's never is — Authority's `build` buys every placement at the
+      // click — so this answers true for those). Short of it, the build is off: the order
+      // goes, every unpaid one queued behind it goes
       // with it, and the player is told which resource ran out in the game's own voice — the
       // same "Not enough gold." they would have got at the click, arriving where the decision
       // actually happened. The silhouettes vanish with their orders.
@@ -13900,9 +13899,10 @@ export class MapViewerScene {
    *    refused up front — see `placementValid` — so this is for the ones no click could catch:
    *    an order from another of your workers landing in the same tick, or ground taken by an
    *    ally after you queued.)
-   *  • **It isn't paid for** — a shift-queued build is charged when the worker reaches it, not
-   *    when it was queued, so the queue can hold more building than the player has gold for.
-   *    The unpaid sites are priced IN ORDER against the live stash, each one spending what the
+   *  • **It isn't paid for** — which a player's own placement never is: every one, shift-queued
+   *    or not, is bought at the click (Authority, `build`). An order handed to the sim UNPAID
+   *    (SimWorld.payPendingBuild) is charged when the worker reaches it instead, so for those
+   *    the unpaid sites are priced IN ORDER against the live stash, each one spending what the
    *    ones ahead of it left, so a queue of five towers on three towers' gold reddens exactly
    *    the last two. This one is not a verdict, unlike the ground: it is re-asked every frame,
    *    so a red site goes back to dark blue the moment the mining catches up, and a blue one
