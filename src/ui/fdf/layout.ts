@@ -118,7 +118,7 @@ function readPoints(frame: FdfFrame): { setAllPoints: boolean; points: PointSpec
  * is the engine's shrink-wrap, and only it lets its glyphs overhang (ui/fdf/render.ts).
  */
 const LINE_LEADING = 1.2;
-function textBoxHeight(frame: FdfFrame, lines: number): number {
+export function textBoxHeight(frame: FdfFrame, lines: number): number {
   const size = fontSizeOf(frame) ?? 0.013;
   return lines <= 1 ? size : lines * size * LINE_LEADING;
 }

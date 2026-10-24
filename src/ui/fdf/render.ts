@@ -7,7 +7,7 @@ import type { FdfFrame } from "./parser";
 import { FdfLibrary, firstProp, hasFlag, numProp, propagateDecorate, strProp } from "./library";
 import {
   fitBox, fontSizeOf, layout, stretchBox, toPixels, UI_HEIGHT,
-  type FitBox, type LaidOutFrame,
+  type FitBox, type LaidOutFrame, type MeasureTextLines,
 } from "./layout";
 import { fadePanels, FADE_MS, LATE_PANEL_DELAY_MS, type PanelDirection } from "./anim";
 import { applyOverride, layer, type FdfOverride } from "../../overrides";
@@ -100,7 +100,7 @@ export interface FdfScreenOptions {
    *  runtime: a `ScriptDialog` gets N `ScriptDialogButton`s stacked inside it, a
    *  `Leaderboard` gets a row per player. This is the hook for building that composite
    *  out of the real templates, so the chrome still comes from the game's own files. */
-  buildRoot?(lib: FdfLibrary): FdfFrame;
+  buildRoot?(lib: FdfLibrary, measureLines?: MeasureTextLines): FdfFrame;
   /** Place the root at the centre of the screen at its own Width/Height, rather than
    *  stretching it over the whole viewport — how WC3 puts a dialog on screen. */
   centerRoot?: boolean;
@@ -211,8 +211,11 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
   for (const o of opts.overrides ?? []) layer(lib, o);
   // buildRoot runs per BUILD, not once: a composed screen's frame tree depends on state
   // that changes (the Custom Game screen grows a player row per slot in the chosen map).
-  const makeRoot = (): FdfFrame => {
-    const r = opts.buildRoot ? opts.buildRoot(lib) : lib.resolveRoot(opts.rootFrame);
+  // `measureLines` is the layout's own word-wrap, handed to a composed root that has to size
+  // ITSELF off its text (a ScriptDialog grows to hold a message that wraps). It needs the
+  // screen's fit, so only a build has one — the first call below is a dry run.
+  const makeRoot = (measureLines?: MeasureTextLines): FdfFrame => {
+    const r = opts.buildRoot ? opts.buildRoot(lib, measureLines) : lib.resolveRoot(opts.rootFrame);
     if (!r) throw new Error(`FDF: frame "${opts.rootFrame}" not found in ${opts.fdfPath}`);
     // After `buildRoot`, so an override can edit a tree the screen composed for itself — the
     // Custom Game screen's Advanced Options pane only exists once it has been adopted.
@@ -250,7 +253,6 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
   const build = (): void => {
     for (const off of disposers) off();
     disposers = [];
-    root = makeRoot();
     // A scrolling FRAME keeps its place across the rebuild. The lobby relayouts whenever the
     // seating changes shape (a joiner takes a bench seat, a row's widgets come and go), and
     // a host that had scrolled down to the bench would otherwise be thrown back to the top
@@ -272,6 +274,8 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     const vw = overlay.clientWidth || window.innerWidth;
     const vh = overlay.clientHeight || window.innerHeight;
     const fit = opts.stretchRoot ? stretchBox(vw, vh) : fitBox(vw, vh);
+    const measureLines: MeasureTextLines = (f, w) => measureTextFrameLines(f, lib, opts.textOverrides ?? {}, fit, w);
+    root = makeRoot(measureLines);
     // Root fills the full screen width (worldW × 0.6) so TOPRIGHT-anchored frames land
     // on the screen's right edge, not a centred 4:3 box's right edge. A CENTRED root
     // instead keeps its own Width/Height and sits in the middle — how the game puts a
@@ -287,7 +291,7 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     const { tree } = layout(
       root, box, widescreen(opts.buttonWidthScale ?? 1, 1, vw / vh),
       (f) => measureTextFrame(f, lib, opts.textOverrides ?? {}, fit),
-      (f, w) => measureTextFrameLines(f, lib, opts.textOverrides ?? {}, fit, w),
+      measureLines,
     );
     renderFrame(tree, overlay, {
       lib, fit, blpCanvas, overlay,

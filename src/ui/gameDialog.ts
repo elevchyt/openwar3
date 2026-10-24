@@ -27,6 +27,7 @@ import type { DialogButtonObj, DialogObj } from "../jass/runtime";
 import type { DataSource } from "../vfs/types";
 import type { Arg, FdfFrame, FdfProp } from "./fdf/parser";
 import { numProp, type FdfLibrary } from "./fdf/library";
+import { textBoxHeight, type MeasureTextLines } from "./fdf/layout";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 
 const SCRIPT_DIALOG_FDF = "UI\\FrameDef\\UI\\ScriptDialog.fdf";
@@ -35,11 +36,15 @@ const SCRIPT_DIALOG_FDF = "UI\\FrameDef\\UI\\ScriptDialog.fdf";
 // EscMenuButtonTemplate (which ScriptDialogButton inherits) is 0.228 × 0.035. The dialog
 // has to grow to hold the buttons the script added, so the height is ours to compute.
 const BUTTON_H = 0.035;
-const BUTTON_GAP = 0.008;
+// Ours, not the FDF's: the button art is already inset inside its 0.035 box, so any gap
+// here reads about double on screen (0.008 left the Victory dialog's two buttons far apart).
+const BUTTON_GAP = 0.002;
 const MESSAGE_H = 0.062; // room for the message band above the button stack
 const MESSAGE_LINE = 0.022; // the message's own line height (see the auto-size note below)
-const SIDE_PAD = 0.02; // keep the message clear of the backdrop's ornate border
-const BOTTOM_PAD = 0.014;
+// Keep the message clear of the backdrop's ornate border: (0.288 − 0.228) / 2, so a message
+// that wraps fills the same column as the buttons under it.
+const SIDE_PAD = 0.03;
+const BOTTOM_PAD = 0.024;
 
 const s = (v: string): Arg => ({ s: v, n: null, str: true });
 const word = (v: string): Arg => ({ s: v, n: null, str: false });
@@ -124,7 +129,7 @@ export class GameDialogOverlay {
         overlayClass: "fdf-ingame fdf-dialog",
         skin: this.skin,
         centerRoot: true,
-        buildRoot: (lib) => this.rootFrame(lib, d),
+        buildRoot: (lib, measureLines) => this.rootFrame(lib, d, measureLines),
         handlers,
         textOverrides,
         shortcutOverrides,
@@ -141,14 +146,22 @@ export class GameDialogOverlay {
 
   /** Build the composite: the game's ScriptDialog frame, grown to fit N clones of its
    *  ScriptDialogButton template, each anchored below the message. */
-  private rootFrame(lib: FdfLibrary, d: DialogObj): FdfFrame {
+  private rootFrame(lib: FdfLibrary, d: DialogObj, measureLines?: MeasureTextLines): FdfFrame {
     const base = lib.resolveRoot("ScriptDialog");
     const button = lib.resolveRoot("ScriptDialogButton");
     if (!base) throw new Error("FDF: frame \"ScriptDialog\" not found");
 
-    const n = button ? d.buttons.length : 0;
-    const height = MESSAGE_H + n * (BUTTON_H + BUTTON_GAP) + BOTTOM_PAD;
     const width = numProp(base, "Width") ?? 0.288;
+    // A message too long for one line WRAPS and the dialog grows by the extra lines, pushing
+    // the buttons down — a map's dialog is free to say more than "Victory!", and a one-line
+    // box clipped it to whichever line landed in the middle. One line keeps MESSAGE_LINE.
+    const text = base.children.find((c) => c.name === "ScriptDialogText");
+    const lines = (text && measureLines?.(text, width - 2 * SIDE_PAD)) || 1;
+    const messageH = lines > 1 && text ? textBoxHeight(text, lines) : MESSAGE_LINE;
+    const top = MESSAGE_H + (messageH - MESSAGE_LINE); // where the button stack starts
+
+    const n = button ? d.buttons.length : 0;
+    const height = top + n * (BUTTON_H + BUTTON_GAP) + BOTTOM_PAD;
 
     // The message is a TEXT frame with no Width/Height. In WC3 a text frame AUTO-SIZES to
     // its content — which is why the FDF anchors it `SetPoint TOP, "ScriptDialog", TOP` and
@@ -165,7 +178,7 @@ export class GameDialogOverlay {
             props: [
               ...c.props.filter((p) => p.key !== "Width" && p.key !== "Height" && p.key !== "FontJustificationH"),
               prop("Width", num(width - 2 * SIDE_PAD)),
-              prop("Height", num(MESSAGE_LINE)),
+              prop("Height", num(messageH)),
               prop("FontJustificationH", word("JUSTIFYCENTER")),
             ],
           }
@@ -174,8 +187,8 @@ export class GameDialogOverlay {
     for (let i = 0; i < n; i++) {
       const clone = renameFrame(button!, i);
       // Stack downward from under the message, centred on the dialog. FDF y is UP, so the
-      // offsets are negative: the first button sits MESSAGE_H below the dialog's top.
-      const dy = -(MESSAGE_H + i * (BUTTON_H + BUTTON_GAP));
+      // offsets are negative: the first button sits `top` below the dialog's top.
+      const dy = -(top + i * (BUTTON_H + BUTTON_GAP));
       clone.props = [
         ...clone.props.filter((p) => p.key !== "SetPoint"),
         prop("SetPoint", word("TOP"), s("ScriptDialog"), word("TOP"), num(0), num(dy)),
