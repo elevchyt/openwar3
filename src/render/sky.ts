@@ -105,6 +105,8 @@ export class SkyDome {
    *  ground. Clears depth afterwards (see the header). */
   renderBehind(): void {
     if (!this.instance) return;
+    const gl = this.viewer.gl;
+    const depthTest = gl.isEnabled(gl.DEPTH_TEST); // the world's, restored below
     this.scene.startFrame(); // viewport + scissor; `alpha` keeps it from clearing
     // The WHOLE sphere, below the horizon too. A sky is what fills whatever the world does not
     // draw over, and below the horizon that is everything past the camera's FarZ: the Frozen
@@ -116,6 +118,15 @@ export class SkyDome {
     // comes back with this, and is the price of the void past FarZ being the sky.
     this.scene.renderOpaque();
     this.scene.renderTranslucent();
+    // …and hand the DEPTH TEST back as the world left it. A sky's layers are flagged
+    // NoDepthTest, so the model batch turns the test OFF and nothing after it turns it on
+    // again before the ground: the ground and the cliffs then drew without testing — and so
+    // without WRITING — depth, and no hill, bank or cliff ever hid a doodad or a unit behind
+    // it. On every map with a sky. The credits are where it showed: their bridges' piers and
+    // abutments drew through the causeways they stand in, which read as a bridge set too
+    // high, until a camera solved off the real client's own frame put our bridges exactly
+    // where its are and the difference turned out to be the ground in front of them.
+    if (depthTest) gl.enable(gl.DEPTH_TEST);
     this.clearDepth();
   }
 
