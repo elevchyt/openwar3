@@ -24,6 +24,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const THREAD = "https://www.hiveworkshop.com/threads/what-is-openwar3.375387/";
+// Newcomers are sent to the LANDING page, never to a GitHub release page.
+const LANDING = "https://openwar3.vercel.app/";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -38,10 +40,6 @@ const gh = (...a) => execFileSync("gh", a, { cwd: root, encoding: "utf8" }).trim
 const release = JSON.parse(gh("release", "view", tag, "--json", "body,isDraft"));
 if (release.isDraft) fail(`${tag} is still a draft — publish it first (gh release edit ${tag} --draft=false …).`);
 if (!release.body.trim()) fail(`${tag} has no release notes yet.`);
-const repo = gh("repo", "view", "--json", "url", "-q", ".url");
-// The TAG's page, not the API's `url`: a release that was ever a draft keeps an
-// `untagged-…` url there, and that one is dead the moment it is published.
-const page = `${repo}/releases/tag/${tag}`;
 
 const post = [
   `[B][SIZE=5]OpenWar3 ${version} is out[/SIZE][/B]`,
@@ -49,7 +47,7 @@ const post = [
   toBBCode(release.body),
   "",
   `[B]Already playing?[/B] Just launch OpenWar3 — it offers the update by itself the next time it starts.`,
-  `[B]New here?[/B] Download it from the [URL='${page}']release page[/URL].`,
+  `[B]New here?[/B] Download it from [URL='${LANDING}']openwar3.vercel.app[/URL].`,
 ].join("\n");
 
 if (printOnly) {
