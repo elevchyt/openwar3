@@ -173,6 +173,7 @@ export function writeUnitSnapshot(u: SimUnit, s: UnitSnapshot): void {
     u.building.queue = s.building.queue;
     u.building.producesUnits = s.building.producesUnits;
     u.building.selfBuilds = s.building.selfBuilds;
+    u.building.stalled = s.building.stalled;
     u.building.rallyX = s.building.rallyX;
     u.building.rallyY = s.building.rallyY;
     u.building.rallyKind = s.building.rallyKind as NonNullable<SimUnit["building"]>["rallyKind"];

@@ -1098,6 +1098,16 @@ export interface BuildingState {
    *
    *  Everything else halts the moment its builder walks off. */
   selfBuilds?: boolean;
+  /** Construction is HALTED this tick: still a scaffold, and nobody is raising it — its
+   *  builder walked off, died, or was re-tasked (or the site is uprooted/frozen). The sim
+   *  needs nothing of it (the clock simply does not move); it is published because the
+   *  scaffold's own model has motion that the construction clock does not drive. A human
+   *  building's Birth clip carries the dust and sawdust emitters and a `saw` bone on a
+   *  GLOBAL sequence (Farm.mdx: `DustParticles`, `SawDustParticles`, bone `saw` on global
+   *  sequence 1), and both run off the instance's own clock — so pinning the Birth frame to
+   *  progress left the dust rising and the saw going over a building nobody was working on.
+   *  Set in tickBuildings, read by the renderer (RtsController, `timeScale` 0). */
+  stalled?: boolean;
   builderIds: number[]; // workers constructing (empty → progress halts). Extra
   // builders past the first "speed build" it (human peasants): faster, but they
   // burn extra resources — see SPEED_BUILD_* constants + tickBuildings.
@@ -7715,6 +7725,8 @@ export class SimWorld {
     for (const u of this.units.values()) {
       const b = u.building;
       if (!b) continue;
+      // Halted unless one of the construction branches below advances the clock this tick.
+      b.stalled = b.constructionLeft > 0;
       // An UPROOTED Ancient is not a building right now: it trains nothing and researches
       // nothing while it walks. The queue is left exactly as it stands rather than refunded —
       // this is a pause, and planting again resumes it where it stopped.
@@ -7725,6 +7737,7 @@ export class SimWorld {
       if (b.constructionLeft > 0) {
         // Debug cheat: finish in ~1s no matter what (no builder required).
         if (this.fastBuild) {
+          b.stalled = false;
           const prevLeft = b.constructionLeft;
           b.constructionLeft = Math.max(0, b.constructionLeft - Math.max(dt, b.buildTimeTotal * dt));
           this.addConstructionHp(u, b, prevLeft);
@@ -7735,6 +7748,7 @@ export class SimWorld {
         // Mine is held up by the Tree's roots, and every Undead structure was SUMMONED and
         // then left to rise on its own. Either way the clock runs unattended.
         if (b.selfBuilds) {
+          b.stalled = false;
           const prevLeft = b.constructionLeft;
           b.constructionLeft = Math.max(0, b.constructionLeft - dt);
           this.addConstructionHp(u, b, prevLeft);
@@ -7773,6 +7787,7 @@ export class SimWorld {
           }
         }
         if (present > 0) {
+          b.stalled = false;
           // Extra builders past the first speed the build but burn extra
           // resources (HUMAN only — speedBuilds()). If the owner can't pay this
           // tick's surcharge, drop back toward the base rate (only as many extras

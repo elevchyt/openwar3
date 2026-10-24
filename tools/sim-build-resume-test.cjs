@@ -114,9 +114,12 @@ console.log("RESUME — a lone worker sent from across the map builds it");
   const before = b.building.constructionLeft;
   world.tick(DT);
   check("the clock does not move while it is still on its way", b.building.constructionLeft === before);
+  // …and says so: `stalled` is what the renderer stops the scaffold's dust and saw on.
+  check("…and the site reads as halted", b.building.stalled === true);
   const r = walkIn(world, w, b);
   check("it walks in and the building goes up", r.built);
   check("…holding the job the whole way — the walk's end did not stop() it off the site", r.kept);
+  check("…and the site no longer reads as halted", b.building.stalled === false);
   const gap = gapOf(w, b);
   check("…from against the wall", gap < 96, `gap ${gap.toFixed(0)}`);
   check("…standing still, on no order", !w.moving && w.order === "idle");
@@ -168,6 +171,7 @@ console.log("\nSTOP — the player's Stop still takes it off the site");
   const left = b.building.constructionLeft;
   for (let t = 0; t < 3 / DT; t++) world.tick(DT);
   check("…and the site stays halted", b.building.constructionLeft === left && !w.moving);
+  check("…and reads as halted again", b.building.stalled === true);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

@@ -232,6 +232,9 @@ export interface BuildingSnapshot {
    *  decides what a right-click on it means: sending wisps into one that is still closing its
    *  roots is the crew boarding, not workers assisting a build that nobody can help with. */
   selfBuilds: boolean;
+  /** Construction is halted (SimWorld BuildingState.stalled): the scaffold's model is drawn
+   *  as a still picture, its dust and its global-sequence saw stopped with the clock. */
+  stalled: boolean;
   rallyX: number;
   rallyY: number;
   rallyKind: string;
@@ -802,7 +805,7 @@ export function rememberedUnit(u: SimUnit): UnitSnapshot {
     bonusInt: 0,
 
     worker: null,
-    building: { constructionLeft: 0, buildTimeTotal: 0, queue: [], producesUnits: false, selfBuilds: false, rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0, stock: null, mineId: u.mineId },
+    building: { constructionLeft: 0, buildTimeTotal: 0, queue: [], producesUnits: false, selfBuilds: false, stalled: false, rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0, stock: null, mineId: u.mineId },
     abilities: [],
     buffs: [],
     inventory: [],
@@ -967,6 +970,7 @@ export function snapshotFor(
             queue: u.building.queue,
             producesUnits: u.building.producesUnits,
             selfBuilds: !!u.building.selfBuilds,
+            stalled: !!u.building.stalled,
             rallyX: u.building.rallyX,
             rallyY: u.building.rallyY,
             rallyKind: u.building.rallyKind,

@@ -400,7 +400,7 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
 
   if (s.building) {
     const b = s.building;
-    w.u8((b.producesUnits ? 1 : 0) | (b.stock ? 2 : 0) | (b.selfBuilds ? 4 : 0) | (b.mineId ? 8 : 0));
+    w.u8((b.producesUnits ? 1 : 0) | (b.stock ? 2 : 0) | (b.selfBuilds ? 4 : 0) | (b.mineId ? 8 : 0) | (b.stalled ? 16 : 0));
     w.f32(b.constructionLeft);
     w.f32(b.buildTimeTotal);
     w.f32(b.rallyX);
@@ -663,7 +663,7 @@ function readUnit(r: Reader): UnitSnapshot {
     const queue = JSON.parse(r.str());
     const stock = bf & 2 ? JSON.parse(r.str()) : null;
     const mineId = bf & 8 ? r.u32() : 0;
-    s.building = { constructionLeft, buildTimeTotal, queue, producesUnits: (bf & 1) !== 0, selfBuilds: (bf & 4) !== 0, rallyX, rallyY, rallyKind, rallyTargetId, stock, mineId };
+    s.building = { constructionLeft, buildTimeTotal, queue, producesUnits: (bf & 1) !== 0, selfBuilds: (bf & 4) !== 0, stalled: (bf & 16) !== 0, rallyX, rallyY, rallyKind, rallyTargetId, stock, mineId };
   }
 
   const nAbilities = r.u8();

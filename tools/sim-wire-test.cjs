@@ -145,7 +145,7 @@ const shop = () => ({
       { kind: "research", unitId: "Rome", level: 2, timeLeft: 13.7, buildTime: 60 },
       { kind: "upgrade", unitId: "ostr", timeLeft: 100, buildTime: 140 },
     ],
-    producesUnits: true, selfBuilds: false, rallyX: -512.25, rallyY: 300.5, rallyKind: "unit", rallyTargetId: 1042, mineId: 0,
+    producesUnits: true, selfBuilds: false, stalled: false, rallyX: -512.25, rallyY: 300.5, rallyKind: "unit", rallyTargetId: 1042, mineId: 0,
     stock: [
       { id: "pinv", count: 2, max: 3, timer: 30.5, period: 120, kind: "item" },
       { id: "nkod", count: 1, max: 1, timer: -1, period: -1, kind: "unit" },
@@ -215,6 +215,8 @@ console.log("decode(encode(snap)) is the same payload, field for field");
   // builder and cannot be given one) rides the same byte as producesUnits/stock.
   const selfBuilt = { ...richSnapshot(), units: [{ ...shop(), building: { ...shop().building, selfBuilds: true } }] };
   check("a self-raising structure's flag crosses", decodeSnapshot(encodeSnapshot(selfBuilt)).units[0].building.selfBuilds, true);
+  const stalled = { ...richSnapshot(), units: [{ ...shop(), building: { ...shop().building, stalled: true } }] };
+  check("a halted construction's flag crosses", decodeSnapshot(encodeSnapshot(stalled)).units[0].building.stalled, true);
   // …and so does the gold mine a building stands ON (a Haunted/Entangled Gold Mine), which a
   // client has no other way to learn: the host's renderer forms that link, a client's never does.
   const haunted = { ...richSnapshot(), units: [{ ...shop(), building: { ...shop().building, mineId: 70000 } }] };

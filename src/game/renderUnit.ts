@@ -230,6 +230,8 @@ export interface RenderUnit {
     readonly queue: readonly RenderBuildJob[];
     readonly constructionLeft: number;
     readonly buildTimeTotal: number;
+    /** Construction halted — the scaffold is drawn as a still picture (BuildingState.stalled). */
+    readonly stalled?: boolean;
   } | null;
   /** Who is INSIDE it, and how many it holds — an Orc Burrow's peons, an Entangled Gold Mine's
    *  wisps. Read for the crew's SIZE only: the occupancy bar WC3 floats under such a building's

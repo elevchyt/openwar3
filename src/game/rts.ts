@@ -113,6 +113,11 @@ export interface Instance {
    *  A node's `worldMatrix` is where that part of the model is actually DRAWN, which is what
    *  the click ray has to be cast against (see render/modelCollision.ts). */
   nodes?: ArrayLike<{ worldMatrix: ArrayLike<number> }>;
+  /** The instance's emitters — `clear()` kills every particle already in flight (a halted
+   *  scaffold's dust, see the construction branch of the entry sync). */
+  particleEmitters?: ArrayLike<{ clear(): void }>;
+  particleEmitters2?: ArrayLike<{ clear(): void }>;
+  ribbonEmitters?: ArrayLike<{ clear(): void }>;
   model: {
     sequences: Array<{ name: string; interval?: ArrayLike<number> }>;
     /** The model's own click volumes. Optional because a placed doodad body we have only
@@ -5058,7 +5063,22 @@ export class RtsController {
       // to the construction progress so it assembles in sync with the timer.
       // Models without a Birth clip fall back to scaling up from ~40% to full.
       if (u.building && u.building.constructionLeft > 0) {
-        setAnimRate(e, 1); // the Birth clip is scrubbed by progress, not played at a rate
+        // The Birth clip is scrubbed by progress, not played at a rate — but the rate is still
+        // the instance's CLOCK, and two things on a scaffold run off it and not off the frame:
+        // its particle emitters (a human building's dust and sawdust) and its global-sequence
+        // tracks (the `saw` bone). So a HALTED construction — the Peasant walked off — stops
+        // the clock outright, the same still picture applyFogFreeze makes, and building again
+        // starts it. (BuildingState.stalled; the frame itself is re-pinned either way.)
+        // A stopped clock also stops the dust ALREADY in the air — mid-flight, hanging over
+        // the site as a frozen cloud — so on the way in it is cleared: the halted scaffold is
+        // the bare model, and the dust comes back with the hammering.
+        const inst = e.unit.instance;
+        if (u.building.stalled && inst.timeScale !== 0) {
+          for (const list of [inst.particleEmitters, inst.particleEmitters2, inst.ribbonEmitters]) {
+            if (list) for (let i = 0; i < list.length; i++) list[i].clear();
+          }
+        }
+        setAnimRate(e, u.building.stalled ? 0 : 1);
         const prog = 1 - u.building.constructionLeft / u.building.buildTimeTotal;
         if (e.birthSeq >= 0) {
           if (e.curSeq !== e.birthSeq) {
