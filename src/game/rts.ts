@@ -4797,13 +4797,70 @@ export class RtsController {
     }
   }
 
-  /** Adopt whatever the renderer has delivered since the last look, WITHOUT stepping the
-   *  world — what a world held at the start gate still needs, since the sim never ticks there
-   *  and `trySeed` is the only way a delivered instance becomes a unit
-   *  (see MapViewerScene.holdAtStart). */
-  seedPending(): void {
-    this.trySeed();
+  /** The units the sim retired since the last look, off the screen: the collapse and the
+   *  corpse for a death, the model put away for a removal. Every step does this, and so does
+   *  a world held at the start gate (`settleHeld`) — the init's own removals are in here. */
+  private retireDrained(): void {
+    for (const id of this.sim.drainDeaths()) {
+      // Hosting a wire: the recipients must be TOLD a unit died — its absence from the next
+      // payload alone reads exactly like fog, and fog plays no collapse. Position from the
+      // entry's drawn spot (the corpse falls where the model stood); each recipient's filter
+      // needs it for the eyes-on-the-spot test.
+      if (this.matchLinkIsHost && this.matchLink) {
+        const loc = this.byId.get(id)?.unit.instance.localLocation;
+        const su = this.sim.units.get(id);
+        this.wireDeaths.push({ id, x: loc?.[0] ?? su?.x ?? 0, y: loc?.[1] ?? su?.y ?? 0 });
+      }
+      this.onDeath(id);
+    }
+    for (const id of this.sim.drainRemovals()) {
+      // A frozen client's applier removes records for two different reasons and says which:
+      // a payload-declared DEATH plays the collapse and leaves the corpse; plain absence is
+      // fog and retires the model silently. The set is per-payload and idempotent — an id
+      // the drain never surfaces (a death in fog we never had a record for) just expires.
+      if (this.pendingWireDeaths.delete(id)) this.onDeath(id);
+      else if (this.sim.takeMineCollapse(id)) this.onMineCollapse(id);
+      else this.onRemove(id);
+    }
+    // Offer every dead structure to the ghost memory BEFORE the fog rebuilds below, so each
+    // viewpoint is judged on the sight it had when the building fell rather than on sight it
+    // gains this tick. A viewpoint that was watching keeps no image — it saw the collapse.
+    for (const u of this.sim.drainDeadStructures()) this.ghosts.noteDestroyed(u, this.viewpoints.viewerSeats());
   }
+
+  /**
+   * Everything a step does that is not SIMULATION, for a world held at the start gate
+   * (MapViewerScene.holdAtStart): adopt what the renderer has delivered, put away what the
+   * map's init REMOVED or killed, light the fog, and draw every model where its unit stands.
+   *
+   * The script's init runs behind the loading screen, and `MeleeClearExcessUnits` is a page of
+   * `RemoveUnit` on the creeps camped by each used start location. The sim dropped them on the
+   * spot, but taking a model off the screen is the step's job (`drainRemovals`), and a held
+   * world never steps — so the camp stood on the gold mine for the first frames of the match,
+   * visibly, until the first tick after the key press put it away. WC3's own init is finished
+   * by the time its loading screen lets you in, and so is ours now.
+   *
+   * No game time passes. The fog's 10 Hz clocks are left alone too — the vision is REBUILT
+   * rather than ticked — so the first step after the release is exactly the step it always
+   * was, and nothing the sim decides off vision moves by a tick.
+   */
+  settleHeld(): void {
+    this.trySeed(); // the only way a delivered instance becomes a unit, held or not
+    this.retireDrained();
+    if (this.hovered !== null && !this.byId.has(this.hovered)) this.hovered = null;
+    // Rebuilt when the roster changed, not every held frame: "press any key" can sit for as
+    // long as the player likes, and nothing moves in a held world but what is adopted.
+    if (this.entries.length !== this.settledEntries) {
+      this.settledEntries = this.entries.length;
+      const rebuilt = this.viewpoints.rebuildAll();
+      for (const vp of rebuilt) this.ghosts.forgetSeen(vp.player, vp);
+      if (rebuilt.includes(this.local)) this.pruneFogged();
+    }
+    this.syncEntries(0, 1);
+  }
+
+  /** `entries.length` at the last held settle — see `settleHeld`. */
+  private settledEntries = -1;
 
   /** One sim step of `dt` seconds. `drawSteps` is how many steps the models have not been
    *  synced for, this one included — 0 when another step follows in the same frame and will be
@@ -4903,31 +4960,7 @@ export class RtsController {
     // found only water at the point — is refused LATE, and to its owner alone: the same gold
     // line and error sound an order refused at the click gets (docs/transports.md).
     for (const r of this.sim.drainRefusals()) if (r.owner === this.localPlayer) this.onRefuse?.(r.key);
-    for (const id of this.sim.drainDeaths()) {
-      // Hosting a wire: the recipients must be TOLD a unit died — its absence from the next
-      // payload alone reads exactly like fog, and fog plays no collapse. Position from the
-      // entry's drawn spot (the corpse falls where the model stood); each recipient's filter
-      // needs it for the eyes-on-the-spot test.
-      if (this.matchLinkIsHost && this.matchLink) {
-        const loc = this.byId.get(id)?.unit.instance.localLocation;
-        const su = this.sim.units.get(id);
-        this.wireDeaths.push({ id, x: loc?.[0] ?? su?.x ?? 0, y: loc?.[1] ?? su?.y ?? 0 });
-      }
-      this.onDeath(id);
-    }
-    for (const id of this.sim.drainRemovals()) {
-      // A frozen client's applier removes records for two different reasons and says which:
-      // a payload-declared DEATH plays the collapse and leaves the corpse; plain absence is
-      // fog and retires the model silently. The set is per-payload and idempotent — an id
-      // the drain never surfaces (a death in fog we never had a record for) just expires.
-      if (this.pendingWireDeaths.delete(id)) this.onDeath(id);
-      else if (this.sim.takeMineCollapse(id)) this.onMineCollapse(id);
-      else this.onRemove(id);
-    }
-    // Offer every dead structure to the ghost memory BEFORE the fog rebuilds below, so each
-    // viewpoint is judged on the sight it had when the building fell rather than on sight it
-    // gains this tick. A viewpoint that was watching keeps no image — it saw the collapse.
-    for (const u of this.sim.drainDeadStructures()) this.ghosts.noteDestroyed(u, this.viewpoints.viewerSeats());
+    this.retireDrained();
     this.tickCorpses(dt);
     perfLog.end("sim.deaths");
     if (this.hovered !== null && !this.byId.has(this.hovered)) this.hovered = null;

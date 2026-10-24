@@ -14808,8 +14808,10 @@ export class MapViewerScene {
       // preload, and models the map's script spawned are still resolving through it. Seeding
       // is not simulation — it is how a delivered instance becomes a sim unit at all — so a
       // unit that lands while we are held must not have to wait for the release to exist
-      // (the same split `holdWorld` draws: "adoption yes, simulation no").
-      if (this.startHeld) this.rts?.seedPending();
+      // (the same split `holdWorld` draws: "adoption yes, simulation no"). And it is SETTLED:
+      // what the init removed is off the screen and the fog is lit before the screen comes
+      // down, rather than on the first step after it (RtsController.settleHeld).
+      if (this.startHeld) this.rts?.settleHeld();
       return;
     }
     // rAF timestamps and performance.now() share a clock, but a frame's vsync stamp can

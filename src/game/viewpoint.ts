@@ -741,6 +741,16 @@ export class VisionSet {
     for (const vp of this.all()) yield { player: vp.player, viewer: vp };
   }
 
+  /** Rebuild every viewpoint NOW, off-clock — for a world held at the start gate, which must
+   *  be lit before the loading screen lets anybody in but owes no stagger phase a step
+   *  (RtsController.settleHeld). The 10 Hz clocks are untouched, so the first `tick` after the
+   *  release rebuilds and staggers exactly as it would have. */
+  rebuildAll(): Viewpoint[] {
+    const all = [...this.all()];
+    for (const vp of all) vp.rebuild(this.modifiers.values());
+    return all;
+  }
+
   tick(dt: number): Viewpoint[] {
     const rebuilt: Viewpoint[] = [];
     // The modifier registry is iterated once per viewpoint, so it must be re-iterable — a

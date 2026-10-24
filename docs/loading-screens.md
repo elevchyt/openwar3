@@ -221,6 +221,12 @@ Two things fall out of it, both of them a bug if you skip them:
   over before they see it (measured on Rise of the Naga: the sim tick stands still across the
   whole wait, then steps on from where it stopped). It is a flag of its own rather than `paused`,
   because the map's own `PauseGame` writes that one and chapters do pause themselves in init.
+  Held is not the same as UNSETTLED, though: every held frame runs `RtsController.settleHeld` —
+  adoption, the init's removals and deaths taken off the screen, the fog rebuilt (never ticked,
+  so no stagger phase moves), every model synced — because the init's own work is otherwise only
+  DRAWN by the first step after the release. `MeleeClearExcessUnits` is a page of `RemoveUnit`,
+  and on (4)LostTemple its four creeps per start location stood on the gold mine in the last held
+  frame, which is the picture the player gets for as long as that heavy first step takes.
 - **The key is swallowed** (capture phase, `preventDefault` + `stopPropagation`). The match's own
   window-level handlers are already live behind the screen — the HUD's hotkeys, the camera's
   arrows, F10 — and the key that dismisses the loading screen must not also be a key the game was
