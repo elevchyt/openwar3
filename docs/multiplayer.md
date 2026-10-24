@@ -96,7 +96,7 @@ deployments differ only in who is at that origin:
 | `pnpm preview` | Vite preview | same, same plugin | `ws://<host>:4173/relay` |
 | Exported game (Electron) | its own process | its own process, beside it | `ws://<host>:<port>/relay` |
 | Internet | a static host (Vercel) | a cloud box (`server/relay.mjs`) | **`VITE_RELAY_URL`** — the one case where the two are not the same box |
-| The OpenWar3 server | any of the above | Railway (`server/`, see below), watched by every client as well as its own | `wss://openwar3.up.railway.app/relay` — `src/net/officialServer.ts` |
+| The OpenWar3 servers | any of the above | Railway (`server/`, see below — EU, US and Asia), watched by every client as well as its own | `wss://openwar3-eu.up.railway.app/relay` (EU, the default), `openwar3-us…`, `openwar3-asia…` — `src/net/officialServer.ts` |
 
 That collapses LAN play to **one command and one firewall hole**: `pnpm dev --host` on the host
 machine, `http://<its ip>:5173` on the other. It also makes the second machine's success follow
@@ -122,12 +122,25 @@ manual reload.
 ### The OpenWar3 server (Railway)
 
 `server/` is a deployable of its own: `server/package.json` (`ws` and nothing else — the repo
-root's install would pull an Electron binary). It runs as the Railway project `openwar3`, service
-`openwar3`, at `openwar3.up.railway.app`, and its settings are declared in
-**`.railway/railway.ts`** — Railway's Infrastructure as Code, written against the `railway` dev
-dependency: the GitHub source with Root Directory `/server`, Railpack, `node relay.mjs`,
-**EU West (Amsterdam), ONE replica**, restart on failure, sleeping off, `PORT=8787` (the generated
-domain targets that port; IaC does not manage generated domains), and `watchPatterns: ["/server/**"]`.
+root's install would pull an Electron binary). It runs in the Railway project `openwar3` as THREE
+services, one per region (issue #225):
+
+| Service | Region | Domain |
+|---|---|---|
+| `openwar3-eu` | EU West, Amsterdam (`europe-west4-drams3a`) — **the default** | `openwar3-eu.up.railway.app` (`openwar3.up.railway.app`, and a service named `openwar3`, up to 0.3.61) |
+| `openwar3-us` | US East, Virginia (`us-east4-eqdc4a`) | `openwar3-us.up.railway.app` |
+| `openwar3-asia` | Southeast Asia, Singapore (`asia-southeast1-eqsg3a`) | `openwar3-asia.up.railway.app` |
+
+Their settings are declared in **`.railway/railway.ts`** — Railway's Infrastructure as Code,
+written against the `railway` dev dependency, one `relay(name, region)` per service and identical
+otherwise: the GitHub source with Root Directory `/server`, Railpack, `node relay.mjs`, **ONE
+replica**, restart on failure, sleeping off, `PORT=8787` (each generated domain targets that port;
+IaC does not manage generated domains), and `watchPatterns: ["/server/**"]`.
+
+A region is a SERVICE, never a second replica of one: each holds its own room table and so its own
+game list. The client watches all three and merges the lists, so a player sees every game on every
+server and only chooses one when HOSTING — the nearest is the one whose forwarding is quickest for
+the players it is likely to get.
 
 That file is NOT applied on push. It is applied with the Railway CLI (5.42.1 or newer) from a
 logged-in, linked checkout: `railway config plan`, then `railway config apply`. A dashboard edit
@@ -149,14 +162,17 @@ Three rules it lives by, each of which is a way to lose every game on it:
   the wire (`tools/sim-wire-test.cjs`: 240 units + 60 projectiles = 45 KB), so at 60 Hz a non-host
   player costs roughly 4–12 Mbit/s — and so does the host's upload, per player.
 
-On the client: `LanLobby.addRelay(url, "official")` (main.ts `lanSession`) watches it as a Servers
-List row with no ✕, listed first, never removed — not by `removeRelay`, not by the beacon's set, and
-not by `promote`, so joining a friend's LAN game leaves it watched. `normalizeRelayUrl` dials a
+On the client: `LanLobby.addRelay(url, "official")` (main.ts `lanSession`, once per entry of
+`OFFICIAL_SERVERS`, EU first) watches each as a Servers List row with no ✕, listed first in that
+order, never removed — not by `removeRelay`, not by the beacon's set, and not by `promote`, so
+joining a friend's LAN game leaves them watched; and leaving one official server for another (a
+game hosted in Europe, then one joined in the US) re-watches the one left on a fresh socket. `normalizeRelayUrl` dials a
 public hostname with no port `wss://` on 443, where Railway serves a generated domain. The Create
 Game screen's "Server:" row (`LAN_CREATE_OVERRIDE`) picks WHERE a room is announced —
-`LanLobby.host(…, on)` promotes that server's connection exactly as `join` does — and opens on the
-official server whenever it answers. `VITE_OFFICIAL_SERVER` points a build at another server, or
-empty at none.
+`LanLobby.host(…, on)` promotes that server's connection exactly as `join` does — lists this
+computer and then the official servers in `OFFICIAL_SERVERS` order, and opens on the host's last
+pick while it answers, else on **EU** whenever it answers (else the next official server that
+does). `VITE_OFFICIAL_SERVER` points a build at other servers (comma-separated), or empty at none.
 
 ### Snapshot cadence — 20 Hz, and the pose buffer
 

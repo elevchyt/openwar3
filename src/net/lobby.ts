@@ -42,8 +42,8 @@ export interface RelayInfo {
   /** Where the address came from. A `typed` one is the player's and only they take it off the
    *  list; a `found` one is the network's (the desktop app's beacon) and comes and goes with the
    *  machine that is broadcasting it, so it is not theirs to remove — it would be back within
-   *  two seconds. The `official` one is the OpenWar3 server every copy of the game watches out
-   *  of the box (src/net/officialServer.ts), and nobody removes it. */
+   *  two seconds. The `official` ones are the OpenWar3 servers every copy of the game watches
+   *  out of the box (src/net/officialServer.ts), and nobody removes them. */
   source: RelaySource;
 }
 
@@ -221,10 +221,10 @@ export class LanLobby {
    * the match wire has to be with the host's relay, and nothing else about a match changes.
    */
   private remotes = new Map<string, RemoteRelay>();
-  /** The official server's URL, once it has been added (`addRelay(…, "official")`). Kept apart
-   *  from `remotes` because it stays ours to show when it has been PROMOTED out of that map —
-   *  see `relays`. */
-  private officialUrl: string | null = null;
+  /** The official servers' URLs, in the order they were added (`addRelay(…, "official")`) —
+   *  which is OFFICIAL_SERVERS' order, the default first. Kept apart from `remotes` because each
+   *  stays ours to show when it has been PROMOTED out of that map — see `relays`. */
+  private officialList: string[] = [];
   /** Our own relay's game list, kept apart from the merged one so a remote's update cannot be
    *  mistaken for ours (the reconnect consults OURS, and only ours). */
   private ownRooms: RoomInfo[] = [];
@@ -426,7 +426,9 @@ export class LanLobby {
   }
 
   /** Every place a game could be announced right now: the connection we stand on, then each
-   *  watched server that is answering. What the create screen's Server menu offers. */
+   *  watched server that is answering — the official servers in their own order wherever we
+   *  stand, so the menu reads EU, US, Asia whichever of them we last played on. What the create
+   *  screen's Server menu offers. */
   get hostTargets(): HostTarget[] {
     const out: HostTarget[] = [];
     const here = this.primary;
@@ -434,14 +436,20 @@ export class LanLobby {
     for (const [url, entry] of this.remotes) {
       if (entry.connected && entry.transport) out.push({ url, kind: entry.source });
     }
-    return out;
+    const rank = (t: HostTarget): number => t.kind === "own" ? -1 : this.officialRank(t.url);
+    return out.sort((a, b) => rank(a) - rank(b));
   }
 
   /** The connection we host on and play on, or null while there is none. */
   get primary(): HostTarget | null {
     if (!this.transport?.connected) return null;
     const url = this.primaryUrl ?? "";
-    return { url, kind: url === "" ? "own" : url === this.officialUrl ? "official" : "typed" };
+    return { url, kind: url === "" ? "own" : this.officialList.includes(url) ? "official" : "typed" };
+  }
+
+  /** The official servers' URLs, the default first (src/net/officialServer.ts). */
+  get officialUrls(): readonly string[] {
+    return this.officialList;
   }
 
   /**
@@ -478,7 +486,7 @@ export class LanLobby {
     const url = normalizeRelayUrl(input);
     if (!url) throw new Error(`"${input}" is not an address. Try 192.168.1.42 or 192.168.1.42:${DEFAULT_RELAY_PORT}.`);
     if (this.isOurOwn(url)) throw new Error("That address is this computer — your own games are already listed.");
-    if (source === "official") this.officialUrl = url;
+    if (source === "official" && !this.officialList.includes(url)) this.officialList.push(url);
     // Already the connection we play on (a promoted server): its games are already the list.
     if (url === this.primaryUrl) return;
     const already = this.remotes.get(url);
@@ -564,20 +572,21 @@ export class LanLobby {
    *  looking at and should not read as an error. */
   get relays(): RelayInfo[] {
     const rows = [...this.remotes].map(([url, entry]) => ({ url, connected: entry.connected, source: entry.source }));
-    // The official server is still a row while it is the connection we PLAY on: it cannot be
+    // An official server is still a row while it is the connection we PLAY on: it cannot be
     // removed, and a row that vanished whenever you hosted or joined a game there would read as
     // exactly that.
-    const official = this.officialUrl;
-    if (official && official === this.primaryUrl && !this.remotes.has(official)) {
-      rows.push({ url: official, connected: this.transport?.connected ?? false, source: "official" });
+    const here = this.primaryUrl;
+    if (here && this.officialList.includes(here) && !this.remotes.has(here)) {
+      rows.push({ url: here, connected: this.transport?.connected ?? false, source: "official" });
     }
-    // Official first — it is on every player's list, and the rows the player manages go under it.
-    return rows.sort((a, b) => Number(b.source === "official") - Number(a.source === "official"));
+    // Official first, in their own order — they are on every player's list, and the rows the
+    // player manages go under them. The rest keep the order they were added in (a stable sort).
+    return rows.sort((a, b) => this.officialRank(a.url) - this.officialRank(b.url));
   }
 
   /** Stop watching one. Its games leave the list with it — they were never ours to show once
    *  nobody is listening to the machine hosting them — and its retry stops with it. The official
-   *  server is the exception: it is on everybody's list, and nobody takes it off. */
+   *  servers are the exception: they are on everybody's list, and nobody takes them off. */
   removeRelay(url: string): void {
     const entry = this.remotes.get(url);
     if (!entry || entry.source === "official") return;
@@ -585,6 +594,13 @@ export class LanLobby {
     if (entry.retry !== null) clearTimeout(entry.retry);
     entry.transport?.close();
     this.mergeRooms();
+  }
+
+  /** Where an address sorts: an official server at its place in OFFICIAL_SERVERS' order, anything
+   *  else after all of them (and, the sorts being stable, in the order it was added). */
+  private officialRank(url: string): number {
+    const i = this.officialList.indexOf(url);
+    return i < 0 ? this.officialList.length : i;
   }
 
   /** Is this address one of ours? The relay tells us its own addresses at the handshake
@@ -610,6 +626,7 @@ export class LanLobby {
     // room — so a host on the official server sent its countdown, its start and every snapshot
     // into nothing, and a joiner's did the same, the instant the old relay's close landed.
     letGo(this.transport);
+    const leaving = this.primaryUrl;
     t.onMessage = (m) => this.handle(m);
     t.onClose = (reason) => this.onLost(reason);
     this.transport = t;
@@ -619,7 +636,7 @@ export class LanLobby {
     // on a server, and a cloud relay has nothing to say in its place.
     this.state = { ...this.state, host: null };
     // Their list is now ours, and every OTHER machine's is no longer any of our business — bar
-    // the official server's, which stays watched (see `relays`), so that leaving a game on a
+    // the official servers', which stay watched (see `relays`), so that leaving a game on a
     // friend's machine puts you back in front of the list everyone else can see.
     this.ownRooms = entry.rooms;
     for (const [otherUrl, other] of [...this.remotes]) {
@@ -627,6 +644,13 @@ export class LanLobby {
       if (other.retry !== null) clearTimeout(other.retry);
       this.remotes.delete(otherUrl);
       letGo(other.transport);
+    }
+    // Leaving one OFFICIAL server for another (a game hosted in Europe, then one joined in the
+    // US) must not take the first off the list: it is watched again, on a socket of its own,
+    // exactly as `addRelay` first watched it.
+    if (leaving && this.officialList.includes(leaving)) {
+      this.addRelay(leaving, "official");
+      return;
     }
     this.mergeRooms();
   }
@@ -774,7 +798,7 @@ export class LanLobby {
       letGo(entry.transport);
     }
     this.remotes.clear();
-    this.officialUrl = null;
+    this.officialList = [];
     this.ownRooms = [];
     this.primaryUrl = undefined;
     this.reconnecting = false;

@@ -23,7 +23,7 @@ import { mountLanScreen, observerSeats, savedPlayerName, toConfig } from "./ui/f
 import { mountLanCreateScreen } from "./ui/fdfLanCreate";
 import { mountLanLobbyScreen } from "./ui/fdfLanLobby";
 import { LanLobby } from "./net/lobby";
-import { OFFICIAL_SERVER_ADDRESS } from "./net/officialServer";
+import { OFFICIAL_SERVERS } from "./net/officialServer";
 import { observerSlots } from "./net/lobbySetup";
 import type { AdvancedOptions } from "./net/advancedOptions";
 import { WebSocketTransport } from "./net/transport";
@@ -417,10 +417,10 @@ function lanSession(): { lobby: LanLobby; connected: Promise<void> } {
     // ADDRESS and nothing else, which is what keeps it a small feature rather than a second way
     // to learn about games. A no-op in a browser, which cannot hear anything.
     const stopListening = onServersFound((urls) => lobby.setDiscovered(urls));
-    // The OpenWar3 server (src/net/officialServer.ts): on every Servers List out of the box, and
-    // removable from none. Watched like any other address, so its games merge into the one list.
-    const official = officialServerAddress();
-    if (official) {
+    // The OpenWar3 servers (src/net/officialServer.ts): on every Servers List out of the box, and
+    // removable from none. Watched like any other address, so their games merge into the one
+    // list — EU first, which is what makes it the Create Game screen's default.
+    for (const official of officialServerAddresses()) {
       try { lobby.addRelay(official, "official"); } catch { /* a malformed override: no official row */ }
     }
     // Reachable for the same reason `openwar3.vfs` and `openwar3.mapScene` are: the LAN screens
@@ -432,11 +432,12 @@ function lanSession(): { lobby: LanLobby; connected: Promise<void> } {
   return lan;
 }
 
-/** The official server's address for THIS build: `VITE_OFFICIAL_SERVER` when the build sets it
- *  — to another server, or empty to watch none — and the shipped one otherwise. */
-function officialServerAddress(): string {
+/** The official servers' addresses for THIS build: `VITE_OFFICIAL_SERVER` when the build sets it
+ *  — to other servers (comma-separated), or empty to watch none — and the shipped ones otherwise. */
+function officialServerAddresses(): string[] {
   const configured = (import.meta.env as Record<string, string | undefined>).VITE_OFFICIAL_SERVER;
-  return configured ?? OFFICIAL_SERVER_ADDRESS;
+  if (configured === undefined) return OFFICIAL_SERVERS.map((s) => s.address);
+  return configured.split(",").map((a) => a.trim()).filter((a) => a !== "");
 }
 
 /** Leaving the LAN flow entirely (Cancel back to the main menu). A hand-off to a match has

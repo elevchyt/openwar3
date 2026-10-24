@@ -2,7 +2,7 @@ import { computerPlusDefault } from "../data/options";
 import { FOUR_STEP_TRACK } from "../vfs/derivedArt";
 import { GAME_SPEED_MAX, GAME_SPEED_MIN, gameSpeedLabel, toGameSpeed } from "../data/gameSpeed";
 import { relayAuthority, type HostTarget, type LanLobby } from "../net/lobby";
-import { OFFICIAL_SERVER_NAME } from "../net/officialServer";
+import { officialServerName } from "../net/officialServer";
 import { LAN_ADVANCED_OPTIONS_OVERRIDE, LAN_CREATE_OVERRIDE, OW3_STRINGS } from "../overrides";
 import {
   DEFAULT_ADVANCED, OBSERVER_ITEMS, VISIBILITY_ITEMS,
@@ -46,9 +46,9 @@ import { widescreen } from "./widescreen";
 //
 // Under the map list is a row of OURS, "Server:" (src/overrides/ui/LocalMultiplayerCreate.fdf):
 // which relay the room is announced on — this computer, which only the local network can reach,
-// or a server the Servers List watches, the OpenWar3 server first (src/net/officialServer.ts).
+// or a server the Servers List watches, the OpenWar3 servers first (src/net/officialServer.ts).
 // It opens on wherever the host last put a game (`HOST_SERVER_KEY`) while that still answers,
-// and otherwise on the official server.
+// and otherwise on the DEFAULT official server — EU — or the next one that answers.
 
 const MAP_LIST_FDF = "UI\\FrameDef\\Glue\\MapListBox.fdf";
 const MAP_INFO_FDF = "UI\\FrameDef\\Glue\\MapInfoPane.fdf";
@@ -104,14 +104,15 @@ export async function mountLanCreateScreen(
   try { server = localStorage.getItem(HOST_SERVER_KEY); } catch { /* no storage: no memory */ }
 
   /**
-   * Where the game would be announced right now: the pick, while it is still answering; else the
-   * OpenWar3 server, because a game there is one every player can see; else whatever answers at
-   * all, which is this computer. Null only while nothing is answering yet.
+   * Where the game would be announced right now: the pick, while it is still answering; else an
+   * OpenWar3 server, because a game there is one every player can see — the default (EU) first,
+   * in OFFICIAL_SERVERS' order, whichever of them we happen to be standing on; else whatever
+   * answers at all, which is this computer. Null only while nothing is answering yet.
    */
   const target = (): HostTarget | null => {
     const targets = lobby.hostTargets;
     return targets.find((t) => t.url === server)
-      ?? targets.find((t) => t.kind === "official")
+      ?? lobby.officialUrls.map((url) => targets.find((t) => t.url === url)).find((t) => !!t)
       ?? targets[0]
       ?? null;
   };
@@ -199,7 +200,7 @@ export async function mountLanCreateScreen(
   /** A place as a player reads it: the machine, the server's name, or the address they typed. */
   function targetLabel(t: HostTarget): string {
     if (t.kind === "own") return lib?.string("THIS_COMPUTER") ?? "This Computer";
-    if (t.kind === "official") return OFFICIAL_SERVER_NAME;
+    if (t.kind === "official") return officialServerName(relayAuthority(t.url));
     return relayAuthority(t.url);
   }
 

@@ -1,6 +1,6 @@
 import type { DataSource } from "../vfs/types";
 import { relayAuthority, type LanLobby } from "../net/lobby";
-import { OFFICIAL_SERVER_NAME } from "../net/officialServer";
+import { officialServerName } from "../net/officialServer";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
@@ -112,7 +112,7 @@ export async function showJoinAddressDialog(opts: {
         // knocking. A machine the NETWORK told us about (the desktop app's beacon) says so
         // instead, because the player did not put it there and should not wonder how it arrived.
         //
-        // The OFFICIAL server is named rather than addressed, and not answering means something
+        // An OFFICIAL server is named rather than addressed, and not answering means something
         // else there: nobody "has not started their game yet" on a server that is always up, so
         // it says offline — which is also what an outdated copy of the game sees, refused at the
         // handshake by a server speaking a newer protocol.
@@ -122,14 +122,14 @@ export async function showJoinAddressDialog(opts: {
           : "";
         return {
           value: url,
-          label: `${official ? OFFICIAL_SERVER_NAME : relayAuthority(url)}${note}`,
+          label: `${official ? officialServerName(relayAuthority(url)) : relayAuthority(url)}${note}`,
           // The row IS the address, so its control removes it — no "select the row, then press
           // the button under the list", which is a step a three-row list does not need.
           //
           // A FOUND one has no ✕: it is not the player's to remove. The machine is broadcasting,
           // so it would be back on the list within two seconds, and a button that undoes itself
           // while you watch is worse than no button. Theirs go when they close their game. The
-          // official server has none either: it is on every copy's list by design
+          // official servers have none either: they are on every copy's list by design
           // (src/net/officialServer.ts), and the lobby would refuse the removal anyway.
           action: source === "found" || official ? undefined : {
             label: "✕",

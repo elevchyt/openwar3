@@ -17,6 +17,7 @@ const {
   seatPeers, setSlotColor,
 } = require(join(REPO, ".sim-build", "src", "net", "lobbySetup.js"));
 const { DEFAULT_ADVANCED, isDefaultAdvanced } = require(join(REPO, ".sim-build", "src", "net", "advancedOptions.js"));
+const { OFFICIAL_SERVERS, officialServerName } = require(join(REPO, ".sim-build", "src", "net", "officialServer.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -684,13 +685,13 @@ const ME = { id: 2, name: "Joiner", host: false };
       refused, `"hello there" is not an address. Try 192.168.1.42 or 192.168.1.42:8787.`);
   }
 
-  const OFFICIAL = "wss://openwar3.up.railway.app/relay";
+  const OFFICIAL = "wss://openwar3-eu.up.railway.app/relay";
   const FRIEND = "ws://192.168.1.42:8787/relay";
 
   console.log("\na server on the internet is dialled the way a cloud host serves it");
   {
-    for (const typed of ["openwar3.up.railway.app", "https://openwar3.up.railway.app/",
-                         "wss://openwar3.up.railway.app/relay", "openwar3.up.railway.app:443"]) {
+    for (const typed of ["openwar3-eu.up.railway.app", "https://openwar3-eu.up.railway.app/",
+                         "wss://openwar3-eu.up.railway.app/relay", "openwar3-eu.up.railway.app:443"]) {
       check(`"${typed}" is TLS on 443`, normalizeRelayUrl(typed), OFFICIAL);
     }
     check("a TCP proxy's port is plain ws — it forwards raw TCP",
@@ -700,7 +701,7 @@ const ME = { id: 2, name: "Joiner", host: false };
                                  ["localhost", "ws://localhost:8787/relay"], ["router.lan", "ws://router.lan:8787/relay"]]) {
       check(`"${typed}" is a machine on the network, not the internet`, normalizeRelayUrl(typed), want);
     }
-    check("a secure server is shown as just its name", relayAuthority(OFFICIAL), "openwar3.up.railway.app");
+    check("a secure server is shown as just its name", relayAuthority(OFFICIAL), "openwar3-eu.up.railway.app");
   }
 
   console.log("\nthe official server is on the list, first, and nobody takes it off");
@@ -709,15 +710,45 @@ const ME = { id: 2, name: "Joiner", host: false };
     const lobby = new LanLobby(() => { const t = fakeTransport(); made.push(t); return t; }, memoryStore());
     await lobby.connect();
     lobby.addRelay("192.168.1.42");
-    lobby.addRelay("openwar3.up.railway.app", "official");
+    lobby.addRelay("openwar3-eu.up.railway.app", "official");
     await tick();
     check("it is watched, and listed FIRST", lobby.relays.map((r) => `${r.url} ${r.source}`), [`${OFFICIAL} official`, `${FRIEND} typed`]);
     lobby.removeRelay(OFFICIAL);
     check("removing it does nothing", lobby.relays.map((r) => r.url), [OFFICIAL, FRIEND]);
-    lobby.addRelay("https://openwar3.up.railway.app");
+    lobby.addRelay("https://openwar3-eu.up.railway.app");
     check("typing its address in does not demote it to a row with a ✕", lobby.relays[0].source, "official");
     lobby.setDiscovered([]);
     check("…and the network going quiet does not drop it", lobby.relays.length, 2);
+    lobby.close();
+  }
+
+  console.log("\nthree official servers: listed in their own order, the default first, wherever we stand");
+  {
+    const US = "wss://openwar3-us.up.railway.app/relay";
+    const ASIA = "wss://openwar3-asia.up.railway.app/relay";
+    const made = [];
+    const lobby = new LanLobby(() => { const t = fakeTransport(); made.push(t); return t; }, memoryStore());
+    await lobby.connect();
+    lobby.addRelay("192.168.1.42");
+    for (const a of OFFICIAL_SERVERS) lobby.addRelay(a.address, "official");
+    await tick();
+    check("every one is watched, in OFFICIAL_SERVERS' order, above the player's own rows",
+      lobby.relays.map((r) => `${r.url} ${r.source}`), [`${OFFICIAL} official`, `${US} official`, `${ASIA} official`, `${FRIEND} typed`]);
+    check("…and named by region", OFFICIAL_SERVERS.map((s) => officialServerName(s.address)),
+      ["OpenWar3 Server (EU)", "OpenWar3 Server (US)", "OpenWar3 Server (Asia)"]);
+    check("…the default being EU", lobby.officialUrls[0], OFFICIAL);
+    for (const url of [US, ASIA]) lobby.removeRelay(url);
+    check("none of them can be removed", lobby.relays.length, 4);
+    // Host on the US server, then join a game on the Asian one: the US server is LEFT, not lost.
+    lobby.host("G", "Host", "Echo Isles", "m", 2, false, US);
+    check("a game hosted in the US stands there", lobby.primary, { url: US, kind: "official" });
+    check("…with the Server menu still reading this order", lobby.hostTargets.map((t) => t.url), [OFFICIAL, US, ASIA]);
+    made.find((t) => t.url === ASIA).onMessage({ t: "rooms", rooms: [{ ...ROOM, id: "7", name: "Far" }] });
+    lobby.join(`${ASIA}#7`, "Bob");
+    await tick();
+    check("joining one in Asia moves us there", lobby.primary, { url: ASIA, kind: "official" });
+    check("…and the US server is watched again, still in its place",
+      lobby.relays.map((r) => `${r.url} ${r.connected}`), [`${OFFICIAL} true`, `${US} true`, `${ASIA} true`]);
     lobby.close();
   }
 
@@ -728,7 +759,7 @@ const ME = { id: 2, name: "Joiner", host: false };
     await lobby.connect();
     const own = made[0];
     own.onMessage({ t: "hello", protocol: 99, host: { kind: "app", lan: true, addresses: ["192.168.1.34:8787"] } });
-    lobby.addRelay("openwar3.up.railway.app", "official");
+    lobby.addRelay("openwar3-eu.up.railway.app", "official");
     lobby.addRelay("192.168.1.42");
     await tick();
     const official = made.find((t) => t.url === OFFICIAL);
@@ -752,7 +783,7 @@ const ME = { id: 2, name: "Joiner", host: false };
     const made = [];
     const lobby = new LanLobby(() => { const t = fakeTransport(made.length > 0); made.push(t); return t; }, memoryStore());
     await lobby.connect();
-    lobby.addRelay("openwar3.up.railway.app", "official");
+    lobby.addRelay("openwar3-eu.up.railway.app", "official");
     await tick();
     check("it is not offered", lobby.hostTargets.map((t) => t.kind), ["own"]);
     let said = null;
@@ -768,7 +799,7 @@ const ME = { id: 2, name: "Joiner", host: false };
     const lobby = new LanLobby(() => { const t = fakeTransport(made.length === 0); made.push(t); return t; }, memoryStore());
     await lobby.connect().catch(() => {});
     check("our own relay is not there", lobby.snapshot.phase, "offline");
-    lobby.addRelay("openwar3.up.railway.app", "official");
+    lobby.addRelay("openwar3-eu.up.railway.app", "official");
     await tick();
     check("the server answering makes it a list to browse", lobby.snapshot.phase, "browsing");
     check("…and the one place to create a game", lobby.hostTargets.map((t) => t.kind), ["official"]);
@@ -780,7 +811,7 @@ const ME = { id: 2, name: "Joiner", host: false };
     const made = [];
     const lobby = new LanLobby(() => { const t = fakeTransport(); made.push(t); return t; }, memoryStore());
     await lobby.connect();
-    lobby.addRelay("openwar3.up.railway.app", "official");
+    lobby.addRelay("openwar3-eu.up.railway.app", "official");
     lobby.addRelay("192.168.1.42");
     await tick();
     made.find((t) => t.url === FRIEND).onMessage({ t: "rooms", rooms: [{ ...ROOM, id: "1", name: "Theirs" }] });
@@ -801,7 +832,7 @@ const ME = { id: 2, name: "Joiner", host: false };
       const made = [];
       const lobby = new LanLobby(() => { const t = realClose(fakeTransport()); made.push(t); return t; }, memoryStore());
       await lobby.connect();
-      lobby.addRelay("openwar3.up.railway.app", "official");
+      lobby.addRelay("openwar3-eu.up.railway.app", "official");
       await tick();
       const official = made.find((t) => t.url === OFFICIAL);
       lobby.host("G", "Host", "Echo Isles", "m", 2, false, OFFICIAL);

@@ -6,7 +6,7 @@ import type { MapPreview } from "../world/mapPreview";
 import { sanitizeChat } from "../game/chat";
 import { matchLinkFrom, type MatchLinkSetup } from "../game/matchLink";
 import { relayAuthority, type LanLobby } from "../net/lobby";
-import { OFFICIAL_SERVER_NAME } from "../net/officialServer";
+import { officialServerName } from "../net/officialServer";
 import type { PeerInfo, StartMatch } from "../net/protocol";
 import { isDefaultAdvanced, type AdvancedOptions } from "../net/advancedOptions";
 import {
@@ -568,7 +568,7 @@ export async function mountLanLobbyScreen(
     const here = lobby.primary;
     if (here?.kind === "official") {
       s.setText("JoinAddressLobbyLabel", "Hosted on:");
-      s.setText("JoinAddressLobbyValue", OFFICIAL_SERVER_NAME);
+      s.setText("JoinAddressLobbyValue", officialServerName(relayAuthority(here.url)));
       const el = s.frame("JoinAddressLobbyValue");
       if (el) { el.style.cursor = ""; el.onclick = null; }
       return;
