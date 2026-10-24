@@ -74,18 +74,23 @@ export function asHandle(v: JassValue): number {
 }
 
 /** JASS `==` equality. Numbers compare by value across int/real; handles by id;
- *  null equals null and equals any null-valued handle — and `false`. Strings/bools by value. */
+ *  null equals null, any null-valued handle, `false`, `0` and `0.0`. Strings/bools by value. */
 export function jassEquals(a: JassValue, b: JassValue): boolean {
   if (a.k === "null" || b.k === "null") {
-    // A boolean against null compares as `false == null`: in the game's VM both are a raw 0.
-    // Map optimizers rely on it — `IsUnitType(u, t) != null` is their spelling of `!= false`
-    // (the IsUnitType-in-a-condition workaround), and BleachVsOnepiece13's `MG` wraps all
-    // 568 of its type checks in it, as do the hero filters of the install's own DotA 6.77b AI
-    // and Angel Arena. Reading `false != null` as TRUE made every unit every type there: a
-    // dummy counted as a hero, re-fired the "a hero enters the rect" trigger that spawned it,
-    // and spawned more of itself until the match ground to a halt.
+    // In the game's VM null is a raw 0, so a boolean, integer or real compares against it by
+    // value: `false == null`, `0 == null` and `0.0 == null` are all TRUE. Measured on the real
+    // 1.30.4 client (a probe map printing each comparison, literals and variables alike):
+    // `true`, `1` and `1.0` are not null, and a STRING is the exception — `"" == null` is false
+    // and only a string that IS null equals it, which is what the both-null rule below says.
+    // Map optimizers rely on the boolean case — `IsUnitType(u, t) != null` is their spelling
+    // of `!= false` (the IsUnitType-in-a-condition workaround), and BleachVsOnepiece13's `MG`
+    // wraps all 568 of its type checks in it, as do the hero filters of the install's own
+    // DotA 6.77b AI and Angel Arena. Reading `false != null` as TRUE made every unit every
+    // type there: a dummy counted as a hero, re-fired the "a hero enters the rect" trigger
+    // that spawned it, and spawned more of itself until the match ground to a halt.
     const other = a.k === "null" ? b : a;
     if (other.k === "bool") return !other.b;
+    if (other.k === "int" || other.k === "real") return other.n === 0;
     // null == null, and null == a handle only if that handle is itself null (we
     // never mint a null handle — real handles have ids ≥ 0), so both-null is the
     // only other true case here.

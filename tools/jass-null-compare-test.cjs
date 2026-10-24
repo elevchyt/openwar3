@@ -2,7 +2,10 @@
 //
 //   npx tsc -p tools/tsconfig.jass.json && node tools/jass-null-compare-test.cjs
 //
-// In the game's VM `false` and `null` are both a raw 0, so `false == null` is TRUE — and map
+// In the game's VM null is a raw 0, so `false == null`, `0 == null` and `0.0 == null` are all
+// TRUE while `"" == null` is not. Every expectation in the first half is what the REAL 1.30.4
+// client printed for the same comparison (a probe map run under Wine, one DisplayText line per
+// case, literals and variables alike). The boolean case is the one maps depend on — map
 // optimizers lean on it: `IsUnitType(u, t) != null` is how they spell `!= false`.
 // BleachVsOnepiece13 routes all 568 of its unit-type checks through one such wrapper,
 //
@@ -54,6 +57,12 @@ const check = (name, got, want) => {
 globals
     unit nobody = null
     boolean flag = false
+    integer i0 = 0
+    integer i1 = 1
+    real r0 = 0.0
+    real r1 = 1.0
+    string sn = null
+    string se = ""
 endglobals
 function FalseEqNull takes nothing returns boolean
     return false == null
@@ -79,6 +88,48 @@ endfunction
 function NullEqNull takes nothing returns boolean
     return null == null
 endfunction
+function ZeroEqNull takes nothing returns boolean
+    return 0 == null
+endfunction
+function NullEqZero takes nothing returns boolean
+    return null == 0
+endfunction
+function ZeroNeNull takes nothing returns boolean
+    return 0 != null
+endfunction
+function OneEqNull takes nothing returns boolean
+    return 1 == null
+endfunction
+function IntVarsEqNull takes nothing returns boolean
+    return i0 == null and not (i1 == null)
+endfunction
+function RealZeroEqNull takes nothing returns boolean
+    return 0.0 == null
+endfunction
+function RealOneEqNull takes nothing returns boolean
+    return 1.0 == null
+endfunction
+function RealVarsEqNull takes nothing returns boolean
+    return r0 == null and not (r1 == null)
+endfunction
+function EmptyEqNull takes nothing returns boolean
+    return "" == null
+endfunction
+function NullEqEmpty takes nothing returns boolean
+    return null == ""
+endfunction
+function StrEqNull takes nothing returns boolean
+    return "a" == null
+endfunction
+function NullStrVarEqNull takes nothing returns boolean
+    return sn == null
+endfunction
+function EmptyStrVarEqNull takes nothing returns boolean
+    return se == null
+endfunction
+function NullStrVarEqEmpty takes nothing returns boolean
+    return sn == ""
+endfunction
 `;
   const interp = buildInterpreter([common, src]);
   const run = (fn) => interp.run(fn, []).b;
@@ -90,6 +141,20 @@ endfunction
   check('a false boolean VARIABLE != null', run('FalseVarNeNull'), false);
   check('a null unit == null (unchanged)', run('NullUnitEqNull'), true);
   check('null == null (unchanged)', run('NullEqNull'), true);
+  check('0 == null', run('ZeroEqNull'), true);
+  check('null == 0', run('NullEqZero'), true);
+  check('0 != null', run('ZeroNeNull'), false);
+  check('1 == null', run('OneEqNull'), false);
+  check('an integer VARIABLE: 0 == null, 1 != null', run('IntVarsEqNull'), true);
+  check('0.0 == null', run('RealZeroEqNull'), true);
+  check('1.0 == null', run('RealOneEqNull'), false);
+  check('a real VARIABLE: 0.0 == null, 1.0 != null', run('RealVarsEqNull'), true);
+  check('"" == null (a string is the exception)', run('EmptyEqNull'), false);
+  check('null == ""', run('NullEqEmpty'), false);
+  check('"a" == null', run('StrEqNull'), false);
+  check('a null string VARIABLE == null', run('NullStrVarEqNull'), true);
+  check('an empty string VARIABLE == null', run('EmptyStrVarEqNull'), false);
+  check('a null string VARIABLE == ""', run('NullStrVarEqEmpty'), false);
 }
 
 // --- BvO's spawn rect -----------------------------------------------------------------------
