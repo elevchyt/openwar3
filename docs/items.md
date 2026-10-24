@@ -73,6 +73,20 @@ raise (`payItemBuild`, so an order abandoned on the way costs nothing), and the 
 raises ITSELF over the row's `Dur1` — 4 s for the Ivory Tower, 20 for the Tiny Great Hall,
 30 for the Tiny Castle — with the hero let go at once, the Acolyte's branch of `assignBuilder`.
 
+## Who an aimed item may be pressed at
+
+A unit-aimed item is asked exactly what a spell is asked, through the same door:
+`itemUseError` (the click, the AI) and `useItem` (the authority, a trigger's
+`UnitUseItemTarget`) both end in `SimWorld.targetError`, which reads the row's `targs1` and then
+[`TARGET_RULES`](../src/sim/targetRules.ts) — the rules no flag list can state, keyed on the
+base `code`, so an item and the spell it IS never disagree. Never add an `if (ad.code === …)`
+refusal to the item path: add a rule there, and the spell button gets it too.
+
+The Wand of Mana Stealing is the case that made this one door. Its row is `[Aste] targs1 =
+notself` and nothing else — no kind word — so the flags admit a BUILDING, and what refuses an
+Arcane Vault is that it has no mana pool (`Targetmanauser`, "Must target a unit with mana.").
+A Moon Well has one (`emow` mana0 100 / manaN 300) and is a legal target in the real client.
+
 ## Who an effect lands on
 
 `itemAreaTargets` is the one answer to "who does this item reach", and it is read off the

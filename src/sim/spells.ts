@@ -1149,67 +1149,8 @@ export const HEAL_SPELLS = new Set(["Ahea", "Anhe"]);
  *  by hand still goes on whatever `targs1` allows, a Peon included. */
 export const FIGHTER_BUFFS = new Set(["Ablo"]);
 
-/** Spells that need the TARGET to have a mana pool, and the [Errors] line each says when
- *  it doesn't. Nothing in `targs1` can express this — Mana Burn's is
- *  `air,ground,enemy,organic,nonancient,vuln,invu`, which a Footman satisfies in full — so
- *  the rule is the ability's own, and the giveaway is that commandstrings.txt ships a line
- *  written for exactly one ability: `Cantmanaburn` = "Unable to cast Mana Burn on this
- *  target." (the general-purpose `Targetmanauser` sits right beside it for the rows that
- *  want the positive wording). A pool of zero is the test, not an empty one: a drained
- *  Sorceress is still a caster and burning her nothing is a legal, useless cast — a
- *  Footman has no mana bar at all and the Demon Hunter simply may not pick him. */
-export const MANA_TARGET_SPELLS: Record<string, string> = {
-  AEmb: "Cantmanaburn", // Demon Hunter — Mana Burn
-};
-
-/** The SACRIFICES — Death Pact and Dark Ritual — take a "friendly Undead unit" (both Ubertips,
- *  word for word), and once more `targs1` cannot say it: both rows read
- *  `air,ground,player,nonhero,invu,vuln`, which a Meat Wagon satisfies in full. Undead here is
- *  the CLASSIFICATION (UnitBalance.slk `type`, common.j's UNIT_TYPE_UNDEAD), not the race: a
- *  Meat Wagon, an Obsidian Statue and the Undead Barge are race `undead` but `type` =
- *  `Mechanical`, while every Ghoul, Abomination and skeleton is `undead`. The line is the
- *  game's own: `Targetundead` = "Must target an Undead unit." */
-export const UNDEAD_TARGET_SPELLS: Record<string, string> = {
-  AUdp: "Targetundead", // Death Knight — Death Pact
-  AUdr: "Targetundead", // Lich — Dark Ritual
-};
-
-/**
- * THE TRANSFORMS — Hex and Polymorph, and the creep copies that share their codes — may not
- * be aimed at a SUMMONED unit. "Casting Hex on a summoned unit does nothing… summoned units
- * are immune to being hexed by design" (classic.battle.net, Shadow Hunter), and Polymorph
- * carries the same clause; Liquipedia lists summons under both spells' refused targets.
- *
- * A rule and not a flag, exactly like the two sets above, and the data proves it twice over:
- * `UI\UnitEditorData.txt`'s [targetList] — the whole vocabulary a `targs1` may draw on — has
- * no "summoned" entry at all in 1.30.4, and yet `Units\CommandStrings.txt` [Errors] ships
- * **`Notsummoned` = "Unable to target summoned units."** for the engine to say. A line written
- * for a rule no ability row can state is the engine telling us it keeps that rule itself.
- *
- * Keyed on the base `code`, so the creeps' `AChx`/`ACpy` and a map's own rows built on either
- * base inherit it — the same door every other transform behaviour comes through.
- *
- * WHY it exists is worth stating, because it is not arbitrary: a summon is on a clock already.
- * Turning a Water Elemental into a sheep for 15 seconds would spend a 175-mana Hex to delay
- * something that was going to expire on its own — but far worse, a critter takes no damage it
- * cannot dodge and gives none, so Hex would be the cheapest possible ANSWER to every summon in
- * the game. The engine refuses it instead.
- */
-export const NO_SUMMON_TARGET: Record<string, string> = {
-  AOhx: "Notsummoned", // Shadow Hunter — Hex
-  AChx: "Notsummoned", // …and the creep row that shares its code
-  Aply: "Notsummoned", // Sorceress — Polymorph
-  ACpy: "Notsummoned", // …and its creep twin
-  // Transmute (issue #204) — the same refusal for a different reason: a summon has no
-  // `goldcost` to be melted down into (UnitBalance prices a Water Elemental at 0), so the
-  // ultimate would be a 45-second-cooldown kill that pays nothing, and the cheapest answer in
-  // the game to a Phoenix or an Infernal. Liquipedia (Alchemist): "Can not target summoned
-  // units."
-  ANtm: "Notsummoned",
-};
-
 /** Devour's shape, shared by the Kodo Beast (`Adev`) and the creeps (`ACdv`). The MAX CREEP
- *  LEVEL both rows carry is enforced at the button (`SimWorld.castError`), not here. */
+ *  LEVEL both rows carry is a target rule (TARGET_RULES, sim/targetRules.ts), not here. */
 const devourSpell: Handler = (api, caster, def, _rank, ctx) => {
   const t = api.getUnit(ctx.targetId);
   if (!t || !api.hostile(caster, t) || t.building || t.isHero) return;
@@ -3416,7 +3357,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // transaction, and both halves are the row's own numbers.
   ANtm: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
-    // Summons and illusions are refused at the order (NO_SUMMON_TARGET); asked again here
+    // Summons and illusions are refused at the order (TARGET_RULES); asked again here
     // because the bottle is in the air for a while and a script's order skips the button.
     if (!t || t.isHero || t.building || t.isSummon || t.isIllusion) return;
     const lvl = def.levelData[rank - 1];
@@ -3425,7 +3366,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     //   Ntm1 (DataA) = 1.25   × the victim's GOLD cost
     //   Ntm2 (DataB) = 0      × its lumber cost
     // (Ntm3 = 5 is the creep level it refuses above — enforced at the order, see
-    // SimWorld.targetError / CREEP_LEVEL_CAP.) The World Editor's own names for these live
+    // TARGET_RULES, sim/targetRules.ts.) The World Editor's own names for these live
     // in strings the install does not ship, so the reading is checked against the numbers
     // players quote instead, and they are `goldcost × 1.25` rounded to the point: a Footman
     // (135) pays 169, a Rifleman (205) 256, a Knight (245) 306.

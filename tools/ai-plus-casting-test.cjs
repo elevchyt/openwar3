@@ -153,7 +153,7 @@ function cast(units, profile = PLUS_INSANE, opts = {}) {
       if (!targetId) return null;
       const t = units.find((u) => u.id === targetId);
       if (!t) return "notarget";
-      // The sim's own `MANA_TARGET_SPELLS` gate (sim/spells.ts): "Unable to cast Mana Burn on
+      // The sim's own mana-pool target rule (TARGET_RULES, sim/targetRules.ts): "Unable to cast Mana Burn on
       // this target." is what a Footman gets — a pool of zero is the test, not an empty one.
       if (code === "AEmb" && t.maxMana <= 0) return "Cantmanaburn";
       const healsUndead = POLARITY[code];

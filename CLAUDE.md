@@ -356,6 +356,16 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   doors and not only the drop button: dropping it, handing it over, selling it, and a NON-hero
   carrier dying with it. It is a per-ITEM flag (`SetItemDroppable`, keyed on the entity id) laid
   over the type's own `droppable` column, which exactly one stock item — `soul` — has clear.
+- **Who an ability may be aimed at** has ONE door: `SimWorld.targetError`. It reads the row's
+  `targs1` (`src/sim/targeting.ts`: kind + allegiance) and then
+  [`TARGET_RULES`](src/sim/targetRules.ts) — the rules no flag list can state (a mana pool, an
+  Undead classification, summon or not, a creep level cap), keyed on the base `code`, each with
+  the game's own [Errors] line. A spell button, an item, an autocast, a computer and a script's
+  order all pass through it, so a new refusal is a RULE there, never an `if (code === …)` in one
+  caller (that is how Control Magic's "summons only" held for the Gloves and not the Spell
+  Breaker). A row that names no KIND word restricts no kind: `[Aste] targs1 = notself` admits a
+  building, and what keeps the Wand of Mana Stealing off an Arcane Vault is its mana rule — a
+  Moon Well, which has a pool, stays legal.
 - **Orb effects:** read [`docs/orbs.md`](docs/orbs.md) before touching any ATTACK MODIFIER — the orb items, the
   arrow abilities (Searing/Cold/Black/Incinerate), Slow Poison, Envenomed Spears, Feedback, Frost Attack or the
   Mask of Death. They are ONE family under one rule — only **one** orb effect may ride a blow, by a fixed priority

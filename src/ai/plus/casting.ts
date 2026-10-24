@@ -1635,8 +1635,8 @@ export class PlusCaster {
   /**
    * IS THERE ENOUGH LEFT IN THIS BAR TO BE WORTH BURNING?
    *
-   * Mana Burn's own legality is the sim's and it is already narrow — `MANA_TARGET_SPELLS`
-   * (sim/spells.ts) refuses any target with no mana POOL, which is the game's own
+   * Mana Burn's own legality is the sim's and it is already narrow — `TARGET_RULES` (sim/targetRules.ts)
+   * refuses any target with no mana POOL, which is the game's own
    * `Cantmanaburn` and the reason a Demon Hunter may not pick a Footman at all. What the data
    * cannot say is that a pool with nothing in it is legal and useless: a drained Sorceress is
    * still a caster, and 60 mana spent taking 4 off her is the cast that makes an AI look like

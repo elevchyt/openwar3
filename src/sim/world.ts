@@ -1,6 +1,7 @@
 import { BUILD_CELL, BUILD_CELL_CELLS, PATHING_CELL, footprintCells, type PathDomain, type PathingGrid } from "./pathing";
 import { findPath, smoothPath, pathExpansionsSpent, pathArrived, pathGoal, PATH_FLOOR_EXPANSIONS, beginPath, PathScratch, type PathSearch } from "./pathfind";
 import { targsKindError } from "./targeting";
+import { targetRulesOf } from "./targetRules";
 import { corpseAdmits, corpseMissingError, corpseNeed, corpseReach, spawnsFromCorpse, type CorpseNeed, type CorpseOrder } from "./corpses";
 import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, type Footprint } from "./destructibles";
 import { BlightGrid } from "./blight";
@@ -47,7 +48,7 @@ import {
 import { perfNow, simProfile } from "./profile";
 import { flyHeight, type MissileFlight } from "./missile";
 import { HERO_KILL_VALUE, MatchStats } from "./matchStats";
-import { SPELL_HANDLERS, ITEM_INVULN_GROUP, AURA_BUFFS, SELF_INVIS_GROUP, BLADESTORM_GROUP, FIELD_PIERCES_SPELL_IMMUNITY, POLARITY_SPELLS, HEAL_SPELLS, FIGHTER_BUFFS, MANA_TARGET_SPELLS, NO_SUMMON_TARGET, UNDEAD_TARGET_SPELLS, DISPEL_CODES, REPLENISH_BAR, replenishRefusal, survivesDispel, clockedBuff, worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, spellShieldBuff, drainTag, burningOilField, spellStealPlan, DRAIN_GROUP, CANNIBALIZE_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
+import { SPELL_HANDLERS, ITEM_INVULN_GROUP, AURA_BUFFS, SELF_INVIS_GROUP, BLADESTORM_GROUP, FIELD_PIERCES_SPELL_IMMUNITY, POLARITY_SPELLS, HEAL_SPELLS, FIGHTER_BUFFS, DISPEL_CODES, REPLENISH_BAR, replenishRefusal, survivesDispel, clockedBuff, worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, spellShieldBuff, drainTag, burningOilField, spellStealPlan, DRAIN_GROUP, CANNIBALIZE_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
 /** The buff group a Tornado's toss is applied under — both halves, so the invulnerability's wipe
  *  spares the stun it came with (clearStatusForInvulnerable). See tickTornado. */
 const TORNADO_SPIN_GROUP = "tornadoSpin";
@@ -3335,24 +3336,6 @@ const MISSILE_COMES_BACK = new Set(["Aabs", "Asps"]);
  *  instead: Sacrifice (`Asac`) — "Target an Acolyte to sacrifice it and turn it into a Shade"
  *  (UndeadAbilityStrings), `Rng1` 75, cast by the Sacrificial Pit, which has no feet. */
 const TARGET_COMES_TO_CASTER = new Set(["Asac"]);
-/** Abilities that refuse a target for being TOO BIG, with the cap in their own `DataC`.
- *  Transmute is the only one in 1.30 and its Ubertip names both the rule and the column:
- *  "Transmute cannot be used on Heroes, or creeps above level <ANtm,DataC1>" (= 5). The
- *  hero half is already the row's `nonhero` flag; this is the other half, and the game
- *  ships the line for it — `Creeptoopowerful` = "That creature is too powerful."
- *  (Units\CommandStrings.txt [Errors]). */
-/** Abilities that refuse a target for being TOO BIG, with the cap in their own `DataC`.
- *  Transmute is the only one in 1.30 and its Ubertip names both the rule and the column:
- *  "Transmute cannot be used on Heroes, or creeps above level <ANtm,DataC1>" (= 5). The
- *  hero half is already the row's `nonhero` flag; this is the other half, and the game
- *  ships the line for it — `Creeptoopowerful` = "That creature is too powerful."
- *  (Units\CommandStrings.txt [Errors]).
- *
- *  DEVOUR is the second, and its cap is in a different column — which is why this is a map of
- *  code → column rather than a set. `Units\AbilityMetaData.slk` declares `Dev1` **"Max Creep
- *  Level"** for `useSpecific = "Adev,ACdv"`, i.e. **DataA** on both the Kodo's row and the
- *  creeps', and both read 5. Without it a Kodo Beast swallowed a level 10 Dragon whole. */
-const CREEP_LEVEL_CAP: Record<string, number> = { ANtm: 2, Adev: 0, ACdv: 0 };
 /**
  * The ARROWS, the loudest members of the ATTACK MODIFIER (orb) family — abilities that ride
  * on a shot rather than being one. The family itself, and the rule that only ONE of its
@@ -14627,7 +14610,7 @@ export class SimWorld {
       const prey = this.units.get(u.devouring);
       if (!prey || prey.hp <= 0) { u.devouring = 0; continue; }
       // The DIGEST RATE is not on the Devour button: `Dev1` on `Adev`/`ACdv` is **"Max Creep
-      // Level"** (enforced at the click, see CREEP_LEVEL_CAP), and the damage lives on the
+      // Level"** (enforced at the click, see TARGET_RULES), and the damage lives on the
       // HOLD that carries the prey — `Advc` "Cargo Hold (Devour)", whose `Dev2` is **"Damage
       // per Second"** = DataB = 5. Both rows read 5, so the old reading was the right number
       // off the wrong column; the creep's own Ubertip is what settles it, citing
@@ -14966,36 +14949,10 @@ export class SimWorld {
     // ability its own error string. Holy Light and Death Coil are mirror images.
     const polarity = POLARITY_SPELLS[code];
     if (polarity && !this.polarityOk(caster, target, polarity.healsUndead)) return polarity.error;
-    // …and abilities that need the target to HAVE a mana bar. Same shape as the polarity
-    // rule and known the same way: `targs1` cannot express it, and the game ships a line
-    // written for one ability ("Unable to cast Mana Burn on this target."). A Demon Hunter
-    // may not pick a Footman at all — see MANA_TARGET_SPELLS.
-    const manaTarget = MANA_TARGET_SPELLS[code];
-    if (manaTarget && target.maxMana <= 0) return manaTarget;
-    // …and the sacrifices, which want an Undead CLASSIFICATION rather than the race — so a
-    // Death Knight cannot Death Pact his own Meat Wagon (see UNDEAD_TARGET_SPELLS).
-    const undeadTarget = UNDEAD_TARGET_SPELLS[code];
-    if (undeadTarget && !this.undeadClassified(target)) return undeadTarget;
-    // …and the TRANSFORMS, which refuse a summoned unit outright — "Unable to target summoned
-    // units." The third rule of the same shape and known the same way (see NO_SUMMON_TARGET:
-    // 1.30.4's target-flag vocabulary has no `summoned`, and the engine ships the error line
-    // anyway). An ILLUSION counts: it is a summon in every reading the sim makes of one, and a
-    // Hex spent on a picture of a Blademaster would be the cheapest possible answer to Mirror
-    // Image.
-    const noSummon = NO_SUMMON_TARGET[code];
-    if (noSummon && (target.isSummon || target.isIllusion)) return noSummon;
-    // …and the ones that refuse a target for being too big (CREEP_LEVEL_CAP). Read off the
-    // caster's own rank rather than a constant, because the cap is a data column: a map that
-    // retunes `DataC` retunes what its Alchemist may melt down.
-    // A creep is anything NEUTRAL HOSTILE owns (team -1, the same reading awardKillXp's creep
-    // factor makes), not only the map-placed camps `isCreep` marks: a creep a trigger spawned
-    // or respawned is just as "too powerful" at level 7 (issue #204).
-    const capColumn = CREEP_LEVEL_CAP[code];
-    if (capColumn !== undefined && (target.isCreep || target.team === -1)) {
-      const lvl = this.passiveLevelData(caster, code);
-      const cap = lvl ? this.dataOf(lvl, capColumn, 0) : 0;
-      if (cap > 0 && target.level > cap) return "Creeptoopowerful";
-    }
+    // …and every other rule the flag list cannot state — a mana pool, an Undead, a summon or
+    // not, a creep level cap — out of the ONE registry every door shares (TARGET_RULES).
+    const ruleError = this.targetRuleError(caster, target, code);
+    if (ruleError !== null) return ruleError;
     // A heal with nothing to heal is refused, not wasted — WC3 won't let you spend a
     // Paladin's mana on an undamaged Footman. The hero/unit split is the data's own:
     // "Hero has full health." vs "Already at full health."
@@ -15024,6 +14981,41 @@ export class SimWorld {
     // later in the same pass), so take it now rather than read a stale null as "nobody".
     this.trackEnsnareSeen(u);
     return !!u.ensnareSeen?.has(t.id);
+  }
+
+  /** The first of `code`'s TARGET_RULES (sim/targetRules.ts) that `target` breaks, as its
+   *  [Errors] key — or null. Asked only from `targetError`, so a spell button, an item, an
+   *  autocast, a computer and a script's order all meet the same rules. */
+  private targetRuleError(caster: SimUnit, target: SimUnit, code: string): string | null {
+    for (const rule of targetRulesOf(code)) {
+      switch (rule.kind) {
+        case "manaPool":
+          if (target.maxMana <= 0) return rule.error;
+          break;
+        case "undeadClass":
+          if (!this.undeadClassified(target)) return rule.error;
+          break;
+        case "notSummon":
+          if (target.isSummon || target.isIllusion) return rule.error;
+          break;
+        case "summonOnly":
+          if (target.summonLeft <= 0) return rule.error;
+          break;
+        case "creepLevel": {
+          // A creep is anything NEUTRAL HOSTILE owns (team -1, the same reading awardKillXp's
+          // creep factor makes), not only the map-placed camps `isCreep` marks: a creep a
+          // trigger spawned or respawned is just as "too powerful" at level 7 (issue #204).
+          if (!target.isCreep && target.team !== -1) break;
+          // Read off the caster's own row — learned or CARRIED (passiveLevelData looks in the
+          // inventory too) — because the cap is a data column a map may retune.
+          const lvl = this.passiveLevelData(caster, code);
+          const cap = lvl ? this.dataOf(lvl, rule.column, 0) : 0;
+          if (cap > 0 && target.level > cap) return rule.error;
+          break;
+        }
+      }
+    }
+    return null;
   }
 
   /** common.j's UNIT_TYPE_UNDEAD for one unit: its type's UnitBalance `type` column, unless a
@@ -25760,6 +25752,12 @@ export class SimWorld {
     // spell cast at the same unit walks into its range. A unit that can move is never told
     // "Target is outside range." — it closes the distance (issueUseItemWalk / tickGetItem).
     if (targetId && targetId !== u.id) {
+      // …but never toward a unit the item may not be aimed at. This is the door the authority,
+      // a trigger's UnitUseItemTarget and the AI all come through, and it asks the same question
+      // the HUD asks before the click (itemUseError → targetError → TARGET_RULES): a Wand of
+      // Mana Stealing sent at an Arcane Vault off the wire must not walk the hero over there to
+      // be refused on arrival.
+      if (this.itemUseError(unitId, slot, targetId, true) !== null) return false;
       const t = this.units.get(targetId);
       const reach = this.itemAimReach(def);
       if (t && reach > 0 && Math.hypot(t.x - u.x, t.y - u.y) > reach + u.radius + t.radius) return this.issueUseItemWalk(u, slot, t);
@@ -26161,7 +26159,7 @@ export class SimWorld {
     const flagErr = this.targetError(u, t, ad.targetFlags, ad.code);
     if (flagErr !== null) return flagErr;
     if (t.owner !== u.owner) return "Targetowned"; // "Must target one of your own units."
-    if (t.isSummon) return "Notsummoned"; // "Unable to target summoned units."
+    // (Summons are refused inside targetError, by TARGET_RULES.)
     // …with the unit's OWN Sanctuary exempted. Its hold is a `stun` like any other, but the
     // same pages say "multiple instances of the heal-over-time effect stack" — which is only
     // possible if a second staff may be aimed at a unit the first one is already holding.
@@ -26276,8 +26274,9 @@ export class SimWorld {
       // to." Answered on the CLICK so the scroll keeps its charge, as the staves are.
       if (ad.code === "AItp") return this.nearestHall(u.owner, u.x, u.y) ? null : "Notownportalhalls";
       // The UNIT-AIMED items. Each is refused by its own row's `targs1` and `Rng1` through the
-      // one shared test a spell goes through (targetError), plus the handful of rules the flag
-      // list cannot express — the same shape POLARITY_SPELLS and MANA_TARGET_SPELLS take.
+      // one shared test a spell goes through (targetError) — which also asks the rules the flag
+      // list cannot express (TARGET_RULES: the wand's mana pool, Control Magic's summons, the
+      // Scepter's creep cap), so an item and the spell it IS can never disagree.
       if (ad.target !== "unit") continue;
       const t = this.units.get(targetId);
       if (!t) return "Targetunit";
@@ -26285,15 +26284,6 @@ export class SimWorld {
       if (flagErr !== null) return flagErr;
       const range = ad.levelData[0]?.castRange ?? 0;
       if (!walkable && range > 0 && Math.hypot(t.x - u.x, t.y - u.y) > range + u.radius + t.radius) return "Notinrange";
-      // Control Magic (`Acmg`) takes SUMMONED units and nothing else — "Grants the ability to
-      // control summoned units", which no `targs1` value can say.
-      // (`Needsummoned` = "Must target summoned units." — the positive line, not `Notsummoned`,
-      // which is the refusal an ability that may NOT touch a summon gives.)
-      if (ad.code === "Acmg" && t.summonLeft <= 0) return "Needsummoned";
-      // The Scepter of Mastery (`AIco`) is Charm with an item's numbers, and carries Charm's
-      // one extra rule in `DataA "Maximum Creep Level"` = 5: "Cannot be used on Heroes or on
-      // creeps higher than level <AIco,DataA1>."
-      if (ad.code === "AIco" && t.isCreep && t.level > this.dataOf(ad.levelData[0] ?? emptyAbilityLevel(), 0, 5)) return "Creeptoopowerful";
       return null;
     }
     return null; // not an aimed item — nothing to check here

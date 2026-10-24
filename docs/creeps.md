@@ -162,7 +162,7 @@ the behaviour:
   `<Advc,DataB1>` and settles it. (The Kodo's says `DataC1`, which is `Dev3` "Maximum Creep
   Level" — Blizzard's typo, invisible because both are 5.)
 - **The Max Creep Level was never enforced**, so a Kodo Beast could swallow a level 10 Dragon.
-  It is the second member of `CREEP_LEVEL_CAP`, which is now a map of code → column because
+  It is a `creepLevel` rule in `TARGET_RULES` (src/sim/targetRules.ts), which names the column because
   Transmute keeps its cap in DataC and Devour in DataA. The refusal is the game's own
   `Creeptoopowerful` line. (A dragon is refused for magic immunity before the level is asked.)
 

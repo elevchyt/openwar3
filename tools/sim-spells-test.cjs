@@ -410,15 +410,15 @@ const round = (n) => Math.round(n * 1000) / 1000;
   }
   {
     // …nor a SUMMON or an ILLUSION (issue #204): neither has a price to melt down, and the
-    // order refuses both with `Notsummoned` (NO_SUMMON_TARGET).
+    // order refuses both with `Notsummoned` (TARGET_RULES, sim/targetRules.ts).
     const summon = unit({ id: 4, team: 1, isSummon: true });
     const image = unit({ id: 5, team: 1, isIllusion: true });
     const { api: a3, log: l3 } = harness([caster, summon, image]);
     SPELL_HANDLERS.ANtm(a3, caster, def({ code: "ANtm", data: [1.25, 0, 5, 1] }), 1, { targetId: 4, x: 0, y: 0 });
     SPELL_HANDLERS.ANtm(a3, caster, def({ code: "ANtm", data: [1.25, 0, 5, 1] }), 1, { targetId: 5, x: 0, y: 0 });
     check("…nor a summon or an illusion", l3.transmutes, []);
-    const { NO_SUMMON_TARGET } = require(join(REPO, ".sim-build", "src", "sim", "spells.js"));
-    check("…and the order says why", NO_SUMMON_TARGET.ANtm, "Notsummoned");
+    const { targetRulesOf } = require(join(REPO, ".sim-build", "src", "sim", "targetRules.js"));
+    check("…and the order says why", targetRulesOf("ANtm").find((r) => r.kind === "notSummon")?.error, "Notsummoned");
   }
 }
 

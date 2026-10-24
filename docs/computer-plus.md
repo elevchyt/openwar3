@@ -2832,7 +2832,7 @@ is *already* in front of the Demon Hunter. What a difficulty still changes here 
 press comes (`castDelay`) and how often it lands on the wrong body (`castMistake`).
 
 **The floor under it is the target's own cheapest button.** The sim already refuses any target
-with no mana POOL (`MANA_TARGET_SPELLS`, the game's own `Cantmanaburn` — a Demon Hunter may not
+with no mana POOL (a `manaPool` rule in `TARGET_RULES`, the game's own `Cantmanaburn` — a Demon Hunter may not
 pick a Footman at all), but a pool with nothing *in* it is legal and useless, and 60 mana spent
 taking 4 off a drained Sorceress is what makes an AI look like it is pressing buttons for the sake
 of it. `manaBurnWorthIt` keeps burning while the target can still afford one of its OWN abilities
