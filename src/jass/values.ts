@@ -74,12 +74,21 @@ export function asHandle(v: JassValue): number {
 }
 
 /** JASS `==` equality. Numbers compare by value across int/real; handles by id;
- *  null equals null and equals any null-valued handle. Strings/bools by value. */
+ *  null equals null and equals any null-valued handle — and `false`. Strings/bools by value. */
 export function jassEquals(a: JassValue, b: JassValue): boolean {
   if (a.k === "null" || b.k === "null") {
+    // A boolean against null compares as `false == null`: in the game's VM both are a raw 0.
+    // Map optimizers rely on it — `IsUnitType(u, t) != null` is their spelling of `!= false`
+    // (the IsUnitType-in-a-condition workaround), and BleachVsOnepiece13's `MG` wraps all
+    // 568 of its type checks in it, as do the hero filters of the install's own DotA 6.77b AI
+    // and Angel Arena. Reading `false != null` as TRUE made every unit every type there: a
+    // dummy counted as a hero, re-fired the "a hero enters the rect" trigger that spawned it,
+    // and spawned more of itself until the match ground to a halt.
+    const other = a.k === "null" ? b : a;
+    if (other.k === "bool") return !other.b;
     // null == null, and null == a handle only if that handle is itself null (we
     // never mint a null handle — real handles have ids ≥ 0), so both-null is the
-    // only true case here.
+    // only other true case here.
     return a.k === "null" && b.k === "null";
   }
   if ((a.k === "int" || a.k === "real") && (b.k === "int" || b.k === "real")) return a.n === b.n;
