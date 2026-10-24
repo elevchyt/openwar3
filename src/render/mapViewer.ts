@@ -1,6 +1,8 @@
 import War3MapViewer from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/viewer";
 import { dataSetFolder, isRoc } from "../data/edition";
 import ModelViewer from "mdx-m3-viewer/dist/cjs/viewer/viewer";
+import { unpackPlanes } from "mdx-m3-viewer/dist/cjs/common/gl-matrix-addon";
+import { mat4 } from "gl-matrix";
 import type { DataSource } from "../vfs/types";
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { MpqDataSource } from "../vfs/mpq";
@@ -684,11 +686,49 @@ const RING_TEX_BUILDING = "ui\\Feedback\\selectioncircle\\SelectionCircleBuildin
 // scale·38, so half-width = scale·38 keeps a ring the same size it used to draw.
 const RING_NATIVE = 38;
 
+// THE CINEMATIC LENS. In a cinematic the real client projects the world into the strip
+// between the letterbox bars, not into the whole screen: the camera's lens spans the strip's
+// height and its principal point is the strip's middle. Solved off a frame of the real 1.30.4
+// Frozen Throne credits (seven points the map states — bridge tower tops, the campfire, the
+// snowman, a torch), a pinhole whose principal point is the middle of the WHOLE screen fits
+// with a 15.7° tilt and a 36.5° lens, neither of which the script asked for; put the principal
+// point at the middle of the strip and the lens over the strip's height, and the same solve
+// returns the script's own camera — rotation 93.3 against 93.3, tilt 12.0° against AOA
+// 349.1's 10.9°, lens 26.6° against fovFromWc3(61)'s 27.1°. Projected over the whole stage,
+// ours looked flatter and closer than the client's and from lower down, which is half of
+// why the credits' bridges read as set too high.
+//
+// The strip is `UI\FrameDef\UI\CinematicPanel.fdf`'s: `CinematicTopBorder` Height 0.0275
+// and `CinematicBottomBorder` Height 0.14 on the FDF's 0.6-tall screen, which the stage is
+// scaled to by its height (ui/cinematicPanel.ts draws the same two bars).
+const CINE_TOP = 0.0275 / 0.6;
+const CINE_STRIP = 1 - CINE_TOP - 0.14 / 0.6;
+/** Where the strip's middle sits in clip space: y = 1 at the top of the stage, −1 at the bottom. */
+const CINE_CENTRE_Y = 1 - 2 * (CINE_TOP + CINE_STRIP / 2);
+
+/** Shift a camera's principal point up to the middle of the letterbox strip. The vertical lens
+ *  was already widened by 1/CINE_STRIP (the strip is that fraction of the stage), so what the
+ *  script's lens frames lands exactly between the bars. An off-axis frustum is one term of the
+ *  projection — clip y gains −P[9]·z, so P[9] = −c moves the centre to NDC c — and everything
+ *  that hangs off the projection is recomposed the way the viewer's own `update()` does it,
+ *  so picking, the frustum cull and every world-to-screen projection stay in step. */
+function cinematicLens(camera: Camera): void {
+  camera.projectionMatrix[9] = -CINE_CENTRE_Y;
+  mat4.mul(camera.viewProjectionMatrix, camera.projectionMatrix, camera.viewMatrix);
+  mat4.invert(camera.inverseViewProjectionMatrix, camera.viewProjectionMatrix);
+  unpackPlanes(camera.planes as unknown as Parameters<typeof unpackPlanes>[0], camera.viewProjectionMatrix);
+}
+
 // Minimal local typings (mdx-m3-viewer's exports drag in their own gl-matrix).
 interface Camera {
   perspective(fov: number, aspect: number, near: number, far: number): void;
   moveToAndFace(from: Float32Array, to: Float32Array, up: Float32Array): void;
   viewProjectionMatrix: Float32Array; // World → Clip; drives the fog-overlay pass
+  // The rest of the chain `update()` builds, for the cinematic lens (`cinematicLens`), which
+  // moves the principal point after the fact and has to recompose what hangs off it.
+  projectionMatrix: Float32Array;
+  viewMatrix: Float32Array;
+  inverseViewProjectionMatrix: Float32Array;
   // The eye and its two screen axes (mdx-m3-viewer Camera: location + the X/Y axes in
   // camera space). The weather pass needs all three to billboard a snowflake at the camera
   // and to turn a rain streak's flat quad toward it (src/render/weather.ts).
@@ -16791,8 +16831,12 @@ export class MapViewerScene {
       eye[2] += sz;
     }
     // FARZ 0 = "the game camera's own rule", which is 8× the focus distance.
-    scene.camera.perspective(this.fov, this.aspect(), 16, this.farZ > 0 ? this.farZ : this.distance * 8);
+    // In a cinematic the lens frames the strip BETWEEN the letterbox bars (cinematicLens).
+    const cine = !this.interfaceShown;
+    const fov = cine ? 2 * Math.atan(Math.tan(this.fov / 2) / CINE_STRIP) : this.fov;
+    scene.camera.perspective(fov, this.aspect(), 16, this.farZ > 0 ? this.farZ : this.distance * 8);
     scene.camera.moveToAndFace(eye, this.target, this.upVector(eye));
+    if (cine) cinematicLens(scene.camera);
     this.sky?.follow(scene.camera); // the sky surrounds the EYE (render/sky.ts)
     // Drive positional (WANT3D) audio: listener at the ground focus, facing the
     // camera's look direction so on-screen battles pan + attenuate around center.

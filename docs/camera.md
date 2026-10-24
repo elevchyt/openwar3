@@ -306,6 +306,29 @@ A single press *held* does not follow. Only the second tap arms it, and the rele
 `keyup` **and** on the window losing focus — a hold that never gets its keyup (alt-tab mid-hold)
 would otherwise leave the camera glued to the group with no key to let go of.
 
+## In a cinematic the lens frames the letterbox strip
+
+While `ShowInterface(false)` has the letterbox up, the real client projects the world into the
+strip BETWEEN the bars: the lens spans the strip's height and the principal point is the strip's
+middle. The bars are `UI\FrameDef\UI\CinematicPanel.fdf`'s `CinematicTopBorder` (Height 0.0275)
+and `CinematicBottomBorder` (0.14) on the 0.6-tall FDF screen, so the strip is 72 % of the stage
+and its middle sits 0.1875 above the stage's centre in clip space.
+
+Measured, not assumed: a pinhole solved off a frame of the real Frozen Throne credits (seven
+points the map states — four bridge tower tops, the campfire, the snowman, a torch) with the
+principal point at the middle of the WHOLE screen needs a 15.7° tilt and a 36.5° lens, neither of
+which `gg_cam_Camera_001` asks for. With the principal point and the lens on the strip, the same
+solve returns the script's camera: rotation 93.3 against 93.3, tilt 12.0° against AOA 349.1's
+10.9°, lens 26.6° against `fovFromWc3(61)`'s 27.1°.
+
+`cinematicLens` (mapViewer.ts) does it as an off-axis frustum on the whole canvas — the vertical
+lens widened by 1/0.72 and `P[9]` shifting the centre — rather than a smaller GL viewport, so
+picking, the frustum cull and every world-to-screen projection read the same matrices as the
+picture. What is still off: with the lens right, the same solve puts the real focus about 100
+units higher than ours (~460 at the credits' target, against ground 204 + ZOFFSET 151 = 355; the
+target is over water, surface 279). Something other than the raw ground under the focus sets the
+camera's height in WC3, and it has not been pinned down yet.
+
 ## Related
 
 - [`docs/triggers.md`](triggers.md) — the JASS/trigger tracker; the script camera is milestone 7.24.
