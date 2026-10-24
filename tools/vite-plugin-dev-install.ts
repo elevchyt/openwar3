@@ -1,5 +1,5 @@
 import { createReadStream, existsSync, statSync } from "node:fs";
-import { readdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import type { Plugin } from "vite";
 
@@ -122,6 +122,39 @@ export function devInstall(): Plugin {
                 const entries = await readdir(root, { withFileTypes: true });
                 const name = entries.find((e) => e.isFile() && e.name.toLowerCase() === CUSTOM_KEYS.toLowerCase())?.name ?? CUSTOM_KEYS;
                 await writeFile(join(root, name), Buffer.concat(chunks));
+                res.statusCode = 204;
+                res.end();
+              } catch (err) {
+                res.statusCode = 500;
+                res.end(String(err));
+              }
+            })();
+          });
+          return;
+        }
+
+        if (url.pathname === "/map" && req.method === "POST") {
+          // A bare .w3m/.w3x file name and nothing else — no separator, nothing that climbs out
+          // (the same rule as electron/install.mjs `writeDownloadedMap`).
+          const name = url.searchParams.get("name") ?? "";
+          if (!/^[^\\/:*?"<>|\u0000-\u001f]+\.(w3m|w3x)$/i.test(name) || name.startsWith(".")) {
+            res.statusCode = 400;
+            res.end("Not a map file name.");
+            return;
+          }
+          const chunks: Buffer[] = [];
+          req.on("data", (c: Buffer) => chunks.push(c));
+          req.on("end", () => {
+            void (async () => {
+              try {
+                const folder = async (parent: string, want: string): Promise<string> => {
+                  const found = (await readdir(parent, { withFileTypes: true }))
+                    .find((e) => e.isDirectory() && e.name.toLowerCase() === want.toLowerCase());
+                  const dir = join(parent, found?.name ?? want);
+                  if (!found) await mkdir(dir, { recursive: true });
+                  return dir;
+                };
+                await writeFile(join(await folder(await folder(root, "Maps"), "Download"), name), Buffer.concat(chunks));
                 res.statusCode = 204;
                 res.end();
               } catch (err) {

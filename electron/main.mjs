@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
 import { startServer } from "./server.mjs";
-import { installVersion, looksLikeInstall, serveInstall, writeCustomKeys, REQUIRED_VERSION } from "./install.mjs";
+import { installVersion, looksLikeInstall, serveInstall, writeCustomKeys, writeDownloadedMap, REQUIRED_VERSION } from "./install.mjs";
 import { downloadInstall } from "./download.mjs";
 import { detectInstall } from "./locate.mjs";
 import { startBeacon } from "./beacon.mjs";
@@ -304,6 +304,8 @@ app.whenReady().then(async () => {
   // The hotkey editor's Save (issue #156): the page's bytes, into the CURRENT folder's
   // CustomKeys.txt. The root is read here, never taken from the page.
   ipcMain.handle("ow3:customkeys-save", (_event, bytes) => writeCustomKeys(currentInstall().path, bytes));
+  // …and a map a LAN game handed us, into Maps\Download\ (src/assets/downloadedMaps.ts).
+  ipcMain.handle("ow3:map-save", (_event, name, bytes) => writeDownloadedMap(currentInstall().path, name, bytes));
   // Options → Video → "Vertical Sync". The SAVED choice, not the running one: a player who turns it
   // off and reopens the panel before relaunching should see the box they left, not the old state.
   ipcMain.handle("ow3:vsync-get", () => readSettings().vsync !== false);

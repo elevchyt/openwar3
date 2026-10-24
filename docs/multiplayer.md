@@ -392,6 +392,31 @@ read 153 ms. Direct: 1 ms (both on one machine), with **zero** match messages th
 after the link opened. With the host's links switched off, the joiner's offers went unanswered,
 it stayed on the relay at 150 ms, and the match played on.
 
+### A map the joiner does not have
+
+A room names its map by PATH and every machine opens its own copy. A joiner whose install lacks it
+(a custom map) is handed it by the HOST, the way Warcraft III's lobby sent one: Join is allowed,
+and once the relay seats us in the room `ui/mapDownload.ts` puts up the game's own
+`BattleNetPatchDialog` ("Downloading Map", `GlobalStrings.fdf` DOWNLOADING_MAP) while
+`net/mapTransfer.ts` PULLS the file over ordinary game traffic: `mapget` piece n, `mappart` piece n
+(48 KiB, base64, at most eight in flight). The relay forwards it without knowing, so no server
+change and no protocol bump. The host serves exactly one file, the map of the room it hosts; any
+other path is refused.
+
+The map is kept in the install's `Maps\Download\` (`assets/downloadedMaps.ts`, made if missing),
+through whichever door the install came in by: the browser picker's folder handle (write access is
+asked for inside the Join click, the only gesture there is), the desktop shell (`ow3:map-save`),
+or the dev server (`POST /wc3/map`). A folder read through `<input webkitdirectory>` cannot be
+written, and the map then lives in memory for the session. Next time, `localMapPath` finds it by
+file name and no download happens.
+
+While it runs the host prints the joiner's progress in the row's own `DownloadValue` column
+(`PlayerSlot.fdf`) and a seat carrying `LobbySlot.download` is left OUT of a start and does not
+block one. So the host CAN start without them: the joiner's download is cancelled, the room is
+left, and the box says "Match started before the download could finish." The seat stops being
+"downloading" only when the joiner's LOBBY SCREEN says so (`mapgot`, sent at mount), not when the
+last piece is sent, so a start in between never seats a player with no lobby to start from.
+
 ### A player who drops
 
 Two ways out of a match, and they are told apart on purpose. A player who CHOSE to go — Quit,

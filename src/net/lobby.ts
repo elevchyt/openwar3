@@ -2,6 +2,7 @@ import { DEFAULT_RELAY_PORT, RELAY_PATH, type StartMatch, type GameMessage, type
 import { edition } from "../data/edition";
 import type { Transport } from "./transportTypes";
 import { localStorageStore, reconnectPlan, type RejoinSession, type SessionStore } from "./reconnect";
+import { answerMapGet, chunkCount, type MapGet, type MapPart, type MapWire } from "./mapTransfer";
 
 // Client-side LAN lobby state: the game list, the room you are in, and who is in it.
 //
@@ -92,6 +93,10 @@ export interface LobbyState {
    *  and therefore in a position to know (`HostInfo`). Null against a standalone or cloud relay,
    *  which is not the same as "unreachable" — it is "nobody can tell you". */
   host: HostInfo | null;
+  /** HOST only: the peers fetching the room's map from us right now, each with how much of it
+   *  has been sent, 0–100 (net/mapTransfer.ts). They are in the room but not yet in the GAME —
+   *  the seating leaves them out of a start until it has arrived (net/lobbySetup.ts). */
+  downloads: Record<number, number>;
 }
 
 const EMPTY: LobbyState = {
@@ -102,6 +107,7 @@ const EMPTY: LobbyState = {
   you: null,
   error: null,
   host: null,
+  downloads: {},
 };
 
 /**
@@ -282,6 +288,17 @@ export class LanLobby {
    *  the seat was let go while we were away (`DROPPED_MESSAGE`). For a match in progress this is
    *  WC3's `GAMEOVER_DISCONNECTED`, "You were disconnected." */
   onDisconnected: () => void = () => {};
+  /**
+   * HOST: where the room's map is on this machine — the file a joiner without it is sent
+   * (net/mapTransfer.ts). Null, the default, refuses every request. Set once by whoever owns the
+   * install's map list (main.ts); the path asked of it is always the room's own.
+   */
+  mapSource: ((path: string) => File | null) | null = null;
+  /** JOINER: the host's answers while we fetch its map (`mapWire`). */
+  private onMapPart: ((part: MapPart) => void) | null = null;
+  /** HOST: per downloading peer, how many pieces it has been sent of how many — `downloads`
+   *  comes off it. */
+  private mapSent = new Map<number, { sent: number; total: number }>();
 
   constructor(
     /** How to make a transport. Injected so the lobby carries no value dependency on
@@ -669,7 +686,8 @@ export class LanLobby {
   leave(): void {
     this.transport?.send({ t: "leave" });
     this.store.save(null); // a chosen departure — forget the token so we do not try to crawl back
-    this.set({ phase: "browsing", room: null, peers: [], you: null });
+    this.mapSent.clear();
+    this.set({ phase: "browsing", room: null, peers: [], you: null, downloads: {} });
   }
 
   refresh(): void {
@@ -750,6 +768,63 @@ export class LanLobby {
     this.transport?.send({ t: "drop", peerId: peer });
   }
 
+  /**
+   * JOINER: the wire `fetchMap` pulls the host's map over (net/mapTransfer.ts) — requests go to the
+   * HOST alone, by peer, and its answers are taken out of the game traffic before any screen's
+   * `onPeerData` could see them.
+   */
+  mapWire(): MapWire {
+    return {
+      ask: (msg) => {
+        const host = this.state.peers.find((p) => p.host)?.id;
+        if (host !== undefined) this.send(msg, host);
+      },
+      listen: (fn) => { this.onMapPart = fn; },
+      arrived: (path) => {
+        const host = this.state.peers.find((p) => p.host)?.id;
+        if (host !== undefined) this.send({ k: "mapgot", path }, host);
+      },
+    };
+  }
+
+  /** HOST: answer one piece of the map. Only while the room is in its lobby — a match in progress
+   *  has handed the wire to the game, and a map is no use to a player who is not in it. */
+  private serveMap(from: number, msg: MapGet): void {
+    const room = this.state.room;
+    if (this.state.phase !== "hosting" || !room || this.handedToMatch) return;
+    void answerMapGet(this.mapSource?.(room.mapPath) ?? null, room.mapPath, msg).then((part) => {
+      if (this.state.phase !== "hosting" || this.handedToMatch) return;
+      if (!this.state.peers.some((p) => p.id === from)) return; // gone while the piece was read
+      this.send(part, from);
+      // Who is still fetching: a peer is downloading from its first piece until it says the map
+      // is in (`mapgot`) — not merely sent, or a start in that last moment would seat a player
+      // whose map is still on the wire. A refusal ends it.
+      if (part.error !== undefined) this.mapSent.delete(from);
+      else {
+        const was = this.mapSent.get(from);
+        this.mapSent.set(from, { sent: Math.min((was?.sent ?? 0) + 1, chunkCount(part.size)), total: chunkCount(part.size) });
+      }
+      this.publishDownloads();
+    });
+  }
+
+  /** HOST: a joiner has the whole map now. */
+  private mapArrived(from: number): void {
+    if (this.mapSent.delete(from)) this.publishDownloads();
+  }
+
+  /** Re-published only when a whole percent moves — a map is hundreds of pieces, and every
+   *  publish is a re-seat and a broadcast of the lobby. */
+  private publishDownloads(): void {
+    const now: Record<number, number> = {};
+    for (const [peer, { sent, total }] of this.mapSent) now[peer] = Math.floor((sent / total) * 100);
+    const was = this.state.downloads;
+    const keys = Object.keys(now);
+    if (keys.length !== Object.keys(was).length || keys.some((k) => was[Number(k)] !== now[Number(k)])) {
+      this.set({ downloads: now });
+    }
+  }
+
   /** Host only: tell the room to load the map and play. */
   startMatch(msg: GameMessage & { k: "start" }): void {
     this.send(msg);
@@ -803,6 +878,8 @@ export class LanLobby {
     this.primaryUrl = undefined;
     this.reconnecting = false;
     this.handedToMatch = false;
+    this.mapSent.clear();
+    this.onMapPart = null;
     this.state = { ...EMPTY };
   }
 
@@ -835,7 +912,11 @@ export class LanLobby {
       case "peer-join":
         return this.set({ peers: [...this.state.peers, m.peer] });
       case "peer-leave":
-        this.set({ peers: this.state.peers.filter((p) => p.id !== m.peerId) });
+        this.mapSent.delete(m.peerId); // a joiner that gave up on the map — or never got it
+        this.set({
+          peers: this.state.peers.filter((p) => p.id !== m.peerId),
+          downloads: Object.fromEntries(Object.entries(this.state.downloads).filter(([p]) => Number(p) !== m.peerId)),
+        });
         // …and tell the match, AFTER the roster (as `peer-rejoin` below): in a game in progress
         // this is a player leaving it — the relay sends it for a chosen `leave` and for a
         // dropped seat whose hold ran out alike (server/rooms.mjs HOLD_MS).
@@ -858,7 +939,8 @@ export class LanLobby {
       case "room-closed": {
         this.store.save(null); // the game is gone; nothing to rejoin
         this.reconnecting = false;
-        this.set({ phase: "browsing", room: null, peers: [], you: null, error: m.reason });
+        this.mapSent.clear();
+        this.set({ phase: "browsing", room: null, peers: [], you: null, error: m.reason, downloads: {} });
         // Then the match, AFTER the state settles — the same order `peer-rejoin` uses, so
         // anything reading the lobby in response sees the room already gone.
         return this.onRoomClosed(m.reason);
@@ -868,6 +950,15 @@ export class LanLobby {
         // else is passed through to whoever owns the match (Phase C/E).
         const data = m.data as Partial<GameMessage> | null;
         if (data && data.k === "start") return this.onStart(data as GameMessage & { k: "start" });
+        // The map, on its way to a joiner without it (net/mapTransfer.ts) — lobby business, not
+        // a screen's: the host answers whatever screen it is on, and the joiner's download
+        // outlives the LAN screen that started it.
+        if (data && data.k === "mapget") return this.serveMap(m.from, data as MapGet);
+        if (data && data.k === "mapgot") return this.mapArrived(m.from);
+        if (data && data.k === "mappart") {
+          if (m.from === this.state.peers.find((p) => p.host)?.id) this.onMapPart?.(data as MapPart);
+          return;
+        }
         return this.onPeerData(m.from, m.data);
       }
       case "error":

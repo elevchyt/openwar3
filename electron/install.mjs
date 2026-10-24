@@ -17,7 +17,7 @@
 // paths in it speak WC3's `\` separator so they can be used as `InstallFiles` keys verbatim.
 
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
-import { readdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 
@@ -113,6 +113,31 @@ export async function writeCustomKeys(root, bytes) {
   const entries = await readdir(root, { withFileTypes: true });
   const name = entries.find((e) => e.isFile() && e.name.toLowerCase() === "customkeys.txt")?.name ?? "CustomKeys.txt";
   await writeFile(join(root, name), Buffer.from(bytes));
+}
+
+/**
+ * Keep a map a LAN game handed us in the install's `Maps\Download\` — Warcraft III's own folder
+ * for maps another player sent (src/assets/downloadedMaps.ts).
+ *
+ * As narrow as `writeCustomKeys`: the page names a FILE and no folder, and a name that is not a
+ * plain `.w3m`/`.w3x` file name — a separator, a `..`, anything that could climb out — is refused
+ * here whatever the page already checked. `Maps` and `Download` are found under whatever case the
+ * folder spells them with and made when they are missing.
+ */
+export async function writeDownloadedMap(root, name, bytes) {
+  if (!root || !existsSync(root)) throw new Error("No Warcraft III folder is selected.");
+  if (typeof name !== "string" || !/^[^\\/:*?"<>|\u0000-\u001f]+\.(w3m|w3x)$/i.test(name) || name.startsWith(".")) {
+    throw new Error("Not a map file name.");
+  }
+  const folder = async (parent, want) => {
+    const found = (await readdir(parent, { withFileTypes: true }))
+      .find((e) => e.isDirectory() && e.name.toLowerCase() === want.toLowerCase());
+    const dir = join(parent, found?.name ?? want);
+    if (!found) await mkdir(dir, { recursive: true });
+    return dir;
+  };
+  const dir = await folder(await folder(root, "Maps"), "Download");
+  await writeFile(join(dir, name), Buffer.from(bytes));
 }
 
 /** The build OpenWar3 plays. MUST equal `REQUIRED_VERSION` in src/vfs/version.ts, which states

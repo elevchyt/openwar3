@@ -70,6 +70,9 @@ contextBridge.exposeInMainWorld("ow3native", {
    *  the shell resolves inside the install itself; the page names no path, so this is not the
    *  general write primitive the note above rules out. */
   saveCustomKeys: (bytes) => ipcRenderer.invoke("ow3:customkeys-save", bytes),
+  /** Keep a map a LAN game handed us, in the install's Maps\Download\ (src/assets/downloadedMaps.ts).
+   *  The page names a FILE, never a folder: the shell puts it in that one folder or nowhere. */
+  saveMap: (name, bytes) => ipcRenderer.invoke("ow3:map-save", String(name), bytes),
 
   /**
    * The OpenWar3s this machine can hear on the local network (electron/beacon.mjs), pushed as

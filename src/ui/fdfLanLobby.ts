@@ -10,7 +10,7 @@ import { officialServerName } from "../net/officialServer";
 import type { PeerInfo, StartMatch } from "../net/protocol";
 import { isDefaultAdvanced, type AdvancedOptions } from "../net/advancedOptions";
 import {
-  applyRequest, buildStart, canStart, colorsFreeFor, editSlot, isSeated, newSetup, rosterDiff,
+  applyRequest, buildStart, canStart, colorsFreeFor, editSlot, isSeated, markDownloads, newSetup, rosterDiff,
   seatPeers, type LobbyChat, type LobbyCount, type LobbyRequest, type LobbySetup, type SlotKind,
 } from "../net/lobbySetup";
 import { ADVANCED_OPTIONS_DISPLAY_OVERRIDE, LAN_LOBBY_ADDRESS_OVERRIDE, OW3_STRINGS } from "../overrides";
@@ -279,8 +279,10 @@ export async function mountLanLobbyScreen(
     // born with the options the host set on the create screen.
     setup ??= newSetup(map.path, map.info.name, lobby.snapshot.room?.name ?? map.info.name, map.info, hostAdvanced);
     const before = setup.slots.length + setup.observers.length;
-    const { setup: next, joined, left } = seatPeers(setup, peers);
-    setup = next;
+    const { setup: seated, joined, left } = seatPeers(setup, peers);
+    // …and who among them is still fetching the map from us (net/mapTransfer.ts): their rows
+    // print how far it has got, and a start leaves them out until it is in.
+    setup = markDownloads(seated, lobby.snapshot.downloads);
     // The host seats itself on the way in; that is not news worth printing.
     for (const p of joined) if (!p.host) system("NETMESSAGE_PLAYERJOINED", p.name);
     for (const name of left) system("NETMESSAGE_PLAYERLEFT", name);
@@ -327,7 +329,9 @@ export async function mountLanLobbyScreen(
     // A client keeps the match with its rejoin token, so the main menu can offer the way back
     // in after a crash or a wire that would not come back (LanLobby.rememberMatch).
     if (!isHost()) lobby.rememberMatch(msg, host);
-    h.onStart(msg.mapPath, map.info, toConfig(msg, me, startsExplored(map.info.classification.flags)), link);
+    // OUR path for the map, not the start's: a joiner that was handed the map keeps it in its own
+    // Maps\Download\ (assets/downloadedMaps.ts), wherever the host keeps it.
+    h.onStart(map.path, map.info, toConfig(msg, me, startsExplored(map.info.classification.flags)), link);
   };
 
   /** Actually begin the match: the host's own countdown has run out. */
@@ -538,6 +542,11 @@ export async function mountLanLobbyScreen(
   wasInRoom = lobby.snapshot.phase === "hosting" || lobby.snapshot.phase === "joined";
   reseat(lobby.snapshot.peers);
   refresh();
+  // A joiner that was handed the map (ui/mapDownload.ts) is counted as downloading by the host
+  // until it says otherwise — said HERE, once this screen is listening for the start, so a start
+  // in between never seats a player with no lobby to start from. Every joiner says it; a host
+  // that sent us nothing ignores it.
+  if (!isHost() && lobby.snapshot.room) lobby.mapWire().arrived(lobby.snapshot.room.mapPath);
 
   // The minimap's markers (gold mines, shops, start locations) are read out of the map file;
   // it lands a beat later and repaints the pane.
@@ -635,8 +644,17 @@ export async function mountLanLobbyScreen(
       ...(bench.length ? [{ value: OBSERVERS_TEAM, label: t("OBSERVERS_TEAM", "Observers") }] : []),
     ];
 
+    /** The row's `DownloadValue` column (PlayerSlot.fdf): how much of the map that player has,
+     *  while they are still fetching it from the host — empty for everybody else. */
+    const download = (i: number, pct: number | undefined): void => {
+      s.setText(`DownloadValue${i}`, pct === undefined ? "" : `${pct}%`);
+      const cell = s.frame(`DownloadValue${i}`);
+      if (cell) cell.style.whiteSpace = "nowrap";
+    };
+
     slots.forEach((slot, i) => {
       const mine = slot.kind === "player" && slot.peer === me;
+      download(i, slot.download);
       // Your own row is yours; on the host, so is every row that is not another PERSON's.
       // That is the reference's division: each player picks their own race, team, colour and
       // handicap, and the host gets the empty seats and whatever AI it put in them.
@@ -713,6 +731,7 @@ export async function mountLanLobbyScreen(
     bench.forEach((seat, j) => {
       const i = slots.length + j;
       const mine = seat.kind === "player" && seat.peer === me;
+      download(i, seat.download);
       const name = s.popup(`NameMenu${i}`);
       if (name) {
         name.setOptions(

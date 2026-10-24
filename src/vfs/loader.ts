@@ -6,6 +6,7 @@ import type { ContentProfile } from "./profiles";
 import { installMaps, type PickedInstall } from "../assets/opfs";
 import { checkVersion } from "./version";
 import { setCustomKeys } from "../data/customKeys";
+import { setMapWriter } from "../assets/downloadedMaps";
 import { EditionDataSource } from "./edition";
 import { PatchDataSource } from "./patch";
 import { DerivedArtDataSource } from "./derivedArt";
@@ -50,6 +51,9 @@ export async function loadProfile(
   // through. It is a loose file in the folder rather than an archive entry, so it cannot arrive
   // through the `DataSource` every other table is read from — see src/data/customKeys.ts.
   setCustomKeys(install.customKeys, install.saveCustomKeys ?? null);
+  // …and the writer that keeps a map a LAN game hands us, in `Maps\Download\` — the same one
+  // door, for the same reason (src/assets/downloadedMaps.ts).
+  setMapWriter(install.saveMap ?? null, install.askMapWrite ?? null);
 
   const maps = installMaps(install.files);
 

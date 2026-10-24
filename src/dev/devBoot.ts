@@ -281,7 +281,12 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
     const res = await fetch("/wc3/customkeys", { method: "POST", body: bytes.slice() });
     if (!res.ok) throw new Error(`CustomKeys.txt could not be written (${res.status}).`);
   };
-  const load = await loadProfile({ files, casc, customKeys, saveCustomKeys }, DEFAULT_PROFILE, (msg) => log(msg));
+  // …and a map a LAN game hands us lands in the served install's Maps\Download\ the same way.
+  const saveMap = async (name: string, bytes: Uint8Array): Promise<void> => {
+    const res = await fetch(`/wc3/map?name=${encodeURIComponent(name)}`, { method: "POST", body: bytes.slice() });
+    if (!res.ok) throw new Error(`The map could not be written (${res.status}).`);
+  };
+  const load = await loadProfile({ files, casc, customKeys, saveCustomKeys, saveMap }, DEFAULT_PROFILE, (msg) => log(msg));
   log(`mounted ${load.mounted.join(", ")} — ${load.fileCount.toLocaleString()} files`);
   hooks.mountInstall(load);
 

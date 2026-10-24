@@ -78,6 +78,13 @@ export interface LobbySlot {
   locked: boolean;
   startX: number;
   startY: number;
+  /**
+   * The player sitting here is still fetching the map from the host, this much of it so far
+   * (0–100, net/mapTransfer.ts) — printed in the row's own `DownloadValue` column, where the real
+   * client printed it. A seat with one is not in the GAME yet: a start leaves it out (`buildStart`)
+   * and does not wait for it (`canStart`), and the player is told the match went without them.
+   */
+  download?: number;
 }
 
 /**
@@ -90,6 +97,8 @@ export interface ObserverSlot {
   kind: Exclude<SlotKind, "computer">;
   peer?: number;
   name?: string;
+  /** As `LobbySlot.download`: a watcher still fetching the map. */
+  download?: number;
 }
 
 /** The whole lobby, as the host broadcasts it. A client renders this and nothing else. */
@@ -318,7 +327,31 @@ export function isSeated(slot: LobbySlot): boolean {
  * is not a match.
  */
 export function canStart(setup: LobbySetup, peers: ReadonlyArray<PeerInfo>): boolean {
-  return setup.slots.filter(isSeated).length >= 2 && allSeated(setup, peers);
+  return setup.slots.filter(inGame).length >= 2 && allSeated(setup, peers);
+}
+
+/** Is this row in the MATCH a start would build — seated, and not still fetching the map? */
+function inGame(slot: LobbySlot): boolean {
+  return isSeated(slot) && slot.download === undefined;
+}
+
+/**
+ * Stamp the host's download progress onto the rows (`LobbySlot.download`): every seat whose peer
+ * is in `downloads` carries its percentage, and every other seat carries none. A new setup when
+ * anything moved, the same one when nothing did — so the caller can tell whether to broadcast.
+ */
+export function markDownloads(setup: LobbySetup, downloads: Readonly<Record<number, number>>): LobbySetup {
+  let changed = false;
+  const mark = <T extends { peer?: number; download?: number }>(seat: T): T => {
+    const now = seat.peer !== undefined ? downloads[seat.peer] : undefined;
+    if (now === seat.download) return seat;
+    changed = true;
+    const { download: _was, ...rest } = seat;
+    return (now === undefined ? rest : { ...rest, download: now }) as T;
+  };
+  const slots = setup.slots.map(mark);
+  const observers = setup.observers.map(mark);
+  return changed ? { ...setup, slots, observers } : setup;
 }
 
 /**
@@ -487,8 +520,10 @@ export function buildStart(
     mapPath: setup.mapPath,
     mapName: setup.mapName,
     seed: seed ?? 1 + Math.floor(Math.random() * 2147483645),
+    // A seat whose player is still fetching the map is left out — they are not in this match, and
+    // their own machine says so (ui/mapDownload.ts).
     slots: setup.slots
-      .filter(isSeated)
+      .filter(inGame)
       .map((s) => ({
         id: s.id,
         controller: s.kind === "player" ? ("user" as const) : ("computer" as const),
@@ -509,7 +544,7 @@ export function buildStart(
       })),
     // The bench: who is watching, by peer, so every machine can seat them outside the slots.
     observers: setup.observers
-      .filter((o) => o.kind === "player" && o.peer !== undefined)
+      .filter((o) => o.kind === "player" && o.peer !== undefined && o.download === undefined)
       .map((o) => ({ peer: o.peer as number, name: o.name ?? "" })),
     advanced,
   };

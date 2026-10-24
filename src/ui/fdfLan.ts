@@ -20,6 +20,8 @@ import {
   loadMinimapIcons, nudgeX, paneRowsToHide, readMapInfo, readMapPreviewFor, setProp,
 } from "./mapBrowser";
 import { widescreen } from "./widescreen";
+import { localMapPath, requestMapWriteAccess } from "../assets/downloadedMaps";
+import { showMapDownload } from "./mapDownload";
 
 // The Multiplayer screen (the game's "Local Area Network"), built from the game's own
 // UI\FrameDef\Glue\LocalMultiplayerJoin.fdf.
@@ -39,10 +41,10 @@ import { widescreen } from "./widescreen";
 // and it is why the room's roster is no longer squeezed into this screen's game list: it has a
 // screen of its own, with a row per slot.
 //
-// THE MAP FILE NEVER CROSSES THE WIRE. A room advertises its map's PATH, and every client
-// opens that path in its own install — see src/net/protocol.ts `RoomInfo.mapPath` for why
-// (legal boundary, and megabytes through a free-tier relay). A player who does not have the
-// map is told so and cannot join, rather than being sent one.
+// A room advertises its map's PATH, and every client opens that path in its own install — see
+// src/net/protocol.ts `RoomInfo.mapPath`. A player who does not have the map is told so, and
+// joining FETCHES it from the host before the lobby opens, as Warcraft III's own lobby sent a
+// custom map to whoever lacked it (ui/mapDownload.ts) — kept in `Maps\Download\` from then on.
 
 const MAP_LIST_FDF = "UI\\FrameDef\\Glue\\MapListBox.fdf";
 const MAP_INFO_FDF = "UI\\FrameDef\\Glue\\MapInfoPane.fdf";
@@ -58,6 +60,9 @@ export interface LanHandlers {
   onCreateGame: () => void;
   /** We are in a room: show the game lobby. Fired the moment the relay confirms the join. */
   onJoined: (mapPath: string, info: MapInfo) => void;
+  /** The host handed us its map (ui/mapDownload.ts): `path` is its key in the install's list
+   *  from now on, and `file` its bytes. */
+  onMapDownloaded: (path: string, file: File) => void;
 }
 
 export async function mountLanScreen(
@@ -103,14 +108,16 @@ export async function mountLanScreen(
     preview = null;
     missing = null;
     if (!room?.mapPath) { render(screen, lobby.snapshot); return; }
-    const info = await readMapInfo(maps, room.mapPath);
+    // The host's path, or a copy an earlier game left in Maps\Download\.
+    const path = localMapPath(maps, room.mapPath);
+    const info = path ? await readMapInfo(maps, path) : null;
     if (info) shown = info;
     else missing = room.mapName || baseName(room.mapPath);
     render(screen, lobby.snapshot);
-    if (!info) return;
+    if (!info || !path) return;
     // The markers need the map's terrain header and unit list unpacked — a second read, and
     // only for the one game highlighted. Ignored if the highlight has moved on meanwhile.
-    const markers = await readMapPreviewFor(vfs, maps, room.mapPath);
+    const markers = await readMapPreviewFor(vfs, maps, path);
     if (!alive || shown !== info) return;
     preview = markers;
     render(screen, lobby.snapshot);
@@ -144,10 +151,7 @@ export async function mountLanScreen(
         remember();
         h.onCreateGame(); // pick a map first — the room is announced on the way into the lobby
       },
-      JoinButton: () => {
-        remember();
-        if (picked) lobby.join(picked, playerName());
-      },
+      JoinButton: () => join(),
       // The machines we watch for games — OpenWar3's own dialog, because the game we are
       // copying broadcast and never needed one (src/ui/joinAddressDialog.ts).
       ServersListButton: () => {
@@ -165,23 +169,76 @@ export async function mountLanScreen(
   });
 
   const remember = (): void => localStorage.setItem("openwar3.playerName", playerName());
+
+  /** Join the highlighted game. A map we lack is about to be downloaded and kept, and the
+   *  browser grants the right to write it only out of a click — this one (assets/downloadedMaps.ts). */
+  function join(): void {
+    if (!picked) return;
+    remember();
+    if (missing) void requestMapWriteAccess();
+    lobby.join(picked, playerName());
+  }
   const nameBox = screen.editBox("PlayerNameEditBox");
   if (nameBox) nameBox.value = savedName;
 
-  lobby.onChange = (s) => {
+  const onLobby = (s: LobbyState): void => {
     if (!alive) return;
     serversDialog?.refresh();
     // The relay confirmed a join: the room has a screen of its own now (issue #77).
     if (s.phase === "joined" && s.room) {
       const room = s.room;
       alive = false;
-      void readMapInfo(maps, room.mapPath).then((info) => {
-        if (info) h.onJoined(room.mapPath, info);
-      });
+      const path = localMapPath(maps, room.mapPath);
+      if (path) {
+        void readMapInfo(maps, path).then((info) => {
+          if (info) h.onJoined(path, info);
+        });
+        return;
+      }
+      void download(room);
       return;
     }
     render(screen, s);
   };
+  lobby.onChange = onLobby;
+
+  /** We are in a room whose map this install lacks: fetch it from the host, then go on to the
+   *  lobby with it. Cancelled, failed or overtaken by the match, the room has been left and this
+   *  screen takes the lobby back. */
+  async function download(room: { mapPath: string; mapName: string; hostName: string }): Promise<void> {
+    const got = await showMapDownload({
+      container,
+      vfs,
+      lobby,
+      mapPath: room.mapPath,
+      mapName: room.mapName || baseName(room.mapPath),
+      hostName: room.hostName,
+      // The table answers a key it does not hold with the key itself — NetworkStrings.fdf is not
+      // mounted on this screen — and that is "no string", not a line to print.
+      string: (key) => {
+        const text = strings?.string(key);
+        return text && text !== key ? text : null;
+      },
+    }).catch((err: unknown) => {
+      console.warn("[OpenWar3] map download dialog failed:", err);
+      lobby.leave();
+      return null;
+    });
+    if (got) maps.set(got.key, got.file);
+    const info = got ? await readMapInfo(maps, got.key).catch(() => null) : null;
+    if (got && info) {
+      h.onMapDownloaded(got.key, got.file);
+      h.onJoined(got.key, info);
+      return;
+    }
+    if (got) {
+      maps.delete(got.key); // arrived, but not a map this game can read
+      lobby.leave();
+    }
+    alive = true;
+    lobby.onChange = onLobby;
+    void showMapOf(lobby.snapshot.rooms.find((r) => r.key === picked) ?? null);
+  }
   render(screen, lobby.snapshot);
 
   const dispose = screen.dispose.bind(screen);
@@ -227,9 +284,7 @@ export async function mountLanScreen(
         const room = lobby.snapshot.rooms.find((r) => r.key === value);
         void showMapOf(room ?? null);
       };
-      list.onActivate = () => {
-        if (picked) { remember(); lobby.join(picked, playerName()); }
-      };
+      list.onActivate = () => join();
       if (picked) list.select(picked);
     }
     s.setText("GameListTitle", "Network Games");
@@ -244,7 +299,8 @@ export async function mountLanScreen(
       s.setText(
         "CustomCreateInfo",
         missing
-              ? `|cffff8080You do not have ${missing}. You cannot join this game.|r`
+              // One line where it can be — the panel has room for one above our reachability line.
+              ? `Joining will download ${missing}.`
           : st.rooms.length
             ? "Select a game and choose Join."
             : "No games found. Create one.",
@@ -266,7 +322,7 @@ export async function mountLanScreen(
     if (st.error) s.setText("CustomCreateInfo", `|cffff8080${st.error}|r`);
 
     s.setEnabled("CreateButton", st.phase === "browsing");
-    s.setEnabled("JoinButton", st.phase === "browsing" && !!picked && !missing);
+    s.setEnabled("JoinButton", st.phase === "browsing" && !!picked);
   }
 }
 

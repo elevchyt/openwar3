@@ -259,11 +259,11 @@ body.in-game {
    the loading screen draws it; the text is placed in those same coordinates. */
 .update-overlay { z-index: 60; }
 .update-overlay-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
-/* Voice Control's download dialog (ui/voiceDownload.ts): the Battle.net progress bar, a canvas laid
+/* The patch dialog (ui/patchDialog.ts — Voice Control's model, a LAN game's map): the Battle.net progress bar, a canvas laid
    over the dialog where its FDF sprite sits. Fixed, because it is placed in viewport pixels off the
    dialog's own rect; above the dialog's frames, and deaf to the mouse like them. */
-.voice-download-bar { position: fixed; z-index: 1; pointer-events: none; }
-.voice-download-percent {
+.patch-dialog-bar { position: fixed; z-index: 1; pointer-events: none; }
+.patch-dialog-percent {
   position: fixed;
   z-index: 2;
   margin: 0;

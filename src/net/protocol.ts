@@ -30,10 +30,11 @@ export interface RoomInfo {
    * The map's path inside the install ("Maps\\FrozenThrone\\(2)EchoIsles.w3x") — how a
    * joiner finds the SAME map in ITS OWN install.
    *
-   * The map file itself is never sent. It is Blizzard content (CLAUDE.md "Legal boundary"),
-   * every player already holds a licensed copy of it, and it is megabytes we would be pushing
-   * through a free-tier relay. The path is the whole handshake; a player whose install lacks
-   * that map is told so, rather than being handed one.
+   * A map every install has — the stock ones — never crosses the wire: each player opens its own
+   * licensed copy, and the path is the whole handshake. A joiner whose install LACKS the map (a
+   * custom one) is handed it by the HOST, peer to peer inside game traffic, and keeps it in its
+   * own `Maps\Download\` as Warcraft III did (net/mapTransfer.ts, assets/downloadedMaps.ts) —
+   * the relay forwards the pieces without knowing what they are.
    */
   mapPath: string;
   players: number;
@@ -172,7 +173,10 @@ export type GameMessage =
   | import("../game/matchLink").PauseStateMessage
   | import("./lobbySetup").LobbySetup
   | import("./lobbySetup").LobbyRequest
-  | import("./lobbySetup").LobbyChat;
+  | import("./lobbySetup").LobbyChat
+  | import("./mapTransfer").MapGet
+  | import("./mapTransfer").MapPart
+  | import("./mapTransfer").MapGot;
 
 /** Bumped whenever the shapes above change incompatibly; the client refuses a mismatch
  *  rather than failing in a confusing way three messages later. */

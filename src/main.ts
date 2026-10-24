@@ -20,6 +20,7 @@ import {
   isCampaignOpen, loadDifficulty, markMissionComplete, saveDifficulty, type Difficulty,
 } from "./data/campaignProgress";
 import { mountLanScreen, observerSeats, savedPlayerName, toConfig } from "./ui/fdfLan";
+import { localMapPath } from "./assets/downloadedMaps";
 import { mountLanCreateScreen } from "./ui/fdfLanCreate";
 import { mountLanLobbyScreen } from "./ui/fdfLanLobby";
 import { LanLobby } from "./net/lobby";
@@ -325,7 +326,9 @@ async function offerReconnect(vfs: DataSource): Promise<void> {
       setTimeout(() => lobby.close(), 150);
       return;
     }
-    const info = installMaps.has(start.mapPath) ? await readMapInfo(editionMaps(), start.mapPath) : null;
+    // Where the map is HERE — the host's path, or the copy a download left in Maps\Download\.
+    const path = localMapPath(installMaps, start.mapPath);
+    const info = path ? await readMapInfo(editionMaps(), path) : null;
     if (!info) {
       lobby.abandonSeat(); // the map is not in this install any more: there is no way back in
       lobby.close();
@@ -333,7 +336,7 @@ async function offerReconnect(vfs: DataSource): Promise<void> {
     }
     lobby.handOff();
     const link = matchLinkFrom(lobby, false, start.slots, peer, hostPeer, observerSeats(start));
-    void startGame(mapFileFor(start.mapPath), info, toConfig(start, peer, startsExplored(info.classification.flags)), link, lobby);
+    void startGame(mapFileFor(path!), info, toConfig(start, peer, startsExplored(info.classification.flags)), link, lobby);
   } finally {
     reconnectAsking = false;
   }
@@ -408,6 +411,9 @@ onShellClosing(async () => {
 function lanSession(): { lobby: LanLobby; connected: Promise<void> } {
   if (!lan) {
     const lobby = new LanLobby(() => new WebSocketTransport());
+    // A joiner without our map is sent it (net/mapTransfer.ts) — out of the install's own list,
+    // asked at the moment of the request, so it is whatever the room is hosting right then.
+    lobby.mapSource = (path) => installMaps.get(path) ?? null;
     // Swallowed here so an unhandled rejection is never logged twice; each screen attaches
     // its own `catch` to put the reason on screen.
     const connected = lobby.connect();
@@ -463,6 +469,9 @@ function lanScreen(vfs: DataSource): { chrome: "BattlenetCustom"; mount: () => P
         onCreateGame: () => void glue.goTo(lanCreateScreen(vfs)),
         // The relay confirmed a join: everyone in a room sits in the lobby, host or not.
         onJoined: (path, info) => void glue.goTo(lanLobbyScreen(vfs, { path, info })),
+        // A map the host handed us is a map of the install from now on — the Custom Game list
+        // has it, and the next game on it needs no download (assets/downloadedMaps.ts).
+        onMapDownloaded: (path, file) => { installMaps.set(path, file); },
       });
     },
   };

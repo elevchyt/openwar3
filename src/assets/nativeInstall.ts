@@ -41,6 +41,8 @@ interface NativeBridge {
   onClosing?(fn: () => Promise<void> | void): void;
   /** Write the install's CustomKeys.txt (issue #156). Absent on a shell older than the editor. */
   saveCustomKeys?(bytes: Uint8Array): Promise<void>;
+  /** Keep a map a LAN game handed us in `Maps\Download\`. Absent on a shell older than it. */
+  saveMap?(name: string, bytes: Uint8Array): Promise<void>;
   update: {
     state(): Promise<UpdateState>;
     download(): Promise<void>;
@@ -197,6 +199,8 @@ export async function loadNativeInstall(): Promise<PickedInstall> {
   // no path to name, and `ow3-install://` is a read-only scheme on purpose (electron/install.mjs).
   const native = bridge();
   const saveCustomKeys = native?.saveCustomKeys ? (bytes: Uint8Array) => native.saveCustomKeys!(bytes) : undefined;
+  // …and so does a map a LAN game hands us (assets/downloadedMaps.ts), for the same reason.
+  const saveMap = native?.saveMap ? (name: string, bytes: Uint8Array) => native.saveMap!(name, bytes) : undefined;
 
-  return { files, casc: manifest.casc ? await fetchCasc(fileUrl, manifest.casc) : null, customKeys, saveCustomKeys };
+  return { files, casc: manifest.casc ? await fetchCasc(fileUrl, manifest.casc) : null, customKeys, saveCustomKeys, saveMap };
 }

@@ -1,5 +1,6 @@
 import { fileReader, type CascFiles } from "../vfs/casc";
 import type { CustomKeysWriter } from "../data/customKeys";
+import { DOWNLOAD_FOLDER, type MapWriter } from "./downloadedMaps";
 
 // Asset import + persistence (plan §1.2). Import once → read the user's own WC3
 // install client-side → cache in OPFS later. Copyrighted bytes never touch a
@@ -55,8 +56,10 @@ interface DirEntry {
 export interface DirHandle {
   name: string;
   values(): AsyncIterableIterator<DirEntry>;
-  /** The write half, used only by `customKeysWriter`. */
+  /** The write half, used only by `customKeysWriter` and `mapWriter`. */
   getFileHandle?(name: string, opts: { create: boolean }): Promise<{ createWritable(): Promise<WritableFile> }>;
+  getDirectoryHandle?(name: string, opts: { create: boolean }): Promise<DirHandle>;
+  queryPermission?(opts: { mode: "readwrite" }): Promise<"granted" | "denied" | "prompt">;
   requestPermission?(opts: { mode: "readwrite" }): Promise<"granted" | "denied" | "prompt">;
 }
 interface WritableFile {
@@ -83,6 +86,40 @@ function customKeysWriter(dir: DirHandle, name: string): CustomKeysWriter | unde
     await out.write(bytes);
     await out.close();
   };
+}
+
+/**
+ * The picker's way of keeping a map a LAN game handed us (assets/downloadedMaps.ts): into
+ * `Maps\Download\` of the folder it was read from, each folder made if it is not there and found
+ * under whatever case it already has if it is.
+ *
+ * `ask` is the permission prompt, split out because it must run inside the Join click — the write
+ * itself comes seconds later, when the download ends and the gesture is long spent. An install in
+ * OPFS (the "Download game files" copy) has no permission to ask for, and answers granted.
+ */
+function mapWriter(root: DirHandle): { write: MapWriter; ask: () => Promise<boolean> } | undefined {
+  if (!root.getDirectoryHandle) return undefined;
+  const ask = async (): Promise<boolean> => {
+    if ((await root.queryPermission?.({ mode: "readwrite" })) === "granted") return true;
+    return ((await root.requestPermission?.({ mode: "readwrite" })) ?? "granted") === "granted";
+  };
+  const child = async (dir: DirHandle, name: string): Promise<DirHandle> => {
+    for await (const entry of dir.values()) {
+      if (entry.kind === "directory" && entry.name.toLowerCase() === name.toLowerCase()) {
+        return dir.getDirectoryHandle!(entry.name, { create: false });
+      }
+    }
+    return dir.getDirectoryHandle!(name, { create: true });
+  };
+  const write: MapWriter = async (name, bytes) => {
+    if (!(await ask())) throw new Error("Permission to write to the Warcraft III folder was refused.");
+    const folder = await child(await child(root, "Maps"), DOWNLOAD_FOLDER);
+    const file = await folder.getFileHandle!(name, { create: true });
+    const out = await file.createWritable();
+    await out.write(bytes);
+    await out.close();
+  };
+  return { write, ask };
 }
 
 const isMpq = (name: string): boolean => name.toLowerCase().endsWith(".mpq");
@@ -113,6 +150,12 @@ export interface PickedInstall {
    * absent when this pick cannot — see `CustomKeysWriter` in src/data/customKeys.ts.
    */
   saveCustomKeys?: CustomKeysWriter;
+  /** Keep a map a LAN game handed us in `Maps\Download\` (assets/downloadedMaps.ts), or absent
+   *  when this pick cannot write. */
+  saveMap?: MapWriter;
+  /** Ask for the write access `saveMap` needs while a click is in hand — the browser's picker
+   *  only; every other door can write without asking. */
+  askMapWrite?: () => Promise<boolean>;
 }
 
 /**
@@ -207,7 +250,14 @@ export async function readInstallDir(handle: DirHandle): Promise<PickedInstall> 
       await collectCasc(entry, casc);
     }
   }
-  return { files, casc: casc.buildInfo ? casc : null, customKeys, saveCustomKeys: customKeysWriter(keysDir, keysName) };
+  const maps = mapWriter(handle);
+  return {
+    files,
+    casc: casc.buildInfo ? casc : null,
+    customKeys,
+    saveCustomKeys: customKeysWriter(keysDir, keysName),
+    ...(maps ? { saveMap: maps.write, askMapWrite: maps.ask } : {}),
+  };
 }
 
 /** Walk `Data\` for the pieces a CASC mount needs (vfs/casc.ts). Everything but the
