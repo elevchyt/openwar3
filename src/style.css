@@ -3015,6 +3015,21 @@ body.hud-widget-skinned .hud-queue-slot { color: transparent; }
 }
 /* MiscUI [FontHeights] Inventory=0.011 — "'Inventory' text above your inventory". */
 .hud-inv-title { font-size: var(--font-Inventory, 12px); color: var(--gold); margin-bottom: 6px; text-align: center; }
+/* The same word lettered onto the console ART's plaque (ui/hud.ts CONSOLE_ZONES.inventoryTitle),
+   in the info panel's label gold (SimpleInfoPanelLabelTextTemplate FontColor 0.99 0.827 0.0705)
+   with the black drop shadow every console label carries. */
+.hud-inv-title.hud-inv-plaque {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  color: rgb(252, 211, 18);
+  text-shadow: 0.1em 0.1em 0 #000;
+  white-space: nowrap;
+  line-height: 1;
+  z-index: 1;
+}
+.hud-inv-title.hud-inv-plaque[hidden] { display: none; }
 .hud-inv-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);

@@ -639,6 +639,10 @@ const CONSOLE_ZONES = {
   portraitMana: { x: 0.2157, y: 0.0020, w: 0.0747, h: 0.0115 },
   info: { x: 0.3022, y: 0.0000, w: 0.2017, h: 0.1150 },
   inventory: { x: 0.5133, y: 0.0033, w: 0.0743, h: 0.1116 },
+  /** The stone PLAQUE the art paints above the six frames — empty in the texture, because the
+   *  engine writes `InfoPanelStrings.fdf` INVENTORY ("Inventory") onto it at MiscUI's
+   *  [FontHeights] Inventory. Measured off its gold rim the way the slots were. */
+  inventoryTitle: { x: 0.5133, y: 0.1195, w: 0.0743, h: 0.0095 },
   command: { x: 0.6165, y: 0.0060, w: 0.1705, h: 0.1275 },
 } as const;
 
@@ -1511,6 +1515,8 @@ export class GameHud {
   private cmdFx: HTMLCanvasElement[] = []; // per command slot, shown while the button is on
   /** The crest drawn over the six slots when the selection has no inventory. */
   private invCover!: HTMLDivElement;
+  /** "Inventory" on the console art's plaque — only while there IS an inventory to title. */
+  private invTitle: HTMLDivElement | null = null;
   private dotsT = 0;
   private textT = TEXT_PERIOD; // render immediately on first frame
   private lastSelId: number | null = null; // force a text refresh when selection changes
@@ -2149,6 +2155,14 @@ export class GameHud {
     this.invCover.hidden = true;
     if (skinned) console_.append(this.invCover);
     if (skinned) {
+      // The plaque's word. The art leaves the plaque blank and the engine letters it, so it is
+      // ours to draw — and it goes with the six pockets: under the crest there is no plaque.
+      this.invTitle = document.createElement("div");
+      this.invTitle.className = "hud-inv-title hud-inv-plaque";
+      this.invTitle.hidden = true;
+      console_.append(this.invTitle);
+    }
+    if (skinned) {
       // The chrome itself is ui/consoleUi.ts's FDF screen, drawn UNDER this element; all this
       // one does is give the widgets the same box to be a percentage of. That box is the
       // file's own: 0.8 wide × CONSOLE_BAND_H tall of the 0.6-tall UI space, held at 4:3 and
@@ -2175,6 +2189,11 @@ export class GameHud {
       // percentages, so they hold at any window size.
       command.style.columnGap = `${COMMAND_GAP.col * 100}%`;
       command.style.rowGap = `${COMMAND_GAP.row * 100}%`;
+      if (this.invTitle) {
+        place(this.invTitle, CONSOLE_ZONES.inventoryTitle);
+        this.invTitle.classList.remove("hud-zone"); // a caption: the clicks go to the console
+        this.invTitle.style.pointerEvents = "none";
+      }
       place(this.invCover, CONSOLE_INVENTORY_COVER);
       this.invCover.classList.remove("hud-zone"); // decoration: it must not eat the clicks
       this.invCover.style.pointerEvents = "none";
@@ -3555,6 +3574,12 @@ export class GameHud {
     // pockets, which in melee means everything but a hero) — the console wears its crest
     // instead, exactly as the real client does.
     this.invCover.hidden = inv.length > 0;
+    if (this.invTitle) {
+      this.invTitle.hidden = inv.length === 0;
+      // Asked every frame because the string table loads after the HUD is built.
+      const word = this.driver.uiString("INVENTORY", "Inventory");
+      if (this.invTitle.textContent !== word) this.invTitle.textContent = word;
+    }
     // Cooldown sweep every frame (cheap; the diff key ignores cooldown).
     for (let i = 0; i < this.invSlots.length; i++) {
       const s = inv[i] ?? null;
