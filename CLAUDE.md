@@ -570,7 +570,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   `pullOutHp` (25 %) and standing in a fight is walked `PULL_BACK_DIST` behind the line and back
   in later (`pullPass`), on a PER-UNIT cooldown — without that timer it see-saws in and out of
   the battle instead of fighting in it; on Insane alone a RANGED one rejoins the moment it arrives
-  (`pullRejoin`) and a MELEE one under 12 % walks HOME instead (`sendHomeHp`) — and a withdrawn CAPTAIN stops anchoring cohesion, or one
+  (`pullRejoin`), ANYTHING under 15 % — a ranged unit and a hero too — walks HOME and rejoins at
+  22 % (`sendHomeHp`/`rejoinHp`), and a ranged unit shoots the most-wounded body already in its
+  reach before the group's focus (`finishWounded`, counting the blows already promised to it so
+  the line does not overkill) — and a withdrawn CAPTAIN stops anchoring cohesion, or one
   hurt hero drags the whole army home. The Scroll of Town Portal is spent leaving a PLAYER; against
   a CREEP CAMP it is a LAST RESORT at 8 % (`LAST_RESORT_HP`) and nothing above it, because the
   hero has two cheaper answers there — the same walk out of the fight every other unit gets, at
@@ -656,7 +659,14 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   no clock by default — the ordinary row is at the BOTTOM of the ladder, bought out of what the
   upgrades, siege, expansion and third hero leave — so a race whose plan IS tier 3 names one
   (`PlusRaceTable.tier3Clock`: the night elf's 510 s, for the bears; `tier3Delay` puts Normal
-  three minutes later), and `tier3Due` then asks for the hall right under the tier-2 row. Its
+  three minutes later), and `tier3Due` then asks for the hall right under the tier-2 row. INSANE
+  RUSHES IT for every race (`PlusProfile.tier3Rush`: the clock is zero), and while the third hall
+  is unpaid (`tier3Rushing`) the core army asks for NOTHING past `TIER3_ARMY` — held at a number it
+  still leaked, because each army row is one unit's SHARE — the smith's research waits, and the
+  undead's forest takes two thirds of its Ghouls (`LUMBER_SHARE_RUSH`: the Black Citadel is 230
+  lumber). What tier 3 is FOR is saved for there: Priest and Shaman Training are UNLOCK rows
+  (rank 2 is Inner Fire / Bloodlust), and every orc and undead tier-2 build grows into Taurens /
+  Abominations (`thenAt3`). Its
   bears were also why an Insane night elf never attacked a MAIN: the power spike sat behind a
   tier 3 that came after `SPIKE_LATEST`, which is why an army of `SPIKE_ARMY_FOOD` now meets the
   spike by itself. Two ID TRAPS that each cost a whole subsystem and are invisible from the call site:

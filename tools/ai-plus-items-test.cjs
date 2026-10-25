@@ -1739,5 +1739,48 @@ console.log("\n-- handing a spare potion over ----------------------------------
   check("a Blademaster's belt starts with the invulnerability potion", m.buy && m.buy.itemId, "pnvl");
 }
 
+// --- INSANE: every hero carries an invulnerability potion, the melee ones served first ----------
+// The developer's: "let's make ranged heroes prefer to buy potion of invulnerability as well (but
+// melee heroes must prioritize buying one before ranged heroes)" (`PlusProfile.invulnEach`).
+{
+  const shelf = ["pnvl"];
+  const mk = () => belt(hero({ typeId: "Hmkg", level: 2, x: 0, y: 0 }), "stwp", "phea", "phea", "shea");
+  const am = () => belt(hero({ typeId: "Hamg", level: 5, x: 0, y: 0 }), "stwp", "phea");
+  const a = [mk(), am(), MERCHANT];
+  const first = shopped(a, PLUS_INSANE, { shelf });
+  check("Insane: with neither holding one, the potion is bought", first.buy && first.buy.itemId, "pnvl");
+  check("…for the MELEE hero first, though the ranged one is higher", first.pick && first.pick.unitId, a[0].id);
+  const b = [belt(hero({ typeId: "Hmkg", level: 2, x: 0, y: 0 }), "stwp", "phea", "phea", "shea", "pnvl"), am(), MERCHANT];
+  const second = shopped(b, PLUS_INSANE, { shelf });
+  check("…and then for the RANGED hero too", second.pick && second.pick.unitId, b[1].id);
+  const normal = shopped([belt(hero({ typeId: "Hmkg", level: 2, x: 0, y: 0 }), "stwp", "phea", "phea", "shea", "pnvl"), am(), MERCHANT], PLUS_NORMAL, { shelf, gold: 160 });
+  check("Normal keeps one for the melee hero and none for the ranged one", normal.buy, null);
+}
+
+// --- …and a second invulnerability potion is HANDED to a hero with room ------------------------
+// "If a hero has more than one in their inventory, they must pass it to one of their other heroes
+// (if the target hero has inventory space of course)" — any kind, Lesser or full.
+{
+  const { potionHandover } = require(join(REPO, ".sim-build", "src", "ai", "plus", "items.js"));
+  const b = (invuln, free) => ({ heal: 0, mana: 0, invuln, free });
+  check("two invulnerability potions and a hero with none: one goes over",
+    JSON.stringify(potionHandover([b(2, 3), b(0, 4)])), JSON.stringify({ from: 0, to: 1, kind: "invuln" }));
+  check("…to the hero holding the FEWEST", JSON.stringify(potionHandover([b(3, 1), b(1, 2), b(0, 2)])), JSON.stringify({ from: 0, to: 2, kind: "invuln" }));
+  check("…three against one still evens out", JSON.stringify(potionHandover([b(3, 1), b(1, 2)])), JSON.stringify({ from: 0, to: 1, kind: "invuln" }));
+  check("two against one is not moved back and forth", potionHandover([b(2, 1), b(1, 2)]), null);
+  check("…nor handed to a full belt", potionHandover([b(2, 1), b(0, 0)]), null);
+  // `[pnvu] abilList=AIvu`, the full-strength row the Lesser one's `AIvl` is a copy of.
+  ITEMS.pnvu = { id: "pnvu", gold: 0, usable: true, abilities: ["AIvu"] };
+  ABILS.AIvu = { code: "AIvu", target: "", levelData: [lvl({ duration: 15 })] };
+  const giver = belt(hero({ x: 4000, y: 4000 }), "pnvl", "stwp", "pnvu");
+  const taker = belt(hero({ x: 4300, y: 4000 }), "stwp");
+  pressed([giver, taker], PLUS_NORMAL, AWAY);
+  const give = lastOrders.find((c) => c.c === "giveitem") ?? null;
+  check("a Lesser and a full Potion of Invulnerability: one is handed over", give && give.unitId, giver.id);
+  check("…to the other hero", give && give.targetId, taker.id);
+  delete ITEMS.pnvu;
+  delete ABILS.AIvu;
+}
+
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");
 process.exit(failed ? 1 : 0);

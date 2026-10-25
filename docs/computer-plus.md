@@ -393,7 +393,10 @@ Blizzard's unless a comment says otherwise) every value here is ours.
 | upgrade rank | 1 | 2 | 3 |
 | animation-cancels | no | no | **yes** |
 | stutter-steps its ranged units | no | no | **yes** |
-| a ranged pull-out rejoins on ARRIVAL; a melee one under 12 % goes HOME | no | no | **yes** |
+| a ranged pull-out rejoins on ARRIVAL; anything under 15 % (heroes too) goes HOME, back at 22 % | no | no | **yes** |
+| ranged units finish the wounded body in reach first (`finishWounded`) | no | no | **yes** |
+| rushes tier 3 the moment tier 2 stands, research held until it is paid (`tier3Rush`) | no | no | **yes** |
+| a Potion of Lesser Invulnerability on EVERY hero, melee first (`invulnEach`) | no | no | **yes** |
 | kills enemy summons with its dispels first | no | no | **yes** |
 | first attack | 7–10 min, rolled per seat | 6–8 min, rolled per seat | 2½–3 min, rolled per seat |
 | army food that makes a wave | 10 | 12 (**30 from 25:00**) | 16, **+10 per hall tier** (26 / 36) |
@@ -2669,6 +2672,15 @@ pinned in `tools/ai-plus-items-test.cjs`). It is the sim's own `giveitem` — th
 `GiveItemRange` — so only our OWN heroes, as in the game, and never while either hero is in a
 fight (`underFire`): the walk replaces whatever the giver was doing.
 
+**Invulnerability potions are shared the same way, and further** (`potionKind` "invuln" — every
+`panic` item: the Potion of Invulnerability, its Lesser twin and the Potion of Divinity). The
+developer's: *"if a hero has more than one in their inventory, they must pass it to one of their
+other heroes (if the target hero has inventory space)"*. A second one goes to the hero holding the
+FEWEST, provided that is at least two fewer — so three against one evens out and two against one
+is never passed back and forth. And on Insane EVERY hero carries one (`invulnEach`): the belt's
+`pnvl` row wants one per hero, a melee hero short of its `MELEE_BELT` piece is served first and a
+hero holding none second (`firstFor`, both in `shopper` and in the field purchase `itemChance`).
+
 ### Obsidian Statues: one on life, one on mana
 
 The undead's only healer, and unlike a Moon Well it walks with the army — without one an undead
@@ -3267,6 +3279,15 @@ It gates the `nuke` and `disable` roles — the developer's own list ("death coi
 impale, carrion swarm, war stomp, shockwave") is exactly those two — and nothing else. A heal, a
 panic button, a morph and a summon are answers to something that has already happened and are
 never held back.
+
+**Thunder Clap is ONCE PER CAMP instead** (`ONCE_PER_CAMP`, plus/casting.ts). The developer's:
+*"make the Mountain King use Thunderclap against creeps as well (don't spam it, perhaps use it once
+per creep camp)"*. Under the roll most camps never saw it, and a camp that rolled yes saw it every
+time the cooldown came back. In a CREEP fight (no hostile player's body in reach) the roll is not
+asked for it and the press is then spent: one per camp per caster, remembered by the camp the
+nearest creep was placed in (`CastCtx.campKey`, `AiPlayer.campAt`'s centre). It still needs its
+quorum in the circle, so it lands with the camp gathered round the hero. Against a player nothing
+changes. Pinned in `tools/ai-plus-casting-test.cjs`.
 
 **Death Coil needs the rule stated twice**, and that is the trap in it. `AUdc` is graded `heal`
 on the ladder (see below), and a heal is never delayed — so the gate in `ready` cannot see it.
@@ -4098,14 +4119,28 @@ at the back does not walk another nine hundred units for nothing.
   `PULL_BACK_HOLD` was damage the fight went without. It goes back on an attack-move at what it
   was walked away from (else the anchor), so it shoots its way in rather than walking through the
   line; the see-saw guard (`next`) is untouched. Heroes keep their own rules.
-* **A MELEE soldier under 12 % goes HOME** (`sendHomeHp`, `sendHome` / `homeTrip`). A step back
-  is no rescue for a Grunt one blow from dead with no range to fight from — it walks to the hall
-  and heals there (its regeneration, a Moon Well — `wellPass` may still send it to one, and the
-  trip never re-orders it off a well — or a statue). Asked whether it is in a fight or not, never
-  of one already within `SEND_HOME_NEAR` (1200) of home, and converted from an ordinary pull-out
-  too (a Grunt pulled at 24 % that took one more blow on the way out). It rejoins when healed to
-  `RECOVER_TO` or after the walk plus `SEND_HOME_REST` (45 s) — bounded, because a night elf
-  soldier by day regenerates nothing — and is not sent again for `PULL_BACK_AGAIN` after that.
+* **ANYTHING under 15 % goes HOME — a ranged unit and a HERO too** (`sendHomeHp`, `sendHome` /
+  `homeTrip`). The developer's: *"once a unit (even heroes) reaches below 15% health, it must
+  return to its base to move away from danger completely … once above 22% health, the unit is
+  safe to go join the army group again"*. (It was the melee soldier's alone, at 12 %.) A step back
+  is no rescue for a body one blow from dead — it walks to the hall and heals there (its
+  regeneration, a fountain, a Moon Well — `wellPass` may still send it to one, and the trip never
+  re-orders it off a well — or a statue). A hero with a Scroll of Town Portal reads it on the same
+  pass (the belt's own bar), which is the faster way home; the walk is for a hero without one.
+  Asked whether it is in a fight or not, never of one already within `SEND_HOME_NEAR` (1200) of
+  home, and converted from an ordinary pull-out too (a Grunt pulled at 24 % that took one more
+  blow on the way out). It rejoins when healed to `rejoinHp` (22 %) or after the walk plus
+  `SEND_HOME_REST` (45 s) — bounded, because a night elf soldier by day regenerates nothing — and
+  is not sent again for `PULL_BACK_AGAIN` after that. Between 15 % and the 25 % pull-out bar a
+  ranged unit is still only stepped behind the line and straight back in, which the same report
+  calls fine.
+* **A RANGED unit finishes the wounded first** (`finishWounded`, `finishPick` — pure and pinned in
+  `tools/ai-plus-army-test.cjs`). The developer's: *"focus down targets with low health first (if
+  directly in range)"*. In `commit`, before the group's focus, every ranged soldier and ranged hero
+  shoots the enemy body under `FINISH_HP` (35 %) with the FEWEST hit points inside its own range
+  (+`FINISH_REACH`, 32 — it never walks for one), under our own eyes and that its weapon may touch.
+  The blows promised this pass are counted (`owed`, a mean blow each), so five archers do not all
+  loose at a Ghoul the first two arrows kill.
 
 Two consequences that are not obvious from the rule and each of which is a bug if missed:
 
@@ -5001,6 +5036,27 @@ Pandaren Brewmaster, whose Drunken Haze → Breath of Fire combo must burn.
   three minutes later. Not while REBUILDING — an army under `TIER3_ARMY` or a gold crew short of
   five a mine; the rows that replace those are above it. Measured headless (fight-free economy),
   Insane: Tree of Eternity at 13:07–19:24 before, 11:22–12:27 after.
+- **…and on Insane EVERY race rushes it** (`PlusProfile.tier3Rush`). The developer's: *"the
+  Computer+ AI (Insane) must ALWAYS try to reach tier 3 as fast as possible"* — Knights, Gryphon
+  Riders and Inner Fire for the human, Berserkers, Bloodlust and Taurens for the orc, Abominations
+  for the undead, the bears for the night elf. The clock is zero: `tier3Due` asks for the hall the
+  pass the tier-2 hall stands (its army and mine-crew gates unchanged). While it is unpaid
+  (`tier3Rushing`) the core army asks for NOTHING once `TIER3_ARMY` stands — held at the number it
+  still leaked, because each army row is one unit's SHARE of the budget — the smith's research
+  waits entirely (`upgrades`), and takes only rank 1 of each row while the hall goes up; the
+  ability unlocks are not held (they are what the army is for). The undead's lumber is GHOULS, and
+  its Black Citadel is 230 of it, so while the rush is unpaid the forest takes two thirds of them
+  (`LUMBER_SHARE_RUSH`) rather than a third. Measured headless, Insane, third hall standing (before
+  → after): human never/12:35 → 9:29–9:31, orc never/12:29 → 9:12–10:04 (the Head Hunter rush
+  11:10, from its held Keep), undead never → 10:46–12:09, night elf 11:22–12:27 → 9:23–9:30.
+  `tools/ai-plus-ladder-test.cjs` pins the rush as the third hall within 5½ minutes of the second.
+- **What tier 3 is FOR is now bought there.** Priest Training (`Rhpt`, rank 2 is Inner Fire —
+  `[Ainf] Requires=Rhpt` ×2, `[Rhpt] Requires1=hcas`) and Shaman Training (`Rost`, rank 2 is
+  Bloodlust — `[Ablo] Requires=Rost` ×2, `[Rost] Requires1=ofrt`) are ability UNLOCKS, saved for
+  high in the ladder once a Priest or a Shaman is on the field; both autocasts are the sim's, armed
+  by the caster. The orc's two tier-2 openings that had no tier-3 clause grow into `taurens`, and
+  the undead's three into `fiendaboms` / `aboms` / `ghoulaboms` — each keeps its line and puts
+  Abominations in front of it; `frostwyrms` takes a few too.
 - **The Pandaren Brewmaster** is the Keeper's third second-hero option (`combos`, beside the Demon
   Hunter and the Pit Lord): Breath of Fire first and maxed first, Drunken Haze beside it, Storm,
   Earth and Fire, then Drunken Brawler (`TAVERN_SKILLS`).

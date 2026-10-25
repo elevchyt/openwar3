@@ -1159,7 +1159,9 @@ function runEconomy() {
       S.gold += miners * GOLD_RATE * DT;
       // …and the undead's lumber, which is a GHOUL and not a worker (`lumberCrew`'s third).
       const ghouls = table.lumberUnit ? alive(table.lumberUnit) : 0;
-      const axes = Math.max(0, workers - miners) + (ghouls ? Math.max(2, Math.floor(ghouls / 3)) : 0);
+      // Two thirds of them while a rushed tier 3 is unpaid (index.ts `LUMBER_SHARE_RUSH`).
+      const rushing = profile.tier3Rush && !doneRaw(table.halls[2]) && doneRaw(table.halls[1]) > 0 && countRaw(table.halls[2]) < 1;
+      const axes = Math.max(0, workers - miners) + (ghouls ? Math.max(2, Math.floor(ghouls * (rushing ? 2 : 1) / 3)) : 0);
       S.lumber += axes * WOOD_RATE * DT;
       for (const b of S.bldgs) {
         if (!b.ready && S.t >= b.finishAt) b.ready = true;
@@ -1198,6 +1200,11 @@ function runEconomy() {
         // fault's own signature: a hall the AI could always have afforded to upgrade, read as
         // a hall it had to found from nothing.
         if (S.t < 150) { S.passesEarly++; if (S.halted === table.halls[1]) S.tierHaltsEarly++ }
+        // `OW3_TRACE=race/build` prints the Insane run's bank, army and build list every ten
+        // seconds — what the ladder was saving for, and which row it halted on.
+        if (process.env.OW3_TRACE === `${race}/${strategyId}` && profile === PLUS_INSANE && !opts.wonAt && Math.round(S.t) % 10 === 0) {
+          console.log(`  t=${Math.round(S.t)} gold=${Math.round(S.gold)} wood=${Math.round(S.lumber)} army=${ctx.armyFood} tier=${ctx.tier} halted=${S.halted} list=${list.map((r) => r.item + ":" + r.qty).join(" ")}`);
+        }
       }
       if (S.tier2At === Infinity && doneRaw(table.halls[1]) > 0) S.tier2At = S.t;
       if (S.tier3At === Infinity && doneRaw(table.halls[2]) > 0) S.tier3At = S.t;
@@ -1291,6 +1298,36 @@ function runEconomy() {
     // leaves gold over at the bottom of the ladder, where the ordinary tier-3 row can buy the
     // hall sooner than the clock does (the Chimaera build did, at 672 s, before the clock).
   }
+
+  // --- EVERY race's tier 3, on Insane (profile.ts `tier3Rush`, plan.ts `tier3Due`) ----------
+  //
+  // The developer's: "the Computer+ AI (Insane) must ALWAYS try to reach tier 3 as fast as
+  // possible" — Knights, Gryphon Riders and Inner Fire for the human, Berserkers, Bloodlust and
+  // Taurens for the orc, Abominations for the undead, the bears for the night elf. Before the
+  // rush the tier-3 hall was asked for out of what the bottom of the ladder had left, and on this
+  // fixture's fight-free economy it stood at 11:25 for the night elf (its own clock) and, for
+  // the other three races, 12½–13 minutes for three builds and not inside fifteen for the other
+  // thirteen. With the rush: human 9:29–9:31, orc 9:12–10:04, night elf 9:23–9:30, undead
+  // 10:46–12:09 (its Black Citadel is 230 lumber, and its lumber is Ghouls — see
+  // index.ts `LUMBER_SHARE_RUSH`).
+  //
+  // What is PINNED is the rush itself — the third hall standing within five and a half minutes
+  // of the second (a save and a 140 s upgrade) — rather than a clock: when tier 2 lands is the
+  // tier-2 clock's business, and a build that holds it back on purpose (the Head Hunter rush,
+  // the fast expand) gets the same rush from its later Keep.
+  console.log("\n--- Insane races rush their tier 3 ---");
+  for (const [race, table] of Object.entries(TABLES)) {
+    for (const s of table.strategies) {
+      if (s.weight <= 0 && !s.replaces) continue; // grown into, never opened on
+      const insane = run(race, s.id, PLUS_INSANE, 900);
+      console.log(`      ${(race + "/" + s.id).padEnd(24)} INSA tier2@${String(insane.tier2At).padStart(4)}s tier3@${String(insane.tier3At).padStart(4)}s army=${insane.armyFood}`);
+      check(`${race}/${s.id} (Insane) stands its tier-3 hall within 5.5 minutes of its tier 2`,
+        insane.tier3At - insane.tier2At <= 330, true);
+    }
+  }
+  // …and Normal does NOT rush: it still buys the hall out of what the ladder leaves.
+  check("human/rifles (Normal) does not rush its tier 3",
+    run("human", "rifles", PLUS_NORMAL, 900).tier3At > run("human", "rifles", PLUS_INSANE, 900).tier3At, true);
 
   console.log("\n--- ten minutes of build ladder ---");
   for (const [race, table] of Object.entries(TABLES)) {

@@ -627,7 +627,13 @@ const HUMAN: PlusRaceTable = {
     { id: UPG_WOOD, from: LUMBER_MILL, ranks: 2, after: 12 },
     { id: UPG_GUN_RANGE, from: BARRACKS, ranks: 1, after: 16 },
     { id: UPG_BREEDING, from: BARRACKS, ranks: 1, after: 24 },
-    { id: UPG_PRAYING, from: SANCTUM, ranks: 2, after: 20 },
+    // PRIEST TRAINING is an UNLOCK, saved for: rank 1 is Dispel Magic and rank 2 is INNER FIRE
+    // (`[Ainf] Requires=Rhpt Requiresamount=2`, HumanAbilityFunc), the buff the developer names
+    // beside the Knights and the Gryphons as what tier 3 is for — and rank 2 is `[Rhpt]
+    // Requires1=hcas`, so with the rush (profile.ts `tier3Rush`) it is the first thing the Castle
+    // buys. As an ordinary row it was bought out of spare change at the bottom of the ladder. The
+    // autocast is the sim's (it goes on the ally in the fight); plus/casting.ts arms it.
+    { id: UPG_PRAYING, from: SANCTUM, ranks: 2, after: 12, unlock: true, forUnit: PRIEST },
     { id: UPG_SORCERY, from: SANCTUM, ranks: 2, after: 20 },
     { id: UPG_HAMMERS, from: AVIARY, ranks: 1, after: 24 },
     { id: UPG_CLOUD, from: AVIARY, ranks: 1, after: 30 },
@@ -777,7 +783,11 @@ const ORC: PlusRaceTable = {
     { id: UPG_ORC_RANGED, from: FORGE, ranks: 3, after: 12 },
     { id: UPG_ORC_SPIKES, from: FORGE, ranks: 1, after: 16 },
     { id: UPG_ORC_WAR_DRUMS, from: BESTIARY, ranks: 3, after: 20 },
-    { id: UPG_ORC_SHAMAN, from: LODGE, ranks: 2, after: 20 },
+    // SHAMAN TRAINING, saved for like Priest Training and for the same reason: rank 2 is
+    // BLOODLUST (`[Ablo] Requires=Rost Requiresamount=2`, OrcAbilityFunc), and rank 2 is `[Rost]
+    // Requires1=ofrt` — the Fortress the rush buys. The developer's orc tier 3 is "Berserkers,
+    // Bloodlust, Taurens".
+    { id: UPG_ORC_SHAMAN, from: LODGE, ranks: 2, after: 12, unlock: true, forUnit: SHAMAN },
     { id: UPG_ORC_PULVERIZE, from: TOTEM, ranks: 1, after: 30 },
   ],
   strategies: [
@@ -786,13 +796,13 @@ const ORC: PlusRaceTable = {
     // behind the same hunters. Feral Spirit is what makes it the creeping opening, and the
     // second hero is the Shadow Hunter or the Tauren Chieftain.
     { id: "headhunters", name: "Head Hunters, Shamans and Kodos", tier: 2, weight: 28, expandAt: 270, expandAgainAt: 690,
-      heroes: [FAR_SEER, SHADOW_HUNTER, TAUREN_CHIEF, BLADE_MASTER],
+      heroes: [FAR_SEER, SHADOW_HUNTER, TAUREN_CHIEF, BLADE_MASTER], thenAt3: "taurens",
       mix: { [HEAD_HUNTER]: 3, [SHAMAN]: 1.2, [KODO_BEAST]: 0.8, [WITCH_DOCTOR]: 0.6 } },
     // BLADEMASTER, GRUNTS AND HEAD HUNTERS, enriched at tier 2 with the whole Beastiary —
     // Raiders, a Kodo, Wind Riders — and the Shamans behind them. Always the Shadow Hunter
     // second. Raiders want to be somewhere the enemy is not, so the second mine comes later.
     { id: "grunts", name: "Grunts, Head Hunters and Raiders", tier: 2, weight: 26, expandAt: 330, expandAgainAt: 750,
-      heroes: [BLADE_MASTER, SHADOW_HUNTER, FAR_SEER, TAUREN_CHIEF],
+      heroes: [BLADE_MASTER, SHADOW_HUNTER, FAR_SEER, TAUREN_CHIEF], thenAt3: "taurens",
       mix: { [GRUNT]: 3, [HEAD_HUNTER]: 1.5, [RAIDER]: 1.5, [SHAMAN]: 1, [KODO_BEAST]: 0.6, [WYVERN]: 0.8 } },
     // TAUREN CHIEFTAIN AND MASS GRUNTS — the simple one, and the one that grows into the Tauren
     // build proper when the Fortress lands (`thenAt3`). At tier 2 the Beastiary adds the Kodo,
@@ -1007,13 +1017,13 @@ const UNDEAD: PlusRaceTable = {
     // Banshees are what it adds once there are fiends to stand in front of them. Both Obsidian
     // Statues are the race's rather than the build's — see `always`.
     { id: "fiends", name: "Ghouls and Crypt Fiends", tier: 2, weight: 30, expandAt: 300, expandAgainAt: 720,
-      heroes: [DEATH_KNIGHT, LICH, CRYPT_LORD, DREAD_LORD],
+      heroes: [DEATH_KNIGHT, LICH, CRYPT_LORD, DREAD_LORD], thenAt3: "fiendaboms",
       mix: { [CRYPT_FIEND]: 3, [GHOUL]: 2.5, [BANSHEE]: 1 } },
     // CRYPT LORD, and the widest mix the race has: ghouls and fiends from the opening, then Meat
     // Wagons and Necromancers at tier 2. The Death Knight is the SECOND hero here rather than the
     // first — he heals the Crypt Lord, who is already the one that can be stood in front.
     { id: "meatwagons", name: "Fiends, Meat Wagons and Necromancers", tier: 2, weight: 24, expandAt: 330, expandAgainAt: 750,
-      heroes: [CRYPT_LORD, DEATH_KNIGHT, LICH, DREAD_LORD],
+      heroes: [CRYPT_LORD, DEATH_KNIGHT, LICH, DREAD_LORD], thenAt3: "aboms",
       mix: { [CRYPT_FIEND]: 2.5, [GHOUL]: 2, [MEAT_WAGON]: 1, [NECRO]: 1.2 } },
     // DREAD LORD MASS GHOULS — the fast one. Vampiric Aura is what makes those ghouls farm, so it
     // expands early, and it is the one undead build that names its SECOND CRYPT: a ghoul army is
@@ -1021,13 +1031,25 @@ const UNDEAD: PlusRaceTable = {
     // is the second hero (a Death Coil on a ghoul is the same aura read from the other end).
     { id: "ghouls", name: "Mass Ghouls and Gargoyles", tier: 2, weight: 22, expandAt: 240, expandAgainAt: 640,
       heroes: [DREAD_LORD, DEATH_KNIGHT, LICH, CRYPT_LORD],
-      factories: { [CRYPT]: 2 },
+      factories: { [CRYPT]: 2 }, thenAt3: "ghoulaboms",
       mix: { [GHOUL]: 4, [GARGOYLE]: 1.5, [CRYPT_FIEND]: 1 } },
     { id: "aboms", name: "Abominations and Meat Wagons", tier: 3, weight: 16, expandAt: 420, expandAgainAt: 840,
       heroes: [CRYPT_LORD, DEATH_KNIGHT, LICH, DREAD_LORD],
       mix: { [ABOMINATION]: 3, [CRYPT_FIEND]: 1.5, [MEAT_WAGON]: 1.2, [NECRO]: 1 } },
     { id: "frostwyrms", name: "Gargoyles and Frost Wyrms", tier: 3, weight: 12, expandAt: 450, expandAgainAt: 870,
-      mix: { [GARGOYLE]: 2.5, [FROST_WYRM]: 1, [CRYPT_FIEND]: 1.5, [NECRO]: 0.8 } },
+      mix: { [GARGOYLE]: 2.5, [FROST_WYRM]: 1, [CRYPT_FIEND]: 1.5, [NECRO]: 0.8, [ABOMINATION]: 0.8 } },
+    // THE UNDEAD TIER-3 TRANSITIONS — never rolled (weight 0), only grown into (`thenAt3`). The
+    // developer's: "Undead Insane AI must get some Abominations as well". Only the Abomination
+    // build and the fast expand used to name one, so the three tier-2 openings — four undead
+    // matches in five — reached the Black Citadel and went on making exactly what they had made
+    // at the Halls of the Dead. Each keeps its own line and puts Abominations in FRONT of it
+    // (`[uabo] Requires=unp2`, off the Slaughterhouse `always` already stands): the fiend build's
+    // fiends and Banshees behind them, the ghoul build's ghouls and Gargoyles beside them. The
+    // Meat Wagon build grows into `aboms` itself, which is its own army with more Abominations.
+    { id: "fiendaboms", name: "Crypt Fiends and Abominations", tier: 3, weight: 0, expandAt: 420, expandAgainAt: 840,
+      mix: { [CRYPT_FIEND]: 2.5, [ABOMINATION]: 2, [GHOUL]: 1, [BANSHEE]: 0.8 } },
+    { id: "ghoulaboms", name: "Ghouls, Abominations and Gargoyles", tier: 3, weight: 0, expandAt: 420, expandAgainAt: 840,
+      mix: { [GHOUL]: 2.5, [ABOMINATION]: 2, [GARGOYLE]: 1.2, [CRYPT_FIEND]: 1 } },
     // THE FAST EXPAND — INSANE ONLY, and EVERY Crypt Lord or Dreadlord opening there. The
     // developer's: "a fast expansion with mass ghouls and/or crypt fiends (so it delays its main
     // hall upgrade/tier 2 a bit to keep resources for a bigger early game army and extra

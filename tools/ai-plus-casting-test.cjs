@@ -43,6 +43,9 @@ const ABILS = {
   AHhb: { code: "AHhb", target: "unit", autocast: false, targetFlags: ["air", "ground", "organic", "notself", "vuln", "invu", "nonancient"], levelData: [lvl()] },
   AUdc: { code: "AUdc", target: "unit", autocast: false, targetFlags: ["air", "ground", "organic", "notself", "vuln", "invu", "nonancient"], levelData: [lvl()] },
   // A plain single-target nuke, for the mana gate: Storm Bolt is a `disable`, Frost Nova a `nuke`.
+  // THUNDER CLAP, its real rank-1 row: `[AHtc] targs1` "ground,neutral,organic", `Area1` 300,
+  // `Cost1` 90, `Dur1` 5 / `HeroDur1` 3, `DataA1` 60 damage (Units\AbilityData.slk).
+  AHtc: { code: "AHtc", target: "none", autocast: false, targetFlags: ["ground", "neutral", "organic"], levelData: [lvl({ area: 300, castRange: 0, cost: 90, duration: 5, heroDuration: 3, data: [60, 0], buffs: ["BHtc"] })] },
   AHtb: { code: "AHtb", target: "unit", autocast: false, targetFlags: ["air", "ground", "enemy", "organic", "vuln", "invu"], levelData: [lvl({ duration: 5, heroDuration: 1.5 })] },
   // Unholy Frenzy — a BUFF whose row names no allegiance at all (`[Auhf] targs1` =
   // "air,ground,organic"), which is the whole of the reported bug: with the flags silent the
@@ -200,7 +203,7 @@ function cast(units, profile = PLUS_INSANE, opts = {}) {
   const t0 = opts.now ?? 100;
   for (let i = 0; i < (opts.passes ?? 1); i++) {
     if (i > 0) orders.length = 0;
-    c.pass(t0 + i * 10, { holdsPortal: () => false, home: { x: 0, y: 0 }, campLeft: opts.camp });
+    c.pass(t0 + i * 10, { holdsPortal: () => false, home: { x: 0, y: 0 }, campLeft: opts.camp, campKey: opts.campKey });
   }
   if (opts.all) return orders.filter((o) => o.c === "cast");
   return orders.find((o) => o.c === "cast") ?? null;
@@ -641,6 +644,32 @@ console.log("\n-- a summon is not spent on a creep camp that is already beaten -
   // No camp table (a map AI's own enemies): nothing to price, the summon goes out as before.
   check("a creep in no camp is fought as before",
     summons(null, [{ hp: 50 }]), "AHwe");
+}
+
+// ==========================================================================================
+console.log("\n-- Thunder Clap goes on every creep camp, once ---------------------------------");
+// ==========================================================================================
+// The developer's: *"make the Mountain King use Thunder Clap against creeps as well (don't spam
+// it, perhaps use it once per creep camp)"*. Against creeps an offensive press waited on the
+// once-per-fight roll (25 % on a small camp), so most camps never saw it — and a camp that rolled
+// yes saw it every time the cooldown came back (`ONCE_PER_CAMP`).
+{
+  const king = () => caster({ abilId: "AHtc", isHero: true, x: 0, y: 0 });
+  const camp = (key, owner = 1, isCreep = true) => [
+    unit({ owner, isCreep, x: 120, y: 0, guardX: key, guardY: 0 }),
+    unit({ owner, isCreep, x: 0, y: 120, guardX: key, guardY: 0 }),
+  ];
+  const campKey = (c) => `camp${c.guardX}`;
+  // `roll` 0.99: the engagement's mana roll says NO, which is what most creep fights got.
+  const first = cast([king(), ...camp(1)], PLUS_INSANE, { roll: 0.99, campKey });
+  check("the Mountain King claps a creep camp the mana roll would have skipped", first && first.code, "AHtc");
+  const again = cast([king(), ...camp(1)], PLUS_INSANE, { roll: 0.99, campKey, passes: 2 });
+  check("…and not a second time on the same camp", again, null);
+  const lucky = cast([king(), ...camp(1)], PLUS_INSANE, { roll: 0, campKey, passes: 2 });
+  check("…not even when the roll said this fight is worth the mana", lucky, null);
+  // A PLAYER fight is not a camp: the clap is up every time the cooldown is.
+  const players = cast([king(), ...camp(0, 1, false)], PLUS_INSANE, { roll: 0, campKey, passes: 2 });
+  check("against a PLAYER's army it is pressed again", players && players.code, "AHtc");
 }
 
 // ==========================================================================================

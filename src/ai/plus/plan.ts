@@ -176,7 +176,25 @@ function tierUpOverdue(c: PlusCtx): boolean {
  */
 function coreArmy(c: PlusCtx): number {
   const full = CORE_ARMY_FOOD + CORE_ARMY_PER_TIER * Math.max(0, c.tier - 1);
-  return Math.min(c.profile.armyFood, tierUpOverdue(c) ? Math.min(full, TIER2_ARMY) : full);
+  if (tierUpOverdue(c)) return Math.min(c.profile.armyFood, full, TIER2_ARMY);
+  // …and the same hold one tier up, while a RUSHED tier 3 is being saved for (`tier3Rushing`):
+  // the army the rush insists on having before it asks (`TIER3_ARMY`) is the army it holds while
+  // it pays — and once that much is on the field the row asks for NOTHING. Held at the number
+  // instead it still leaked: every row is one unit's SHARE of the budget, so a Sanctum build with
+  // eight fallback Footmen standing kept buying its Sorceress and its Priest share on top, and
+  // on the ladder fixture the Castle waited two minutes behind them with the Keep long up. The
+  // hold ends the moment the hall is in the queue — the gold is spent by then.
+  if (tier3Rushing(c)) return c.armyFood >= TIER3_ARMY ? 0 : Math.min(c.profile.armyFood, full, TIER3_ARMY);
+  return Math.min(c.profile.armyFood, full);
+}
+
+/**
+ * Is a RUSHED tier 3 (`PlusProfile.tier3Rush`) still unpaid — tier 2 standing, the third hall not
+ * yet in the queue? What the core army holds for (`coreArmy`) and what keeps the smith's research
+ * back (`upgrades`).
+ */
+function tier3Rushing(c: PlusCtx): boolean {
+  return c.profile.tier3Rush && c.profile.techTier >= 3 && c.tier === 2 && c.ai.count(c.table.halls[2]) < 1;
 }
 
 /** Workers on a mine. WC3 mines take five at a time, so a sixth is a peasant standing in a
@@ -1380,7 +1398,10 @@ function tierUpDue(c: PlusCtx): void {
  * only waits for them and never competes with them; the bottom-of-the-ladder row still applies.
  */
 function tier3Due(c: PlusCtx): void {
-  const at = c.strategy.tier3Clock ?? c.table.tier3Clock;
+  // …or from the moment the tier-2 hall stands, on a rung that RUSHES it (`PlusProfile.tier3Rush`,
+  // Insane): every race, every build, no clock at all. The gates below still hold — a rush that
+  // left the army or the mine crew short would be the first raid's to punish.
+  const at = c.profile.tier3Rush ? 0 : c.strategy.tier3Clock ?? c.table.tier3Clock;
   if (at === undefined || c.clock < at + c.profile.tier3Delay) return;
   const { ai, profile, table, armyFood, tier } = c;
   if (profile.techTier < 3 || tier < 2 || armyFood < TIER3_ARMY) return;
@@ -1910,6 +1931,13 @@ const ENEMY_RANGED = 3;
 
 function upgrades(c: PlusCtx): void {
   const { ai, profile, table, armyFood } = c;
+  // A RUSHED tier 3 (`PlusProfile.tier3Rush`) takes NONE of the smith's research until the third
+  // hall is paid for, and only the first rank of each while it goes up — the developer's "don't
+  // buy many upgrades from the Hunter's Hall etc. until tier 3 is reached, same for other races".
+  // Four Hunter's Hall ranks are 600 gold and 400 lumber, which is most of a Tree of Eternity.
+  // The ability UNLOCKS are not this row (`abilityUpgrades`): they are what the army is for.
+  if (tier3Rushing(c)) return;
+  const rush = profile.tier3Rush && c.tier < 3;
   for (const row of table.upgrades) {
     if (row.unlock) continue; // `abilityUpgrades`, much higher up
     if (ai.countDone(row.from) < 1) continue;
@@ -1918,7 +1946,7 @@ function upgrades(c: PlusCtx): void {
     // …and an upgrade that only answers one thing waits until that thing has been SEEN — see
     // `UpgradeRow.when`. Asked of the scouting read, so it is only as good as the scouting.
     if (row.when === "enemyRanged" && (c.enemy.pierce ?? 0) < ENEMY_RANGED) continue;
-    ai.setBuildUpgr(Math.min(row.ranks, profile.upgradeRank), row.id);
+    ai.setBuildUpgr(Math.min(row.ranks, profile.upgradeRank, rush ? 1 : Infinity), row.id);
   }
 }
 

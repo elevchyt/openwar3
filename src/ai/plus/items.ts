@@ -487,6 +487,12 @@ const CLARITY: ReadonlySet<string> = new Set(["plcl", "pclr"]);
  *  and the army's Scroll of Healing. Out of the purse and past the habit ceiling, like `FIGHT`. */
 const MELEE_BELT: readonly string[] = ["pnvl", "phea", "shea"];
 
+/** The invulnerability potion the belt BUYS — the Lesser one, because it is the one on a shelf
+ *  (`[ngme] Sellitems`; see `LIST`) — and every invulnerability potion a hero may HOLD, the
+ *  full-strength `pnvu` a creep drops included. */
+const INVULN_BUY = "pnvl";
+const INVULN_ITEMS: ReadonlySet<string> = new Set(["pnvl", "pnvu"]);
+
 /**
  * THE ORB OF VENOM for the night elf's Demon Hunter, at tier 3 — the developer's rule. `[oven]
  * Requires=etoe` (ItemFunc.txt), so the Ancient of Wonders sells it only once the Tree of
@@ -917,11 +923,14 @@ const SHARE_REACH = 1500;
 
 /** Which bar a potion refills — the two a hero is handed a spare of. A Scroll of Healing or
  *  Restoration (`healArea`) is not a potion and is the whole army's, so it is not in either. */
-export type PotionKind = "heal" | "mana";
+export type PotionKind = "heal" | "mana" | "invuln";
 export function potionKind(use: Use | null): PotionKind | null {
   switch (use) {
     case "healSelf": case "healOther": case "replenish": return "heal";
     case "mana": case "manaRegen": return "mana";
+    // The Potion of Invulnerability, its Lesser twin and the Potion of Divinity — every `panic`
+    // item is one of the three (`USE_OF`).
+    case "panic": return "invuln";
     default: return null;
   }
 }
@@ -930,9 +939,15 @@ export function potionKind(use: Use | null): PotionKind | null {
  * Who hands a spare potion to whom: the first hero in `belts` holding TWO or more of a kind,
  * and the first other hero holding NONE of it with a slot free. `belts[i]` is hero i's
  * potions by kind and its free slots. Pure, for the test — `share` feeds it the real belts.
+ *
+ * INVULNERABILITY goes further, because it is one press per fight and only ever the holder's:
+ * the developer's *"if a hero has more than one [Potion of Invulnerability] in their inventory,
+ * they must pass it to one of their other heroes (if the target hero has inventory space of
+ * course)"*. So a second one is handed to the hero holding the FEWEST, as long as that is at
+ * least two fewer — a hero with none first, and never a swap that only moves the pile.
  */
 export function potionHandover(
-  belts: ReadonlyArray<{ heal: number; mana: number; free: number }>,
+  belts: ReadonlyArray<{ heal: number; mana: number; invuln?: number; free: number }>,
 ): { from: number; to: number; kind: PotionKind } | null {
   for (const kind of ["heal", "mana"] as const) {
     for (let from = 0; from < belts.length; from++) {
@@ -941,6 +956,16 @@ export function potionHandover(
         if (to !== from && belts[to][kind] === 0 && belts[to].free > 0) return { from, to, kind };
       }
     }
+  }
+  for (let from = 0; from < belts.length; from++) {
+    const have = belts[from].invuln ?? 0;
+    if (have < 2) continue;
+    let to = -1;
+    for (let o = 0; o < belts.length; o++) {
+      if (o === from || belts[o].free <= 0 || (belts[o].invuln ?? 0) > have - 2) continue;
+      if (to < 0 || (belts[o].invuln ?? 0) < (belts[to].invuln ?? 0)) to = o;
+    }
+    if (to >= 0) return { from, to, kind: "invuln" };
   }
   return null;
 }
@@ -1116,7 +1141,8 @@ export class PlusItems {
    * ONE HERO'S SPARE IS ANOTHER HERO'S FIRST.
    *
    * Reported: *"if a hero has more than one healing/mana potion, it must try and give one to a
-   * friendly hero that doesn't have one and has an empty inventory slot"*. The shopper is
+   * friendly hero that doesn't have one and has an empty inventory slot"* — and the same again
+   * for the Potions of Invulnerability, of either kind (`potionHandover`). The shopper is
    * whoever is standing at the shop (`shopper`) and a drop goes to whoever is nearest (`loot`),
    * so one hero ends up with three Potions of Healing and the other with none — and the one
    * with none is the one that dies.
@@ -1135,7 +1161,7 @@ export class PlusItems {
       && !this.view.world.holdsChannel(u.id) && u.order !== "getitem" && !this.underFire(u, foes));
     if (heroes.length < 2) return;
     const belts = heroes.map((u) => {
-      const belt = { heal: 0, mana: 0, free: 0 };
+      const belt = { heal: 0, mana: 0, invuln: 0, free: 0 };
       for (const held of u.inventory) {
         if (!held) { belt.free++; continue; }
         const def = this.view.item(held.itemId);
@@ -2214,8 +2240,11 @@ export class PlusItems {
     const order = own.some((u) => u.isHero && MELEE_HEROES.has(u.typeId))
       ? [...FIGHT].sort((a, b) => MELEE_BELT.indexOf(a.id) - MELEE_BELT.indexOf(b.id))
       : FIGHT;
+    // …one EACH on a rung where every hero carries one (`PlusProfile.invulnEach`).
+    const heroes = own.filter((u) => u.isHero && !u.isIllusion).length;
     for (const w of order) {
-      if (this.carried(own, w.id) >= w.want) continue;
+      const want = w.id === INVULN_BUY && this.profile.invulnEach ? Math.max(w.want, heroes) : w.want;
+      if (this.carried(own, w.id) >= want) continue;
       if (this.itemChance(now, own, fightCtx, w.id)) return true;
     }
     return false;
@@ -2232,7 +2261,9 @@ export class PlusItems {
     // trained), the older of two at the same level. A full belt cannot take it.
     const heroes = own
       .filter((u) => u.isHero && !u.isIllusion && u.inventory.length && u.inventory.indexOf(null) >= 0 && roomForOne(u, itemId) && suits(u, itemId) && u.order !== "getitem" && this.canAct(u))
-      .sort((a, b) => b.level - a.level || a.id - b.id);
+      // …a melee hero short of its belt first, then a hero holding no invulnerability potion
+      // where every hero carries one (`firstFor`).
+      .sort((a, b) => this.firstFor(itemId, b) - this.firstFor(itemId, a) || b.level - a.level || a.id - b.id);
     if (!heroes.length) return false;
     const shops: SimUnit[] = [];
     for (const u of this.view.world.units.values()) {
@@ -2475,9 +2506,11 @@ export class PlusItems {
       // …and the habit ceiling, which an ESSENTIAL buy is exempt from — see `shop`.
       const cap = rich || essential ? u.inventory.length : this.profile.shopping;
       if (u.inventory.filter((h) => h !== null).length >= cap) continue;
-      // The MELEE belt goes to a melee hero that has none of it yet before it goes to the best.
-      if (best && this.meleeFirst(itemId, u) !== this.meleeFirst(itemId, best)) {
-        if (this.meleeFirst(itemId, u)) best = u;
+      // The MELEE belt goes to a melee hero that has none of it yet before it goes to the best —
+      // and, on a rung where every hero carries one, an invulnerability potion then goes to a
+      // hero holding none before a second goes to anybody (`firstFor`).
+      if (best && this.firstFor(itemId, u) !== this.firstFor(itemId, best)) {
+        if (this.firstFor(itemId, u) > this.firstFor(itemId, best)) best = u;
         continue;
       }
       if (!best || u.level > best.level) best = u;
@@ -2488,6 +2521,18 @@ export class PlusItems {
   /** Is `u` a melee hero still short of this piece of `MELEE_BELT`? */
   private meleeFirst(itemId: string, u: SimUnit): boolean {
     return MELEE_BELT.includes(itemId) && MELEE_HEROES.has(u.typeId) && !u.inventory.some((h) => h?.itemId === itemId);
+  }
+
+  /**
+   * Who is served FIRST with `itemId`: 2 for a melee hero short of its `MELEE_BELT` piece, 1 for
+   * any hero holding no invulnerability potion at all on a rung where every hero carries one
+   * (`PlusProfile.invulnEach` — the developer's "melee heroes must prioritize buying one before
+   * ranged heroes"), 0 for everybody else.
+   */
+  private firstFor(itemId: string, u: SimUnit): number {
+    if (this.meleeFirst(itemId, u)) return 2;
+    if (this.profile.invulnEach && itemId === INVULN_BUY && !u.inventory.some((h) => h !== null && INVULN_ITEMS.has(h.itemId))) return 1;
+    return 0;
   }
 
   /** The next thing to buy, and where. Walks the list in preference order and stops at the
@@ -2560,12 +2605,16 @@ export class PlusItems {
     const meleeBelt: Want[] = melee
       ? MELEE_BELT.map((id) => ({ id, want: id === "shea" ? Math.min(2, melee) : Math.max(melee, id === "phea" ? 2 : 1), opening: true }))
       : [];
+    // …and on a rung where EVERY hero carries an invulnerability potion (`PlusProfile.invulnEach`),
+    // one each — the melee heroes still served first (`firstFor`).
+    const invuln = this.profile.invulnEach ? heroes.length : 0;
+    const each = (w: Want): Want => (w.id === INVULN_BUY && w.want < invuln ? { ...w, want: invuln } : w);
     const first = [...orbs, ...(RACE_FIRST[this.race] ?? []).map((w) => ({ ...w, opening: true }))];
     // …and the race's MANA, which is bought out of the purse for the same reason but sits one
     // place further down: BEHIND the scroll. A hero with an empty bar has lost its spells; a
     // hero with no Town Portal loses the army, and that is the bigger loss (`PORTAL`).
     const mana = ((this.profile.eagerMana ? RACE_MANA_EAGER : RACE_MANA)[this.race] ?? []).map((w) => ({ ...w, opening: true }));
-    const fight = [...meleeBelt, ...FIGHT.filter((w) => !meleeBelt.some((m) => m.id === w.id))];
+    const fight = [...meleeBelt, ...FIGHT.filter((w) => !meleeBelt.some((m) => m.id === w.id))].map(each);
     const seen = new Set([...first, ...fight, ...mana].map((w) => w.id));
     const rest = LIST.filter((w) => !seen.has(w.id));
     // WHERE THE PORTAL SITS DEPENDS ON WHETHER THIS PLAYER HAS EVER HAD ONE.

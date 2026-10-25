@@ -5,7 +5,7 @@ import type { PlayableRace } from "../../data/races";
 import type { UnitDef } from "../../data/units";
 import type { TechRegistry } from "../../data/techtree";
 import { WeaponType } from "../../data/enums";
-import { ITEM_REGEN_GROUP, isOffField, pathDomain, type SimUnit } from "../../sim/world";
+import { ITEM_REGEN_GROUP, isOffField, pathDomain, type SimUnit, type SimWeapon } from "../../sim/world";
 import { simProfile, perfNow } from "../../sim/profile";
 import { AiPlayer, type AiHost, REGROUP_HP_FRACTION, TOWN_RADIUS } from "../aiPlayer";
 import { PlusCaster } from "./casting";
@@ -810,6 +810,15 @@ const LUMBER_PER_CHOPPER = 120;
  * behind ten — never the whole crypt, at any bank.
  */
 const LUMBER_SHARE = 1 / 3;
+/**
+ * …and the share while a RUSHED tier 3 is being saved for (`PlusProfile.tier3Rush`, plus/plan.ts
+ * `tier3Rushing`): two thirds. The Black Citadel is the dearest upgrade in lumber the race has,
+ * and with a third of the ghouls in the trees the rush stood on it for five minutes with a
+ * thousand gold banked (tools/ai-plus-ladder-test.cjs). The army is held at its floor for exactly
+ * that window anyway (`coreArmy`), so the ghouls the forest borrows are ones the wave was not
+ * going to be given. Ours.
+ */
+const LUMBER_SHARE_RUSH = 2 / 3;
 
 /**
  * How many of `choppers` the forest keeps.
@@ -886,10 +895,10 @@ export function reliefCount(serving: readonly number[], rested: readonly number[
   return k;
 }
 
-export function lumberCrew(wood: number, choppers: number): number {
+export function lumberCrew(wood: number, choppers: number, rushing = false): number {
   if (choppers <= 0) return 0;
   const bank = LUMBER_CREW - Math.floor(wood / LUMBER_PER_CHOPPER);
-  const share = Math.ceil(choppers * LUMBER_SHARE);
+  const share = Math.ceil(choppers * (rushing ? LUMBER_SHARE_RUSH : LUMBER_SHARE));
   const want = Math.max(LUMBER_FLOOR, Math.min(bank, share));
   return Math.max(0, Math.min(want, choppers));
 }
@@ -1760,6 +1769,57 @@ const MARCH_IGNORE = 30;
 const MARCH_GOAL_CAMP = CREEP_BERTH + 600;
 
 /**
+ * FINISH THE WOUNDED IN REACH (`PlusProfile.finishWounded`, Insane) — the developer's *"must be
+ * a bit more smart with its ranged units/heroes. it must try to focus down targets with low
+ * health first (if directly in range)"*. All OURS.
+ *
+ * `FINISH_HP` is "low health": under this share of its life an enemy is a kill to be taken, and
+ * one blow less on it is one body fewer swinging back. `FINISH_REACH` is "directly in range" —
+ * hull to hull, the shooter's own `range` and this much more, so the pick never walks a ranged
+ * unit forward into the melee to reach it (a unit that has to walk is the group focus's job).
+ * Among the candidates the one with the FEWEST hit points goes first, because it is the one that
+ * dies soonest — and blows already promised to it this pass are counted (`owed`), so five
+ * archers do not all loose at a Ghoul the first two arrows kill.
+ */
+const FINISH_HP = 0.35;
+const FINISH_REACH = 32;
+
+type FinishUnit = Pick<SimUnit, "id" | "x" | "y" | "radius" | "hp" | "maxHp"> & {
+  readonly weapon: Pick<SimWeapon, "ranged" | "range" | "damage" | "dice" | "sides"> | null;
+};
+
+/** One blow of `w`, on average — the base and the mean of the dice. */
+export function meanBlow(w: Pick<SimWeapon, "damage" | "dice" | "sides">): number {
+  return w.damage + (w.dice * (w.sides + 1)) / 2;
+}
+
+/**
+ * The wounded enemy `u` should shoot NOW, or null — see `FINISH_HP`. `owed` is the damage
+ * already promised to each target this pass; `canHit` is the sim's own "may this weapon touch
+ * that" plus whatever else the caller asks (vision, a body worth a blow). Pure and exported so
+ * the rule is pinned by a test (tools/ai-plus-army-test.cjs).
+ */
+export function finishPick<T extends FinishUnit>(
+  u: FinishUnit,
+  foes: readonly T[],
+  owed: ReadonlyMap<number, number>,
+  canHit: (t: T) => boolean,
+): T | null {
+  const w = u.weapon;
+  if (!w?.ranged) return null;
+  let best: T | null = null;
+  for (const t of foes) {
+    if (t.hp <= 0 || t.hp / Math.max(1, t.maxHp) > FINISH_HP) continue;
+    if (Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > w.range + FINISH_REACH) continue;
+    if ((owed.get(t.id) ?? 0) >= t.hp) continue; // already dead on the blows in flight
+    if (best && (t.hp > best.hp || (t.hp === best.hp && Math.hypot(t.x - u.x, t.y - u.y) >= Math.hypot(best.x - u.x, best.y - u.y)))) continue;
+    if (!canHit(t)) continue;
+    best = t;
+  }
+  return best;
+}
+
+/**
  * THE WOUNDED WALK OUT OF THE FIGHT — how far back, how long for, and how long before the same
  * unit may do it again (`PlusProfile.pullOutHp` is the bar that starts it, and 0 on Easy).
  *
@@ -1838,12 +1898,12 @@ const PULL_BACK_AGAIN = 45;
 const PULL_BACK_ARRIVE = 200;
 
 /**
- * A MELEE soldier under `PlusProfile.sendHomeHp` goes HOME instead of behind the line — and these
+ * A unit under `PlusProfile.sendHomeHp` goes HOME instead of behind the line — and these
  * are that trip's clocks. All OURS.
  *
  * `SEND_HOME_NEAR` is how close to the hall counts as already home (a unit defending its own base
  * is not sent to the spot it is standing on). `SEND_HOME_REST` is how long it stands there AFTER
- * the walk before it may rejoin, unless it heals past `RECOVER_TO` first: a Grunt's own 0.25 hit
+ * the walk before it may rejoin, unless it heals past `PlusProfile.rejoinHp` first: a Grunt's own 0.25 hit
  * points a second is slow, so the trip is bounded rather than left to the bar, or a night elf
  * soldier by day (no regeneration at all) would sit in the base for the rest of the match. The
  * walk itself is priced off the unit's own speed, so a Knight and a Ghoul both arrive with the
@@ -3061,6 +3121,10 @@ export class ComputerPlusAi {
           holdsPortal: (u) => b.items.holdsEscape(u),
           home: b.ai.home(),
           campLeft: (creep) => b.ai.campStanding(creep.guardX, creep.guardY),
+          campKey: (creep) => {
+            const camp = b.ai.campAt(creep.guardX, creep.guardY);
+            return camp ? `${Math.round(camp.x)},${Math.round(camp.y)}` : null;
+          },
         });
         simProfile.end("sim.ai.cast");
         simProfile.gauge("aiCastPass", perfNow() - t0);
@@ -3488,7 +3552,8 @@ export class ComputerPlusAi {
       if (u.isPeon) return 0; // the ordinary workers chop — this is not that race's problem
       choppers++;
     }
-    return lumberCrew(b.ai.wood(), choppers);
+    const rushing = b.profile.tier3Rush && this.tier(b) === 2 && b.ai.count(b.table.halls[2]) < 1;
+    return lumberCrew(b.ai.wood(), choppers, rushing);
   }
 
   /**
@@ -6164,6 +6229,8 @@ export class ComputerPlusAi {
     const vanguard = b.vanguardUntil > b.clock;
     // TANKS FIRST — see `tankHold`. Decided once for the pass: which RANKS are still held back.
     const heldRanks = travelling || vanguard ? null : this.tankHold(b, x, y, bodies);
+    // The blows the ranged line has been told to put on a wounded body this pass (`finishPick`).
+    const owed = new Map<number, number>();
     for (const u of this.squadUnits(b)) {
       if (vanguard) {
         if (!isCopy(u)) continue;
@@ -6309,6 +6376,17 @@ export class ComputerPlusAi {
         if (aim) {
           if (u.order === "attack" && u.targetId === aim.id) continue;
           this.issue(b, { c: "order", unitId: u.id, order: { kind: "attack", targetId: aim.id }, queued: false });
+          continue;
+        }
+      }
+      // THE WOUNDED IN REACH COME BEFORE THE GROUP'S FOCUS, for a ranged unit — see
+      // `FINISH_HP`. Only what it can shoot from where it stands, under our own eyes.
+      if (b.profile.finishWounded && !u.isPeon && u.weapon?.ranged) {
+        const kill = finishPick(u, bodies, owed, (t) => b.ai.knows(t) && !!this.host.world.weaponVs(u, t));
+        if (kill && u.weapon) {
+          owed.set(kill.id, (owed.get(kill.id) ?? 0) + meanBlow(u.weapon));
+          if (u.order === "attack" && u.targetId === kill.id) continue;
+          this.issue(b, { c: "order", unitId: u.id, order: { kind: "attack", targetId: kill.id }, queued: false });
           continue;
         }
       }
@@ -7541,10 +7619,10 @@ export class ComputerPlusAi {
         continue;
       }
       const entry = b.pulls.get(u.id);
-      // THE TRIP HOME (`sendHomeHp`, Insane): a melee soldier too hurt to be worth stepping back
-      // into the line. Asked BEFORE the ordinary pull-out, and of a unit already standing behind
+      // THE TRIP HOME (`sendHomeHp`, Insane): a unit too hurt to be worth stepping back into
+      // the line. Asked BEFORE the ordinary pull-out, and of a unit already standing behind
       // the line too — a Grunt pulled at 24 % that took one more blow on the way out is the
-      // same Grunt at 10 %.
+      // same Grunt at 10 %, and an archer that rejoined at 20 % and was caught is the same.
       if (entry?.home && pulledOut(entry, b.clock)) {
         this.homeTrip(b, u, entry);
         continue;
@@ -7600,18 +7678,22 @@ export class ComputerPlusAi {
   }
 
   /**
-   * SEND A MELEE SOLDIER HOME — the developer's "melee ones must run back to the Computer+ AI
-   * player's base if they have less than 12% health", Insane alone (`PlusProfile.sendHomeHp`).
+   * SEND A UNIT HOME — the developer's "once a unit (even heroes) reaches below 15% health, it
+   * must return to its base to move away from danger completely … once above 22% health, the
+   * unit is safe to go join the army group again", Insane alone (`PlusProfile.sendHomeHp` /
+   * `rejoinHp`). It was the MELEE soldier's alone at 12 %; a ranged one above the bar is still
+   * stepped behind the line and straight back in (`pullRejoin`), which the same report calls fine.
    *
    * A step behind the line (`pullBackSpot`) is a rescue for a unit that can come back and fight;
-   * a melee soldier this low is one blow from dead the moment it does, and it has no range to
-   * fight from the back with. So it walks to the hall, out of the army's orders (`pulls`, the
-   * same channel every withdrawal uses — `commit` skips it and `squadFood` does not count it),
-   * and heals there: its own regeneration, a Moon Well (`wellPass` may still send it to one), an
-   * Obsidian Statue. Asked whether it is in a fight or not — a soldier at a tenth of its life
-   * marching to the NEXT fight is the same loss a few seconds later — but never of one already
-   * at home (`SEND_HOME_NEAR`), a worker, a hero (whose exits are the scroll and `pullBar`), a
-   * copy, or a unit already being healed.
+   * a body this low is one blow from dead the moment it does. So it walks to the hall, out of
+   * the army's orders (`pulls`, the same channel every withdrawal uses — `commit` skips it,
+   * `squadFood` does not count it, and `armyAnchor` will not anchor the army on a captain that
+   * has gone), and heals there: its own regeneration, a Moon Well (`wellPass` may still send it
+   * to one), an Obsidian Statue, a fountain. A HERO is included: its Scroll of Town Portal is
+   * read on the same pass by the belt and is the faster way home when it has one — this walk is
+   * what a hero WITHOUT one does. Asked whether it is in a fight or not — a soldier at a tenth of
+   * its life marching to the NEXT fight is the same loss a few seconds later — but never of one
+   * already at home (`SEND_HOME_NEAR`), a worker, a copy, or a unit already being healed.
    */
   private sendHome(b: Brain, u: SimUnit, entry: PullBack | undefined): boolean {
     const bar = b.profile.sendHomeHp;
@@ -7620,7 +7702,7 @@ export class ComputerPlusAi {
     // before it healed (a night elf soldier by day regenerates nothing) is let go with the army
     // rather than turned round the moment it is `SEND_HOME_NEAR` out of the base.
     if (entry?.home && b.clock < entry.next) return false;
-    if (u.isHero || u.isPeon || isCopy(u) || !u.weapon || u.weapon.ranged || this.recovering(u)) return false;
+    if (u.isPeon || isCopy(u) || this.recovering(u)) return false;
     const home = b.ai.home();
     const dist = Math.hypot(u.x - home.x, u.y - home.y);
     if (dist <= SEND_HOME_NEAR) return false;
@@ -7631,9 +7713,10 @@ export class ComputerPlusAi {
     return true;
   }
 
-  /** …and keep it on the way there until it has healed or its clock runs out. */
+  /** …and keep it on the way there until it has healed to `PlusProfile.rejoinHp` or its clock
+   *  runs out. */
   private homeTrip(b: Brain, u: SimUnit, entry: PullBack): void {
-    if (u.hp / Math.max(1, u.maxHp) >= RECOVER_TO) {
+    if (u.hp / Math.max(1, u.maxHp) >= b.profile.rejoinHp) {
       b.pulls.set(u.id, { ...entry, until: b.clock });
       return;
     }

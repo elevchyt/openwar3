@@ -104,6 +104,22 @@ export interface PlusProfile {
    *  `tier3Due`): seconds added to it. The clock is the night elf's plan, and asked for at
    *  Insane ("tier 3 at 10–12 minutes"); a Normal player runs the same plan later. */
   readonly tier3Delay: number;
+  /**
+   * Does it RUSH its tier 3 — ask for the third hall the moment the second stands, for every
+   * race and every build, and hold back the smith's research until that hall is paid for
+   * (plus/plan.ts `tier3Due`, `upgrades`)?
+   *
+   * The developer's Insane: *"must ALWAYS try to reach tier 3 as fast as possible (at least for
+   * now since we don't have any rush strategies etc.)"* — Knights, Gryphon Riders and Inner Fire
+   * for the human, Berserkers, Bloodlust and Taurens for the orc, Abominations for the undead and
+   * the bears for the night elf all sit behind it (`[Ainf] Requires=Rhpt` ×2 and
+   * `[Rhpt] Requires1=hcas`; `[Ablo] Requires=Rost` ×2 and `[Rost] Requires1=ofrt`;
+   * `[uabo] Requires=unp2`). What it replaces is the race's own clock (`PlusRaceTable.tier3Clock`),
+   * which only the night elf had: the other three asked for the hall out of whatever the bottom of
+   * the ladder had left, and on the ladder fixture most of their builds never got there in fifteen
+   * minutes. Insane only — a weaker player techs when it is comfortable.
+   */
+  readonly tier3Rush: boolean;
 
   // --- countering: rebuilding against what the enemy turns out to be fielding ---------------
   /**
@@ -280,6 +296,14 @@ export interface PlusProfile {
   /** Does the whole group pick ONE target and kill it? The clearest "this AI micros" tell. */
   readonly focusFire: boolean;
   /**
+   * Does each RANGED unit and ranged hero finish a badly hurt enemy already inside its reach
+   * before anything else (plus/index.ts `finishTarget`)? The developer's Insane: *"must be a bit
+   * more smart with its ranged units/heroes. it must try to focus down targets with low health
+   * first (if directly in range)"*. A body killed is a body that stops hitting back, and a
+   * ranged unit is the one that can pick it without walking anywhere.
+   */
+  readonly finishWounded: boolean;
+  /**
    * Does the army go into a fight in TANK ORDER — summons, then melee soldiers, then heroes, then
    * the ranged line — each rank held back until one in front of it is engaged (index.ts
    * `tankHold`)? The developer's Insane: *"Computer+ tends to put its ranged units forward …
@@ -325,12 +349,23 @@ export interface PlusProfile {
    */
   readonly pullRejoin: boolean;
   /**
-   * Hit-point fraction under which a MELEE soldier is not stepped behind the line but sent all
-   * the way HOME (`pullPass`) — the developer's 12 %: a Grunt that low dies to the first blow it
-   * walks back into, and the base is where it heals (its regeneration, a Moon Well, a statue).
-   * 0 = never, which is every rung but Insane.
+   * Hit-point fraction under which a unit is not stepped behind the line but sent all the way
+   * HOME (`pullPass` / `sendHome`) — the developer's 15 %, for EVERY unit, the ranged ones and
+   * the heroes included: *"once a unit (even heroes) reaches below 15% health, it must return to
+   * its base to move away from danger completely"*. A body that low dies to the first blow it
+   * walks back into, a ranged one included once the fight has moved onto it, and the base is
+   * where it heals (its regeneration, a fountain, a Moon Well, a statue). A hero carrying a
+   * Scroll of Town Portal still reads its own belt on the same pass and leaves by it.
+   * (It was 12 % and melee-only.) 0 = never, which is every rung but Insane.
    */
   readonly sendHomeHp: number;
+  /**
+   * …and the hit-point fraction at which a unit sent home is SAFE to rejoin the army — the
+   * developer's 22 %. Above `sendHomeHp` by a margin, so the same unit is not walked out and back
+   * across the line (the trip's own see-saw clock, `PULL_BACK_AGAIN`, still stands behind it).
+   * Unread at a rung whose `sendHomeHp` is 0.
+   */
+  readonly rejoinHp: number;
   /**
    * Does it spend its DISPELS on enemy SUMMONS before anything else (`PlusCaster.dispelSummons`)?
    * A Water Elemental, a Lava Spawn or a pair of Spirit Wolves dies to one Dispel Magic, Purge,
@@ -456,6 +491,14 @@ export interface PlusProfile {
    */
   readonly eagerMana: boolean;
   /**
+   * Does EVERY hero carry a Potion of (Lesser) Invulnerability, the ranged and caster heroes
+   * included (plus/items.ts `list` / `firstFor`)? The developer's Insane: *"let's make ranged
+   * heroes prefer to buy potion of invulnerability as well (but melee heroes must prioritize
+   * buying one before ranged heroes)"*. Without it the belt holds one per MELEE hero
+   * (`MELEE_BELT`) and one for the whole army besides. OURS.
+   */
+  readonly invulnEach: boolean;
+  /**
    * Gold it will NOT spend on items.
    *
    * The gate docs/computer-plus.md warns about: item gold is gold `OneBuildLoop` was going to
@@ -529,7 +572,7 @@ export const PLUS_EASY: PlusProfile = {
   // line — an easy computer's Storm Bolt lands on the Tauren and its Death Coil on the
   // Abomination — and it is why its casters never feel like they are answering your army.
   castTargeting: "naive", castMistake: 0.35, heroFocus: 0.3,
-  workers: 8, expansions: 0, expandDelay: 0, tier3Delay: 0,
+  workers: 8, expansions: 0, expandDelay: 0, tier3Delay: 0, tier3Rush: false,
   // It does not counter at all: an easy computer builds what it opened with, whatever walks
   // into its base. This is the single biggest thing the top two difficulties do that it doesn't.
   counterWeight: 0, counterSample: Infinity, counterShare: 1, counterMemory: 0,
@@ -550,10 +593,10 @@ export const PLUS_EASY: PlusProfile = {
   // that are close to its base and that's it".
   // …and it does NOT micro its wounded out of a fight — issue #124's Easy is a player who
   // gives an order and then watches it happen. `pullOutHp` 0 is that in one number.
-  focusFire: false, tankFirst: false, pullOutHp: 0, stutterStep: false, pullRejoin: false, sendHomeHp: 0, dispelSummons: false, creeps: true, creepAt: 240, creepFood: 8,
+  focusFire: false, finishWounded: false, tankFirst: false, pullOutHp: 0, stutterStep: false, pullRejoin: false, sendHomeHp: 0, rejoinHp: 0, dispelSummons: false, creeps: true, creepAt: 240, creepFood: 8,
   creepCamps: 2, creepCampMax: CAMP_GREEN_MAX, creepRange: 3000, creepRest: 0, creepGreenUntil: 0, creepHunger: 1,
   harass: false, roam: false, mercChance: 0, scout: false, sweepEvery: Infinity, expansionFirst: 0.5,
-  shopping: 0, eagerMana: false, itemReserve: Infinity, keepPortal: false, portalToAttack: false,
+  shopping: 0, eagerMana: false, invulnEach: false, itemReserve: Infinity, keepPortal: false, portalToAttack: false,
   concedeAfter: 24,
 };
 
@@ -587,7 +630,7 @@ export const PLUS_NORMAL: PlusProfile = {
   // spell in seven. It does not price a spell's effect — a nuke goes on whoever is lowest
   // rather than on whoever it can finish.
   castTargeting: "sound", castMistake: 0.15, heroFocus: 0.7,
-  workers: 11, expansions: 1, expandDelay: 180, tier3Delay: 180,
+  workers: 11, expansions: 1, expandDelay: 180, tier3Delay: 180, tier3Rush: false,
   // It counters, badly: it wants to have seen a dozen enemy units and half its army to be one
   // thing before it believes it, it only moves its mix a third of the way, and it forgets in a
   // minute and a half. That reads as a player who noticed late and over-corrected slightly.
@@ -636,7 +679,7 @@ export const PLUS_NORMAL: PlusProfile = {
   // minutes (`creepGreenUntil`).
   // It does not focus-fire, but it DOES pull a soldier out of the line at a quarter health —
   // the one piece of micro a player picks up long before they learn to focus a target.
-  focusFire: false, tankFirst: false, pullOutHp: 0.25, stutterStep: false, pullRejoin: false, sendHomeHp: 0, dispelSummons: false, creeps: true, creepAt: 300, creepFood: 10,
+  focusFire: false, finishWounded: false, tankFirst: false, pullOutHp: 0.25, stutterStep: false, pullRejoin: false, sendHomeHp: 0, rejoinHp: 0, dispelSummons: false, creeps: true, creepAt: 300, creepFood: 10,
   creepCamps: Infinity, creepCampMax: Infinity, creepRange: Infinity, creepRest: 60, creepGreenUntil: 420, creepHunger: 1,
   harass: false, roam: false, mercChance: 0, scout: true, sweepEvery: 120, expansionFirst: 0.75,
   // A third of a belt, and it keeps 500 gold back for the build order. It DOES keep a Town
@@ -650,7 +693,7 @@ export const PLUS_NORMAL: PlusProfile = {
   // not touch is `ESSENTIAL` (plus/items.ts) — the Town Portal, the Potion of Healing and the two
   // fight items are bought past the ceiling — so the belt is thinner, not empty. Insane keeps
   // the full six.
-  shopping: 2, eagerMana: false, itemReserve: 500, keepPortal: true, portalToAttack: false,
+  shopping: 2, eagerMana: false, invulnEach: false, itemReserve: 500, keepPortal: true, portalToAttack: false,
   concedeAfter: 14,
 };
 
@@ -670,7 +713,7 @@ export const PLUS_INSANE: PlusProfile = {
   // The whole ladder: kill shots, damage-per-second, and the game's own `herodur1` — so it
   // saves the Hex for the Shaman rather than spending it on a hero that eats a third of it.
   castTargeting: "expert", castMistake: 0, heroFocus: 1,
-  workers: 14, expansions: 3, expandDelay: 0, tier3Delay: 0,
+  workers: 14, expansions: 3, expandDelay: 0, tier3Delay: 0, tier3Rush: true,
   // Full countering, off a small sample and a long memory: six units and a quarter of them one
   // type is enough to start shifting, and it remembers what it saw four minutes ago.
   counterWeight: 1, counterSample: 6, counterShare: 0.25, counterMemory: 240,
@@ -684,15 +727,15 @@ export const PLUS_INSANE: PlusProfile = {
   // Creeping starts at ninety seconds with the hero and eight food — the ladder's own answer,
   // which is "as soon as the hero walks out of the altar".
   // …and its wounded are micro'd both ways from there: an archer is back in the fight the moment
-  // it reaches the spot it was walked to, and a melee soldier under 12 % goes home to heal
-  // instead (`pullRejoin` / `sendHomeHp`, the developer's numbers). It also kills summons with
-  // its dispels first (`dispelSummons`).
-  focusFire: true, tankFirst: true, pullOutHp: 0.25, stutterStep: true, pullRejoin: true, sendHomeHp: 0.12, dispelSummons: true, creeps: true, creepAt: 90, creepFood: 8,
+  // it reaches the spot it was walked to, and anything under 15 % — a hero too — goes home to
+  // heal instead, and back out at 22 % (`pullRejoin` / `sendHomeHp` / `rejoinHp`, the
+  // developer's numbers). It also kills summons with its dispels first (`dispelSummons`).
+  focusFire: true, finishWounded: true, tankFirst: true, pullOutHp: 0.25, stutterStep: true, pullRejoin: true, sendHomeHp: 0.15, rejoinHp: 0.22, dispelSummons: true, creeps: true, creepAt: 90, creepFood: 8,
   creepCamps: Infinity, creepCampMax: Infinity, creepRange: Infinity, creepRest: 0, creepGreenUntil: 0, creepHunger: 1.2,
   harass: true, roam: true, mercChance: 0.5, scout: true, sweepEvery: 75, expansionFirst: 0.85,
   // A full belt and a Town Portal on the hero. Both are what separates a player who has been
   // here before from one who has not.
-  shopping: 6, eagerMana: true, itemReserve: 200, keepPortal: true, portalToAttack: true,
+  shopping: 6, eagerMana: true, invulnEach: true, itemReserve: 200, keepPortal: true, portalToAttack: true,
   concedeAfter: 8,
 };
 

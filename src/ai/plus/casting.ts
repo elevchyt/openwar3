@@ -644,6 +644,21 @@ const IMMOLATION = "AEim";
  * See `imagesStanding` for the gate.
  */
 const MIRROR_IMAGE = "AOmi";
+/**
+ * Buttons pressed ONCE PER CREEP CAMP — the developer's: *"make the Mountain King use Thunder
+ * Clap against creeps as well (don't spam it, perhaps use it once per creep camp)"*.
+ *
+ * Against creeps an offensive press waits on the once-per-fight roll (`CREEP_SPELL_SMALL` 25 %,
+ * `CREEP_SPELL_BIG` 70 %), so most camps never saw the clap at all — and a camp that rolled
+ * "yes" got it every time the cooldown came back. A row here bypasses that roll in a CREEP
+ * fight and is then spent: one press per camp per caster (`campCasts`, keyed on the camp the
+ * nearest creep was placed in — `CastCtx.campKey`). It still has to find its quorum of
+ * bodies in the circle (`pickSpot`), so it lands when the camp is gathered round the hero rather
+ * than on the first Gnoll to arrive. Against a PLAYER nothing here applies: the stun opens the
+ * fight that matters every time it is up. Thunder Clap is `[AHtc]`: 300 area, 90 mana, a slow
+ * and damage — the camp's whole melee line at once, which is what it is for. Ours.
+ */
+const ONCE_PER_CAMP: ReadonlySet<string> = new Set(["AHtc"]);
 
 /**
  * THE BLOOD MAGE AND THE PALADIN — Siphon Mana (`AHdr`) as a mana PUMP.
@@ -787,6 +802,9 @@ export interface CastCtx {
    * that map's own and are never priced as one (`campSpent`).
    */
   campLeft?(creep: SimUnit): { alive: number; health: number } | null;
+  /** …and WHICH camp it is, as a stable key (its centre) — what `ONCE_PER_CAMP` remembers a press
+   *  against. Optional for the same reason as `campLeft`. */
+  campKey?(creep: SimUnit): string | null;
 }
 
 /** One Computer+ player's casters. */
@@ -817,6 +835,8 @@ export class PlusCaster {
    *  fight starts and kept for as long as it lasts. See `CREEP_SPELL_SMALL` for why it cannot
    *  be a per-pass roll, and `trackFight`, which is what clears it. */
   private offense = new Map<number, boolean>();
+  /** Caster → the creep camps it has already spent a `ONCE_PER_CAMP` button on. */
+  private campCasts = new Map<number, Set<string>>();
   /** Druid of the Claw → the hero it has left Bear Form to Rejuvenate (`druidPass`). */
   private rejuvTask = new Map<number, { hero: number; since: number }>();
   /** Brewmaster → when it last threw Drunken Haze, so the breath waits for the flask
@@ -882,6 +902,7 @@ export class PlusCaster {
     for (const id of this.fightSince.keys()) if (!alive.has(id)) this.fightSince.delete(id);
     for (const id of this.burningSince.keys()) if (!alive.has(id)) this.burningSince.delete(id);
     for (const id of this.offense.keys()) if (!alive.has(id)) this.offense.delete(id);
+    for (const id of this.campCasts.keys()) if (!alive.has(id)) this.campCasts.delete(id);
     for (const id of this.rejuvTask.keys()) if (!alive.has(id)) this.rejuvTask.delete(id);
     for (const id of this.hazedAt.keys()) if (!alive.has(id)) this.hazedAt.delete(id);
   }
@@ -1130,16 +1151,58 @@ export class PlusCaster {
     }
     cards.sort((a, b) => roleRank(a.role) - roleRank(b.role));
 
+    // The creep camp this fight is against, if it is one — asked only for a `ONCE_PER_CAMP` card.
+    let camp: string | null | undefined;
     for (const card of cards) {
-      if (!this.ready(u, card.role, engaged)) continue;
+      // ONCE PER CAMP (`ONCE_PER_CAMP`): spent on this camp already → skip; not yet → the
+      // engagement's mana roll is not asked.
+      let once = false;
+      if (ONCE_PER_CAMP.has(card.def.code) && engaged) {
+        if (camp === undefined) camp = this.creepCamp(u, foes);
+        if (camp !== null) {
+          if (this.campCasts.get(u.id)?.has(camp)) continue;
+          once = true;
+        }
+      }
+      if (!this.ready(u, card.role, engaged, once)) continue;
       // Mana, cooldown, the upgrade gate and "is there even a corpse" — asked of the sim, at
       // the same door a player's click asks, so this can never be more permissive.
       if (this.view.world.castUseError(u.id, card.ab.code) !== null) continue;
       if (this.ctx.holds?.(u, card.ab.code)) continue;
       if (!this.wants(u, card.def, card.role, friends, foes, engaged)) continue;
-      if (this.aim(u, card.ab.code, card.def, card.lvl, card.role, friends, foes)) return true;
+      if (this.aim(u, card.ab.code, card.def, card.lvl, card.role, friends, foes)) {
+        if (once && camp) {
+          let spent = this.campCasts.get(u.id);
+          if (!spent) this.campCasts.set(u.id, (spent = new Set()));
+          spent.add(camp);
+        }
+        return true;
+      }
     }
     return false;
+  }
+
+  /**
+   * The CREEP CAMP this caster is fighting, as `CastCtx.campKey` names it — the camp of the
+   * nearest creep in reach — or null when it is not a creep fight: a hostile PLAYER's body in
+   * reach makes it a real one (the same rule `campSpent` and `worthTheMana` read), and so does a
+   * map that keeps no camp table.
+   */
+  private creepCamp(u: SimUnit, foes: SimUnit[]): string | null {
+    if (!this.ctx.campKey) return null;
+    const look = Math.max(u.weapon?.acquire ?? 0, MIN_LOOK);
+    let nearest: SimUnit | null = null;
+    let nearestD = Infinity;
+    for (const f of foes) {
+      if (f.building || !near(u, f, look)) continue;
+      if (!f.isCreep) {
+        if (f.owner >= 0 && f.owner < MELEE.MAX_PLAYERS && !f.isPeon) return null;
+        continue;
+      }
+      const d = Math.hypot(f.x - u.x, f.y - u.y);
+      if (d < nearestD) { nearestD = d; nearest = f; }
+    }
+    return nearest ? this.ctx.campKey(nearest) : null;
   }
 
   /**
@@ -1287,12 +1350,13 @@ export class PlusCaster {
    * see the fight", and it is what makes an easy computer's Shock Wave land after you have
    * already walked out of it.
    */
-  private ready(u: SimUnit, role: Role, engaged: boolean): boolean {
+  private ready(u: SimUnit, role: Role, engaged: boolean, oncePerCamp = false): boolean {
     if (role === "panic" || role === "heal") return true;
     // …AND WHETHER IT IS SPENDING THE MANA ON THIS FIGHT AT ALL — see `CREEP_SPELL_SMALL`. The
     // decision belongs to the engagement rather than to the pass, so it is asked of a roll made
-    // once when the fight started (`trackFight`) and it holds for the whole of it.
-    if (OFFENSIVE.has(role) && this.offense.get(u.id) === false) return false;
+    // once when the fight started (`trackFight`) and it holds for the whole of it. A
+    // `ONCE_PER_CAMP` press against a camp it has not yet been spent on is not asked.
+    if (OFFENSIVE.has(role) && !oncePerCamp && this.offense.get(u.id) === false) return false;
     if (!engaged) return true; // nothing to be late for
     const since = this.fightSince.get(u.id);
     return since === undefined || this.now - since >= this.profile.castDelay;

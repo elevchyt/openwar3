@@ -641,13 +641,36 @@ console.log("\n-- STUTTER-STEP (Insane's ranged micro between shots) -----------
   check("a melee unit (a Footman) never stutters", stutterAim(archer({ weapon: { ranged: false, range: 90 } }), grunt()), null);
 }
 
+console.log("\n-- the ranged line finishes the wounded in reach (finishWounded) ---------");
+{
+  // The developer's Insane: "must try to focus down targets with low health first (if directly
+  // in range)". An Archer at the origin (range 500), a Rifleman's blow of ~20.
+  const { finishPick, meanBlow } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
+  const archer = { id: 1, x: 0, y: 0, radius: 16, hp: 245, maxHp: 245, weapon: { ranged: true, range: 500, damage: 16, dice: 1, sides: 3 } };
+  const foe = (id, x, hp, maxHp = 400) => ({ id, x, y: 0, radius: 16, hp, maxHp });
+  const yes = () => true;
+  const near = [foe(2, 300, 380), foe(3, 400, 90), foe(4, 450, 60)];
+  check("the weakest wounded body in reach is the one shot", finishPick(archer, near, new Map(), yes)?.id, 4);
+  check("…a healthy one never is", finishPick(archer, [foe(2, 300, 380)], new Map(), yes), null);
+  check("…nor a wounded one it would have to WALK to", finishPick(archer, [foe(5, 900, 40)], new Map(), yes), null);
+  check("…nor one the blows already promised will kill", finishPick(archer, near, new Map([[4, 60]]), yes)?.id, 3);
+  check("…nor one it may not touch (the sim's `weaponVs`, our eyes)", finishPick(archer, near, new Map(), (t) => t.id !== 4)?.id, 3);
+  check("a melee unit picks nothing here", finishPick({ ...archer, weapon: { ...archer.weapon, ranged: false } }, near, new Map(), yes), null);
+  check("a blow is the base and the mean of the dice", meanBlow({ damage: 16, dice: 1, sides: 3 }), 18);
+  check("Insane finishes the wounded", PLUS_INSANE.finishWounded, true);
+  check("…Normal does not", PLUS_NORMAL.finishWounded, false);
+}
+
 console.log("\n-- INSANE-ONLY MICRO (rejoin on arrival, send home, dispel summons) ------");
 {
   // The developer's: ranged soldiers walked out at low health rejoin once they reach the spot,
-  // melee ones under 12 % go home, and dispels go on enemy summons — "ONLY the Insane difficulty".
+  // anything under 15 % — heroes and ranged units too — goes home and rejoins at 22 %, and
+  // dispels go on enemy summons — "ONLY the Insane difficulty".
   check("Insane: a ranged pull-out rejoins on arrival", PLUS_INSANE.pullRejoin, true);
-  check("Insane: a melee soldier under 12 % goes home", PLUS_INSANE.sendHomeHp, 0.12);
+  check("Insane: a unit under 15 % goes home", PLUS_INSANE.sendHomeHp, 0.15);
+  check("…and is safe to rejoin at 22 %", PLUS_INSANE.rejoinHp, 0.22);
   check("…below the pull-out bar, so it is the later of the two", PLUS_INSANE.sendHomeHp < PLUS_INSANE.pullOutHp, true);
+  check("…and the rejoin bar above the trip's own", PLUS_INSANE.rejoinHp > PLUS_INSANE.sendHomeHp, true);
   check("Insane: dispels kill enemy summons", PLUS_INSANE.dispelSummons, true);
   for (const [name, p] of [["Normal", PLUS_NORMAL], ["Easy", PLUS_EASY]]) {
     check(`${name} does none of the three`, p.pullRejoin || p.sendHomeHp > 0 || p.dispelSummons, false);
