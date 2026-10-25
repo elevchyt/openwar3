@@ -571,6 +571,7 @@ export class AiCaster {
   /** The trigger half: does the caster want this ability RIGHT NOW, before anything is aimed?
    *  The gates that need the aim (cluster size, a wounded ally) are asked in `aim`. */
   private wants(u: SimUnit, def: AbilityDef, rule: CastRule, foes: SimUnit[]): boolean {
+    if (stripsOwnShield(def.code, u)) return false;
     switch (rule.when) {
       case "spam":
       case "ready":
@@ -865,6 +866,21 @@ export class AiCaster {
 /** "Preference for units with at least 75 mana" — the thread's own number, for Silence and
  *  reused by every "has mana worth burning" preference. */
 const SILENCE_MANA = 75;
+
+/**
+ * Would pressing `code` THROW AWAY the caster's own invulnerability?
+ *
+ * Mirror Image "Dispels all magic from the Blademaster" (`[AOmi]` Ubertip) — ALL of it, which
+ * the sim reads literally (`SimWorld.startMirrorImage` calls `wipeAllStatus`), so a Blademaster
+ * that presses it under a Potion of Invulnerability (or any other `invuln` buff) is dispelling
+ * his own shield in the middle of the fight it was drunk for. The developer's: "make sure that
+ * the AI doesn't use Mirror Image while under the effect of invulnerability". Asked by every
+ * caster that can press it — this file's `wants`, plus/casting.ts `wants` and plus/index.ts
+ * `mirrorVanguard`.
+ */
+export function stripsOwnShield(code: string, u: Pick<SimUnit, "invulnerable">): boolean {
+  return code === "AOmi" && u.invulnerable;
+}
 
 /** Is this ability aimed at friends? The same expression `SimWorld.tickAutocast` derives from
  *  `targs1`, and for the same reason: the ability's own Targets Allowed is the only thing that

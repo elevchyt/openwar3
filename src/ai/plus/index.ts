@@ -8,6 +8,7 @@ import { WeaponType } from "../../data/enums";
 import { ITEM_REGEN_GROUP, isOffField, pathDomain, type SimUnit, type SimWeapon } from "../../sim/world";
 import { simProfile, perfNow } from "../../sim/profile";
 import { AiPlayer, type AiHost, REGROUP_HP_FRACTION, TOWN_RADIUS } from "../aiPlayer";
+import { stripsOwnShield } from "../casting";
 import { PlusCaster } from "./casting";
 import { EnemyMemory, counterScore, type EnemyRead } from "./counter";
 import {
@@ -5871,6 +5872,7 @@ export class ComputerPlusAi {
       if (!u.isHero || isCopy(u) || u.hp <= 0 || u.inCombat) continue;
       const ab = u.abilities.find((a) => a.code === MIRROR_IMAGE && a.level > 0);
       if (!ab || world.castUseError(u.id, ab.code) !== null) continue;
+      if (stripsOwnShield(ab.code, u)) continue; // it would dispel his own invulnerability
       if (this.issue(b, { c: "cast", unitId: u.id, code: ab.code, targetId: 0, x: u.x, y: u.y, queued: false })) return u;
     }
     return undefined;

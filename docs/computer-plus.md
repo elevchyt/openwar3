@@ -2959,6 +2959,13 @@ The two halves cannot fight: `wants` needs `engaged` to re-light a `buff`, and `
 
 ### Mirror Image is the one buff whose effect is BODIES, not a buff
 
+**…and it is never pressed under INVULNERABILITY** (`stripsOwnShield`, src/ai/casting.ts). The
+press "Dispels all magic from the Blademaster" (`[AOmi]` Ubertip) and the sim takes that literally
+(`startMirrorImage` → `wipeAllStatus`), so under a Potion of Invulnerability it dispels the
+potion. The developer's: *"make sure that the AI doesn't use Mirror Image while under the effect
+of invulnerability"*. One rule, asked by all three places that press it: the Computer+ caster's
+`wants`, the creep vanguard (`mirrorVanguard`) and the classic AI's caster.
+
 Reported: the Computer+ orc *"seems to be spamming the Mirror Image ability instead of waiting for
 the mirror images (illusions) to die first"*. Everything else on the `buff` rung leaves something
 on the caster that `buffFree` can see, so a spell already up is never re-pressed — and `AOmi`

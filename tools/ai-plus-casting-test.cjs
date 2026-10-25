@@ -745,6 +745,16 @@ const pack = () => [unit({ owner: 1, x: 200 }), unit({ owner: 1, x: 260 })];
 {
   check("…and nothing is pressed with no fight at all", cast([caster({ abilId: "AOmi" })]), null);
 }
+{
+  // "Dispels all magic from the Blademaster" (`[AOmi]` Ubertip; the sim's `wipeAllStatus`) — his
+  // own Potion of Invulnerability included. The developer's: never press it under one.
+  const bm = caster({ abilId: "AOmi", invulnerable: true });
+  check("…nor while the Blademaster is INVULNERABLE (it would dispel his own potion)", cast([bm, ...pack()]), null);
+  const { stripsOwnShield } = require(join(REPO, ".sim-build", "src", "ai", "casting.js"));
+  check("the shared rule: Mirror Image under invulnerability throws it away", stripsOwnShield("AOmi", { invulnerable: true }), true);
+  check("…and without it does not", stripsOwnShield("AOmi", { invulnerable: false }), false);
+  check("…and no other button is held for it", stripsOwnShield("AOwk", { invulnerable: true }), false);
+}
 
 // ==========================================================================================
 console.log("\n-- The Destroyer devours magic, and a statue becomes one when it should ---------");

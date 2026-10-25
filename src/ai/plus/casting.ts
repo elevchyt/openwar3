@@ -1,7 +1,7 @@
 import { isRepairCode, NO_AOE_CURSOR, targetFlagSet, type AbilityDef, type AbilityLevel } from "../../data/abilities";
 import type { SimUnit } from "../../sim/world";
 import { DISPEL_CODES, POLARITY_SPELLS, worthDispelling } from "../../sim/spells";
-import { friendlySpell, near, treeAim, treeSpots, waveDistance, waveHalfWidth, type CasterView } from "../casting";
+import { friendlySpell, near, stripsOwnShield, treeAim, treeSpots, waveDistance, waveHalfWidth, type CasterView } from "../casting";
 import { MELEE } from "../../data/gameplayConstants";
 import { MELEE_INSANE, MELEE_NEWBIE, WIND_WALK } from "../ids";
 import type { PlusProfile } from "./profile";
@@ -1422,7 +1422,9 @@ export class PlusCaster {
         // MIRROR IMAGE IS NOT RE-PRESSED WHILE ITS OWN IMAGES ARE STILL WALKING — see
         // `MIRROR_IMAGE`. Reported: the Computer+ orc "seems to be spamming the Mirror Image
         // ability instead of waiting for the mirror images to die first".
-        if (def.code === MIRROR_IMAGE) return engaged && !this.imagesStanding(u);
+        // …nor while the Blademaster is INVULNERABLE: the press dispels everything on him, his
+        // own Potion of Invulnerability included (`stripsOwnShield`).
+        if (def.code === MIRROR_IMAGE) return engaged && !stripsOwnShield(def.code, u) && !this.imagesStanding(u);
         return engaged;
     }
   }
