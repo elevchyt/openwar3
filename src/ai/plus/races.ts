@@ -261,6 +261,33 @@ export interface PlusStrategy {
   readonly lead?: Readonly<Record<string, number>>;
   /** The build's own POWER SPIKE, over the race's (`PlusRaceTable.powerSpike`). */
   readonly powerSpike?: PowerSpike;
+  /**
+   * Units of the mix that wait for something ELSE to be true first — the unit is left out of the
+   * mix (and its producer is not put up for it) until the condition holds (plan.ts
+   * `activeStrategy`). A `PowerSpike` because it is the same kind of question: a research rank,
+   * a count of a unit, a tier.
+   *
+   * The developer's two, both "this unit is the SECOND thing the tier is for": the human's
+   * Gryphon Riders *"if too many knights"* (`units: [KNIGHT, n]`), and the orc's Taurens *"after
+   * getting berserkers"* (`research: [Robk, 1]`).
+   */
+  readonly waitFor?: Readonly<Record<string, PowerSpike>>;
+  /**
+   * The build's CARRY — a hero that is not its opener but is the one the build is played
+   * around: the Far Seer opening's Tauren Chieftain, *"basically the carry (similar to demon
+   * hunter and blademaster)… its goal must be to gain a lot of levels and items through creep
+   * camps and shops"* (the developer). While he is alive he is the army's CAPTAIN (index.ts
+   * `squadHero`: the hero the party musters on and creeps behind), and he is served FIRST by the
+   * shops and the loot (plus/items.ts `ItemCtx.carry`). An opener needs no such clause — the
+   * first hero already is all three.
+   */
+  readonly carry?: string;
+  /**
+   * The SECOND town is due the moment this hall tier stands, whatever `expandAt` says, and the
+   * row moves up the ladder with it the way a won fight's expansion does (plan.ts `expand`).
+   * The Blademaster openings': *"try to harass or expand upon reaching tier 2"*.
+   */
+  readonly expandWithTier?: number;
 }
 
 /**
@@ -374,6 +401,21 @@ export interface PlusRaceTable {
    * races to its second tier rather than last.
    */
   readonly tier2Clock?: number;
+  /**
+   * The army this race keeps on the field while it SAVES for its second tier — plan.ts
+   * `TIER2_ARMY` (8 food: a hero and one soldier) unless a race says otherwise. It is both the
+   * army the tier row insists on before it asks and the army the core row stops growing at
+   * once the tier is overdue (`coreArmy`).
+   *
+   * The human says otherwise, and `tier2Clock` is why: its tier-up is due at TWO minutes, so the
+   * hold began before the first Rifleman was out and lasted until the Keep stood at six and a
+   * half — the developer's "human not having enough units early". Measured over 48 Insane
+   * matches (Echo Isles): two Riflemen at seven minutes, the smallest army of the four races at
+   * every checkpoint (4.9 units at 7:00 against 6.7–7.7), and 6 wins in 20 decided games. The
+   * other three races hold the same 8 food but either tier at three minutes or field their
+   * lumber crew as soldiers (the undead's Ghouls). OURS.
+   */
+  readonly tier2Army?: number;
   /**
    * The race's TIER-3 clock, if its tier 3 IS its plan: from here the third hall is asked for
    * HIGH in the ladder (plan.ts `tier3Due`), above the tech buildings, the smith's upgrades, the
@@ -573,6 +615,9 @@ const HUMAN: PlusRaceTable = {
   ],
   // A MINUTE EARLIER THAN THE OTHER THREE — see `PlusRaceTable.tier2Clock`.
   tier2Clock: 120,
+  // …and a hero and FOUR soldiers on the field while it saves (5 + 4 × 3 for the Rifleman the
+  // three rifle builds field), not a hero and one — see `PlusRaceTable.tier2Army`.
+  tier2Army: 17,
   shop: ARCANE_VAULT,
   // THE FLYING MACHINE, off one Workshop — the developer's own example of the rule
   // (`PlusRaceTable.antiAir`). It is the human's dedicated answer: `hgyr` shoots air and nothing
@@ -651,20 +696,20 @@ const HUMAN: PlusRaceTable = {
     // opens on Footmen. Paladin first, then the Blood Mage (the race's `combos` row for him).
     // A ranged line holds ground, so it takes its second mine early.
     { id: "rifles", name: "Riflemen, Priests and Mortars", tier: 2, weight: 26, expandAt: 240, expandAgainAt: 660,
-      heroes: [PALADIN, BLOOD_MAGE, MTN_KING, ARCHMAGE], thenAt3: "rifleknights", thenAt3Or: ["riflegryphons"],
+      heroes: [PALADIN, BLOOD_MAGE, MTN_KING, ARCHMAGE], thenAt3: "knightpriests",
       mix: { [RIFLEMAN]: 3, [PRIEST]: 1.2, [MORTAR]: 0.8 } },
     // THE DOUBLE ARCANE SANCTUM. Footmen at tier 1, and at tier 2 a SECOND Sanctum pouring out
     // the three units that come out of it — the Spell Breaker being the army and the other two
     // the support. The second building IS the build: one Sanctum makes one caster at a time.
     { id: "sanctums", name: "Double Arcane Sanctum", tier: 2, weight: 24, expandAt: 330, expandAgainAt: 750,
       heroes: [ARCHMAGE, MTN_KING, PALADIN, BLOOD_MAGE],
-      factories: { [SANCTUM]: 2 }, thenAt3: "sanctumknights", thenAt3Or: ["sanctumgryphons"],
+      factories: { [SANCTUM]: 2 }, thenAt3: "knightpriests",
       mix: { [FOOTMAN]: 2, [SPELL_BREAKER]: 2, [SORCERESS]: 1.5, [PRIEST]: 1.5 } },
     // RIFLES AND PRIESTS — the same opening as `rifles`, with the Sanctum rather than the
     // Workshop behind it and the Riflemen never stopping.
     { id: "riflecaster", name: "Riflemen and Priests", tier: 2, weight: 22, expandAt: 270, expandAgainAt: 690,
       powerSpike: { tier: 2, armyFood: 46 },
-      heroes: [ARCHMAGE, MTN_KING, PALADIN, BLOOD_MAGE], thenAt3: "rifleknights", thenAt3Or: ["riflegryphons"],
+      heroes: [ARCHMAGE, MTN_KING, PALADIN, BLOOD_MAGE], thenAt3: "knightpriests",
       mix: { [RIFLEMAN]: 3, [PRIEST]: 1.5, [SORCERESS]: 0.5 } },
     // THE CLASSIC TIER-3 ARMY, and the build both rifle openings GROW INTO (`thenAt3`): Knights,
     // Priests, Mortar Teams and a few Flying Machines. Rollable on its own too, in which case
@@ -674,29 +719,38 @@ const HUMAN: PlusRaceTable = {
     // build fielded nothing but Footmen for its first ten minutes. At tier 3 the same row is
     // the ranged line the Knights stand in front of, and it is what both rifle builds have
     // massed by the time they grow into this one.
+    //
+    // At the Castle it grows into the Knight army every human build ends in (`knightpriests`);
+    // until then it is the rifle line with its Priests and Mortars.
     { id: "knights", name: "Knights, Riflemen and Priests", tier: 3, weight: 20, expandAt: 420, expandAgainAt: 840,
-      heroes: [PALADIN, BLOOD_MAGE, MTN_KING, ARCHMAGE],
-      mix: { [KNIGHT]: 3, [RIFLEMAN]: 2, [PRIEST]: 1.5, [MORTAR]: 0.8, [COPTER]: 0.5 } },
+      heroes: [PALADIN, BLOOD_MAGE, MTN_KING, ARCHMAGE], thenAt3: "knightpriests",
+      mix: { [RIFLEMAN]: 3, [PRIEST]: 1.5, [MORTAR]: 0.8 } },
     // Air is the slowest build to come online, so it is the last to look up from its own base.
     { id: "gryphons", name: "Gryphon Riders", tier: 3, weight: 12, expandAt: 480, expandAgainAt: 900,
       mix: { [GRYPHON]: 3, [HUMAN_DRAGON_HAWK]: 1, [RIFLEMAN]: 1.5, [PRIEST]: 1 } },
-    // THE TIER-3 TRANSITIONS — never rolled (weight 0), only grown into (`thenAt3`/`thenAt3Or`).
-    // The developer: a Paladin + Riflemen + Blood Mage human *"must eventually get a few Knights
-    // as well when they reach tier 3 (they should keep getting riflemen though). also another
-    // transition/variation of that build is to get gryphon riders … both of these variations are
-    // very common no matter the build (could be a typical Archmage and Mountain King build)"*.
-    // So the RIFLE army keeps its Riflemen as the bulk and adds a few Knights or the Gryphons,
-    // and the SANCTUM army keeps its casters and its two Sanctums and does the same.
-    { id: "rifleknights", name: "Riflemen and Knights", tier: 3, weight: 0, expandAt: 420, expandAgainAt: 840,
-      mix: { [RIFLEMAN]: 3, [KNIGHT]: 1.5, [PRIEST]: 1.2, [MORTAR]: 0.6 } },
-    { id: "riflegryphons", name: "Riflemen and Gryphon Riders", tier: 3, weight: 0, expandAt: 420, expandAgainAt: 840,
-      mix: { [RIFLEMAN]: 3, [GRYPHON]: 1.8, [PRIEST]: 1.2 } },
-    { id: "sanctumknights", name: "Knights and Arcane Sanctum casters", tier: 3, weight: 0, expandAt: 420, expandAgainAt: 840,
-      factories: { [SANCTUM]: 2 },
-      mix: { [FOOTMAN]: 1, [KNIGHT]: 2, [SPELL_BREAKER]: 1.5, [SORCERESS]: 1.2, [PRIEST]: 1.2 } },
-    { id: "sanctumgryphons", name: "Gryphon Riders and Arcane Sanctum casters", tier: 3, weight: 0, expandAt: 420, expandAgainAt: 840,
-      factories: { [SANCTUM]: 2 },
-      mix: { [FOOTMAN]: 1.5, [GRYPHON]: 2, [SPELL_BREAKER]: 1.5, [SORCERESS]: 1, [PRIEST]: 1.2 } },
+    // THE HUMAN TIER 3 — never rolled (weight 0), and what every human tier-2 build grows into
+    // (`thenAt3`). The developer: *"the tier 3 build that makes humans beat undead is knights +
+    // 2-3 flying machines + priests with master training (for inner fire on knights and heroes).
+    // if too many knights, gryphon riders can be bought as well. this way, human will be strong
+    // in the late game similar to the undead and night elf."*
+    //
+    //  · KNIGHTS are the army — `[hkni] Requires=hlum,hcas,hbla`, the Castle's own unit;
+    //  · PRIESTS behind them, whose Master Training is INNER FIRE (`UPG_PRAYING` rank 2, an unlock
+    //    row bought the moment the Castle stands). The autocast is the sim's and lands on whoever
+    //    is swinging, which in this army is the Knights and the heroes (world.ts `FIGHTER_BUFFS`);
+    //  · THREE FLYING MACHINES as a COUNT and not a share (`lead`), because the developer's number
+    //    is a number: a share of a 70-food army is a dozen of them, and a share of a 20-food one
+    //    none. They are the army's eyes and its answer to a Gargoyle or a Frost Wyrm;
+    //  · and GRYPHON RIDERS once there are already six Knights (`waitFor`) — "if too many
+    //    knights", which is to say once the Knights are not what the next 280 gold is short of.
+    //    Six is OURS.
+    //
+    // It replaces four transitions (Riflemen + a few Knights or Gryphons, Sanctum casters + a few
+    // Knights or Gryphons) that kept the tier-2 army as the bulk and added the Castle's units on
+    // top of it.
+    { id: "knightpriests", name: "Knights, Priests and Flying Machines", tier: 3, weight: 0, expandAt: 420, expandAgainAt: 840,
+      lead: { [COPTER]: 3 }, waitFor: { [GRYPHON]: { units: [KNIGHT, 6] } },
+      mix: { [KNIGHT]: 3, [PRIEST]: 1.5, [GRYPHON]: 1.5 } },
   ],
   heroes: [ARCHMAGE, PALADIN, MTN_KING, BLOOD_MAGE],
   skills: {
@@ -798,95 +852,85 @@ const ORC: PlusRaceTable = {
     { id: UPG_ORC_PULVERIZE, from: TOTEM, ranks: 1, after: 30 },
   ],
   strategies: [
-    // FAR SEER AND HEAD HUNTERS — a tier-1 build (the War Mill, then the hunters) that is KEPT
-    // and enriched at tier 2 rather than replaced: the Spirit Lodge and the Beastiary go up
-    // behind the same hunters. Feral Spirit is what makes it the creeping opening, and the
-    // second hero is the Shadow Hunter or the Tauren Chieftain.
-    { id: "headhunters", name: "Head Hunters, Shamans and Kodos", tier: 2, weight: 28, expandAt: 270, expandAgainAt: 690,
-      heroes: [FAR_SEER, SHADOW_HUNTER, TAUREN_CHIEF, BLADE_MASTER], thenAt3: "taurens",
-      mix: { [HEAD_HUNTER]: 3, [SHAMAN]: 1.2, [KODO_BEAST]: 0.8, [WITCH_DOCTOR]: 0.6 } },
-    // BLADEMASTER, GRUNTS AND HEAD HUNTERS, enriched at tier 2 with the whole Beastiary —
-    // Raiders, a Kodo, Wind Riders — and the Shamans behind them. Always the Shadow Hunter
-    // second. Raiders want to be somewhere the enemy is not, so the second mine comes later.
-    { id: "grunts", name: "Grunts, Head Hunters and Raiders", tier: 2, weight: 26, expandAt: 330, expandAgainAt: 750,
-      heroes: [BLADE_MASTER, SHADOW_HUNTER, FAR_SEER, TAUREN_CHIEF], thenAt3: "taurens",
-      mix: { [GRUNT]: 3, [HEAD_HUNTER]: 1.5, [RAIDER]: 1.5, [SHAMAN]: 1, [KODO_BEAST]: 0.6, [WYVERN]: 0.8 } },
-    // TAUREN CHIEFTAIN AND MASS GRUNTS — the simple one, and the one that grows into the Tauren
-    // build proper when the Fortress lands (`thenAt3`). At tier 2 the Beastiary adds the Kodo,
-    // the Wind Riders and the bats.
-    { id: "massgrunts", name: "Grunts, Kodos and Wind Riders", tier: 2, weight: 22, expandAt: 300, expandAgainAt: 720,
-      heroes: [TAUREN_CHIEF, SHADOW_HUNTER, FAR_SEER, BLADE_MASTER], thenAt3: "taurens",
-      mix: { [GRUNT]: 3.5, [KODO_BEAST]: 0.8, [WYVERN]: 1, [BATRIDER]: 0.5, [SHAMAN]: 0.8 } },
-    // …AND THE SAME CHIEFTAIN OVER TROLLS INSTEAD OF GRUNTS. The Tauren Chieftain's two skills
-    // are an AURA and a STUN, and neither of them cares what is standing under it: Endurance
-    // Aura is movement and attack speed, which a Head Hunter turns into damage at range rather
-    // than into a faster walk to the front, and War Stomp is what a ranged line needs most —
-    // the two seconds where nothing is hitting the trolls back. So "Chieftain and mass Grunts"
-    // and "Chieftain and mass Head Hunters" are two real builds off one hero rather than one
-    // build with a substitution, and this is the second of them.
+    // THE ORC PLAYS TWO OPENINGS, and each goes one of two ways at tier 2. The developer's:
+    // *"the orc basically plays two builds, a blademaster opening (which is similar to night
+    // elf's demon hunter opening) and a far seer opening"*, and at tier 2 *"Orc players tend to
+    // build two Bestiaries (for pumping out raiders + ensnare along with a single Kodo Beast for
+    // its aura), which is an aggressive build that allows the orc to dominate the map during its
+    // tier 2 to contest creep camps fast and expand with ease or be aggressive against an
+    // opponent's expo OR the more standard build where they build one bestiary for raiders +
+    // ensnare + 1 kodo beast and one spirit lodge for shamans and they try to reach tier 3 to get
+    // the berserker upgrade along with master training on their shamans"*. So four builds, an
+    // opening by a tier-2 plan, and all four grow into the same tier 3 (`taurens`):
     //
-    // `[ohun] Requires=ofor`, and the War Mill is already the orc's tier-1 support row, so the
-    // hunters are an OPENING here exactly as they are in `headhunters` above. What separates
-    // the two builds is the plan around the same unit: this one leads with the Chieftain, buys
-    // Kodo Beasts for the War Drums the aura stacks with, and grows into the Tauren army at
-    // tier 3 — where the Head Hunters become the line the Taurens walk in front of, which is
-    // what `taurens` already names its Grunt row for.
+    //  · the KODO is a COUNT and not a share (`lead`) — one, for its War Drums aura;
+    //  · ENSNARE is an unlock row off the Beastiary (`upgrades`), bought the moment it stands —
+    //    *"the orc is still strong when it gets the Ensnare as it can pick off units with its
+    //    raiders"*;
+    //  · the TWO-BEASTIARY plan is a tier-2 army, so it names its own tier-3 clock (`tier3Clock`,
+    //    which a build's own clock holds against the Insane rush — plan.ts `tier3Due`) and takes
+    //    its second mine with the Stronghold (`expandWithTier`). 600 s is OURS: about two minutes
+    //    of the Stronghold's map control before the Fortress is saved for;
+    //  · the STANDARD plan rushes tier 3 like every other Insane build (`PlusProfile.tier3Rush`).
     //
-    // Expands between the two: a ranged line holds ground the way `headhunters` does (270 s),
-    // but this one is saving for the Fortress that `thenAt3` is pointed at, the way `massgrunts`
-    // does (300 s).
-    //
-    // No flyer in the mix, unlike its Grunt twin, and that is the unit rather than an omission:
-    // `ohun` is `targs1 = ground,structure,debris,AIR,item,ward` (UnitWeapons.slk), so the mass
-    // IS the answer to air. `antiAir` is still there for a build that meets nothing but Gargoyles.
-    { id: "masshunters", name: "Head Hunters, Kodos and Witch Doctors", tier: 2, weight: 20, expandAt: 285, expandAgainAt: 705,
-      heroes: [TAUREN_CHIEF, SHADOW_HUNTER, FAR_SEER, BLADE_MASTER], thenAt3: "taurens",
-      mix: { [HEAD_HUNTER]: 3.5, [KODO_BEAST]: 1, [WITCH_DOCTOR]: 0.8, [SHAMAN]: 0.8 } },
-    // THE TAUREN ARMY — the orc's standard tier 3, and the build EVERY orc tier-2 build grows
-    // into (`thenAt3`). The developer's: *"the standard tier 3 build for orc is Taurens along
-    // with Berserkers and Shamans using Bloodlust on both"*. So three things and nothing else:
-    // the Taurens in front; the Head Hunters behind them, who ARE the Berserkers — `[Robk]`
-    // (an unlock row above, bought the moment the Fortress stands) swaps every `ohun` for an
-    // `otbk` and takes `ohun` off the Barracks' shelf, and `AiPlayer.replacedBy` trains the
-    // Berserker wherever this row names the Head Hunter; and the Shamans, whose Master Training
-    // (`Rost` rank 2, also an unlock row) is BLOODLUST, an autocast the sim lays on whoever is
-    // swinging — Tauren and Berserker alike (world.ts `FIGHTER_BUFFS`). The Berserker is also
-    // the answer to air (`ohun`/`otbk` `targs1` include AIR); `antiAir` still adds Wind Riders
-    // against an army that is mostly flyers. (It carried Grunts, Wind Riders and Witch Doctors
-    // beside a smaller troll share; a Grunt opening's Grunts still stand, they are just not
-    // rebuilt.)
-    { id: "taurens", name: "Taurens, Berserkers and Shamans", tier: 3, weight: 18, expandAt: 420, expandAgainAt: 840,
-      heroes: [TAUREN_CHIEF, SHADOW_HUNTER, FAR_SEER, BLADE_MASTER],
+    // The BLADEMASTER openings are played FOR the Blademaster: *"get as many levels as possible
+    // on the blademaster and try to harass or expand upon reaching tier 2 (shadow hunter must be
+    // trained as fast as possible upon reaching tier 2)"* — so the second mine comes with the
+    // Stronghold (`expandWithTier`), and the Shadow Hunter is the second hero (`combos`), whom
+    // `tierTwoHero` buys above everything else the Stronghold makes affordable. Grunts at tier 1;
+    // the standard plan adds the Head Hunters the Berserker Upgrade is for.
+    { id: "bmraiders", name: "Blademaster, Grunts and two Beastiaries", tier: 2, weight: 25, expandAt: 330, expandAgainAt: 750,
+      heroes: [BLADE_MASTER, SHADOW_HUNTER, TAUREN_CHIEF, FAR_SEER], expandWithTier: 2, tier3Clock: 600,
+      factories: { [BESTIARY]: 2 }, lead: { [KODO_BEAST]: 1 }, thenAt3: "taurens",
+      mix: { [GRUNT]: 2, [RAIDER]: 3 } },
+    { id: "bmstandard", name: "Blademaster, Grunts, Raiders and Shamans", tier: 2, weight: 25, expandAt: 330, expandAgainAt: 750,
+      heroes: [BLADE_MASTER, SHADOW_HUNTER, TAUREN_CHIEF, FAR_SEER], expandWithTier: 2,
+      lead: { [KODO_BEAST]: 1 }, thenAt3: "taurens",
+      mix: { [GRUNT]: 2, [HEAD_HUNTER]: 1.5, [RAIDER]: 1.5, [SHAMAN]: 1.2 } },
+    // The FAR SEER openings are played for the TAUREN CHIEFTAIN: *"for far seer opening, the
+    // goal is to get a tauren chieftain as the second hero as soon as tier 2 is reached, and the
+    // tauren chieftain is basically the "carry" … its goal must be to gain a lot of levels and
+    // items through creep camps and shops"* — `carry`, which makes him the army's captain and the
+    // first in line at a shop and at a drop — and *"when going Far Seer the computer+ (iNSANE) AI
+    // must focus on mass producing head hunters while also teching up"*: the Head Hunter is the
+    // army at every tier (`[ohun] Requires=ofor`, the War Mill the race's support row puts up),
+    // and the standard plan pours it out of two Barracks.
+    { id: "fsraiders", name: "Far Seer, Head Hunters and two Beastiaries", tier: 2, weight: 25, expandAt: 300, expandAgainAt: 720,
+      heroes: [FAR_SEER, TAUREN_CHIEF, SHADOW_HUNTER, BLADE_MASTER], carry: TAUREN_CHIEF, expandWithTier: 2, tier3Clock: 600,
+      factories: { [BESTIARY]: 2 }, lead: { [KODO_BEAST]: 1 }, thenAt3: "taurens",
+      mix: { [HEAD_HUNTER]: 3, [RAIDER]: 2.5 } },
+    { id: "fsstandard", name: "Far Seer, mass Head Hunters, Raiders and Shamans", tier: 2, weight: 25, expandAt: 270, expandAgainAt: 690,
+      heroes: [FAR_SEER, TAUREN_CHIEF, SHADOW_HUNTER, BLADE_MASTER], carry: TAUREN_CHIEF,
+      factories: { [ORC_BARRACKS]: 2 }, lead: { [KODO_BEAST]: 1 }, thenAt3: "taurens",
+      mix: { [HEAD_HUNTER]: 3.5, [RAIDER]: 1.2, [SHAMAN]: 1.2 } },
+    // THE ORC TIER 3 — never rolled (weight 0), only grown into. The developer's: *"Taurens can be
+    // added on tier 3 after getting berserkers along with shamans with master training for their
+    // bloodlust ability"*. So three things and nothing else: the Head Hunters, who ARE the
+    // Berserkers — `[Robk]` (an unlock row above, bought the moment the Fortress stands) swaps
+    // every `ohun` for an `otbk` and takes `ohun` off the Barracks' shelf, and
+    // `AiPlayer.replacedBy` trains the Berserker wherever this row names the Head Hunter; the
+    // Shamans, whose Master Training (`Rost` rank 2, also an unlock row) is BLOODLUST, an autocast
+    // the sim lays on whoever is swinging (world.ts `FIGHTER_BUFFS`); and the Taurens, which wait
+    // for the Berserker Upgrade (`waitFor`) and then go in front. The Berserker is also the answer
+    // to air (`ohun`/`otbk` `targs1` include AIR); `antiAir` still adds Batriders against an army
+    // that is mostly flyers. What the opening fielded — Grunts, Raiders — still stands; it is just
+    // not rebuilt.
+    { id: "taurens", name: "Berserkers, Shamans and Taurens", tier: 3, weight: 0, expandAt: 420, expandAgainAt: 840,
+      waitFor: { [TAUREN]: { research: [UPG_ORC_BERSERKER, 1] } },
       mix: { [TAUREN]: 3, [HEAD_HUNTER]: 2.5, [SHAMAN]: 1.5 } },
-    { id: "wyverns", name: "Wind Riders and Batriders", tier: 3, weight: 12, expandAt: 450, expandAgainAt: 870,
-      mix: { [WYVERN]: 3, [BATRIDER]: 0.8, [HEAD_HUNTER]: 1.5, [SHAMAN]: 1 } },
-    // THE HEAD HUNTER RUSH — INSANE ONLY, and half of every Far Seer opening there (`replaces`).
-    // The developer's: "mass builds a lot of headhunters and gets either Fire Lord (Summon Lava
-    // Spawn) or Beastmaster (Summon Quilbeast or Bear) as the second hero from the tavern … and
-    // tries to rush the opponent as much as possible (delay its main hall upgrade to have more
-    // resources to mass low tier units)". So: two Barracks pouring Head Hunters, the Stronghold
-    // held back to six minutes (`tier2Clock` — it STANDS about two and a half minutes later, once
-    // the upgrade is saved for and built: held to seven it stood at ten, measured live), and the
-    // wave out before the hero has creeped to three (`rush`). A tavern hero is a hero like any
-    // other — he arrives with the Stronghold, so the hall's delay is also the summoner's. Expands
-    // late, like every rush.
-    { id: "hhrush", name: "Head Hunter rush", tier: 2, weight: 0, expandAt: 480, expandAgainAt: 840,
-      replaces: { first: [FAR_SEER], chance: 0.5 }, rush: true, tier2Clock: 360,
-      combo: { second: [FIRE_LORD, BEASTMASTER], third: [[ALCHEMIST], [TAUREN_CHIEF, SHADOW_HUNTER]] },
-      factories: { [ORC_BARRACKS]: 2 }, thenAt3: "taurens",
-      mix: { [HEAD_HUNTER]: 4, [GRUNT]: 1.2, [SHAMAN]: 0.6, [WITCH_DOCTOR]: 0.4 } },
   ],
   heroes: [BLADE_MASTER, FAR_SEER, TAUREN_CHIEF, SHADOW_HUNTER],
   skills: {
-    // Both of the Blademaster's real openings, beside the Critical Strike that is never in
-    // question. Wind Walk is the harassing one — the backstab, and an exit (plus/casting.ts
-    // `windWalkRole` plays it as both); Mirror Image is the creeping one, three more bodies
-    // for the camp to swing at.
+    // CRITICAL STRIKE FIRST AND MAXED FIRST, whichever skill goes beside it — the developer's
+    // *"the blademaster must always max out/level up Critical Strike first"*. The choice is the
+    // second skill: Wind Walk is the harassing one — the backstab, and an exit (plus/casting.ts
+    // `windWalkRole` plays it as both); Mirror Image is the creeping one, three more bodies for
+    // the camp to swing at.
     [BLADE_MASTER]: [
-      [WIND_WALK, CRITICAL_STRIKE, WIND_WALK, CRITICAL_STRIKE, WIND_WALK,
-        BLADE_STORM, CRITICAL_STRIKE, MIRROR_IMAGE, MIRROR_IMAGE, MIRROR_IMAGE],
-      [MIRROR_IMAGE, CRITICAL_STRIKE, MIRROR_IMAGE, CRITICAL_STRIKE, MIRROR_IMAGE,
-        BLADE_STORM, CRITICAL_STRIKE, WIND_WALK, WIND_WALK, WIND_WALK],
+      [CRITICAL_STRIKE, WIND_WALK, CRITICAL_STRIKE, WIND_WALK, CRITICAL_STRIKE,
+        BLADE_STORM, WIND_WALK, MIRROR_IMAGE, MIRROR_IMAGE, MIRROR_IMAGE],
+      [CRITICAL_STRIKE, MIRROR_IMAGE, CRITICAL_STRIKE, MIRROR_IMAGE, CRITICAL_STRIKE,
+        BLADE_STORM, MIRROR_IMAGE, WIND_WALK, WIND_WALK, WIND_WALK],
     ],
     [FAR_SEER]: [[CHAIN_LIGHTNING, SPIRIT_WOLF, CHAIN_LIGHTNING, SPIRIT_WOLF, CHAIN_LIGHTNING,
       EARTHQUAKE, SPIRIT_WOLF, FAR_SIGHT, FAR_SIGHT, FAR_SIGHT]],
@@ -909,16 +953,18 @@ const ORC: PlusRaceTable = {
     ],
     ...TAVERN_SKILLS,
   },
-  // BLADEMASTER → ALWAYS the Shadow Hunter. FAR SEER → the Tauren Chieftain or the Shadow Hunter,
-  // even odds. TAUREN CHIEFTAIN → ALWAYS the Shadow Hunter (the heal and the Hex his line has no
-  // other source of), then the Alchemist or the Far Seer — and NEVER a Blademaster, which is two
-  // melee heroes and no sustain ("a very wrong build", the developer). The third is otherwise
-  // the Alchemist, or whichever of those two is still missing.
+  // BLADEMASTER → ALWAYS the Shadow Hunter, then the Tauren Chieftain. FAR SEER → ALWAYS the
+  // Tauren Chieftain (the build's carry), then the Shadow Hunter. The developer's: *"third hero is
+  // usually shadow hunter or tauren chieftain depending on which one was bought second (the one
+  // or the other)"*.
   combos: {
-    [BLADE_MASTER]: { second: [SHADOW_HUNTER], third: [[ALCHEMIST], [TAUREN_CHIEF, SHADOW_HUNTER]] },
-    [FAR_SEER]: { second: [TAUREN_CHIEF, SHADOW_HUNTER], third: [[ALCHEMIST], [TAUREN_CHIEF, SHADOW_HUNTER]] },
-    [TAUREN_CHIEF]: { second: [SHADOW_HUNTER], third: [[ALCHEMIST], [FAR_SEER, SHADOW_HUNTER]] },
-    "*": { third: [[ALCHEMIST], [TAUREN_CHIEF, SHADOW_HUNTER, FAR_SEER]] },
+    [BLADE_MASTER]: { second: [SHADOW_HUNTER], third: [[TAUREN_CHIEF]] },
+    [FAR_SEER]: { second: [TAUREN_CHIEF], third: [[SHADOW_HUNTER]] },
+    // No build here opens on the Tauren Chieftain any more, but a hero order that does (a
+    // reordered build, a later table) still takes the Shadow Hunter beside him and never a
+    // Blademaster — two melee heroes and no sustain, "a very wrong build" (the developer).
+    [TAUREN_CHIEF]: { second: [SHADOW_HUNTER], third: [[FAR_SEER, SHADOW_HUNTER]] },
+    "*": { third: [[TAUREN_CHIEF, SHADOW_HUNTER, FAR_SEER]] },
   },
 };
 

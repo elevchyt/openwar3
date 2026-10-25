@@ -379,6 +379,13 @@ const ROLE_OF = new Map<string, Role>(
  * transform family and every "the thread records nothing" entry have moved into the table
  * above. What is left is the three kinds of button that are not a combat decision at all:
  */
+/** Unstable Concoction's two bars (`concoction`): this many enemy flyers in the blast… */
+const CONCOCTION_AIR = 3;
+/** …or this many Batriders' worth of hit points taken. OURS, both. */
+const CONCOCTION_TRADE = 2;
+/** …and how far past its cast range a Batrider looks for one — it is a flyer, it gets there. */
+const CONCOCTION_REACH = 300;
+
 const NEVER = new Set<string>([
   // 1. Jobs that belong to other parts of the AI, not to a caster.
   "Aent", // Entangle Gold Mine — the economy's (AiPlayer.entangleMines)
@@ -402,6 +409,7 @@ const NEVER = new Set<string>([
   // 2. Buttons that spend the unit itself. A human uses a Sapper; an AI with no read on
   //    whether the trade is worth it uses them on a Footman. Left out until it can be judged.
   "Asds", // Kaboom!
+  // Unstable Concoction is judged on its own instead, against enemy AIR — see `concoction`.
   "Auco", // Unstable Concoction
   "Adtn", // Detonate — a Wisp is a worker, and the economy has already assigned it
   // ABSORB MANA takes ALL of one of our own units' mana — `[Aabs] targs1 = player`, which the
@@ -1129,6 +1137,8 @@ export class PlusCaster {
     // `dispelSummon`. Above the whole ladder, because the button is the cheapest kill there is
     // and the summon is only on the field for its own short clock.
     if (this.profile.dispelSummons && this.dispelSummon(u, friends, foes)) return true;
+    // …and a BATRIDER worth trading for the air it would take with it — see `concoction`.
+    if (this.concoction(u, foes)) return true;
     // THE BREWMASTER'S HAZE GOES BEFORE HIS BREATH — see `DRUNKEN_HAZE`.
     if (this.hazeFirst(u, foes, engaged)) return true;
     const flaskFlying = this.now - (this.hazedAt.get(u.id) ?? -Infinity) < HAZE_LAND;
@@ -1338,6 +1348,58 @@ export class PlusCaster {
       if (spot && this.view.order({ c: "cast", unitId: u.id, code: ab.code, targetId: 0, x: spot.x, y: spot.y, queued: false })) return true;
     }
     return false;
+  }
+
+  /**
+   * UNSTABLE CONCOCTION — the Batrider flies into an enemy flyer and explodes: `DataB` to the one
+   * it hits and `DataD` to every other enemy AIR unit within `DataC`, and the Batrider dies
+   * (spells.ts `Auco`). The developer's: *"batriders can use Unstable Concoction to kill a bunch
+   * of air units of the enemy"*.
+   *
+   * It spends the unit, which is why it sat on `NEVER`: pressed at the first flyer in reach, it
+   * trades 160 gold of Batrider for a Gryphon's scratch. So it is pressed only where the trade is
+   * plainly good, and both bars are OURS:
+   *
+   *  · a CLUSTER — `CONCOCTION_AIR` enemy flyers inside the blast, the one it hits included —
+   *    which is what "a bunch of air units" means;
+   *  · or a BIG ONE — hit points taken (each body's share capped at what it has left) of at least
+   *    `CONCOCTION_TRADE` Batriders' worth of life: a Frost Wyrm or a Chimaera, alone.
+   *
+   * Never on Easy, which does not know the button exists. Aimed at the target that takes the most.
+   */
+  private concoction(u: SimUnit, foes: SimUnit[]): boolean {
+    if (this.profile.difficulty === MELEE_NEWBIE) return false;
+    const ab = u.abilities.find((a) => a.level >= 1 && a.cooldownLeft <= 0 && this.view.def(a.id)?.code === "Auco");
+    if (!ab) return false;
+    const def = this.view.def(ab.id);
+    const lvl = def?.levelData[Math.min(ab.level, def.levelData.length) - 1];
+    if (!def || !lvl) return false;
+    if (this.view.world.castUseError(u.id, ab.code) !== null) return false;
+    if (this.ctx.holds?.(u, ab.code)) return false;
+    const air = foes.filter((f) => f.flying && f.hp > 0 && !f.invulnerable && !f.building);
+    if (!air.length) return false;
+    const direct = lvl.data[1] || 600;
+    const radius = lvl.data[2] || 200;
+    const splash = lvl.data[3] || 140;
+    const reach = lvl.castRange + CONCOCTION_REACH;
+    let best: SimUnit | null = null;
+    let bestValue = 0;
+    for (const t of air) {
+      if (!near(u, t, reach)) continue;
+      let caught = 0;
+      let value = 0;
+      for (const e of air) {
+        if (e !== t && Math.hypot(e.x - t.x, e.y - t.y) > radius) continue;
+        caught++;
+        value += Math.min(e.hp, e === t ? direct : splash);
+      }
+      if (caught < CONCOCTION_AIR && value < u.maxHp * CONCOCTION_TRADE) continue;
+      if (value <= bestValue) continue;
+      if (this.view.world.castError(u.id, ab.code, t.id) !== null) continue;
+      best = t;
+      bestValue = value;
+    }
+    return !!best && this.view.order({ c: "cast", unitId: u.id, code: ab.code, targetId: best.id, x: 0, y: 0, queued: false });
   }
 
   /**

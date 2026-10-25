@@ -3298,6 +3298,7 @@ export class ComputerPlusAi {
       // our own shop, once the second tier stands.
       defending: b.mode === "defending",
       tier: this.tier(b),
+      carry: b.strategy.carry,
     };
   }
 
@@ -8179,7 +8180,9 @@ export class ComputerPlusAi {
     const alive: SimUnit[] = [];
     for (const u of this.squadUnits(b)) if (u.isHero && u.hp > 0) alive.push(u);
     if (!alive.length) return null;
-    for (const id of [b.ai.heroId, b.ai.heroId2, b.ai.heroId3]) {
+    // The build's CARRY leads while he lives (`PlusStrategy.carry`) — the army musters on him and
+    // creeps behind him, which is how a second hero catches the opener up and passes him.
+    for (const id of [b.strategy.carry, b.ai.heroId, b.ai.heroId2, b.ai.heroId3]) {
       if (!id) continue;
       const found = alive.find((u) => u.typeId === id);
       if (found) return found;

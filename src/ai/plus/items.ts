@@ -498,21 +498,52 @@ const INVULN_ITEMS: ReadonlySet<string> = new Set(["pnvl", "pnvu"]);
  * Requires=etoe` (ItemFunc.txt), so the Ancient of Wonders sells it only once the Tree of
  * Eternity stands and `missingForShop` is the whole tier gate; no clock is restated here.
  */
-const HERO_ORBS: Readonly<Record<string, string>> = { Edem: "oven" };
-const ORB_OF: ReadonlySet<string> = new Set(Object.values(HERO_ORBS));
+//
+// …and THE ORB OF LIGHTNING for the orc's Blademaster and Far Seer — the developer's: *"buying
+// Orb of Lightning on blademaster (or tauren chieftain if they opened with far seer)"*, then
+// *"orb of lighting is a good purchase in general … it's also good on the Far Seer so let's have
+// him buy that too"*. `[oli2]` is on the Voodoo Lounge's own shelf (`[ovln] Makeitems`) and is
+// `Requires=ofrt` (ItemFunc.txt), so like the Orb of Venom it is a tier-3 buy whose tier gate is
+// the shop's. Its Purge on hit slows ground and air alike (docs/orbs.md), which is why it is
+// worth having whatever the enemy fields. The Tauren Chieftain's is in `CARRY_ORBS`: he wants one
+// only where he is the build's carry, which is the Far Seer opening (plus/races.ts `carry`).
+const HERO_ORBS: Readonly<Record<string, string>> = { Edem: "oven", Obla: "oli2", Ofar: "oli2" };
+const CARRY_ORBS: Readonly<Record<string, string>> = { Otch: "oli2" };
+const ORB_OF: ReadonlySet<string> = new Set([...Object.values(HERO_ORBS), ...Object.values(CARRY_ORBS)]);
 
-/** Is `u` a hero this item is FOR? A melee hero is never sent for a clarity pour, and a hero's
- *  own orb (`HERO_ORBS`) goes to that hero alone. Everything else suits anybody. */
-function suits(u: SimUnit, itemId: string): boolean {
+/** The orb `u` should carry, if any — its own (`HERO_ORBS`), or its carry's (`CARRY_ORBS`) when
+ *  it is the build's carry. */
+function orbFor(u: SimUnit, carry: string | undefined): string | undefined {
+  return HERO_ORBS[u.typeId] ?? (u.typeId === carry ? CARRY_ORBS[u.typeId] : undefined);
+}
+
+/**
+ * A HERO'S OWN GEAR — permanent items a particular hero is sent for once the belt's consumables
+ * are in. The developer's: *"blademaster must also like to buy Gloves of Haste and Claws of
+ * Attack and circlet of nobility and boots of speed from shops/market place"*. Not one of these
+ * is on a race shop: the Circlet of Nobility and the Boots are the Goblin Merchant's (`[ngme]
+ * Sellitems`), and the Gloves of Haste (`gcel`) and the Claws of Attack +6 (`rat6`) are level-2
+ * PERMANENT items, which is what a Marketplace rolls onto its shelf (world.ts, `nmrk`) — so they
+ * are bought when a shop in reach happens to have them, and wanted again on every pass until
+ * then. The Boots are on the general list (`LIST`) already, for every hero.
+ */
+const HERO_GEAR: Readonly<Record<string, readonly string[]>> = { Obla: ["gcel", "rat6", "cnob"] };
+const GEAR: ReadonlySet<string> = new Set(Object.values(HERO_GEAR).flat());
+
+/** Is `u` a hero this item is FOR? A melee hero is never sent for a clarity pour, a hero's own
+ *  orb (`orbFor`) goes to that hero alone, and so does its gear (`HERO_GEAR`). Everything else
+ *  suits anybody. */
+function suits(u: SimUnit, itemId: string, carry?: string): boolean {
   if (CLARITY.has(itemId)) return !MELEE_HEROES.has(u.typeId);
-  if (ORB_OF.has(itemId)) return HERO_ORBS[u.typeId] === itemId && !u.inventory.some((h) => h?.itemId === itemId);
+  if (ORB_OF.has(itemId)) return orbFor(u, carry) === itemId && !u.inventory.some((h) => h?.itemId === itemId);
+  if (GEAR.has(itemId)) return (HERO_GEAR[u.typeId] ?? []).includes(itemId) && !u.inventory.some((h) => h?.itemId === itemId);
   return true;
 }
 
 /** The buys `PlusProfile.shopping` does not cap: the Town Portal (see `shop`), the Potion of
  *  Healing (see `LIST`) and the two FIGHT items (`FIGHT`). A free SLOT is still required —
  *  `shopper` asks for one. */
-const ESSENTIAL: ReadonlySet<string> = new Set(["stwp", "phea", "shea", "pnvl", ...Object.values(HERO_ORBS)]);
+const ESSENTIAL: ReadonlySet<string> = new Set(["stwp", "phea", "shea", "pnvl", ...ORB_OF]);
 
 /**
  * The two items that decide a fight rather than the walk between two: the Scroll of Healing (the
@@ -1029,6 +1060,9 @@ export interface ItemCtx {
   wave?: boolean;
   /** The highest hall tier standing (1/2/3) — `defenceChance` asks for the second. */
   tier?: number;
+  /** The build's CARRY hero type (plus/races.ts `PlusStrategy.carry`), if it has one: served
+   *  first at a shop and at a drop, and the one that wants the carry's orb (`CARRY_ORBS`). */
+  carry?: string;
 }
 
 /** One computer player's inventory: what it buys, and when it presses it. */
@@ -1058,6 +1092,8 @@ export class PlusItems {
   private hadPortal = false;
   /** When a hero was last sent off on a Town Portal detour — throttled like a shopping trip. */
   private lastDetour = -Infinity;
+  /** This pass's `ItemCtx.carry`, kept for the helpers that are not handed the ctx. */
+  private carry: string | undefined;
 
   constructor(
     private readonly view: ItemView,
@@ -1067,6 +1103,7 @@ export class PlusItems {
   ) {}
 
   pass(now: number, ctx: ItemCtx): void {
+    this.carry = ctx.carry;
     const own: SimUnit[] = [];
     const foes: SimUnit[] = [];
     // OURS, AND OUR ALLIES' — see fact 4 in the file header. `own` is who this player gives
@@ -1443,6 +1480,12 @@ export class PlusItems {
         if (!def.powerup && u.inventory.indexOf(null) < 0) continue;
         if (!roomForOne(u, it.itemId)) continue;
         const d = Math.hypot(u.x - it.x, u.y - it.y);
+        // The build's CARRY takes any drop he can walk to before a nearer hero does
+        // (`ItemCtx.carry`) — the items are how he carries.
+        const carry = !!this.carry && u.typeId === this.carry && d <= LOOT_WALK;
+        const bestIsCarry = !!this.carry && best?.typeId === this.carry;
+        if (bestIsCarry && !carry) continue;
+        if (carry && !bestIsCarry) { bestD = d; best = u; continue; }
         if (d < bestD) { bestD = d; best = u; }
       }
       if (!best) continue;
@@ -2260,7 +2303,7 @@ export class PlusItems {
     // The FIRST hero where it can be: the highest level (which is nearly always the first one
     // trained), the older of two at the same level. A full belt cannot take it.
     const heroes = own
-      .filter((u) => u.isHero && !u.isIllusion && u.inventory.length && u.inventory.indexOf(null) >= 0 && roomForOne(u, itemId) && suits(u, itemId) && u.order !== "getitem" && this.canAct(u))
+      .filter((u) => u.isHero && !u.isIllusion && u.inventory.length && u.inventory.indexOf(null) >= 0 && roomForOne(u, itemId) && suits(u, itemId, this.carry) && u.order !== "getitem" && this.canAct(u))
       // …a melee hero short of its belt first, then a hero holding no invulnerability potion
       // where every hero carries one (`firstFor`).
       .sort((a, b) => this.firstFor(itemId, b) - this.firstFor(itemId, a) || b.level - a.level || a.id - b.id);
@@ -2502,7 +2545,7 @@ export class PlusItems {
       if (u.order === "getitem") continue;
       if (u.inventory.indexOf(null) < 0) continue; // belt full
       if (!roomForOne(u, itemId)) continue; // already holds its one (`ONE_PER_HERO`)
-      if (!suits(u, itemId)) continue; // a melee hero's clarity, another hero's orb
+      if (!suits(u, itemId, this.carry)) continue; // a melee hero's clarity, another hero's orb
       // …and the habit ceiling, which an ESSENTIAL buy is exempt from — see `shop`.
       const cap = rich || essential ? u.inventory.length : this.profile.shopping;
       if (u.inventory.filter((h) => h !== null).length >= cap) continue;
@@ -2513,7 +2556,10 @@ export class PlusItems {
         if (this.firstFor(itemId, u) > this.firstFor(itemId, best)) best = u;
         continue;
       }
-      if (!best || u.level > best.level) best = u;
+      // …and the build's CARRY before anybody else of the same standing (`ItemCtx.carry`): the
+      // items are how he carries. Otherwise the highest level, which is nearly always the opener.
+      const carried = (h: SimUnit): number => (h.typeId === this.carry ? 1 : 0);
+      if (!best || carried(u) > carried(best) || (carried(u) === carried(best) && u.level > best.level)) best = u;
     }
     return best;
   }
@@ -2555,7 +2601,7 @@ export class PlusItems {
       if (!def) continue;
       if (this.carried(own, want.id) >= want.want) continue;
       // Every hero already holds its one (`ONE_PER_HERO`): the row is satisfied, not blocked.
-      if (!own.some((u) => u.isHero && !u.isIllusion && u.inventory.length && roomForOne(u, want.id) && suits(u, want.id))) continue;
+      if (!own.some((u) => u.isHero && !u.isIllusion && u.inventory.length && roomForOne(u, want.id) && suits(u, want.id, this.carry))) continue;
       if (def.gold > purse) {
         // SAVE for a missing Town Portal rather than spend the gold on the next row down. With
         // the scroll first on the list (`hadPortal`) but 350 gold, every pass it could not be
@@ -2598,8 +2644,16 @@ export class PlusItems {
     const heroes = own.filter((u) => u.isHero && !u.isIllusion);
     const orbs: Want[] = [];
     for (const h of heroes) {
-      const orb = HERO_ORBS[h.typeId];
-      if (orb && !orbs.some((w) => w.id === orb)) orbs.push({ id: orb, want: heroes.filter((o) => HERO_ORBS[o.typeId] === orb).length, opening: true });
+      const orb = orbFor(h, this.carry);
+      if (orb && !orbs.some((w) => w.id === orb)) orbs.push({ id: orb, want: heroes.filter((o) => orbFor(o, this.carry) === orb).length, opening: true });
+    }
+    // …and each hero's own GEAR (`HERO_GEAR`), out of the surplus like the rest of the general
+    // list and just in front of it — behind everything that decides a fight.
+    const gear: Want[] = [];
+    for (const h of heroes) {
+      for (const id of HERO_GEAR[h.typeId] ?? []) {
+        if (!gear.some((w) => w.id === id)) gear.push({ id, want: heroes.filter((o) => (HERO_GEAR[o.typeId] ?? []).includes(id)).length });
+      }
     }
     const melee = heroes.filter((u) => MELEE_HEROES.has(u.typeId)).length;
     const meleeBelt: Want[] = melee
@@ -2615,8 +2669,8 @@ export class PlusItems {
     // hero with no Town Portal loses the army, and that is the bigger loss (`PORTAL`).
     const mana = ((this.profile.eagerMana ? RACE_MANA_EAGER : RACE_MANA)[this.race] ?? []).map((w) => ({ ...w, opening: true }));
     const fight = [...meleeBelt, ...FIGHT.filter((w) => !meleeBelt.some((m) => m.id === w.id))].map(each);
-    const seen = new Set([...first, ...fight, ...mana].map((w) => w.id));
-    const rest = LIST.filter((w) => !seen.has(w.id));
+    const seen = new Set([...first, ...fight, ...mana, ...gear].map((w) => w.id));
+    const rest = [...gear, ...LIST.filter((w) => !seen.has(w.id))];
     // WHERE THE PORTAL SITS DEPENDS ON WHETHER THIS PLAYER HAS EVER HAD ONE.
     //
     // Two rules that both have a match behind them, and they are about different halves of it:

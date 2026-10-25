@@ -95,7 +95,7 @@ function recorder(table, strategy, profile, opts = {}) {
     // fixture withholds something (a Lumber Mill, for the Guard Tower).
     techMeets: (id) => (opts.meets ? opts.meets(id) : true),
     buildFactory: (item) => ai.setBuildUnit(1, item),
-    count, countDone: count, townCountTotal: () => opts.towns ?? 1,
+    count, countDone: count, upgradeLevel: () => 0, townCountTotal: () => opts.towns ?? 1,
     // `TownCount` FOLDS a type's upgraded forms into it and the raw counts do not — a Keep is a
     // Town Hall, a Spirit Tower is a Ziggurat (`TOWN_COUNT_EQUIVALENTS`, `AiPlayer.townCountEx`).
     // The distinction is not decoration: `startUnit` compares a row's quantity against the
@@ -1029,6 +1029,7 @@ function runEconomy() {
       guardSecondary: (t, q, item) => { if (t === 0) ai.secondaryTown(t, q, item) },
       buildFactory: (item) => ai.setBuildUnit(1, item),
       count: countRaw, countDone: doneRaw, townCountDone, townCountTotal: () => S.mines,
+      upgradeLevel: (id) => S.research[id] ?? 0,
       // One town's worth is the whole model here — the run has one base — so a per-town count
       // is the global one. What it is FOR is the undead's Haunted Gold Mine (plan.ts
       // `mineBuildings`), which must not be asked for twice.
@@ -1370,6 +1371,14 @@ function runEconomy() {
       if (s.weight <= 0 && !s.replaces) continue; // grown into, never opened on
       const insane = run(race, s.id, PLUS_INSANE, 900);
       console.log(`      ${(race + "/" + s.id).padEnd(24)} INSA tier2@${String(insane.tier2At).padStart(4)}s tier3@${String(insane.tier3At).padStart(4)}s army=${insane.armyFood}`);
+      // A build that names its OWN tier-3 clock (the orc's two-Beastiary builds) is measured from
+      // that clock instead: the rush is held to it on purpose (plus/plan.ts `tier3Held`).
+      if (s.tier3Clock !== undefined) {
+        check(`${race}/${s.id} (Insane) does not buy its tier-3 hall before its own clock`, insane.tier3At >= s.tier3Clock, true);
+        check(`${race}/${s.id} (Insane) stands its tier-3 hall within 4 minutes of that clock`,
+          insane.tier3At - Math.max(s.tier3Clock, insane.tier2At) <= 240, true);
+        continue;
+      }
       check(`${race}/${s.id} (Insane) stands its tier-3 hall within 5.5 minutes of its tier 2`,
         insane.tier3At - insane.tier2At <= 330, true);
     }

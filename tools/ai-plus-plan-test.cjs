@@ -44,7 +44,7 @@ function check(what, got, want) {
 function ctx(table, strategy, profile, standing, tier) {
   const have = new Set(standing);
   return {
-    ai: { countDone: (id) => (have.has(id) ? 1 : 0), minesOwned: () => 1, gold: () => 0, wood: () => 0 },
+    ai: { countDone: (id) => (have.has(id) ? 1 : 0), upgradeLevel: () => 0, minesOwned: () => 1, gold: () => 0, wood: () => 0 },
     profile, table, strategy, tier,
     // Nothing scouted, so the counter half of the weighting is off and the weights under test
     // are the build order's own.
@@ -160,15 +160,22 @@ console.log("\n--- thenAt3: the tier-3 transition ---");
   check("…and no Knights yet", two.some((r) => r.unit === "hkni"), false);
   const three = buildableMix(ctx(human, rifles, PLUS_NORMAL, [human.halls[2], ...standing], 3));
   check("…and Knights once the Castle is standing", three.some((r) => r.unit === "hkni"), true);
-  check("…beside Riflemen that never stop", three.some((r) => r.unit === "hrif"), true);
-  // The other transition (`thenAt3Or`), rolled at seat time: Gryphon Riders instead.
-  const air = rollTransition(rifles, (lo, hi) => hi);
-  check("a rifle seat may roll the Gryphon transition", air.thenAt3, "riflegryphons");
-  check("…and the Knight one", rollTransition(rifles, (lo) => lo).thenAt3, "rifleknights");
-  const airThree = buildableMix(ctx(human, air, PLUS_NORMAL, [human.halls[2], ...standing, "hgra"], 3));
-  check("…which fields Gryphons and keeps its Riflemen", `${airThree.some((r) => r.unit === "hgry")},${airThree.some((r) => r.unit === "hrif")}`, "true,true");
-  const sanctums = human.strategies.find((s) => s.id === "sanctums");
-  check("the Sanctum build has both transitions too", [sanctums.thenAt3, ...sanctums.thenAt3Or].join(","), "sanctumknights,sanctumgryphons");
+  check("…with their Priests", three.some((r) => r.unit === "hmpr"), true);
+  check("…and no more Riflemen: the Knight army replaces the line", three.some((r) => r.unit === "hrif"), false);
+  // The Gryphon Riders wait for "too many knights" (`waitFor`, six).
+  check("…and no Gryphons beside the first Knights", three.some((r) => r.unit === "hgry"), false);
+  const sixKnights = ctx(human, rifles, PLUS_NORMAL, [human.halls[2], ...standing, "hgra"], 3);
+  const done = sixKnights.ai.countDone;
+  sixKnights.ai.countDone = (id) => (id === "hkni" ? 6 : done(id));
+  check("…but Gryphons once six Knights stand", buildableMix(sixKnights).some((r) => r.unit === "hgry"), true);
+  check("…and the three Flying Machines are a lead count, not a share",
+    human.strategies.find((s) => s.id === "knightpriests").lead.hgyr, 3);
+  // EVERY human tier-2 build grows into the same tier 3 (the developer's Knights + Flying
+  // Machines + Priests), the Sanctum build included.
+  for (const id of ["rifles", "sanctums", "riflecaster", "knights"]) {
+    check(`${id} grows into the Knight army`, human.strategies.find((s) => s.id === id).thenAt3, "knightpriests");
+  }
+  check("…with no second transition to roll", rollTransition(rifles, (lo, hi) => hi).thenAt3, "knightpriests");
 }
 
 // THE NIGHT ELF'S LATE GAME. Reported: *"going for archers + huntresses a bit too much … later it
@@ -290,7 +297,19 @@ console.log("\n--- hero pairings, and the Insane-only builds ---");
   check("Archmage → Mountain King", human.combos.Hamg.second.join(), "Hmkg");
   check("human third: Paladin if missing, else the Alchemist", human.combos["*"].third[0].join(), "Hpal,Nalc");
   check("Blademaster → Shadow Hunter", orc.combos.Obla.second.join(), "Oshd");
-  check("Far Seer → Tauren Chieftain or Shadow Hunter", orc.combos.Ofar.second.join(), "Otch,Oshd");
+  check("…then the Tauren Chieftain", orc.combos.Obla.third.map((o) => o.join("/")).join(), "Otch");
+  check("Far Seer → Tauren Chieftain", orc.combos.Ofar.second.join(), "Otch");
+  check("…then the Shadow Hunter", orc.combos.Ofar.third.map((o) => o.join("/")).join(), "Oshd");
+  check("a Blademaster maxes Critical Strike first, in every build",
+    orc.skills.Obla.every((b) => b[0] === "AOcr" && b.slice(0, 5).filter((x) => x === "AOcr").length === 3), true);
+  // The orc plays TWO openings (Blademaster, Far Seer), each with two tier-2 plans.
+  const rolled = orc.strategies.filter((s) => s.weight > 0);
+  check("the orc rolls four builds", rolled.map((s) => s.id).join(), "bmraiders,bmstandard,fsraiders,fsstandard");
+  check("…two Blademaster and two Far Seer openings", rolled.map((s) => s.heroes[0]).join(), "Obla,Obla,Ofar,Ofar");
+  check("…a Far Seer build's carry is the Tauren Chieftain", rolled.filter((s) => s.heroes[0] === "Ofar").every((s) => s.carry === "Otch"), true);
+  check("…every one keeps one Kodo for its aura", rolled.every((s) => s.lead?.okod === 1), true);
+  check("…and grows into the Tauren army", rolled.every((s) => s.thenAt3 === "taurens"), true);
+  check("the two-Beastiary builds hold tier 3 to their own clock", rolled.filter((s) => s.factories?.obea === 2).every((s) => s.tier3Clock === 600), true);
   check("every Shadow Hunter build opens on Hex or Healing Wave",
     orc.skills.Oshd.every((b) => b[0] === "AOhx" || b[0] === "AOhw"), true);
   check("Death Knight → Lich", undead.combos.Udea.second.join(), "Ulic");
@@ -314,12 +333,11 @@ console.log("\n--- hero pairings, and the Insane-only builds ---");
       if (s.replaces) { check(`${table.race}: a replacing build is never rolled`, s.id, "(none)"); break; }
     }
   }
-  const fs = orc.strategies.find((s) => s.id === "headhunters");
-  check("Insane Far Seer: the rush on a low roll", insaneVariant(orc, fs, () => 0.1).id, "hhrush");
-  check("…its own build on a high one", insaneVariant(orc, fs, () => 0.9).id, "headhunters");
-  check("…and the rush keeps the Far Seer", insaneVariant(orc, fs, () => 0.1).heroes[0], "Ofar");
-  const bm = orc.strategies.find((s) => s.id === "grunts");
-  check("a Blademaster opening is never the rush", insaneVariant(orc, bm, () => 0).id, "grunts");
+  // The Head Hunter rush is gone: a Far Seer opening now techs (the developer's "mass producing
+  // head hunters while also teching up"), so no orc build replaces another on Insane.
+  for (const s of orc.strategies.filter((x) => x.weight > 0)) {
+    check(`Insane orc ${s.id} plays itself`, insaneVariant(orc, s, () => 0).id, s.id);
+  }
   for (const id of ["meatwagons", "ghouls", "aboms"]) {
     const s = undead.strategies.find((x) => x.id === id);
     const v = insaneVariant(undead, s, () => 0.99);

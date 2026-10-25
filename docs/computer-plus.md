@@ -1646,19 +1646,18 @@ tier 2 is not "going Shamans", it is Head Hunters with Shamans and a Kodo behind
 and Head Hunters enriched with Raiders and Wind Riders. A build that is worth rolling names an
 ARMY and the support that goes with it.
 
-Which is also why the same unit can appear at the top of two builds. The Tauren Chieftain has
-**two** of them — `massgrunts` and `masshunters` — and they are two plans rather than one plan
-with a substitution: the Chieftain's card is an AURA and a STUN, and neither cares what is
-standing under it. Endurance Aura is attack speed, which a Head Hunter turns into damage at range
-where a Grunt turns it into a faster walk to the front; War Stomp is what a ranged line needs
-most. The troll build takes no flyer of its own, because `ohun` is `targs1 =
-ground,structure,debris,**air**,item,ward` (`UnitWeapons.slk`) and the mass IS the answer to air,
-where the Grunt build has to buy Wind Riders and bats for it. Both grow into `taurens` at the
-Fortress, whose line is a split 0.8/0.8 of Grunts and Head Hunters for exactly that reason —
-whichever unit the seat spent its tier-2 game massing keeps being produced under the Taurens
-instead of being abandoned for the other one. Head Hunters are the orc's other tier-1 opening
-besides (`[ohun] Requires=ofor`, and the War Mill is already the race's tier-1 support row), so
-the troll build opens on trolls rather than waiting for anything.
+The ORC is the race whose table is written as a grid. The developer's: *"the orc basically
+plays two builds, a blademaster opening … and a far seer opening"*, and at tier 2 each goes one
+of two ways — TWO Beastiaries of Raiders with Ensnare and a single Kodo (map control: contest the
+camps, expand, hit the other player's expansion), or the STANDARD one Beastiary plus one Spirit
+Lodge and straight on to tier 3 for the Berserker Upgrade and Bloodlust. So four builds
+(`bmraiders`, `bmstandard`, `fsraiders`, `fsstandard`), and all four grow into `taurens` —
+Berserkers, Shamans with Master Training, and Taurens once the Berserker Upgrade is in
+(`waitFor`). The Blademaster openings take their second mine WITH the Stronghold
+(`expandWithTier`) and buy the Shadow Hunter there; the Far Seer openings mass Head Hunters
+(`fsstandard` out of two Barracks), buy the Tauren Chieftain at the Stronghold, and play around
+him as the build's CARRY (`PlusStrategy.carry`, below). The two-Beastiary builds hold the
+Fortress to their own 10:00 clock (`tier3Held`) — the Insane rush is the standard plan's.
 
 A strategy is a **weighted unit mix** and two clocks, and nothing else is written down:
 
@@ -1714,9 +1713,9 @@ difficulty — Easy simply never reaches a second row and Normal never a third:
 |---|---|---|---|
 | human | Paladin | Blood Mage, **Siphon Mana first** | Alchemist |
 | human | Archmage | Mountain King | Paladin |
-| orc | Blademaster | Shadow Hunter | Alchemist, or the Tauren Chieftain |
-| orc | Far Seer | Tauren Chieftain / Shadow Hunter, even odds | Alchemist, or whichever of those two is missing |
-| orc | Tauren Chieftain | Shadow Hunter — **never** the Blademaster | Alchemist / Far Seer |
+| orc | Blademaster (**Critical Strike first and maxed**) | Shadow Hunter | Tauren Chieftain |
+| orc | Far Seer | Tauren Chieftain (the build's **carry**) | Shadow Hunter |
+| orc | Tauren Chieftain (no build opens on him now) | Shadow Hunter — **never** the Blademaster | Far Seer / Shadow Hunter |
 | undead | Death Knight | Lich | Dark Ranger (Black Arrow) / Crypt Lord (Impale) |
 | undead | Crypt Lord (**Carrion Beetles first**), Dreadlord | Death Knight | Dark Ranger |
 | night elf | Demon Hunter | Keeper of the Grove / Naga Sea Witch / Pandaren Brewmaster | Alchemist / Priestess of the Moon |
@@ -1751,16 +1750,43 @@ where every melee hero is `Requires1=TWN2`, so 425 gold was withheld from every 
 
 ### Insane-only builds: the rush and the fast expand
 
-Two builds are never rolled; they REPLACE the rolled build when it opens on a given hero
-(`PlusStrategy.replaces`, `insaneVariant`), on Insane only:
+One build is never rolled; it REPLACES the rolled build when it opens on a given hero
+(`PlusStrategy.replaces`, `insaneVariant`), on Insane only. (There was an orc one, the Head Hunter
+rush behind half of all Far Seer openings — a Fire Lord or Beastmaster second and the Stronghold
+held to 6:00. It is gone: the developer's Far Seer opening masses Head Hunters *"while also
+teching up"* and buys the Tauren Chieftain at the Stronghold, and over 48 observed Insane matches
+the rush reached its Fortress at 13:29 on average against 9:46 for the build it replaced.)
 
-* **Head Hunter rush** (orc, half of every Far Seer opening) — two Barracks of Head Hunters, the
-  second hero a Fire Lord or a Beastmaster off the Tavern, the Stronghold held to 6:00
-  (`PlusStrategy.tier2Clock`, which also refuses the tier-up BEFORE it), and the wave not waiting
-  on the hero's third level (`rush`). Headless: 15 army food at 5:00 and 20 at 6:00 against the
-  standard Head Hunter build's 13 and 15.
 * **Fast expansion** (undead, every Crypt Lord or Dreadlord opening) — the second mine on a 2:30
   clock, two Crypts of Ghouls and Fiends, and the Halls of the Dead held to 5:30.
+
+### Clauses a build can carry
+
+* **`carry`** — a hero who is not the opener but is the one the build is played around (the Far
+  Seer openings' Tauren Chieftain: *"basically the carry … gain a lot of levels and items through
+  creep camps and shops"*). While he is alive he is the army's captain (`squadHero`: the party
+  musters on him and creeps behind him), the shopper picks him first (`shopper`) and he takes any
+  drop within `LOOT_WALK` before a nearer hero does (`loot`).
+* **`waitFor`** — a unit of the mix left out (with its producer) until a condition holds, in the
+  `PowerSpike` shape: the human's Gryphons after six Knights, the orc's Taurens after `Robk`.
+* **`expandWithTier`** — the second mine is due the moment that hall stands, and the row moves up
+  the ladder the way a won fight's expansion does (`expand`, `withTier`).
+* **`tier3Clock` on a build** is now held even against the Insane rush (`tier3Held`): a build that
+  names one has decided its tier-2 army is the plan until then.
+* **`PlusRaceTable.tier2Army`** — the army held while the second tier is saved for. The human's is
+  17 (a hero and four Riflemen) instead of the default 8, because its 2:00 tier-2 clock made the
+  hold last from the first Rifleman to a 6:30 Keep: over 48 observed Insane matches it had two
+  Riflemen at 7:00 and won 6 of 20 decided games. Headless, the rifle build now holds 20 food from
+  4:30 (11 before), and its Keep stands about 70 s later.
+
+The AI's random stream is also SEEDED THROUGH A HASH now (`mixSeed`, src/ai/aiPlayer.ts):
+Park–Miller's first draw is `seed × 16807 / (2³¹ − 1)`, so a small dev seed always rolled the
+first build in its race's table — every Computer+ seat of the 48-match benchmark above played
+`rifles`, `headhunters`, `fiends` or `bears`. A lobby's seed is drawn up to 2³¹ and never showed it.
+
+And the Batrider presses **Unstable Concoction** (`PlusCaster.concoction`), which used to sit on
+`NEVER` as a button that spends the unit: only into three enemy flyers inside the blast, or into
+two Batriders' worth of hit points (a Frost Wyrm, a Chimaera) — both bars ours.
 
 ### Losing the buildings a build is made of
 
@@ -5003,13 +5029,22 @@ essential rows alone). Before this change, a Normal orc on Echo Isles played fif
 - **Moon Wells on the way past.** `wellPass(b, true)` runs whenever the army is not massing or
   defending: a soldier under 50 % or a hero under `RECOVER_TO` stops at a well within 900 with
   nothing hostile within 1200 (`WELL_PASS_*`).
-- **Human tier-3 transitions.** `PlusStrategy.thenAt3Or` and `rollTransition`: a rifle build grows
-  into Riflemen + a few Knights (`rifleknights`) or Riflemen + Gryphon Riders (`riflegryphons`), and
-  the Sanctum build into the same two with its casters kept, one rolled per seat.
+- **Human tier 3.** Every human tier-2 build grows into ONE army, `knightpriests` — the
+  developer's *"knights + 2-3 flying machines + priests with master training (for inner fire on
+  knights and heroes). if too many knights, gryphon riders can be bought as well"*: Knights and
+  Priests as the mix, three Flying Machines as a COUNT (`lead`), and Gryphon Riders only once six
+  Knights stand (`waitFor`). It replaced four transitions (`rifleknights`, `riflegryphons`,
+  `sanctumknights`, `sanctumgryphons`) that kept the tier-2 line as the bulk; `thenAt3Or` and
+  `rollTransition` stay for a build that names more than one.
 - **The belt.** A MELEE hero (`MELEE_HEROES`, the developer's nine) is never sent for a Clarity
   Potion and carries a Potion of Lesser Invulnerability, a Potion of Healing and a Scroll of Healing
   instead (`MELEE_BELT`); a night elf's Demon Hunter buys the Orb of Venom, whose `[oven]
-  Requires=etoe` is the tier-3 gate (`HERO_ORBS`). And a Town Portal is not read by a hero that is
+  Requires=etoe` is the tier-3 gate (`HERO_ORBS`) — and the orc's Blademaster and Far Seer the
+  Orb of Lightning (`[oli2]`, the Voodoo Lounge's, `Requires=ofrt`), as does a Tauren Chieftain
+  who is the build's carry (`CARRY_ORBS`). A hero may also have its own GEAR (`HERO_GEAR`): the
+  Blademaster is sent for Gloves of Haste, Claws of Attack +6 and the Circlet of Nobility (the
+  Goblin Merchant's and whatever a Marketplace has rolled), beside the Boots every hero wants. And
+  a Town Portal is not read by a hero that is
   out of the fight with nothing hostile within `ESCAPE_CHASE` — `losing` stays up for the whole walk
   home, which is how a night elf bought a scroll at its own shop and read it there, alone.
 

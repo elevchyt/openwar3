@@ -3,7 +3,7 @@ import type { AiPlayer } from "../aiPlayer";
 import { BLK_SPHINX, OBSIDIAN_STATUE, PIT_FIEND, TOWN_COUNT_EQUIVALENTS } from "../ids";
 import { AIR_HEAVY, counterScore, type EnemyRead } from "./counter";
 import type { PlusProfile } from "./profile";
-import type { PlusRaceTable, PlusStrategy } from "./races";
+import type { PlusRaceTable, PlusStrategy, PowerSpike } from "./races";
 
 // Computer+ — the build plan (issue #124).
 //
@@ -176,7 +176,7 @@ function tierUpOverdue(c: PlusCtx): boolean {
  */
 function coreArmy(c: PlusCtx): number {
   const full = CORE_ARMY_FOOD + CORE_ARMY_PER_TIER * Math.max(0, c.tier - 1);
-  if (tierUpOverdue(c)) return Math.min(c.profile.armyFood, full, TIER2_ARMY);
+  if (tierUpOverdue(c)) return Math.min(c.profile.armyFood, full, tier2Army(c));
   // …and the same hold one tier up, while a RUSHED tier 3 is being saved for (`tier3Rushing`):
   // the army the rush insists on having before it asks (`TIER3_ARMY`) is the army it holds while
   // it pays — and once that much is on the field the row asks for NOTHING. Held at the number
@@ -194,7 +194,18 @@ function coreArmy(c: PlusCtx): number {
  * back (`upgrades`).
  */
 function tier3Rushing(c: PlusCtx): boolean {
-  return c.profile.tier3Rush && c.profile.techTier >= 3 && c.tier === 2 && c.ai.count(c.table.halls[2]) < 1;
+  return c.profile.tier3Rush && c.profile.techTier >= 3 && c.tier === 2 && c.ai.count(c.table.halls[2]) < 1
+    && !tier3Held(c);
+}
+
+/**
+ * Is a build that names its OWN tier-3 clock (`PlusStrategy.tier3Clock`) still before it? Then the
+ * third hall is not bought at all — not by the rush, not out of leftover gold at the bottom of the
+ * ladder — exactly as `tier2` holds a build's own tier-2 clock: a build that names one has decided
+ * its tier-2 army is the plan until then (the orc's two-Beastiary builds, plus/races.ts).
+ */
+function tier3Held(c: PlusCtx): boolean {
+  return c.strategy.tier3Clock !== undefined && c.clock < c.strategy.tier3Clock + c.profile.tier3Delay;
 }
 
 /** Workers on a mine. WC3 mines take five at a time, so a sixth is a peasant standing in a
@@ -1304,7 +1315,28 @@ const MIN_COUNTER_WEIGHT = 0.2;
  * obeys (rule 1 at the top of the file).
  */
 export function activeStrategy(c: PlusCtx): PlusStrategy {
-  return affordable(c, grownInto(c));
+  return waiting(c, affordable(c, grownInto(c)));
+}
+
+/** …less the units still WAITING on something (`PlusStrategy.waitFor`) — the human's Gryphon
+ *  Riders until there are Knights enough, the orc's Taurens until the Berserker Upgrade. Read
+ *  every pass, like the tier: a waiting unit's producer is not put up either (`mixBuildings`
+ *  reads this same mix), so nothing is spent on it before it is wanted. */
+function waiting(c: PlusCtx, strategy: PlusStrategy): PlusStrategy {
+  const wait = strategy.waitFor;
+  if (!wait) return strategy;
+  const drop = Object.entries(wait).filter(([, w]) => !holds(c, w)).map(([u]) => u);
+  if (!drop.length) return strategy;
+  return { ...strategy, mix: Object.fromEntries(Object.entries(strategy.mix).filter(([u]) => !drop.includes(u))) };
+}
+
+/** Does every clause of `w` hold? A clause left out asks nothing — the same reading index.ts
+ *  `spikeHeld` gives a `PowerSpike`. */
+function holds(c: PlusCtx, w: PowerSpike): boolean {
+  return (!w.research || c.ai.upgradeLevel(w.research[0]) >= w.research[1])
+    && (!w.units || c.ai.countDone(w.units[0]) >= w.units[1])
+    && (!w.tier || c.tier >= w.tier)
+    && (!w.armyFood || c.armyFood >= w.armyFood);
 }
 
 /** …the rolled build, or what it has grown into: `thenAt3` at tier 3, `thenAt2` from tier 2
@@ -1355,8 +1387,11 @@ function mixBuildings(c: PlusCtx): Array<{ build: string; tier: number }> {
   // builds a Slaughterhouse at tier 2" is stated: nowhere. It falls out of wanting the statue,
   // exactly as every other building here falls out of wanting the unit it makes (rule 2 at the
   // top of the file). The same is true of the lumber unit's Crypt.
+  // …and the build's LEAD units (`PlusStrategy.lead`), which may name a unit the mix does not —
+  // the human's three Flying Machines are a count beside the Knight army, not a share of it.
   const wanted = [
     ...Object.keys(strategy.mix),
+    ...Object.keys(strategy.lead ?? {}),
     ...(table.always ?? []).map((r) => r.unit),
     ...(table.lumberUnit ? [table.lumberUnit] : []),
   ];
@@ -1379,7 +1414,7 @@ function mixBuildings(c: PlusCtx): Array<{ build: string; tier: number }> {
 function tierUp(c: PlusCtx): void {
   tier2(c);
   const { ai, profile, table, armyFood, tier } = c;
-  if (profile.techTier >= 3 && tier >= 2 && armyFood >= TIER3_ARMY) ai.setBuildUnit(1, table.halls[2]);
+  if (profile.techTier >= 3 && tier >= 2 && armyFood >= TIER3_ARMY && !tier3Held(c)) ai.setBuildUnit(1, table.halls[2]);
 }
 
 /** …and the same tier-2 row HIGH in the ladder once its clock is up — see `TIER2_CLOCK`. Asking
@@ -1407,12 +1442,19 @@ function tier3Due(c: PlusCtx): void {
   // …or from the moment the tier-2 hall stands, on a rung that RUSHES it (`PlusProfile.tier3Rush`,
   // Insane): every race, every build, no clock at all. The gates below still hold — a rush that
   // left the army or the mine crew short would be the first raid's to punish.
-  const at = c.profile.tier3Rush ? 0 : c.strategy.tier3Clock ?? c.table.tier3Clock;
+  // A build's OWN clock is kept even under the rush (`tier3Held`) — it is the build saying when.
+  const at = c.strategy.tier3Clock ?? (c.profile.tier3Rush ? 0 : c.table.tier3Clock);
   if (at === undefined || c.clock < at + c.profile.tier3Delay) return;
   const { ai, profile, table, armyFood, tier } = c;
   if (profile.techTier < 3 || tier < 2 || armyFood < TIER3_ARMY) return;
   if (ai.count(table.worker) < MINE_CREW * Math.max(1, ai.minesOwned())) return;
   ai.setBuildUnit(1, table.halls[2]);
+}
+
+/** The army held while the second tier is saved for — the race's, else `TIER2_ARMY` (see
+ *  `PlusRaceTable.tier2Army`). */
+function tier2Army(c: PlusCtx): number {
+  return c.table.tier2Army ?? TIER2_ARMY;
 }
 
 /** …and the clock is the BUILD'S, then the RACE'S — see `PlusStrategy.tier2Clock` and
@@ -1428,7 +1470,7 @@ function tier2(c: PlusCtx): void {
   // it, not even out of leftover gold at the bottom of the ladder — the gold is the army's and
   // the second mine's until then. See `PlusStrategy.tier2Clock`.
   if (c.strategy.tier2Clock !== undefined && c.clock < c.strategy.tier2Clock && !starved(c)) return;
-  if (armyFood < TIER2_ARMY && !starved(c)) return;
+  if (armyFood < tier2Army(c) && !starved(c)) return;
   ai.setBuildUnit(1, table.halls[1]);
 }
 
@@ -2007,10 +2049,15 @@ function expand(c: PlusCtx, early = false): void {
   // ONE row, at one of two depths: high in the ladder in the window after a won fight, and at its
   // ordinary place otherwise — never both, because a row that appears twice reserves its price
   // twice (`OneBuildLoop`).
-  const won = wonExpansion(c);
+  //
+  // A build that expands WITH ITS TIER (`PlusStrategy.expandWithTier`) takes the high row too, for
+  // its second town, from the moment that hall stands: the same lifted clock and the same depth,
+  // for the same reason — down at the bottom the tier-3 rows and the tech take the gold first.
+  const owned = Math.max(1, ai.minesOwned());
+  const withTier = owned === 1 && strategy.expandWithTier !== undefined && c.tier >= strategy.expandWithTier;
+  const won = wonExpansion(c) || withTier;
   if (early !== won) return;
   if (profile.expansions < 1 || threatened) return;
-  const owned = Math.max(1, ai.minesOwned());
   if (owned >= 1 + profile.expansions) return;
   const planned = (owned === 1 ? strategy.expandAt : strategy.expandAgainAt) + profile.expandDelay;
   const needed = ai.goldOwned() < EXPAND_GOLD;

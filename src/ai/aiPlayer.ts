@@ -334,7 +334,14 @@ export class AiPlayer {
     // identity (a client replays it), and an AI that drew from it would advance it on the host
     // and nowhere else. Seeded off the match seed and the slot so two computers on one map
     // still pick different heroes.
-    this.rng = lcg(seed + player * 7919 + 1);
+    //
+    // The seed is MIXED before it reaches the generator. Park–Miller's first draw is
+    // `seed × 16807 / (2³¹ − 1)`, so a SMALL seed always opens near zero: a dev boot's `?seed=`
+    // is in the thousands, and over 48 observed matches on seeds 2001–2048 every Computer+ seat
+    // rolled the FIRST build in its race's table — one build per race, every match. A lobby's seed
+    // is drawn up to 2³¹ (fdfSkirmish.ts) and never showed it, but nothing about the stream should
+    // depend on that. `mixSeed` spreads neighbouring seeds across the whole range.
+    this.rng = lcg(mixSeed(seed + player * 7919 + 1));
     this.bypassFog = difficulty === MELEE_INSANE;
     const mine = host.world.nearestMine(startX, startY, 3000);
     this.towns.push({ x: startX, y: startY, mineId: mine?.id ?? 0 });
@@ -2746,6 +2753,15 @@ function inflate(fp: Footprint): Footprint {
   const h = fp.h + 2;
   const buildBlocked = new Array<boolean>(w * h).fill(true);
   return { w, h, blocked: buildBlocked, buildBlocked };
+}
+
+/** A 32-bit integer hash (MurmurHash3's finaliser), so that seeds 1, 2, 3… start the AI's
+ *  stream far apart — see the constructor. */
+function mixSeed(seed: number): number {
+  let h = Math.floor(seed) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  return (h ^ (h >>> 16)) >>> 0;
 }
 
 /** The AI's own Park–Miller stream (see the constructor for why it is not the sim's). */

@@ -802,9 +802,16 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   difficulty), several of them TAVERN heroes, hired by walking a worker to the Tavern's door
   (`AiPlayer.hireAtTavern`) and only once the hero is LEGAL (`heroLegal` — every melee hero's
   `Requires1` is the tier-2 hall, which also made the old tier-1 second-hero row a dead 425-gold
-  reservation). Two Insane-only builds REPLACE a rolled build by its opener (`replaces`): the orc
-  Head Hunter rush behind a Far Seer and the undead fast expand behind a Crypt Lord or Dreadlord,
-  each holding its tier-up to its own `tier2Clock`. Insane also ROAMS (`PlusProfile.roam`): it
+  reservation). One Insane-only build REPLACES a rolled build by its opener (`replaces`): the
+  undead fast expand behind a Crypt Lord or Dreadlord, holding its tier-up to its own
+  `tier2Clock`. The ORC is a grid of four builds — a Blademaster or a Far Seer opening, by two
+  Beastiaries of Raiders or the standard Beastiary + Spirit Lodge — all growing into Berserkers,
+  Shamans and Taurens (the Taurens `waitFor` the Berserker Upgrade); the Far Seer ones play around
+  the Tauren Chieftain as their `carry` (captain, first at the shop and the drop). Every HUMAN
+  tier-2 build grows into Knights, Priests, three Flying Machines (`lead`) and Gryphons after six
+  Knights, and the human holds a hero and four soldiers while saving for its 2:00 Keep
+  (`tier2Army`). The AI's seed goes through `mixSeed` first, or a small dev `?seed=` rolls the
+  first build in every table. Insane also ROAMS (`PlusProfile.roam`): it
   masses out on its half of the map, never idle at home. The caster's `NEVER` holds the HARVEST
   codes — a Ghoul is not `isPeon`, so `roleOf` derived its `Ahrl` as a spell and threw it at the
   creep it was swinging at, cancelling the swing every pass (the "Ghouls don't hit creeps" bug).
