@@ -401,6 +401,52 @@ const from = (src, over = {}) => ({
 }
 
 // ==========================================================================================
+// POISON AND THE ROLL-CALL ARE NOT DISPELLED — every poison (the developer's rule) and the
+// debuffs Liquipedia's Dispel page says nothing removes: Thunder Clap, Acid Bomb, Shadow Strike.
+// ==========================================================================================
+// Applied through the REAL doors (`applyPoison`, the spell handlers), because the flag is set
+// where the buff is made: a hand-built buff here would prove only `survivesDispel` itself.
+{
+  const { SPELL_HANDLERS } = require(join(REPO, ".sim-build", "src", "sim", "spells.js"));
+  const lvlOf = (over) => ({ cost: 0, cooldown: 0, castRange: 600, area: 0, duration: 0, heroDuration: 0, castTime: 0, data: [], buffs: [], summon: "", ...over });
+  const FOE_FLAGS = ["air", "ground", "enemy", "neutral", "organic"];
+  // Slow Poison (`Aspo`): DataA damage per second, DataB/DataC the move/attack factors, Dur1 5.
+  const SLOW_POISON = { id: "Aspo", code: "Aspo", target: "none", targetFlags: FOE_FLAGS, buffFx: [], levelData: [lvlOf({ duration: 5, buffs: ["Bspo"] })] };
+  // Shadow Strike (`AEsh`): Esh1 10 every Cast1 3 s for Dur1 15.1, Esh2 0.5 slow, Esh5 75 on the hit.
+  const SHADOW_STRIKE = { id: "AEsh", code: "AEsh", target: "unit", targetFlags: FOE_FLAGS, buffFx: [], levelData: [lvlOf({ duration: 15.1, castTime: 3, data: [10, 0.5, 0, 0, 75] })] };
+  // Acid Bomb (`ANab`): DataC 3 armour, DataD/DataE 6/4 damage, DataF 1 s interval, Area1 200, Dur1 15.
+  const ACID_BOMB = { id: "ANab", code: "ANab", target: "unit", targetFlags: FOE_FLAGS, buffFx: [], levelData: [lvlOf({ duration: 15, area: 200, data: [0, 0, 3, 6, 4, 1] })] };
+  // Thunder Clap (`AHtc`): DataA 60, DataC/DataD 0.5 move/attack, Area1 250, Dur1 5.
+  const THUNDER_CLAP = { id: "AHtc", code: "AHtc", target: "none", targetFlags: FOE_FLAGS, buffFx: [], levelData: [lvlOf({ duration: 5, area: 250, data: [60, 0, 0.5, 0.5] })] };
+  const cases = [
+    ["Slow Poison", (w, foe, t) => w.applyPoison(foe, t, SLOW_POISON, 5, 4, 0.25, 0.5, 1)],
+    ["Shadow Strike", (w, foe, t) => SPELL_HANDLERS.AEsh(w.spellApi, foe, SHADOW_STRIKE, 1, { targetId: t.id, x: t.x, y: t.y })],
+    ["Acid Bomb", (w, foe, t) => SPELL_HANDLERS.ANab(w.spellApi, foe, ACID_BOMB, 1, { targetId: t.id, x: t.x, y: t.y })],
+    ["Thunder Clap", (w, foe, t) => SPELL_HANDLERS.AHtc(w.spellApi, foe, THUNDER_CLAP, 1, { targetId: 0, x: foe.x, y: foe.y })],
+  ];
+  for (const [name, hit] of cases) {
+    const w = world();
+    const d = dryad(w, { x: 0, y: 0 });
+    const foe = add(w, { owner: 1, team: 1, x: 350, y: 0 });
+    const t = add(w, { x: 300, y: 0 });
+    hit(w, foe, t);
+    const worn = t.buffs.map((b) => `${b.kind}:${b.group}`).sort().join(",");
+    check(`${name} lands on the ally`, t.buffs.length > 0, true);
+    check(`${name}: every half is undispellable`, t.buffs.every((b) => b.undispellable === true), true);
+    check(`${name}: the Dryad's autocast leaves the ally alone`, w.tickAutocast(d), false);
+    check(`${name}: …and keeps her mana`, d.mana, 200);
+    // …but a Slow beside it is still worth the cast, and the dispel takes ONLY the Slow.
+    t.buffs.push(from(foe, { kind: "slow", group: "slow", timeLeft: 9, buffId: "Bslo" }));
+    check(`${name} + Slow: the Slow is worth the cast`, w.tickAutocast(d), true);
+    w.dispelUnit(t);
+    check(`${name}: a dispel leaves it standing`, t.buffs.map((b) => `${b.kind}:${b.group}`).sort().join(","), worn);
+    // An invulnerability wipe keeps it too — only Mirror Image removes such effects.
+    w.clearStatusForInvulnerable(t);
+    check(`${name}: an invulnerability wipe leaves it standing`, t.buffs.map((b) => `${b.kind}:${b.group}`).sort().join(","), worn);
+  }
+}
+
+// ==========================================================================================
 // BLOODLUST'S AUTOCAST IS FOR A FIGHTER (issue #213): only an ally that is itself attacking an
 // enemy, and never a worker — while a Bloodlust pressed by hand still goes on either.
 // ==========================================================================================

@@ -13687,6 +13687,9 @@ export class SimWorld {
    *     a cycloned unit walked off untouchable instead of spinning in the air;
    *   - an `undispellable` one — Doom, whose Ubertip is "This spell cannot be dispelled". A
    *     Doomed unit is going to die, and a Divine Shield does not buy its way out of that.
+   *     The same holds for the rest of the flag's holders (a poison, Thunder Clap, Acid Bomb,
+   *     Shadow Strike — `survivesDispel`): Liquipedia's Dispel page names Mirror Image as
+   *     the ONE thing that removes such effects.
    * Auras are taken like everything else and are back on the next `applyAuras` pass, exactly
    * as they are after a Dispel Magic.
    */
@@ -23933,15 +23936,19 @@ export class SimWorld {
    *
    * NOTE the group names carry no colon. A colon in a buff group means "aura, and the first
    * half is its ability code" to the renderer's persistent-FX pass, and a poison is not one.
+   *
+   * Both halves are UNDISPELLABLE — the developer's rule, a dispel does not cure a poison — so
+   * Abolish Magic, Dispel Magic, Purge and Devour Magic leave it running, and the dispel
+   * autocast does not spend mana on a poisoned ally (`survivesDispel`, sim/spells.ts).
    */
   private applyPoison(attacker: SimUnit, target: SimUnit, def: AbilityDef, dur: number, dps: number, attackFactor: number, moveFactor: number, stack = 0): void {
     const t = dur || 5;
     const group = `poison-${def.code}` + (stack & STACK_DAMAGE ? `-${attacker.id}` : "");
-    if (dps > 0) this.applyBuffInternal(target, { kind: "dot", group, timeLeft: t, value: dps, sourceId: attacker.id, nonLethal: true, ...this.buffArtOf(def) });
+    if (dps > 0) this.applyBuffInternal(target, { kind: "dot", group, timeLeft: t, value: dps, sourceId: attacker.id, nonLethal: true, undispellable: true, ...this.buffArtOf(def) });
     if (moveFactor > 0 || attackFactor > 0) {
       // Same buff row as the damage half above (`BSpo` IS "Slow Poison"), split in two only
       // because our buffs carry one kind each — so the Status row shows it once.
-      this.applyBuffInternal(target, { kind: "slow", group: `poison-${def.code}-slow`, timeLeft: t, value: moveFactor, value2: attackFactor, sourceId: attacker.id, buffId: buffIdOf(def) });
+      this.applyBuffInternal(target, { kind: "slow", group: `poison-${def.code}-slow`, timeLeft: t, value: moveFactor, value2: attackFactor, sourceId: attacker.id, buffId: buffIdOf(def), undispellable: true });
     }
   }
 

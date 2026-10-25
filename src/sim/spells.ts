@@ -1056,7 +1056,7 @@ export const DISPEL_CODES = new Set(["Aprg", "Adis", "Aadm", "Advm"]);
  * on their Grunt.
  *
  * Two exclusions, both because the cast would achieve nothing: a buff that `survivesDispel` (Doom,
- * a frost slow and every stun — `dispelUnit` keeps exactly those), and an AURA, which is a buff with `timeLeft` Infinity and
+ * a poison, a frost slow, every stun… — `dispelUnit` keeps exactly those), and an AURA, which is a buff with `timeLeft` Infinity and
  * is therefore back the tick after the dispel lands. A buff whose source is GONE — a Bloodlust
  * from a dead Shaman — cannot be placed and does not count; that is the safe direction, since
  * the cost of missing one is a dispel not cast.
@@ -1075,7 +1075,7 @@ export const DISPEL_CODES = new Set(["Aprg", "Adis", "Aadm", "Advm"]);
  * rather than off `MISC_GAME`, and the data set underfoot answers it (docs/editions.md).
  */
 /**
- * Does this buff SURVIVE a dispel? Three kinds do: the one flagged `undispellable` (Doom), the
+ * Does this buff SURVIVE a dispel? Three kinds do: the one flagged `undispellable`, the
  * frost Slowed buff (`SLOWED_BUFF`, "dispellable=no"), and every STUN — the developer's rule, "stun cannot be removed via dispel": a Storm Bolt, a War
  * Stomp or a Bash holds for its whole duration whatever Dispel Magic, Abolish Magic, Purge,
  * Devour Magic or a scripted auto-dispel lands on it. The one stun that DOES go is the Staff of
@@ -1087,6 +1087,19 @@ export const DISPEL_CODES = new Set(["Aprg", "Adis", "Aadm", "Advm"]);
  * only Data column (`[Acyc] DataA "Can Be Dispelled"` = 1 — taking a cycloned ally down is what
  * a dispel is famous for). POSSESSION's hold is NOT excepted — the developer's word, it cannot
  * be dispelled either.
+ *
+ * `undispellable` is set where the buff is applied, and it is carried by:
+ *  · Doom ("This spell cannot be dispelled");
+ *  · the rest of Liquipedia's Dispel roll-call of debuffs nothing removes — Thunder Clap
+ *    (and the creeps' Slam, the same handler), Acid Bomb and Shadow Strike;
+ *  · every POISON — the developer's rule, a dispel does not cure a poison: Slow Poison,
+ *    Envenomed Spears, Poison Sting, Poison Arrows and the Orb of Venom, both halves
+ *    (world.ts `applyPoison`).
+ * The roll-call also names the breaths' damage-over-time halves; Breath of Fire's burn is
+ * not modelled (`ANbf` deals its `DataA` and nothing else), so there is no buff to flag.
+ * Being `undispellable` also keeps a buff through an invulnerability wipe
+ * (world.ts `clearStatusForInvulnerable`), as that same page says: only Mirror Image
+ * removes such effects.
  *
  * One predicate for every door a dispel has — `dispelUnit`, Devour Magic's meal, the JASS
  * `autoDispel` query and `worthDispelling` below — so the autocast never spends mana on an
@@ -1335,8 +1348,9 @@ const thunderClap: Handler = (api, caster, def, rank, ctx) => {
     if (t === caster || !api.hostile(caster, t) || t.flying) continue;
     api.spellDamage(t, d(lvl, 0), caster.id);
     // fx(def) → the slow buff BHtc's own Targetart, StasisTotemTarget.mdx worn
-    // `overhead` (the amber swirl — the same rig as the blue stun one).
-    api.applyBuff(t, { kind: "slow", timeLeft: dur(lvl, t), sourceId: caster.id, value: d(lvl, 2, 0.25), value2: d(lvl, 3, 0.25), ...fx(def) });
+    // `overhead` (the amber swirl — the same rig as the blue stun one). UNDISPELLABLE: it
+    // heads Liquipedia's Dispel roll-call of what no dispel removes (`survivesDispel`).
+    api.applyBuff(t, { kind: "slow", timeLeft: dur(lvl, t), sourceId: caster.id, value: d(lvl, 2, 0.25), value2: d(lvl, 3, 0.25), undispellable: true, ...fx(def) });
   }
 };
 
@@ -1772,9 +1786,9 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // Abolish Magic (Dryad) — Dispel Magic aimed at ONE unit instead of an area: strip its
   // timed buffs, and a summon takes dataB "Summoned Unit Damage" (300), which is enough to
   // end most of them. dataA is "Mana Loss", 0 on every stock row but honoured if a map sets
-  // it. Its allegiance is deliberately unrestricted — the same cast cleanses a poisoned
-  // ally and strips an enemy's Bloodlust, which is exactly why `targs1` names neither
-  // `friend` nor `enemy`.
+  // it. Its allegiance is deliberately unrestricted — the same cast frees a slowed ally and
+  // strips an enemy's Bloodlust, which is exactly why `targs1` names neither `friend` nor
+  // `enemy`. (Not a POISONED one: poison is undispellable — `survivesDispel`.)
   // Cannibalize (Ghoul, Abomination) — eat the corpse underfoot and regenerate off it. dataA
   // is "Hit Points per Second" (16 Ghoul, 25 Abomination) for the row's `Dur1` (20s).
   //
@@ -2333,6 +2347,9 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   //   DataD "Primary Damage"     6/11/17   the PRIMARY target's dps
   //   DataE "Secondary Damage"   4/7/11    …and everyone else's ("slightly less damage")
   //   DataF "Damage Interval"    1
+  //
+  // Both halves are UNDISPELLABLE — Acid Bomb is on Liquipedia's Dispel roll-call of what no
+  // dispel removes (`survivesDispel`), so the armour and the burn run their whole clock.
   ANab: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
@@ -2340,8 +2357,8 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const life = lvl.duration || 15;
     const tick = d(lvl, 5, 1) || 1;
     for (const o of enemiesInArea(api, caster, def, t.x, t.y, lvl.area || 200)) {
-      api.applyBuff(o, { kind: "armor", group: "acid", timeLeft: life, sourceId: caster.id, value: -d(lvl, 2, 3), ...fx(def) });
-      api.applyBuff(o, { kind: "dot", group: "acid", timeLeft: life, sourceId: caster.id, value: (o === t ? d(lvl, 3, 6) : d(lvl, 4, 4)) / tick });
+      api.applyBuff(o, { kind: "armor", group: "acid", timeLeft: life, sourceId: caster.id, value: -d(lvl, 2, 3), undispellable: true, ...fx(def) });
+      api.applyBuff(o, { kind: "dot", group: "acid", timeLeft: life, sourceId: caster.id, value: (o === t ? d(lvl, 3, 6) : d(lvl, 4, 4)) / tick, undispellable: true });
     }
   },
 
@@ -2367,6 +2384,9 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // not a casting time — which is why the Warden used to stand still for three seconds
   // before throwing (see world.ts CAST_TIME_IS_NOT_A_WINDUP). Our dot ticks continuously,
   // so the per-tick figure is spread over the interval to give the same total.
+  //
+  // Both halves are UNDISPELLABLE: Shadow Strike is on Liquipedia's Dispel roll-call of what
+  // no dispel removes, and it is a POISON besides (`survivesDispel`).
   AEsh: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
@@ -2374,8 +2394,8 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const d0 = dur(lvl, t) || 15.1;
     const tick = lvl.castTime || 3;
     api.spellDamage(t, d(lvl, 4, 75), caster.id);
-    api.applyBuff(t, { kind: "dot", group: "shadowstrike", timeLeft: d0, sourceId: caster.id, value: d(lvl, 0, 10) / tick, ...fx(def) });
-    api.applyBuff(t, { kind: "slow", group: "shadowstrike", timeLeft: d0, sourceId: caster.id, value: d(lvl, 1, 0.5), value2: d(lvl, 2, 0) });
+    api.applyBuff(t, { kind: "dot", group: "shadowstrike", timeLeft: d0, sourceId: caster.id, value: d(lvl, 0, 10) / tick, undispellable: true, ...fx(def) });
+    api.applyBuff(t, { kind: "slow", group: "shadowstrike", timeLeft: d0, sourceId: caster.id, value: d(lvl, 1, 0.5), value2: d(lvl, 2, 0), undispellable: true });
   },
 
   // Howl of Terror (Pit Lord) — enemies in `area` deal dataA less attack damage.
