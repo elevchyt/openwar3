@@ -1375,8 +1375,19 @@ function runEconomy() {
       // that clock instead: the rush is held to it on purpose (plus/plan.ts `tier3Held`).
       if (s.tier3Clock !== undefined) {
         check(`${race}/${s.id} (Insane) does not buy its tier-3 hall before its own clock`, insane.tier3At >= s.tier3Clock, true);
-        check(`${race}/${s.id} (Insane) stands its tier-3 hall within 4 minutes of that clock`,
-          insane.tier3At - Math.max(s.tier3Clock, insane.tier2At) <= 240, true);
+        // Five minutes, not four: the orc's tier-2 ARMY (four Raiders, a Kodo, Head Hunters — the
+        // `lead` rows of its tier-2 builds) is bought before the Fortress now, as it should be.
+        // Measured here: 13:01–14:15 for the two two-Beastiary builds.
+        check(`${race}/${s.id} (Insane) stands its tier-3 hall within 5 minutes of that clock`,
+          insane.tier3At - Math.max(s.tier3Clock, insane.tier2At) <= 300, true);
+        continue;
+      }
+      // …and one that names a CONDITION (`tier3After`) from the latest it may wait for it
+      // (plan.ts `TIER3_AFTER_LATEST`, 600 s). Measured: 13:08–14:57 for the orc's standard
+      // plans, which before this skipped their tier-2 army altogether for a 9:00 Fortress.
+      if (s.tier3After !== undefined) {
+        check(`${race}/${s.id} (Insane) stands its tier-3 hall within 5.5 minutes of its tier-3 cutoff`,
+          insane.tier3At - Math.max(600, insane.tier2At) <= 330, true);
         continue;
       }
       check(`${race}/${s.id} (Insane) stands its tier-3 hall within 5.5 minutes of its tier 2`,

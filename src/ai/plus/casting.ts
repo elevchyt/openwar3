@@ -1904,7 +1904,7 @@ export class PlusCaster {
         : code === HEX
           // HEX: priced at its FULL duration on a hero, and then at a premium — see `HEX_HERO_FIRST`.
           ? this.value(t, half, { ...lvl, heroDuration: lvl.duration }) * (t.isHero ? HEX_HERO_FIRST : 1)
-          : this.value(t, half, lvl) * (half === "heal" && polarity ? POLARITY_HEAL_FIRST : 1);
+          : this.value(t, half, lvl, def.code) * (half === "heal" && polarity ? POLARITY_HEAL_FIRST : 1);
       const s = worth * 1000 - Math.hypot(t.x - u.x, t.y - u.y);
       if (s > bestScore) { bestScore = s; best = t; }
     }
@@ -1997,8 +1997,8 @@ export class PlusCaster {
    * that is `dur1`/`herodur1`: every hard disable in the game has a shorter hero duration, so
    * an expert prices a stun spent on a hero at what it actually buys.
    */
-  private value(t: SimUnit, role: Role, lvl?: AbilityLevel): number {
-    return spellValue(t, role, this.aim0, lvl ? spellFacts(lvl.duration, lvl.heroDuration) : undefined);
+  private value(t: SimUnit, role: Role, lvl?: AbilityLevel, code?: string): number {
+    return spellValue(t, role, this.aim0, lvl ? spellFacts(lvl.duration, lvl.heroDuration, code) : undefined);
   }
 
   /**

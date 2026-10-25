@@ -1651,10 +1651,16 @@ plays two builds, a blademaster opening … and a far seer opening"*, and at tie
 of two ways — TWO Beastiaries of Raiders with Ensnare and a single Kodo (map control: contest the
 camps, expand, hit the other player's expansion), or the STANDARD one Beastiary plus one Spirit
 Lodge and straight on to tier 3 for the Berserker Upgrade and Bloodlust. So four builds
-(`bmraiders`, `bmstandard`, `fsraiders`, `fsstandard`), and all four grow into `taurens` —
+(`bmraiders`, `bmstandard`, `fsraiders`, `fsstandard`), each OPENING growing at the Stronghold into
+its tier-2 ARMY (`thenAt2`: `orcraiders2` / `orcstandard2` — Head Hunters as the main damage, a
+Grunt or two, and four Raiders and the Kodo as `lead` counts; the developer's *"3-4 raiders and the
+rest should be headhunters and maybe 1-2 grunts"*), the standard one holding its Fortress until three
+Raiders are out (`tier3After`, given up at 10:00 — `TIER3_AFTER_LATEST`), and all four growing into
+`taurens` —
 Berserkers, Shamans with Master Training, and Taurens once the Berserker Upgrade is in
 (`waitFor`). The Blademaster openings take their second mine WITH the Stronghold
-(`expandWithTier`) and buy the Shadow Hunter there; the Far Seer openings mass Head Hunters
+(`expandWithTier`, which opens the clock and leaves the row where it is — moved up, its Great Hall
+halted the ladder above the Raiders for minutes) and buy the Shadow Hunter there; the Far Seer openings mass Head Hunters
 (`fsstandard` out of two Barracks), buy the Tauren Chieftain at the Stronghold, and play around
 him as the build's CARRY (`PlusStrategy.carry`, below). The two-Beastiary builds hold the
 Fortress to their own 10:00 clock (`tier3Held`) — the Insane rush is the standard plan's.
@@ -1771,10 +1777,15 @@ the rush reached its Fortress at 13:29 on average against 9:46 for the build it 
 * **A melee CARRY's kit** (plus/items.ts `CARRY_KIT`, `HERO_KIT`): the Potion of Lesser
   Invulnerability is bought ahead of almost everything — out of the purse, for that hero first
   (`firstFor`), on the field door too — and the Scroll of Healing right behind the rest of the melee
-  belt. Every melee carry gets it (the Blademaster in his own openings, a Far Seer's Tauren
+  belt, then a Potion of Healing off the race's own shop. Every melee carry gets it (the Blademaster
+  and the Demon Hunter in their own openings, a Far Seer's Tauren
   Chieftain, the human's Mountain King, a Priestess opening's Demon Hunter or Brewmaster), and the
   Tauren Chieftain always does — the developer's *"potion of invulnerability should be a high
   priority purchase"*; six of his eight deaths in the last benchmark were to a Lich.
+* **Ensnare and the net** (plus/targeting.ts `PREFERRED`, index.ts `nettedPick`): a Raider's
+  Ensnare is worth ×3 on a Crypt Fiend, an Obsidian Statue or a Lich (the developer's), and a
+  ranged unit shoots a netted enemy (Ensnare or Web) it can already reach before the group's focus
+  — after a kill shot, and never instead of finishing a hero.
 * **`HeroCombo.carry`** — the same, for a carry the build cannot name because the pairing ROLLS
   him: the Priestess of the Moon's second hero, a Demon Hunter or a Pandaren Brewmaster, is the
   carry whichever comes up (`pickHeroOrder` resolves it at seat time).

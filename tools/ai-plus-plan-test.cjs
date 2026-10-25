@@ -132,7 +132,7 @@ console.log("\n--- the last resort is the whole tier-1 line ---");
 console.log("\n--- spellcasters are a share of the army, not the army ---");
 {
   const orc = PLUS_RACES.orc;
-  const casters = { ...orc.strategies[0], id: "casters", mix: { ogru: 1, oshm: 4, odoc: 4 } };
+  const casters = { ...orc.strategies[0], id: "casters", mix: { ogru: 1, oshm: 4, odoc: 4 }, thenAt2: undefined, thenAt3: undefined };
   const rows = buildableMix(ctx(orc, casters, PLUS_NORMAL, [orc.halls[1], orc.barracks, "osld", "ofor"], 2));
   const total = rows.reduce((n, r) => n + r.weight, 0);
   const share = rows.filter((r) => orc.units[r.unit].caster).reduce((n, r) => n + r.weight, 0) / total;
@@ -213,7 +213,8 @@ console.log("\n--- night elf: bears first, Chimaeras after ---");
   const picks = [(lo) => lo, (lo, hi) => hi].map((rand) => pickHeroOrder(elf, potm, () => true, rand));
   check("…her second is the Demon Hunter or the Brewmaster", picks.map((h) => h.second).sort().join(), "Edem,Npbm");
   check("…and that hero is the carry", picks.every((h) => h.carry === h.second), true);
-  check("a Demon Hunter opening has no carry", pickHeroOrder(elf, elf.strategies[0], () => true, (lo) => lo).carry, undefined);
+  check("a Demon Hunter opening's carry is the Demon Hunter", pickHeroOrder(elf, elf.strategies[0], () => true, (lo) => lo).carry, "Edem");
+  check("…on every build that opens on him", elf.strategies.filter((s) => s.weight > 0 && (s.heroes ?? elf.heroes)[0] === "Edem").every((s) => s.carry === "Edem"), true);
 }
 
 // THE DEVELOPER'S HERO RULES: the Far Seer's Tauren Chieftain opens on War Stomp, a second
@@ -250,6 +251,29 @@ console.log("\n--- second-hero skill builds and the human carry ---");
   mem.note({ id: 2, owner: 1, typeId: "Udea", isHero: true }, 300);
   mem.forget(1000, 60);
   check("an opponent's opening hero is the first one seen, and outlives the sightings", mem.openingHeroes().get(1), "Udre");
+}
+
+// ENSNARE ON THE UNDEAD'S SPINE, AND ARROWS ON WHAT IS NETTED. The developer's: "raiders should
+// aim their ensnare at crypt fiends, obsidian statues and Lich more when playing against undead",
+// and "ensnared targets must be focused more by ranged units if it makes sense".
+console.log("\n--- Ensnare targets, and the netted are shot first ---");
+{
+  const { spellValue, spellFacts } = require(join(REPO, ".sim-build", "src", "ai", "plus", "targeting.js"));
+  const { nettedPick } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
+  const ctx = { skill: "expert", heroFocus: 0.3, harass: false };
+  const body = (typeId, o = {}) => ({ typeId, hp: 500, maxHp: 500, maxMana: 0, isHero: false, isSummon: false, isPeon: false, building: null, weapon: null, ...o });
+  const net = spellFacts(12, 3, "Aens");
+  const ranked = [body("ugho", { hp: 340, maxHp: 340 }), body("uabo", { hp: 1080, maxHp: 1080 }), body("ucry", { hp: 550, maxHp: 550 }), body("uobs", { hp: 700, maxHp: 700, maxMana: 200 })]
+    .sort((x, y) => spellValue(y, "disable", ctx, net) - spellValue(x, "disable", ctx, net)).map((t) => t.typeId);
+  check("Ensnare goes on the Statue and the Fiend before an Abomination or a Ghoul", ranked.slice(0, 2).sort().join(), "ucry,uobs");
+  const plain = spellFacts(12, 3);
+  check("…and only Ensnare: another disable reads them as before",
+    spellValue(body("ucry"), "disable", ctx, plain) < spellValue(body("ucry"), "disable", ctx, net), true);
+  const archer = { x: 0, y: 0, radius: 16, weapon: { ranged: true, range: 600 } };
+  const foe = (id, x, netted, hp = 400) => ({ id, x, y: 0, radius: 16, hp, maxHp: 500, building: null, buffs: netted ? [{ group: "ensnare" }] : [] });
+  check("a ranged unit shoots the netted enemy in reach", nettedPick(archer, [foe(1, 300, false, 100), foe(2, 400, true)], () => true)?.id, 2);
+  check("…not one out of reach", nettedPick(archer, [foe(3, 1400, true)], () => true), null);
+  check("…and a melee unit is not asked", nettedPick({ ...archer, weapon: { ranged: false, range: 100 } }, [foe(4, 50, true)], () => true), null);
 }
 
 // THE NIGHT ELF'S LATE GAME. Reported: *"going for archers + huntresses a bit too much … later it
@@ -385,9 +409,17 @@ console.log("\n--- hero pairings, and the Insane-only builds ---");
   check("…two Blademaster and two Far Seer openings", rolled.map((s) => s.heroes[0]).join(), "Obla,Obla,Ofar,Ofar");
   check("…a Far Seer build's carry is the Tauren Chieftain", rolled.filter((s) => s.heroes[0] === "Ofar").every((s) => s.carry === "Otch"), true);
   check("…a Blademaster build's carry is the Blademaster", rolled.filter((s) => s.heroes[0] === "Obla").every((s) => s.carry === "Obla"), true);
-  check("…every one keeps one Kodo for its aura", rolled.every((s) => s.lead?.okod === 1), true);
+  // Each opening grows into its tier-2 ARMY at the Stronghold: Head Hunters as the main damage,
+  // four Raiders and the Kodo as counts (the developer's "3-4 raiders and the rest should be
+  // headhunters and maybe 1-2 grunts").
+  const at2 = (s) => orc.strategies.find((x) => x.id === s.thenAt2);
+  check("…every one grows into a tier-2 army", rolled.every((s) => !!at2(s)), true);
+  check("…with four Raiders and one Kodo as counts", rolled.every((s) => at2(s).lead?.orai === 4 && at2(s).lead?.okod === 1), true);
+  check("…and Head Hunters as the main damage", rolled.every((s) => Object.entries(at2(s).mix).sort((a, b) => b[1] - a[1])[0][0] === "ohun"), true);
+  check("…the standard plans wait for three Raiders before the Fortress",
+    rolled.filter((s) => s.id.endsWith("standard")).every((s) => s.tier3After?.units?.join() === "orai,3"), true);
   check("…and grows into the Tauren army", rolled.every((s) => s.thenAt3 === "taurens"), true);
-  check("the two-Beastiary builds hold tier 3 to their own clock", rolled.filter((s) => s.factories?.obea === 2).every((s) => s.tier3Clock === 600), true);
+  check("the two-Beastiary builds hold tier 3 to their own clock", rolled.filter((s) => at2(s).factories?.obea === 2).every((s) => s.tier3Clock === 600), true);
   check("every Shadow Hunter build opens on Hex or Healing Wave",
     orc.skills.Oshd.every((b) => b[0] === "AOhx" || b[0] === "AOhw"), true);
   check("Death Knight → Lich", undead.combos.Udea.second.join(), "Ulic");

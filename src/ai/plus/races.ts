@@ -247,6 +247,13 @@ export interface PlusStrategy {
   readonly tier2Clock?: number;
   /** The tier-3 clock for THIS build, over the race's (`PlusRaceTable.tier3Clock`). */
   readonly tier3Clock?: number;
+  /**
+   * …and a CONDITION the third hall waits for, in the `PowerSpike` shape — held even against the
+   * Insane rush, like `tier3Clock`, and given up at plan.ts `TIER3_AFTER_LATEST` so a seat that
+   * keeps losing what it waits for still tiers. The orc's standard plans: three Raiders out
+   * before the Fortress is saved for (see the orc's builds).
+   */
+  readonly tier3After?: PowerSpike;
   /** A RUSH: the wave does not wait for the hero's third level in the opening (index.ts
    *  `waveReady`'s `EARLY_GAME` gate) — the whole build is spent before the camps would pay. */
   readonly rush?: boolean;
@@ -284,8 +291,8 @@ export interface PlusStrategy {
    */
   readonly carry?: string;
   /**
-   * The SECOND town is due the moment this hall tier stands, whatever `expandAt` says, and the
-   * row moves up the ladder with it the way a won fight's expansion does (plan.ts `expand`).
+   * The SECOND town is due the moment this hall tier stands, whatever `expandAt` says (plan.ts
+   * `expand`) — from the expansion's ordinary place in the ladder, not above the army.
    * The Blademaster openings': *"try to harass or expand upon reaching tier 2"*.
    */
   readonly expandWithTier?: number;
@@ -890,36 +897,49 @@ const ORC: PlusRaceTable = {
     // tier 2 to contest creep camps fast and expand with ease or be aggressive against an
     // opponent's expo OR the more standard build where they build one bestiary for raiders +
     // ensnare + 1 kodo beast and one spirit lodge for shamans and they try to reach tier 3 to get
-    // the berserker upgrade along with master training on their shamans"*. So four builds, an
-    // opening by a tier-2 plan, and all four grow into the same tier 3 (`taurens`):
+    // the berserker upgrade along with master training on their shamans"*. So four builds — an
+    // opening by a tier-2 plan — and each OPENING grows into its PLAN at the Stronghold
+    // (`thenAt2`: `orcraiders2` or `orcstandard2`, below), and all four into `taurens` at tier 3.
     //
-    //  · the KODO is a COUNT and not a share (`lead`) — one, for its War Drums aura;
-    //  · ENSNARE is an unlock row off the Beastiary (`upgrades`), bought the moment it stands —
-    //    *"the orc is still strong when it gets the Ensnare as it can pick off units with its
-    //    raiders"*;
-    //  · the TWO-BEASTIARY plan is a tier-2 army, so it names its own tier-3 clock (`tier3Clock`,
-    //    which a build's own clock holds against the Insane rush — plan.ts `tier3Due`) and takes
-    //    its second mine with the Stronghold (`expandWithTier`). 600 s is OURS: about two minutes
-    //    of the Stronghold's map control before the Fortress is saved for;
-    //  · the STANDARD plan rushes tier 3 like every other Insane build (`PlusProfile.tier3Rush`).
+    // The tier-2 army is HEAD HUNTERS, not Raiders: *"straight raiders with no headhunters and
+    // grunts is not very good on tier 2 so instead of 6 raiders it must get 3-4 raiders and the
+    // rest should be headhunters and maybe 1-2 grunts, but headhunters are the main dps"* (the
+    // developer). So both plans name the Raiders and the Kodo as COUNTS (`lead`: four and one,
+    // asked high in the ladder from the moment the Beastiary stands) and the mix is Head Hunters
+    // with a small Grunt share. ENSNARE is an unlock row off the Beastiary (`upgrades`), bought the
+    // moment it stands — *"the orc is still strong when it gets the Ensnare as it can pick off
+    // units with its raiders"* (and plus/targeting.ts aims it).
+    //
+    // Measured over 48 observed Insane matches before this (orc 5–19): the STANDARD builds never
+    // trained one Raider or Kodo in twelve seats — the Insane rush (`PlusProfile.tier3Rush`)
+    // saved for the Fortress from the moment the Stronghold stood, and the tier-3 army has none —
+    // and the TWO-BEASTIARY builds' first Raider came three minutes after their Beastiary, the
+    // ladder halted on the expansion that `expandWithTier` used to move up to the top. Now:
+    //
+    //  · the STANDARD plan holds its tier 3 until three Raiders are out (`tier3After`), so its
+    //    Beastiary, Kodo and Lodge are bought first and the Fortress rush comes after them;
+    //  · the TWO-BEASTIARY plan names its own tier-3 clock (`tier3Clock`, held even against the
+    //    rush — plan.ts `tier3Held`) and takes its second mine with the Stronghold, from the
+    //    expansion's ORDINARY place in the ladder (`expandWithTier` opens the clock and no longer
+    //    moves the row). 600 s is OURS: about two minutes of the Stronghold's map control.
     //
     // The BLADEMASTER openings are played FOR the Blademaster: *"get as many levels as possible
     // on the blademaster and try to harass or expand upon reaching tier 2 (shadow hunter must be
     // trained as fast as possible upon reaching tier 2)"* — so the second mine comes with the
     // Stronghold (`expandWithTier`), and the Shadow Hunter is the second hero (`combos`), whom
-    // `tierTwoHero` buys above everything else the Stronghold makes affordable. Grunts at tier 1;
-    // the standard plan adds the Head Hunters the Berserker Upgrade is for. The Blademaster is the
-  // build's CARRY too (`carry`: the developer's *"blademaster is also a carry"*) — he already
-  // leads the army as its opener, and the clause is what gives him the melee carry's kit
-  // (plus/items.ts `CARRY_KIT`) and first claim on the shops and the drops.
+    // `tierTwoHero` buys above everything else the Stronghold makes affordable. Grunts at tier 1,
+    // Head Hunters as soon as the War Mill stands. The Blademaster is the build's CARRY too
+    // (`carry`: the developer's *"blademaster is also a carry"*) — he already leads the army as its
+    // opener, and the clause is what gives him the melee carry's kit (plus/items.ts `CARRY_KIT`)
+    // and first claim on the shops and the drops.
     { id: "bmraiders", name: "Blademaster, Grunts and two Beastiaries", tier: 2, weight: 25, expandAt: 330, expandAgainAt: 750,
       heroes: [BLADE_MASTER, SHADOW_HUNTER, TAUREN_CHIEF, FAR_SEER], carry: BLADE_MASTER, expandWithTier: 2, tier3Clock: 600,
-      factories: { [BESTIARY]: 2 }, lead: { [KODO_BEAST]: 1 }, thenAt3: "taurens",
-      mix: { [GRUNT]: 2, [RAIDER]: 3 } },
+      thenAt2: "orcraiders2", thenAt3: "taurens",
+      mix: { [GRUNT]: 3, [HEAD_HUNTER]: 1.5 } },
     { id: "bmstandard", name: "Blademaster, Grunts, Raiders and Shamans", tier: 2, weight: 25, expandAt: 330, expandAgainAt: 750,
       heroes: [BLADE_MASTER, SHADOW_HUNTER, TAUREN_CHIEF, FAR_SEER], carry: BLADE_MASTER, expandWithTier: 2,
-      lead: { [KODO_BEAST]: 1 }, thenAt3: "taurens",
-      mix: { [GRUNT]: 2, [HEAD_HUNTER]: 1.5, [RAIDER]: 1.5, [SHAMAN]: 1.2 } },
+      tier3After: { units: [RAIDER, 3] }, thenAt2: "orcstandard2", thenAt3: "taurens",
+      mix: { [GRUNT]: 3, [HEAD_HUNTER]: 1.5 } },
     // The FAR SEER openings are played for the TAUREN CHIEFTAIN: *"for far seer opening, the
     // goal is to get a tauren chieftain as the second hero as soon as tier 2 is reached, and the
     // tauren chieftain is basically the "carry" … its goal must be to gain a lot of levels and
@@ -927,15 +947,25 @@ const ORC: PlusRaceTable = {
     // first in line at a shop and at a drop — and *"when going Far Seer the computer+ (iNSANE) AI
     // must focus on mass producing head hunters while also teching up"*: the Head Hunter is the
     // army at every tier (`[ohun] Requires=ofor`, the War Mill the race's support row puts up),
-    // and the standard plan pours it out of two Barracks.
+    // and the standard opening pours it out of two Barracks.
     { id: "fsraiders", name: "Far Seer, Head Hunters and two Beastiaries", tier: 2, weight: 25, expandAt: 300, expandAgainAt: 720,
       heroes: [FAR_SEER, TAUREN_CHIEF, SHADOW_HUNTER, BLADE_MASTER], carry: TAUREN_CHIEF, expandWithTier: 2, tier3Clock: 600,
-      factories: { [BESTIARY]: 2 }, lead: { [KODO_BEAST]: 1 }, thenAt3: "taurens",
-      mix: { [HEAD_HUNTER]: 3, [RAIDER]: 2.5 } },
+      thenAt2: "orcraiders2", thenAt3: "taurens",
+      mix: { [HEAD_HUNTER]: 3.5, [GRUNT]: 0.5 } },
     { id: "fsstandard", name: "Far Seer, mass Head Hunters, Raiders and Shamans", tier: 2, weight: 25, expandAt: 270, expandAgainAt: 690,
       heroes: [FAR_SEER, TAUREN_CHIEF, SHADOW_HUNTER, BLADE_MASTER], carry: TAUREN_CHIEF,
-      factories: { [ORC_BARRACKS]: 2 }, lead: { [KODO_BEAST]: 1 }, thenAt3: "taurens",
-      mix: { [HEAD_HUNTER]: 3.5, [RAIDER]: 1.2, [SHAMAN]: 1.2 } },
+      tier3After: { units: [RAIDER, 3] }, factories: { [ORC_BARRACKS]: 2 }, thenAt2: "orcstandard2", thenAt3: "taurens",
+      mix: { [HEAD_HUNTER]: 3.5, [GRUNT]: 0.5 } },
+    // THE TWO TIER-2 ARMIES — never rolled (weight 0), only grown into at the Stronghold. Head
+    // Hunters as the main damage with a Grunt or two, four Raiders and the Kodo as counts; the
+    // two-Beastiary one puts both buildings up so the four Raiders arrive two at a time, and the
+    // standard one adds the Spirit Lodge's Shamans.
+    { id: "orcraiders2", name: "Head Hunters, four Raiders and a Kodo (two Beastiaries)", tier: 2, weight: 0, expandAt: 330, expandAgainAt: 750,
+      factories: { [BESTIARY]: 2 }, lead: { [RAIDER]: 4, [KODO_BEAST]: 1 }, thenAt3: "taurens",
+      mix: { [HEAD_HUNTER]: 3.5, [GRUNT]: 0.6 } },
+    { id: "orcstandard2", name: "Head Hunters, four Raiders, a Kodo and Shamans", tier: 2, weight: 0, expandAt: 330, expandAgainAt: 750,
+      lead: { [RAIDER]: 4, [KODO_BEAST]: 1 }, thenAt3: "taurens",
+      mix: { [HEAD_HUNTER]: 3.5, [GRUNT]: 0.5, [SHAMAN]: 1.2 } },
     // THE ORC TIER 3 — never rolled (weight 0), only grown into. The developer's: *"Taurens can be
     // added on tier 3 after getting berserkers along with shamans with master training for their
     // bloodlust ability"*. So three things and nothing else: the Head Hunters, who ARE the
@@ -1283,12 +1313,15 @@ const NIGHT_ELF: PlusRaceTable = {
     { id: UPG_CHIM_ACID, from: CHIMAERA_ROOST, ranks: 1, after: 30 },
   ],
   strategies: [
+    // The DEMON HUNTER is the carry of every build that opens on him (`carry`, the developer's
+    // *"mark the Demon Hunter as carry so that he gets the kit too"* — plus/items.ts `CARRY_KIT`).
+    //
     // DEMON HUNTER AND FOUR ARCHERS into the creep camps, then TWO Ancient of Lores at tier 2
     // pouring out Dryads and Druids of the Claw — with `Resi` (Abolish Magic) and `Redc` off the
     // same buildings, and `Redc` rank 2 is what puts Bear Form on the Druid at tier 3. That is
     // the build's power spike, and it is why this one build is worth two Lores.
     { id: "bears", name: "Dryads and Druids of the Claw", tier: 2, weight: 26, expandAt: 330, expandAgainAt: 750,
-      heroes: [DEMON_HUNTER, KEEPER, MOON_CHICK, WARDEN],
+      heroes: [DEMON_HUNTER, KEEPER, MOON_CHICK, WARDEN], carry: DEMON_HUNTER,
       factories: { [ANCIENT_LORE]: 2 }, thenAt3: "lategrove",
       mix: { [DRUID_CLAW]: 2.5, [DRYAD]: 2, [ARCHER]: 1.5 } },
     // KEEPER OF THE GROVE, ARCHERS AND HUNTRESSES — committed to from tier 1 (the Hunter's Hall
@@ -1305,13 +1338,13 @@ const NIGHT_ELF: PlusRaceTable = {
     // …the same opening, massing DRYADS out of both Lores instead. Abolish Magic is the upgrade
     // that makes it, and the second hero is the ranged damage the Dryads do not have.
     { id: "dryads", name: "Mass Dryads", tier: 2, weight: 22, expandAt: 300, expandAgainAt: 720, notInsane: true,
-      heroes: [DEMON_HUNTER, MOON_CHICK, KEEPER, WARDEN],
+      heroes: [DEMON_HUNTER, MOON_CHICK, KEEPER, WARDEN], carry: DEMON_HUNTER,
       factories: { [ANCIENT_LORE]: 2 }, thenAt3: "lategrove",
       mix: { [DRYAD]: 3.5, [ARCHER]: 1.5 } },
     // …and the same opening again, teching to the WIND instead: Druids of the Talon behind
     // Archers that never stop, with `Reib` (Improved Bows) off the Ancient of War.
     { id: "talons", name: "Archers and Druids of the Talon", tier: 2, weight: 20, expandAt: 270, expandAgainAt: 690, notInsane: true,
-      heroes: [DEMON_HUNTER, MOON_CHICK, KEEPER, WARDEN], thenAt3: "lategrove",
+      heroes: [DEMON_HUNTER, MOON_CHICK, KEEPER, WARDEN], carry: DEMON_HUNTER, thenAt3: "lategrove",
       mix: { [ARCHER]: 3, [DRUID_TALON]: 1.2, [DRYAD]: 1 } },
     // THE PRIESTESS OF THE MOON opening into the same bears: Archers behind her Searing Arrows at
     // tier 1, both Lores at tier 2. The developer's: *"when opening with priestess of the moon,
@@ -1327,7 +1360,7 @@ const NIGHT_ELF: PlusRaceTable = {
     // reaches tier 3"*, so a build that names a tier-3 army of its own still grows into one with
     // the bears in it.
     { id: "chimaeras", name: "Chimaeras and Dryads", tier: 3, weight: 12, expandAt: 480, expandAgainAt: 900,
-      thenAt3: "chimgrove",
+      carry: DEMON_HUNTER, thenAt3: "chimgrove",
       mix: { [CHIMAERA]: 3, [DRYAD]: 2, [HUNTRESS]: 1.5, [FAERIE_DRAGON]: 0.5 } },
     // THE LATE GROVE — never rolled (weight 0), only grown into at tier 3 by every other night
     // elf build (`thenAt3`). The developer's late game: *"bears (druid of the claw + his

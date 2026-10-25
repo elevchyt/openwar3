@@ -205,8 +205,16 @@ function tier3Rushing(c: PlusCtx): boolean {
  * its tier-2 army is the plan until then (the orc's two-Beastiary builds, plus/races.ts).
  */
 function tier3Held(c: PlusCtx): boolean {
-  return c.strategy.tier3Clock !== undefined && c.clock < c.strategy.tier3Clock + c.profile.tier3Delay;
+  if (c.strategy.tier3Clock !== undefined && c.clock < c.strategy.tier3Clock + c.profile.tier3Delay) return true;
+  // …and one that names a CONDITION (`PlusStrategy.tier3After`) is held until it holds — or until
+  // `TIER3_AFTER_LATEST`, so a seat that keeps losing what it waits for still tiers up.
+  const after = c.strategy.tier3After;
+  return !!after && !holds(c, after) && c.clock < TIER3_AFTER_LATEST + c.profile.tier3Delay;
 }
+
+/** The latest a `PlusStrategy.tier3After` condition holds the third hall back. OURS: a minute past
+ *  the orc's old 9:00 Fortress — the four Raiders arrive by then in a fight-free ladder run. */
+const TIER3_AFTER_LATEST = 600;
 
 /** Workers on a mine. WC3 mines take five at a time, so a sixth is a peasant standing in a
  *  queue: five per town, everybody else in the trees. */
@@ -475,6 +483,11 @@ export function buildPlan(c: PlusCtx): void {
   supportBuildings(c);
   // …and the UNIT-ABILITY UNLOCKS (Web, Berserker, Defend…), saved for — see `abilityUpgrades`.
   abilityUpgrades(c);
+  // …and on the rungs that do NOT match air (`antiAirMatch` already put it under the core army),
+  // the ANSWER TO AIR goes in above the build's lead counts: an orc's four Raiders and its Kodo
+  // otherwise took the room under the army ceiling and no Batrider fitted (ai-plus-ladder-test).
+  // It is only ever emitted once enough air has been SEEN (`antiAirDue`).
+  if (!c.profile.antiAirMatch) antiAir(c);
   leadUnits(c);
   tierUpDue(c); // …and from three minutes, the Keep — see TIER2_CLOCK
   tier3Due(c); // …and the race's tier 3 on ITS clock, if it has one — see `tier3Due`
@@ -489,11 +502,6 @@ export function buildPlan(c: PlusCtx): void {
   techBuildings(c);
   upgrades(c);
   always(c);
-  // …and the ANSWER TO AIR, which is the only row here the build order did not ask for — see
-  // `antiAir`. Beside `always` because it is the same kind of row: support the plan assumed
-  // (or, here, did not know it would need), above the expansion and below the buildings that
-  // make the army.
-  if (!c.profile.antiAirMatch) antiAir(c);
   // …and SIEGE, the same kind of row for the other thing a build may not have planned for: the
   // towers at the end of the march. Bounded to two bodies, so its reservation ends.
   if (!c.table.siegeEarly) siegeLine(c);
@@ -1390,9 +1398,12 @@ function mixBuildings(c: PlusCtx): Array<{ build: string; tier: number }> {
   // top of the file). The same is true of the lumber unit's Crypt.
   // …and the build's LEAD units (`PlusStrategy.lead`), which may name a unit the mix does not —
   // the human's three Flying Machines are a count beside the Knight army, not a share of it.
+  // FIRST, because they are the build's priority and `techBuildings` asks in this order with a
+  // thin purse: an orc standard plan put its Spirit Lodge (off the mix's Shamans) up ahead of the
+  // Beastiary its four Raiders and its Kodo come out of.
   const wanted = [
-    ...Object.keys(strategy.mix),
     ...Object.keys(strategy.lead ?? {}),
+    ...Object.keys(strategy.mix),
     ...(table.always ?? []).map((r) => r.unit),
     ...(table.lumberUnit ? [table.lumberUnit] : []),
   ];
@@ -1446,6 +1457,7 @@ function tier3Due(c: PlusCtx): void {
   // A build's OWN clock is kept even under the rush (`tier3Held`) — it is the build saying when.
   const at = c.strategy.tier3Clock ?? (c.profile.tier3Rush ? 0 : c.table.tier3Clock);
   if (at === undefined || c.clock < at + c.profile.tier3Delay) return;
+  if (tier3Held(c)) return; // …and a build's own condition (`tier3After`)
   const { ai, profile, table, armyFood, tier } = c;
   if (profile.techTier < 3 || tier < 2 || armyFood < TIER3_ARMY) return;
   if (ai.count(table.worker) < MINE_CREW * Math.max(1, ai.minesOwned())) return;
@@ -2051,18 +2063,20 @@ function expand(c: PlusCtx, early = false): void {
   // ordinary place otherwise — never both, because a row that appears twice reserves its price
   // twice (`OneBuildLoop`).
   //
-  // A build that expands WITH ITS TIER (`PlusStrategy.expandWithTier`) takes the high row too, for
-  // its second town, from the moment that hall stands: the same lifted clock and the same depth,
-  // for the same reason — down at the bottom the tier-3 rows and the tech take the gold first.
+  // A build that expands WITH ITS TIER (`PlusStrategy.expandWithTier`) has its clock lifted for
+  // its second town from the moment that hall stands — but the row STAYS where it is. It used to
+  // move up with the won-fight row, and a hall row up there halts the ladder while it saves:
+  // measured over 48 observed Insane matches, the orc's two-Beastiary builds stood their first
+  // Raider three minutes after their Beastiary, every pass halted on the Great Hall above it.
   const owned = Math.max(1, ai.minesOwned());
   const withTier = owned === 1 && strategy.expandWithTier !== undefined && c.tier >= strategy.expandWithTier;
-  const won = wonExpansion(c) || withTier;
+  const won = wonExpansion(c);
   if (early !== won) return;
   if (profile.expansions < 1 || threatened) return;
   if (owned >= 1 + profile.expansions) return;
   const planned = (owned === 1 ? strategy.expandAt : strategy.expandAgainAt) + profile.expandDelay;
   const needed = ai.goldOwned() < EXPAND_GOLD;
-  if (clock < planned && !needed && !won) return;
+  if (clock < planned && !needed && !won && !withTier) return;
   // WHAT AN EXPANSION *IS* is not the same building for all four races, and `undead.ai` says so
   // in as many words: every one of its four expansion sites reads
   // `ai.basicExpansion(mines < N, UNDEAD_MINE)` — the Haunted Gold Mine, never the Necropolis

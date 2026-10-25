@@ -1826,6 +1826,36 @@ export function meanBlow(w: Pick<SimWeapon, "damage" | "dice" | "sides">): numbe
  * that" plus whatever else the caller asks (vision, a body worth a blow). Pure and exported so
  * the rule is pinned by a test (tools/ai-plus-army-test.cjs).
  */
+/**
+ * A NETTED ENEMY IN REACH — the developer's *"ensnared targets must be focused more by ranged
+ * units if it makes sense"*. A unit under Ensnare or Web (`ensnare`/`web`, the sim's own root
+ * groups — spells.ts `Aens`, `Aweb`) cannot walk out of the arrows or back to a healer, and a
+ * flyer pulled down by one can be hit by everything on the ground; it is the Raider's whole
+ * reason for throwing the net.
+ *
+ * "If it makes sense" is the REACH: only what the unit can already shoot from where it stands
+ * (`FINISH_REACH`, as `finishPick` reads it), so nothing walks out of the line for it. Among
+ * several, the one with the least life left. Not a building, and nothing it cannot hurt (`canHit`).
+ */
+export function nettedPick<T extends FinishUnit & { building?: unknown; buffs: readonly { group: string }[] }>(
+  u: FinishUnit,
+  foes: readonly T[],
+  canHit: (t: T) => boolean,
+): T | null {
+  const w = u.weapon;
+  if (!w?.ranged) return null;
+  let best: T | null = null;
+  for (const t of foes) {
+    if (t.hp <= 0 || t.building) continue;
+    if (!t.buffs.some((f) => f.group === "ensnare" || f.group === "web")) continue;
+    if (Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > w.range + FINISH_REACH) continue;
+    if (best && t.hp >= best.hp) continue;
+    if (!canHit(t)) continue;
+    best = t;
+  }
+  return best;
+}
+
 export function finishPick<T extends FinishUnit>(
   u: FinishUnit,
   foes: readonly T[],
@@ -6496,6 +6526,17 @@ export class ComputerPlusAi {
           owed.set(kill.id, (owed.get(kill.id) ?? 0) + meanBlow(u.weapon));
           if (u.order === "attack" && u.targetId === kill.id) continue;
           this.issue(b, { c: "order", unitId: u.id, order: { kind: "attack", targetId: kill.id }, queued: false });
+          continue;
+        }
+      }
+      // …and a NETTED enemy in reach, for a ranged unit — see `nettedPick`. After the wounded
+      // (a kill shot is still the better use of the arrow) and before the group's focus.
+      if (b.profile.difficulty !== MELEE_NEWBIE && !u.isPeon && u.weapon?.ranged) {
+        const net = nettedPick(u, bodies, (t) => b.ai.knows(t) && !!this.host.world.weaponVs(u, t));
+        // …unless the group is finishing a HERO, which outranks a net.
+        if (net && net !== focus && !(focus?.isHero && heroKillable(focus))) {
+          if (u.order === "attack" && u.targetId === net.id) continue;
+          this.issue(b, { c: "order", unitId: u.id, order: { kind: "attack", targetId: net.id }, queued: false });
           continue;
         }
       }

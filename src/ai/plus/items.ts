@@ -551,7 +551,12 @@ const HERO_GEAR: Readonly<Record<string, readonly string[]>> = { Obla: ["gcel", 
 // belt (the 'carry' behavior)"* — the human's Mountain King, a Priestess opening's Demon Hunter or
 // Brewmaster, the Far Seer's Chieftain. A melee hero is the one that is killed in the line
 // (`MELEE_HEROES`); a ranged carry would want something else and none of the races has one.
-const CARRY_KIT: readonly string[] = [INVULN_BUY, "shea"];
+//
+// …and a POTION OF HEALING after the scroll, off the player's own shop (all four race shops stock
+// `phea`): *"update the melee carry kit so that it also likes to carry a potion of healing (bought
+// from player's own shop). this will help the tauren chieftain immensely die less"* (the developer).
+// `ONE_PER_HERO` still holds — it is one, in the carry's own belt.
+const CARRY_KIT: readonly string[] = [INVULN_BUY, "shea", "phea"];
 const HERO_KIT: Readonly<Record<string, readonly string[]>> = { Otch: CARRY_KIT };
 const GEAR: ReadonlySet<string> = new Set(Object.values(HERO_GEAR).flat());
 

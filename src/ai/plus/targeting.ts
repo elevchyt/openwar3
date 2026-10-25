@@ -68,6 +68,8 @@ export type AimRole = "panic" | "heal" | "morph" | "disable" | "nuke" | "summon"
 
 /** What the ability's own row says, where it changes the aim. */
 export interface SpellFacts {
+  /** The ability's base CODE, where a spell has preferred targets of its own (`PREFERRED`). */
+  readonly code?: string;
   /** `herodur1 / dur1` for this rank. Every hard disable in the game carries both, and the hero
    *  number is a fraction of the other — Storm Bolt is 5 s / 1.5 s, Hex 15 s / 5 s, Sleep
    *  20 s / 10 s. So a stun spent on a hero buys a third of the fight it buys on a soldier, and
@@ -189,6 +191,21 @@ const HEAL_HERO = 1.5;
 
 const clamp01 = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n);
 
+/**
+ * Spells with targets of their OWN, by base code: unit type → a multiplier on the ordinary value.
+ *
+ * The Raider's ENSNARE (`Aens`), against the undead, the developer's: *"raiders should aim their
+ * ensnare at crypt fiends, obsidian statues and Lich more when playing against undead"*. A net is
+ * worth most on what the undead army is held together by: the Crypt Fiend is its ranged line and
+ * its answer to air (`ucry`, and `ucrm` burrowed), the Obsidian Statue its healing (`uobs`), the
+ * Lich its Frost Nova (`Ulic`) — each caught where the Raiders and the Head Hunters can reach it.
+ * The ×3 is OURS: enough to put a Fiend ahead of a healthy Ghoul and a Statue ahead of an
+ * Abomination, not enough to net a full-health Lich over a Fiend about to die.
+ */
+const PREFERRED: Readonly<Record<string, Readonly<Record<string, number>>>> = {
+  Aens: { ucry: 3, ucrm: 3, uobs: 3, Ulic: 3 },
+};
+
 /** Average damage per second, off the weapon's own roll (`damage + dice×(sides+1)/2`, the
  *  sim's own `rollDamage` shape). The expert's measure of "who is hurting us most". */
 function threat(u: SimUnit): number {
@@ -274,6 +291,9 @@ export function spellValue(t: SimUnit, role: AimRole, ctx: AimCtx, facts?: Spell
     default:
       break;
   }
+  // …and a spell's OWN preferred targets (`PREFERRED`), at every reading above the naive one.
+  const preferred = facts?.code ? PREFERRED[facts.code]?.[t.typeId] : undefined;
+  if (preferred) v *= preferred;
   return v;
 }
 
@@ -337,6 +357,6 @@ export function razeCost(t: SimUnit, distance: number, producing = false): numbe
 const RAZE_NEAR = 200;
 
 /** The ability row's own aiming facts, for `spellValue`. `dur1`/`herodur1` are per RANK. */
-export function spellFacts(duration: number, heroDuration: number): SpellFacts {
-  return { heroDurationRatio: duration > 0 && heroDuration > 0 ? heroDuration / duration : 1 };
+export function spellFacts(duration: number, heroDuration: number, code?: string): SpellFacts {
+  return { code, heroDurationRatio: duration > 0 && heroDuration > 0 ? heroDuration / duration : 1 };
 }
