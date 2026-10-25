@@ -1102,6 +1102,15 @@ export function survivesDispel(b: { kind: BuffKind; group?: string; buffId?: str
  * what the frost sources share — and what a map's own frost ability names too.
  */
 export const SLOWED_BUFF = "Bfro";
+/**
+ * Every buff row whose bearer is drawn CHILLED (rts.ts FROST_TINT): the generic Slowed buff
+ * above, and Cold / Frost Arrows' own — AbilityData.slk gives `AHca` (the Ranger's Cold Arrows,
+ * the Skeletal Marksman's `ACcw`) `BuffID = BHca,Bcsd,Bcsi` and the Sea Witch's Frost Arrows
+ * (`ANfa`) `BHca,Bcsd`, never `Bfro`, so keyed on Slowed alone an arrow's slow wore no colour.
+ * The arrows draw blue like every other frost slow (the developer's rule). This is the TINT's
+ * set only: Cold Arrows' buffs stay dispellable, so `survivesDispel` still asks `SLOWED_BUFF`.
+ */
+export const CHILL_BUFFS: ReadonlySet<string> = new Set([SLOWED_BUFF, "BHca", "Bcsd", "Bcsi"]);
 const NOT_A_STUN: ReadonlySet<string> = new Set(["cyclone"]);
 
 /**

@@ -51,7 +51,7 @@ import { autoArmed, type UnitRegistry, type UnitDef } from "../data/units";
 import { ArmorType, AttackType, isNeutralSlot, MoveType, neutralSlot, PlayerSlot, PrimaryAttribute } from "../data/enums";
 import { MELEE, dataNum, gameNum, xpToReachLevel } from "../data/gameplayConstants";
 import { type AbilityRegistry, type AbilityDef, type AbilityLevel } from "../data/abilities";
-import { AURA_BUFFS, SLOWED_BUFF } from "../sim/spells";
+import { AURA_BUFFS, CHILL_BUFFS } from "../sim/spells";
 import { REINCARNATION_BODY } from "../sim/world";
 import { resolveTipRefs } from "../data/tipRefs";
 import { disabledIconPath } from "../data/commandStrings";
@@ -482,7 +482,8 @@ export const ILLUSION_TINT = [0.22, 0.42, 1.9] as const;
 export const RAISED_TINT = [60 / 255, 40 / 255, 40 / 255] as const;
 // The cold a FROST slow leaves on its target: Liquipedia's Slowed page (the generic `Bfro` buff
 // every frost source hangs — Frost Attack, Frost Breath, Frost Nova, the Orb of Frost) says
-// "The target appears blue, while this buff is active". No table carries the colour (MiscData
+// "The target appears blue, while this buff is active"; Cold / Frost Arrows' own buffs wear it
+// too (spells.ts CHILL_BUFFS). No table carries the colour (MiscData
 // and MiscGame name only the slow's two magnitudes), so this number is OURS: a light multiply,
 // well short of the illusion wash, so the unit reads as chilled rather than as a copy.
 export const FROST_TINT = [0.7, 0.82, 1.25] as const;
@@ -2368,9 +2369,10 @@ export class RtsController {
     // an alpha written anywhere else would be clobbered on the next re-emit.
     const fade = this.ghostAlpha(e, u, dt);
     const raised = u.raisedBy !== "";
-    // …and a unit under a frost slow wears the cold (FROST_TINT). Read off the buff ROW, which
-    // crosses the wire with every buff, so a client needs nothing new to draw it.
-    const frost = u.buffs.some((x) => x.buffId === SLOWED_BUFF);
+    // …and a unit under a frost slow — Slowed or Cold / Frost Arrows' — wears the cold
+    // (FROST_TINT). Read off the buff ROW, which crosses the wire with every buff, so a client
+    // needs nothing new to draw it.
+    const frost = u.buffs.some((x) => CHILL_BUFFS.has(x.buffId));
     if (e.fogTintB === b && e.aoeHi === hi && e.fade === fade && e.illus === illus && e.raised === raised && e.frost === frost) return; // unchanged since last tick
     e.raised = raised;
     e.frost = frost;
