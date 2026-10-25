@@ -3871,6 +3871,9 @@ export class SimWorld {
    *  sets each only when the loaded script actually registers that event kind — off
    *  for melee and for maps that don't listen, so nothing accumulates unread). */
   captureDeaths = false;
+  /** Told of every death as it happens, with the killer if it is still a unit — the match log's
+   *  (src/game/matchLog.ts). Null, and never called, in a world nobody is recording. */
+  deathObserver: ((victim: SimUnit, killer: SimUnit | undefined) => void) | null = null;
   captureDamage = false;
   /**
    * The map's damage events, SYNCHRONOUSLY — set by the host only for a script that can change a
@@ -25217,6 +25220,9 @@ export class SimWorld {
       const killer = killerId ? this.units.get(killerId) : undefined;
       this.deathEvents.push({ victim: eventInfo(u), killer: killer ? eventInfo(killer) : null });
     }
+    // …and the MATCH LOG's (src/game/matchLog.ts), which only wants to hear it — a call, not a
+    // queue, so it can never fall behind the trigger engine's drain or compete with it.
+    this.deathObserver?.(u, killerId ? this.units.get(killerId) : undefined);
     this.unitDrops.delete(u.id);
   }
 

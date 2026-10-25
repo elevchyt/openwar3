@@ -1303,7 +1303,7 @@ const MIN_COUNTER_WEIGHT = 0.2;
  * build back to what its owner can actually produce, which is the same rule every other row here
  * obeys (rule 1 at the top of the file).
  */
-function activeStrategy(c: PlusCtx): PlusStrategy {
+export function activeStrategy(c: PlusCtx): PlusStrategy {
   return affordable(c, grownInto(c));
 }
 

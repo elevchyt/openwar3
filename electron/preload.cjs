@@ -70,6 +70,17 @@ contextBridge.exposeInMainWorld("ow3native", {
    *  the shell resolves inside the install itself; the page names no path, so this is not the
    *  general write primitive the note above rules out. */
   saveCustomKeys: (bytes) => ipcRenderer.invoke("ow3:customkeys-save", bytes),
+  /**
+   * The MATCH LOG (src/game/matchLog.ts): `begin(map)` opens a file in the OpenWar3 data folder's
+   * `.logs/` and resolves to its id (null if the disk said no), `append(id, text)` adds whole
+   * lines to it, and `end(id)` closes it. The page names a map, never a path — the shell picks
+   * the file, and rolls it over at about a megabyte (electron/logStore.mjs).
+   */
+  matchLog: {
+    begin: (map) => ipcRenderer.invoke("ow3:log-begin", String(map ?? "")),
+    append: (id, text) => ipcRenderer.send("ow3:log-append", String(id), String(text ?? "")),
+    end: (id) => ipcRenderer.invoke("ow3:log-end", String(id)),
+  },
   /** Keep a map a LAN game handed us, in the install's Maps\Download\ (src/assets/downloadedMaps.ts).
    *  The page names a FILE, never a folder: the shell puts it in that one folder or nowhere. */
   saveMap: (name, bytes) => ipcRenderer.invoke("ow3:map-save", String(name), bytes),

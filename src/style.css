@@ -1032,6 +1032,9 @@ body:not(.hud-tooltip-skinned) .dev-drawer { outline: 1px solid rgba(200, 160, 5
   border-top: 1px solid rgba(255, 204, 0, 0.25);
 }
 .dev-row { display: flex; align-items: center; gap: 5px; }
+/* The Sim Speed cheat's percentage field (ui/devTools.ts `buildSpeed`). */
+.dev-speed { margin-bottom: 4px; }
+.dev-speed-input { width: 7em; padding: 3px 6px; }
 .dev-label {
   flex: none;
   width: 48px;

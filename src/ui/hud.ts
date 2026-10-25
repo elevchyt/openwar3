@@ -515,6 +515,9 @@ export interface HudDriver {
    *  the clock to day/night. Returns the resulting on/off state (only meaningful for the
    *  toggles, "fastbuild" and "godmode"). */
   cheat(kind: CheatKind): boolean;
+  /** The SIM SPEED cheat: set the multiplier on the Game Speed (1 = off), or read it with no
+   *  argument. Answers the factor in force — refused (unchanged) outside single player. */
+  speedBoost(factor?: number): number;
   /** May the dev tools act at all? SINGLE PLAYER ONLY — one human seat and no wire. A LAN or
    *  online match answers false for its whole length, and the panel can then neither be shown
    *  nor pressed. */

@@ -467,9 +467,62 @@ export class DevToolsDrawer {
       // `whosyourdaddy`, `riseandshine` and `lightsout` — the original game's cheats.
       this.section("Cheats", [mk("Fast Build", "fastbuild"), mk("God Mode", "godmode"), mk("Set Day", "day"), mk("Set Night", "night")]),
       this.section("Selection", [sel("Full HP", "hp"), sel("Full MP", "mp"), sel("Reset Cooldown", "cooldown")]),
+      this.buildSpeed(),
     );
     setGameTip(this.cheatButtons.get("fastbuild")!, "Builds and training finish in about a second");
     return page;
+  }
+
+  /**
+   * SIM SPEED — the game's pace as a PERCENTAGE of its Game Speed rung, from 100 % up to
+   * `MapViewerScene.MAX_SPEED_BOOST` (10 000 %, a hundred times as fast). The developer's: "a
+   * new cheat … that can move the speed even further than the Fastest game option … maybe make
+   * it a percentage input field" — for playing out computer-versus-computer matches quickly and
+   * reading their match logs afterwards (docs/match-log.md). The sim still takes whole fixed
+   * steps, so a match plays out the same at 5000 % as at 100 % — just sooner — until a frame
+   * cannot afford its steps, which is the ceiling a given machine actually reaches.
+   */
+  private buildSpeed(): HTMLElement {
+    const box = el("div", "dev-section");
+    const row = el("div", "dev-row dev-speed");
+    const input = el("input", "dev-search dev-speed-input");
+    input.type = "number";
+    input.min = "100";
+    input.step = "100";
+    input.value = "100";
+    input.spellcheck = false;
+    const unit = el("span", "dev-n", "%");
+    const presets: HTMLButtonElement[] = [];
+    const show = (factor: number): void => {
+      const pct = Math.round(factor * 100);
+      input.value = String(pct);
+      presets.forEach((b) => b.classList.toggle("active", Number(b.dataset.pct) === pct));
+    };
+    const apply = (pct: number): void => {
+      if (!Number.isFinite(pct)) return show(this.driver.speedBoost());
+      show(this.driver.speedBoost(pct / 100));
+    };
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation(); // digits are control groups to the game
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      apply(Number(input.value));
+      input.blur();
+    });
+    input.addEventListener("change", () => apply(Number(input.value)));
+    setGameTip(input, "Game pace as a percentage of the Game Speed (100% = as set). Enter to apply.");
+    row.append(el("span", "dev-label", "Pace"), input, unit);
+    const grid = el("div", "dev-grid");
+    for (const pct of [100, 300, 1000, 3000, 10000]) {
+      const b = el("button", "dev-btn", `${pct}%`);
+      b.dataset.pct = String(pct);
+      b.onclick = () => apply(pct);
+      presets.push(b);
+      grid.append(b);
+    }
+    show(1);
+    box.append(el("div", "dev-label", "Sim Speed"), row, grid);
+    return box;
   }
 
   // ------------------------------------------------------------------ Overlays

@@ -96,6 +96,18 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   per call — ~24% of a 287-unit frame, more than the whole renderer cost by then. `targetFlagSet`
   (data/abilities.ts) normalises once per array and keeps it in a WeakMap: **−23% in Low
   Performance Mode and −26% at full quality**, exact, with `TargetFlagCache.enabled` to re-measure.
+- **Match logs:** read [`docs/match-log.md`](docs/match-log.md) before touching
+  [`src/game/matchLog.ts`](src/game/matchLog.ts), [`electron/logStore.mjs`](electron/logStore.mjs)
+  or the Sim Speed cheat. EVERY match — release build included — writes a readable
+  `[mm:ss] P<n> …` record to `.logs/` (the repo's under `pnpm dev`, `<userData>/.logs/` in the
+  desktop app; a plain web build writes nothing): births, buildings, upgrades, hero levels and
+  deaths with the killer, research, Computer+ mode/target/build changes, chat, results, STATUS
+  blocks every 30 game s and the score screen at the close. It is cheap by construction — it
+  DIFFS the world once a game-second, and its one sim hook is `SimWorld.deathObserver` — and the
+  ONE writer (logStore) caps a file at ~1 MB (rolling into `.partN.log`) and sweeps everything in
+  `.logs/` older than three days. To test Computer+ at scale, boot an observed AI match and set
+  the dev drawer's Cheats → **Sim Speed** pace (100–10 000 %, `setSpeedBoost`); a boosted frame
+  never steps for more than `BOOST_FRAME_MS`, then read the newest `.log`.
 - **Direct links:** read [`docs/multiplayer.md`](docs/multiplayer.md) "Direct links (WebRTC)"
   before touching [`src/net/directLink.ts`](src/net/directLink.ts) or `matchLinkFrom`. In a match
   each client opens ONE ordered, reliable `RTCDataChannel` to the host and the relay is left

@@ -18,7 +18,7 @@ import {
 } from "./chatter";
 import { PlusItems, type ItemCtx } from "./items";
 import {
-  LUMBER_FLOOR, armyTarget, buildPlan, buildableMix, expansionOpen, harvestPlan, openingUnit, secondHeroHold, type PlusCtx,
+  LUMBER_FLOOR, activeStrategy, armyTarget, buildPlan, buildableMix, expansionOpen, harvestPlan, openingUnit, secondHeroHold, type PlusCtx,
 } from "./plan";
 import {
   ATTACK_TELL_GAP, BUSY_LINES, COLOUR_NAMES, COMING_LINES, COUNTER_TELL, HELP_ANSWER_GAP,
@@ -2597,6 +2597,28 @@ const HELD_UNLESS_DANGER: ReadonlySet<string> = new Set(["AHdr"]);
 const SIPHON_LET_GO_HP = 0.5;
 
 /** Every Computer+ player in the match. */
+/** How coarse a spot target is for the match log's "did the aim change" (`PlusLogReading.targetKey`). Ours. */
+const LOG_TARGET_GRID = 1500;
+
+/** One Computer+ seat as the MATCH LOG reads it (src/game/matchLog.ts) — `ComputerPlusAi.logReport`. */
+export interface PlusLogReading {
+  player: number;
+  /** The rolled build, and what it has grown into when that differs ("rifles>rifleknights"). */
+  build: string;
+  mode: Mode;
+  creeping: boolean;
+  retreat: string | null;
+  /** What the wave is aimed at, in words ("P1 Town Hall", "camp at 1200,-3400"), or "". */
+  target: string;
+  /** …and as a KEY that only changes when the aim really does: the unit's id, or a spot
+   *  rounded to `LOG_TARGET_GRID` — a fight drifts the army's aim a few hundred units every
+   *  pass, and the log must not write a line for each. */
+  targetKey: string;
+  squadFood: number;
+  /** What it has scouted of the enemy — the sample, the air it counts, the ranged. */
+  enemy: string;
+}
+
 /** One Computer+ seat's concession state — `ComputerPlusAi.concedeReport`. */
 export interface ConcedeReading {
   player: number;
@@ -2865,6 +2887,35 @@ export class ComputerPlusAi {
         concedeAfter: b.profile.concedeAfter,
         conceded: b.concededAt >= 0,
         gone: b.gone,
+      };
+    });
+  }
+
+  /**
+   * Every seat's state as the MATCH LOG writes it (src/game/matchLog.ts): the build it is playing,
+   * what the army is doing and at what. Read-only like `concedeReport` — `activeStrategy` and
+   * `squadFood` are both pure readings — so recording a match cannot change how it is played.
+   */
+  logReport(): PlusLogReading[] {
+    const name = (id: string): string => this.host.registry.get(id)?.name ?? id;
+    return this.brains.filter((b) => !b.gone).map((b) => {
+      const active = activeStrategy(this.ctx(b));
+      const t = b.target;
+      const unit = t?.id ? this.host.world.units.get(t.id) : undefined;
+      const target = !t ? ""
+        : unit ? `${unit.owner >= 0 && unit.owner < MELEE.MAX_PLAYERS ? `P${unit.owner}` : "creep"} ${name(unit.typeId)}`
+          : `${b.creeping ? "camp" : "spot"} at ${Math.round(t.x)},${Math.round(t.y)}`;
+      const e = b.enemy;
+      return {
+        player: b.ai.player,
+        build: active.id === b.strategy.id ? b.strategy.id : `${b.strategy.id}>${active.id}`,
+        mode: b.mode,
+        creeping: b.creeping,
+        retreat: b.retreatFrom,
+        target,
+        targetKey: !t ? "" : t.id ? `u${t.id}` : `${Math.round(t.x / LOG_TARGET_GRID)},${Math.round(t.y / LOG_TARGET_GRID)}`,
+        squadFood: this.squadFood(b),
+        enemy: `seen ${e.seen} air ${e.airBodies ?? 0} ranged ${e.pierce ?? 0}`,
       };
     });
   }

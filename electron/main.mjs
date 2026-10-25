@@ -27,6 +27,7 @@ import { startBeacon } from "./beacon.mjs";
 import { startUpdates } from "./updates.mjs";
 import { PROTOCOL_VERSION } from "../server/rooms.mjs";
 import { readSettings, useSettingsDir, writeSettings } from "./settings.mjs";
+import { createLogStore } from "./logStore.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DIST = join(here, "..", "dist");
@@ -98,6 +99,16 @@ app.commandLine.appendSwitch("js-flags", `--max-old-space-size=${HEAP_MIB}`);
 // the usual price of vsync off. OURS, not the game's: 1.30.4 has no frame-rate or vsync setting.
 useSettingsDir(app.getPath("userData"));
 const VSYNC = readSettings().vsync !== false;
+
+// THE MATCH LOGS (src/game/matchLog.ts, docs/match-log.md): every match the player plays writes a
+// plain-text record of itself into `<userData>/.logs/` — OpenWar3's own data folder, beside the
+// settings file — so a match can be read back afterwards, a release build's included. The size
+// and age limits are the store's (electron/logStore.mjs); opening it sweeps out anything older
+// than three days, so the folder is cleaned on every launch whether or not a match is played.
+const matchLogs = createLogStore(join(app.getPath("userData"), ".logs"), {
+  warn: (msg) => console.warn(`[match-log] ${msg}`),
+});
+matchLogs.sweep();
 if (!VSYNC) {
   app.commandLine.appendSwitch("disable-gpu-vsync");
   app.commandLine.appendSwitch("disable-frame-rate-limit");
@@ -308,6 +319,11 @@ app.whenReady().then(async () => {
   ipcMain.handle("ow3:map-save", (_event, name, bytes) => writeDownloadedMap(currentInstall().path, name, bytes));
   // Options → Video → "Vertical Sync". The SAVED choice, not the running one: a player who turns it
   // off and reopens the panel before relaunching should see the box they left, not the old state.
+  // The match log (see `matchLogs` above). The page names a MAP, never a path: the file is the
+  // store's to place, inside the one folder, so this is not a general write primitive either.
+  ipcMain.handle("ow3:log-begin", (_event, name) => matchLogs.begin(String(name ?? ""))?.id ?? null);
+  ipcMain.on("ow3:log-append", (_event, id, text) => { matchLogs.append(String(id), String(text ?? "")); });
+  ipcMain.handle("ow3:log-end", (_event, id) => matchLogs.end(String(id)));
   ipcMain.handle("ow3:vsync-get", () => readSettings().vsync !== false);
   ipcMain.handle("ow3:vsync-set", (_event, on) => { writeSettings({ vsync: on === true }); });
   // …and the restart that applies it. Vsync is a launch switch (see VSYNC above), so the Options

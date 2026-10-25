@@ -26,7 +26,9 @@ A clean exit (leaving the match) renders the digest by itself, so `.logs/` norma
 `.txt` beside each `.ndjson`. The CLI is for the sessions that did **not** end cleanly — a tab
 crash, a killed dev server — which are exactly the ones this feature is for.
 
-`.logs/` is gitignored and pruned to the newest 40 sessions. Add `?noperf` to the URL to turn
+`.logs/` is gitignored and pruned to the newest 40 sessions — and, like every file in it, swept
+once it is three days old by the MATCH LOG's writer, which shares the folder ([match-log.md](match-log.md):
+every match, dev and release, writes a readable `.log` of what happened in it, always on). Add `?noperf` to the URL to turn
 recording off for one boot.
 
 ## The three pieces

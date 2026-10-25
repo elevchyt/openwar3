@@ -83,7 +83,10 @@ interface CreepSeed {
 }
 import { RACE_INDEX, STARTING_UNITS, WORKERS, MELEE_UNIT_SPACING, MELEE_WORKER_CLUSTERS, isHarvestCode, resolveRace, type PlayableRace, type WorkerCluster } from "../data/races";
 import { MELEE_NORMAL as MELEE_AI_NORMAL } from "../ai/ids";
-import { DEFAULT_GAME_SPEED, gameSpeedRate, type GameSpeed } from "../data/gameSpeed";
+import { DEFAULT_GAME_SPEED, gameSpeedLabel, gameSpeedRate, type GameSpeed } from "../data/gameSpeed";
+import { MatchLog, type LogSeat } from "../game/matchLog";
+import { matchLogSink } from "../game/matchLogSink";
+import { patchLevel } from "../patches";
 import { AI_SCRIPT_FOR } from "../ai";
 import { HERO_SEATS as CANDY_HERO_SEATS, isCandyWarScript } from "../ai/plus/candy/map";
 import { HERO_SEATS as WARCHASERS_HERO_SEATS, isWarChasersScript } from "../ai/plus/warchasers/map";
@@ -94,6 +97,8 @@ import { OBSERVER_NAME, type Controller, type MeleeConfig, type SlotConfig } fro
 import { MetricsOverlay } from "../ui/metrics";
 import { cursorImageValue, cursorPx, cursorValue } from "../ui/cursor";
 import { perfLog } from "../dev/perfLog";
+/** package.json's version, as the main menu prints it (vite.config.ts). */
+declare const __OW3_VERSION__: string;
 import { animStride, renderSize, videoSettings } from "./videoQuality";
 import { edgeScrollScale, keyScrollScale } from "./scrollOptions";
 import { gamepadPan, setGamepadHost } from "../ui/gamepad";
@@ -1572,6 +1577,22 @@ export class MapViewerScene {
   private speedRate = 1;
   /** The speed is the HOST's (any multiplayer game): F10's slider shows it and cannot move it. */
   private speedLocked = false;
+  /** The dev tools' SPEED cheat (ui/devTools.ts, "Sim Speed"): a multiplier on top of the Game
+   *  Speed rung, for running matches faster than Fastest — single player only (`setSpeedBoost`). */
+  private speedBoost = 1;
+  /** The running cost of one sim step in real ms — how a boosted frame spots its last step. */
+  private stepCost = 1;
+  /** This match's record (src/game/matchLog.ts) — opened once the start gate lifts, on the
+   *  machine that steps the sim, and closed by `stop`. */
+  private matchLog: MatchLog | null = null;
+  /** The seats as the lobby configured them — who is human, who is a computer and how hard. */
+  private logSlots: SlotConfig[] = [];
+  /** The match's seed, for the log's header. */
+  private logSeed: number | null = null;
+  /** Frames drawn since the log last asked (`MatchLogSource.pace`). */
+  private logFrames = 0;
+  private logFramesAt = 0;
+  private readonly logFlush = (): void => this.matchLog?.flush();
   /** common.j gamedifficulty index — MAP_DIFFICULTY_NORMAL until a campaign says otherwise. */
   private gameDifficulty = 1;
   /** …and the CAMPAIGN SCREEN's own rung, which a script may not change: `GetDefaultDifficulty`.
@@ -2854,6 +2875,8 @@ export class MapViewerScene {
     this.matchRaces = races;
     this.randomSeats = new Set(config.slots.filter((s) => s.random || s.race === "random").map((s) => s.id));
     this.meleeTeams = new Map(config.slots.map((s) => [s.id, s.team]));
+    this.logSlots = config.slots;
+    this.logSeed = config.seed ?? null;
     this.scoreSeats = config.slots
       .filter((s) => s.controller === "user" || s.controller === "computer")
       .map((s) => ({ id: s.id, team: s.team }));
@@ -3761,6 +3784,7 @@ export class MapViewerScene {
         }
         this.playersOut.add(player);
         this.gameResults.set(player, result); // the score screen's gold plate is a VICTORY
+        this.matchLog?.event(["VICTORY", "DEFEAT", "TIE", "game over (neutral)"][result] ?? `game over (${result})`, player);
 
         // A campaign chapter is "completed" exactly when its own script declares the local
         // player the winner — the same signal, read for a different reason.
@@ -10101,7 +10125,12 @@ export class MapViewerScene {
       minimapBlight: () => this.minimapBlight(),
       consoleSkinned: () => this.consoleSkinned(),
       skinPath: (key) => this.skinPath(key),
-      cheat: (kind) => this.rts?.cheat(kind) ?? false,
+      cheat: (kind) => {
+        const on = this.rts?.cheat(kind) ?? false;
+        this.matchLog?.event(`cheat ${kind}${kind === "fastbuild" || kind === "godmode" ? (on ? " on" : " off") : ""}`);
+        return on;
+      },
+      speedBoost: (factor) => (factor === undefined ? this.speedBoost : this.setSpeedBoost(factor)),
       cheatSelected: (kind) => this.rts?.cheatSelected(kind),
       toggleColliders: () => (this.showColliders = !this.showColliders),
       togglePathing: () => (this.showPathing = !this.showPathing),
@@ -10399,6 +10428,7 @@ export class MapViewerScene {
     // routing above, not the raw line. A Computer+ player in a team game answers "help" from an
     // ally (src/ai/plus/teamchat.ts), and it may only answer what was addressed to it.
     this.rts?.heardChat(line, heard);
+    this.matchLog?.event(`chat (${line.target.scope}${line.target.player !== undefined ? ` to P${line.target.player}` : ""}): ${line.text}`, line.from);
     if (heard.includes(this.localPlayer)) this.showChat(line);
   }
 
@@ -14900,6 +14930,11 @@ export class MapViewerScene {
     // The catch-up cap grows with the rate, or Fastest would drop steps on any 60 Hz frame.
     this.simAccum += (dt / 1000) * this.speedRate;
     const maxSteps = Math.ceil(MAX_STEPS_PER_FRAME * Math.max(1, this.speedRate));
+    // …and a BOOSTED sim (the Sim Speed cheat, `setSpeedBoost`) is held to a time budget as well
+    // as a count: at a few thousand per cent the count alone would let one frame step for
+    // seconds and the window would stop answering. `stepCost` is the running cost of one step, so
+    // the frame can tell its LAST step in advance and still sync what it draws (`lastStep`).
+    const budgetEnd = this.speedBoost > 1 ? now + MapViewerScene.BOOST_FRAME_MS : Infinity;
     let steps = 0;
     while (this.simAccum >= SIM_DT && steps < maxSteps) {
       // A frozen client must not start builds off its own records (option 2): the worker's
@@ -14915,7 +14950,8 @@ export class MapViewerScene {
       // Predicted with the loop's own condition, and nothing in the loop body touches
       // `simAccum`, so the prediction is exact; a frame of one step is exactly as before.
       this.drawOwed++;
-      const lastStep = !(this.simAccum - SIM_DT >= SIM_DT && steps + 1 < maxSteps);
+      const lastStep = !(this.simAccum - SIM_DT >= SIM_DT && steps + 1 < maxSteps)
+        || performance.now() + 2 * this.stepCost >= budgetEnd;
       this.rts?.tick(SIM_DT, lastStep ? this.drawOwed : 0); // sim runs in seconds; advance, then sync before render
       if (lastStep) this.drawOwed = 0;
       // Engine combat text ages on the SIM clock, like a script's text tags do inside the
@@ -14954,6 +14990,12 @@ export class MapViewerScene {
       this.simTick++;
       this.simAccum -= SIM_DT;
       steps++;
+      this.stepCost = this.stepCost * 0.9 + (performance.now() - stepAt) * 0.1;
+      // Out of budget (a boosted sim only): the owed steps are dropped like a clamped frame's.
+      if (lastStep && budgetEnd !== Infinity && performance.now() + 2 * this.stepCost >= budgetEnd) {
+        this.simAccum = 0;
+        break;
+      }
     }
     perfLog.tally("simSteps", steps);
     // Steps the frame could not afford. A sim falling behind wall time is the difference
@@ -15146,8 +15188,115 @@ export class MapViewerScene {
    *  drawn world ages at (`wdt`). Nothing else needs telling — every timer, cooldown, trigger and
    *  the match clock itself count sim steps. */
   setGameSpeed(speed: GameSpeed): void {
+    const was = this.speed;
     this.speed = speed;
-    this.speedRate = gameSpeedRate(speed);
+    this.speedRate = gameSpeedRate(speed) * this.speedBoost;
+    if (was !== speed) this.matchLog?.event(`game speed ${gameSpeedLabel(speed, null)}`);
+  }
+
+  /**
+   * The dev tools' SIM SPEED cheat: run the match `factor` times faster than its Game Speed rung,
+   * beyond Fastest — for playing out matches between computers quickly and reading their logs
+   * (docs/match-log.md). The sim still steps in whole SIM_DT steps, so a boosted match plays out
+   * exactly as an unboosted one would, only sooner; the catch-up cap in `advanceSim` grows with
+   * the rate, and a frame that cannot afford its steps drops them, which is the cheat's ceiling.
+   * Single player only, like every cheat (`cheatsAllowed`). Answers the factor now in force.
+   */
+  setSpeedBoost(factor: number): number {
+    if (!this.cheatsAllowed || !Number.isFinite(factor)) return this.speedBoost;
+    const next = Math.max(1, Math.min(MapViewerScene.MAX_SPEED_BOOST, factor));
+    if (next === this.speedBoost) return next;
+    this.speedBoost = next;
+    this.speedRate = gameSpeedRate(this.speed) * this.speedBoost;
+    this.matchLog?.event(`sim speed ${Math.round(next * 100)}% (cheat)`);
+    return this.speedBoost;
+  }
+
+  /** The biggest Sim Speed the cheat offers: 10 000 % of the rung. A frame never spends more than
+   *  `BOOST_FRAME_MS` stepping however high it is set (`advanceSim`), so this is a ceiling on
+   *  what is ASKED, and the machine decides what is delivered. */
+  static readonly MAX_SPEED_BOOST = 100;
+  /** …and the most real time one frame may spend stepping a BOOSTED sim — a tenth of a second,
+   *  so the window still answers at ten frames a second while the match races. Ours. */
+  static readonly BOOST_FRAME_MS = 100;
+
+  /**
+   * The MATCH LOG, once a frame: open it the first frame the match is really running (the start
+   * gate down, on the machine whose sim steps — a LAN client's world is a fog-limited copy and
+   * would record a match it cannot see), then let it look.
+   */
+  private tickMatchLog(): void {
+    this.logFrames++;
+    if (!this.matchLog) {
+      const rts = this.rts;
+      if (!rts || rts.frozenClient || this.startHeld || !this.logSlots.length) return;
+      const sink = matchLogSink();
+      if (!sink) return;
+      const log = new MatchLog(sink, {
+        clock: () => rts.matchSeconds(),
+        world: () => this.rts?.simWorld ?? null,
+        seats: () => this.logSeats(),
+        food: (p) => rts.foodFor(p),
+        nameOf: (id) => this.registry.get(id)?.name ?? this.items.get(id)?.name ?? this.upgrades.get(id)?.names[0] ?? id,
+        ai: () => rts.computerPlusLog(),
+        pace: () => {
+          const now = performance.now();
+          const fps = this.logFramesAt ? (this.logFrames * 1000) / Math.max(1, now - this.logFramesAt) : 0;
+          this.logFrames = 0;
+          this.logFramesAt = now;
+          return { fps, speed: `${gameSpeedLabel(this.speed, null)}${this.speedBoost > 1 ? ` x${this.speedBoost}` : ""}` };
+        },
+      });
+      this.matchLog = log;
+      log.open(this.mapDisplayName || "match", {
+        version: __OW3_VERSION__,
+        edition: isRoc() ? "Reign of Chaos" : "The Frozen Throne",
+        patch: patchLevel(),
+        mode: rts.networked ? "LAN (host)" : "single player",
+        "game speed": gameSpeedLabel(this.speed, null),
+        seed: this.logSeed ?? "random",
+      });
+      addEventListener("pagehide", this.logFlush);
+    }
+    this.matchLog.update();
+  }
+
+  /** The seated players, as the log's header and status lines name them. */
+  private logSeats(): LogSeat[] {
+    // `aiDifficulty` is the common.ai rung — MELEE_NEWBIE 1, MELEE_NORMAL 2, MELEE_INSANE 3.
+    const DIFF: Record<number, string> = { 1: "Easy", 2: "Normal", 3: "Insane" };
+    return this.logSlots
+      .filter((s) => s.controller === "user" || s.controller === "computer")
+      .map((s) => ({
+        player: s.id,
+        name: this.playerLabel(s.id),
+        race: this.matchRaces.get(s.id) ?? String(s.race),
+        team: s.team,
+        controller: s.controller === "user"
+          ? (s.id === this.localPlayer && this.observer ? "observer" : "human")
+          : `${s.aiPlus ? "Computer+" : "computer"} (${DIFF[s.aiDifficulty ?? 2] ?? s.aiDifficulty})`,
+      }));
+  }
+
+  /** Close this match's log with its result and its score screen. */
+  private closeMatchLog(): void {
+    const log = this.matchLog;
+    if (!log) return;
+    this.matchLog = null;
+    removeEventListener("pagehide", this.logFlush);
+    const lines: string[] = [];
+    const table = this.scoreTable();
+    if (table) {
+      lines.push(`# result after ${Math.floor(table.elapsed / 60)}m${String(Math.floor(table.elapsed % 60)).padStart(2, "0")}s of game time`);
+      for (const r of table.rows) {
+        lines.push(`# P${r.player} ${r.name} (${r.race}) ${r.won ? "WON" : this.playersOut.has(r.player) ? "lost" : "no result"}`
+          + ` — unit score ${r.unitScore}, hero score ${r.heroScore}, resource score ${r.resourceScore},`
+          + ` produced ${r.unitsProduced}, killed ${r.unitsKilled}, built ${r.buildingsProduced}, razed ${r.buildingsRazed},`
+          + ` largest army ${r.largestArmy}, gold ${r.goldMined}, lumber ${r.lumberHarvested}, upkeep lost ${r.upkeepLost},`
+          + ` tech ${r.techPercent}%, heroes ${r.heroes.map((h) => `${this.registry.get(h.typeId)?.name ?? h.typeId} L${h.level}`).join(", ") || "none"}`);
+      }
+    }
+    log.close(lines);
   }
 
   start(): void {
@@ -15181,6 +15330,7 @@ export class MapViewerScene {
       // retire. Deriving it here instead means the focus and the positions the frame is about
       // to DRAW come from the same instant of game time.
       this.advanceSim(t);
+      this.tickMatchLog(); // the match's record (src/game/matchLog.ts) — once a game-second
       // **How much time the WORLD is worth this frame — zero while it is stopped.**
       //
       // A pause used to stop the SIM and nothing else: units held their ground while their
@@ -15792,6 +15942,8 @@ export class MapViewerScene {
     // The match is over as far as the frame loop is concerned — close the log and let the
     // dev server render its digest beside it.
     perfLog.close();
+    this.closeMatchLog();
+    this.speedBoost = 1;
     setSimProfiler(null);
     this.metrics.hide();
     this.hud?.hide();

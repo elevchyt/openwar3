@@ -61,7 +61,7 @@ import { type ItemRegistry } from "../data/items";
 import { workerProfileFor, harvestAbilityOf, depotRoleFor, isHarvestCode, type PlayableRace } from "../data/races";
 import { MeleeAi, AI_SCRIPT_RACES } from "../ai";
 import { CreepCaster } from "../ai/creeps";
-import { ComputerPlusAi, type ConcedeReading, type PlusHost } from "../ai/plus";
+import { ComputerPlusAi, type ConcedeReading, type PlusHost, type PlusLogReading } from "../ai/plus";
 import { CandyWarAi, type CandyHost } from "../ai/plus/candy";
 import { WarChasersAi } from "../ai/plus/warchasers";
 import { type TechRegistry } from "../data/techtree";
@@ -9294,6 +9294,11 @@ export class RtsController {
    *  Computer+ seat, and on a client (the AI runs where the authority does). */
   computerPlusConcede(): ConcedeReading[] {
     return this.computerPlus?.concedeReport() ?? [];
+  }
+
+  /** …and each Computer+ seat's build, mode and target — the match log's (src/game/matchLog.ts). */
+  computerPlusLog(): PlusLogReading[] {
+    return this.computerPlus?.logReport() ?? [];
   }
 
   /**

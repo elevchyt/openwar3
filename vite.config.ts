@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { defineConfig } from "vite";
 import { devInstall } from "./tools/vite-plugin-dev-install";
 import { driveProxy } from "./tools/vite-plugin-drive-proxy";
+import { matchLog } from "./tools/vite-plugin-match-log";
 import { perfLog, perfLogDefines } from "./tools/vite-plugin-perf-log";
 import { relay } from "./tools/vite-plugin-relay";
 
@@ -15,6 +16,10 @@ import { relay } from "./tools/vite-plugin-relay";
 // `perfLog` is the other `apply: "serve"` plugin, and exists for the same reason in reverse: a
 // browser cannot append to a file in the project, so a match's performance log needs the dev
 // server to write it. It owns `.logs/` (gitignored) and is opt-in — `pnpm dev:log`.
+//
+// `matchLog` writes every match's plain-text record into the same `.logs/` — ALWAYS, not opt-in:
+// it costs a line a game-second. A shipped game writes through the desktop shell instead
+// (electron/logStore.mjs is the one writer both use; docs/match-log.md).
 //
 // `relay` is the third, and the reason LAN play is one process: it mounts the socket-free relay
 // core on the dev server's own port at `/relay`, so `pnpm dev --host` is the whole of hosting a
@@ -33,7 +38,7 @@ import { relay } from "./tools/vite-plugin-relay";
 const version = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version as string;
 
 export default defineConfig({
-  plugins: [devInstall(), driveProxy(), perfLog(), relay()],
+  plugins: [devInstall(), driveProxy(), perfLog(), matchLog(), relay()],
   define: { ...perfLogDefines(), __OW3_VERSION__: JSON.stringify(version) },
   server: {
     port: 5173,
