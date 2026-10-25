@@ -440,6 +440,7 @@ export function buildPlan(c: PlusCtx): void {
   supportBuildings(c);
   // …and the UNIT-ABILITY UNLOCKS (Web, Berserker, Defend…), saved for — see `abilityUpgrades`.
   abilityUpgrades(c);
+  leadUnits(c);
   tierUpDue(c); // …and from three minutes, the Keep — see TIER2_CLOCK
   // …and the undead's SIEGE, up here rather than below the upgrades — see
   // `PlusRaceTable.siegeEarly`. The same row; only its place in the ladder moves. Above the
@@ -1858,6 +1859,26 @@ function abilityUpgrades(c: PlusCtx): void {
     if (row.forUnit && ai.count(row.forUnit) < 1) continue; // `UpgradeRow.forUnit`
     if (row.when === "enemyRanged" && (c.enemy.pierce ?? 0) < ENEMY_RANGED) continue;
     ai.setBuildUpgrSaved(row.ranks, row.id);
+  }
+}
+
+/**
+ * The build's POWER UNIT, high in the ladder (`PlusStrategy.lead`): under the ability unlocks,
+ * which are what make it the power unit (Bear Form is `Redc`), and above the expansion, the third
+ * hero, the towers and the rest of the army — every row that can halt the loop. A `SetBuildNext`
+ * row like the army's, so it reserves one body's price at a time; only once the unit can be
+ * trained at all (its tier standing, its producer up), or it would hold its price for a building
+ * nobody has started.
+ */
+function leadUnits(c: PlusCtx): void {
+  const lead = activeStrategy(c).lead;
+  if (!lead) return;
+  const cap = Math.min(c.profile.techTier, c.tier);
+  for (const [unit, n] of Object.entries(lead)) {
+    const row = c.table.units[unit];
+    if (!row || row.tier > cap || !producerReady(c, row.from, row.needs)) continue;
+    const want = fitted(c, unit, n);
+    if (want > 0) c.ai.setBuildNext(want, unit);
   }
 }
 

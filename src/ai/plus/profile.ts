@@ -276,6 +276,15 @@ export interface PlusProfile {
   /** Does the whole group pick ONE target and kill it? The clearest "this AI micros" tell. */
   readonly focusFire: boolean;
   /**
+   * Does the army go into a fight in TANK ORDER — summons, then melee soldiers, then heroes, then
+   * the ranged line — each rank held back until one in front of it is engaged (index.ts
+   * `tankHold`)? The developer's Insane: *"Computer+ tends to put its ranged units forward …
+   * when creeping a camp, it must not 'hug' the creeps with its Riflemen and archers and should
+   * instead prefer tanking with water elementals, footmen … (summoned units > melee units >
+   * heroes > ranged units)"*. Easy and Normal walk in together, which is fine for them.
+   */
+  readonly tankFirst: boolean;
+  /**
    * Hit-point fraction at which a unit standing in a fight is WALKED OUT of it. 0 = it never
    * is, which is Easy — and that is the whole of what the bottom rung gives up here.
    *
@@ -537,7 +546,7 @@ export const PLUS_EASY: PlusProfile = {
   // that are close to its base and that's it".
   // …and it does NOT micro its wounded out of a fight — issue #124's Easy is a player who
   // gives an order and then watches it happen. `pullOutHp` 0 is that in one number.
-  focusFire: false, pullOutHp: 0, stutterStep: false, pullRejoin: false, sendHomeHp: 0, dispelSummons: false, creeps: true, creepAt: 240, creepFood: 8,
+  focusFire: false, tankFirst: false, pullOutHp: 0, stutterStep: false, pullRejoin: false, sendHomeHp: 0, dispelSummons: false, creeps: true, creepAt: 240, creepFood: 8,
   creepCamps: 2, creepCampMax: CAMP_GREEN_MAX, creepRange: 3000, creepRest: 0, creepGreenUntil: 0, creepHunger: 1,
   harass: false, roam: false, mercChance: 0, scout: false, sweepEvery: Infinity, expansionFirst: 0.5,
   shopping: 0, eagerMana: false, itemReserve: Infinity, keepPortal: false, portalToAttack: false,
@@ -623,7 +632,7 @@ export const PLUS_NORMAL: PlusProfile = {
   // minutes (`creepGreenUntil`).
   // It does not focus-fire, but it DOES pull a soldier out of the line at a quarter health —
   // the one piece of micro a player picks up long before they learn to focus a target.
-  focusFire: false, pullOutHp: 0.25, stutterStep: false, pullRejoin: false, sendHomeHp: 0, dispelSummons: false, creeps: true, creepAt: 300, creepFood: 10,
+  focusFire: false, tankFirst: false, pullOutHp: 0.25, stutterStep: false, pullRejoin: false, sendHomeHp: 0, dispelSummons: false, creeps: true, creepAt: 300, creepFood: 10,
   creepCamps: Infinity, creepCampMax: Infinity, creepRange: Infinity, creepRest: 60, creepGreenUntil: 420, creepHunger: 1,
   harass: false, roam: false, mercChance: 0, scout: true, sweepEvery: 120, expansionFirst: 0.75,
   // A third of a belt, and it keeps 500 gold back for the build order. It DOES keep a Town
@@ -674,7 +683,7 @@ export const PLUS_INSANE: PlusProfile = {
   // it reaches the spot it was walked to, and a melee soldier under 12 % goes home to heal
   // instead (`pullRejoin` / `sendHomeHp`, the developer's numbers). It also kills summons with
   // its dispels first (`dispelSummons`).
-  focusFire: true, pullOutHp: 0.25, stutterStep: true, pullRejoin: true, sendHomeHp: 0.12, dispelSummons: true, creeps: true, creepAt: 90, creepFood: 8,
+  focusFire: true, tankFirst: true, pullOutHp: 0.25, stutterStep: true, pullRejoin: true, sendHomeHp: 0.12, dispelSummons: true, creeps: true, creepAt: 90, creepFood: 8,
   creepCamps: Infinity, creepCampMax: Infinity, creepRange: Infinity, creepRest: 0, creepGreenUntil: 0, creepHunger: 1.2,
   harass: true, roam: true, mercChance: 0.5, scout: true, sweepEvery: 75, expansionFirst: 0.85,
   // A full belt and a Town Portal on the hero. Both are what separates a player who has been

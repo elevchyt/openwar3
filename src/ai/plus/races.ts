@@ -247,6 +247,17 @@ export interface PlusStrategy {
   /** A RUSH: the wave does not wait for the hero's third level in the opening (index.ts
    *  `waveReady`'s `EARLY_GAME` gate) — the whole build is spent before the camps would pay. */
   readonly rush?: boolean;
+  /**
+   * The build's POWER UNIT, asked for high in the ladder — right under the ability unlocks and
+   * ABOVE the expansion, the third hero, the towers and the rest of the army (plan.ts
+   * `leadUnits`) — as soon as it can be trained, up to this many. The night elf's late grove:
+   * reported *"the bears/druids of the claw are coming in VERY late, even after transitioning to
+   * tier 3"*, because the Druid of the Claw was one share of the LAST army row and every row
+   * that can halt the ladder sat above it.
+   */
+  readonly lead?: Readonly<Record<string, number>>;
+  /** The build's own POWER SPIKE, over the race's (`PlusRaceTable.powerSpike`). */
+  readonly powerSpike?: PowerSpike;
 }
 
 /**
@@ -267,6 +278,26 @@ export interface PlusStrategy {
  * none of them) is skipped like a taken one, and the race's own order fills the gap
  * (index.ts `pickHeroes`).
  */
+/**
+ * What a build has to have before an INSANE computer takes its army at the enemy's MAIN base
+ * (index.ts `spikeHeld`). Until then a wave goes at an expansion it knows of, or creeps — the
+ * developer's: *"the night elf's power spike is when it gets bears with master training, so
+ * before that it should kinda avoid hitting the enemy's base until it has its power spike (if
+ * the opponent has an expansion it should fight at the expansion though)"*, and of the human
+ * Riflemen-and-casters build, *"its power spike is at tier 2 when they reach close to 50 food"*.
+ * Every clause given must hold; a clause left out asks nothing.
+ */
+export interface PowerSpike {
+  /** A research at at least this rank (`[id, rank]`). */
+  readonly research?: readonly [string, number];
+  /** At least this many of a unit, finished. */
+  readonly units?: readonly [string, number];
+  /** The hall tier standing. */
+  readonly tier?: number;
+  /** Food of the army that would walk (heroes' five included — index.ts `squadFood`). */
+  readonly armyFood?: number;
+}
+
 export interface HeroCombo {
   readonly second?: readonly string[];
   readonly third?: readonly (readonly string[])[];
@@ -361,6 +392,8 @@ export interface PlusRaceTable {
    * puts up at tier 2, is why a human computer stood behind plain Scout Towers all match.
    */
   readonly towerUpgrades?: ReadonlyArray<{ id: string; perTown?: number }>;
+  /** The race's POWER SPIKE (`PowerSpike`), which a build may restate (`PlusStrategy.powerSpike`). */
+  readonly powerSpike?: PowerSpike;
   /**
    * The unit this race answers AIR with, and how many of it — the Flying Machine, the Troll
    * Batrider, the Gargoyle, the Hippogryph.
@@ -595,6 +628,7 @@ const HUMAN: PlusRaceTable = {
     // RIFLES AND PRIESTS — the same opening as `rifles`, with the Sanctum rather than the
     // Workshop behind it and the Riflemen never stopping.
     { id: "riflecaster", name: "Riflemen and Priests", tier: 2, weight: 22, expandAt: 270, expandAgainAt: 690,
+      powerSpike: { tier: 2, armyFood: 46 },
       heroes: [ARCHMAGE, MTN_KING, PALADIN, BLOOD_MAGE], thenAt3: "rifleknights", thenAt3Or: ["riflegryphons"],
       mix: { [RIFLEMAN]: 3, [PRIEST]: 1.5, [SORCERESS]: 0.5 } },
     // THE CLASSIC TIER-3 ARMY, and the build both rifle openings GROW INTO (`thenAt3`): Knights,
@@ -1044,6 +1078,9 @@ const NIGHT_ELF: PlusRaceTable = {
   antiAir: { unit: HIPPO, count: 4 },
   siegeUnit: BALLISTA,
   tower: ANCIENT_PROTECT,
+  // BEARS WITH MASTER TRAINING (`Redc` rank 2 is Bear Form) — the developer's spike for the race.
+  // Four of them is ours: enough bears to be the front of the army rather than a sample of it.
+  powerSpike: { research: [UPG_DRUID_CLAW, 2], units: [DRUID_CLAW, 4] },
   units: {
     [ARCHER]: { from: ANCIENT_WAR, tier: 1 },
     [HUNTRESS]: { from: ANCIENT_WAR, needs: [HUNTERS_HALL], tier: 1 }, // `[esen] Requires=edob`
@@ -1080,13 +1117,20 @@ const NIGHT_ELF: PlusRaceTable = {
     // (`[Arej] Requires=Redc`), rank 2 Bear Form — researched at the Ancient of Lore that is
     // training Druids and Dryads all match, so as an ordinary row it was almost never started.
     // Saved for (`unlock`), and only once a Druid of the Claw is on the field (`forUnit`).
-    { id: UPG_DRUID_CLAW, from: ANCIENT_LORE, ranks: 2, after: 12, unlock: true, forUnit: DRUID_CLAW },
+    //
+    // …and NOT `forUnit` any more. The druid is a tier-3 unit to Computer+ (see `units`), so a
+    // row waiting for one on the field started Adept Training only once the first druid was out
+    // at tier 3, and Master Training a research after that — the bears came minutes after the
+    // Tree of Eternity. Rank 1 needs nothing (`[Redc] Requires=`, only rank 2 names `etoe`), so it
+    // is bought at tier 2 out of the Lore that is already training Dryads, and rank 2 starts the
+    // moment the Tree of Eternity lands.
+    { id: UPG_DRUID_CLAW, from: ANCIENT_LORE, ranks: 2, after: 12, unlock: true },
     // MARK OF THE CLAW — "Allows Druids of the Claw to cast Roar while in Bear Form"
     // (NightElfUpgradeStrings `[Reeb]`; the bear's card carries `Ara2`, `Requires=Reeb`). Without
     // it a druid that morphs for the fight gives up its Roar. `[Reeb] Requires=Redc
     // Requiresamount=2`, which `researchDue` asks before it saves a coin; elf.ai buys it beside
     // the second rank too.
-    { id: UPG_MARK_CLAW, from: ANCIENT_LORE, ranks: 1, after: 16, unlock: true, forUnit: DRUID_CLAW },
+    { id: UPG_MARK_CLAW, from: ANCIENT_LORE, ranks: 1, after: 16, unlock: true },
     { id: UPG_ABOLISH, from: ANCIENT_LORE, ranks: 1, after: 12, unlock: true },
     { id: UPG_DRUID_TALON, from: ANCIENT_WIND, ranks: 2, after: 20 },
     { id: UPG_CHIM_ACID, from: CHIMAERA_ROOST, ranks: 1, after: 30 },
@@ -1136,11 +1180,11 @@ const NIGHT_ELF: PlusRaceTable = {
     // is where the Druid of the Claw becomes the army. The Chimaeras are `affluent`: taken with a
     // second mine or a bank to spare, and kept once their Roost stands.
     { id: "lategrove", name: "Druids of the Claw, Dryads and Chimaeras", tier: 3, weight: 0, expandAt: 480, expandAgainAt: 900,
-      factories: { [ANCIENT_LORE]: 2 }, affluent: [CHIMAERA],
+      factories: { [ANCIENT_LORE]: 2 }, affluent: [CHIMAERA], lead: { [DRUID_CLAW]: 6 },
       mix: { [DRUID_CLAW]: 3, [DRYAD]: 2, [CHIMAERA]: 1.5, [ARCHER]: 0.5 } },
     // The late grove for the Chimaera build: the same bears and Dryads, with its Chimaeras kept.
     { id: "chimgrove", name: "Druids of the Claw, Dryads and Chimaeras", tier: 3, weight: 0, expandAt: 480, expandAgainAt: 900,
-      factories: { [ANCIENT_LORE]: 2 },
+      factories: { [ANCIENT_LORE]: 2 }, lead: { [DRUID_CLAW]: 6 },
       mix: { [DRUID_CLAW]: 3, [DRYAD]: 2, [CHIMAERA]: 2 } },
   ],
   heroes: [DEMON_HUNTER, KEEPER, MOON_CHICK, WARDEN],

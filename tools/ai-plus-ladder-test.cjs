@@ -160,6 +160,28 @@ console.log("--- Defend waits for enemy ranged units; the ability unlocks come f
   check("…Berserker Upgrade the orc's", PLUS_RACES.orc.upgrades[0].id, "Robk");
 }
 
+// --- the night elf's BEARS: Adept Training at tier 2, druids high in the ladder at tier 3 ---
+//
+// Reported: "the bears/druids of the claw are coming in VERY late, even after transitioning to
+// tier 3". `Redc` rank 1 needs nothing (`[Redc] Requires=`), so it no longer waits for a druid on
+// the field; and the druid is the late grove's `lead` row, above the expansion and the tier rows.
+console.log("--- night elf: the bears come as soon as tier 3 does ---");
+{
+  const elf = PLUS_RACES.nightelf;
+  const bears = elf.strategies.find((s) => s.id === "bears");
+  const standing = { [elf.halls[1]]: 1, [elf.barracks]: 1, [elf.altar]: 1, [elf.farm]: 6, eaoe: 1, edob: 1, eden: 1 };
+  const t2 = recorder(elf, bears, PLUS_INSANE, { standing, armyFood: 20, gold: 5000, wood: 5000, tier: 2 });
+  buildPlan(t2.ctx);
+  check("Druid of the Claw training is asked for at tier 2 with no druid out", t2.build.some((x) => x.kind === "upgrade" && x.item === "Redc"), true);
+  const t3 = recorder(elf, bears, PLUS_INSANE, { standing: { ...standing, [elf.halls[2]]: 1 }, armyFood: 20, gold: 5000, wood: 5000, tier: 3 });
+  buildPlan(t3.ctx);
+  const at = (pred) => t3.build.findIndex(pred);
+  const druid = at((x) => x.kind === "unit" && x.item === "edoc");
+  const expand = at((x) => x.kind === "expand");
+  check("at tier 3 the druid row is asked for", druid >= 0, true);
+  check("…above the expansion", expand < 0 || druid < expand, true);
+}
+
 // --- the extra production building -----------------------------------------------------
 //
 // The gate was `armyFood >= 40 && gold > 800`, and the first half is above the army CEILING of

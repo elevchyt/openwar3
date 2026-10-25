@@ -4953,3 +4953,28 @@ essential rows alone). Before this change, a Normal orc on Echo Isles played fif
   Requires=etoe` is the tier-3 gate (`HERO_ORBS`). And a Town Portal is not read by a hero that is
   out of the fight with nothing hostile within `ESCAPE_CHASE` — `losing` stays up for the whole walk
   home, which is how a night elf bought a scroll at its own shop and read it there, alone.
+
+### …and the follow-up
+
+- **The bears came late at tier 3** because everything about them was serial: no druid before the
+  Tree of Eternity, Adept Training (`Redc` rank 1) waiting for a druid on the field, Master
+  Training after that, and the druid one share of the LAST army row. Now rank 1 is bought at tier
+  2 (`[Redc] Requires=` is empty; only rank 2 names `etoe`), and the late grove names the druid
+  as its `lead` unit — asked for right under the ability unlocks, above the expansion, the third
+  hero and the towers (plan.ts `leadUnits`).
+- **The POWER SPIKE** (`PowerSpike`, Insane only, index.ts `spikeHeld`): before it, a wave goes
+  at a known enemy EXPANSION or creeps, never at a main. The night elf's is `Redc` rank 2 and
+  four Druids of the Claw; the human Riflemen-and-casters build's is tier 2 and 46 food of army
+  (heroes included). Latched once met, and given up at `SPIKE_LATEST` (18 minutes).
+- **TANK ORDER** (`PlusProfile.tankFirst`, Insane only, `tankHold`): summons, then melee soldiers,
+  then heroes, then the ranged line. A rank stands off (`HOLD_BACK_HERO` 450, `HOLD_BACK_RANGED`
+  650, a plain move) until a rank in front of it is engaged, and never once an enemy is aiming
+  at it; at most `TANK_HOLD_MAX` (10 s) per objective. Siege is never held.
+- **Summons are never pulled out** of a fight (`pullPass`) nor sent to a Moon Well — taking the
+  blows is what they are for.
+- **Militia** are not recruited into the squad, and a squad member that turns back into a WORKER
+  (`isPeon`) is pruned, released from `held` and STOPPED, so `workIdleWorkers` puts it back on a
+  mine or a tree.
+- **Orphaned scaffolds** (`AiPlayer.resumeOrphans`): a building going up with nobody building it
+  for `ORPHAN_GRACE` gets one worker sent with `buildresume`, idle before lumber before gold, and
+  not while something hostile is within `ORPHAN_DANGER` of it.

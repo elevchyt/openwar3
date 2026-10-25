@@ -317,5 +317,40 @@ console.log("\n-- and nothing else takes the crew off it -----------------------
   check("…and it is still the last resort", pick && pick.id, only.id);
 }
 
+// ==========================================================================================
+console.log("\n-- a scaffold whose builder is gone is finished (resumeOrphans) ----------------");
+// ==========================================================================================
+// Reported of the human Computer+: it "DOESN'T finish buildings whose peasant that was building
+// them died, left etc.". One worker goes back with the player's own `buildresume`.
+{
+  const site = building("hbar", 40, { constructionLeft: 30, x: 500 });
+  const miner = worker("gold", { x: 450 });
+  const idle = worker("idle", { x: 2000 });
+  for (const u of [site, miner, idle]) u.weapons = [];
+  const { ai, asked, host } = seat([site, miner, idle]);
+  host.world.elapsed = 0;
+  ai.resumeOrphans();
+  check("a fresh scaffold is given its grace", asked.length, 0);
+  host.world.elapsed = 5;
+  ai.resumeOrphans();
+  const cmd = asked.find((c) => c.order?.kind === "buildresume");
+  check("…then one worker is sent back to it", asked.filter((c) => c.order?.kind === "buildresume").length, 1);
+  check("…the idle one before the miner, far as it is", cmd && cmd.unitId, idle.id);
+  check("…at that building", cmd && cmd.order.buildingId, site.id);
+}
+{
+  const site = building("hbar", 40, { constructionLeft: 30 });
+  const builder = worker("idle");
+  builder.constructing = site.id;
+  const other = worker("idle");
+  for (const u of [site, builder, other]) u.weapons = [];
+  const { ai, asked, host } = seat([site, builder, other]);
+  host.world.elapsed = 0;
+  ai.resumeOrphans();
+  host.world.elapsed = 10;
+  ai.resumeOrphans();
+  check("a site somebody is building is left alone", asked.length, 0);
+}
+
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");
 process.exit(failed ? 1 : 0);

@@ -33,7 +33,7 @@ import {
 import { liveProfile, plusProfile, type PlusProfile } from "./profile";
 import { aimCtx, HERO_KILL_HP, heroKillable, isSiege, isTower, killValue, razeCost, razeValue } from "./targeting";
 import { PLUS_RACES, TAVERN_HEROES, insaneVariant, rollStrategy, rollTransition, tableForEdition, type HeroCombo, type PlusRaceTable, type PlusStrategy } from "./races";
-import { MELEE_INSANE, MELEE_NEWBIE, MIRROR_IMAGE } from "../ids";
+import { MELEE_INSANE, MELEE_NEWBIE, MILITIA, MIRROR_IMAGE } from "../ids";
 import { isRoc } from "../../data/edition";
 import { CAMP_GREEN_MAX, armyPower, maxCampLevel, preferredCampFloor, type CreepForce, type Fighter } from "./power";
 
@@ -1085,6 +1085,24 @@ const HUNGRY_UNTIL_LEVEL = 9;
 const isMercCamp = (typeId: string): boolean => typeId === "nmer" || /^nmr[0-9a-f]$/.test(typeId);
 const MERC_CAMP_REACH = 800;
 const MERC_WINDOW = 10;
+/** The latest an Insane computer waits for its POWER SPIKE before its waves may go at a main
+ *  anyway (`spikeHeld`). OURS. */
+const SPIKE_LATEST = 1080;
+/** TANK ORDER (`tankHold`): the ranks, how far off the fight a held hero and a held ranged unit
+ *  stand, and the longest the hold lasts per objective. OURS — the standoffs are a little past a
+ *  creep's own acquisition (Camp 200 asleep, ~500 awake) so the held line is not pulled in. */
+const TANK_SUMMON = 0;
+const TANK_MELEE = 1;
+const TANK_HERO = 2;
+const TANK_RANGED = 3;
+const HOLD_BACK_HERO = 450;
+const HOLD_BACK_RANGED = 650;
+const TANK_HOLD_MAX = 10;
+/** …and how much further out than its standoff a held unit may stand and count as there. */
+const HOLD_BACK_BAND = 250;
+/** A unit's place in the TANK ORDER: summons, melee soldiers, heroes, then the ranged line. */
+const tankRank = (u: SimUnit): number =>
+  u.isSummon ? TANK_SUMMON : u.isHero ? TANK_HERO : u.weapon?.ranged ? TANK_RANGED : TANK_MELEE;
 
 /**
  * THE FIRST TEN MINUTES BELONG TO THE CAMPS — how long, and the hero level that buys the party
@@ -2439,6 +2457,10 @@ interface Brain {
    *  there (`mercPass`); and every camp already rolled for, so each is rolled ONCE a match. */
   merc: { shopId: number; count: number; until: number } | null;
   mercRolled: Set<number>;
+  /** Has this player reached its POWER SPIKE (`spikeHeld`)? Latched. */
+  spikeMet: boolean;
+  /** The objective the TANK-ORDER hold is timed against, and since when (`tankHold`). */
+  tankHoldAt: { x: number; y: number; since: number } | null;
   /** The one opponent of a 1v1, -1 in any other game, and undefined until first asked — the
    *  seat the two 1v1 concession terms compare against (`duelFoe`). */
   duelFoe: number | undefined;
@@ -2736,6 +2758,8 @@ export class ComputerPlusAi {
       vanguardDone: false,
       merc: null,
       mercRolled: new Set(),
+      spikeMet: false,
+      tankHoldAt: null,
       duelFoe: undefined,
       firstHero: new Map(),
       concededAt: -1,
@@ -3072,6 +3096,9 @@ export class ComputerPlusAi {
     // spoken for when the slices are filled and the rest of the crew is redistributed around
     // them (`applyHarvest` passes over a worker on a repair job).
     ai.applyRepairs();
+    // …and a scaffold whose builder is gone gets one sent back to it (`resumeOrphans`) — before
+    // the harvest plan, for the same reason as the repair crew.
+    ai.resumeOrphans();
     // Workers first, then the list they will be spending on — the same order the classic AI
     // runs its two halves in (`peon_assignment` fills the harvest plan, `OneBuildLoop` spends).
     harvestPlan(ctx);
@@ -3341,7 +3368,11 @@ export class ComputerPlusAi {
   private recruit(b: Brain): void {
     const spare: SimUnit[] = [];
     for (const u of b.ai.army()) {
-      if (b.squad.has(u.id) || u.isPeon) continue;
+      // …nor a MILITIA. It is a Peasant on Call to Arms' clock (`[Amil]` HeroDur 40), raised by
+      // the town bell to defend the town (plus/casting.ts `townBell`), and it turns back into a
+      // Peasant where it stands. Recruited, it marched out with the wave and — once it was a
+      // Peasant again — stayed in the squad, spoken for, until it died (see `prune`).
+      if (b.squad.has(u.id) || u.isPeon || u.typeId === MILITIA) continue;
       if (u.worker) spare.push(u);
       else b.squad.add(u.id);
     }
@@ -6123,6 +6154,8 @@ export class ComputerPlusAi {
     // the only thing this commit moves is the copies; the body was stopped where it stands and
     // nothing here may start it walking again.
     const vanguard = b.vanguardUntil > b.clock;
+    // TANKS FIRST — see `tankHold`. Decided once for the pass: which RANKS are still held back.
+    const heldRanks = travelling || vanguard ? null : this.tankHold(b, x, y, bodies);
     for (const u of this.squadUnits(b)) {
       if (vanguard) {
         if (!isCopy(u)) continue;
@@ -6240,6 +6273,10 @@ export class ComputerPlusAi {
       // or whether there is an enemy beside the gun. A gun whose wave target is out of its
       // reach takes the best building it CAN reach (`siegeNear`) rather than walking through
       // the defence to the one the wave picked.
+      if (heldRanks && heldRanks.has(tankRank(u)) && !u.isPeon && !isSiege(u) && !heldRanks.targeted.has(u.id)) {
+        this.holdBack(b, u, x, y, anchor ?? u, tankRank(u) === TANK_RANGED ? HOLD_BACK_RANGED : HOLD_BACK_HERO);
+        continue;
+      }
       if (!u.isPeon && isSiege(u)) {
         let aim = razeAim && this.host.world.weaponVs(u, razeAim)
           && Math.hypot(u.x - razeAim.x, u.y - razeAim.y) <= this.siegeReach(u)
@@ -6351,6 +6388,66 @@ export class ComputerPlusAi {
     // standing still. It costs nothing: inside the window this loop only ever looks at the
     // copies, and their attack-move is not re-issued once it is pointed at the camp.
     b.reissueIn = vanguard ? 0 : REISSUE_PERIOD;
+  }
+
+  /**
+   * THE ARMY GOES IN IN TANK ORDER — `PlusProfile.tankFirst` (Insane). Ranks by `tankRank`:
+   * summons, melee soldiers, heroes, the ranged line. A rank is HELD while some rank in front of
+   * it is in the squad and none of those is engaged yet — engaged meaning swinging in range
+   * (`inCombat`) or being swung at — so the Riflemen and Archers stand off while the Water
+   * Elemental and the Footmen take the camp's first blows, and walk in the moment they have.
+   * Returns the held ranks (and every unit an enemy is already aiming at, which is never held:
+   * standing off is pointless for a body that is being hit), or null for none.
+   *
+   * Bounded by `TANK_HOLD_MAX` per objective, so a front line that cannot reach the enemy (a
+   * camp over a cliff, flyers) never parks the ranged line for good.
+   */
+  private tankHold(b: Brain, x: number, y: number, bodies: readonly SimUnit[]): (Set<number> & { targeted: Set<number> }) | null {
+    if (!b.profile.tankFirst || b.mode === "defending" || !bodies.length) return (b.tankHoldAt = null);
+    if (!b.tankHoldAt || Math.hypot(b.tankHoldAt.x - x, b.tankHoldAt.y - y) > REISSUE_SLACK * 2) {
+      b.tankHoldAt = { x, y, since: b.clock };
+    }
+    if (b.clock - b.tankHoldAt.since > TANK_HOLD_MAX) return null;
+    const targeted = new Set<number>();
+    for (const t of bodies) if (t.targetId) targeted.add(t.targetId);
+    const present = new Set<number>();
+    const engaged = new Set<number>();
+    for (const u of this.squadUnits(b)) {
+      if (u.isPeon || isCopy(u) || this.recovering(u)) continue;
+      const r = tankRank(u);
+      present.add(r);
+      if (u.inCombat || targeted.has(u.id)) engaged.add(r);
+    }
+    const held = new Set<number>() as Set<number> & { targeted: Set<number> };
+    held.targeted = targeted;
+    for (const r of [TANK_HERO, TANK_RANGED]) {
+      const ahead = [...present].filter((p) => p < r);
+      if (ahead.length && !ahead.some((p) => engaged.has(p))) held.add(r);
+    }
+    if (!held.size) {
+      // The front is in: the hold is spent for this objective.
+      b.tankHoldAt.since = -Infinity;
+      return null;
+    }
+    return held;
+  }
+
+  /** Stand `u` off `standoff` from the fight at (x, y), on the side the army is coming from — a
+   *  plain MOVE, which does not acquire, so nothing in range pulls it in early. */
+  private holdBack(b: Brain, u: SimUnit, x: number, y: number, from: { x: number; y: number }, standoff: number): void {
+    const dx = from.x - x;
+    const dy = from.y - y;
+    const len = Math.hypot(dx, dy) || 1;
+    const off = Math.hypot(u.x - x, u.y - y);
+    if (off >= standoff && off <= standoff + HOLD_BACK_BAND && !u.targetId) {
+      // Already standing about there: wait rather than walk on.
+      if (u.moving || u.order === "attackmove") this.issue(b, { c: "order", unitId: u.id, order: { kind: "stop" }, queued: false });
+      return;
+    }
+    const spot = this.walkableNear({ x: x + (dx / len) * standoff, y: y + (dy / len) * standoff }) ?? from;
+    const end = moveGoal(u);
+    if (end && Math.hypot(end.x - spot.x, end.y - spot.y) <= REISSUE_SLACK) return;
+    this.issue(b, { c: "order", unitId: u.id, order: { kind: "move", x: spot.x, y: spot.y }, queued: false });
   }
 
   /**
@@ -7021,13 +7118,39 @@ export class ComputerPlusAi {
     if (b.avoid.length) b.avoid = b.avoid.filter((a) => a.until > b.clock);
     const avoided = (p: { x: number; y: number }): boolean => isShunned(b.avoid, p, b.clock, GOAL_MATCH);
     const expansion = this.knownExpansion(b, foe, avoided);
-    const main = this.mainOf(b, foe, avoided);
+    // …and before its POWER SPIKE an Insane computer does not go at a MAIN at all — only at an
+    // expansion it knows of (see `spikeHeld`).
+    const held = this.spikeHeld(b);
+    const main = held ? null : this.mainOf(b, foe, avoided);
     if (expansion) {
       const u = this.host.world.units.get(expansion.id);
       const chance = u && b.ai.isTowered(u) ? b.profile.expansionFirst / 2 : b.profile.expansionFirst;
       if (!main || b.ai.randomInt(0, 999) < chance * 1000) return expansion;
     }
-    return main ?? expansion ?? this.anyBase(b, foe, avoided);
+    return main ?? expansion ?? (held ? null : this.anyBase(b, foe, avoided));
+  }
+
+  /**
+   * Is an INSANE computer still short of its build's POWER SPIKE (`PowerSpike` — the build's own,
+   * else the race's), and so holding its army off the enemy's MAIN? The wave goes at a known
+   * EXPANSION instead, or creeps (`pickTarget`'s last rung), and a fight that comes to it is
+   * fought as ever. LATCHED once met — a spike is the moment the army is ready, and losing a
+   * fight afterwards is not a reason to sit at home again — and given up at `SPIKE_LATEST`, so a
+   * spike the economy never reaches cannot hold the army home for the rest of the match.
+   */
+  private spikeHeld(b: Brain): boolean {
+    if (b.spikeMet || b.profile.difficulty !== MELEE_INSANE) return false;
+    const spike = b.strategy.powerSpike ?? b.table.powerSpike;
+    if (!spike || b.clock >= SPIKE_LATEST) {
+      b.spikeMet = true;
+      return false;
+    }
+    const met = (!spike.research || b.ai.upgradeLevel(spike.research[0]) >= spike.research[1])
+      && (!spike.units || b.ai.countDone(spike.units[0]) >= spike.units[1])
+      && (!spike.tier || this.tier(b) >= spike.tier)
+      && (!spike.armyFood || this.squadFood(b) >= spike.armyFood);
+    if (met) b.spikeMet = true;
+    return !met;
   }
 
   /**
@@ -7398,6 +7521,14 @@ export class ComputerPlusAi {
     // itself out of the line does not count as one (see `armyAnchor`).
     const anchor = this.armyAnchor(b);
     for (const u of this.squadUnits(b)) {
+      // A SUMMON IS NEVER WALKED OUT. It is on a clock, it costs nothing to lose, and taking the
+      // blows is what it is for — the developer: *"must not micro away summoned units that are
+      // low health … since it's good when summoned units are tanking damage"*. (The same reason
+      // it leads the army in, `tankRank`.)
+      if (u.isSummon) {
+        b.pulls.delete(u.id);
+        continue;
+      }
       const entry = b.pulls.get(u.id);
       // THE TRIP HOME (`sendHomeHp`, Insane): a melee soldier too hurt to be worth stepping back
       // into the line. Asked BEFORE the ordinary pull-out, and of a unit already standing behind
@@ -7670,7 +7801,7 @@ export class ComputerPlusAi {
     // more than a Grunt is — sending them in squad order gave the hero whatever the soldiers
     // in front of it had not already drunk, which on one Moon Well is nothing.
     const bar = (u: SimUnit): number => (passing && !u.isHero ? WELL_PASS_HP : RECOVER_TO);
-    const hurt = [...this.squadUnits(b)].filter((u) => u.hp / Math.max(1, u.maxHp) < bar(u));
+    const hurt = [...this.squadUnits(b)].filter((u) => !u.isSummon && u.hp / Math.max(1, u.maxHp) < bar(u));
     hurt.sort((p, q) => (q.isHero ? 1 : 0) - (p.isHero ? 1 : 0));
     for (const u of hurt) {
       if (u.drinkWellId > 0) continue; // already on its way to one
@@ -8012,6 +8143,21 @@ export class ComputerPlusAi {
   private prune(b: Brain): void {
     for (const id of [...b.squad]) {
       const u = this.host.world.units.get(id);
+      // A WORKER is never a soldier. The one way an ordinary worker gets into the squad is the
+      // human's Militia changing back (`recruit` keeps both out now, but a Militia that was in
+      // when it reverted is a Peasant in the wave): it goes back to the economy, STOPPED, so the
+      // idle-worker pass (`AiPlayer.workIdleWorkers`, which only sees an order of "idle") hands
+      // it a mine or a tree instead of leaving it under the army's last attack-move.
+      if (u && u.hp > 0 && u.owner === b.ai.player && u.isPeon) {
+        b.squad.delete(id);
+        b.held.delete(id);
+        b.pulls.delete(id);
+        b.waiting.delete(id);
+        if (u.order !== "idle" && u.order !== "harvest" && u.order !== "return" && u.order !== "repair") {
+          this.issue(b, { c: "order", unitId: u.id, order: { kind: "stop" }, queued: false });
+        }
+        continue;
+      }
       if (u && u.hp > 0 && u.owner === b.ai.player) continue;
       b.squad.delete(id);
       b.pulls.delete(id); // …and its pull-back clock dies with it

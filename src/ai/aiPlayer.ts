@@ -227,6 +227,11 @@ const REPAIR_AT = 0.9;
  * lumber per hit point restored and abandons the job when the bank empties).
  */
 const REPAIR_MAX = 2;
+/** `resumeOrphans`: how long a site must have stood with nobody building it before a worker is
+ *  sent, and how close something hostile may be before the site is left until the fight is over.
+ *  OURS. */
+const ORPHAN_GRACE = 3;
+const ORPHAN_DANGER = 700;
 /** Workers put on one damaged building… */
 const REPAIR_CREW = 1;
 /** …and on the HALL, which is the one building whose loss ends the game: it may have BOTH of
@@ -287,6 +292,8 @@ export class AiPlayer {
   /** …and the game clock at which the errand lapses unless a hire pass renews it: a row that
    *  stops asking (the plan moved on, the hero came some other way) must hand the worker back. */
   private tavernRunnerUntil = 0;
+  /** Building id → when it was first seen going up with nobody building it (`resumeOrphans`). */
+  private orphanSince = new Map<number, number>();
   /** Is this unit the army's, the scout, or on the Tavern errand — anything but the economy's? */
   private spokenFor(id: number): boolean {
     if (this.captainHeld.has(id)) return true;
@@ -2093,6 +2100,67 @@ export class AiPlayer {
         taken.add(u.id);
         on++;
         working++;
+      }
+    }
+  }
+
+  /**
+   * FINISH WHAT WAS STARTED. A structure whose builder died, was pulled off it or wandered away
+   * stops going up and stays a scaffold (SimWorld `tickBuildings`: "construction halts if the
+   * worker wanders off" — the human's and the orc's buildings both need a worker present; an
+   * undead or Entangled site `selfBuilds`). Reported of the human Computer+: it "DOESN'T finish
+   * buildings whose peasant that was building them died, left etc." — the build array counts a
+   * scaffold as the building (`count` includes it), so no row ever asked for it again and the
+   * money already spent sat in a half-built Barracks for the rest of the match.
+   *
+   * A site nobody is building (no worker of ours holds `constructing` on it) for `ORPHAN_GRACE`
+   * gets ONE worker sent with the player's own right-click, `buildresume` (SimWorld
+   * `assignBuilder`) — chosen the way a repair crew is: idle before a lumberjack before a miner,
+   * then nearest. Not while something hostile is standing at it (`ORPHAN_DANGER`): the worker
+   * would only die there too, and the site waits for the fight to end.
+   */
+  resumeOrphans(): void {
+    const world = this.host.world;
+    const now = world.elapsed;
+    const building = new Set<number>();
+    for (const u of world.units.values()) {
+      if (u.owner === this.player && u.hp > 0 && u.constructing) building.add(u.constructing);
+    }
+    const sites: SimUnit[] = [];
+    const seen = new Set<number>();
+    for (const b of world.units.values()) {
+      if (b.owner !== this.player || b.hp <= 0 || !b.building) continue;
+      if (b.building.constructionLeft <= 0 || b.building.selfBuilds || building.has(b.id)) continue;
+      seen.add(b.id);
+      const since = this.orphanSince.get(b.id) ?? now;
+      this.orphanSince.set(b.id, since);
+      if (now - since < ORPHAN_GRACE) continue;
+      let danger = false;
+      for (const t of world.units.values()) {
+        if (t.hp <= 0 || t.building || !t.weapons.length || !this.hostileTo(t)) continue;
+        if (Math.hypot(t.x - b.x, t.y - b.y) <= ORPHAN_DANGER) { danger = true; break; }
+      }
+      if (!danger) sites.push(b);
+    }
+    for (const id of [...this.orphanSince.keys()]) if (!seen.has(id)) this.orphanSince.delete(id);
+    if (!sites.length) return;
+    const free: SimUnit[] = [];
+    for (const u of world.units.values()) {
+      if (u.owner !== this.player || u.hp <= 0 || !u.worker || u.repair) continue;
+      if (isOffField(u) || u.buildPending || u.insideBuild || u.constructing) continue;
+      if (this.spokenFor(u.id)) continue;
+      free.push(u);
+    }
+    const cost = (u: SimUnit): number => (this.onGold(u) ? 2 : u.resKind === "lumber" ? 1 : 0);
+    for (const site of sites) {
+      const pick = free
+        .filter((u) => u.hp > 0 && !u.constructing)
+        .sort((a, b) => cost(a) - cost(b)
+          || Math.hypot(a.x - site.x, a.y - site.y) - Math.hypot(b.x - site.x, b.y - site.y))[0];
+      if (!pick) return;
+      if (this.host.execute(this.player, { c: "order", unitId: pick.id, order: { kind: "buildresume", buildingId: site.id }, queued: false })) {
+        free.splice(free.indexOf(pick), 1);
+        this.orphanSince.set(site.id, now); // given its grace again, should this worker be lost too
       }
     }
   }
