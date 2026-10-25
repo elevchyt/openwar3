@@ -189,6 +189,8 @@ const ITEMS = {
   gcel: { id: "gcel", gold: 125, usable: false, abilities: ["AIsx"] }, // Gloves of Haste
   rat6: { id: "rat6", gold: 125, usable: false, abilities: ["AIt6"] }, // Claws of Attack +6
   cnob: { id: "cnob", gold: 175, usable: false, abilities: ["AIx2"] }, // Circlet of Nobility
+  spre: { id: "spre", gold: 150, usable: true, abilities: ["ANpr"] }, // Staff of Preservation
+  ssan: { id: "ssan", gold: 250, usable: true, abilities: ["ANsa"] }, // Staff of Sanctuary
   spro: { id: "spro", gold: 150, usable: true, abilities: ["AIda"] }, // Scroll of Protection
   pman: { id: "pman", gold: 200, usable: true, abilities: ["AIm1"] }, // Potion of Mana
   sreg: { id: "sreg", gold: 100, usable: true, abilities: ["AIsl"] }, // Scroll of Regeneration
@@ -1743,6 +1745,25 @@ console.log("\n-- handing a spare potion over ----------------------------------
   const bm = belt(hero({ typeId: "Obla", x: 0, y: 0 }), "stwp");
   const m = shopped([bm, MERCHANT], PLUS_INSANE, { race: "orc" });
   check("a Blademaster's belt starts with the invulnerability potion", m.buy && m.buy.itemId, "pnvl");
+}
+
+// --- the STAFF that sends a unit home: Insane night elf and human, on the opener -----------------
+// The developer's: "make the night elf (only on Insane) Computer+ AI also buy a staff of
+// preservation when it can (let's put it high on its priorities). it should buy it on its first
+// hero (dh) ideally", and the human the Staff of Sanctuary.
+{
+  const wonders = ["moon", "plcl", "phea", "pman", "stwp", "spre", "oven", "pams"];
+  const dh = () => belt(hero({ typeId: "Edem", level: 5, x: 0, y: 0 }), "stwp");
+  check("an Insane night elf buys the Staff of Preservation first",
+    shopped([dh(), MERCHANT], PLUS_INSANE, { shelf: wonders, race: "nightelf" }).buy?.itemId, "spre");
+  check("…a Normal one does not",
+    shopped([dh(), MERCHANT], PLUS_NORMAL, { shelf: wonders, race: "nightelf" }).buy?.itemId === "spre", false);
+  const vault = ["sreg", "mcri", "plcl", "phea", "pman", "stwp", "tsct", "ofir", "ssan"];
+  check("an Insane human buys the Staff of Sanctuary",
+    shopped([belt(hero({ typeId: "Hamg", x: 0, y: 0 }), "stwp"), MERCHANT], PLUS_INSANE, { shelf: vault, race: "human" }).buy?.itemId, "ssan");
+  const pair = [dh(), belt(hero({ typeId: "Npbm", level: 2, x: 0, y: 0 }), "stwp")];
+  const walk = shopped([...pair, MERCHANT], PLUS_INSANE, { shelf: ["spre"], race: "nightelf", carry: "Npbm", inRange: false });
+  check("…on the opener, not the carry", walk.move?.unitId, pair[0].id);
 }
 
 // --- the ORC's Orb of Lightning, and the Blademaster's own gear --------------------------------

@@ -216,6 +216,42 @@ console.log("\n--- night elf: bears first, Chimaeras after ---");
   check("a Demon Hunter opening has no carry", pickHeroOrder(elf, elf.strategies[0], () => true, (lo) => lo).carry, undefined);
 }
 
+// THE DEVELOPER'S HERO RULES: the Far Seer's Tauren Chieftain opens on War Stomp, a second
+// Mountain King on Storm Bolt (index.ts `mountainKingSkills` makes the undead exception), and the
+// human's carry is the Mountain King.
+console.log("\n--- second-hero skill builds and the human carry ---");
+{
+  const orc = PLUS_RACES.orc;
+  const human = PLUS_RACES.human;
+  const ws = orc.combos.Ofar.skills.Otch;
+  check("a Far Seer's Tauren Chieftain opens on War Stomp", ws[0], "AOws");
+  check("…and maxes it first", ws.slice(0, 5).filter((x) => x === "AOws").length, 3);
+  check("an Archmage's Mountain King opens on Storm Bolt", human.combos.Hamg.skills.Hmkg[0], "AHtb");
+  const { pickHeroOrder } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
+  const rifles = human.strategies.find((s) => s.id === "rifles");
+  check("the human's carry is the Mountain King", pickHeroOrder(human, rifles, () => true, (lo) => lo).carry, "Hmkg");
+  const fs = orc.strategies.find((s) => s.id === "fsstandard");
+  check("…while a build's own carry still wins", pickHeroOrder(orc, fs, () => true, (lo) => lo).carry, "Otch");
+  // Who a staff saves first: a hero, then a melee body (the bigger first), then a ranged one.
+  const { staffRank } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
+  const body = (o) => ({ isHero: false, maxHp: 400, weapon: { ranged: false }, ...o });
+  const order = [
+    body({ id: "archer", weapon: { ranged: true }, maxHp: 900 }),
+    body({ id: "bear", maxHp: 960 }),
+    body({ id: "dryad", weapon: { ranged: true }, maxHp: 435 }),
+    body({ id: "hero", isHero: true, maxHp: 700 }),
+    body({ id: "huntress", maxHp: 600 }),
+  ].sort((a, b) => staffRank(b) - staffRank(a)).map((u) => u.id).join();
+  check("a staff saves heroes, then melee (bigger first), then ranged", order, "hero,bear,huntress,archer,dryad");
+  // The first hero ever seen of each opponent is LATCHED (`EnemyMemory.openingHeroes`).
+  const { EnemyMemory } = require(join(REPO, ".sim-build", "src", "ai", "plus", "counter.js"));
+  const mem = new EnemyMemory();
+  mem.note({ id: 1, owner: 1, typeId: "Udre", isHero: true }, 10);
+  mem.note({ id: 2, owner: 1, typeId: "Udea", isHero: true }, 300);
+  mem.forget(1000, 60);
+  check("an opponent's opening hero is the first one seen, and outlives the sightings", mem.openingHeroes().get(1), "Udre");
+}
+
 // THE NIGHT ELF'S LATE GAME. Reported: *"going for archers + huntresses a bit too much … later it
 // should go for bears (druid of the claw + his upgrades) and dryads and even chimeras if it has
 // the resources (or an expo at least)"*.

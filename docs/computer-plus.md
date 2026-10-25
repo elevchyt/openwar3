@@ -1799,6 +1799,26 @@ the Claw, the lead row asks for eight of them, and the Chimaeras wait for five. 
 Moon opening (`potmbears`) goes into the same bears behind Archers, and the Keeper of the Grove
 carries the Orb of Venom as the Demon Hunter does (`HERO_ORBS`).
 
+**THE STAVES THAT SEND A UNIT HOME** (`staffPass`, index.ts). On Insane the night elf buys a
+Staff of Preservation (`[spre]`, Ancient of Wonders, `Requires=etoa`) and the human a Staff of
+Sanctuary (`[ssan]`, Arcane Vault, `Requires=hcas`) — high on the list, out of the purse, and on the
+opener rather than the carry (plus/items.ts `RACE_STAFF`). Any hero carrying either presses it on
+one of our units under **15 %** that is not already home, HEROES first, then melee (the bigger
+body first), ranged last (`staffRank`); legality is the sim's `itemUseError`. Sanctuary's own stun
+holds its unit until it is healed (world.ts). A unit Preservation sends home is held from the moment
+it lands — `issue()` and the order drain refuse to walk it (`sentHomeHeld`), because measured live
+the muster walked a teleported Archer back out at 28 hp — walked to a Moon Well with mana, kept
+there to 95 % (`STAFF_RECOVER_TO`, not the ordinary 65 %), and re-sent to another well if its walk
+stopped outside the 400 pour. Verified live with a staged unit at 10 % in the middle of Echo Isles:
+teleported and back to full within a second on three seeds; Sanctuary 54 → 519 of 535 at 15 hp/s.
+
+Two second-hero skill rules: a Far Seer's Tauren Chieftain opens on WAR STOMP and maxes it, and a
+Mountain King who comes second opens on STORM BOLT — unless this player has SCOUTED an undead
+opponent whose first hero was a Dreadlord or a Crypt Lord (`EnemyMemory.openingHeroes`, latched),
+in which case he opens on Thunder Clap (`mountainKingSkills`, decided every pass until he is
+trained; the Thunder Clap choice is ours). And the human's carry is the Mountain King whenever he is
+fielded (`PlusRaceTable.carry`).
+
 And the Batrider presses **Unstable Concoction** (`PlusCaster.concoction`), which used to sit on
 `NEVER` as a button that spends the unit: only into three enemy flyers inside the blast, or into
 two Batriders' worth of hit points (a Frost Wyrm, a Chimaera) — both bars ours.

@@ -427,6 +427,13 @@ export interface PlusRaceTable {
    */
   readonly tier2Army?: number;
   /**
+   * The race's CARRY whenever he is fielded, for a build that names none of its own and a pairing
+   * that does not make its second one (`PlusStrategy.carry`, `HeroCombo.carry`). The human's
+   * Mountain King — the developer's *"make sure that the human is also treating mountain king as
+   * its 'carry' when he comes out"*.
+   */
+  readonly carry?: string;
+  /**
    * The race's TIER-3 clock, if its tier 3 IS its plan: from here the third hall is asked for
    * HIGH in the ladder (plan.ts `tier3Due`), above the tech buildings, the smith's upgrades, the
    * siege, the expansion and the third hero — every row that otherwise spends the gold first.
@@ -592,6 +599,16 @@ export interface PlusRaceTable {
 //  HUMAN
 // --------------------------------------------------------------------------------------
 
+/** The Mountain King's three skill builds (see `PlusRaceTable.skills`): Storm Bolt + Thunder Clap,
+ *  Storm Bolt + Bash, and Thunder Clap + Bash. Named, because the second-hero rule picks between
+ *  the first and the last (`combos`, index.ts `mountainKingSkills`). */
+export const MK_STORM_BOLT: readonly string[] = [THUNDER_BOLT, THUNDER_CLAP, THUNDER_BOLT, THUNDER_CLAP, THUNDER_BOLT, AVATAR,
+  THUNDER_CLAP, BASH, BASH, BASH];
+const MK_BOLT_BASH: readonly string[] = [THUNDER_BOLT, BASH, THUNDER_BOLT, BASH, THUNDER_BOLT, AVATAR,
+  BASH, THUNDER_CLAP, THUNDER_CLAP, THUNDER_CLAP];
+export const MK_THUNDER_CLAP: readonly string[] = [THUNDER_CLAP, BASH, THUNDER_CLAP, BASH, THUNDER_CLAP, AVATAR,
+  BASH, THUNDER_BOLT, THUNDER_BOLT, THUNDER_BOLT];
+
 const HUMAN: PlusRaceTable = {
   race: "human",
   worker: PEASANT,
@@ -628,6 +645,8 @@ const HUMAN: PlusRaceTable = {
   // …and a hero and FOUR soldiers on the field while it saves (5 + 4 × 3 for the Rifleman the
   // three rifle builds field), not a hero and one — see `PlusRaceTable.tier2Army`.
   tier2Army: 17,
+  // …and the MOUNTAIN KING is its carry whenever he comes out — see `PlusRaceTable.carry`.
+  carry: MTN_KING,
   shop: ARCANE_VAULT,
   // THE FLYING MACHINE, off one Workshop — the developer's own example of the rule
   // (`PlusRaceTable.antiAir`). It is the human's dedicated answer: `hgyr` shoots air and nothing
@@ -775,14 +794,7 @@ const HUMAN: PlusRaceTable = {
     // Storm Bolt + Bash is the duellist's, spending the levels on the one target it wants
     // dead; Thunder Clap + Bash is the front-line one, which is what a Mountain King leading
     // Footmen actually looks like.
-    [MTN_KING]: [
-      [THUNDER_BOLT, THUNDER_CLAP, THUNDER_BOLT, THUNDER_CLAP, THUNDER_BOLT, AVATAR,
-        THUNDER_CLAP, BASH, BASH, BASH],
-      [THUNDER_BOLT, BASH, THUNDER_BOLT, BASH, THUNDER_BOLT, AVATAR,
-        BASH, THUNDER_CLAP, THUNDER_CLAP, THUNDER_CLAP],
-      [THUNDER_CLAP, BASH, THUNDER_CLAP, BASH, THUNDER_CLAP, AVATAR,
-        BASH, THUNDER_BOLT, THUNDER_BOLT, THUNDER_BOLT],
-    ],
+    [MTN_KING]: [MK_STORM_BOLT, MK_BOLT_BASH, MK_THUNDER_CLAP],
     [BLOOD_MAGE]: [[FLAME_STRIKE, SIPHON_MANA, FLAME_STRIKE, SIPHON_MANA, FLAME_STRIKE,
       SUMMON_PHOENIX, SIPHON_MANA, BANISH, BANISH, BANISH]],
     ...TAVERN_SKILLS,
@@ -800,7 +812,14 @@ const HUMAN: PlusRaceTable = {
           SUMMON_PHOENIX, FLAME_STRIKE, BANISH, BANISH, BANISH],
       },
     },
-    [ARCHMAGE]: { second: [MTN_KING], third: [[PALADIN, ALCHEMIST]] },
+    // …and a Mountain King who comes SECOND opens on STORM BOLT (the developer's: *"it must always
+    // start with Storm Bolt as its first ability, except if facing a Dreadlord or Crypt Lord first
+    // Undead opponent (that it has scouted)"* — the exception is index.ts `mountainKingSkills`,
+    // which can only be decided once there is something scouted).
+    [ARCHMAGE]: {
+      second: [MTN_KING], third: [[PALADIN, ALCHEMIST]],
+      skills: { [MTN_KING]: MK_STORM_BOLT },
+    },
     "*": { third: [[PALADIN, ALCHEMIST]] },
   },
 };
@@ -969,7 +988,14 @@ const ORC: PlusRaceTable = {
   // or the other)"*.
   combos: {
     [BLADE_MASTER]: { second: [SHADOW_HUNTER], third: [[TAUREN_CHIEF]] },
-    [FAR_SEER]: { second: [TAUREN_CHIEF], third: [[SHADOW_HUNTER]] },
+    // The Far Seer's Tauren Chieftain opens on WAR STOMP and maxes it first (the developer's
+    // *"when tauren chieftain is trained as the second hero (far seer opening), it must start
+    // (and max first) war stomp instead of shockwave"*).
+    [FAR_SEER]: {
+      second: [TAUREN_CHIEF], third: [[SHADOW_HUNTER]],
+      skills: { [TAUREN_CHIEF]: [WAR_STOMP, ENDURANE_AURA, WAR_STOMP, ENDURANE_AURA, WAR_STOMP,
+        REINCARNATION, ENDURANE_AURA, SHOCKWAVE, SHOCKWAVE, SHOCKWAVE] },
+    },
     // No build here opens on the Tauren Chieftain any more, but a hero order that does (a
     // reordered build, a later table) still takes the Shadow Hunter beside him and never a
     // Blademaster — two melee heroes and no sustain, "a very wrong build" (the developer).

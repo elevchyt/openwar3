@@ -33,8 +33,8 @@ import {
 } from "./teamchat";
 import { liveProfile, plusProfile, type PlusProfile } from "./profile";
 import { aimCtx, HERO_KILL_HP, heroKillable, isSiege, isTower, killValue, razeCost, razeValue } from "./targeting";
-import { PLUS_RACES, TAVERN_HEROES, insaneVariant, rollStrategy, rollTransition, tableForEdition, type HeroCombo, type PlusRaceTable, type PlusStrategy } from "./races";
-import { MELEE_INSANE, MELEE_NEWBIE, MILITIA, MIRROR_IMAGE } from "../ids";
+import { MK_STORM_BOLT, MK_THUNDER_CLAP, PLUS_RACES, TAVERN_HEROES, insaneVariant, rollStrategy, rollTransition, tableForEdition, type HeroCombo, type PlusRaceTable, type PlusStrategy } from "./races";
+import { CRYPT_LORD, DREAD_LORD, MELEE_INSANE, MELEE_NEWBIE, MILITIA, MIRROR_IMAGE, MTN_KING } from "../ids";
 import { isRoc } from "../../data/edition";
 import { CAMP_GREEN_MAX, armyPower, maxCampLevel, preferredCampFloor, type CreepForce, type Fighter } from "./power";
 
@@ -1078,6 +1078,32 @@ const WELL_WALK = 2000;
 const WELL_PASS_REACH = 900;
 const WELL_PASS_HP = 0.5;
 const WELL_PASS_SAFE = 1200;
+/**
+ * THE STAVES THAT SEND A UNIT HOME (`staffPass`): the Staff of Preservation (`ANpr`) and the Staff
+ * of Sanctuary (`ANsa`), told apart by their ability CODE so a map's re-skinned staff is the same
+ * staff. The developer's: a unit *"under 15% health"* is sent home — HEROES first, then beefy melee
+ * units (a bear), ranged units last. The 15 % is theirs; the rest of these numbers are OURS.
+ */
+const STAFF_CODES: ReadonlySet<string> = new Set(["ANpr", "ANsa"]);
+const STAFF_HP = 0.15;
+/** …and a unit Preservation sent home is walked to a Moon Well with mana for this long after the
+ *  press — the teleport is instant, so this only covers a queued order and a well that was busy —
+ *  and kept there until this much of its life is back (`recovering`), not the ordinary
+ *  `RECOVER_TO`: *"restore as much health as possible to that unit"*. */
+const STAFF_WELL_WINDOW = 30;
+/** …and how long the item use is given to land before a unit still out in the field is let go
+ *  (the press was refused or queued behind something). */
+const STAFF_LAND = 3;
+const STAFF_RECOVER_TO = 0.95;
+/** A Moon Well's pour, `[Ambt] Area1` — what a drinker must stand inside to be poured into. */
+const WELL_POUR = 400;
+
+/** Who a staff saves first (`staffPass`): a HERO, then a MELEE body, then a ranged one — and the
+ *  bigger body of two in the same rung, which is the "beefy" in *"beefy melee units like bears"*. */
+export function staffRank(t: SimUnit): number {
+  const rung = t.isHero ? 3 : t.weapon && !t.weapon.ranged ? 2 : 1;
+  return rung * 1e6 + t.maxHp;
+}
 /** Hit-point fraction the CAPTAIN must have before the party goes to the next camp. A hero
  *  that walks into a second camp on a third of its life is a hero the camp kills, and a dead
  *  hero is the most expensive thing on a melee map. It heals up at home first. */
@@ -2644,6 +2670,11 @@ export interface ConcedeReading {
 
 export class ComputerPlusAi {
   private readonly brains: Brain[] = [];
+  /** Units a staff has sent home (`staffPass`), and the brain clock it happened at — held at a
+   *  Moon Well to `STAFF_RECOVER_TO` rather than the ordinary `RECOVER_TO` (`recovering`). */
+  private readonly sentHome = new Map<number, number>();
+  /** …and the wells each of them has already been sent to and could not reach (`staffPass`). */
+  private readonly sentHomeTried = new Map<number, Set<number>>();
 
   constructor(private readonly host: PlusHost) {}
 
@@ -3073,6 +3104,10 @@ export class ComputerPlusAi {
       // sites that re-aim a squad: a pass that forgets to ask is one Starfall thrown away.
       if (this.holdsUltimate(cmd.unitId) || this.holdsSiphon(b, cmd.unitId)) return true;
       const kind = cmd.order.kind;
+      // …and a unit a STAFF has just sent home is not walked anywhere until it is healed
+      // (`staffPass`, `sentHomeHeld`) — the same door, for the same reason: a pass that forgets to
+      // ask `recovering` walks it straight back into the fight at a tenth of its life.
+      if (kind !== "stop" && kind !== "hold" && this.sentHomeHeld(cmd.unitId)) return true;
       if (kind === "move" || kind === "attackmove" || kind === "attack" || kind === "patrol") {
         if (b.ordersThisStep >= ORDERS_PER_STEP) {
           b.orderQueue.push(cmd);
@@ -3106,6 +3141,9 @@ export class ComputerPlusAi {
       if (!u || u.hp <= 0) continue; // gone
       // …and asked again on the way out: the order was queued before the channel began.
       if (this.holdsUltimate(u.id) || this.holdsSiphon(b, u.id)) continue;
+      // …and one queued before a staff sent the unit home (`sentHomeHeld`). Measured live: a
+      // rejoin order queued in the field was delivered the second after the teleport.
+      if (this.sentHomeHeld(u.id)) continue;
       b.ordersThisStep++;
       b.ai.order(cmd);
       simProfile.tally("aiOrdersIssued");
@@ -3113,6 +3151,13 @@ export class ComputerPlusAi {
     b.orderQueue = rest;
     simProfile.end("sim.ai.orders");
     simProfile.gauge("aiOrderDrain", perfNow() - t0);
+  }
+
+  /** Is this unit one a staff has sent home and that is not yet healed (`staffPass`)? */
+  private sentHomeHeld(unitId: number): boolean {
+    if (!this.sentHome.has(unitId)) return false;
+    const u = this.host.world.units.get(unitId);
+    return !!u && u.hp > 0 && u.hp / Math.max(1, u.maxHp) < STAFF_RECOVER_TO;
   }
 
   /** Is this unit channelling one of the `HELD_CHANNELS` ultimates right now? */
@@ -3434,6 +3479,10 @@ export class ComputerPlusAi {
     // home from a lost fight — stops at one on the way for the units that need it (`wellPass`'s
     // `passing` reading: a short detour, and never with an enemy in sight).
     else if (!threatened && b.mode !== "defending") this.wellPass(b, true);
+    // …and a unit about to DIE is sent home by a staff, if a hero carries one — see `staffPass`.
+    // Every mode: the staff is for the fight, and the units it saves are the ones in it.
+    this.staffPass(b);
+    this.mountainKingSkills(b);
     // THE WOUNDED WALK OUT OF THE FIGHT, one at a time — before anything is aimed, because who
     // is in the line is what the aiming below is about. Above `defendPass` rather than inside a
     // mode branch: a Grunt on its last quarter is worth pulling out of a fight in the enemy's
@@ -7567,6 +7616,11 @@ export class ComputerPlusAi {
     // a rally or commit order mid-channel walks it off its meal and throws the heal away. Asked
     // before the `RECOVER_TO` bar because the meal starts at a higher one.
     if (u.order === "cast" && u.pendingCast?.code === "Acan") return true;
+    // A unit a STAFF sent home is held from the moment it lands, and drinks to nearly full
+    // (`STAFF_RECOVER_TO`): it was sent there to be put back together, not topped up. Held BEFORE
+    // its well order too — measured live, the muster walked a teleported Archer at 28 hp straight
+    // back out towards the fight in the second between the teleport and `staffPass`'s next look.
+    if (this.sentHome.has(u.id)) return u.hp / Math.max(1, u.maxHp) < STAFF_RECOVER_TO;
     if (u.hp / Math.max(1, u.maxHp) >= RECOVER_TO) return false;
     if (u.drinkWellId > 0) return true;
     return u.buffs.some((f) => f.group.startsWith(ITEM_REGEN_GROUP));
@@ -7971,6 +8025,140 @@ export class ComputerPlusAi {
       // arrives (SimWorld.issueDrink). Not a second channel — the same order a player gives.
       this.issue(b, { c: "drink", unitId: u.id, wellId: best.id });
     }
+  }
+
+  /**
+   * THE STAVES — send a unit about to die home, and put it back together there.
+   *
+   * The developer's: *"it must use it on its units that are under 15% health to teleport them back
+   * to their base. then, it must use available moonwells (if it has any with mana in them) to
+   * restore as much health as possible to that unit and have it walk back into the fight"*, and
+   * for the human's Staff of Sanctuary, *"the unit is just teleported back to the base, and cannot
+   * be moved, attack, use abilities etc. until it is on full health again"* — which is the sim's
+   * own `ANsa` payload (world.ts: a stun and a 15 hp/s pour, both until healed), so for that staff
+   * the press is the whole of it. *"both staffs' logic must ALWAYS prefer heroes first if they
+   * have multiple choices and then beefy melee units like bears and ranged units last"* —
+   * `staffRank`.
+   *
+   * Two halves:
+   *
+   *  · THE PRESS: every hero of ours carrying a ready staff looks at our units under `STAFF_HP`
+   *    and not already home, and sends the best of them — legality (range, a summon, a unit
+   *    already held, somewhere to arrive) is the sim's, asked through `itemUseError`, the same
+   *    door the HUD asks before a player's click;
+   *  · THE WELL: a unit sent home is walked to the nearest of our Moon Wells with mana in it
+   *    (`drink`, the ordinary right-click), and `recovering` keeps the army's orders off it until
+   *    `STAFF_RECOVER_TO`. After that it is an ordinary straggler, and the muster walks it back
+   *    to the army. A race with no wells (the human) never gets this half.
+   */
+  private staffPass(b: Brain): void {
+    const world = this.host.world;
+    const home = b.ai.home();
+    // THE WELL, for the units sent home on an earlier pass.
+    for (const [id, at] of this.sentHome) {
+      const u = world.units.get(id);
+      if (!u || u.hp <= 0) { this.sentHome.delete(id); this.sentHomeTried.delete(id); continue; }
+      if (u.owner !== b.ai.player) continue;
+      if (b.clock - at > STAFF_WELL_WINDOW || u.hp / Math.max(1, u.maxHp) >= STAFF_RECOVER_TO) {
+        if (u.drinkWellId <= 0) { this.sentHome.delete(id); this.sentHomeTried.delete(id); } // a drinker keeps its higher bar to the end
+        continue;
+      }
+      // At a well already — unless the walk there gave up OUTSIDE its pour (measured live: an
+      // Archer stood 439 from a well whose `Area1` is 400, behind the buildings round it, and the
+      // well never counted it as arrived). Then it is sent to another well with mana.
+      if (u.drinkWellId > 0) {
+        const at = world.units.get(u.drinkWellId);
+        if (u.order !== "idle" || !at || Math.hypot(u.x - at.x, u.y - at.y) - u.radius <= WELL_POUR) continue;
+        let tried = this.sentHomeTried.get(u.id);
+        if (!tried) this.sentHomeTried.set(u.id, (tried = new Set()));
+        tried.add(at.id);
+      }
+      // The staff did not fire (still out where it was) — let it go back to being a soldier.
+      if (b.clock - at > STAFF_LAND && Math.hypot(u.x - home.x, u.y - home.y) > TOWN_RADIUS) {
+        this.sentHome.delete(id);
+        this.sentHomeTried.delete(id);
+        continue;
+      }
+      let well: SimUnit | null = null;
+      let bestD = WELL_WALK;
+      const tried = this.sentHomeTried.get(u.id);
+      for (const w of world.units.values()) {
+        if (w.owner !== b.ai.player || w.hp <= 0 || w.mana <= 0 || !world.isReplenisher(w.id)) continue;
+        if (tried?.has(w.id)) continue;
+        const d = Math.hypot(w.x - u.x, w.y - u.y);
+        if (d < bestD) { bestD = d; well = w; }
+      }
+      if (well) {
+        this.arm(b, well, REPLENISH_CODE);
+        this.issue(b, { c: "drink", unitId: u.id, wellId: well.id });
+      }
+    }
+    // THE PRESS.
+    for (const holder of world.units.values()) {
+      if (holder.owner !== b.ai.player || !holder.isHero || holder.hp <= 0 || holder.isIllusion) continue;
+      const slot = holder.inventory.findIndex((h) => h && this.isStaff(h.itemId));
+      if (slot < 0 || world.itemReadyError(holder.id, slot) !== null) continue;
+      let best: SimUnit | null = null;
+      let bestRank = -Infinity;
+      for (const t of world.units.values()) {
+        if (t.owner !== b.ai.player || t.hp <= 0 || t.building || t.isIllusion || t.isSummon || t.isPeon) continue;
+        if (t.hp / Math.max(1, t.maxHp) >= STAFF_HP) continue;
+        if (Math.hypot(t.x - home.x, t.y - home.y) <= TOWN_RADIUS) continue; // home already
+        if (world.itemUseError(holder.id, slot, t.id) !== null) continue;
+        const rank = staffRank(t);
+        if (rank > bestRank) { bestRank = rank; best = t; }
+      }
+      if (!best) continue;
+      // Held at home for a Moon Well only where there IS one — Preservation on a player with
+      // wells; Sanctuary's own stun holds its unit (world.ts), and a race with neither simply
+      // gets its unit back at home.
+      const code = this.staffCode(holder.inventory[slot]!.itemId);
+      if (this.issue(b, { c: "useitem", unitId: holder.id, slot, targetId: best.id, x: best.x, y: best.y })
+        && code === "ANpr" && this.ownsWell(b)) {
+        this.sentHome.set(best.id, b.clock);
+      }
+    }
+  }
+
+  /**
+   * A MOUNTAIN KING WHO COMES SECOND opens on STORM BOLT — `combos`' own skill build for him — with
+   * one exception, the developer's: *"except if facing a Dreadlord or Crypt Lord first Undead
+   * opponent (that it has scouted, otherwise it must always get Storm Bolt!)"*. Against one of
+   * those he opens on THUNDER CLAP instead (the Thunder Clap + Bash build, `MK_THUNDER_CLAP` — the
+   * choice of replacement is OURS: an area slow for the swarm of Ghouls or Beetles those two
+   * openers bring, where a single-target stun is spent on one of many).
+   *
+   * Decided on every pass until he is TRAINED, because the scouting that decides it arrives during
+   * the match and the skill array is only read once he has his first point; from then on it is
+   * left alone. "Scouted" is `EnemyMemory.openingHeroes`: the first hero this player ever saw of
+   * each opponent.
+   */
+  private mountainKingSkills(b: Brain): void {
+    if (b.ai.heroId2 !== MTN_KING || b.ai.countDone(MTN_KING) > 0) return;
+    const swarm = [...b.memory.openingHeroes().values()].some((h) => h === DREAD_LORD || h === CRYPT_LORD);
+    b.ai.setSkillArray(2, MTN_KING, swarm ? MK_THUNDER_CLAP : MK_STORM_BOLT);
+  }
+
+  /** Is this item one of the staves that send a unit home? Asked of its ABILITY's code. */
+  private isStaff(itemId: string): boolean {
+    return this.staffCode(itemId) !== null;
+  }
+
+  /** …and which one (`ANpr` / `ANsa`), or null. */
+  private staffCode(itemId: string): string | null {
+    for (const id of this.host.items.get(itemId)?.abilities ?? []) {
+      const code = this.host.abilities.get(id)?.code ?? "";
+      if (STAFF_CODES.has(code)) return code;
+    }
+    return null;
+  }
+
+  /** Does this player own a Moon Well (any replenisher), dry or not? */
+  private ownsWell(b: Brain): boolean {
+    for (const u of this.host.world.units.values()) {
+      if (u.owner === b.ai.player && u.hp > 0 && this.host.world.isReplenisher(u.id)) return true;
+    }
+    return false;
   }
 
   /**
@@ -9553,7 +9741,8 @@ export function pickHeroOrder(
   }
   third ||= fallback();
   // The build's CARRY: its own (`PlusStrategy.carry`), else the second hero where the pairing
-  // says the second is the one the build is played around (`HeroCombo.carry`).
-  const carry = strategy.carry ?? (combo.carry && second ? second : undefined);
+  // says the second is the one the build is played around (`HeroCombo.carry`), else the race's
+  // (`PlusRaceTable.carry` — the human's Mountain King, whenever he is fielded).
+  const carry = strategy.carry ?? (combo.carry && second ? second : undefined) ?? table.carry;
   return { first, second, third, combo, carry };
 }

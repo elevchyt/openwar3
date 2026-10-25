@@ -59,10 +59,19 @@ const EMPTY_READ: EnemyRead = { seen: 0, air: 0, airBodies: 0, armor: {}, pierce
  */
 export class EnemyMemory {
   private readonly seen = new Map<number, { typeId: string; at: number }>();
+  /** The FIRST hero ever seen of each opposing player (owner → hero type) — latched, and never
+   *  forgotten with the sightings: an opening is a fact about the match, not about the army. */
+  private readonly openers = new Map<number, string>();
 
   /** Record a sighting. Called for every hostile unit currently under this player's own eyes. */
   note(u: SimUnit, now: number): void {
     this.seen.set(u.id, { typeId: u.typeId, at: now });
+    if (u.isHero && !u.isIllusion && !this.openers.has(u.owner)) this.openers.set(u.owner, u.typeId);
+  }
+
+  /** Each opposing player's opening hero, as far as this player has SCOUTED it (`openers`). */
+  openingHeroes(): ReadonlyMap<number, string> {
+    return this.openers;
   }
 
   /** Drop everything older than the window — called once per pass so the map cannot grow. */

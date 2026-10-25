@@ -7,6 +7,7 @@ import { isOrbCode } from "../../sim/orbs";
 import { near, type CasterView } from "../casting";
 import { HERO_KILL_HP } from "./targeting";
 import type { PlusProfile } from "./profile";
+import { MELEE_INSANE } from "../ids";
 
 // Computer+ — buying items, and pressing them (issue #124, issue #130).
 //
@@ -543,10 +544,26 @@ function suits(u: SimUnit, itemId: string, carry?: string): boolean {
   return true;
 }
 
+/**
+ * THE STAFF that sends a unit home, for the two races whose own shop stocks one — on INSANE only,
+ * the developer's: *"we must make the night elf (only on Insane) Computer+ AI also buy a staff of
+ * preservation when it can (let's put it high on its priorities). it should buy it on its first
+ * hero (dh) ideally"*, and the same for the human with the Staff of Sanctuary. `[spre]` is on the
+ * Ancient of Wonders' shelf and `Requires=etoa`; `[ssan]` on the Arcane Vault's and
+ * `Requires=hcas` (ItemFunc.txt) — the shop's own tier gate, as for the orbs. ONE, carried by the
+ * opener: the shopper gives it to the highest-level hero and never to the carry first (`shopper`).
+ * Pressed by the army manager, which knows who is about to die (index.ts `staffPass`).
+ */
+const RACE_STAFF: Partial<Record<PlayableRace, Want>> = {
+  nightelf: { id: "spre", want: 1 },
+  human: { id: "ssan", want: 1 },
+};
+const STAFFS: ReadonlySet<string> = new Set(Object.values(RACE_STAFF).map((w) => w!.id));
+
 /** The buys `PlusProfile.shopping` does not cap: the Town Portal (see `shop`), the Potion of
  *  Healing (see `LIST`) and the two FIGHT items (`FIGHT`). A free SLOT is still required —
  *  `shopper` asks for one. */
-const ESSENTIAL: ReadonlySet<string> = new Set(["stwp", "phea", "shea", "pnvl", ...ORB_OF]);
+const ESSENTIAL: ReadonlySet<string> = new Set(["stwp", "phea", "shea", "pnvl", ...ORB_OF, ...STAFFS]);
 
 /**
  * The two items that decide a fight rather than the walk between two: the Scroll of Healing (the
@@ -2313,7 +2330,9 @@ export class PlusItems {
   private heroChance(now: number, own: SimUnit[], ctx: ItemCtx): boolean {
     if (this.profile.shopping <= 0) return false;
     const fieldCtx = ctx.wave ? { ...ctx, mayDetour: false } : ctx;
-    const wanted: string[] = [];
+    // The race's STAFF first (`RACE_STAFF`) — high on the list, and the race shop is in the base
+    // the roaming army only passes through.
+    const wanted: string[] = this.staffRows().filter((w) => this.carried(own, w.id) < w.want).map((w) => w.id);
     for (const h of own) {
       if (!h.isHero || h.isIllusion) continue;
       const orb = orbFor(h, this.carry);
@@ -2592,7 +2611,8 @@ export class PlusItems {
       }
       // …and the build's CARRY before anybody else of the same standing (`ItemCtx.carry`): the
       // items are how he carries. Otherwise the highest level, which is nearly always the opener.
-      const carried = (h: SimUnit): number => (h.typeId === this.carry ? 1 : 0);
+      // (Not the STAFF: that is the opener's, which is the highest level — `RACE_STAFF`.)
+      const carried = (h: SimUnit): number => (h.typeId === this.carry && !STAFFS.has(itemId) ? 1 : 0);
       if (!best || carried(u) > carried(best) || (carried(u) === carried(best) && u.level > best.level)) best = u;
     }
     return best;
@@ -2697,7 +2717,7 @@ export class PlusItems {
     // one each — the melee heroes still served first (`firstFor`).
     const invuln = this.profile.invulnEach ? heroes.length : 0;
     const each = (w: Want): Want => (w.id === INVULN_BUY && w.want < invuln ? { ...w, want: invuln } : w);
-    const first = [...orbs, ...(RACE_FIRST[this.race] ?? []).map((w) => ({ ...w, opening: true }))];
+    const first = [...orbs, ...this.staffRows(), ...(RACE_FIRST[this.race] ?? []).map((w) => ({ ...w, opening: true }))];
     // …and the race's MANA, which is bought out of the purse for the same reason but sits one
     // place further down: BEHIND the scroll. A hero with an empty bar has lost its spells; a
     // hero with no Town Portal loses the army, and that is the bigger loss (`PORTAL`).
@@ -2752,6 +2772,12 @@ export class PlusItems {
     // ladder never reaches is a row that does not exist, and `pick` stops at the first one it
     // can act on.
     return [...core, ...(RACE_SURPLUS[this.race] ?? []), ...RICH];
+  }
+
+  /** This player's `RACE_STAFF` row, out of the purse — on Insane, for the races that have one. */
+  private staffRows(): Want[] {
+    const staff = this.profile.difficulty === MELEE_INSANE ? RACE_STAFF[this.race] : undefined;
+    return staff ? [{ ...staff, opening: true }] : [];
   }
 
   /** How many of an item our heroes are already carrying. Counted across ALL of them: two
