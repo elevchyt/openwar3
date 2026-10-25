@@ -194,6 +194,15 @@ console.log("\n--- night elf: bears first, Chimaeras after ---");
     return buildableMix(c);
   };
   check("the late grove is mostly bears", Object.entries(grove.mix).sort((a, b) => b[1] - a[1])[0][0], "edoc");
+  // INSANE trains its druids a tier early (`insaneTier`), and only Insane (index.ts `recruit`
+  // keeps them at home until Bear Form).
+  const { tableForDifficulty } = require(join(REPO, ".sim-build", "src", "ai", "plus", "races.js"));
+  const bears = elf.strategies.find((s) => s.id === "bears");
+  const t2 = [elf.halls[1], elf.barracks, "eaoe", "edob", "eden"];
+  const at2 = (insane) => buildableMix(ctx(tableForDifficulty(elf, insane), bears, insane ? PLUS_INSANE : PLUS_NORMAL, t2, 2)).some((r) => r.unit === "edoc");
+  check("an Insane night elf trains Druids of the Claw at tier 2", at2(true), true);
+  check("…a Normal one waits for tier 3", at2(false), false);
+  check("…and the table is only changed for Insane", tableForDifficulty(elf, false), elf);
   check("…and asks for eight of them high in the ladder", grove.lead.edoc, 8);
   check("no Chimaeras beside four bears", rich(4).some((r) => r.unit === "echm"), false);
   check("…but Chimaeras once five bears stand", rich(5).some((r) => r.unit === "echm"), true);
@@ -419,6 +428,10 @@ console.log("\n--- hero pairings, and the Insane-only builds ---");
   check("…the standard plans wait for three Raiders before the Fortress",
     rolled.filter((s) => s.id.endsWith("standard")).every((s) => s.tier3After?.units?.join() === "orai,3"), true);
   check("…and grows into the Tauren army", rolled.every((s) => s.thenAt3 === "taurens"), true);
+  const taurens = orc.strategies.find((x) => x.id === "taurens");
+  check("…and two Kodo Beasts at tier 3", taurens.lead?.okod, 2);
+  const drums = orc.upgrades.find((u) => u.id === "Rwdm");
+  check("War Drums is a saved-for unlock, once a Kodo is out", `${drums.unlock},${drums.ranks},${drums.forUnit}`, "true,1,okod");
   check("the two-Beastiary builds hold tier 3 to their own clock", rolled.filter((s) => at2(s).factories?.obea === 2).every((s) => s.tier3Clock === 600), true);
   check("every Shadow Hunter build opens on Hex or Healing Wave",
     orc.skills.Oshd.every((b) => b[0] === "AOhx" || b[0] === "AOhw"), true);

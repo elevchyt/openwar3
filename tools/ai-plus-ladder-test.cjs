@@ -40,7 +40,7 @@ const { existsSync, readFileSync, writeFileSync } = require("node:fs");
 const REPO = join(__dirname, "..");
 writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { buildPlan, harvestPlan } = require(join(REPO, ".sim-build", "src", "ai", "plus", "plan.js"));
-const { PLUS_RACES, tableForEdition } = require(join(REPO, ".sim-build", "src", "ai", "plus", "races.js"));
+const { PLUS_RACES, tableForEdition, tableForDifficulty } = require(join(REPO, ".sim-build", "src", "ai", "plus", "races.js"));
 const EDITION = process.env.OW3_EDITION === "roc" ? "roc" : "tft";
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 const { TOWN_COUNT_EQUIVALENTS } = require(join(REPO, ".sim-build", "src", "ai", "ids.js"));
@@ -941,7 +941,9 @@ function runEconomy() {
   const ATTRITION_SHARE = 0.25;
 
   function run(race, strategyId, profile, seconds, opts = {}) {
-    const table = TABLES[race];
+    // …as the seat plays it: an Insane seat's table has its `insaneTier` units moved
+    // (`tableForDifficulty`, exactly as `ComputerPlusAi.add` applies it).
+    const table = tableForDifficulty(TABLES[race], profile === PLUS_INSANE);
     const strategy = table.strategies.find((s) => s.id === strategyId);
     // The build's own POWER SPIKE building: the producer of the heaviest tier-2 unit in its mix
     // — the human's Arcane Sanctum, the orc's Spirit Lodge, the undead's Temple of the Damned.

@@ -1782,6 +1782,13 @@ the rush reached its Fortress at 13:29 on average against 9:46 for the build it 
   Chieftain, the human's Mountain King, a Priestess opening's Demon Hunter or Brewmaster), and the
   Tauren Chieftain always does — the developer's *"potion of invulnerability should be a high
   priority purchase"*; six of his eight deaths in the last benchmark were to a Lich.
+* **Kodo Beasts and War Drums**: one Kodo in the orc's tier-2 armies and TWO at tier 3 (`lead`, so a
+  fallen one is replaced), and War Drums (`Rwdm`, one rank, `Requires=ofrt`) a saved-for unlock row
+  once a Kodo is out — it was an ordinary three-rank row bought out of leftovers.
+* **Early druids on Insane** (`UnitRow.insaneTier`, `tableForDifficulty`): an Insane night elf's
+  Druid of the Claw is a TIER-2 unit, and `recruit` keeps every druid out of the army until Master
+  Training (`Redc` rank 2) — so the bears are standing at home when Bear Form lands, rather than
+  being trained after it. Every other rung keeps the druid at tier 3.
 * **Ensnare and the net** (plus/targeting.ts `PREFERRED`, index.ts `nettedPick`): a Raider's
   Ensnare is worth ×3 on a Crypt Fiend, an Obsidian Statue or a Lich (the developer's), and a
   ranged unit shoots a netted enemy (Ensnare or Web) it can already reach before the group's focus

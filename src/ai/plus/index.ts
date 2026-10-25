@@ -33,8 +33,8 @@ import {
 } from "./teamchat";
 import { liveProfile, plusProfile, type PlusProfile } from "./profile";
 import { aimCtx, HERO_KILL_HP, heroKillable, isSiege, isTower, killValue, razeCost, razeValue } from "./targeting";
-import { MK_STORM_BOLT, MK_THUNDER_CLAP, PLUS_RACES, TAVERN_HEROES, insaneVariant, rollStrategy, rollTransition, tableForEdition, type HeroCombo, type PlusRaceTable, type PlusStrategy } from "./races";
-import { CRYPT_LORD, DREAD_LORD, MELEE_INSANE, MELEE_NEWBIE, MILITIA, MIRROR_IMAGE, MTN_KING } from "../ids";
+import { MK_STORM_BOLT, MK_THUNDER_CLAP, PLUS_RACES, TAVERN_HEROES, insaneVariant, tableForDifficulty, rollStrategy, rollTransition, tableForEdition, type HeroCombo, type PlusRaceTable, type PlusStrategy } from "./races";
+import { CRYPT_LORD, DREAD_LORD, DRUID_CLAW, MELEE_INSANE, MELEE_NEWBIE, MILITIA, MIRROR_IMAGE, MTN_KING, UPG_DRUID_CLAW } from "../ids";
 import { isRoc } from "../../data/edition";
 import { CAMP_GREEN_MAX, armyPower, maxCampLevel, preferredCampFloor, type CreepForce, type Fighter } from "./power";
 
@@ -2719,7 +2719,7 @@ export class ComputerPlusAi {
     // arrive a tier later, and a hero order that opens on a Blood Mage never produces a hero at
     // all. `tableForEdition` reads what the loaded tech tree (`Melee_V0\Units\*`) actually has.
     const tech = this.host.tech;
-    const table = isRoc()
+    const edition = isRoc()
       ? tableForEdition(base, {
         // "does this edition MAKE it" — see TechRegistry.produces (never `has`, which answers
         // a different question and loses the Moon Well).
@@ -2728,6 +2728,8 @@ export class ComputerPlusAi {
         builds: (id) => tech.builds(id),
       })
       : base;
+    // …and as this DIFFICULTY plays it (`UnitRow.insaneTier` — the night elf's early druids).
+    const table = tableForDifficulty(edition, difficulty === MELEE_INSANE);
     // ONE BRAIN PER SEAT. `StartMeleeAI` is the map script's to call and nothing here can stop
     // it being called twice — a melee init that ran and a fallback that ran on top of it did
     // exactly that (see `MapViewerScene.startMelee`), and two brains on one seat is not a
@@ -3583,6 +3585,11 @@ export class ComputerPlusAi {
       // Peasant where it stands. Recruited, it marched out with the wave and — once it was a
       // Peasant again — stayed in the squad, spoken for, until it died (see `prune`).
       if (b.squad.has(u.id) || u.isPeon || u.typeId === MILITIA) continue;
+      // …nor a DRUID OF THE CLAW before Bear Form (`Redc` rank 2): an Insane night elf trains
+      // them from tier 2 (`UnitRow.insaneTier`) and keeps them at home, out of every fight, so
+      // they are alive and standing the moment Master Training lands — the developer's "protect
+      // them so that they stay alive until master training has been reached".
+      if (u.typeId === DRUID_CLAW && b.ai.upgradeLevel(UPG_DRUID_CLAW) < 2) continue;
       if (u.worker) spare.push(u);
       else b.squad.add(u.id);
     }

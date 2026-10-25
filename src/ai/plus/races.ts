@@ -84,6 +84,9 @@ export interface UnitRow {
   needs?: readonly string[];
   /** The hall tier this unit waits for (1/2/3). Also what `PlusProfile.techTier` caps. */
   tier: number;
+  /** …and on INSANE, if that differs (`tableForDifficulty`). The night elf's Druid of the Claw,
+   *  trained a tier early on Insane and kept out of the fights until Bear Form. */
+  insaneTier?: number;
   /** Counts as SIEGE for the attack ladder — what lets a wave commit to a base rather than
    *  bouncing off the towers. */
   siege?: boolean;
@@ -876,11 +879,17 @@ const ORC: PlusRaceTable = {
     // the first thing bought there. Ensnare (`[Roen]`, no requirement) is the Raider's.
     { id: UPG_ORC_BERSERKER, from: ORC_BARRACKS, ranks: 1, after: 12, unlock: true },
     { id: UPG_ORC_ENSNARE, from: BESTIARY, ranks: 1, after: 12, unlock: true },
+    // WAR DRUMS — the developer's *"make sure that orc gets the kodo drums upgrade as well on tier
+    // 3"*. One rank (`[Rwdm] maxlevel=1`, 100/150, UpgradeData.slk) and `Requires=ofrt,ofor`
+    // (OrcUpgradeFunc.txt), so the Fortress gates it by itself; saved for like the other unlocks,
+    // and only once a Kodo is out to carry the aura (`forUnit`). It was an ordinary three-rank row
+    // bought out of what the ladder left over, which at tier 3 is nothing.
+    { id: UPG_ORC_WAR_DRUMS, from: BESTIARY, ranks: 1, after: 0, unlock: true, forUnit: KODO_BEAST },
     { id: UPG_ORC_MELEE, from: FORGE, ranks: 3, after: 8 },
     { id: UPG_ORC_ARMOR, from: FORGE, ranks: 3, after: 8 },
     { id: UPG_ORC_RANGED, from: FORGE, ranks: 3, after: 12 },
     { id: UPG_ORC_SPIKES, from: FORGE, ranks: 1, after: 16 },
-    { id: UPG_ORC_WAR_DRUMS, from: BESTIARY, ranks: 3, after: 20 },
+
     // SHAMAN TRAINING, saved for like Priest Training and for the same reason: rank 2 is
     // BLOODLUST (`[Ablo] Requires=Rost Requiresamount=2`, OrcAbilityFunc), and rank 2 is `[Rost]
     // Requires1=ofrt` — the Fortress the rush buys. The developer's orc tier 3 is "Berserkers,
@@ -978,8 +987,12 @@ const ORC: PlusRaceTable = {
     // to air (`ohun`/`otbk` `targs1` include AIR); `antiAir` still adds Batriders against an army
     // that is mostly flyers. What the opening fielded — Grunts, Raiders — still stands; it is just
     // not rebuilt.
+    //
+    // …and TWO Kodo Beasts as a count (`lead`): the developer's *"it always tries to have 1 to 2
+    // kodo beasts"* — one in the tier-2 armies, two here, each replaced when it falls — with War
+    // Drums researched for them (`upgrades`).
     { id: "taurens", name: "Berserkers, Shamans and Taurens", tier: 3, weight: 0, expandAt: 420, expandAgainAt: 840,
-      waitFor: { [TAUREN]: { research: [UPG_ORC_BERSERKER, 1] } },
+      lead: { [KODO_BEAST]: 2 }, waitFor: { [TAUREN]: { research: [UPG_ORC_BERSERKER, 1] } },
       mix: { [TAUREN]: 3, [HEAD_HUNTER]: 2.5, [SHAMAN]: 1.5 } },
   ],
   heroes: [BLADE_MASTER, FAR_SEER, TAUREN_CHIEF, SHADOW_HUNTER],
@@ -1271,7 +1284,15 @@ const NIGHT_ELF: PlusRaceTable = {
     // developer's rule: the night elf holds out with Archers (and the Lores' Dryads) until the
     // Tree of Eternity, then ALWAYS goes bears and Dryads (`lategrove`), and the druid lives in
     // the bear (plus/casting.ts `druidPass`).
-    [DRUID_CLAW]: { from: ANCIENT_LORE, tier: 3 },
+    //
+    // …except on INSANE, where it is trained from TIER 2 (`insaneTier`) and kept OUT OF THE FIGHTS
+    // until Master Training has been researched (index.ts `recruit`): the developer's *"the night
+    // elf Computer+ AI (Insane) must start getting druids of the claw even before finishing tier 3
+    // and getting master, but it should protect them so that they stay alive until master
+    // training has been reached at tier 3. this way bears arrive earlier"*. Over the last
+    // benchmark Bear Form landed 2.5–4 minutes after the Tree of Eternity (11:38–15:20) and then
+    // the druids still had to be trained; this way they are standing at home when it does.
+    [DRUID_CLAW]: { from: ANCIENT_LORE, tier: 3, insaneTier: 2 },
     [MOUNTAIN_GIANT]: { from: ANCIENT_LORE, needs: [DEN_OF_WONDERS], tier: 2 }, // `[emtg] Requires=etoa,eden`
     [DRUID_TALON]: { from: ANCIENT_WIND, tier: 2, caster: true },
     // The Ancient of Wind is `[eaow] Requires=etoa`, so the Hippogryph is a tier-2 flyer; the
@@ -1469,6 +1490,18 @@ export interface EditionTech {
  * Applied at seat time and only on Reign of Chaos (`ComputerPlusAi.add`): the expansion's
  * tables are the ones these rows were tuned on, and they are left exactly as written.
  */
+/**
+ * A race's table as an INSANE seat plays it: every unit with an `insaneTier` moved to that tier.
+ * Applied at seat time (index.ts `add`), after the edition's table, so nothing else in the plan
+ * has to know about the difference — every tier gate reads `UnitRow.tier`.
+ */
+export function tableForDifficulty(table: PlusRaceTable, insane: boolean): PlusRaceTable {
+  if (!insane || !Object.values(table.units).some((r) => r.insaneTier !== undefined)) return table;
+  const units = Object.fromEntries(Object.entries(table.units)
+    .map(([id, r]) => [id, r.insaneTier !== undefined ? { ...r, tier: r.insaneTier } : r]));
+  return { ...table, units };
+}
+
 export function tableForEdition(table: PlusRaceTable, tech: EditionTech): PlusRaceTable {
   const has = (id: string | undefined): boolean => !!id && tech.has(id);
   const buildings = new Set(tech.builds(table.worker));
