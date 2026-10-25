@@ -2380,16 +2380,26 @@ export class RtsController {
     e.aoeHi = hi;
     e.illus = illus;
     e.fade = fade;
+    this.writeTint(e);
+  }
+
+  /** Compose and write the tint applyFogTint last decided (the states it memoised on the
+   *  entry) over the model's own colour. Split out so a death can drop one wash — the frost —
+   *  without re-deciding the others off a unit that no longer exists. */
+  private writeTint(e: Entry): void {
+    const inst = e.unit.instance;
+    if (!inst.setVertexColor) return;
     if (!e.baseColor) {
       const c = inst.vertexColor;
       e.baseColor = c ? new Float32Array([c[0], c[1], c[2], c[3]]) : new Float32Array([1, 1, 1, 1]);
     }
     const base = e.baseColor;
-    const g = hi ? AOE_TARGET_TINT : ([1, 1, 1] as const);
-    const m = illus ? ILLUSION_TINT : ([1, 1, 1] as const);
-    const r = raised ? RAISED_TINT : ([1, 1, 1] as const);
-    const f = frost ? FROST_TINT : ([1, 1, 1] as const);
-    inst.setVertexColor([base[0] * b * g[0] * m[0] * r[0] * f[0], base[1] * b * g[1] * m[1] * r[1] * f[1], base[2] * b * g[2] * m[2] * r[2] * f[2], base[3] * fade]);
+    const b = e.fogTintB === undefined || Number.isNaN(e.fogTintB) ? 1 : e.fogTintB; // NaN: "re-emit me" (remodel)
+    const g = e.aoeHi ? AOE_TARGET_TINT : ([1, 1, 1] as const);
+    const m = e.illus ? ILLUSION_TINT : ([1, 1, 1] as const);
+    const r = e.raised ? RAISED_TINT : ([1, 1, 1] as const);
+    const f = e.frost ? FROST_TINT : ([1, 1, 1] as const);
+    inst.setVertexColor([base[0] * b * g[0] * m[0] * r[0] * f[0], base[1] * b * g[1] * m[1] * r[1] * f[1], base[2] * b * g[2] * m[2] * r[2] * f[2], base[3] * (e.fade ?? 1)]);
   }
 
   /**
@@ -5505,6 +5515,13 @@ export class RtsController {
     // Drop any attack/walk re-rating: the model outlives its Entry as a corpse, and a unit
     // cut down mid-stride would otherwise play its Death and decay clips at its walk rate.
     e.unit.instance.timeScale = 1;
+    // …and drop the frost wash (FROST_TINT): the cold is the slow BUFF's, and a body wears no
+    // buff — the unit stops looking chilled the instant it dies, not when the buff would have
+    // run out. The entry is retired above, so nothing else will ever re-emit its colour.
+    if (e.frost) {
+      e.frost = false;
+      this.writeTint(e);
+    }
     if (e.anims.death >= 0) {
       e.unit.instance.setSequence(e.anims.death);
       e.unit.instance.setSequenceLoopMode(SequenceLoopMode.ModelDefined);
