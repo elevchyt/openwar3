@@ -277,7 +277,7 @@ export function buildSlider(el: HTMLElement, f: FdfFrame, thumb: HTMLElement | n
     window.removeEventListener("pointerup", onUp);
   };
   el.addEventListener("pointerdown", (e) => {
-    if (!enabled) return;
+    if (!enabled || e.button !== 0) return; // a slider is dragged by the left button alone
     dragging = true;
     fromPointer(e.clientX);
     window.addEventListener("pointermove", onMove);
@@ -867,6 +867,7 @@ function buildScrollBar(
   rows.addEventListener("scroll", sync);
 
   knob.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return; // …and so is a scrollbar's knob
     e.preventDefault();
     const from = e.clientY;
     const at = rows.scrollTop;

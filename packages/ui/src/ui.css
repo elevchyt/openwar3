@@ -154,17 +154,20 @@
   color: #d6dcf5;
 }
 
-/* Pressed: the Down border, and ButtonPushedTextOffset −0.002 −0.003 moves the caption. */
-.ow3-glue-btn:not(.is-disabled):active,
+/* Pressed: the Down border, and ButtonPushedTextOffset −0.002 −0.003 moves the caption.
+   Only under the LEFT button: Chromium raises :active for any button, and a page that marks a
+   press begun on another one with `ow3-alt-press` on the root (the game: src/ui/primaryPress.ts)
+   keeps the button still under it. A page that never sets the class is unaffected. */
+:where(:root:not(.ow3-alt-press)) .ow3-glue-btn:not(.is-disabled):active,
 .ow3-glue-btn.is-pressed {
   border-image-source: url("./frames/glue-button-down.svg");
   border-image-slice: 22 fill;
 }
-.ow3-glue-btn--bordered:not(.is-disabled):active,
+:where(:root:not(.ow3-alt-press)) .ow3-glue-btn--bordered:not(.is-disabled):active,
 .ow3-glue-btn--bordered.is-pressed {
   border-image-slice: 22 fill;
 }
-.ow3-glue-btn:not(.is-disabled):active .ow3-glue-btn__text,
+:where(:root:not(.ow3-alt-press)) .ow3-glue-btn:not(.is-disabled):active .ow3-glue-btn__text,
 .ow3-glue-btn.is-pressed .ow3-glue-btn__text {
   transform: translate(-1px, 2px);
 }

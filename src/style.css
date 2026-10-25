@@ -1069,7 +1069,7 @@ body:not(.hud-tooltip-skinned) .dev-drawer { outline: 1px solid rgba(200, 160, 5
 }
 .dev-btn:disabled { opacity: 0.45; }
 .dev-btn:not(:disabled):hover { background: rgba(50, 40, 16, 0.92); border-color: #a58a3e; }
-.dev-btn:not(:disabled):active { background: rgba(70, 56, 22, 0.95); }
+:where(:root:not(.ow3-alt-press)) .dev-btn:not(:disabled):active { background: rgba(70, 56, 22, 0.95); }
 .dev-btn.active { background: #3a6a2a; border-color: #6fd05a; color: #d6ffcf; }
 .dev-btn-main { background: linear-gradient(#5a1d12, #2e0c06); border-color: #c49a3a; color: #ffcc00; }
 .dev-btn-main.on { box-shadow: 0 0 0 2px #ffcc00; }
@@ -1478,7 +1478,7 @@ body:not(.hud-tooltip-skinned) .obs-panel { outline: 1px solid rgba(200, 160, 50
   height: var(--obs-pull-h);
 }
 .obs-button > span { position: relative; z-index: 1; }
-.obs-button:active > span { top: 1px; left: 1px; }
+:where(:root:not(.ow3-alt-press)) .obs-button:active > span { top: 1px; left: 1px; }
 .obs-button:hover > span, .obs-button.pad-hover > span { filter: brightness(1.25); }
 
 .obs-pull-wrap { position: relative; pointer-events: auto; }
@@ -3661,18 +3661,20 @@ body.in-game .fdf-screen.fdf-ingame {
 }
 
 /* Pressed state: the FDF's Down backdrop, shown while the button is held, plus the
-   ButtonPushedTextOffset nudge on the label — matching the reference press look. */
+   ButtonPushedTextOffset nudge on the label — matching the reference press look. Held by the
+   LEFT button only: every `:active` here sits under `:root:not(.ow3-alt-press)`, because
+   Chromium raises :active for a right-press too (ui/primaryPress.ts). */
 .fdf-pushed {
   opacity: 0;
   pointer-events: none;
 }
-.fdf-button:active .fdf-pushed { opacity: 1; }
-.fdf-button:active .fdf-btn-text { transform: translate(var(--push-x, 0), var(--push-y, 0)); }
+:where(:root:not(.ow3-alt-press)) .fdf-button:active .fdf-pushed { opacity: 1; }
+:where(:root:not(.ow3-alt-press)) .fdf-button:active .fdf-btn-text { transform: translate(var(--push-x, 0), var(--push-y, 0)); }
 /* …and the normal face goes OUT while it does. The engine has one backdrop per state rather
    than a stack of them, and these faces are alpha-blended, so a Down art that draws its detail
    a pixel or two in leaves the normal art's showing through beside it — the campaign rows'
    arrow button wore two arrows while held. */
-.fdf-button:active > .fdf-base-face { opacity: 0; }
+:where(:root:not(.ow3-alt-press)) .fdf-button:active > .fdf-base-face { opacity: 0; }
 
 /* A latched button stays pressed even when not held — the Options screen's active category
    tab (Gameplay / Video / Sound), which WC3 keeps depressed to show which panel is open. */
@@ -3794,7 +3796,7 @@ body.in-game .fdf-screen.fdf-ingame {
 .fdf-button.pad-hover > .fdf-simple-text-normal { opacity: 0; }
 .fdf-button:hover > .fdf-simple-text-high,
 .fdf-button.pad-hover > .fdf-simple-text-high { opacity: 1; }
-.fdf-button:active > .fdf-simple-text { transform: translate(var(--push-x, 0), var(--push-y, 0)); }
+:where(:root:not(.ow3-alt-press)) .fdf-button:active > .fdf-simple-text { transform: translate(var(--push-x, 0), var(--push-y, 0)); }
 /* Disabled wins over hover: a dead button neither lights up nor answers. */
 .fdf-button.fdf-disabled > .fdf-simple-text-normal,
 .fdf-button.fdf-disabled > .fdf-simple-text-high { opacity: 0; }
@@ -3813,7 +3815,7 @@ body.in-game .fdf-screen.fdf-ingame {
   opacity: 0;
   pointer-events: none;
 }
-.fdf-checkbox:active .fdf-pushed { opacity: 1; }
+:where(:root:not(.ow3-alt-press)) .fdf-checkbox:active .fdf-pushed { opacity: 1; }
 .fdf-checked > .fdf-check-face { opacity: 1; }
 /* A checked box that is also DEAD wears the greyed tick instead of the live one — the state
    every row of an observer's Allies dialog is in. */
@@ -4155,7 +4157,7 @@ body.in-game .fdf-screen.fdf-ingame {
 .fdf-scrollbar-knob { position: absolute; }
 .fdf-scrollbar-arrow,
 .fdf-scrollbar-knob { cursor: inherit; }
-.fdf-scrollbar-arrow:active { filter: brightness(0.8); }
+:where(:root:not(.ow3-alt-press)) .fdf-scrollbar-arrow:active { filter: brightness(0.8); }
 
 /* A FRAME that scrolls (ui/fdf/widgets.ts buildScrollFrame — the game lobby's player rows):
    the viewport the frame's children ride in, clipped to the frame's box. It takes the pointer

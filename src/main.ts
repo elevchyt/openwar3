@@ -5,6 +5,8 @@ import "@openwar3/ui/ui.css";
 import "./style.css";
 // First, so its capture listener is the page's first: Alt+Enter must reach nothing else.
 import "./ui/fullscreen";
+// …and before any button exists: a press is the left button's (`ow3-alt-press`).
+import "./ui/primaryPress";
 import { AssetResolver } from "./assets/resolver";
 import { decodeBlp } from "./assets/blp";
 import { mountMainMenu } from "./ui/mainMenu";
