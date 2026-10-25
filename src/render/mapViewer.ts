@@ -52,6 +52,7 @@ import { onVoiceControlChange, setVoiceHost, voiceControlOn } from "../voice/con
 import { VoiceLabels } from "../game/voiceLabels";
 import { mountVoiceHints } from "../ui/voiceHints";
 import { dressAsGameTip } from "../ui/gameTipSkin";
+import { anyModalOpen } from "../ui/modal";
 import { makeVoiceHost } from "../game/voiceActions";
 import { Talkers, VOICE_HUD_MAX, VOICE_KEY_CODE, voiceFromBase64, voiceRecipients, voiceToBase64 } from "../game/voice";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
@@ -16923,10 +16924,16 @@ export class MapViewerScene {
     // under the cursor, so an arrow key, the stick or the cursor brushing a screen edge would
     // each slide it out from under the hand that is holding it.
     if (this.userControl && !this.hardPaused && !this.midPanning) {
-      const panUp = (letters && this.keys.has("w")) || this.keys.has("arrowup");
-      const panDown = (letters && this.keys.has("s")) || this.keys.has("arrowdown");
-      const panRight = (letters && this.keys.has("d")) || this.keys.has("arrowright");
-      const panLeft = (letters && this.keys.has("a")) || this.keys.has("arrowleft");
+      // …and a DIALOG on screen owns the keyboard: the game-over box, the F10 menu, Allies, a
+      // script's own dialog. The world underneath a modal takes no commands and its camera
+      // does not move (ui/modal.ts) — the arrows that slid the map behind "Victory!" were the
+      // one key family that still reached it, because they are held state read here rather
+      // than an event the HUD's own gate (`anyModalOpen` in onKey) gets to refuse.
+      const keyed = !anyModalOpen();
+      const panUp = keyed && ((letters && this.keys.has("w")) || this.keys.has("arrowup"));
+      const panDown = keyed && ((letters && this.keys.has("s")) || this.keys.has("arrowdown"));
+      const panRight = keyed && ((letters && this.keys.has("d")) || this.keys.has("arrowright"));
+      const panLeft = keyed && ((letters && this.keys.has("a")) || this.keys.has("arrowleft"));
       // Options → Gameplay → "Keyboard Scroll:" scales the KEYS alone; the screen edges take
       // their own slider a few lines down (render/scrollOptions.ts).
       const keySpeed = speed * keyScrollScale();
@@ -16941,7 +16948,7 @@ export class MapViewerScene {
       // Stick-down is +y, the screen's down. Full tilt pans at `PAD_PAN_SCALE` of a held arrow
       // key — ours, not the game's (WC3 has no pad): at the full key speed a thumb, which cannot
       // tap a stick the way it taps a key, overshot what it was panning to.
-      const [padX, padY] = gamepadPan();
+      const [padX, padY] = keyed ? gamepadPan() : [0, 0];
       const padSpeed = keySpeed * PAD_PAN_SCALE;
       if (padX) this.pan(right, padSpeed * padX);
       if (padY) this.pan(fwd, -padSpeed * padY);
