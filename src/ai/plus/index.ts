@@ -1254,9 +1254,6 @@ const EARLY_HERO_LEVEL = 3;
  * a wave is measured in the food that would actually LEAVE, and the wounded are not in it.
  */
 const UNDEAD_ARMY = 1.75;
-/** The supply an Insane computer must be using before it walks at an UNDEAD main (`undeadMainHeld`)
- *  — the developer's 70, counted on the supply counter, workers included. */
-const UNDEAD_PUSH_FOOD = 70;
 const UNDEAD_CEILING = 0.8;
 
 /**
@@ -5150,31 +5147,6 @@ export class ComputerPlusAi {
     return this.refilled(b, at);
   }
 
-  /**
-   * AN UNDEAD MAIN WAITS FOR 70 FOOD — the developer's, for every race on Insane: *"upon reaching
-   * tier 3, the Orc's power spike starts to fall off. we must make the Orc try to reach 70 food or
-   * more before it starts actually pushing, especially when against undead"*, then *"orc must hold
-   * its push only against Undead, since the undead base is very strong. we must apply the same rule
-   * for night elf and human when playing against undead … however, if the undead has an expansion
-   * that the … player has scouted, then it's fine to push the expansion to try and destroy the
-   * haunted gold mine earlier. undead must do the same when playing against undead as well"*.
-   *
-   * So a wave at the MAIN of an undead player (`mainOf`, the hall at its start location) is
-   * refused until this player's supply COUNTER reads `UNDEAD_PUSH_FOOD` — workers included, which
-   * is what "70 food" means to a player — and `baseTarget` goes at a scouted EXPANSION of theirs
-   * instead, or the army keeps creeping. Lifted the moment we hold no gold mine (waiting is no
-   * longer a plan), and never asked of a defence: a base under attack is `defending`, which no
-   * wave gates. Insane alone — the other rungs' army ceilings sit under 70 food.
-   */
-  private undeadMainHeld(b: Brain, main: { id: number }): boolean {
-    if (b.profile.difficulty !== MELEE_INSANE) return false;
-    const u = this.host.world.units.get(main.id);
-    if (!u || u.owner < 0 || u.owner >= MELEE.MAX_PLAYERS) return false;
-    if (this.host.playerRace(u.owner) !== "undead" && this.host.registry.get(u.typeId)?.race !== "undead") return false;
-    if (b.ai.minesOwned() < 1 || b.ai.goldOwned() <= 0) return false;
-    return b.ai.foodUsed() < UNDEAD_PUSH_FOOD;
-  }
-
   /** Is this building at its owner's START LOCATION — part of a main base, not an expansion? */
   private atStart(u: SimUnit): boolean {
     const start = this.host.startLocations().find((s) => s.player === u.owner);
@@ -5349,8 +5321,9 @@ export class ComputerPlusAi {
     if (!u || u.owner < 0 || u.owner >= MELEE.MAX_PLAYERS) return true;
     if (this.host.registry.get(u.typeId)?.race !== "undead") return true;
     // …and on Insane an undead EXPANSION is worth pushing with the wave as it is — the developer's
-    // "it's fine to push the expansion to try and destroy the haunted gold mine earlier". Its MAIN
-    // has its own, stricter bar (`undeadMainHeld`).
+    // "it's fine to push the expansion to try and destroy the haunted gold mine earlier". (A 70-food
+    // hold on the undead MAIN was tried beside this and taken back out: over 48 observed Insane
+    // matches 16 of the 24 players facing undead never reached 70 food and undead won 21 of 23.)
     if (b.profile.difficulty === MELEE_INSANE && !this.atStart(u)) return true;
     const profile = liveProfile(b.profile, b.clock);
     const bar = Math.min(this.waveFood(b) * UNDEAD_ARMY, profile.armyFood * UNDEAD_CEILING);
@@ -7500,16 +7473,13 @@ export class ComputerPlusAi {
     // …and before its POWER SPIKE an Insane computer does not go at a MAIN at all — only at an
     // expansion it knows of (see `spikeHeld`).
     const held = this.spikeHeld(b);
-    const found = held ? null : this.mainOf(b, foe, avoided);
-    // …and an UNDEAD main waits for 70 food (`undeadMainHeld`) — its expansion does not.
-    const undeadHeld = !!found && this.undeadMainHeld(b, found);
-    const main = undeadHeld ? null : found;
+    const main = held ? null : this.mainOf(b, foe, avoided);
     if (expansion) {
       const u = this.host.world.units.get(expansion.id);
       const chance = u && b.ai.isTowered(u) ? b.profile.expansionFirst / 2 : b.profile.expansionFirst;
       if (!main || b.ai.randomInt(0, 999) < chance * 1000) return expansion;
     }
-    return main ?? expansion ?? (held || undeadHeld ? null : this.anyBase(b, foe, avoided));
+    return main ?? expansion ?? (held ? null : this.anyBase(b, foe, avoided));
   }
 
   /**

@@ -1789,12 +1789,11 @@ the rush reached its Fortress at 13:29 on average against 9:46 for the build it 
   Druid of the Claw is a TIER-2 unit, and `recruit` keeps every druid out of the army until Master
   Training (`Redc` rank 2) — so the bears are standing at home when Bear Form lands, rather than
   being trained after it. Every other rung keeps the druid at tier 3.
-* **An undead MAIN waits for 70 food** (`undeadMainHeld`, in `baseTarget`): on Insane, every race
-  (undead included) refuses a wave at an undead player's main base until its supply counter reads
-  70 — workers counted, the way a player reads "70 food" — and goes at a scouted undead EXPANSION
-  instead (to take its Haunted Gold Mine down early; `mayAssault` exempts an expansion from its
-  own undead bar on Insane), or keeps creeping. Lifted when we hold no gold mine; a defence is
-  never held. Ensnare waits for the first Raider (`forUnit`).
+* **An undead EXPANSION is fair game** (`mayAssault`): on Insane its own undead-base bar does not
+  apply to an undead expansion, so a wave may push it to take the Haunted Gold Mine down early. A
+  70-food hold on the undead MAIN was tried beside it and removed — over 48 observed Insane matches
+  16 of the 24 players facing undead never reached 70 food, the night elf never attacked at all, and
+  undead won 21 of 23. Ensnare waits for the first Raider (`forUnit`).
 * **Scrolls of Healing** (`ItemCtx.healScrolls`: an Insane orc always, any Insane race facing
   undead): one per hero, right behind the invulnerability potion on the field door; read IN a
   fight on Insane once four friendly bodies in the circle are under 68% (`SCROLL_FIGHT_*`), and a
