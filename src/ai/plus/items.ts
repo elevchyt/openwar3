@@ -532,6 +532,27 @@ function orbFor(u: SimUnit, carry: string | undefined): string | undefined {
  * then. The Boots are on the general list (`LIST`) already, for every hero.
  */
 const HERO_GEAR: Readonly<Record<string, readonly string[]>> = { Obla: ["gcel", "rat6", "cnob"] };
+
+/**
+ * A hero's own FIGHT KIT — the consumables a particular hero must always be carrying, in
+ * priority order, bought ahead of almost everything (`list`, `heroChance`) and served to that
+ * hero before any other (`firstFor`). The Tauren Chieftain's, the developer's: *"we must make sure
+ * that the tauren chieftain always carries potion of invulnerability and scroll of healing if
+ * possible, but potion of invulnerability should be a high priority purchase"*. He is the orc's
+ * carry and stands at the front for his War Stomp, and in the last 48 observed Insane matches six of
+ * his eight deaths were to a Lich. Both are Goblin Merchant wares
+ * (`[ngme] Sellitems`; the scroll is also the Tomb of Relics'), which is why the field door
+ * carries them too. The invulnerability potion leads the purse-bought rows; the scroll sits with
+ * the rest of the melee belt.
+ */
+//
+// …and the SAME kit for every MELEE hero who is the build's CARRY (`ItemCtx.carry`), the
+// developer's follow-up: *"invulnerability + healing scroll must also be part of the generic melee
+// belt (the 'carry' behavior)"* — the human's Mountain King, a Priestess opening's Demon Hunter or
+// Brewmaster, the Far Seer's Chieftain. A melee hero is the one that is killed in the line
+// (`MELEE_HEROES`); a ranged carry would want something else and none of the races has one.
+const CARRY_KIT: readonly string[] = [INVULN_BUY, "shea"];
+const HERO_KIT: Readonly<Record<string, readonly string[]>> = { Otch: CARRY_KIT };
 const GEAR: ReadonlySet<string> = new Set(Object.values(HERO_GEAR).flat());
 
 /** Is `u` a hero this item is FOR? A melee hero is never sent for a clarity pour, a hero's own
@@ -2332,7 +2353,14 @@ export class PlusItems {
     const fieldCtx = ctx.wave ? { ...ctx, mayDetour: false } : ctx;
     // The race's STAFF first (`RACE_STAFF`) — high on the list, and the race shop is in the base
     // the roaming army only passes through.
-    const wanted: string[] = this.staffRows().filter((w) => this.carried(own, w.id) < w.want).map((w) => w.id);
+    const wanted: string[] = [];
+    // A hero's own KIT first (`HERO_KIT`) — the Tauren Chieftain's invulnerability potion is "a
+    // high priority purchase", and the Goblin Merchant that sells it is out on the map.
+    for (const h of own) {
+      if (!h.isHero || h.isIllusion) continue;
+      for (const id of this.kitFor(h) ?? []) if (!h.inventory.some((x) => x?.itemId === id)) wanted.push(id);
+    }
+    wanted.push(...this.staffRows().filter((w) => this.carried(own, w.id) < w.want).map((w) => w.id));
     for (const h of own) {
       if (!h.isHero || h.isIllusion) continue;
       const orb = orbFor(h, this.carry);
@@ -2630,6 +2658,8 @@ export class PlusItems {
    * ranged heroes"), 0 for everybody else.
    */
   private firstFor(itemId: string, u: SimUnit): number {
+    // A hero's own KIT (`HERO_KIT`) goes to that hero before anybody.
+    if (this.kitFor(u)?.includes(itemId) && !u.inventory.some((h) => h?.itemId === itemId)) return 3;
     if (this.meleeFirst(itemId, u)) return 2;
     if (this.profile.invulnEach && itemId === INVULN_BUY && !u.inventory.some((h) => h !== null && INVULN_ITEMS.has(h.itemId))) return 1;
     return 0;
@@ -2717,12 +2747,19 @@ export class PlusItems {
     // one each — the melee heroes still served first (`firstFor`).
     const invuln = this.profile.invulnEach ? heroes.length : 0;
     const each = (w: Want): Want => (w.id === INVULN_BUY && w.want < invuln ? { ...w, want: invuln } : w);
-    const first = [...orbs, ...this.staffRows(), ...(RACE_FIRST[this.race] ?? []).map((w) => ({ ...w, opening: true }))];
+    // …the KIT's high-priority row (`HERO_KIT`'s first item) leads them, counted so that the kit
+    // hero's own need is not "satisfied" by a potion in somebody else's belt.
+    const kitNeed = (id: string): number => heroes.filter((h) => this.kitFor(h)?.includes(id) && !h.inventory.some((x) => x?.itemId === id)).length;
+    const kitRow = (id: string): Want[] => (kitNeed(id) ? [{ id, want: this.carried(own, id) + kitNeed(id), opening: true }] : []);
+    const kitFirst = [...new Set(heroes.map((h) => this.kitFor(h)?.[0]).filter((id): id is string => !!id))].flatMap(kitRow);
+    const first = [...kitFirst, ...orbs, ...this.staffRows(), ...(RACE_FIRST[this.race] ?? []).map((w) => ({ ...w, opening: true }))];
     // …and the race's MANA, which is bought out of the purse for the same reason but sits one
     // place further down: BEHIND the scroll. A hero with an empty bar has lost its spells; a
     // hero with no Town Portal loses the army, and that is the bigger loss (`PORTAL`).
     const mana = ((this.profile.eagerMana ? RACE_MANA_EAGER : RACE_MANA)[this.race] ?? []).map((w) => ({ ...w, opening: true }));
-    const fight = [...meleeBelt, ...FIGHT.filter((w) => !meleeBelt.some((m) => m.id === w.id))].map(each);
+    const kitRest = [...new Set(heroes.flatMap((h) => (this.kitFor(h) ?? []).slice(1)))].flatMap(kitRow);
+    const fight = [...kitRest, ...meleeBelt.filter((m) => !kitRest.some((k) => k.id === m.id)),
+      ...FIGHT.filter((w) => !meleeBelt.some((m) => m.id === w.id) && !kitRest.some((k) => k.id === w.id))].map(each);
     const seen = new Set([...first, ...fight, ...mana, ...gear].map((w) => w.id));
     const rest = [...gear, ...LIST.filter((w) => !seen.has(w.id))];
     // WHERE THE PORTAL SITS DEPENDS ON WHETHER THIS PLAYER HAS EVER HAD ONE.
@@ -2774,6 +2811,11 @@ export class PlusItems {
     return [...core, ...(RACE_SURPLUS[this.race] ?? []), ...RICH];
   }
 
+  /** This hero's fight KIT — its own (`HERO_KIT`), else the melee carry's (`CARRY_KIT`). */
+  private kitFor(u: SimUnit): readonly string[] | undefined {
+    return HERO_KIT[u.typeId] ?? (u.typeId === this.carry && MELEE_HEROES.has(u.typeId) ? CARRY_KIT : undefined);
+  }
+
   /** This player's `RACE_STAFF` row, out of the purse — on Insane, for the races that have one. */
   private staffRows(): Want[] {
     const staff = this.profile.difficulty === MELEE_INSANE ? RACE_STAFF[this.race] : undefined;
@@ -2782,7 +2824,7 @@ export class PlusItems {
 
   /** How many of an item our heroes are already carrying. Counted across ALL of them: two
    *  heroes with a Town Portal each is one wasted, and the second hero's slot is better spent. */
-  private carried(own: SimUnit[], itemId: string): number {
+  private carried(own: readonly SimUnit[], itemId: string): number {
     let n = 0;
     for (const u of own) for (const held of u.inventory) if (held?.itemId === itemId) n++;
     return n;

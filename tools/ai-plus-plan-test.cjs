@@ -384,6 +384,7 @@ console.log("\n--- hero pairings, and the Insane-only builds ---");
   check("the orc rolls four builds", rolled.map((s) => s.id).join(), "bmraiders,bmstandard,fsraiders,fsstandard");
   check("…two Blademaster and two Far Seer openings", rolled.map((s) => s.heroes[0]).join(), "Obla,Obla,Ofar,Ofar");
   check("…a Far Seer build's carry is the Tauren Chieftain", rolled.filter((s) => s.heroes[0] === "Ofar").every((s) => s.carry === "Otch"), true);
+  check("…a Blademaster build's carry is the Blademaster", rolled.filter((s) => s.heroes[0] === "Obla").every((s) => s.carry === "Obla"), true);
   check("…every one keeps one Kodo for its aura", rolled.every((s) => s.lead?.okod === 1), true);
   check("…and grows into the Tauren army", rolled.every((s) => s.thenAt3 === "taurens"), true);
   check("the two-Beastiary builds hold tier 3 to their own clock", rolled.filter((s) => s.factories?.obea === 2).every((s) => s.tier3Clock === 600), true);

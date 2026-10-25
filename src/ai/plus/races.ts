@@ -278,8 +278,9 @@ export interface PlusStrategy {
    * hunter and blademaster)… its goal must be to gain a lot of levels and items through creep
    * camps and shops"* (the developer). While he is alive he is the army's CAPTAIN (index.ts
    * `squadHero`: the hero the party musters on and creeps behind), and he is served FIRST by the
-   * shops and the loot (plus/items.ts `ItemCtx.carry`). An opener needs no such clause — the
-   * first hero already is all three.
+   * shops and the loot (plus/items.ts `ItemCtx.carry`) — and a MELEE carry carries the
+   * invulnerability potion and the Scroll of Healing ahead of everything (`CARRY_KIT`). An opener
+   * may be one too: the Blademaster openings name the Blademaster, for the kit.
    */
   readonly carry?: string;
   /**
@@ -907,13 +908,16 @@ const ORC: PlusRaceTable = {
     // trained as fast as possible upon reaching tier 2)"* — so the second mine comes with the
     // Stronghold (`expandWithTier`), and the Shadow Hunter is the second hero (`combos`), whom
     // `tierTwoHero` buys above everything else the Stronghold makes affordable. Grunts at tier 1;
-    // the standard plan adds the Head Hunters the Berserker Upgrade is for.
+    // the standard plan adds the Head Hunters the Berserker Upgrade is for. The Blademaster is the
+  // build's CARRY too (`carry`: the developer's *"blademaster is also a carry"*) — he already
+  // leads the army as its opener, and the clause is what gives him the melee carry's kit
+  // (plus/items.ts `CARRY_KIT`) and first claim on the shops and the drops.
     { id: "bmraiders", name: "Blademaster, Grunts and two Beastiaries", tier: 2, weight: 25, expandAt: 330, expandAgainAt: 750,
-      heroes: [BLADE_MASTER, SHADOW_HUNTER, TAUREN_CHIEF, FAR_SEER], expandWithTier: 2, tier3Clock: 600,
+      heroes: [BLADE_MASTER, SHADOW_HUNTER, TAUREN_CHIEF, FAR_SEER], carry: BLADE_MASTER, expandWithTier: 2, tier3Clock: 600,
       factories: { [BESTIARY]: 2 }, lead: { [KODO_BEAST]: 1 }, thenAt3: "taurens",
       mix: { [GRUNT]: 2, [RAIDER]: 3 } },
     { id: "bmstandard", name: "Blademaster, Grunts, Raiders and Shamans", tier: 2, weight: 25, expandAt: 330, expandAgainAt: 750,
-      heroes: [BLADE_MASTER, SHADOW_HUNTER, TAUREN_CHIEF, FAR_SEER], expandWithTier: 2,
+      heroes: [BLADE_MASTER, SHADOW_HUNTER, TAUREN_CHIEF, FAR_SEER], carry: BLADE_MASTER, expandWithTier: 2,
       lead: { [KODO_BEAST]: 1 }, thenAt3: "taurens",
       mix: { [GRUNT]: 2, [HEAD_HUNTER]: 1.5, [RAIDER]: 1.5, [SHAMAN]: 1.2 } },
     // The FAR SEER openings are played for the TAUREN CHIEFTAIN: *"for far seer opening, the

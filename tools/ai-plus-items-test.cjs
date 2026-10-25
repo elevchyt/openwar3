@@ -1766,6 +1766,32 @@ console.log("\n-- handing a spare potion over ----------------------------------
   check("…on the opener, not the carry", walk.move?.unitId, pair[0].id);
 }
 
+// --- the TAUREN CHIEFTAIN's kit: invulnerability potion first, then the Scroll of Healing ---------
+// The developer's: "the tauren chieftain always carries potion of invulnerability and scroll of
+// healing if possible, but potion of invulnerability should be a high priority purchase".
+{
+  const merchant = ["stwp", "bspd", "pnvl", "shea", "phea", "cnob"];
+  const tc = () => belt(hero({ typeId: "Otch", x: 0, y: 0 }));
+  check("a Tauren Chieftain's first buy is the invulnerability potion",
+    shopped([tc(), MERCHANT], PLUS_INSANE, { shelf: merchant, race: "orc" }).buy?.itemId, "pnvl");
+  check("…even with a Normal belt",
+    shopped([tc(), MERCHANT], PLUS_NORMAL, { shelf: merchant, race: "orc" }).buy?.itemId, "pnvl");
+  const holding = tc(); holding.inventory[0] = { id: 900, itemId: "pnvl", charges: 1, cooldownLeft: 0 };
+  check("…then the Scroll of Healing, ahead of the rest of the belt",
+    shopped([holding, MERCHANT], PLUS_INSANE, { shelf: merchant.filter((x) => x !== "stwp"), race: "orc" }).buy?.itemId, "shea");
+  // Another hero's potion does not satisfy his: the kit goes to HIM (`firstFor`).
+  const bm = belt(hero({ typeId: "Obla", level: 6, x: 0, y: 0 }), "pnvl");
+  const chief = belt(hero({ typeId: "Otch", level: 2, x: 0, y: 0 }));
+  const walked = shopped([bm, chief, MERCHANT], PLUS_INSANE, { shelf: ["pnvl"], race: "orc", inRange: false });
+  check("…and a Blademaster's own potion does not count as his", walked.move?.unitId, chief.id);
+  // …and the same kit for ANY melee carry ("part of the generic melee belt (the carry behavior)"):
+  // the human's Mountain King, first in line ahead of the Archmage who opened.
+  const am = belt(hero({ typeId: "Hamg", level: 6, x: 0, y: 0 }), "stwp");
+  const mk = belt(hero({ typeId: "Hmkg", level: 2, x: 0, y: 0 }), "stwp");
+  const carryKit = shopped([am, mk, MERCHANT], PLUS_INSANE, { shelf: ["pnvl", "shea"], race: "human", carry: "Hmkg", inRange: false });
+  check("a melee carry (the Mountain King) is sent for the kit first", carryKit.move?.unitId, mk.id);
+}
+
 // --- the ORC's Orb of Lightning, and the Blademaster's own gear --------------------------------
 // The developer's: the Orb of Lightning "on blademaster (or tauren chieftain if they opened with
 // far seer)" and "on the Far Seer"; the Blademaster "must also like to buy Gloves of Haste and

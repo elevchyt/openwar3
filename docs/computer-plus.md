@@ -1768,6 +1768,13 @@ the rush reached its Fortress at 13:29 on average against 9:46 for the build it 
   creep camps and shops"*). While he is alive he is the army's captain (`squadHero`: the party
   musters on him and creeps behind him), the shopper picks him first (`shopper`) and he takes any
   drop within `LOOT_WALK` before a nearer hero does (`loot`).
+* **A melee CARRY's kit** (plus/items.ts `CARRY_KIT`, `HERO_KIT`): the Potion of Lesser
+  Invulnerability is bought ahead of almost everything — out of the purse, for that hero first
+  (`firstFor`), on the field door too — and the Scroll of Healing right behind the rest of the melee
+  belt. Every melee carry gets it (the Blademaster in his own openings, a Far Seer's Tauren
+  Chieftain, the human's Mountain King, a Priestess opening's Demon Hunter or Brewmaster), and the
+  Tauren Chieftain always does — the developer's *"potion of invulnerability should be a high
+  priority purchase"*; six of his eight deaths in the last benchmark were to a Lich.
 * **`HeroCombo.carry`** — the same, for a carry the build cannot name because the pairing ROLLS
   him: the Priestess of the Moon's second hero, a Demon Hunter or a Pandaren Brewmaster, is the
   carry whichever comes up (`pickHeroOrder` resolves it at seat time).
