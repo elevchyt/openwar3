@@ -878,7 +878,11 @@ const ORC: PlusRaceTable = {
     // `[Robk] Requires=ofrt,ofor` — a Fortress and a War Mill, so it comes up at tier 3 and is
     // the first thing bought there. Ensnare (`[Roen]`, no requirement) is the Raider's.
     { id: UPG_ORC_BERSERKER, from: ORC_BARRACKS, ranks: 1, after: 12, unlock: true },
-    { id: UPG_ORC_ENSNARE, from: BESTIARY, ranks: 1, after: 12, unlock: true },
+    // …ENSNARE once a Raider is out or in the queue (`forUnit`) — the developer's *"orc must first
+    // train 1 raider and then queue ensnare upgrade (instead of getting ensnare first)"*. Bought
+    // first, it kept the one Beastiary researching for a minute while the Raiders waited, and
+    // the first Raider stood at ten minutes.
+    { id: UPG_ORC_ENSNARE, from: BESTIARY, ranks: 1, after: 12, unlock: true, forUnit: RAIDER },
     // WAR DRUMS — the developer's *"make sure that orc gets the kodo drums upgrade as well on tier
     // 3"*. One rank (`[Rwdm] maxlevel=1`, 100/150, UpgradeData.slk) and `Requires=ofrt,ofor`
     // (OrcUpgradeFunc.txt), so the Fortress gates it by itself; saved for like the other unlocks,

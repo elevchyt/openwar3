@@ -428,6 +428,13 @@ console.log("\n--- hero pairings, and the Insane-only builds ---");
   check("…the standard plans wait for three Raiders before the Fortress",
     rolled.filter((s) => s.id.endsWith("standard")).every((s) => s.tier3After?.units?.join() === "orai,3"), true);
   check("…and grows into the Tauren army", rolled.every((s) => s.thenAt3 === "taurens"), true);
+  check("…and researches Ensnare once a Raider is out", orc.upgrades.find((u) => u.id === "Roen").forUnit, "orai");
+  // A ranged hero is walked behind its line (index.ts `backlineSpot`).
+  const { backlineSpot } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
+  const enemyAt = { x: 1000, y: 0 }, line = { x: 600, y: 0 };
+  check("a ranged hero ahead of its melee line is walked behind it", JSON.stringify(backlineSpot({ x: 700, y: 0 }, enemyAt, 500, line)), JSON.stringify({ x: 300, y: 0 }));
+  check("…one already behind it, with nobody close, is left alone", backlineSpot({ x: 400, y: 0 }, enemyAt, 600, line), null);
+  check("…and with no line it steps out of reach", JSON.stringify(backlineSpot({ x: 800, y: 0 }, enemyAt, 200, null)), JSON.stringify({ x: 500, y: 0 }));
   const taurens = orc.strategies.find((x) => x.id === "taurens");
   check("…and two Kodo Beasts at tier 3", taurens.lead?.okod, 2);
   const drums = orc.upgrades.find((u) => u.id === "Rwdm");

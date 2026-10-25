@@ -558,6 +558,30 @@ const HERO_GEAR: Readonly<Record<string, readonly string[]>> = { Obla: ["gcel", 
 // `ONE_PER_HERO` still holds — it is one, in the carry's own belt.
 const CARRY_KIT: readonly string[] = [INVULN_BUY, "shea", "phea"];
 const HERO_KIT: Readonly<Record<string, readonly string[]>> = { Otch: CARRY_KIT };
+/**
+ * …and against UNDEAD, a POTION OF HEALING for every RANGED hero, bought high on the list
+ * (`ItemCtx.vsUndead`): the developer's *"ranged heroes should prioritize buying and carrying a
+ * potion of healing when playing against undead just as a safety net against the undead's nuke
+ * capabilities"* — a Frost Nova and a Death Coil land on the hero standing at the back as easily
+ * as on the one in front. `[phea]` is on all four race shops.
+ */
+const RANGED_KIT: readonly string[] = ["phea"];
+
+/**
+ * THE SCROLL OF HEALING, ONE PER HERO (`ItemCtx.healScrolls`): `[shea]` restores hit points to
+ * everything friendly around the reader at once (`AIha`), which is the answer to burst damage
+ * over an area — a Frost Nova, a Death and Decay, a Carrion Swarm — that a potion poured into one
+ * body is not. The Goblin Merchant's (`[ngme] Sellitems`) and the undead's own Tomb of Relics'.
+ * Bought out of the purse right behind the carry kit's potion, one for each hero (the field door
+ * too, `heroChance`), read in the fight once enough of the circle is hurt (`SCROLL_FIGHT_HP`), and a
+ * hero holding two hands one to a hero holding none (`share`).
+ */
+const SCROLL = "shea";
+/** …read IN a fight once this many friendly bodies in its circle are under `SCROLL_FIGHT_HP` —
+ *  the developer's *"uses it when a lot of its surrounding friendly units in a fight are below
+ *  68% health (e.g. night elf to restore health to a lot of bears)"*. Insane. Four is OURS. */
+const SCROLL_FIGHT_HP = 0.68;
+const SCROLL_FIGHT_COUNT = 4;
 const GEAR: ReadonlySet<string> = new Set(Object.values(HERO_GEAR).flat());
 
 /** Is `u` a hero this item is FOR? A melee hero is never sent for a clarity pour, a hero's own
@@ -1109,6 +1133,17 @@ export interface ItemCtx {
   /** The build's CARRY hero type (plus/races.ts `PlusStrategy.carry`), if it has one: served
    *  first at a shop and at a drop, and the one that wants the carry's orb (`CARRY_ORBS`). */
   carry?: string;
+  /**
+   * Should EVERY hero carry a Scroll of Healing, bought high on the list? The developer's: *"it's
+   * important for the Orc to make it a priority to be buying scrolls of healing from the goblin
+   * merchant (perhaps even carry one on each hero) so that it can quickly restore aoe/burst damage
+   * done from frost nova etc. this is true for every race when facing undead"*. Set by the army
+   * manager (index.ts) for an Insane orc, and for any Insane race facing undead. See `SCROLL_EACH`.
+   */
+  healScrolls?: boolean;
+  /** Is this (Insane) player facing an UNDEAD opponent? Then every RANGED hero carries a Potion of
+   *  Healing as its high-priority kit (`RANGED_KIT`). */
+  vsUndead?: boolean;
 }
 
 /** One computer player's inventory: what it buys, and when it presses it. */
@@ -1140,6 +1175,10 @@ export class PlusItems {
   private lastDetour = -Infinity;
   /** This pass's `ItemCtx.carry`, kept for the helpers that are not handed the ctx. */
   private carry: string | undefined;
+  /** …and its `ItemCtx.healScrolls`. */
+  private healScrolls = false;
+  /** …and its `ItemCtx.vsUndead`. */
+  private vsUndead = false;
 
   constructor(
     private readonly view: ItemView,
@@ -1150,6 +1189,8 @@ export class PlusItems {
 
   pass(now: number, ctx: ItemCtx): void {
     this.carry = ctx.carry;
+    this.healScrolls = !!ctx.healScrolls;
+    this.vsUndead = !!ctx.vsUndead;
     const own: SimUnit[] = [];
     const foes: SimUnit[] = [];
     // OURS, AND OUR ALLIES' — see fact 4 in the file header. `own` is who this player gives
@@ -1245,6 +1286,18 @@ export class PlusItems {
     const heroes = own.filter((u) => u.isHero && !u.isIllusion && u.inventory.length && this.canAct(u)
       && !this.view.world.holdsChannel(u.id) && u.order !== "getitem" && !this.underFire(u, foes));
     if (heroes.length < 2) return;
+    // A SPARE SCROLL OF HEALING goes to a hero holding none — the developer's *"if a hero is
+    // carrying more than one scroll of healing, it must give one of them to the other hero owned
+    // by that player"*. Before the potions, one hand-over a look like them.
+    for (const from of heroes) {
+      const slots = from.inventory.map((h, i) => (h?.itemId === SCROLL ? i : -1)).filter((i) => i >= 0);
+      if (slots.length < 2) continue;
+      const to = heroes.find((o) => o !== from && !o.inventory.some((h) => h?.itemId === SCROLL)
+        && o.inventory.indexOf(null) >= 0 && Math.hypot(o.x - from.x, o.y - from.y) <= SHARE_REACH);
+      if (!to) continue;
+      this.view.order({ c: "giveitem", unitId: from.id, slot: slots[slots.length - 1], targetId: to.id });
+      return;
+    }
     const belts = heroes.map((u) => {
       const belt = { heal: 0, mana: 0, invuln: 0, free: 0 };
       for (const held of u.inventory) {
@@ -1684,6 +1737,11 @@ export class PlusItems {
         // The EMERGENCY half first, and it is the one clause of this rung that does not ask
         // whether there is a fight — see `SCROLL_EMERGENCY_HP`.
         if (u.isHero && hp < SCROLL_EMERGENCY_HP && this.instantHeal(def)) return true;
+        // …and IN the fight, on Insane, once enough of the circle is hurt — see `SCROLL_FIGHT_HP`.
+        // An instant heal is not lost to the next blow the way a pour is, so a fight is exactly
+        // where it is worth most.
+        if (this.profile.difficulty === MELEE_INSANE && this.instantHeal(def)
+          && this.hurtAround(u, friends, this.areaOf(def)) >= SCROLL_FIGHT_COUNT) return true;
         return (
           !engaged
           && (this.armyHeal(u, own, friends, this.areaOf(def), foes) || this.selfRegenWorthIt(u, hp, def))
@@ -1869,6 +1927,18 @@ export class PlusItems {
    * standing across the map is not a reason this hero's scroll is being wasted. Putting them in
    * the denominator would mean a computer with a busy ally could never reach the half.
    */
+  /** How many friendly fighting bodies within `radius` of `u` are under `SCROLL_FIGHT_HP` —
+   *  heroes, soldiers and summons alike; buildings, workers and illusions are no part of it. */
+  private hurtAround(u: SimUnit, friends: SimUnit[], radius: number): number {
+    let n = 0;
+    for (const o of friends) {
+      if (o.building || o.isPeon || o.isIllusion || o.hp <= 0) continue;
+      if (!near(u, o, radius)) continue;
+      if (o.hp / Math.max(1, o.maxHp) < SCROLL_FIGHT_HP) n++;
+    }
+    return n;
+  }
+
   private armyHeal(u: SimUnit, own: SimUnit[], friends: SimUnit[], radius: number, foes: SimUnit[]): boolean {
     let party = 0;
     for (const o of own) {
@@ -2328,13 +2398,16 @@ export class PlusItems {
     // wave, never walked to.
     const fightCtx = ctx.wave ? { ...ctx, mayDetour: false } : ctx;
     // A MELEE hero's invulnerability potion before the army's scroll (`MELEE_BELT`'s order).
-    const order = own.some((u) => u.isHero && MELEE_HEROES.has(u.typeId))
-      ? [...FIGHT].sort((a, b) => MELEE_BELT.indexOf(a.id) - MELEE_BELT.indexOf(b.id))
-      : FIGHT;
+    const melee = own.some((u) => u.isHero && MELEE_HEROES.has(u.typeId));
+    // …and with `healScrolls`, the SCROLL right behind the invulnerability potion and before the
+    // rest — the developer's "make it a priority to be buying scrolls of healing" (`SCROLL`).
+    const rank = (id: string): number => (this.healScrolls ? [INVULN_BUY, SCROLL] : MELEE_BELT).indexOf(id) + 1 || 99;
+    const order = melee || this.healScrolls ? [...FIGHT].sort((a, b) => rank(a.id) - rank(b.id)) : FIGHT;
     // …one EACH on a rung where every hero carries one (`PlusProfile.invulnEach`).
     const heroes = own.filter((u) => u.isHero && !u.isIllusion).length;
     for (const w of order) {
-      const want = w.id === INVULN_BUY && this.profile.invulnEach ? Math.max(w.want, heroes) : w.want;
+      const want = w.id === INVULN_BUY && this.profile.invulnEach ? Math.max(w.want, heroes)
+        : w.id === SCROLL && this.healScrolls ? Math.max(w.want, heroes) : w.want;
       if (this.carried(own, w.id) >= want) continue;
       if (this.itemChance(now, own, fightCtx, w.id)) return true;
     }
@@ -2365,6 +2438,7 @@ export class PlusItems {
       if (!h.isHero || h.isIllusion) continue;
       for (const id of this.kitFor(h) ?? []) if (!h.inventory.some((x) => x?.itemId === id)) wanted.push(id);
     }
+    if (this.healScrolls && own.some((h) => h.isHero && !h.isIllusion && !h.inventory.some((x) => x?.itemId === SCROLL))) wanted.push(SCROLL);
     wanted.push(...this.staffRows().filter((w) => this.carried(own, w.id) < w.want).map((w) => w.id));
     for (const h of own) {
       if (!h.isHero || h.isIllusion) continue;
@@ -2757,7 +2831,9 @@ export class PlusItems {
     const kitNeed = (id: string): number => heroes.filter((h) => this.kitFor(h)?.includes(id) && !h.inventory.some((x) => x?.itemId === id)).length;
     const kitRow = (id: string): Want[] => (kitNeed(id) ? [{ id, want: this.carried(own, id) + kitNeed(id), opening: true }] : []);
     const kitFirst = [...new Set(heroes.map((h) => this.kitFor(h)?.[0]).filter((id): id is string => !!id))].flatMap(kitRow);
-    const first = [...kitFirst, ...orbs, ...this.staffRows(), ...(RACE_FIRST[this.race] ?? []).map((w) => ({ ...w, opening: true }))];
+    // …and a Scroll of Healing for EVERY hero where the army manager asks (`ItemCtx.healScrolls`).
+    const scrolls: Want[] = this.healScrolls && heroes.length ? [{ id: SCROLL, want: heroes.length, opening: true }] : [];
+    const first = [...kitFirst, ...scrolls, ...orbs, ...this.staffRows(), ...(RACE_FIRST[this.race] ?? []).map((w) => ({ ...w, opening: true }))];
     // …and the race's MANA, which is bought out of the purse for the same reason but sits one
     // place further down: BEHIND the scroll. A hero with an empty bar has lost its spells; a
     // hero with no Town Portal loses the army, and that is the bigger loss (`PORTAL`).
@@ -2818,7 +2894,9 @@ export class PlusItems {
 
   /** This hero's fight KIT — its own (`HERO_KIT`), else the melee carry's (`CARRY_KIT`). */
   private kitFor(u: SimUnit): readonly string[] | undefined {
-    return HERO_KIT[u.typeId] ?? (u.typeId === this.carry && MELEE_HEROES.has(u.typeId) ? CARRY_KIT : undefined);
+    return HERO_KIT[u.typeId]
+      ?? (u.typeId === this.carry && MELEE_HEROES.has(u.typeId) ? CARRY_KIT : undefined)
+      ?? (this.vsUndead && !MELEE_HEROES.has(u.typeId) ? RANGED_KIT : undefined);
   }
 
   /** This player's `RACE_STAFF` row, out of the purse — on Insane, for the races that have one. */

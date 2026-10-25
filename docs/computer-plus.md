@@ -1789,6 +1789,21 @@ the rush reached its Fortress at 13:29 on average against 9:46 for the build it 
   Druid of the Claw is a TIER-2 unit, and `recruit` keeps every druid out of the army until Master
   Training (`Redc` rank 2) — so the bears are standing at home when Bear Form lands, rather than
   being trained after it. Every other rung keeps the druid at tier 3.
+* **An undead MAIN waits for 70 food** (`undeadMainHeld`, in `baseTarget`): on Insane, every race
+  (undead included) refuses a wave at an undead player's main base until its supply counter reads
+  70 — workers counted, the way a player reads "70 food" — and goes at a scouted undead EXPANSION
+  instead (to take its Haunted Gold Mine down early; `mayAssault` exempts an expansion from its
+  own undead bar on Insane), or keeps creeping. Lifted when we hold no gold mine; a defence is
+  never held. Ensnare waits for the first Raider (`forUnit`).
+* **Scrolls of Healing** (`ItemCtx.healScrolls`: an Insane orc always, any Insane race facing
+  undead): one per hero, right behind the invulnerability potion on the field door; read IN a
+  fight on Insane once four friendly bodies in the circle are under 68% (`SCROLL_FIGHT_*`), and a
+  hero holding two hands one to a hero holding none (`share`). Against undead every RANGED hero
+  also carries a Potion of Healing as its first buy (`RANGED_KIT`). These are Goblin Merchant wares
+  for the orc, so on a map whose Merchant is far from home they arrive when a hero passes it.
+* **Ranged heroes stay behind the line** (`backlinePass`, `backlineSpot`, Normal and Insane): in a
+  fight, a ranged hero ahead of our melee line's centre or with an enemy within 350 is walked 300
+  behind the line and left there for 1.5 s.
 * **Ensnare and the net** (plus/targeting.ts `PREFERRED`, index.ts `nettedPick`): a Raider's
   Ensnare is worth ×3 on a Crypt Fiend, an Obsidian Statue or a Lich (the developer's), and a
   ranged unit shoots a netted enemy (Ensnare or Web) it can already reach before the group's focus

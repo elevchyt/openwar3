@@ -1095,8 +1095,38 @@ const STAFF_WELL_WINDOW = 30;
  *  (the press was refused or queued behind something). */
 const STAFF_LAND = 3;
 const STAFF_RECOVER_TO = 0.95;
+/** The backline (`backlinePass`): how near a hostile body makes it a fight, how far from the hero
+ *  our melee counts as its line, how far behind the line's centre the hero must stand, how close
+ *  an enemy may come, how far behind the line it is walked, and how long it is left there.
+ *  OURS, all of them. */
+const BACKLINE_LOOK = 900;
+const BACKLINE_LINE = 1000;
+const BACKLINE_BEHIND = 100;
+const BACKLINE_GAP = 350;
+const BACKLINE_STEP = 300;
+const BACKLINE_HOLD = 1.5;
 /** A Moon Well's pour, `[Ambt] Area1` — what a drinker must stand inside to be poured into. */
 const WELL_POUR = 400;
+
+/**
+ * WHERE A RANGED HERO SHOULD BE STANDING, or null where it already is (`backlinePass`). `enemy` is
+ * the centre of the hostile bodies in the fight, `nearest` the distance to the closest of them, and
+ * `line` the centre of our own melee around the hero (null with none). Pure, for the test.
+ */
+export function backlineSpot(
+  h: { x: number; y: number }, enemy: { x: number; y: number }, nearest: number, line: { x: number; y: number } | null,
+): { x: number; y: number } | null {
+  if (line) {
+    const len = Math.hypot(line.x - enemy.x, line.y - enemy.y) || 1;
+    const dx = (line.x - enemy.x) / len, dy = (line.y - enemy.y) / len; // from the enemy towards our side
+    const behind = (h.x - line.x) * dx + (h.y - line.y) * dy; // >0: on our side of the line
+    if (behind >= BACKLINE_BEHIND && nearest >= BACKLINE_GAP) return null;
+    return { x: line.x + dx * BACKLINE_STEP, y: line.y + dy * BACKLINE_STEP };
+  }
+  if (nearest >= BACKLINE_GAP) return null;
+  const len = Math.hypot(h.x - enemy.x, h.y - enemy.y) || 1;
+  return { x: h.x + ((h.x - enemy.x) / len) * BACKLINE_STEP, y: h.y + ((h.y - enemy.y) / len) * BACKLINE_STEP };
+}
 
 /** Who a staff saves first (`staffPass`): a HERO, then a MELEE body, then a ranged one — and the
  *  bigger body of two in the same rung, which is the "beefy" in *"beefy melee units like bears"*. */
@@ -1224,6 +1254,9 @@ const EARLY_HERO_LEVEL = 3;
  * a wave is measured in the food that would actually LEAVE, and the wounded are not in it.
  */
 const UNDEAD_ARMY = 1.75;
+/** The supply an Insane computer must be using before it walks at an UNDEAD main (`undeadMainHeld`)
+ *  — the developer's 70, counted on the supply counter, workers included. */
+const UNDEAD_PUSH_FOOD = 70;
 const UNDEAD_CEILING = 0.8;
 
 /**
@@ -2352,6 +2385,9 @@ interface Brain {
   /** Ranged soldiers mid STUTTER-STEP (`stutterPass`): unit → what to go back to when the
    *  weapon is ready — the target it was shooting, and the order it was on. */
   readonly stutters: Map<number, Stutter>;
+  /** Ranged heroes `backlinePass` has just walked behind the line, and until when they are left
+   *  alone there (brain clock). */
+  readonly backline: Map<number, number>;
   /**
    * The SECOND HERO's gold while the build order banks for it (plus/plan.ts `secondHeroHold`) —
    * 0 the rest of the time. The belt shops out of the bank minus this, because the shop is the
@@ -2849,6 +2885,7 @@ export class ComputerPlusAi {
       freeze: { was: null, since: 0 },
       pulls: new Map(),
       stutters: new Map(),
+      backline: new Map(),
       heroHold,
       waiting: new Map(),
       afield: false,
@@ -3140,6 +3177,10 @@ export class ComputerPlusAi {
       // (`staffPass`, `sentHomeHeld`) — the same door, for the same reason: a pass that forgets to
       // ask `recovering` walks it straight back into the fight at a tenth of its life.
       if (kind !== "stop" && kind !== "hold" && this.sentHomeHeld(cmd.unitId)) return true;
+      // …and a ranged hero `backlinePass` is walking behind the line, for its short hold —
+      // except the backline pass's own walk, which is the only one issued as a plain move to a
+      // spot while the hold is being set.
+      if (b.backline.has(cmd.unitId) && b.clock < (b.backline.get(cmd.unitId) ?? 0)) return true;
       if (kind === "move" || kind === "attackmove" || kind === "attack" || kind === "patrol") {
         if (b.ordersThisStep >= ORDERS_PER_STEP) {
           b.orderQueue.push(cmd);
@@ -3227,6 +3268,7 @@ export class ComputerPlusAi {
       this.drainOrders(b); // last step's leftovers go first, then this step's passes
       b.items.tickGrabs(b.clock); // a drop at a hero's feet, picked up once its pause is over
       this.stutterPass(b); // Insane's ranged micro between shots — every step, it is timed to the cooldown
+      this.backlinePass(b); // …and the ranged HEROES kept behind the melee line
       if ((b.buildIn -= dt) <= 0) {
         b.buildIn = b.profile.buildPeriod;
         simProfile.begin("sim.ai.build");
@@ -3382,6 +3424,10 @@ export class ComputerPlusAi {
       defending: b.mode === "defending",
       tier: this.tier(b),
       carry: b.strategy.carry,
+      // A Scroll of Healing in EVERY hero's belt, high on the list — an Insane orc always, and
+      // any Insane race facing an undead opponent (plus/items.ts `ItemCtx.healScrolls`).
+      healScrolls: b.profile.difficulty === MELEE_INSANE && (b.table.race === "orc" || this.facesUndead(b)),
+      vsUndead: b.profile.difficulty === MELEE_INSANE && this.facesUndead(b),
     };
   }
 
@@ -5105,6 +5151,92 @@ export class ComputerPlusAi {
   }
 
   /**
+   * AN UNDEAD MAIN WAITS FOR 70 FOOD — the developer's, for every race on Insane: *"upon reaching
+   * tier 3, the Orc's power spike starts to fall off. we must make the Orc try to reach 70 food or
+   * more before it starts actually pushing, especially when against undead"*, then *"orc must hold
+   * its push only against Undead, since the undead base is very strong. we must apply the same rule
+   * for night elf and human when playing against undead … however, if the undead has an expansion
+   * that the … player has scouted, then it's fine to push the expansion to try and destroy the
+   * haunted gold mine earlier. undead must do the same when playing against undead as well"*.
+   *
+   * So a wave at the MAIN of an undead player (`mainOf`, the hall at its start location) is
+   * refused until this player's supply COUNTER reads `UNDEAD_PUSH_FOOD` — workers included, which
+   * is what "70 food" means to a player — and `baseTarget` goes at a scouted EXPANSION of theirs
+   * instead, or the army keeps creeping. Lifted the moment we hold no gold mine (waiting is no
+   * longer a plan), and never asked of a defence: a base under attack is `defending`, which no
+   * wave gates. Insane alone — the other rungs' army ceilings sit under 70 food.
+   */
+  private undeadMainHeld(b: Brain, main: { id: number }): boolean {
+    if (b.profile.difficulty !== MELEE_INSANE) return false;
+    const u = this.host.world.units.get(main.id);
+    if (!u || u.owner < 0 || u.owner >= MELEE.MAX_PLAYERS) return false;
+    if (this.host.playerRace(u.owner) !== "undead" && this.host.registry.get(u.typeId)?.race !== "undead") return false;
+    if (b.ai.minesOwned() < 1 || b.ai.goldOwned() <= 0) return false;
+    return b.ai.foodUsed() < UNDEAD_PUSH_FOOD;
+  }
+
+  /** Is this building at its owner's START LOCATION — part of a main base, not an expansion? */
+  private atStart(u: SimUnit): boolean {
+    const start = this.host.startLocations().find((s) => s.player === u.owner);
+    return !!start && Math.hypot(u.x - start.x, u.y - start.y) <= TOWN_RADIUS;
+  }
+
+  /** Does this player face an UNDEAD opponent — any seat at war with it whose race is undead?
+   *  The lobby's races, as `startLocations` and `playerRace` give them (the team chat names
+   *  players by the same reading). */
+  private facesUndead(b: Brain): boolean {
+    const me = b.ai.player;
+    return this.host.startLocations().some((s) => s.player !== me && !this.host.coAllied(me, s.player)
+      && this.host.playerRace(s.player) === "undead");
+  }
+
+  /**
+   * RANGED HEROES STAND BEHIND THE LINE — the developer's *"make sure that ranged heroes such as
+   * archmage and far seer are also keeping their distance when a team fight is happening behind
+   * (they must stay behind their frontline ALWAYS so that they don't get nuked)"*.
+   *
+   * In a fight (a hostile body within `BACKLINE_LOOK`), a ranged hero of the squad that is AHEAD
+   * of our own melee line — closer to the enemy than the line's centre is, by the line's own
+   * axis — or that has an enemy within `BACKLINE_GAP`, is walked to `BACKLINE_STEP` behind the
+   * line's centre, along the axis from the enemy to the line, and left alone for
+   * `BACKLINE_HOLD` (`issue` refuses the army's walks for it meanwhile, as for a unit a staff
+   * sent home). With no melee line at all it simply steps back out of `BACKLINE_GAP`.
+   *
+   * Never a hero CHANNELLING (a Starfall, a Blizzard: `holdsChannel`), nor one the pull-out pass
+   * already has (`pulledOut`). Normal and Insane; the numbers are OURS.
+   */
+  private backlinePass(b: Brain): void {
+    if (b.profile.difficulty === MELEE_NEWBIE) return;
+    const world = this.host.world;
+    for (const [id, until] of b.backline) if (b.clock >= until || !world.units.get(id)) b.backline.delete(id);
+    const squad = [...this.squadUnits(b)];
+    for (const h of squad) {
+      if (!h.isHero || h.hp <= 0 || isCopy(h) || !h.weapon?.ranged || b.backline.has(h.id)) continue;
+      if (world.holdsChannel(h.id) || pulledOut(b.pulls.get(h.id), b.clock)) continue;
+      let ex = 0, ey = 0, en = 0, nearest = Infinity;
+      for (const t of world.units.values()) {
+        if (t.hp <= 0 || t.building || t.isPeon || t.owner === b.ai.player) continue;
+        const d = Math.hypot(t.x - h.x, t.y - h.y);
+        if (d > BACKLINE_LOOK || !b.ai.hostileTo(t) || !b.ai.knows(t)) continue;
+        ex += t.x; ey += t.y; en++;
+        if (d < nearest) nearest = d;
+      }
+      if (!en) continue;
+      ex /= en; ey /= en;
+      let fx = 0, fy = 0, fn = 0;
+      for (const u of squad) {
+        if (u === h || u.hp <= 0 || u.isHero || u.weapon?.ranged || !u.weapon) continue;
+        if (Math.hypot(u.x - h.x, u.y - h.y) > BACKLINE_LINE) continue;
+        fx += u.x; fy += u.y; fn++;
+      }
+      const spot = backlineSpot(h, { x: ex, y: ey }, nearest, fn ? { x: fx / fn, y: fy / fn } : null);
+      if (!spot) continue;
+      this.issue(b, { c: "order", unitId: h.id, order: { kind: "move", x: spot.x, y: spot.y }, queued: false });
+      b.backline.set(h.id, b.clock + BACKLINE_HOLD);
+    }
+  }
+
+  /**
    * THE UNDEAD'S SECOND WAVE BRINGS ITS MEAT WAGON — the developer's: "we must also add the Meat
    * Wagon to the undead's second wave". For a race whose siege row is EARLY
    * (`PlusRaceTable.siegeEarly`), the SECOND wave waits while a siege unit is ON ITS WAY —
@@ -5216,6 +5348,10 @@ export class ComputerPlusAi {
     const u = this.host.world.units.get(target.id);
     if (!u || u.owner < 0 || u.owner >= MELEE.MAX_PLAYERS) return true;
     if (this.host.registry.get(u.typeId)?.race !== "undead") return true;
+    // …and on Insane an undead EXPANSION is worth pushing with the wave as it is — the developer's
+    // "it's fine to push the expansion to try and destroy the haunted gold mine earlier". Its MAIN
+    // has its own, stricter bar (`undeadMainHeld`).
+    if (b.profile.difficulty === MELEE_INSANE && !this.atStart(u)) return true;
     const profile = liveProfile(b.profile, b.clock);
     const bar = Math.min(this.waveFood(b) * UNDEAD_ARMY, profile.armyFood * UNDEAD_CEILING);
     return this.squadFood(b, this.mustered(b)) >= bar;
@@ -7364,13 +7500,16 @@ export class ComputerPlusAi {
     // …and before its POWER SPIKE an Insane computer does not go at a MAIN at all — only at an
     // expansion it knows of (see `spikeHeld`).
     const held = this.spikeHeld(b);
-    const main = held ? null : this.mainOf(b, foe, avoided);
+    const found = held ? null : this.mainOf(b, foe, avoided);
+    // …and an UNDEAD main waits for 70 food (`undeadMainHeld`) — its expansion does not.
+    const undeadHeld = !!found && this.undeadMainHeld(b, found);
+    const main = undeadHeld ? null : found;
     if (expansion) {
       const u = this.host.world.units.get(expansion.id);
       const chance = u && b.ai.isTowered(u) ? b.profile.expansionFirst / 2 : b.profile.expansionFirst;
       if (!main || b.ai.randomInt(0, 999) < chance * 1000) return expansion;
     }
-    return main ?? expansion ?? (held ? null : this.anyBase(b, foe, avoided));
+    return main ?? expansion ?? (held || undeadHeld ? null : this.anyBase(b, foe, avoided));
   }
 
   /**

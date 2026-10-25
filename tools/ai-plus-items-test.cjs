@@ -1052,7 +1052,7 @@ function shopped(units, profile, opts = {}) {
     // and every other race shops off `LIST` alone.
   }, profile, opts.race ?? "human");
   const ctx = { home: { x: 0, y: 0 }, losing: false, mayShop: opts.mayShop ?? true, mayDetour: opts.mayDetour ?? false, portalWorthIt: true,
-    defending: opts.defending ?? false, tier: opts.tier ?? 1, carry: opts.carry };
+    defending: opts.defending ?? false, tier: opts.tier ?? 1, carry: opts.carry, healScrolls: opts.healScrolls, vsUndead: opts.vsUndead };
   items.pass(opts.now ?? 500, ctx);
   // A SECOND pass on the SAME belt, for the rules that are about what this player has already
   // had rather than about what it is holding — `PlusItems.hadPortal` is the only one today.
@@ -1790,6 +1790,49 @@ console.log("\n-- handing a spare potion over ----------------------------------
   const mk = belt(hero({ typeId: "Hmkg", level: 2, x: 0, y: 0 }), "stwp");
   const carryKit = shopped([am, mk, MERCHANT], PLUS_INSANE, { shelf: ["pnvl", "shea"], race: "human", carry: "Hmkg", inRange: false });
   check("a melee carry (the Mountain King) is sent for the kit first", carryKit.move?.unitId, mk.id);
+}
+
+// --- the SCROLL OF HEALING: one per hero, read in the fight, a spare handed across ---------------
+// The developer's: "orc [must] make it a priority to be buying scrolls of healing from the goblin
+// merchant (perhaps even carry one on each hero) … this is true for every race when facing
+// undead", "uses it when a lot of its surrounding friendly units in a fight are below 68% health",
+// and "if a hero is carrying more than one scroll of healing, it must give one of them to the
+// other hero".
+{
+  const two = [belt(hero({ typeId: "Obla", x: 0, y: 0 }), "stwp", "pnvl"), belt(hero({ typeId: "Ofar", x: 0, y: 0 }), "stwp", "pnvl")];
+  check("with healScrolls, the Scroll of Healing comes right after the invulnerability potion",
+    shopped([...two, MERCHANT], PLUS_INSANE, { shelf: ["shea", "phea", "pnvl"], race: "orc", healScrolls: true }).buy?.itemId, "shea");
+  const one = [belt(hero({ typeId: "Obla", x: 0, y: 0 }), "stwp", "shea"), belt(hero({ typeId: "Ofar", x: 0, y: 0 }), "stwp")];
+  check("…until every hero carries one",
+    shopped([...one, MERCHANT], PLUS_INSANE, { shelf: ["shea"], race: "orc", healScrolls: true }).buy?.itemId, "shea");
+  // In the fight: four friendly bodies under 68 % in the circle, an enemy in contact.
+  const reader = belt(hero({ id: nextId++, hp: 900, maxHp: 900, x: 0, y: 0 }), "shea");
+  const hurt = [0, 1, 2, 3].map((i) => unit({ hp: 300, maxHp: 600, x: 100 + i * 40, y: 0 }));
+  const foe = enemy({ x: 80, y: 0 });
+  const used = pressed([reader, ...hurt, foe], PLUS_INSANE, AWAY);
+  check("Insane reads the scroll IN a fight once four in the circle are under 68%", used !== null && reader.inventory[used.slot]?.itemId, "shea");
+  const three = belt(hero({ id: nextId++, hp: 900, maxHp: 900, x: 0, y: 0 }), "shea");
+  check("…not for three", pressed([three, ...hurt.slice(0, 3), foe], PLUS_INSANE, AWAY), null);
+  const normal = belt(hero({ id: nextId++, hp: 900, maxHp: 900, x: 0, y: 0 }), "shea");
+  check("…and Normal still waits for the fight to end", pressed([normal, ...hurt, foe], PLUS_NORMAL, AWAY), null);
+  // A spare goes to the hero holding none.
+  const rich = belt(hero({ id: nextId++, x: 0, y: 0 }), "shea", "shea");
+  const poor = belt(hero({ id: nextId++, x: 300, y: 0 }), "stwp");
+  pressed([rich, poor], PLUS_INSANE, AWAY);
+  const give = lastOrders.find((c) => c.c === "giveitem");
+  check("a hero with two scrolls hands one to the hero with none", give && `${give.unitId}->${give.targetId}`, `${rich.id}->${poor.id}`);
+}
+
+// --- against UNDEAD, every ranged hero's first buy is a Potion of Healing --------------------------
+// The developer's: "ranged heroes should prioritize buying and carrying a potion of healing when
+// playing against undead just as a safety net against the undead's nuke capabilities".
+{
+  const am = () => belt(hero({ typeId: "Hamg", x: 0, y: 0 }), "stwp");
+  const vault = ["sreg", "plcl", "phea", "pman", "stwp"];
+  check("against undead, an Archmage's first buy is a Potion of Healing",
+    shopped([am(), MERCHANT], PLUS_INSANE, { shelf: vault, race: "human", vsUndead: true }).buy?.itemId, "phea");
+  check("…and otherwise it is the race's own opening buy",
+    shopped([am(), MERCHANT], PLUS_INSANE, { shelf: vault, race: "human" }).buy?.itemId, "sreg");
 }
 
 // --- the ORC's Orb of Lightning, and the Blademaster's own gear --------------------------------
