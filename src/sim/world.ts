@@ -23640,6 +23640,12 @@ export class SimWorld {
       // upgrade-granted ability makes.
       if (isArrowOrb(ab.code)) {
         if (!ab.autocastOn && ab.code !== aimed) continue;
+        // An arrow is a SPELL on the shot, and a hostile spell does not touch a magic-immune
+        // unit — the aimed shot already hears "Immunetomagic" at the door (castableTarget →
+        // targetError), and autocast must answer the same: a Sea Witch's Frost Arrows on a
+        // Mud Golem goes out as a plain arrow, slows nothing and costs no mana. The hostile
+        // half of targetError's test is the gate at the top of this function.
+        if (target.magicImmune && !MAGIC_IMMUNE_EXEMPT.has(ab.code)) continue;
       } else if (!this.unitMeets(attacker, ab.id)) continue;
       const def = this.abilityDefOf(ab);
       if (!def) continue;
