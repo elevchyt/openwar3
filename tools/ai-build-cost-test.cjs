@@ -320,5 +320,43 @@ console.log("\n-- a dead hero's row is priced as the REVIVAL it becomes --------
   check("…and the rows below it are still reached", ai.count("Obla"), 1);
 }
 
+// ==========================================================================================
+console.log("\n-- after the Berserker Upgrade, a Head Hunter row trains BERSERKERS -----------");
+// ==========================================================================================
+// `[Robk]` swaps every `ohun` for an `otbk` and takes `ohun` off the Barracks (`rtma`;
+// SimWorld.applyUnitSwap sets its max to 0). A build order names the Head Hunter, so the row
+// has to (a) count the Berserkers as what it asked for and (b) train the unit that replaced it.
+{
+  DEFS.obar = { goldCost: 180, lumberCost: 50, isBuilding: true, isHero: false, classification: [], foodUsed: 0, foodMade: 0, weapons: [] };
+  DEFS.ohun = { goldCost: 135, lumberCost: 20, buildTime: 20, isBuilding: false, isHero: false, classification: [], foodUsed: 2, foodMade: 0, weapons: [] };
+  DEFS.otbk = { ...DEFS.ohun };
+  const run = (upgraded, berserkers) => {
+    const barracks = { id: 1, owner: 0, typeId: "obar", hp: 100, maxHp: 100, x: 0, y: 0, building: { constructionLeft: 0, queue: [] }, orderQueue: [] };
+    const units = new Map([[1, barracks]]);
+    for (let i = 0; i < berserkers; i++) units.set(10 + i, { id: 10 + i, owner: 0, typeId: "otbk", hp: 100, maxHp: 100, x: 0, y: 0, building: null, orderQueue: [] });
+    const asked = [];
+    const host = {
+      world: {
+        units, mines: new Map(), nearestMine: () => null, hauntsMines: () => false,
+        stashOf: () => ({ gold: 5000, lumber: 5000 }), pendingTrained: () => [],
+        tech: { maxAllowed: (_p, id) => (id === "ohun" ? (upgraded ? 0 : -1) : id === "otbk" ? (upgraded ? -1 : 0) : -1) },
+      },
+      registry: { get: (id) => DEFS[id] },
+      tech: { get: () => ({ upgrade: [] }), trains: (id) => (id === "obar" ? ["ohun", "otbk"] : []) },
+      execute: (_player, cmd) => { asked.push(cmd); return true; },
+    };
+    const ai = new AiPlayer(0, "orc", 1, host, 0, 0, 1);
+    ai.refresh();
+    ai.initBuildArray();
+    ai.setBuildNext(6, "ohun");
+    ai.runBuildLoop();
+    return asked.filter((c) => c.c === "train").map((c) => c.unitId);
+  };
+  check("before the upgrade the row trains a Head Hunter", run(false, 0), ["ohun"]);
+  check("after it, the same row trains a BERSERKER", run(true, 0), ["otbk"]);
+  check("…and counts the Berserkers standing as Head Hunters (four of six: one more)", run(true, 4), ["otbk"]);
+  check("…and stops when six stand", run(true, 6), []);
+}
+
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");
 process.exit(failed ? 1 : 0);

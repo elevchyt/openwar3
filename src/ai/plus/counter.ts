@@ -36,6 +36,9 @@ export interface EnemyRead {
   seen: number;
   /** The share of them that flies. */
   air: number;
+  /** …and how many of them fly, as a COUNT and never thresholded — the size of the air army an
+   *  answer is sized against (plus/plan.ts `antiAirCount`). Absent in a read built by hand. */
+  airBodies?: number;
   /** Share by armour type, thresholded (see the file header). */
   armor: Readonly<Partial<Record<ArmorType, number>>>;
   /** How many of them shoot PIERCING missiles — Archers, Riflemen, Head Hunters, Crypt Fiends,
@@ -44,7 +47,7 @@ export interface EnemyRead {
   pierce: number;
 }
 
-const EMPTY_READ: EnemyRead = { seen: 0, air: 0, armor: {}, pierce: 0 };
+const EMPTY_READ: EnemyRead = { seen: 0, air: 0, airBodies: 0, armor: {}, pierce: 0 };
 
 /**
  * What this player has seen of the enemy, and when.
@@ -94,7 +97,7 @@ export class EnemyMemory {
       if (share >= minShare) shares[type] = share;
     }
     const airShare = air / total;
-    return { seen: total, air: airShare >= minShare ? airShare : 0, armor: shares, pierce };
+    return { seen: total, air: airShare >= minShare ? airShare : 0, airBodies: air, armor: shares, pierce };
   }
 }
 

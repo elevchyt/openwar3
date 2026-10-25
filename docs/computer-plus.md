@@ -1719,7 +1719,7 @@ difficulty — Easy simply never reaches a second row and Normal never a third:
 | orc | Tauren Chieftain | Shadow Hunter — **never** the Blademaster | Alchemist / Far Seer |
 | undead | Death Knight | Lich | Dark Ranger (Black Arrow) / Crypt Lord (Impale) |
 | undead | Crypt Lord (**Carrion Beetles first**), Dreadlord | Death Knight | Dark Ranger |
-| night elf | Demon Hunter | Keeper of the Grove / Naga Sea Witch | Alchemist / Priestess of the Moon |
+| night elf | Demon Hunter | Keeper of the Grove / Naga Sea Witch / Pandaren Brewmaster | Alchemist / Priestess of the Moon |
 | night elf | Keeper of the Grove | Demon Hunter / Pit Lord | Alchemist / Fire Lord (Lava Spawn) |
 
 A build's own hero list is followed AS WRITTEN where the pairings say nothing — there used to be a
@@ -1808,6 +1808,23 @@ or a free upgrade: only what has been SEEN, only off a sample this difficulty be
 at a difficulty that does not counter at all — an Easy computer builds what it opened with,
 whatever is flying over its base. The "the enemy went air" bar is `counter.ts`'s own `AIR_HEAVY`,
 shared rather than re-stated so the row and the re-weighting cannot disagree about it.
+
+**Insane MATCHES the air** (`PlusProfile.antiAirMatch`) — the developer's *"make sure that the
+Insane Computer+ AI is also countering enemy air units etc. properly"*. Three differences:
+
+- **A count, not only a share.** `AIR_BODIES` (4) flyers seen are an air threat however much
+  ground walks beside them (`EnemyRead.airBodies`, never thresholded). Five Frost Wyrms in a
+  25-body army are a fifth of it — under `AIR_HEAVY`, and under Insane's own `counterShare`, so
+  the share alone read 0 — and they still kill a ground army that cannot shoot up.
+- **The answer grows** (`antiAirCount`): one anti-air body per flyer seen once there are more of
+  them than the race's four, up to `ANTI_AIR_GROWTH` (3) times it — an answer to air, never an air
+  army.
+- **The row sits ABOVE the tier rows**, right under the core army. Down beside `always` it was
+  unreachable while the ladder halted to save for a hall — and with the tier-3 rush that is
+  exactly the window an air army arrives in.
+
+The human's Flying Machines also get **Flak Cannons** (`Rhfc`, `Aflk` splash against air — the sim
+implements it), an unlock row saved for once a Flying Machine is out.
 
 ### SIEGE joins the army at tier 2
 
@@ -5050,6 +5067,15 @@ Pandaren Brewmaster, whose Drunken Haze → Breath of Fire combo must burn.
   → after): human never/12:35 → 9:29–9:31, orc never/12:29 → 9:12–10:04 (the Head Hunter rush
   11:10, from its held Keep), undead never → 10:46–12:09, night elf 11:22–12:27 → 9:23–9:30.
   `tools/ai-plus-ladder-test.cjs` pins the rush as the third hall within 5½ minutes of the second.
+- **The orc's tier 3 is Taurens, Berserkers and Shamans** (`taurens`, which every orc tier-2
+  build now grows into) — the developer's standard: *"Taurens along with Berserkers and Shamans
+  using Bloodlust on both"*. The Berserkers are the mix's Head Hunter row: `[Robk]` swaps every
+  `ohun` for an `otbk` and takes `ohun` off the Barracks, and two `AiPlayer` fixes make the row
+  follow it — `setBuildNext` counts a unit's other forms (`TownCount`'s fold; it read four
+  Berserkers as no Head Hunters, asked for "one" and was satisfied, so not one more was ever
+  trained — the same was true of a Druid of the Claw in Bear Form), and `replacedBy` trains the
+  unit an `rtma` upgrade put on the shelf in place of the one it withdrew. Bloodlust is the
+  sim's autocast and goes on whoever is swinging, Tauren and Berserker alike.
 - **What tier 3 is FOR is now bought there.** Priest Training (`Rhpt`, rank 2 is Inner Fire —
   `[Ainf] Requires=Rhpt` ×2, `[Rhpt] Requires1=hcas`) and Shaman Training (`Rost`, rank 2 is
   Bloodlust — `[Ablo] Requires=Rost` ×2, `[Rost] Requires1=ofrt`) are ability UNLOCKS, saved for

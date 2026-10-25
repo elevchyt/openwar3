@@ -435,6 +435,12 @@ export function buildPlan(c: PlusCtx): void {
   // a row that is never reached at all.
   shop(c);
   army(c, coreArmy(c)); // enough not to die to the first raid, cheap enough not to block tech
+  // …and on a rung that MATCHES the enemy's air (`PlusProfile.antiAirMatch`), the ANSWER TO AIR
+  // comes up here, under the core army and above every row that halts the ladder to save — the
+  // tier rows above all. Down at its ordinary place it could not be reached while an Insane
+  // computer saved for its rushed tier 3 (`tier3Due`), which is the very window an air army
+  // arrives in. See `antiAir`.
+  if (c.profile.antiAirMatch) antiAir(c);
   // THE SECOND HERO COMES WITH THE KEEP — see `tierTwoHero`, and note WHERE it is: directly under
   // the core army, above the fight-item reserve, the support buildings, the unit-ability
   // research, the Castle, the tech and the upgrades, because at tier 2 that is the order a ladder
@@ -476,7 +482,7 @@ export function buildPlan(c: PlusCtx): void {
   // `antiAir`. Beside `always` because it is the same kind of row: support the plan assumed
   // (or, here, did not know it would need), above the expansion and below the buildings that
   // make the army.
-  antiAir(c);
+  if (!c.profile.antiAirMatch) antiAir(c);
   // …and SIEGE, the same kind of row for the other thing a build may not have planned for: the
   // towers at the end of the march. Bounded to two bodies, so its reservation ends.
   if (!c.table.siegeEarly) siegeLine(c);
@@ -1111,7 +1117,7 @@ function sideOwed(c: PlusCtx, rows: ReadonlyArray<{ unit: string }>): number {
   // only ever came in after a loss, which is too late for the second wave it is meant for.
   if (siegeDue(c)) owe(table.siegeUnit, profile.siegeUnits);
   for (const r of table.always ?? []) if (ready(r.unit)) owe(r.unit, r.count);
-  if (table.antiAir && antiAirDue(c) && ready(table.antiAir.unit)) owe(table.antiAir.unit, table.antiAir.count);
+  if (table.antiAir && antiAirDue(c) && ready(table.antiAir.unit)) owe(table.antiAir.unit, antiAirCount(c, table.antiAir.count));
   let food = 0;
   for (const [unit, n] of owed) food += Math.max(0, n - c.ai.count(unit)) * Math.max(1, c.foodOf(unit));
   return food;
@@ -1593,7 +1599,32 @@ function extraCopies(c: PlusCtx, stuck: boolean): Array<[string, number]> {
  *  race's anti-air row? `antiAir`'s gate, shared with `sideOwed`. */
 function antiAirDue(c: PlusCtx): boolean {
   const { profile, enemy } = c;
-  return profile.counterWeight > 0 && enemy.seen >= profile.counterSample && enemy.air >= AIR_HEAVY;
+  if (profile.counterWeight <= 0) return false;
+  // …or, on a rung that MATCHES the air (`PlusProfile.antiAirMatch`), enough flyers to be an air
+  // army however much ground stands beside them — see `AIR_BODIES`.
+  if (profile.antiAirMatch && (enemy.airBodies ?? 0) >= AIR_BODIES) return true;
+  return enemy.seen >= profile.counterSample && enemy.air >= AIR_HEAVY;
+}
+
+/**
+ * How many flyers seen make an air threat on a rung that matches the air, whatever their share
+ * of the army (`antiAirDue`) — four, a Gryphon or Frost Wyrm squad's worth: three Gargoyles
+ * escorting a ghoul army are a nuisance the fiends already answer, four Frost Wyrms are not.
+ * And how far the answer may grow past the race's own count (`antiAirCount`): three times it,
+ * so twelve Flying Machines or Gargoyles at most — an answer to air, never an air army. Ours.
+ */
+const AIR_BODIES = 4;
+const ANTI_AIR_GROWTH = 3;
+
+/**
+ * The anti-air row's size: the race's own count (`PlusRaceTable.antiAir`), or — where the rung
+ * matches the air (`PlusProfile.antiAirMatch`) — one body per flyer seen once there are more of
+ * them than that, up to `ANTI_AIR_GROWTH` times it. Four Flying Machines are an answer to four
+ * Gryphon Riders and a snack for ten. Shared with `sideOwed`, which keeps the room for it.
+ */
+function antiAirCount(c: PlusCtx, base: number): number {
+  if (!c.profile.antiAirMatch) return base;
+  return Math.min(base * ANTI_AIR_GROWTH, Math.max(base, c.enemy.airBodies ?? 0));
 }
 
 function antiAir(c: PlusCtx): void {
@@ -1610,7 +1641,7 @@ function antiAir(c: PlusCtx): void {
     if (!mixBuildings(c).some((b) => b.build === row.from)) ai.setBuildUnit(1, row.from);
     return;
   }
-  const want = fitted(c, answer.unit, answer.count);
+  const want = fitted(c, answer.unit, antiAirCount(c, answer.count));
   if (want > 0) ai.setBuildNext(want, answer.unit);
 }
 

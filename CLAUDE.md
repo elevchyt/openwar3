@@ -666,7 +666,12 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   undead's forest takes two thirds of its Ghouls (`LUMBER_SHARE_RUSH`: the Black Citadel is 230
   lumber). What tier 3 is FOR is saved for there: Priest and Shaman Training are UNLOCK rows
   (rank 2 is Inner Fire / Bloodlust), and every orc and undead tier-2 build grows into Taurens /
-  Abominations (`thenAt3`). Its
+  Abominations (`thenAt3`) — the orc's being Taurens, BERSERKERS and Shamans: the mix names the
+  Head Hunter, and after `Robk` withdraws it `AiPlayer.replacedBy` trains the Berserker and
+  `setBuildNext` counts it (a plain count read four Berserkers as none and never trained a fifth).
+  Insane also MATCHES enemy air (`antiAirMatch`): four flyers seen are enough whatever their share,
+  the anti-air row grows with the flyers (up to 3× the race's count), and it sits ABOVE the tier
+  rows so a rushed tier 3 cannot starve it. Its
   bears were also why an Insane night elf never attacked a MAIN: the power spike sat behind a
   tier 3 that came after `SPIKE_LATEST`, which is why an army of `SPIKE_ARMY_FOOD` now meets the
   spike by itself. Two ID TRAPS that each cost a whole subsystem and are invisible from the call site:

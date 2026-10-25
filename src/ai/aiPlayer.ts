@@ -647,10 +647,18 @@ export class AiPlayer {
 
   /** `SetBuildNext(qty, id)` — the RELATIVE form: while short of qty, ask for one more than
    *  is finished. (Note it reads `GetUnitCount` for the test and `GetUnitCountDone`+1 for the
-   *  ask, which is what keeps it from queueing the whole shortfall at once.) */
+   *  ask, which is what keeps it from queueing the whole shortfall at once.)
+   *
+   *  Both counts FOLD the unit's other forms (`TOWN_COUNT_EQUIVALENTS`, the `TownCount` fold),
+   *  where common.ai reads the plain counts. The row's ask is answered by `startUnit`, which
+   *  folds — so a plain test and a folded answer disagreed for every soldier that changes form:
+   *  four Head Hunters turned Berserkers by `Robk` read as NONE here, asked for "one", and
+   *  `startUnit` found four and called it met, so not one more Berserker was ever trained (and
+   *  the same for a Druid of the Claw living in Bear Form). No race script asks this row for a
+   *  unit with another form, so this changes nothing for them. */
   setBuildNext(qty: number, item: string): void {
-    if (this.count(item) >= qty) return;
-    this.setBuildAll(BUILD_UNIT, this.countDone(item) + 1, item, -1);
+    if (this.townCount(item) >= qty) return;
+    this.setBuildAll(BUILD_UNIT, this.townCountDone(item) + 1, item, -1);
   }
 
   /** `SecondaryTown(town, qty, id)` / `SecTown`. */
@@ -1021,6 +1029,8 @@ export class AiPlayer {
     // Without this the AI would ask forever and be refused forever: the authority counts a
     // fallen hero as one you already have.
     if (def.isHero && this.reviveFallen(id)) return true;
+    // A unit an upgrade has WITHDRAWN is made as the unit that replaced it — see `replacedBy`.
+    if (!def.isBuilding) id = this.replacedBy(id);
     const made = !def.isBuilding ? this.trainUnits(qty, id)
       : this.upgradeExisting(id, town) || this.placeStructure(qty, id, town);
     // …and drop this type's cached count, so the REST of this same pass sees what was just
@@ -1031,6 +1041,23 @@ export class AiPlayer {
     // `SetBuildUnit(1, NECROPOLIS_1)`) starts it twice, in one pass, and pays for both.
     if (made) this.census.delete(id);
     return made;
+  }
+
+  /**
+   * The unit to train when `id` is asked for: `id` itself, or — when an `rtma` upgrade has taken
+   * it off the shelf (`maxAllowed` 0) — the form that upgrade put there instead, out of the same
+   * fold `TownCount` uses. The Berserker Upgrade is the case: `[Robk]` withdraws `ohun` and
+   * enables `otbk` (`TechTree.unitSwapForUpgrade`, which also morphs the ones standing), so a
+   * build order that names Head Hunters asked the Barracks for a unit it no longer trains, was
+   * refused every pass, and fielded no Berserkers past the ones the upgrade converted.
+   */
+  private replacedBy(id: string): string {
+    const tech = this.host.world.tech;
+    if (!tech || tech.maxAllowed(this.player, id) !== 0) return id;
+    for (const alt of TOWN_COUNT_EQUIVALENTS[id] ?? []) {
+      if (tech.maxAllowed(this.player, alt) !== 0 && !this.buildingsThatTrain(alt).next().done) return alt;
+    }
+    return id;
   }
 
   /** Train `qty` of a unit, spreading across every building that makes it. */

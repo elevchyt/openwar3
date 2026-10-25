@@ -265,6 +265,55 @@ console.log("\n--- an air enemy is answered on top of the build ---");
   check("an easy computer does not transition to anti-air", easy.build.some((x) => x.item === "hgyr"), false);
 }
 
+// --- INSANE MATCHES the air (profile.ts `antiAirMatch`) -----------------------------------
+//
+// The developer's: "make sure that the Insane Computer+ AI is also countering enemy air units
+// etc. properly". Three things, each of which the Normal rung above does not do: four flyers seen
+// are an air army however much ground walks beside them; the answer grows with the flyers; and the
+// row sits ABOVE the tier rows, where a rushed tier 3 (`tier3Due`) cannot starve it.
+console.log("\n--- Insane matches the enemy's air ---");
+{
+  // Five Frost Wyrms in a 25-body army: a fifth of it, under `AIR_HEAVY`, and under Insane's own
+  // `counterShare` too, so the share reads 0 — only the COUNT says air.
+  const WYRMS = { seen: 25, air: 0, airBodies: 5, armor: {} };
+  for (const [race, table] of Object.entries(PLUS_RACES)) {
+    const s = table.strategies[0];
+    const aa = table.antiAir;
+    const unit = table.units[aa.unit];
+    const standing = {
+      [table.halls[0]]: 1, [table.halls[1]]: 1, [table.barracks]: 1, [table.altar]: 1, [table.worker]: 10,
+      ...Object.fromEntries((unit.needs ?? []).map((n) => [n, 1])), [unit.from]: 1,
+    };
+    const opts = { standing, tier: 2, armyFood: 24, enemy: WYRMS, clock: 600 };
+    const insane = recorder(table, s, PLUS_INSANE, opts);
+    buildPlan(insane.ctx);
+    const aaAt = insane.build.findIndex((x) => x.item === aa.unit);
+    check(`${race} (Insane) answers five flyers in a big ground army with ${aa.unit}`, aaAt >= 0, true);
+    const hallAt = insane.build.findIndex((x) => x.item === table.halls[2]);
+    check(`${race} (Insane) asks for it ABOVE the rushed tier-3 hall`, aaAt >= 0 && hallAt >= 0 && aaAt < hallAt, true);
+    const normal = recorder(table, s, PLUS_NORMAL, opts);
+    buildPlan(normal.ctx);
+    const named = Object.keys(s.mix).includes(aa.unit);
+    check(`${race} (Normal) does not — a fifth of the army is not its bar`, normal.build.some((x) => x.item === aa.unit), named);
+    // …and the answer GROWS: four of the race's anti-air already standing against ten flyers.
+    const ten = { ...opts, standing: { ...standing, [aa.unit]: aa.count }, enemy: { ...WYRMS, airBodies: 10 } };
+    const more = recorder(table, s, PLUS_INSANE, ten);
+    buildPlan(more.ctx);
+    check(`${race} (Insane) builds past ${aa.count} ${aa.unit} against ten flyers`, more.build.some((x) => x.item === aa.unit), true);
+    const enough = recorder(table, s, PLUS_INSANE, { ...ten, enemy: { ...WYRMS, airBodies: 4 } });
+    buildPlan(enough.ctx);
+    check(`${race} (Insane) stops at ${aa.count} against four`, enough.build.some((x) => x.item === aa.unit), named);
+  }
+  // FLAK CANNONS, the human's answer to an air ARMY, saved for once a Flying Machine is out.
+  const human = PLUS_RACES.human;
+  const flak = recorder(human, human.strategies[0], PLUS_INSANE, {
+    standing: { [human.halls[0]]: 1, [human.halls[1]]: 1, [human.barracks]: 1, [human.altar]: 1, hbla: 1, harm: 1, hgyr: 4 },
+    tier: 2, armyFood: 24, enemy: WYRMS,
+  });
+  buildPlan(flak.ctx);
+  check("the human researches Flak Cannons once its Flying Machines are out", flak.build.some((x) => x.item === "Rhfc" && x.save), true);
+}
+
 // --- SIEGE later in the game --------------------------------------------------------------
 //
 // "We must make Computer+ AI (Normal and Insane only) build more siege units to grow its army.

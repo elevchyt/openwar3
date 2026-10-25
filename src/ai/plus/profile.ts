@@ -141,6 +141,16 @@ export interface PlusProfile {
   /** How long a sighting stays in the memory. A short memory is a player who only reacts to
    *  what they saw a moment ago. */
   readonly counterMemory: number;
+  /**
+   * Does it MATCH the enemy's air rather than merely acknowledge it (plus/plan.ts `antiAirDue`,
+   * `antiAirCount`)? The developer's: *"make sure that the Insane Computer+ AI is also countering
+   * enemy air units etc. properly"*. Three things change, all on the race's dedicated anti-air
+   * row (`PlusRaceTable.antiAir`): `AIR_BODIES` flyers seen is an air threat whatever their share
+   * of a big army (four Frost Wyrms beside sixteen Ghouls are a third of nothing and still kill
+   * it), the answer GROWS with the flyers seen instead of stopping at four, and the row sits
+   * ABOVE the tier rows, so a computer saving for its hall still answers the air in front of it.
+   */
+  readonly antiAirMatch: boolean;
 
   // --- the ceiling on the army ------------------------------------------------------------
   /**
@@ -575,7 +585,7 @@ export const PLUS_EASY: PlusProfile = {
   workers: 8, expansions: 0, expandDelay: 0, tier3Delay: 0, tier3Rush: false,
   // It does not counter at all: an easy computer builds what it opened with, whatever walks
   // into its base. This is the single biggest thing the top two difficulties do that it doesn't.
-  counterWeight: 0, counterSample: Infinity, counterShare: 1, counterMemory: 0,
+  counterWeight: 0, counterSample: Infinity, counterShare: 1, counterMemory: 0, antiAirMatch: false,
   // Twelve food of soldiers, and a wave of ten. It was twelve and ten, then eight and six after
   // "builds kinda big armies for beginner players" — the ceiling is spent PER ROW of the mix, so
   // the opening Footmen a rifle build falls back on stay standing when the Riflemen come online
@@ -634,7 +644,7 @@ export const PLUS_NORMAL: PlusProfile = {
   // It counters, badly: it wants to have seen a dozen enemy units and half its army to be one
   // thing before it believes it, it only moves its mix a third of the way, and it forgets in a
   // minute and a half. That reads as a player who noticed late and over-corrected slightly.
-  counterWeight: 0.35, counterSample: 12, counterShare: 0.4, counterMemory: 90,
+  counterWeight: 0.35, counterSample: 12, counterShare: 0.4, counterMemory: 90, antiAirMatch: false,
   // TIER 3. It used to stop at a Keep, which is a bigger handicap than it reads as: `techTier`
   // is also the filter on which BUILDS may be rolled (`rollStrategy`), so a tier-2 ceiling shut
   // a Normal computer out of most of its race's table — no Knights, no Bears, no Frost Wyrms,
@@ -716,7 +726,7 @@ export const PLUS_INSANE: PlusProfile = {
   workers: 14, expansions: 3, expandDelay: 0, tier3Delay: 0, tier3Rush: true,
   // Full countering, off a small sample and a long memory: six units and a quarter of them one
   // type is enough to start shifting, and it remembers what it saw four minutes ago.
-  counterWeight: 1, counterSample: 6, counterShare: 0.25, counterMemory: 240,
+  counterWeight: 1, counterSample: 6, counterShare: 0.25, counterMemory: 240, antiAirMatch: true,
   armyFood: UPKEEP_TIER2, wholeArmyCeiling: false, unlockAt: Infinity, lateAttackFood: 16, towers: 2, siegeUnits: 2, heroes: 3, techTier: 3, upgradeRank: 3,
   // Half a minute of `firstAttackSpread` — it was none, so two Insane computers left home on the
   // same tick at 2:30 every game ("attack each other at the same moment").

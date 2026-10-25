@@ -297,7 +297,7 @@ console.log("\n--- hero pairings, and the Insane-only builds ---");
   check("a Crypt Lord who opens starts on Carrion Beetles", undead.combos.Ucrl.skills.Ucrl[0], "AUcb");
   check("…and as a third hero keeps Impale first", undead.skills.Ucrl[0][0], "AUim");
   check("Crypt Lord → Death Knight, then the Dark Ranger", undead.combos.Ucrl.second.join() + "/" + undead.combos.Ucrl.third.flat().join(), "Udea/Nbrn");
-  check("Demon Hunter → Keeper or Naga Sea Witch", nightelf.combos.Edem.second.join(), "Ekee,Nngs");
+  check("Demon Hunter → Keeper, Naga Sea Witch or Pandaren Brewmaster", nightelf.combos.Edem.second.join(), "Ekee,Nngs,Npbm");
   check("Keeper → Demon Hunter, Pit Lord or Pandaren Brewmaster", nightelf.combos.Ekee.second.join(), "Edem,Nplh,Npbm");
   // …and the Brewmaster opens on Breath of Fire, maxes it first, and takes Drunken Haze beside
   // it — the haze is what makes the breath ignite (plus/casting.ts `DRUNKEN_HAZE`).

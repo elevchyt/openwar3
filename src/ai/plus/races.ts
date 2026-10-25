@@ -26,7 +26,7 @@ import {
   UPG_GUN_RANGE,
   UPG_HAMMERS, UPG_HIDES, UPG_LEATHER, UPG_MASONRY, UPG_MELEE, UPG_MOON_ARMOR, UPG_NECROS,
   UPG_ORC_ARMOR, UPG_ORC_BERSERKER, UPG_ORC_ENSNARE, UPG_ORC_MELEE, UPG_ORC_PULVERIZE,
-  UPG_ORC_RANGED, UPG_ORC_SHAMAN, UPG_ORC_SPIKES, UPG_ORC_WAR_DRUMS, UPG_PRAYING, UPG_RANGED,
+  UPG_FLAK, UPG_ORC_RANGED, UPG_ORC_SHAMAN, UPG_ORC_SPIKES, UPG_ORC_WAR_DRUMS, UPG_PRAYING, UPG_RANGED,
   UPG_SORCERY, UPG_STR_MOON, UPG_STR_WILD, UPG_UNHOLY_ARMOR, UPG_UNHOLY_STR, UPG_WOOD,
   UNDEAD_ALTAR, UNDEAD_MINE, VAMP_AURA, VENGEANCE, VOODOO, WAR_STOMP, WARDEN, WATCH_TOWER, WATER_ELEMENTAL,
   WIND_WALK, WISP,
@@ -635,6 +635,13 @@ const HUMAN: PlusRaceTable = {
     // autocast is the sim's (it goes on the ally in the fight); plus/casting.ts arms it.
     { id: UPG_PRAYING, from: SANCTUM, ranks: 2, after: 12, unlock: true, forUnit: PRIEST },
     { id: UPG_SORCERY, from: SANCTUM, ranks: 2, after: 20 },
+    // FLAK CANNONS — the Flying Machine's answer to an air ARMY: "an area effect damage attack
+    // against air units" (`Aflk`, `Requires=Rhfc`; the sim's splash, world.ts). The human's
+    // anti-air row (`antiAir`) is Flying Machines, and against a clump of Gryphons or Frost
+    // Wyrms four of them without it are four bodies plinking one target each. An UNLOCK, saved
+    // for, and only once a Flying Machine is out (`forUnit`) — which is to say only once air
+    // has been seen or the build named one. `[Rhfc] Requires=hkee`, at the Workshop.
+    { id: UPG_FLAK, from: WORKSHOP, ranks: 1, after: 0, unlock: true, forUnit: COPTER },
     { id: UPG_HAMMERS, from: AVIARY, ranks: 1, after: 24 },
     { id: UPG_CLOUD, from: AVIARY, ranks: 1, after: 30 },
   ],
@@ -835,16 +842,22 @@ const ORC: PlusRaceTable = {
     { id: "masshunters", name: "Head Hunters, Kodos and Witch Doctors", tier: 2, weight: 20, expandAt: 285, expandAgainAt: 705,
       heroes: [TAUREN_CHIEF, SHADOW_HUNTER, FAR_SEER, BLADE_MASTER], thenAt3: "taurens",
       mix: { [HEAD_HUNTER]: 3.5, [KODO_BEAST]: 1, [WITCH_DOCTOR]: 0.8, [SHAMAN]: 0.8 } },
-    // THE TAUREN ARMY, and the build BOTH Chieftain openings grow into (`thenAt3`). Its line is
-    // half Grunts and half Head Hunters — one 1.5 share split rather than a second one added, so
-    // the Taurens keep the share of the army their name promises. That split is what makes it a
-    // legal destination for both parents: whichever of the two the seat spent its tier-2 game
-    // massing keeps being produced under the Taurens instead of being abandoned for the other,
-    // and a directly-rolled `taurens` gets the mixed melee-and-ranged line an orc tier-3 army
-    // actually has.
-    { id: "taurens", name: "Taurens, Shamans and Wind Riders", tier: 3, weight: 18, expandAt: 420, expandAgainAt: 840,
+    // THE TAUREN ARMY — the orc's standard tier 3, and the build EVERY orc tier-2 build grows
+    // into (`thenAt3`). The developer's: *"the standard tier 3 build for orc is Taurens along
+    // with Berserkers and Shamans using Bloodlust on both"*. So three things and nothing else:
+    // the Taurens in front; the Head Hunters behind them, who ARE the Berserkers — `[Robk]`
+    // (an unlock row above, bought the moment the Fortress stands) swaps every `ohun` for an
+    // `otbk` and takes `ohun` off the Barracks' shelf, and `AiPlayer.replacedBy` trains the
+    // Berserker wherever this row names the Head Hunter; and the Shamans, whose Master Training
+    // (`Rost` rank 2, also an unlock row) is BLOODLUST, an autocast the sim lays on whoever is
+    // swinging — Tauren and Berserker alike (world.ts `FIGHTER_BUFFS`). The Berserker is also
+    // the answer to air (`ohun`/`otbk` `targs1` include AIR); `antiAir` still adds Wind Riders
+    // against an army that is mostly flyers. (It carried Grunts, Wind Riders and Witch Doctors
+    // beside a smaller troll share; a Grunt opening's Grunts still stand, they are just not
+    // rebuilt.)
+    { id: "taurens", name: "Taurens, Berserkers and Shamans", tier: 3, weight: 18, expandAt: 420, expandAgainAt: 840,
       heroes: [TAUREN_CHIEF, SHADOW_HUNTER, FAR_SEER, BLADE_MASTER],
-      mix: { [TAUREN]: 3, [GRUNT]: 0.8, [HEAD_HUNTER]: 0.8, [SHAMAN]: 1.2, [WYVERN]: 1, [WITCH_DOCTOR]: 0.6 } },
+      mix: { [TAUREN]: 3, [HEAD_HUNTER]: 2.5, [SHAMAN]: 1.5 } },
     { id: "wyverns", name: "Wind Riders and Batriders", tier: 3, weight: 12, expandAt: 450, expandAgainAt: 870,
       mix: { [WYVERN]: 3, [BATRIDER]: 0.8, [HEAD_HUNTER]: 1.5, [SHAMAN]: 1 } },
     // THE HEAD HUNTER RUSH — INSANE ONLY, and half of every Far Seer opening there (`replaces`).
@@ -1255,11 +1268,13 @@ const NIGHT_ELF: PlusRaceTable = {
       FAN_KNIVES, BLINK, BLINK, BLINK]],
     ...TAVERN_SKILLS,
   },
-  // DEMON HUNTER → the Keeper of the Grove or the Naga Sea Witch (Tavern), then the Alchemist or
-  // the Priestess of the Moon. KEEPER → the Demon Hunter, the Pit Lord or the Pandaren
-  // Brewmaster (both Tavern), then the Alchemist or the Fire Lord (Lava Spawn).
+  // DEMON HUNTER → the Keeper of the Grove, the Naga Sea Witch or the Pandaren Brewmaster (both
+  // Tavern — the developer added the Brewmaster here too: his Breath of Fire and Drunken Haze
+  // are as good behind a Demon Hunter as behind a Keeper), then the Alchemist or the Priestess
+  // of the Moon. KEEPER → the Demon Hunter, the Pit Lord or the Pandaren Brewmaster (both
+  // Tavern), then the Alchemist or the Fire Lord (Lava Spawn).
   combos: {
-    [DEMON_HUNTER]: { second: [KEEPER, NAGA_WITCH], third: [[ALCHEMIST], [MOON_CHICK]] },
+    [DEMON_HUNTER]: { second: [KEEPER, NAGA_WITCH, BREWMASTER], third: [[ALCHEMIST], [MOON_CHICK]] },
     [KEEPER]: { second: [DEMON_HUNTER, PIT_LORD, BREWMASTER], third: [[ALCHEMIST], [FIRE_LORD]] },
   },
 };
