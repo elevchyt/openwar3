@@ -1142,6 +1142,8 @@ export class PlusItems {
     // on a map whose Merchant is out in the contested ground (Echo Isles: ~8000 from either
     // start, past `SHOP_REACH`) the ordinary trip from home never goes there at all.
     if (this.fightChance(now, own, ctx)) return;
+    // …and a hero's OWN orb and gear the same way — see `heroChance`.
+    if (this.heroChance(now, own, ctx)) return;
     this.shop(now, own, ctx);
   }
 
@@ -2290,6 +2292,35 @@ export class PlusItems {
       if (this.carried(own, w.id) >= want) continue;
       if (this.itemChance(now, own, fightCtx, w.id)) return true;
     }
+    return false;
+  }
+
+  /**
+   * A hero's OWN ORB (`orbFor`) and then its GEAR (`HERO_GEAR`), bought wherever the hero stands
+   * in reach of a shop that has them, and walked to on the field detour while the party musters —
+   * the same door as `fightChance`, with the same rule that a wave only buys in passing.
+   *
+   * The ordinary trip (`shop`) cannot carry these on its own: it starts only while the army is
+   * MASSING AT HOME, and an Insane army roams (`PlusProfile.roam`) — over 48 observed Insane
+   * matches not one orc hero ended a game holding the Orb of Lightning, though the Voodoo Lounge
+   * stocks it and every one of those orcs reached its Fortress. The orb is in the base and the
+   * gear is out on the map (the Goblin Merchant, a Marketplace), and both are passed on the way
+   * somewhere else far more often than the army sits at home.
+   */
+  private heroChance(now: number, own: SimUnit[], ctx: ItemCtx): boolean {
+    if (this.profile.shopping <= 0) return false;
+    const fieldCtx = ctx.wave ? { ...ctx, mayDetour: false } : ctx;
+    const wanted: string[] = [];
+    for (const h of own) {
+      if (!h.isHero || h.isIllusion) continue;
+      const orb = orbFor(h, this.carry);
+      if (orb && !h.inventory.some((x) => x?.itemId === orb)) wanted.push(orb);
+    }
+    for (const h of own) {
+      if (!h.isHero || h.isIllusion) continue;
+      for (const id of HERO_GEAR[h.typeId] ?? []) if (!h.inventory.some((x) => x?.itemId === id)) wanted.push(id);
+    }
+    for (const id of new Set(wanted)) if (this.itemChance(now, own, fieldCtx, id)) return true;
     return false;
   }
 

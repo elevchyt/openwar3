@@ -185,6 +185,10 @@ const ITEMS = {
   hslv: { id: "hslv", gold: 100, usable: true, abilities: ["AIrl"] }, // Healing Salve
   pclr: { id: "pclr", gold: 160, usable: true, abilities: ["AIpr"] }, // Clarity Potion
   oven: { id: "oven", gold: 325, usable: false, abilities: ["AIpv"] }, // Orb of Venom
+  oli2: { id: "oli2", gold: 375, usable: false, abilities: ["AIll"] }, // Orb of Lightning
+  gcel: { id: "gcel", gold: 125, usable: false, abilities: ["AIsx"] }, // Gloves of Haste
+  rat6: { id: "rat6", gold: 125, usable: false, abilities: ["AIt6"] }, // Claws of Attack +6
+  cnob: { id: "cnob", gold: 175, usable: false, abilities: ["AIx2"] }, // Circlet of Nobility
   spro: { id: "spro", gold: 150, usable: true, abilities: ["AIda"] }, // Scroll of Protection
   pman: { id: "pman", gold: 200, usable: true, abilities: ["AIm1"] }, // Potion of Mana
   sreg: { id: "sreg", gold: 100, usable: true, abilities: ["AIsl"] }, // Scroll of Regeneration
@@ -1046,7 +1050,7 @@ function shopped(units, profile, opts = {}) {
     // and every other race shops off `LIST` alone.
   }, profile, opts.race ?? "human");
   const ctx = { home: { x: 0, y: 0 }, losing: false, mayShop: opts.mayShop ?? true, mayDetour: opts.mayDetour ?? false, portalWorthIt: true,
-    defending: opts.defending ?? false, tier: opts.tier ?? 1 };
+    defending: opts.defending ?? false, tier: opts.tier ?? 1, carry: opts.carry };
   items.pass(opts.now ?? 500, ctx);
   // A SECOND pass on the SAME belt, for the rules that are about what this player has already
   // had rather than about what it is holding — `PlusItems.hadPortal` is the only one today.
@@ -1737,6 +1741,36 @@ console.log("\n-- handing a spare potion over ----------------------------------
   const bm = belt(hero({ typeId: "Obla", x: 0, y: 0 }), "stwp");
   const m = shopped([bm, MERCHANT], PLUS_INSANE, { race: "orc" });
   check("a Blademaster's belt starts with the invulnerability potion", m.buy && m.buy.itemId, "pnvl");
+}
+
+// --- the ORC's Orb of Lightning, and the Blademaster's own gear --------------------------------
+// The developer's: the Orb of Lightning "on blademaster (or tauren chieftain if they opened with
+// far seer)" and "on the Far Seer"; the Blademaster "must also like to buy Gloves of Haste and
+// Claws of Attack and circlet of nobility and boots of speed".
+{
+  const lounge = ["hslv", "plcl", "phea", "pman", "stwp", "oli2"];
+  const full = (typeId) => belt(hero({ typeId, x: 0, y: 0 }), "stwp", "phea", "pnvl", "shea");
+  check("a Blademaster buys his Orb of Lightning",
+    shopped([full("Obla"), MERCHANT], PLUS_INSANE, { shelf: lounge, race: "orc" }).buy?.itemId, "oli2");
+  check("…and so does a Far Seer",
+    shopped([belt(hero({ typeId: "Ofar", x: 0, y: 0 }), "stwp", "phea", "pnvl", "shea", "hslv"), MERCHANT], PLUS_INSANE,
+      { shelf: lounge, race: "orc" }).buy?.itemId, "oli2");
+  const shd = belt(hero({ typeId: "Oshd", x: 0, y: 0 }), "stwp", "phea", "pnvl", "shea", "hslv");
+  check("…but a Shadow Hunter does not",
+    shopped([shd, MERCHANT], PLUS_INSANE, { shelf: lounge, race: "orc" }).buy?.itemId === "oli2", false);
+  check("a Tauren Chieftain buys one only as the build's carry",
+    [undefined, "Otch"].map((carry) => shopped([full("Otch"), MERCHANT], PLUS_INSANE, { shelf: lounge, race: "orc", carry }).buy?.itemId === "oli2").join(),
+    "false,true");
+  const market = ["gcel", "rat6", "cnob"];
+  const bmGear = shopped([full("Obla"), MERCHANT], PLUS_INSANE, { shelf: market, race: "orc" });
+  check("a Blademaster is sent for his Gloves of Haste", bmGear.buy?.itemId, "gcel");
+  const sh = belt(hero({ typeId: "Oshd", x: 0, y: 0 }), "stwp", "phea", "pnvl", "shea");
+  check("…which no other hero is", shopped([sh, MERCHANT], PLUS_INSANE, { shelf: market, race: "orc" }).buy, null);
+  const twoHeroes = [belt(hero({ typeId: "Ofar", level: 5, x: 0, y: 0 }), "stwp", "plcl", "pnvl", "shea"),
+    belt(hero({ typeId: "Otch", level: 2, x: 0, y: 0 }), "stwp", "phea", "pnvl", "shea")];
+  const toCarry = shopped([...twoHeroes, MERCHANT], PLUS_INSANE, { shelf: ["bspd"], race: "orc", carry: "Otch", inRange: false });
+  const shopper = toCarry.move?.unitId; // out of range, so the pass WALKS the hero it chose
+  check("the carry is the one sent shopping, ahead of a higher-level opener", shopper, twoHeroes[1].id);
 }
 
 // --- INSANE: every hero carries an invulnerability potion, the melee ones served first ----------
