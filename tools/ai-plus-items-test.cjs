@@ -1737,6 +1737,8 @@ console.log("\n-- handing a spare potion over ----------------------------------
   const keeper = belt(hero({ typeId: "Ekee", x: 0, y: 0 }), "stwp", "phea", "pnvl", "shea");
   const k = shopped([keeper, MERCHANT], PLUS_INSANE, { shelf: ["plcl", "phea", "stwp"], race: "nightelf" });
   check("a Keeper of the Grove does buy one", k.buy && k.buy.itemId, "plcl");
+  const keeperOrb = belt(hero({ typeId: "Ekee", x: 0, y: 0 }), "stwp", "phea", "pnvl", "shea", "plcl");
+  check("…and his own Orb of Venom", shopped([keeperOrb, MERCHANT], PLUS_INSANE, { shelf, race: "nightelf" }).buy?.itemId, "oven");
   delete ITEMS.plcl;
   const bm = belt(hero({ typeId: "Obla", x: 0, y: 0 }), "stwp");
   const m = shopped([bm, MERCHANT], PLUS_INSANE, { race: "orc" });

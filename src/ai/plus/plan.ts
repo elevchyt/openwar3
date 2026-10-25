@@ -1331,10 +1331,11 @@ function waiting(c: PlusCtx, strategy: PlusStrategy): PlusStrategy {
 }
 
 /** Does every clause of `w` hold? A clause left out asks nothing — the same reading index.ts
- *  `spikeHeld` gives a `PowerSpike`. */
+ *  `spikeHeld` gives a `PowerSpike`, except that a unit is counted with its other forms
+ *  (`townCountDone`, `TOWN_COUNT_EQUIVALENTS`): a Druid of the Claw in Bear Form is still one. */
 function holds(c: PlusCtx, w: PowerSpike): boolean {
   return (!w.research || c.ai.upgradeLevel(w.research[0]) >= w.research[1])
-    && (!w.units || c.ai.countDone(w.units[0]) >= w.units[1])
+    && (!w.units || c.ai.townCountDone(w.units[0]) >= w.units[1])
     && (!w.tier || c.tier >= w.tier)
     && (!w.armyFood || c.armyFood >= w.armyFood);
 }

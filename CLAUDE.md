@@ -810,8 +810,11 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   the Tauren Chieftain as their `carry` (captain, first at the shop and the drop). Every HUMAN
   tier-2 build grows into Knights, Priests, three Flying Machines (`lead`) and Gryphons after six
   Knights, and the human holds a hero and four soldiers while saving for its 2:00 Keep
-  (`tier2Army`). The AI's seed goes through `mixSeed` first, or a small dev `?seed=` rolls the
-  first build in every table. Insane also ROAMS (`PlusProfile.roam`): it
+  (`tier2Army`). The NIGHT ELF's tier 3 is bears first (eight in the lead row, Chimaeras only
+  after five — `waitFor` counts a druid in Bear Form), Insane never rolls its `talons`/`dryads`
+  builds (`notInsane`), and a Priestess opening's rolled second hero — Demon Hunter or Brewmaster
+  — is the carry (`HeroCombo.carry`). The AI's seed goes through `mixSeed` first, or a small dev
+  `?seed=` rolls the first build in every table. Insane also ROAMS (`PlusProfile.roam`): it
   masses out on its half of the map, never idle at home. The caster's `NEVER` holds the HARVEST
   codes — a Ghoul is not `isPeon`, so `roleOf` derived its `Ahrl` as a spell and threw it at the
   creep it was swinging at, cancelling the swing every pass (the "Ghouls don't hit creeps" bug).

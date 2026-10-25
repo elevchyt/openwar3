@@ -1719,6 +1719,7 @@ difficulty — Easy simply never reaches a second row and Normal never a third:
 | undead | Death Knight | Lich | Dark Ranger (Black Arrow) / Crypt Lord (Impale) |
 | undead | Crypt Lord (**Carrion Beetles first**), Dreadlord | Death Knight | Dark Ranger |
 | night elf | Demon Hunter | Keeper of the Grove / Naga Sea Witch / Pandaren Brewmaster | Alchemist / Priestess of the Moon |
+| night elf | Priestess of the Moon (`potmbears`) | Demon Hunter / Pandaren Brewmaster — **the build's carry** | Keeper of the Grove / Alchemist |
 | night elf | Keeper of the Grove | Demon Hunter / Pit Lord | Alchemist / Fire Lord (Lava Spawn) |
 
 A build's own hero list is followed AS WRITTEN where the pairings say nothing — there used to be a
@@ -1767,8 +1768,16 @@ the rush reached its Fortress at 13:29 on average against 9:46 for the build it 
   creep camps and shops"*). While he is alive he is the army's captain (`squadHero`: the party
   musters on him and creeps behind him), the shopper picks him first (`shopper`) and he takes any
   drop within `LOOT_WALK` before a nearer hero does (`loot`).
+* **`HeroCombo.carry`** — the same, for a carry the build cannot name because the pairing ROLLS
+  him: the Priestess of the Moon's second hero, a Demon Hunter or a Pandaren Brewmaster, is the
+  carry whichever comes up (`pickHeroOrder` resolves it at seat time).
 * **`waitFor`** — a unit of the mix left out (with its producer) until a condition holds, in the
-  `PowerSpike` shape: the human's Gryphons after six Knights, the orc's Taurens after `Robk`.
+  `PowerSpike` shape: the human's Gryphons after six Knights, the orc's Taurens after `Robk`, the
+  night elf's Chimaeras after five bears. A unit is counted with its other forms
+  (`townCountDone`), so a druid in Bear Form is still a Druid of the Claw.
+* **`notInsane`** — a build Insane never rolls (`rollStrategy`'s `insane`) and the other rungs
+  still do: the night elf's `talons` and `dryads`, which went 0–4 and 1–5 over 48 observed Insane
+  matches.
 * **`expandWithTier`** — the second mine is due the moment that hall stands, and the row moves up
   the ladder the way a won fight's expansion does (`expand`, `withTier`).
 * **`tier3Clock` on a build** is now held even against the Insane rush (`tier3Held`): a build that
@@ -1783,6 +1792,12 @@ The AI's random stream is also SEEDED THROUGH A HASH now (`mixSeed`, src/ai/aiPl
 Park–Miller's first draw is `seed × 16807 / (2³¹ − 1)`, so a small dev seed always rolled the
 first build in its race's table — every Computer+ seat of the 48-match benchmark above played
 `rifles`, `headhunters`, `fiends` or `bears`. A lobby's seed is drawn up to 2³¹ and never showed it.
+
+The NIGHT ELF's tier 3 is BEARS FIRST (the developer's *"more bears on tier 3 … then … some
+chimaeras after reaching around 5-6 bears"*): `lategrove` and `chimgrove` are mostly Druids of
+the Claw, the lead row asks for eight of them, and the Chimaeras wait for five. A Priestess of the
+Moon opening (`potmbears`) goes into the same bears behind Archers, and the Keeper of the Grove
+carries the Orb of Venom as the Demon Hunter does (`HERO_ORBS`).
 
 And the Batrider presses **Unstable Concoction** (`PlusCaster.concoction`), which used to sit on
 `NEVER` as a button that spends the unit: only into three enemy flyers inside the blast, or into

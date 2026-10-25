@@ -288,6 +288,13 @@ export interface PlusStrategy {
    * The Blademaster openings': *"try to harass or expand upon reaching tier 2"*.
    */
   readonly expandWithTier?: number;
+  /**
+   * Never rolled on INSANE — a build the other difficulties keep (`rollStrategy`). The night elf's
+   * Druids of the Talon and mass Dryads: the developer's *"remove the talons and dryads builds of
+   * the night elf for Computer+ Insane (keep them for other difficulties)"*, after 48 observed
+   * Insane matches had them at 0–4 and 1–5.
+   */
+  readonly notInsane?: boolean;
 }
 
 /**
@@ -330,6 +337,9 @@ export interface PowerSpike {
 
 export interface HeroCombo {
   readonly second?: readonly string[];
+  /** The SECOND hero of this pairing, whichever is rolled, is the build's CARRY
+   *  (`PlusStrategy.carry`, resolved at seat time — index.ts `pickHeroOrder`). */
+  readonly carry?: boolean;
   readonly third?: readonly (readonly string[])[];
   readonly skills?: Readonly<Record<string, readonly string[]>>;
 }
@@ -1264,15 +1274,24 @@ const NIGHT_ELF: PlusRaceTable = {
       mix: { [ARCHER]: 2.5, [HUNTRESS]: 2.5, [DRYAD]: 1 } },
     // …the same opening, massing DRYADS out of both Lores instead. Abolish Magic is the upgrade
     // that makes it, and the second hero is the ranged damage the Dryads do not have.
-    { id: "dryads", name: "Mass Dryads", tier: 2, weight: 22, expandAt: 300, expandAgainAt: 720,
+    { id: "dryads", name: "Mass Dryads", tier: 2, weight: 22, expandAt: 300, expandAgainAt: 720, notInsane: true,
       heroes: [DEMON_HUNTER, MOON_CHICK, KEEPER, WARDEN],
       factories: { [ANCIENT_LORE]: 2 }, thenAt3: "lategrove",
       mix: { [DRYAD]: 3.5, [ARCHER]: 1.5 } },
     // …and the same opening again, teching to the WIND instead: Druids of the Talon behind
     // Archers that never stop, with `Reib` (Improved Bows) off the Ancient of War.
-    { id: "talons", name: "Archers and Druids of the Talon", tier: 2, weight: 20, expandAt: 270, expandAgainAt: 690,
+    { id: "talons", name: "Archers and Druids of the Talon", tier: 2, weight: 20, expandAt: 270, expandAgainAt: 690, notInsane: true,
       heroes: [DEMON_HUNTER, MOON_CHICK, KEEPER, WARDEN], thenAt3: "lategrove",
       mix: { [ARCHER]: 3, [DRUID_TALON]: 1.2, [DRYAD]: 1 } },
+    // THE PRIESTESS OF THE MOON opening into the same bears: Archers behind her Searing Arrows at
+    // tier 1, both Lores at tier 2. The developer's: *"when opening with priestess of the moon,
+    // the second hero must either be demon hunter or pandaren brewmaster and that hero must be the
+    // designated 'carry'"* — `combos`, whose `carry` makes whichever of the two is rolled the
+    // build's carry (the army's captain, first at the shop and the drop).
+    { id: "potmbears", name: "Priestess of the Moon, Archers into Druids of the Claw", tier: 2, weight: 22, expandAt: 330, expandAgainAt: 750,
+      heroes: [MOON_CHICK, DEMON_HUNTER, KEEPER, WARDEN],
+      factories: { [ANCIENT_LORE]: 2 }, thenAt3: "lategrove",
+      mix: { [ARCHER]: 2.5, [DRUID_CLAW]: 2.5, [DRYAD]: 1.5 } },
     // …and the Chimaera build is the same opening into the same tier 3, with the Roost kept
     // whatever the purse (`chimgrove`): *"night elf must ALWAYS switch to bears + dryads when it
     // reaches tier 3"*, so a build that names a tier-3 army of its own still grows into one with
@@ -1284,15 +1303,26 @@ const NIGHT_ELF: PlusRaceTable = {
     // elf build (`thenAt3`). The developer's late game: *"bears (druid of the claw + his
     // upgrades) and dryads and even chimeras if it has the resources (or an expo at least)"*.
     // Bear Form is `Redc` rank 2, which wants this very tier (`[Redc] Requires1=etoe`), so tier 3
-    // is where the Druid of the Claw becomes the army. The Chimaeras are `affluent`: taken with a
-    // second mine or a bank to spare, and kept once their Roost stands.
+    // is where the Druid of the Claw becomes the army.
+    //
+    // MORE BEARS, AND THE CHIMAERAS AFTER THEM. The developer, after 48 observed Insane matches had
+    // the night elf at 7–16: *"we should have more bears on tier 3 for night elf, then when the
+    // night elf has enough it should attempt to get some chimaeras after reaching around 5-6
+    // bears"*. So the druid is the bulk of the mix and the build's lead row asks for EIGHT of them
+    // high in the ladder (it was six, beside a Dryad share almost as large); the Chimaeras wait for
+    // five bears standing (`waitFor` — a druid in Bear Form is counted, `TOWN_COUNT_EQUIVALENTS`)
+    // and, here, for the purse too (`affluent`: a second mine or a bank to spare, and kept once
+    // their Roost stands). Eight and five are OURS.
     { id: "lategrove", name: "Druids of the Claw, Dryads and Chimaeras", tier: 3, weight: 0, expandAt: 480, expandAgainAt: 900,
-      factories: { [ANCIENT_LORE]: 2 }, affluent: [CHIMAERA], lead: { [DRUID_CLAW]: 6 },
-      mix: { [DRUID_CLAW]: 3, [DRYAD]: 2, [CHIMAERA]: 1.5, [ARCHER]: 0.5 } },
-    // The late grove for the Chimaera build: the same bears and Dryads, with its Chimaeras kept.
+      factories: { [ANCIENT_LORE]: 2 }, affluent: [CHIMAERA], lead: { [DRUID_CLAW]: 8 },
+      waitFor: { [CHIMAERA]: { units: [DRUID_CLAW, 5] } },
+      mix: { [DRUID_CLAW]: 4, [DRYAD]: 1.5, [CHIMAERA]: 1.5 } },
+    // The late grove for the Chimaera build: the same bears first, with its Chimaeras kept once
+    // the bears are there whatever the purse.
     { id: "chimgrove", name: "Druids of the Claw, Dryads and Chimaeras", tier: 3, weight: 0, expandAt: 480, expandAgainAt: 900,
-      factories: { [ANCIENT_LORE]: 2 }, lead: { [DRUID_CLAW]: 6 },
-      mix: { [DRUID_CLAW]: 3, [DRYAD]: 2, [CHIMAERA]: 2 } },
+      factories: { [ANCIENT_LORE]: 2 }, lead: { [DRUID_CLAW]: 8 },
+      waitFor: { [CHIMAERA]: { units: [DRUID_CLAW, 5] } },
+      mix: { [DRUID_CLAW]: 4, [DRYAD]: 1.5, [CHIMAERA]: 2 } },
   ],
   heroes: [DEMON_HUNTER, KEEPER, MOON_CHICK, WARDEN],
   skills: {
@@ -1318,8 +1348,11 @@ const NIGHT_ELF: PlusRaceTable = {
   // Tavern — the developer added the Brewmaster here too: his Breath of Fire and Drunken Haze
   // are as good behind a Demon Hunter as behind a Keeper), then the Alchemist or the Priestess
   // of the Moon. KEEPER → the Demon Hunter, the Pit Lord or the Pandaren Brewmaster (both
-  // Tavern), then the Alchemist or the Fire Lord (Lava Spawn).
+  // Tavern), then the Alchemist or the Fire Lord (Lava Spawn). PRIESTESS OF THE MOON → the Demon
+  // Hunter or the Pandaren Brewmaster, and whichever it is is the build's CARRY (the developer's,
+  // see `potmbears`); then the Keeper or the Alchemist.
   combos: {
+    [MOON_CHICK]: { second: [DEMON_HUNTER, BREWMASTER], carry: true, third: [[KEEPER], [ALCHEMIST]] },
     [DEMON_HUNTER]: { second: [KEEPER, NAGA_WITCH, BREWMASTER], third: [[ALCHEMIST], [MOON_CHICK]] },
     [KEEPER]: { second: [DEMON_HUNTER, PIT_LORD, BREWMASTER], third: [[ALCHEMIST], [FIRE_LORD]] },
   },
@@ -1442,10 +1475,13 @@ export function tableForEdition(table: PlusRaceTable, tech: EditionTech): PlusRa
  * ever played. Its `techTier` still caps the MIX at tier 1, so what it actually fields is the
  * tier-1 half of whichever of them it drew.
  */
-export function rollStrategy(table: PlusRaceTable, techTier: number, roll: (lo: number, hi: number) => number): PlusStrategy {
+export function rollStrategy(
+  table: PlusRaceTable, techTier: number, roll: (lo: number, hi: number) => number, insane = false,
+): PlusStrategy {
   // A weight of 0 is a build that is only ever GROWN INTO (`thenAt2`/`thenAt3`) or swapped in
-  // (`replaces`), never rolled.
-  const rollable = table.strategies.filter((s) => !s.replaces && s.weight > 0);
+  // (`replaces`), never rolled — and an Insane seat leaves out the builds it does not play
+  // (`PlusStrategy.notInsane`).
+  const rollable = table.strategies.filter((s) => !s.replaces && s.weight > 0 && !(insane && s.notInsane));
   const eligible = rollable.filter((s) => s.tier <= techTier);
   const lowest = Math.min(...rollable.map((s) => s.tier));
   const pool = eligible.length ? eligible : rollable.filter((s) => s.tier === lowest);

@@ -507,7 +507,10 @@ const INVULN_ITEMS: ReadonlySet<string> = new Set(["pnvl", "pnvu"]);
 // the shop's. Its Purge on hit slows ground and air alike (docs/orbs.md), which is why it is
 // worth having whatever the enemy fields. The Tauren Chieftain's is in `CARRY_ORBS`: he wants one
 // only where he is the build's carry, which is the Far Seer opening (plus/races.ts `carry`).
-const HERO_ORBS: Readonly<Record<string, string>> = { Edem: "oven", Obla: "oli2", Ofar: "oli2" };
+//
+// …and the KEEPER OF THE GROVE carries the Orb of Venom too — the developer's *"keeper of the
+// grove must also like to buy orb of venom!"* — off the same shelf and the same tier gate.
+const HERO_ORBS: Readonly<Record<string, string>> = { Edem: "oven", Ekee: "oven", Obla: "oli2", Ofar: "oli2" };
 const CARRY_ORBS: Readonly<Record<string, string>> = { Otch: "oli2" };
 const ORB_OF: ReadonlySet<string> = new Set([...Object.values(HERO_ORBS), ...Object.values(CARRY_ORBS)]);
 

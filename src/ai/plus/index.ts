@@ -2686,15 +2686,20 @@ export class ComputerPlusAi {
     // match. Two Computer+ players on one map open differently; the same seat on the same seed
     // opens the same way twice.
     // …and on INSANE, the build it turns into for its opening hero (`PlusStrategy.replaces`: the
-    // orc's Head Hunter rush behind a Far Seer, the undead's fast expansion behind a Crypt Lord or
-    // a Dreadlord). Rolled off the same stream, so the same seed opens the same way.
-    const rolled = rollStrategy(table, profile.techTier, (lo, hi) => ai.randomInt(lo, hi));
+    // undead's fast expansion behind a Crypt Lord or a Dreadlord), from a table without the builds
+    // Insane does not play (`PlusStrategy.notInsane`). Rolled off the same stream, so the same
+    // seed opens the same way.
+    const insane = profile.difficulty === MELEE_INSANE;
+    const rolled = rollStrategy(table, profile.techTier, (lo, hi) => ai.randomInt(lo, hi), insane);
     // …and which tier-3 transition it grows into, where the build names more than one
     // (`PlusStrategy.thenAt3Or`).
-    const strategy = rollTransition(profile.difficulty === MELEE_INSANE
+    const played = rollTransition(insane
       ? insaneVariant(table, rolled, () => ai.randomInt(0, 999) / 1000)
       : rolled, (lo, hi) => ai.randomInt(lo, hi));
-    this.pickHeroes(ai, table, strategy);
+    // …and its CARRY, which a hero pairing may name as "whoever came second" (`HeroCombo.carry`)
+    // where the build itself cannot: the Priestess opening's second is rolled.
+    const carry = this.pickHeroes(ai, table, played);
+    const strategy = carry && carry !== played.carry ? { ...played, carry } : played;
     const squad = new Set<number>();
     // The harvest plan has to know who is spoken for, or an undead computer marches its attack
     // ghouls straight back into the forest a second after mustering them — and the scout would
@@ -3028,8 +3033,8 @@ export class ComputerPlusAi {
    * `PlusRaceTable.skills`), so the table carries a list and one is rolled here — unless the
    * pairing names the build it needs (the Blood Mage beside a Paladin takes Siphon Mana first).
    */
-  private pickHeroes(ai: AiPlayer, table: PlusRaceTable, strategy: PlusStrategy): void {
-    const { first, second, third, combo } = pickHeroOrder(table, strategy, (id) => this.tavernSells(id), (lo, hi) => ai.randomInt(lo, hi));
+  private pickHeroes(ai: AiPlayer, table: PlusRaceTable, strategy: PlusStrategy): string | undefined {
+    const { first, second, third, combo, carry } = pickHeroOrder(table, strategy, (id) => this.tavernSells(id), (lo, hi) => ai.randomInt(lo, hi));
     ai.heroId = first;
     ai.heroId2 = second;
     ai.heroId3 = third;
@@ -3043,6 +3048,7 @@ export class ComputerPlusAi {
       const build = combo.skills?.[hero] ?? builds[builds.length === 1 ? 0 : ai.randomInt(1, builds.length) - 1];
       for (const slot of [1, 2, 3]) ai.setSkillArray(slot, hero, build);
     }
+    return carry;
   }
 
   /** Does a Tavern on this map — a neutral building whose `Sellunits` lists the hero — sell
@@ -9507,7 +9513,7 @@ export function pickHeroOrder(
   strategy: PlusStrategy,
   tavernSells: (heroId: string) => boolean,
   rand: (lo: number, hi: number) => number,
-): { first: string; second: string; third: string; combo: HeroCombo } {
+): { first: string; second: string; third: string; combo: HeroCombo; carry?: string } {
   const order = [...(strategy.heroes ?? table.heroes)];
   const first = order[0] ?? "";
   // The build's order is followed AS WRITTEN. There used to be a coin flip here swapping the
@@ -9546,5 +9552,8 @@ export function pickHeroOrder(
       ?? combo.third.flat().find((h) => gettable(h) && !taken.has(h)) ?? "";
   }
   third ||= fallback();
-  return { first, second, third, combo };
+  // The build's CARRY: its own (`PlusStrategy.carry`), else the second hero where the pairing
+  // says the second is the one the build is played around (`HeroCombo.carry`).
+  const carry = strategy.carry ?? (combo.carry && second ? second : undefined);
+  return { first, second, third, combo, carry };
 }

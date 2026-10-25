@@ -44,7 +44,7 @@ function check(what, got, want) {
 function ctx(table, strategy, profile, standing, tier) {
   const have = new Set(standing);
   return {
-    ai: { countDone: (id) => (have.has(id) ? 1 : 0), upgradeLevel: () => 0, minesOwned: () => 1, gold: () => 0, wood: () => 0 },
+    ai: { countDone: (id) => (have.has(id) ? 1 : 0), townCountDone: (id) => (have.has(id) ? 1 : 0), upgradeLevel: () => 0, minesOwned: () => 1, gold: () => 0, wood: () => 0 },
     profile, table, strategy, tier,
     // Nothing scouted, so the counter half of the weighting is off and the weights under test
     // are the build order's own.
@@ -165,8 +165,8 @@ console.log("\n--- thenAt3: the tier-3 transition ---");
   // The Gryphon Riders wait for "too many knights" (`waitFor`, six).
   check("…and no Gryphons beside the first Knights", three.some((r) => r.unit === "hgry"), false);
   const sixKnights = ctx(human, rifles, PLUS_NORMAL, [human.halls[2], ...standing, "hgra"], 3);
-  const done = sixKnights.ai.countDone;
-  sixKnights.ai.countDone = (id) => (id === "hkni" ? 6 : done(id));
+  const done = sixKnights.ai.townCountDone;
+  sixKnights.ai.townCountDone = (id) => (id === "hkni" ? 6 : done(id));
   check("…but Gryphons once six Knights stand", buildableMix(sixKnights).some((r) => r.unit === "hgry"), true);
   check("…and the three Flying Machines are a lead count, not a share",
     human.strategies.find((s) => s.id === "knightpriests").lead.hgyr, 3);
@@ -176,6 +176,44 @@ console.log("\n--- thenAt3: the tier-3 transition ---");
     check(`${id} grows into the Knight army`, human.strategies.find((s) => s.id === id).thenAt3, "knightpriests");
   }
   check("…with no second transition to roll", rollTransition(rifles, (lo, hi) => hi).thenAt3, "knightpriests");
+}
+
+// THE NIGHT ELF AFTER THE 48-MATCH BENCHMARK (7–16 on Insane). The developer's: more bears at tier
+// 3 and Chimaeras after five or six of them; no Talon or Dryad build on Insane; a Priestess
+// opening's second hero (Demon Hunter or Brewmaster) is the carry.
+console.log("\n--- night elf: bears first, Chimaeras after ---");
+{
+  const elf = PLUS_RACES.nightelf;
+  const grove = elf.strategies.find((s) => s.id === "lategrove");
+  const standing = [elf.halls[2], elf.barracks, "eaoe", "edob", "eden", "edos"];
+  const rich = (bears) => {
+    const c = ctx(elf, grove, PLUS_INSANE, standing, 3);
+    c.ai.minesOwned = () => 2; // the `affluent` half is met — the bears are what is under test
+    const done = c.ai.townCountDone;
+    c.ai.townCountDone = (id) => (id === "edoc" ? bears : done(id));
+    return buildableMix(c);
+  };
+  check("the late grove is mostly bears", Object.entries(grove.mix).sort((a, b) => b[1] - a[1])[0][0], "edoc");
+  check("…and asks for eight of them high in the ladder", grove.lead.edoc, 8);
+  check("no Chimaeras beside four bears", rich(4).some((r) => r.unit === "echm"), false);
+  check("…but Chimaeras once five bears stand", rich(5).some((r) => r.unit === "echm"), true);
+  const chim = elf.strategies.find((s) => s.id === "chimgrove");
+  check("the Chimaera build's grove waits for the same bears", chim.waitFor.echm.units.join(), "edoc,5");
+  // Insane never rolls the Talon or the Dryad build; Normal still may.
+  const seen = (insane) => {
+    const ids = new Set();
+    for (let k = 1; k <= 200; k++) ids.add(rollStrategy(elf, 3, () => k, insane).id);
+    return ids;
+  };
+  check("Insane never rolls talons or dryads", ["talons", "dryads"].some((id) => seen(true).has(id)), false);
+  check("…Normal still does", ["talons", "dryads"].every((id) => seen(false).has(id)), true);
+  const { pickHeroOrder } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
+  const potm = elf.strategies.find((s) => s.id === "potmbears");
+  check("a build opens on the Priestess of the Moon", potm.heroes[0], "Emoo");
+  const picks = [(lo) => lo, (lo, hi) => hi].map((rand) => pickHeroOrder(elf, potm, () => true, rand));
+  check("…her second is the Demon Hunter or the Brewmaster", picks.map((h) => h.second).sort().join(), "Edem,Npbm");
+  check("…and that hero is the carry", picks.every((h) => h.carry === h.second), true);
+  check("a Demon Hunter opening has no carry", pickHeroOrder(elf, elf.strategies[0], () => true, (lo) => lo).carry, undefined);
 }
 
 // THE NIGHT ELF'S LATE GAME. Reported: *"going for archers + huntresses a bit too much … later it
@@ -188,7 +226,9 @@ console.log("\n--- night elf: Archers and Huntresses is an opening ---");
   const standing = [elf.barracks, "edob", elf.units.edoc.from, "eden"];
   const at = (tier, extra = {}) => {
     const c = ctx(elf, hunt, PLUS_INSANE, [elf.halls[tier - 1], ...standing, ...(extra.also ?? [])], tier);
-    c.ai = { ...c.ai, minesOwned: () => extra.mines ?? 1, gold: () => extra.gold ?? 200, wood: () => extra.wood ?? 100 };
+    const done = c.ai.townCountDone;
+    c.ai = { ...c.ai, minesOwned: () => extra.mines ?? 1, gold: () => extra.gold ?? 200, wood: () => extra.wood ?? 100,
+      townCountDone: (id) => (id === "edoc" ? extra.bears ?? 0 : done(id)) };
     return buildableMix(c).map((r) => r.unit);
   };
   check("at tier 1 it is Archers and Huntresses", at(1).includes("esen") && !at(1).includes("edoc"), true);
@@ -198,9 +238,10 @@ console.log("\n--- night elf: Archers and Huntresses is an opening ---");
     `${at(2).includes("edry")},${at(2).includes("earc")},${at(2).includes("edoc")}`, "true,true,false");
   check("…and trains no more Huntresses", at(2).includes("esen"), false);
   check("at tier 3, one mine and a lean bank: druids and dryads, no Chimaeras", `${at(3).includes("edoc")},${at(3).includes("echm")}`, "true,false");
-  check("…with an expansion, Chimaeras too", at(3, { mines: 2, also: ["edos"] }).includes("echm"), true);
-  check("…or with the resources", at(3, { gold: 1500, wood: 800, also: ["edos"] }).includes("echm"), true);
-  check("…or once a Roost already stands", at(3, { also: ["edos"] }).includes("echm"), true);
+  // …and every one of these with the five bears the Chimaeras also wait for (`waitFor`).
+  check("…with an expansion, Chimaeras too", at(3, { mines: 2, also: ["edos"], bears: 5 }).includes("echm"), true);
+  check("…or with the resources", at(3, { gold: 1500, wood: 800, also: ["edos"], bears: 5 }).includes("echm"), true);
+  check("…or once a Roost already stands", at(3, { also: ["edos"], bears: 5 }).includes("echm"), true);
   check("every other night elf build but the air one grows into the late grove",
     elf.strategies.filter((s) => s.weight > 0 && s.id !== "chimaeras").every((s) => s.thenAt3 === "lategrove"), true);
   check("…and the air one into its own grove, bears and Dryads included",
