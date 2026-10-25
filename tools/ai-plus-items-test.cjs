@@ -184,6 +184,7 @@ const ITEMS = {
   shea: { id: "shea", gold: 250, usable: true, abilities: ["AIha"] }, // Scroll of Healing
   hslv: { id: "hslv", gold: 100, usable: true, abilities: ["AIrl"] }, // Healing Salve
   pclr: { id: "pclr", gold: 160, usable: true, abilities: ["AIpr"] }, // Clarity Potion
+  oven: { id: "oven", gold: 325, usable: false, abilities: ["AIpv"] }, // Orb of Venom
   spro: { id: "spro", gold: 150, usable: true, abilities: ["AIda"] }, // Scroll of Protection
   pman: { id: "pman", gold: 200, usable: true, abilities: ["AIm1"] }, // Potion of Mana
   sreg: { id: "sreg", gold: 100, usable: true, abilities: ["AIsl"] }, // Scroll of Regeneration
@@ -1705,6 +1706,37 @@ console.log("\n-- handing a spare potion over ----------------------------------
   const taker = belt(hero({ x: 9000, y: 4000 }), "stwp");
   pressed([giver, taker], PLUS_INSANE, AWAY);
   check("…nor across the map", lastOrders.some((c) => c.c === "giveitem"), false);
+}
+
+// --- a hero that has already GOT AWAY does not read the scroll ------------------------------------
+// Reported: a night elf walked home from a lost fight, bought a scroll on the way past its shop and
+// read it at once, alone. `losing` is still the retreat's; nothing hostile is near the hero.
+{
+  const h = belt(hero({ hp: 900, x: 4000, y: 4000 }), "stwp");
+  check("out of the fight, a retreating hero keeps its scroll",
+    pressed([h, enemy({ x: 7000, y: 7000 })], PLUS_INSANE, { ...AWAY, losing: true }), null);
+  const chased = belt(hero({ hp: 900, x: 4000, y: 4000 }), "stwp");
+  check("…while one with the enemy still on it reads it",
+    itemOf(pressed([chased, enemy({ x: 4200, y: 4000 })], PLUS_INSANE, { ...AWAY, losing: true })), 0);
+}
+
+// --- MELEE heroes carry healing, not clarity; a Demon Hunter carries his Orb of Venom ------------
+{
+  // The Lesser Clarity Potion is in the fixture for these cases alone: the older ones were
+  // written against a table without it.
+  ITEMS.plcl = { id: "plcl", gold: 70, usable: true, abilities: ["AIpr"] };
+  const shelf = ["plcl", "pman", "phea", "stwp", "oven"];
+  const dh = belt(hero({ typeId: "Edem", x: 0, y: 0 }), "stwp", "phea", "pnvl", "shea");
+  const r = shopped([dh, MERCHANT], PLUS_INSANE, { shelf, race: "nightelf" });
+  check("a Demon Hunter is never sent for a Clarity Potion", r.buy && r.buy.itemId === "plcl", false);
+  check("…but buys his Orb of Venom", r.buy && r.buy.itemId, "oven");
+  const keeper = belt(hero({ typeId: "Ekee", x: 0, y: 0 }), "stwp", "phea", "pnvl", "shea");
+  const k = shopped([keeper, MERCHANT], PLUS_INSANE, { shelf: ["plcl", "phea", "stwp"], race: "nightelf" });
+  check("a Keeper of the Grove does buy one", k.buy && k.buy.itemId, "plcl");
+  delete ITEMS.plcl;
+  const bm = belt(hero({ typeId: "Obla", x: 0, y: 0 }), "stwp");
+  const m = shopped([bm, MERCHANT], PLUS_INSANE, { race: "orc" });
+  check("a Blademaster's belt starts with the invulnerability potion", m.buy && m.buy.itemId, "pnvl");
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

@@ -373,6 +373,17 @@ export interface PlusProfile {
    */
   readonly creepRest: number;
   readonly creepGreenUntil: number;
+  /**
+   * How HUNGRY it is for the big camps — a multiplier on the party's price against the camp bars
+   * (plus/power.ts `maxCampLevel`), and what makes it PREFER an orange or red camp over a green
+   * one once it clears that harder bar with room to spare (`preferredCampFloor`), and keep taking
+   * them past the level the hero stops wanting green ones at (index.ts `HUNGRY_UNTIL_LEVEL`).
+   * 1 = priced as the bars say and nearest first. The developer's Insane: *"don't seem too keen
+   * towards creeping orange and red camps, we must make them more hungry for them, especially as
+   * their armies and hero levels grow"* — and Insane's own micro (focus fire, the pull-back, the
+   * stutter step) is worth the margin. OURS.
+   */
+  readonly creepHunger: number;
   /** In an enemy base, does it turn on the WORKERS rather than whatever swung first? */
   readonly harass: boolean;
   /**
@@ -384,6 +395,13 @@ export interface PlusProfile {
    * presence is a ladder player's habit, and the reinforcements walk out to it alone. OURS.
    */
   readonly roam: boolean;
+  /**
+   * The chance, per Mercenary Camp it clears the guards off, that it hires one or two of the
+   * camp's mercenaries there and then (index.ts `mercPass`). 0 = never. The developer's Insane:
+   * *"buy 1-2 mercenaries from a Mercenary Camp after clearing the creeps guarding it (not
+   * always, but it would add some nice variation)"*. OURS.
+   */
+  readonly mercChance: number;
   /** Does it send an early scout? (Only matters for finding expansions — a melee player is
    *  handed every start location, see AiPlayer.knows.) */
   readonly scout: boolean;
@@ -520,8 +538,8 @@ export const PLUS_EASY: PlusProfile = {
   // …and it does NOT micro its wounded out of a fight — issue #124's Easy is a player who
   // gives an order and then watches it happen. `pullOutHp` 0 is that in one number.
   focusFire: false, pullOutHp: 0, stutterStep: false, pullRejoin: false, sendHomeHp: 0, dispelSummons: false, creeps: true, creepAt: 240, creepFood: 8,
-  creepCamps: 2, creepCampMax: CAMP_GREEN_MAX, creepRange: 3000, creepRest: 0, creepGreenUntil: 0,
-  harass: false, roam: false, scout: false, sweepEvery: Infinity, expansionFirst: 0.5,
+  creepCamps: 2, creepCampMax: CAMP_GREEN_MAX, creepRange: 3000, creepRest: 0, creepGreenUntil: 0, creepHunger: 1,
+  harass: false, roam: false, mercChance: 0, scout: false, sweepEvery: Infinity, expansionFirst: 0.5,
   shopping: 0, eagerMana: false, itemReserve: Infinity, keepPortal: false, portalToAttack: false,
   concedeAfter: 24,
 };
@@ -606,8 +624,8 @@ export const PLUS_NORMAL: PlusProfile = {
   // It does not focus-fire, but it DOES pull a soldier out of the line at a quarter health —
   // the one piece of micro a player picks up long before they learn to focus a target.
   focusFire: false, pullOutHp: 0.25, stutterStep: false, pullRejoin: false, sendHomeHp: 0, dispelSummons: false, creeps: true, creepAt: 300, creepFood: 10,
-  creepCamps: Infinity, creepCampMax: Infinity, creepRange: Infinity, creepRest: 60, creepGreenUntil: 420,
-  harass: false, roam: false, scout: true, sweepEvery: 120, expansionFirst: 0.75,
+  creepCamps: Infinity, creepCampMax: Infinity, creepRange: Infinity, creepRest: 60, creepGreenUntil: 420, creepHunger: 1,
+  harass: false, roam: false, mercChance: 0, scout: true, sweepEvery: 120, expansionFirst: 0.75,
   // A third of a belt, and it keeps 500 gold back for the build order. It DOES keep a Town
   // Portal and replace it: a scroll is the difference between losing a fight and losing an army,
   // and a player at this level has learnt that much.
@@ -657,8 +675,8 @@ export const PLUS_INSANE: PlusProfile = {
   // instead (`pullRejoin` / `sendHomeHp`, the developer's numbers). It also kills summons with
   // its dispels first (`dispelSummons`).
   focusFire: true, pullOutHp: 0.25, stutterStep: true, pullRejoin: true, sendHomeHp: 0.12, dispelSummons: true, creeps: true, creepAt: 90, creepFood: 8,
-  creepCamps: Infinity, creepCampMax: Infinity, creepRange: Infinity, creepRest: 0, creepGreenUntil: 0,
-  harass: true, roam: true, scout: true, sweepEvery: 75, expansionFirst: 0.85,
+  creepCamps: Infinity, creepCampMax: Infinity, creepRange: Infinity, creepRest: 0, creepGreenUntil: 0, creepHunger: 1.2,
+  harass: true, roam: true, mercChance: 0.5, scout: true, sweepEvery: 75, expansionFirst: 0.85,
   // A full belt and a Town Portal on the hero. Both are what separates a player who has been
   // here before from one who has not.
   shopping: 6, eagerMana: true, itemReserve: 200, keepPortal: true, portalToAttack: true,

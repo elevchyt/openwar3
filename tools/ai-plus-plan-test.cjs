@@ -26,7 +26,7 @@ const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { buildableMix } = require(join(REPO, ".sim-build", "src", "ai", "plus", "plan.js"));
-const { PLUS_RACES, insaneVariant, rollStrategy, TAVERN_HEROES } = require(join(REPO, ".sim-build", "src", "ai", "plus", "races.js"));
+const { PLUS_RACES, insaneVariant, rollStrategy, rollTransition, TAVERN_HEROES } = require(join(REPO, ".sim-build", "src", "ai", "plus", "races.js"));
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 
 let failed = 0;
@@ -110,7 +110,8 @@ console.log("\n--- the fallback is only a fallback ---");
   check("a tier-2 elf build opens on Archers", early.map((r) => r.unit).join(","), "earc");
   // Tier 2 with an Ancient of Lore up: the mix can be produced, so the Archer is not offered.
   const later = buildableMix(ctx(elf, late, PLUS_NORMAL, [elf.halls[1], elf.barracks, "eaoe"], 2));
-  check("…and drops it once the Dryad is up", later.map((r) => r.unit).join(","), "edry,edoc");
+  // (The Druid of the Claw waits for tier 3 — `[DRUID_CLAW] tier: 3`, the bear's tier.)
+  check("…and drops it once the Dryad is up", later.map((r) => r.unit).join(","), "edry");
 }
 
 // THE LAST RESORT is everything the opening building can still make, not one named unit: a
@@ -159,6 +160,15 @@ console.log("\n--- thenAt3: the tier-3 transition ---");
   check("…and no Knights yet", two.some((r) => r.unit === "hkni"), false);
   const three = buildableMix(ctx(human, rifles, PLUS_NORMAL, [human.halls[2], ...standing], 3));
   check("…and Knights once the Castle is standing", three.some((r) => r.unit === "hkni"), true);
+  check("…beside Riflemen that never stop", three.some((r) => r.unit === "hrif"), true);
+  // The other transition (`thenAt3Or`), rolled at seat time: Gryphon Riders instead.
+  const air = rollTransition(rifles, (lo, hi) => hi);
+  check("a rifle seat may roll the Gryphon transition", air.thenAt3, "riflegryphons");
+  check("…and the Knight one", rollTransition(rifles, (lo) => lo).thenAt3, "rifleknights");
+  const airThree = buildableMix(ctx(human, air, PLUS_NORMAL, [human.halls[2], ...standing, "hgra"], 3));
+  check("…which fields Gryphons and keeps its Riflemen", `${airThree.some((r) => r.unit === "hgry")},${airThree.some((r) => r.unit === "hrif")}`, "true,true");
+  const sanctums = human.strategies.find((s) => s.id === "sanctums");
+  check("the Sanctum build has both transitions too", [sanctums.thenAt3, ...sanctums.thenAt3Or].join(","), "sanctumknights,sanctumgryphons");
 }
 
 // THE NIGHT ELF'S LATE GAME. Reported: *"going for archers + huntresses a bit too much … later it
@@ -175,7 +185,10 @@ console.log("\n--- night elf: Archers and Huntresses is an opening ---");
     return buildableMix(c).map((r) => r.unit);
   };
   check("at tier 1 it is Archers and Huntresses", at(1).includes("esen") && !at(1).includes("edoc"), true);
-  check("…at tier 2 it has grown into Druids of the Claw and Dryads", at(2).includes("edoc") && at(2).includes("edry"), true);
+  // The bears build at tier 2 holds out on Archers and the Lores' Dryads; the Druid of the Claw
+  // is a TIER-3 unit for Computer+ (the developer: "holding out with archers until then").
+  check("…at tier 2 it has grown into Dryads behind Archers, no Druids of the Claw yet",
+    `${at(2).includes("edry")},${at(2).includes("earc")},${at(2).includes("edoc")}`, "true,true,false");
   check("…and trains no more Huntresses", at(2).includes("esen"), false);
   check("at tier 3, one mine and a lean bank: druids and dryads, no Chimaeras", `${at(3).includes("edoc")},${at(3).includes("echm")}`, "true,false");
   check("…with an expansion, Chimaeras too", at(3, { mines: 2, also: ["edos"] }).includes("echm"), true);
@@ -183,6 +196,8 @@ console.log("\n--- night elf: Archers and Huntresses is an opening ---");
   check("…or once a Roost already stands", at(3, { also: ["edos"] }).includes("echm"), true);
   check("every other night elf build but the air one grows into the late grove",
     elf.strategies.filter((s) => s.weight > 0 && s.id !== "chimaeras").every((s) => s.thenAt3 === "lategrove"), true);
+  check("…and the air one into its own grove, bears and Dryads included",
+    ["edoc", "edry"].every((u) => u in elf.strategies.find((s) => s.id === elf.strategies.find((x) => x.id === "chimaeras").thenAt3).mix), true);
   check("…which is never rolled on its own", elf.strategies.find((s) => s.id === "lategrove").weight, 0);
 }
 

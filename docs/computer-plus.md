@@ -674,8 +674,10 @@ army spent **14–19 %** of its time massing at home with nothing to do — no c
 price, and too small for a wave (`attackFood` 16). `PlusProfile.roam` (Insane only) moves that
 wait OUT ONTO THE MAP: while massing, with a hero fit to creep (`creepAt`, `CREEP_HEALTH`,
 `creepFood`), the muster point is a circuit (`roamCircuit`) of the free gold mines AHEAD of our base (no
-building of anyone's within 900, no living camp within 900) and the camps we have already cleared
-there, nearest first, `ROAM_DWELL` (35 s) at each; with none of those, a point `ROAM_SHARE` of
+building of anyone's within 900, no living camp within 900), nearest first, `ROAM_DWELL` (35 s) at
+each — and NOT the camps it has already cleared, which it used to include and which read as "revisits
+camps (especially green ones) even after beating them and chilling/standing at them" (the green ones
+are the nearest ground ahead of the base and the first to fall); with none of those, a point `ROAM_SHARE` of
 the way toward the enemy, at most `ROAM_OUT`. Everything else is unchanged and simply happens from
 there: a creep run sets off from the party's feet, a wave sets off when it is ready, an enemy army
 met is `contactPass`'s, and a threat at home is `defendPass`'s, above every mode. `b.afield` is
@@ -695,6 +697,25 @@ back toward home `ROAM_PULL_IN` at a time until it qualifies, and is dropped (th
 at home) if it never does. Reported on Lost Temple as "triggered the aggro of a red camp at the
 start of the game": from the top base against the left one, the bare projection landed ~150 from
 the level-21 ogre camp guarding the Goblin Laboratory, and the first roam walked the hero into it.
+
+### Insane is HUNGRY for the big camps
+
+`PlusProfile.creepHunger` (1.2 on Insane, 1 elsewhere — ours) does three things, all in plus/power.ts
+and `creepTarget`: it multiplies the party's price against the camp bars (`maxCampLevel`), it makes
+each `CREEP_REACH` ring ask for the hardest colour the party clears with `PREFER_MARGIN` (1.25) to
+spare FIRST (`preferredCampFloor` — so as the army and the hero grow, an orange or red camp beats a
+green one beside it, though a camp next door still beats a long walk), and past `CREEP_UNTIL_LEVEL`
+it keeps creeping ORANGE and RED camps only, up to `HUNGRY_UNTIL_LEVEL` (9), where every other
+difficulty would go to the wave. Reported: Insane *"don't seem too keen towards creeping orange and
+red camps … especially as their armies and hero levels grow"*.
+
+### …and it hires at a Mercenary Camp it has cleared
+
+`PlusProfile.mercChance` (0.5 on Insane, ours): when a creep run kills the camp guarding a Mercenary
+Camp (`[nmer]`, `[nmr0]`…`[nmrf]`), the roll is made once for that camp (`mercRoll`), and on a hit
+one or two of its non-hero wares are hired over the next `MERC_WINDOW` seconds (`mercPass`) — the
+ordinary `train` at a neutral shelf, which the shop accepts only with a unit at its counter, exactly
+as `hireAtTavern` hires a hero. Not saved for: unaffordable is simply not this time.
 
 ### A wave is what SETS OFF, not what exists
 
@@ -4906,3 +4927,29 @@ row the ceiling refuses above it no longer ends the shopping pass (`shop` retrie
 essential rows alone). Before this change, a Normal orc on Echo Isles played fifteen minutes with
 1258 gold banked and never bought one. The shelf's own clock is still the only wait:
 `[phea] stockStart` is 440 s, so nobody can buy one before 7:20.
+
+
+## Notes from the October 2026 Insane review
+
+- **Sea Witch.** Frost Arrows is her FIRST skill at every difficulty, and its autocast is ON only
+  with a hostile PLAYER's unit in reach and OFF against creeps (`PLAYERS_ONLY_AUTOCAST`,
+  `armAutocasts` flips the toggle each pass).
+- **Night elf tier 3 is always bears and Dryads.** The Druid of the Claw is a TIER-3 unit to
+  Computer+ (its data says tier 2; a druid without Bear Form is a caster in a melee line), so every
+  build holds out on Archers and the two Lores' Dryads until the Tree of Eternity and then grows
+  into `lategrove` — the Chimaera build into `chimgrove`, which keeps its Roost. A druid with Bear
+  Form LIVES in it (`druidPass`): it leaves it only for an own hero under 60 %, ONE druid per hero
+  (`rejuvTask`), and only with the mana for both presses (Bear Form 25 + Rejuvenation 125), then
+  goes straight back.
+- **Moon Wells on the way past.** `wellPass(b, true)` runs whenever the army is not massing or
+  defending: a soldier under 50 % or a hero under `RECOVER_TO` stops at a well within 900 with
+  nothing hostile within 1200 (`WELL_PASS_*`).
+- **Human tier-3 transitions.** `PlusStrategy.thenAt3Or` and `rollTransition`: a rifle build grows
+  into Riflemen + a few Knights (`rifleknights`) or Riflemen + Gryphon Riders (`riflegryphons`), and
+  the Sanctum build into the same two with its casters kept, one rolled per seat.
+- **The belt.** A MELEE hero (`MELEE_HEROES`, the developer's nine) is never sent for a Clarity
+  Potion and carries a Potion of Lesser Invulnerability, a Potion of Healing and a Scroll of Healing
+  instead (`MELEE_BELT`); a night elf's Demon Hunter buys the Orb of Venom, whose `[oven]
+  Requires=etoe` is the tier-3 gate (`HERO_ORBS`). And a Town Portal is not read by a hero that is
+  out of the fight with nothing hostile within `ESCAPE_CHASE` — `losing` stays up for the whole walk
+  home, which is how a night elf bought a scroll at its own shop and read it there, alone.

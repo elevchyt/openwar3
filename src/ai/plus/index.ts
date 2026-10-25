@@ -32,10 +32,10 @@ import {
 } from "./teamchat";
 import { liveProfile, plusProfile, type PlusProfile } from "./profile";
 import { aimCtx, HERO_KILL_HP, heroKillable, isSiege, isTower, killValue, razeCost, razeValue } from "./targeting";
-import { PLUS_RACES, TAVERN_HEROES, insaneVariant, rollStrategy, tableForEdition, type HeroCombo, type PlusRaceTable, type PlusStrategy } from "./races";
+import { PLUS_RACES, TAVERN_HEROES, insaneVariant, rollStrategy, rollTransition, tableForEdition, type HeroCombo, type PlusRaceTable, type PlusStrategy } from "./races";
 import { MELEE_INSANE, MELEE_NEWBIE, MIRROR_IMAGE } from "../ids";
 import { isRoc } from "../../data/edition";
-import { CAMP_GREEN_MAX, armyPower, maxCampLevel, type CreepForce, type Fighter } from "./power";
+import { CAMP_GREEN_MAX, armyPower, maxCampLevel, preferredCampFloor, type CreepForce, type Fighter } from "./power";
 
 // Computer+ — the improved melee AI (issue #124). Start at docs/computer-plus.md.
 //
@@ -1062,6 +1062,12 @@ const RECOVER_TO = 0.65;
 /** How far a hurt unit will walk to a Moon Well. Beyond this the trip costs more than the pour
  *  is worth and it heals where it stands. */
 const WELL_WALK = 2000;
+/** …and for an army only PASSING its wells (`wellPass`'s `passing`): how far off the march a well
+ *  may be, the hit points under which a SOLDIER stops for one (a hero uses `RECOVER_TO`), and how
+ *  close an enemy may be before nobody leaves the column. OURS. */
+const WELL_PASS_REACH = 900;
+const WELL_PASS_HP = 0.5;
+const WELL_PASS_SAFE = 1200;
 /** Hit-point fraction the CAPTAIN must have before the party goes to the next camp. A hero
  *  that walks into a second camp on a third of its life is a hero the camp kills, and a dead
  *  hero is the most expensive thing on a melee map. It heals up at home first. */
@@ -1070,6 +1076,15 @@ const CREEP_HEALTH = 0.65;
  *  an ability — see `creepNext`, which only applies it when there is actually an attack to
  *  prefer over the camp. */
 const CREEP_UNTIL_LEVEL = 5;
+/** …and, for a HUNGRY computer (`PlusProfile.creepHunger`), the level up to which the ORANGE
+ *  and RED camps are still worth it past that one — green ones are not. OURS. */
+const HUNGRY_UNTIL_LEVEL = 9;
+/** A MERCENARY CAMP (`[nmer]`, and the tileset twins `[nmr0]`…`[nmrf]` — every one is "Mercenary
+ *  Camp" in NeutralUnitStrings.txt), how far from the cleared camp's centre it may stand to be
+ *  that camp's, and how long the party has to hire there once the guards are dead. OURS. */
+const isMercCamp = (typeId: string): boolean => typeId === "nmer" || /^nmr[0-9a-f]$/.test(typeId);
+const MERC_CAMP_REACH = 800;
+const MERC_WINDOW = 10;
 
 /**
  * THE FIRST TEN MINUTES BELONG TO THE CAMPS — how long, and the hero level that buys the party
@@ -2420,6 +2435,10 @@ interface Brain {
    *  standing outside a camp with no wand asks the belt the same question every army pass, and
    *  one WITH a wand pops a fresh double every few seconds instead of a vanguard. */
   vanguardDone: boolean;
+  /** A Mercenary Camp whose guards this party has just killed, and until when it may still hire
+   *  there (`mercPass`); and every camp already rolled for, so each is rolled ONCE a match. */
+  merc: { shopId: number; count: number; until: number } | null;
+  mercRolled: Set<number>;
   /** The one opponent of a 1v1, -1 in any other game, and undefined until first asked — the
    *  seat the two 1v1 concession terms compare against (`duelFoe`). */
   duelFoe: number | undefined;
@@ -2557,9 +2576,11 @@ export class ComputerPlusAi {
     // orc's Head Hunter rush behind a Far Seer, the undead's fast expansion behind a Crypt Lord or
     // a Dreadlord). Rolled off the same stream, so the same seed opens the same way.
     const rolled = rollStrategy(table, profile.techTier, (lo, hi) => ai.randomInt(lo, hi));
-    const strategy = profile.difficulty === MELEE_INSANE
+    // …and which tier-3 transition it grows into, where the build names more than one
+    // (`PlusStrategy.thenAt3Or`).
+    const strategy = rollTransition(profile.difficulty === MELEE_INSANE
       ? insaneVariant(table, rolled, () => ai.randomInt(0, 999) / 1000)
-      : rolled;
+      : rolled, (lo, hi) => ai.randomInt(lo, hi));
     this.pickHeroes(ai, table, strategy);
     const squad = new Set<number>();
     // The harvest plan has to know who is spoken for, or an undead computer marches its attack
@@ -2713,6 +2734,8 @@ export class ComputerPlusAi {
       creepLevel: 0,
       vanguardUntil: 0,
       vanguardDone: false,
+      merc: null,
+      mercRolled: new Set(),
       duelFoe: undefined,
       firstHero: new Map(),
       concededAt: -1,
@@ -3243,11 +3266,16 @@ export class ComputerPlusAi {
     // the fight it is standing in, so unlike the Moon Well trip below this is not a decision
     // about being at home. (A statue trained mid-battle arrives with both autocasts off.)
     this.statuePass(b);
+    this.mercPass(b);
     // Only while MASSING. A well trip replaces whatever the unit was doing, so running this
     // during a fight would walk a Grunt at 60 % out of the battle line and across the base —
     // which is not healing, it is leaving. "When it returned to the base" is the whole
     // condition, and `massing` is what that is called here.
     if (b.mode === "massing" && !threatened) this.wellPass(b);
+    // …and an army that is only PASSING the wells — a march out past its own base, or the walk
+    // home from a lost fight — stops at one on the way for the units that need it (`wellPass`'s
+    // `passing` reading: a short detour, and never with an enemy in sight).
+    else if (!threatened && b.mode !== "defending") this.wellPass(b, true);
     // THE WOUNDED WALK OUT OF THE FIGHT, one at a time — before anything is aimed, because who
     // is in the line is what the aiming below is about. Above `defendPass` rather than inside a
     // mode branch: a Grunt on its last quarter is worth pulling out of a fight in the enemy's
@@ -5070,13 +5098,12 @@ export class ComputerPlusAi {
       }
       if (!taken && quiet(m)) spots.push({ x: m.x, y: m.y });
     }
-    // …and the camps already CLEARED on our half: the ground a ladder player's army stands on
-    // between fights is where it has just fought, and a dead camp is a spot nothing will wake.
-    for (const camp of this.host.creepCamps()) {
-      if (Math.hypot(camp.x - home.x, camp.y - home.y) <= TOWN_RADIUS || !ahead(camp)) continue;
-      if (camp.members.some((id) => (world.units.get(id)?.hp ?? 0) > 0)) continue;
-      if (quiet(camp)) spots.push({ x: camp.x, y: camp.y });
-    }
+    // NOT the camps already cleared. They used to be on the circuit — "the ground a ladder
+    // player's army stands on between fights is where it has just fought" — and that is exactly
+    // what was reported against it: Insane *"likes to revisit camps (especially green ones) even
+    // after beating them and chilling/standing at them for a while which looks bad"*. The green
+    // camps are the nearest ground ahead of the base and the first to be cleared, so the circuit
+    // walked the army back to them for `ROAM_DWELL` at a time.
     spots.sort((p, q) => Math.hypot(p.x - home.x, p.y - home.y) - Math.hypot(q.x - home.x, q.y - home.y));
     if (!spots.length) {
       // The point toward the enemy — pulled back toward home a step at a time until it is quiet,
@@ -5178,10 +5205,22 @@ export class ComputerPlusAi {
     // go NOW. Applied unconditionally it produced the thing the developer asked us to stop: a
     // level-six hero standing at the rally point behind `waveGap` with three camps still on the
     // map and nothing whatever to do for two minutes.
-    if (hero.level >= CREEP_UNTIL_LEVEL && this.waveReady(b)) return null;
+    //
+    // …unless it is HUNGRY: then past the cap the big camps are still worth the walk and the
+    // green ones are not (`creepFloor`).
+    const floor = this.creepFloor(b, hero);
+    if (floor < 0) return null;
     if (hero.hp / Math.max(1, hero.maxHp) < CREEP_HEALTH) return null;
     if (this.squadFood(b, this.mustered(b)) < profile.creepFood) return null;
-    return this.creepTarget(b);
+    return this.creepTarget(b, floor);
+  }
+
+  /** The easiest camp still worth a run for this captain, or -1 for none: every camp below
+   *  `CREEP_UNTIL_LEVEL` (or with no wave to prefer), only ORANGE and RED past it for a hungry
+   *  computer (`PlusProfile.creepHunger`, `HUNGRY_UNTIL_LEVEL`). */
+  private creepFloor(b: Brain, hero: SimUnit): number {
+    if (hero.level < CREEP_UNTIL_LEVEL || !this.waveReady(b)) return CREEP_FLOOR;
+    return b.profile.creepHunger > 1 && hero.level < HUNGRY_UNTIL_LEVEL ? CAMP_GREEN_MAX + 1 : -1;
   }
 
   /** Is the party still RESTING at home after its last creep run (`PlusProfile.creepRest`)?
@@ -5214,25 +5253,26 @@ export class ComputerPlusAi {
    * that has no better idea) so the two cannot disagree — which they did, and which is how a
    * party that `creepNext` had refused to send was sent anyway a moment later.
    */
-  private creepTarget(b: Brain): { x: number; y: number; level: number } | null {
+  private creepTarget(b: Brain, minLevel = CREEP_FLOOR): { x: number; y: number; level: number } | null {
     // A computer that creeps only a little has its own three limits — see
     // `PlusProfile.creepCamps`: so many runs, so hard a camp, so far from home.
     const { profile } = b;
     if (b.creepRuns >= profile.creepCamps) return null;
     // Priced off the party that is actually STANDING at the muster point — see `mustered`. A
     // camp chosen for an army that is still in the forest is a camp the hero walks into alone.
+    const force = this.creepForce(b, this.mustered(b));
     const ceiling = Math.min(
-      maxCampLevel(this.creepForce(b, this.mustered(b))),
+      maxCampLevel(force, profile.creepHunger),
       profile.creepCampMax,
       b.clock < profile.creepGreenUntil ? CAMP_GREEN_MAX : Infinity,
     );
-    if (ceiling < 0) return null;
+    if (ceiling < minLevel) return null;
     const air = this.hasAir(b);
     if (profile.creepRange < Infinity) {
       const home = b.ai.home();
       const skipOnly = (camp: { x: number; y: number }): boolean => isShunned(b.shunned, camp, b.clock);
       for (;;) {
-        const camp = b.ai.creepCamp(CREEP_FLOOR, ceiling, air, profile.creepRange, home, skipOnly);
+        const camp = b.ai.creepCamp(minLevel, ceiling, air, profile.creepRange, home, skipOnly);
         if (!camp) return null;
         const aim = this.campAim(b, camp);
         if (aim) return { x: aim.x, y: aim.y, level: camp.level };
@@ -5261,7 +5301,7 @@ export class ComputerPlusAi {
     // (an enemy army on the rock is a wave's business, not a creep run's).
     const foe = b.ai.expansionFoe();
     if (foe?.isCreep) {
-      const guard = b.ai.creepCamp(CREEP_FLOOR, ceiling, air, EXP_CAMP_REACH, foe, skip);
+      const guard = b.ai.creepCamp(minLevel, ceiling, air, EXP_CAMP_REACH, foe, skip);
       const aim = guard && this.campAim(b, guard);
       if (guard && aim) return { x: aim.x, y: aim.y, level: guard.level };
     }
@@ -5271,7 +5311,16 @@ export class ComputerPlusAi {
     // one point too hard — and a party that is walking is a party that is neither creeping nor
     // defending. Stepping the radius out means a camp next door is always taken first, and the
     // long walk is only ever offered once nothing closer is left.
-    for (const reach of CREEP_REACH) {
+    // A HUNGRY party (`PlusProfile.creepHunger`) asks each ring for the harder colours FIRST —
+    // `preferredCampFloor`, which rises with the army and the hero — and only then for anything
+    // it can take, so a camp next door still beats a long walk but an orange camp beats a green
+    // one beside it.
+    const want = Math.max(minLevel, preferredCampFloor(force, profile.creepHunger));
+    const preferred = want <= ceiling ? want : minLevel;
+    const floors = [...new Set([preferred, CAMP_GREEN_MAX + 1, minLevel])]
+      .filter((f) => f >= minLevel && f <= preferred)
+      .sort((p, q) => q - p);
+    for (const reach of CREEP_REACH) for (const floor of floors) {
       // …and it must be somewhere the party can actually WALK TO. `creepCamp` answers off the
       // map's fixed camp table and a straight-line distance, neither of which knows about the
       // river between here and there — so the nearest camp on the list is quite often one no
@@ -5281,7 +5330,7 @@ export class ComputerPlusAi {
       // condemned; and an unreachable one is SHUNNED rather than skipped in place, which both
       // ends this loop and stops the next massing pass paying for the same search again.
       for (;;) {
-        const camp = b.ai.creepCamp(CREEP_FLOOR, ceiling, air, reach, from, skip);
+        const camp = b.ai.creepCamp(floor, ceiling, air, reach, from, skip);
         if (!camp) break;
         const aim = this.campAim(b, camp);
         if (aim) return { x: aim.x, y: aim.y, level: camp.level };
@@ -5613,7 +5662,10 @@ export class ComputerPlusAi {
       //
       // `campHealthAt` is the same measure `oppositionHealthy` already prices a run by, off the
       // fixed camp table, so this cannot disagree with what the run was sent at.
-      if (b.ai.campHealthAt(target.x, target.y) <= 0) return void this.endWave(b);
+      if (b.ai.campHealthAt(target.x, target.y) <= 0) {
+        this.mercRoll(b, target);
+        return void this.endWave(b);
+      }
     } else if (target.id) {
       const u = this.host.world.units.get(target.id);
       // …and an objective that FALLS is the next building, or the press, before it is home —
@@ -6902,8 +6954,11 @@ export class ComputerPlusAi {
     // aimed rather than when a creep run is being started, and it must agree with it — an army
     // sent to a camp from here without a hero is the very thing `creepNext` refuses to do.
     const captain = this.squadHero(b);
-    if (profile.creeps && captain && captain.level < CREEP_UNTIL_LEVEL && !this.creepResting(b)) {
-      const camp = this.creepTarget(b);
+    // …and past `CREEP_UNTIL_LEVEL` a HUNGRY computer still prefers an orange or red camp to the
+    // base (`HUNGRY_UNTIL_LEVEL`).
+    const hungry = profile.creepHunger > 1 && !!captain && captain.level < HUNGRY_UNTIL_LEVEL;
+    if (profile.creeps && captain && (captain.level < CREEP_UNTIL_LEVEL || hungry) && !this.creepResting(b)) {
+      const camp = this.creepTarget(b, captain.level < CREEP_UNTIL_LEVEL ? CREEP_FLOOR : CAMP_GREEN_MAX + 1);
       if (camp) {
         b.creeping = true;
         b.creepLevel = camp.level;
@@ -7585,7 +7640,18 @@ export class ComputerPlusAi {
     return best;
   }
 
-  private wellPass(b: Brain): void {
+  /**
+   * …and `passing`: the army is NOT at home — marching out past the base, or walking back from a
+   * lost fight — and the developer's rule is that a night elf going by its own wells with hurt
+   * units uses them: *"when the night elf player is passing near their base and their moonwells
+   * have mana, they must utilize them if they have low health units/heroes"*. A shorter leash
+   * (`WELL_PASS_REACH`: the well has to be on the way, not across the base), a lower bar for a
+   * soldier (`WELL_PASS_HP` — a march does not stop for a scratch; a hero still drinks under
+   * `RECOVER_TO`), and never with an enemy within `WELL_PASS_SAFE`, where the well trip would be
+   * walking out of a fight. The column walks on; `recovering` keeps the march from pulling the
+   * drinker away, and it rejoins once the well has poured.
+   */
+  private wellPass(b: Brain, passing = false): void {
     const wells: SimUnit[] = [];
     for (const u of this.host.world.units.values()) {
       if (u.owner !== b.ai.player || u.hp <= 0) continue;
@@ -7603,12 +7669,14 @@ export class ComputerPlusAi {
     // THE HERO FIRST, then the rest of the army. A well's mana is finite and a hero is worth
     // more than a Grunt is — sending them in squad order gave the hero whatever the soldiers
     // in front of it had not already drunk, which on one Moon Well is nothing.
-    const hurt = [...this.squadUnits(b)].filter((u) => u.hp / Math.max(1, u.maxHp) < RECOVER_TO);
+    const bar = (u: SimUnit): number => (passing && !u.isHero ? WELL_PASS_HP : RECOVER_TO);
+    const hurt = [...this.squadUnits(b)].filter((u) => u.hp / Math.max(1, u.maxHp) < bar(u));
     hurt.sort((p, q) => (q.isHero ? 1 : 0) - (p.isHero ? 1 : 0));
     for (const u of hurt) {
       if (u.drinkWellId > 0) continue; // already on its way to one
+      if (passing && (u.inCombat || this.enemyNear(b, u.x, u.y, WELL_PASS_SAFE))) continue;
       let best: SimUnit | null = null;
-      let bestD = WELL_WALK;
+      let bestD = passing ? WELL_PASS_REACH : WELL_WALK;
       for (const w of wells) {
         const d = Math.hypot(w.x - u.x, w.y - u.y);
         if (d < bestD) { bestD = d; best = w; }
@@ -7650,6 +7718,48 @@ export class ComputerPlusAi {
       this.arm(b, u, wants);
       this.disarm(b, u, other);
     });
+  }
+
+  /**
+   * A MERCENARY CAMP JUST CLEARED: roll `PlusProfile.mercChance` once for it, and on a hit hire
+   * one or two of its mercenaries before the party walks on (`mercPass`). Every Mercenary Camp
+   * on a melee map stands inside the camp that guards it (`campAim` explains the Echo Isles
+   * ones), so the party that killed the guards is standing at its counter.
+   */
+  private mercRoll(b: Brain, at: { x: number; y: number }): void {
+    if (b.profile.mercChance <= 0) return;
+    const world = this.host.world;
+    for (const u of world.units.values()) {
+      if (u.hp <= 0 || !u.building || !isMercCamp(u.typeId)) continue;
+      if (Math.hypot(u.x - at.x, u.y - at.y) > MERC_CAMP_REACH || b.mercRolled.has(u.id)) continue;
+      if (!world.canUseShop(u.id, b.ai.player)) continue;
+      b.mercRolled.add(u.id);
+      if (b.ai.randomInt(0, 999) >= b.profile.mercChance * 1000) return;
+      b.merc = { shopId: u.id, count: b.ai.randomInt(1, 2), until: b.clock + MERC_WINDOW };
+      return;
+    }
+  }
+
+  /**
+   * …and the hire itself: the ordinary purchase off a neutral shelf (`train` at the shop, as
+   * `AiPlayer.hireAtTavern` hires a hero), which the shop only accepts from a buyer with a unit
+   * at its counter (`hasUnitAtShop`) — so it is tried over `MERC_WINDOW` while the party is
+   * still standing there, and given up when it has gone. Which mercenaries: any in stock that
+   * is not a hero, picked at random — the variation is the point.
+   */
+  private mercPass(b: Brain): void {
+    const m = b.merc;
+    if (!m) return;
+    const world = this.host.world;
+    const shop = world.units.get(m.shopId);
+    if (!shop || shop.hp <= 0 || m.count <= 0 || b.clock > m.until) return void (b.merc = null);
+    if (!world.hasUnitAtShop(shop.id, b.ai.player)) return;
+    const wares = this.host.tech.get(shop.typeId).sellunits.filter((id) =>
+      !this.host.registry.get(id)?.isHero && world.shopStock(shop.id, id) !== 0);
+    if (!wares.length) return void (b.merc = null);
+    const pick = wares[b.ai.randomInt(0, wares.length - 1)];
+    if (this.issue(b, { c: "train", buildingId: shop.id, unitId: pick })) m.count--;
+    else b.merc = null; // not affordable, or no food: the variation is not worth saving for
   }
 
   /** Switch an autocast ON if it is off. `{ c: "autocast" }` is a TOGGLE, so both of these

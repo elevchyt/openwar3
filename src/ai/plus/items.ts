@@ -462,10 +462,51 @@ function roomForOne(u: SimUnit, itemId: string): boolean {
   return !ONE_PER_HERO.has(itemId) || !u.inventory.some((h) => h?.itemId === itemId);
 }
 
+/**
+ * THE MELEE HEROES — the ones that stand in the line and are KILLED there rather than run dry.
+ * The developer's list, by name: Demon Hunter, Mountain King, Warden, Blademaster, Tauren
+ * Chieftain, Dreadlord, Pandaren Brewmaster, Death Knight and Pit Lord. Reported: *"the
+ * Computer+ AI likes to buy double clarity potion on heroes like demon hunter which is not very
+ * good"* — a melee hero's mana is a stun or a Mana Burn, not the fight, and what decides whether
+ * it survives one is a Potion of Healing, a Potion of Invulnerability and a Scroll of Healing
+ * (`MELEE_BELT`). The clarity pours are a CASTER's belt (Shadow Hunter, Far Seer, Lich, Paladin,
+ * Keeper of the Grove…), and a melee hero is never the one sent for one (`suits`). OURS — no
+ * file states it.
+ */
+const MELEE_HEROES: ReadonlySet<string> = new Set([
+  "Edem", "Hmkg", "Ewar", "Obla", "Otch", "Udre",
+  "Npbm", // Pandaren Brewmaster (Tavern)
+  "Udea", "Nplh",
+]);
+
+/** The clarity POURS — `[plcl]` Lesser Clarity Potion and `[pclr]` Clarity Potion. */
+const CLARITY: ReadonlySet<string> = new Set(["plcl", "pclr"]);
+
+/** …and what a melee hero carries instead: one Potion of Healing and one Potion of Lesser
+ *  Invulnerability EACH (`[ngme]`; the invulnerability one is the "important" one, so it leads),
+ *  and the army's Scroll of Healing. Out of the purse and past the habit ceiling, like `FIGHT`. */
+const MELEE_BELT: readonly string[] = ["pnvl", "phea", "shea"];
+
+/**
+ * THE ORB OF VENOM for the night elf's Demon Hunter, at tier 3 — the developer's rule. `[oven]
+ * Requires=etoe` (ItemFunc.txt), so the Ancient of Wonders sells it only once the Tree of
+ * Eternity stands and `missingForShop` is the whole tier gate; no clock is restated here.
+ */
+const HERO_ORBS: Readonly<Record<string, string>> = { Edem: "oven" };
+const ORB_OF: ReadonlySet<string> = new Set(Object.values(HERO_ORBS));
+
+/** Is `u` a hero this item is FOR? A melee hero is never sent for a clarity pour, and a hero's
+ *  own orb (`HERO_ORBS`) goes to that hero alone. Everything else suits anybody. */
+function suits(u: SimUnit, itemId: string): boolean {
+  if (CLARITY.has(itemId)) return !MELEE_HEROES.has(u.typeId);
+  if (ORB_OF.has(itemId)) return HERO_ORBS[u.typeId] === itemId && !u.inventory.some((h) => h?.itemId === itemId);
+  return true;
+}
+
 /** The buys `PlusProfile.shopping` does not cap: the Town Portal (see `shop`), the Potion of
  *  Healing (see `LIST`) and the two FIGHT items (`FIGHT`). A free SLOT is still required —
  *  `shopper` asks for one. */
-const ESSENTIAL: ReadonlySet<string> = new Set(["stwp", "phea", "shea", "pnvl"]);
+const ESSENTIAL: ReadonlySet<string> = new Set(["stwp", "phea", "shea", "pnvl", ...Object.values(HERO_ORBS)]);
 
 /**
  * The two items that decide a fight rather than the walk between two: the Scroll of Healing (the
@@ -678,6 +719,9 @@ const REPLENISH_MANA = 0.7;
 const LOOK = 900;
 /** How close to home is close enough that a Town Portal would be spent on nothing. */
 const HOME = 1200;
+/** …and how close something hostile must still be for a hero OUT of the fight to be escaping it
+ *  (`escape`) — a little past `LOOK`, the reach of a chase. OURS. */
+const ESCAPE_CHASE = 1200;
 /** Seconds between shopping trips. A player checks the shop occasionally; they do not stand in
  *  it. Also what keeps a hero from being re-ordered towards a shop every army pass. */
 const SHOP_PERIOD = 5;
@@ -1098,6 +1142,9 @@ export class PlusItems {
         const kind = def ? potionKind(this.useOf(def)) : null;
         if (kind) belt[kind]++;
       }
+      // A melee hero is never handed a caster's mana (`MELEE_HEROES`): reading it as holding one
+      // already keeps it off the receiving end without making it a giver.
+      if (MELEE_HEROES.has(u.typeId) && belt.mana === 0) belt.mana = 1;
       return belt;
     });
     for (let i = 0; i < heroes.length; i++) {
@@ -1471,6 +1518,12 @@ export class PlusItems {
       case "escape": {
         if (!engaged && !ctx.losing) return false;
         if (Math.hypot(u.x - ctx.home.x, u.y - ctx.home.y) <= HOME) return false;
+        // …and a hero that has already GOT AWAY is escaping nothing. Reported: a night elf walked
+        // home from a lost fight, bought a scroll at its own shop on the way past and read it the
+        // moment it had it — alone, a short walk from its hall. `ctx.losing` is the RETREAT's, and
+        // it stays up for the whole walk home; the scroll is for the fight, so out of one it needs
+        // something hostile still on the hero (`ESCAPE_CHASE`).
+        if (!engaged && !foes.some((f) => f.hp > 0 && !f.building && near(u, f, ESCAPE_CHASE))) return false;
         // AGAINST CREEPS the scroll is the LAST RESORT and nothing else — `LAST_RESORT_HP`, and
         // neither half of the rung below it. The hero steps back out of the camp instead
         // (`pullPass`), and a camp that is actually winning is walked away from.
@@ -2157,7 +2210,11 @@ export class PlusItems {
     // The wave's detour is the SCROLL's (`PORTAL_DETOUR_WAVE`): a potion is bought in passing on a
     // wave, never walked to.
     const fightCtx = ctx.wave ? { ...ctx, mayDetour: false } : ctx;
-    for (const w of FIGHT) {
+    // A MELEE hero's invulnerability potion before the army's scroll (`MELEE_BELT`'s order).
+    const order = own.some((u) => u.isHero && MELEE_HEROES.has(u.typeId))
+      ? [...FIGHT].sort((a, b) => MELEE_BELT.indexOf(a.id) - MELEE_BELT.indexOf(b.id))
+      : FIGHT;
+    for (const w of order) {
       if (this.carried(own, w.id) >= w.want) continue;
       if (this.itemChance(now, own, fightCtx, w.id)) return true;
     }
@@ -2174,7 +2231,7 @@ export class PlusItems {
     // The FIRST hero where it can be: the highest level (which is nearly always the first one
     // trained), the older of two at the same level. A full belt cannot take it.
     const heroes = own
-      .filter((u) => u.isHero && !u.isIllusion && u.inventory.length && u.inventory.indexOf(null) >= 0 && roomForOne(u, itemId) && u.order !== "getitem" && this.canAct(u))
+      .filter((u) => u.isHero && !u.isIllusion && u.inventory.length && u.inventory.indexOf(null) >= 0 && roomForOne(u, itemId) && suits(u, itemId) && u.order !== "getitem" && this.canAct(u))
       .sort((a, b) => b.level - a.level || a.id - b.id);
     if (!heroes.length) return false;
     const shops: SimUnit[] = [];
@@ -2414,12 +2471,23 @@ export class PlusItems {
       if (u.order === "getitem") continue;
       if (u.inventory.indexOf(null) < 0) continue; // belt full
       if (!roomForOne(u, itemId)) continue; // already holds its one (`ONE_PER_HERO`)
+      if (!suits(u, itemId)) continue; // a melee hero's clarity, another hero's orb
       // …and the habit ceiling, which an ESSENTIAL buy is exempt from — see `shop`.
       const cap = rich || essential ? u.inventory.length : this.profile.shopping;
       if (u.inventory.filter((h) => h !== null).length >= cap) continue;
+      // The MELEE belt goes to a melee hero that has none of it yet before it goes to the best.
+      if (best && this.meleeFirst(itemId, u) !== this.meleeFirst(itemId, best)) {
+        if (this.meleeFirst(itemId, u)) best = u;
+        continue;
+      }
       if (!best || u.level > best.level) best = u;
     }
     return best;
+  }
+
+  /** Is `u` a melee hero still short of this piece of `MELEE_BELT`? */
+  private meleeFirst(itemId: string, u: SimUnit): boolean {
+    return MELEE_BELT.includes(itemId) && MELEE_HEROES.has(u.typeId) && !u.inventory.some((h) => h?.itemId === itemId);
   }
 
   /** The next thing to buy, and where. Walks the list in preference order and stops at the
@@ -2435,14 +2503,14 @@ export class PlusItems {
   ): { shopId: number; itemId: string; x: number; y: number } | null {
     const shops = this.shops(ctx);
     if (!shops.length) return null;
-    for (const want of this.list(rich)) {
+    for (const want of this.list(rich, own)) {
       if (essentialOnly && !ESSENTIAL.has(want.id)) continue;
       const purse = want.opening ? gold : gold - this.profile.itemReserve;
       const def = this.view.item(want.id);
       if (!def) continue;
       if (this.carried(own, want.id) >= want.want) continue;
       // Every hero already holds its one (`ONE_PER_HERO`): the row is satisfied, not blocked.
-      if (!own.some((u) => u.isHero && !u.isIllusion && u.inventory.length && roomForOne(u, want.id))) continue;
+      if (!own.some((u) => u.isHero && !u.isIllusion && u.inventory.length && roomForOne(u, want.id) && suits(u, want.id))) continue;
       if (def.gold > purse) {
         // SAVE for a missing Town Portal rather than spend the gold on the next row down. With
         // the scroll first on the list (`hadPortal`) but 350 gold, every pass it could not be
@@ -2478,13 +2546,26 @@ export class PlusItems {
    * appears in both lists keeps the RACE's count rather than being asked for twice at two
    * different quantities.
    */
-  private list(rich: boolean): readonly Want[] {
-    const first = (RACE_FIRST[this.race] ?? []).map((w) => ({ ...w, opening: true }));
+  private list(rich: boolean, own: readonly SimUnit[]): readonly Want[] {
+    // A hero's own ORB leads the race's first buys — it is wanted once the shop will sell it
+    // at all, which is tier 3 (`HERO_ORBS`) — and the MELEE belt rides with `FIGHT`: one of
+    // each per melee hero (`MELEE_BELT`).
+    const heroes = own.filter((u) => u.isHero && !u.isIllusion);
+    const orbs: Want[] = [];
+    for (const h of heroes) {
+      const orb = HERO_ORBS[h.typeId];
+      if (orb && !orbs.some((w) => w.id === orb)) orbs.push({ id: orb, want: heroes.filter((o) => HERO_ORBS[o.typeId] === orb).length, opening: true });
+    }
+    const melee = heroes.filter((u) => MELEE_HEROES.has(u.typeId)).length;
+    const meleeBelt: Want[] = melee
+      ? MELEE_BELT.map((id) => ({ id, want: id === "shea" ? Math.min(2, melee) : Math.max(melee, id === "phea" ? 2 : 1), opening: true }))
+      : [];
+    const first = [...orbs, ...(RACE_FIRST[this.race] ?? []).map((w) => ({ ...w, opening: true }))];
     // …and the race's MANA, which is bought out of the purse for the same reason but sits one
     // place further down: BEHIND the scroll. A hero with an empty bar has lost its spells; a
     // hero with no Town Portal loses the army, and that is the bigger loss (`PORTAL`).
     const mana = ((this.profile.eagerMana ? RACE_MANA_EAGER : RACE_MANA)[this.race] ?? []).map((w) => ({ ...w, opening: true }));
-    const fight = FIGHT;
+    const fight = [...meleeBelt, ...FIGHT.filter((w) => !meleeBelt.some((m) => m.id === w.id))];
     const seen = new Set([...first, ...fight, ...mana].map((w) => w.id));
     const rest = LIST.filter((w) => !seen.has(w.id));
     // WHERE THE PORTAL SITS DEPENDS ON WHETHER THIS PLAYER HAS EVER HAD ONE.

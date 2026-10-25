@@ -201,6 +201,19 @@ const step = (w, seconds, dt = 0.05) => { for (let i = 0; i < Math.round(seconds
   step(w, 0.2);
   check("past Area1 the link snaps", [drainBuffs(victim), drainBuffs(ranger)], [[], []]);
   check("…and its beam is cut", w.drainLightningStops(), [`drain:${ranger.id}`]);
+  // …and the CASTER stops channelling with it: a link broken from the victim's end used to leave
+  // the Blood Mage in the channel pose for the rest of the 8 seconds, draining nobody.
+  step(w, 0.2);
+  check("…and the caster stops channelling", ranger.order !== "cast", true);
+}
+{
+  // The same when the VICTIM dies mid-channel.
+  const { w, ranger, victim } = pair();
+  w.issueCast(ranger.id, "AHdr", victim.id);
+  step(w, 1);
+  victim.hp = 0;
+  step(w, 0.4);
+  check("a drain whose victim died releases the caster", ranger.order !== "cast", true);
 }
 
 // --- Siphon Mana on an ALLY gives mana instead of taking it -----------------------------

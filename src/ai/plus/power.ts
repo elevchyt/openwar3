@@ -223,12 +223,12 @@ function barFor(campLevel: number): CampBar {
  * walk into a red camp, and that three Archers are not three Grunts — is pinned by a test
  * rather than by reading it (tools/ai-plus-army-test.cjs).
  */
-export function canClearCamp(force: CreepForce, campLevel: number): boolean {
+export function canClearCamp(force: CreepForce, campLevel: number, hunger = 1): boolean {
   if (force.heroLevel < 1) return false; // no captain, no creeping
   if (force.health < CAMP_HEALTH) return false;
   if (force.heroHealth < CAMP_HERO_HEALTH) return false;
   const bar = barFor(campLevel);
-  return force.heroLevel >= bar.hero && forcePower(force) >= bar.power;
+  return force.heroLevel >= bar.hero && forcePower(force) * hunger >= bar.power;
 }
 
 /**
@@ -238,9 +238,28 @@ export function canClearCamp(force: CreepForce, campLevel: number): boolean {
  * Expressed as a ceiling rather than as a filter because that is the shape `GetCreepCamp` takes:
  * it hands back the NEAREST camp inside a level window, which is what a player picks too.
  */
-export function maxCampLevel(force: CreepForce): number {
-  if (!canClearCamp(force, 1)) return -1;
-  if (!canClearCamp(force, CAMP_GREEN_MAX + 1)) return CAMP_GREEN_MAX;
-  if (!canClearCamp(force, CAMP_ORANGE_MAX + 1)) return CAMP_ORANGE_MAX;
+export function maxCampLevel(force: CreepForce, hunger = 1): number {
+  if (!canClearCamp(force, 1, hunger)) return -1;
+  if (!canClearCamp(force, CAMP_GREEN_MAX + 1, hunger)) return CAMP_GREEN_MAX;
+  if (!canClearCamp(force, CAMP_ORANGE_MAX + 1, hunger)) return CAMP_ORANGE_MAX;
   return Infinity;
+}
+
+/** How far over a harder bar a HUNGRY party must price before it prefers that colour to the
+ *  easier camps nearer it (`preferredCampFloor`). OURS. */
+export const PREFER_MARGIN = 1.25;
+
+/**
+ * The EASIEST camp a hungry party still goes out of its way for — the `min` it asks
+ * `AiPlayer.creepCamp` for FIRST, before falling back on any camp it can take
+ * (`PlusProfile.creepHunger`). 0 for an ordinary appetite, else the floor of the hardest colour
+ * the party clears with `PREFER_MARGIN` to spare: as the army and the hero grow, the green
+ * camps stop being what it walks to.
+ */
+export function preferredCampFloor(force: CreepForce, hunger: number): number {
+  if (hunger <= 1 || !canClearCamp(force, 1, hunger)) return 0;
+  const power = forcePower(force) * hunger;
+  if (force.heroLevel >= RED.hero && power >= RED.power * PREFER_MARGIN) return CAMP_ORANGE_MAX + 1;
+  if (force.heroLevel >= ORANGE.hero && power >= ORANGE.power * PREFER_MARGIN) return CAMP_GREEN_MAX + 1;
+  return 0;
 }

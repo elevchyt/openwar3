@@ -17202,6 +17202,14 @@ export class SimWorld {
       // to strip buffs that would otherwise keep draining for a caster who walked away; a
       // channel that ran its course reaches here on the very tick its buffs expire and its
       // beam finishes fading, so the same cleanup costs it nothing.
+      //
+      // …and a link that broke from the OTHER end — the victim walked past the leash, or died —
+      // ends the caster's channel with it. Left alone, `channelLeft` ran on and the Blood Mage
+      // stood out the rest of Siphon Mana's 8 seconds in the channel pose with nothing on the
+      // end of the beam ("If the enemy passes out of range, the spell will end prematurely" —
+      // classic.battle.net, quoted above). Zeroed rather than stopped, so `tickCast` ends it
+      // the ordinary way (`endCast`) and the unit goes back to standing.
+      if (channelling && pc) pc.channelLeft = 0;
       this.stripDrain(caster);
       this.stripDrain(target);
       this.spellLightningStops.push(drainTag(dr.casterId));

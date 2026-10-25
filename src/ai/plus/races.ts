@@ -206,6 +206,13 @@ export interface PlusStrategy {
    */
   readonly thenAt3?: string;
   /**
+   * Other builds this one may grow into at tier 3 INSTEAD of `thenAt3`, one rolled per seat at
+   * seat time (`rollTransition`, evenly over `thenAt3` and these) and held for the match. The
+   * human's: a rifle or a Sanctum army at the Castle goes on to a FEW Knights or to Gryphon
+   * Riders — *"both of these variations are very common no matter the build"* (the developer).
+   */
+  readonly thenAt3Or?: readonly string[];
+  /**
    * The same clause one tier earlier: the build this one grows into once a TIER-2 hall stands
    * (its own `thenAt3` still applies at tier 3, and wins there). For a TIER-1 build whose army
    * is an opening rather than a plan — the night elf's Archers and Huntresses, which the
@@ -282,7 +289,9 @@ const TAVERN_SKILLS: Readonly<Record<string, readonly (readonly string[])[]>> = 
     [SUMMON_QUILBEAST, SUMMON_BEAR, SUMMON_QUILBEAST, SUMMON_BEAR, SUMMON_QUILBEAST, STAMPEDE,
       SUMMON_BEAR, SUMMON_HAWK, SUMMON_HAWK, SUMMON_HAWK],
   ],
-  [NAGA_WITCH]: [[FORKED_LIGHTNING, FROST_ARROWS, FORKED_LIGHTNING, FROST_ARROWS, FORKED_LIGHTNING,
+  // Frost Arrows FIRST, at every difficulty (the developer's rule): the slow is what a Sea Witch
+  // is hired for, and plus/casting.ts arms its autocast against PLAYERS only.
+  [NAGA_WITCH]: [[FROST_ARROWS, FORKED_LIGHTNING, FROST_ARROWS, FORKED_LIGHTNING, FORKED_LIGHTNING,
     TORNADO, FROST_ARROWS, MANA_SHIELD, MANA_SHIELD, MANA_SHIELD]],
   [PIT_LORD]: [[RAIN_OF_FIRE, CLEAVING_ATTACK, RAIN_OF_FIRE, CLEAVING_ATTACK, RAIN_OF_FIRE, DOOM,
     CLEAVING_ATTACK, HOWL_OF_TERROR, HOWL_OF_TERROR, HOWL_OF_TERROR]],
@@ -574,19 +583,19 @@ const HUMAN: PlusRaceTable = {
     // opens on Footmen. Paladin first, then the Blood Mage (the race's `combos` row for him).
     // A ranged line holds ground, so it takes its second mine early.
     { id: "rifles", name: "Riflemen, Priests and Mortars", tier: 2, weight: 26, expandAt: 240, expandAgainAt: 660,
-      heroes: [PALADIN, BLOOD_MAGE, MTN_KING, ARCHMAGE], thenAt3: "knights",
+      heroes: [PALADIN, BLOOD_MAGE, MTN_KING, ARCHMAGE], thenAt3: "rifleknights", thenAt3Or: ["riflegryphons"],
       mix: { [RIFLEMAN]: 3, [PRIEST]: 1.2, [MORTAR]: 0.8 } },
     // THE DOUBLE ARCANE SANCTUM. Footmen at tier 1, and at tier 2 a SECOND Sanctum pouring out
     // the three units that come out of it — the Spell Breaker being the army and the other two
     // the support. The second building IS the build: one Sanctum makes one caster at a time.
     { id: "sanctums", name: "Double Arcane Sanctum", tier: 2, weight: 24, expandAt: 330, expandAgainAt: 750,
       heroes: [ARCHMAGE, MTN_KING, PALADIN, BLOOD_MAGE],
-      factories: { [SANCTUM]: 2 },
+      factories: { [SANCTUM]: 2 }, thenAt3: "sanctumknights", thenAt3Or: ["sanctumgryphons"],
       mix: { [FOOTMAN]: 2, [SPELL_BREAKER]: 2, [SORCERESS]: 1.5, [PRIEST]: 1.5 } },
     // RIFLES AND PRIESTS — the same opening as `rifles`, with the Sanctum rather than the
     // Workshop behind it and the Riflemen never stopping.
     { id: "riflecaster", name: "Riflemen and Priests", tier: 2, weight: 22, expandAt: 270, expandAgainAt: 690,
-      heroes: [ARCHMAGE, MTN_KING, PALADIN, BLOOD_MAGE], thenAt3: "knights",
+      heroes: [ARCHMAGE, MTN_KING, PALADIN, BLOOD_MAGE], thenAt3: "rifleknights", thenAt3Or: ["riflegryphons"],
       mix: { [RIFLEMAN]: 3, [PRIEST]: 1.5, [SORCERESS]: 0.5 } },
     // THE CLASSIC TIER-3 ARMY, and the build both rifle openings GROW INTO (`thenAt3`): Knights,
     // Priests, Mortar Teams and a few Flying Machines. Rollable on its own too, in which case
@@ -602,6 +611,23 @@ const HUMAN: PlusRaceTable = {
     // Air is the slowest build to come online, so it is the last to look up from its own base.
     { id: "gryphons", name: "Gryphon Riders", tier: 3, weight: 12, expandAt: 480, expandAgainAt: 900,
       mix: { [GRYPHON]: 3, [HUMAN_DRAGON_HAWK]: 1, [RIFLEMAN]: 1.5, [PRIEST]: 1 } },
+    // THE TIER-3 TRANSITIONS — never rolled (weight 0), only grown into (`thenAt3`/`thenAt3Or`).
+    // The developer: a Paladin + Riflemen + Blood Mage human *"must eventually get a few Knights
+    // as well when they reach tier 3 (they should keep getting riflemen though). also another
+    // transition/variation of that build is to get gryphon riders … both of these variations are
+    // very common no matter the build (could be a typical Archmage and Mountain King build)"*.
+    // So the RIFLE army keeps its Riflemen as the bulk and adds a few Knights or the Gryphons,
+    // and the SANCTUM army keeps its casters and its two Sanctums and does the same.
+    { id: "rifleknights", name: "Riflemen and Knights", tier: 3, weight: 0, expandAt: 420, expandAgainAt: 840,
+      mix: { [RIFLEMAN]: 3, [KNIGHT]: 1.5, [PRIEST]: 1.2, [MORTAR]: 0.6 } },
+    { id: "riflegryphons", name: "Riflemen and Gryphon Riders", tier: 3, weight: 0, expandAt: 420, expandAgainAt: 840,
+      mix: { [RIFLEMAN]: 3, [GRYPHON]: 1.8, [PRIEST]: 1.2 } },
+    { id: "sanctumknights", name: "Knights and Arcane Sanctum casters", tier: 3, weight: 0, expandAt: 420, expandAgainAt: 840,
+      factories: { [SANCTUM]: 2 },
+      mix: { [FOOTMAN]: 1, [KNIGHT]: 2, [SPELL_BREAKER]: 1.5, [SORCERESS]: 1.2, [PRIEST]: 1.2 } },
+    { id: "sanctumgryphons", name: "Gryphon Riders and Arcane Sanctum casters", tier: 3, weight: 0, expandAt: 420, expandAgainAt: 840,
+      factories: { [SANCTUM]: 2 },
+      mix: { [FOOTMAN]: 1.5, [GRYPHON]: 2, [SPELL_BREAKER]: 1.5, [SORCERESS]: 1, [PRIEST]: 1.2 } },
   ],
   heroes: [ARCHMAGE, PALADIN, MTN_KING, BLOOD_MAGE],
   skills: {
@@ -1025,10 +1051,13 @@ const NIGHT_ELF: PlusRaceTable = {
     // nothing more (NightElfUnitFunc).
     [BALLISTA]: { from: ANCIENT_WAR, needs: [HUNTERS_HALL], tier: 1, siege: true },
     [DRYAD]: { from: ANCIENT_LORE, tier: 2 },
-    // TIER TWO — `[edoc] Requires=etoa`, the Tree of Ages. What waits for tier 3 is BEAR FORM,
-    // which is `Redc` rank 2 (`[Redc] Requirescount=2 Requires1=etoe`): the build's power spike
-    // is an UPGRADE, not the unit, and at tier 3 the unit could not be fielded before it.
-    [DRUID_CLAW]: { from: ANCIENT_LORE, tier: 2 },
+    // `[edoc] Requires=etoa`, the Tree of Ages — but TRAINED from tier 3, which is a choice and
+    // not the data. What waits for tier 3 is BEAR FORM, `Redc` rank 2 (`[Redc] Requirescount=2
+    // Requires1=etoe`), and a druid without it is a 255-gold caster in a melee line. The
+    // developer's rule: the night elf holds out with Archers (and the Lores' Dryads) until the
+    // Tree of Eternity, then ALWAYS goes bears and Dryads (`lategrove`), and the druid lives in
+    // the bear (plus/casting.ts `druidPass`).
+    [DRUID_CLAW]: { from: ANCIENT_LORE, tier: 3 },
     [MOUNTAIN_GIANT]: { from: ANCIENT_LORE, needs: [DEN_OF_WONDERS], tier: 2 }, // `[emtg] Requires=etoa,eden`
     [DRUID_TALON]: { from: ANCIENT_WIND, tier: 2, caster: true },
     // The Ancient of Wind is `[eaow] Requires=etoa`, so the Hippogryph is a tier-2 flyer; the
@@ -1093,7 +1122,12 @@ const NIGHT_ELF: PlusRaceTable = {
     { id: "talons", name: "Archers and Druids of the Talon", tier: 2, weight: 20, expandAt: 270, expandAgainAt: 690,
       heroes: [DEMON_HUNTER, MOON_CHICK, KEEPER, WARDEN], thenAt3: "lategrove",
       mix: { [ARCHER]: 3, [DRUID_TALON]: 1.2, [DRYAD]: 1 } },
+    // …and the Chimaera build is the same opening into the same tier 3, with the Roost kept
+    // whatever the purse (`chimgrove`): *"night elf must ALWAYS switch to bears + dryads when it
+    // reaches tier 3"*, so a build that names a tier-3 army of its own still grows into one with
+    // the bears in it.
     { id: "chimaeras", name: "Chimaeras and Dryads", tier: 3, weight: 12, expandAt: 480, expandAgainAt: 900,
+      thenAt3: "chimgrove",
       mix: { [CHIMAERA]: 3, [DRYAD]: 2, [HUNTRESS]: 1.5, [FAERIE_DRAGON]: 0.5 } },
     // THE LATE GROVE — never rolled (weight 0), only grown into at tier 3 by every other night
     // elf build (`thenAt3`). The developer's late game: *"bears (druid of the claw + his
@@ -1104,6 +1138,10 @@ const NIGHT_ELF: PlusRaceTable = {
     { id: "lategrove", name: "Druids of the Claw, Dryads and Chimaeras", tier: 3, weight: 0, expandAt: 480, expandAgainAt: 900,
       factories: { [ANCIENT_LORE]: 2 }, affluent: [CHIMAERA],
       mix: { [DRUID_CLAW]: 3, [DRYAD]: 2, [CHIMAERA]: 1.5, [ARCHER]: 0.5 } },
+    // The late grove for the Chimaera build: the same bears and Dryads, with its Chimaeras kept.
+    { id: "chimgrove", name: "Druids of the Claw, Dryads and Chimaeras", tier: 3, weight: 0, expandAt: 480, expandAgainAt: 900,
+      factories: { [ANCIENT_LORE]: 2 },
+      mix: { [DRUID_CLAW]: 3, [DRYAD]: 2, [CHIMAERA]: 2 } },
   ],
   heroes: [DEMON_HUNTER, KEEPER, MOON_CHICK, WARDEN],
   skills: {
@@ -1216,6 +1254,7 @@ export function tableForEdition(table: PlusRaceTable, tech: EditionTech): PlusRa
   const strategies = kept.map((s) => ({
     ...s,
     thenAt3: s.thenAt3 && ids.has(s.thenAt3) ? s.thenAt3 : undefined,
+    thenAt3Or: s.thenAt3Or?.filter((id) => ids.has(id)),
     thenAt2: s.thenAt2 && ids.has(s.thenAt2) ? s.thenAt2 : undefined,
   }));
 
@@ -1264,6 +1303,17 @@ export function rollStrategy(table: PlusRaceTable, techTier: number, roll: (lo: 
     if (pick <= 0) return s;
   }
   return pool[pool.length - 1];
+}
+
+/**
+ * Which tier-3 transition this seat will grow into (`PlusStrategy.thenAt3Or`) — rolled ONCE, at
+ * seat time, evenly over `thenAt3` and its alternatives, and written into the build as its
+ * `thenAt3` so the plan (plus/plan.ts `grownInto`) reads one answer for the whole match.
+ */
+export function rollTransition(strategy: PlusStrategy, roll: (lo: number, hi: number) => number): PlusStrategy {
+  const options = [strategy.thenAt3, ...(strategy.thenAt3Or ?? [])].filter((id): id is string => !!id);
+  if (options.length < 2) return strategy;
+  return { ...strategy, thenAt3: options[roll(0, options.length - 1)] };
 }
 
 /**

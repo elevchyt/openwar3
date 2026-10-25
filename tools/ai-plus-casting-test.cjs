@@ -860,11 +860,36 @@ const druid = (o = {}) => unit({
   check("a bear with no fight near does not turn back", cast([d])?.code === "Abrf", false);
 }
 {
-  // REJUVENATION on a hurt friend in reach, out of the fight as well as in it.
-  const d = druid();
+  // REJUVENATION on a hurt friend in reach, out of the fight as well as in it — for a druid that
+  // has no Bear Form yet (`Redc` rank 2 unresearched), which is still a caster.
+  const d = druid({ abilities: ["Aroa", "Arej"].map((id) => ({ id, code: id, level: 1, cooldownLeft: 0, autocastOn: false })) });
   const hurt = unit({ hp: 350, x: 200, race: "nightelf" });
   check("a druid rejuvenates a hurt soldier beside it", cast([d, hurt])?.code, "Arej");
   check("…aimed at it", cast([d, hurt])?.targetId, hurt.id);
+}
+
+console.log("\n--- …and once it has Bear Form, it LIVES in the bear (the developer's rule) ---");
+{
+  // In caster form with nothing to do, it goes back into the bear — no fight needed.
+  const d = druid();
+  check("a druid with Bear Form and nothing to heal turns into a bear", cast([d])?.code, "Abrf");
+  // …and a hurt SOLDIER is not a reason to leave it.
+  const bear = druid({ altModel: true });
+  const hurt = unit({ hp: 350, x: 200, race: "nightelf" });
+  check("a bear does not change back for a hurt soldier", cast([bear, hurt])?.code === "Abrf", false);
+}
+{
+  // An own HERO under 60 %: ONE bear changes back for it, and only with the mana for both
+  // presses (Bear Form 25 + Rejuvenation 125).
+  const hero = unit({ isHero: true, hp: 500, maxHp: 1000, x: 200, race: "nightelf" });
+  const b1 = druid({ altModel: true, x: 100 });
+  const b2 = druid({ altModel: true, x: -100 });
+  const orders = cast([b1, b2, hero], PLUS_INSANE, { all: true });
+  check("a bear changes back for a hero under 60 %", orders.filter((c) => c.code === "Abrf").length, 1);
+  check("…a hero at 70 % is not one", cast([druid({ altModel: true }), unit({ isHero: true, hp: 700, maxHp: 1000, x: 200 })])?.code === "Abrf", false);
+  check("…and a bear without the mana for both stays a bear",
+    cast([druid({ altModel: true, mana: 140 }), unit({ isHero: true, hp: 300, maxHp: 1000, x: 200 })])?.code === "Abrf", false);
+  check("…while one with exactly enough goes", cast([druid({ altModel: true, mana: 150 }), unit({ isHero: true, hp: 300, maxHp: 1000, x: 200 })])?.code, "Abrf");
 }
 
 // ==========================================================================================

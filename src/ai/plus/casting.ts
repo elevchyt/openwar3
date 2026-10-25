@@ -440,6 +440,26 @@ const NEVER = new Set<string>([
 // of Healing is an area heal `pickSpot` already knows how to aim, and a Scroll of Town Portal
 // belongs to the army manager's retreat rather than to this file.
 
+const BEAR_FORM = "Abrf";
+const REJUVENATION = "Arej";
+/** A hero under this share of its hit points is worth a druid leaving Bear Form — the
+ *  developer's 60 %. */
+const REJUV_HERO_HP = 0.6;
+/** How far a bear will go back for a hero — OURS: a little past Rejuvenation's own cast range
+ *  (`[Arej] Rng1` 400), so the walk is short and the druid is still in the same fight. */
+const REJUV_REACH = 900;
+/** A task that has not landed in this long is given up — OURS. */
+const REJUV_TASK_TIME = 8;
+const rejuvenating = (u: SimUnit): boolean => u.buffs.some((b) => b.group === "rejuv");
+
+/**
+ * Autocasts that are ON against a player's army and OFF against a creep camp — the developer's
+ * rule for the Sea Witch's Frost Arrows (`ANfa`): each arrow costs mana that a camp is not worth
+ * and the slow is what a fight against a player is decided by. Flipped every pass by
+ * `armAutocasts` off `playerInReach`, at every difficulty.
+ */
+const PLAYERS_ONLY_AUTOCAST = new Set<string>(["ANfa"]);
+
 /** Autocasts the AI must not simply switch on — the same two the classic caster holds back,
  *  for the same reasons (Defend costs 30% move speed and has a condition; Replenish is a job). */
 const HAND_AUTOCAST = new Set<string>([
@@ -778,6 +798,8 @@ export class PlusCaster {
    *  fight starts and kept for as long as it lasts. See `CREEP_SPELL_SMALL` for why it cannot
    *  be a per-pass roll, and `trackFight`, which is what clears it. */
   private offense = new Map<number, boolean>();
+  /** Druid of the Claw → the hero it has left Bear Form to Rejuvenate (`druidPass`). */
+  private rejuvTask = new Map<number, { hero: number; since: number }>();
 
   /**
    * `roll` is the AI's OWN random stream (`AiPlayer.randomInt`), not `Math.random` — a
@@ -822,8 +844,9 @@ export class PlusCaster {
       // nobody — a whole race's healing, silently absent, because the one walk that could have
       // switched it on skipped every building in the game. The Obsidian Statue is the same row
       // on a unit and was already reached; the well was not.
-      if (this.canArm(u)) this.armAutocasts(u);
+      if (this.canArm(u)) this.armAutocasts(u, foes);
       if (!this.canAct(u)) continue;
+      if (this.druidPass(u, own)) continue;
       this.tryCast(u, friends, foes);
     }
     this.lastHp.clear();
@@ -837,6 +860,75 @@ export class PlusCaster {
     for (const id of this.fightSince.keys()) if (!alive.has(id)) this.fightSince.delete(id);
     for (const id of this.burningSince.keys()) if (!alive.has(id)) this.burningSince.delete(id);
     for (const id of this.offense.keys()) if (!alive.has(id)) this.offense.delete(id);
+    for (const id of this.rejuvTask.keys()) if (!alive.has(id)) this.rejuvTask.delete(id);
+  }
+
+  /**
+   * THE DRUID OF THE CLAW LIVES IN BEAR FORM — the developer's rule for the night elf's tier-3
+   * army: a druid that has Bear Form (`Redc` rank 2, `[Abrf] Requires=Redc Requiresamount=2`)
+   * wears it all the time, not only for a fight, and leaves it for ONE reason: an own hero
+   * under `REJUV_HERO_HP` it can Rejuvenate. The bear's card has no Rejuvenation (`edcm`
+   * carries Roar and Bear Form only — UnitAbilities.slk), so the druid has to change back first,
+   * and two rules keep that from wrecking the army:
+   *
+   *  · ONE druid per hero (`rejuvTask`) — every druid in reach turning back for the same
+   *    Demon Hunter is the whole bear line standing in caster form at once.
+   *  · only with the mana for BOTH presses, the change back and the heal — Bear Form keeps the
+   *    absolute mana across the morph (SimWorld.morphUnit: the pools are 200/200), so the bear's
+   *    own bar is what is read; a druid that changes back and cannot cast is a caster in a melee.
+   *
+   * The task ends when the hero wears Rejuvenation (anybody's), dies, or `REJUV_TASK_TIME` runs
+   * out, and the druid goes straight back into the bear. Returns true when it has issued (or is
+   * waiting on) an order of its own, so `tryCast` leaves it alone this pass; a bear with nothing
+   * to do falls through to the ladder, which still Roars.
+   */
+  private druidPass(u: SimUnit, own: SimUnit[]): boolean {
+    const bear = u.abilities.find((a) => a.level >= 1 && this.view.def(a.id)?.code === BEAR_FORM);
+    if (!bear || !this.view.world.unitMeets(u, bear.id)) return false;
+    const press = (code: string, targetId = 0): boolean =>
+      this.view.world.castUseError(u.id, code) === null
+      && this.view.order({ c: "cast", unitId: u.id, code, targetId, x: targetId ? 0 : u.x, y: targetId ? 0 : u.y, queued: false });
+    const task = this.rejuvTask.get(u.id);
+    if (task) {
+      const hero = this.view.world.units.get(task.hero);
+      if (!hero || hero.hp <= 0 || rejuvenating(hero) || this.now - task.since > REJUV_TASK_TIME) {
+        this.rejuvTask.delete(u.id);
+      } else if (u.altModel) {
+        if (!press(bear.code)) this.rejuvTask.delete(u.id);
+        return true;
+      } else {
+        const rej = u.abilities.find((a) => a.level >= 1 && this.view.def(a.id)?.code === REJUVENATION);
+        if (rej && this.view.world.castError(u.id, rej.code, hero.id) === null && press(rej.code, hero.id)) return true;
+        this.rejuvTask.delete(u.id);
+      }
+    }
+    if (u.altModel) {
+      const hero = this.rejuvWanted(u, own, bear);
+      if (!hero) return false;
+      this.rejuvTask.set(u.id, { hero: hero.id, since: this.now });
+      press(bear.code);
+      return true;
+    }
+    // In caster form with nothing to heal: back into the bear.
+    return press(bear.code);
+  }
+
+  /** The own hero this BEAR should change back for, if any — see `druidPass`. */
+  private rejuvWanted(u: SimUnit, own: SimUnit[], bear: SimUnit["abilities"][number]): SimUnit | null {
+    const rejDef = this.view.def(REJUVENATION);
+    const bearDef = this.view.def(bear.id);
+    if (!rejDef || !bearDef) return null;
+    const rejCost = rejDef.levelData[0]?.cost ?? 0;
+    const bearCost = bearDef.levelData[Math.min(bear.level, bearDef.levelData.length) - 1]?.cost ?? 0;
+    if (u.mana < rejCost + bearCost) return null;
+    const claimed = new Set([...this.rejuvTask.values()].map((t) => t.hero));
+    let best: SimUnit | null = null;
+    for (const h of own) {
+      if (!h.isHero || h.hp <= 0 || claimed.has(h.id) || rejuvenating(h)) continue;
+      if (h.hp / Math.max(1, h.maxHp) >= REJUV_HERO_HP || !near(u, h, REJUV_REACH)) continue;
+      if (!best || h.hp / h.maxHp < best.hp / best.maxHp) best = h;
+    }
+    return best;
   }
 
   /** May this unit's autocasts be switched on? A much shorter list than `canAct`: arming is a
@@ -867,15 +959,33 @@ export class PlusCaster {
    *  covers Heal, Inner Fire, Slow, Bloodlust, Curse, Faerie Fire, Frost Armor, Abolish Magic,
    *  Web, Raise Dead, Get Corpse and every arrow orb, with none of it restated here. (Ensnare is
    *  a target spell, not an autocast, and is cast off `roleOf` as a disable.) */
-  private armAutocasts(u: SimUnit): void {
+  private armAutocasts(u: SimUnit, foes: SimUnit[]): void {
     for (const ab of u.abilities) {
-      if (ab.level < 1 || ab.autocastOn) continue;
+      if (ab.level < 1) continue;
       const def = this.view.def(ab.id);
       if (!def?.autocast) continue;
+      if (PLAYERS_ONLY_AUTOCAST.has(def.code)) {
+        // A TOGGLE both ways round, so it is only flipped when it disagrees with the fight.
+        const want = this.playerInReach(u, foes);
+        if (want !== ab.autocastOn) this.view.order({ c: "autocast", unitId: u.id, code: ab.code });
+        continue;
+      }
+      if (ab.autocastOn) continue;
       if (NEVER.has(def.code) || HAND_AUTOCAST.has(def.code) || isRepairCode(def.code)) continue;
       if (!this.view.world.unitMeets(u, ab.id)) continue;
       this.view.order({ c: "autocast", unitId: u.id, code: ab.code });
     }
+  }
+
+  /** A hostile PLAYER's unit (never a creep, a building or a worker) inside the unit's look —
+   *  the same reading `worthTheMana` makes, without the creep roll. */
+  private playerInReach(u: SimUnit, foes: SimUnit[]): boolean {
+    const look = Math.max(u.weapon?.acquire ?? 0, MIN_LOOK);
+    for (const f of foes) {
+      if (f.building || f.isPeon || f.isCreep || !near(u, f, look)) continue;
+      if (f.owner >= 0 && f.owner < MELEE.MAX_PLAYERS) return true;
+    }
+    return false;
   }
 
   /**
