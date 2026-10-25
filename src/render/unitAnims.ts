@@ -49,6 +49,10 @@ export interface AnimSet {
    *  Strike, or the blow that breaks Wind Walk). -1 when the model authors none, which is
    *  most of them — only units with a proc-on-attack passive carry one. */
   attackSlam: number;
+  /** "Attack Spell" — the swing an ABILITY's attack is struck with (SimUnit.swingSpell): the
+   *  Chimaera's Corrosive Breath at a building. -1 if the model authors none, and the plain
+   *  swing then serves. */
+  attackSpell: number;
   /** "Stand Ready" — the ALERT stance a unit holds BETWEEN swings: the Grunt's raised axe,
    *  the Dreadlord's crouch. -1 when the model authors none, which most of the flyers do not
    *  (WyvernRider, Gargoyle, GryphonRider, Hippogryph, Chimaera, BatTroll all go Stand ·
@@ -561,6 +565,11 @@ export function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] =
     // King authors "Attack Slam" and "Attack Slam Alternate" (Avatar), and applyAnimProps
     // has already renamed the alternate to a bare "Attack Slam" — or blanked it — by here.
     attackSlam: find(/^attack slam\s*$/i),
+    // Anchored like the slam, and spelled either way round the models spell it (Chimaera.mdx's
+    // "attack spell", the casters' "Spell Attack"). The anchor keeps out the Owlbear's
+    // "Attack Spell Slam", which is its War Stomp, and the bear's "Attack Spell Alternate" —
+    // already a bare "Attack Spell" here when the bear is the form being worn.
+    attackSpell: find(/^(attack spell|spell attack)(\s*-?\s*\d+)?\s*$/i),
     // Anchored for the same reason as the slam: "Stand Ready Alternate" is the OTHER form's
     // stance and has already been renamed to a bare "Stand Ready" by applyAnimProps when
     // the alternate props are on. And in the alternate form only a clip of MINE counts — a
@@ -614,7 +623,7 @@ export function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] =
 export function isSwingClip(a: AnimSet, seq: number): boolean {
   if (seq < 0) return false;
   return (
-    (seq === a.attackSlam || a.attackVariants.includes(seq) || a.attackGold.includes(seq) || a.attackLumber.includes(seq)) &&
+    (seq === a.attackSlam || seq === a.attackSpell || a.attackVariants.includes(seq) || a.attackGold.includes(seq) || a.attackLumber.includes(seq)) &&
     !a.standVariants.includes(seq)
   );
 }

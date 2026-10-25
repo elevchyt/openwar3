@@ -298,6 +298,7 @@ export interface UnitSnapshot {
   swingBroken: boolean;
   swingFollowThrough: boolean;
   swingSlam: boolean;
+  swingSpell: boolean;
   altModel: boolean;
   /** Seconds left on a TIMED alternate form — a Militia's 40 (`[Amil]` HeroDur1), a raging
    *  Alchemist's 15. Rides with `altModel` (which is already "am I wearing the other half of
@@ -760,6 +761,7 @@ export function rememberedUnit(u: SimUnit): UnitSnapshot {
     swingBroken: false,
     swingFollowThrough: false,
     swingSlam: false,
+    swingSpell: false,
     altModel: u.altModel,
     altFormLeft: 0, // a memory has no live clock on it — the same rule the rest of this stub keeps
     hexForm: "", // …nor a critter skin: only organic units are hexed, and only buildings are remembered
@@ -909,6 +911,7 @@ export function snapshotFor(
       swingBroken: u.swingBroken,
       swingFollowThrough: u.swingFollowThrough,
       swingSlam: u.swingSlam,
+      swingSpell: u.swingSpell,
       altModel: u.altModel,
       altFormLeft: u.altFormLeft,
       hexForm: u.hexForm,

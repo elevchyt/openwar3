@@ -327,9 +327,9 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
   w.u16(quantU16(s.speed));
   w.u8(Math.min(255, Math.round(s.radius)));
   // The swing counter's TOP bit carries `swingFollowThrough`, because the flags word above is
-  // full. The counter only ever has to CHANGE when a swing starts (the renderer compares, it
-  // never subtracts), so fifteen bits of it lose nothing.
-  w.u16((s.swingSeq & 0x7fff) | (s.swingFollowThrough ? 0x8000 : 0));
+  // full, and the bit under it `swingSpell`. The counter only ever has to CHANGE when a swing
+  // starts (the renderer compares, it never subtracts), so fourteen bits of it lose nothing.
+  w.u16((s.swingSeq & 0x3fff) | (s.swingSpell ? 0x4000 : 0) | (s.swingFollowThrough ? 0x8000 : 0));
   // …and the CHOP counter's top bit carries `hidden` (`ShowUnit`), for the same reason and on the
   // same terms: the counter is only ever compared for a change, never subtracted.
   w.u16((s.chopSeq & 0x7fff) | (s.hidden ? 0x8000 : 0));
@@ -525,6 +525,7 @@ function readUnit(r: Reader): UnitSnapshot {
     swingBroken: (flags & F_SWING_BROKEN) !== 0,
     swingFollowThrough: false, // …read below, off the swing counter's top bit
     swingSlam: (flags & F_SWING_SLAM) !== 0,
+    swingSpell: false, // …read below, off the swing counter's second bit
     altModel: (flags & F_ALT_MODEL) !== 0,
     altFormLeft: 0,
     spawning: 0,
@@ -599,7 +600,8 @@ function readUnit(r: Reader): UnitSnapshot {
   s.speed = r.u16();
   s.radius = r.u8();
   const swing = r.u16();
-  s.swingSeq = swing & 0x7fff;
+  s.swingSeq = swing & 0x3fff;
+  s.swingSpell = (swing & 0x4000) !== 0;
   s.swingFollowThrough = (swing & 0x8000) !== 0;
   const chop = r.u16();
   s.chopSeq = chop & 0x7fff;

@@ -2527,9 +2527,11 @@ export class RtsController {
         this.sounds.playImpact(h.weaponSound, armorSound, at); // melee: material clang
         continue;
       }
-      // No weapon sound: a missile's own impact noise instead, which only the def records.
-      const atk = this.defOf(h.attackerId);
-      if (atk?.missileArt) this.sounds.playMissile(atk.missileArt, "impact", at); // ranged
+      // No weapon sound: a missile's own impact noise instead — the missile that LANDED it,
+      // which the hit carries (SimWorld.hits), and only failing that the def's one art: a
+      // two-slot unit throws two different missiles (the Chimaera's acid and lightning).
+      const art = h.missileArt || this.defOf(h.attackerId)?.missileArt;
+      if (art) this.sounds.playMissile(art, "impact", at); // ranged
     }
     for (const workerId of this.sim.drainChops()) {
       const def = this.defOf(workerId);
@@ -5244,14 +5246,18 @@ export class RtsController {
         // SimUnit.swingSlam) shows the model's "Attack Slam" instead of a random plain
         // swing: that clip is authored for exactly this and is why the Blademaster and
         // the Mountain King have one. Models without it just swing normally.
+        // …and a blow an ABILITY strikes (SimUnit.swingSpell — Corrosive Breath at a building)
+        // shows the model's "Attack Spell", falling back to the plain swing without one.
         const vs =
           u.swingSlam && e.anims.attackSlam >= 0
             ? [e.anims.attackSlam]
-            : w && w.carryGold > 0 && e.anims.attackGold.length
-              ? e.anims.attackGold
-              : w && w.carryLumber > 0 && e.anims.attackLumber.length
-                ? e.anims.attackLumber
-                : e.anims.attackVariants;
+            : u.swingSpell && e.anims.attackSpell >= 0
+              ? [e.anims.attackSpell]
+              : w && w.carryGold > 0 && e.anims.attackGold.length
+                ? e.anims.attackGold
+                : w && w.carryLumber > 0 && e.anims.attackLumber.length
+                  ? e.anims.attackLumber
+                  : e.anims.attackVariants;
         // A model whose "attack" IS its stand clip: the Human towers author ONE sequence
         // apiece that covers both ("Stand Ready Attack", "Stand Upgrade Third Attack Ready"),
         // so `anims.attack` and `anims.stand` land on the same index. Re-triggering that per

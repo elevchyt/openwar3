@@ -5993,8 +5993,15 @@ export class MapViewerScene {
       }
       const src = b.srcId ? units.get(b.srcId) : undefined;
       const dst = b.dstId ? units.get(b.dstId) : undefined;
-      const sx = src ? src.x : b.sx;
-      const sy = src ? src.y : b.sy;
+      // A unit's end is re-anchored on it every frame, and the SOURCE's at its launch offset
+      // turned by the facing it has NOW (SimLightning.slx/sly — the sim's launchPoint: forward
+      // is launchY, right is launchX), so a Chimaera's bolt stays in its jaws as it turns.
+      const fc = src ? Math.cos(src.facing) : 0;
+      const fs = src ? Math.sin(src.facing) : 0;
+      const lx = b.slx ?? 0;
+      const ly = b.sly ?? 0;
+      const sx = src ? src.x + ly * fc + lx * fs : b.sx;
+      const sy = src ? src.y + ly * fs - lx * fc : b.sy;
       const tx = dst ? dst.x : b.tx;
       const ty = dst ? dst.y : b.ty;
       // Seen if EITHER end is: a bolt reaching out of the fog into your army is a bolt you
@@ -9003,7 +9010,12 @@ export class MapViewerScene {
     inst.setLocation(this.loc3);
     inst.setSequence(death);
     inst.setSequenceLoopMode(0); // play once, then the effects timer detaches it
-    this.effects.push({ inst, t: 1.0 });
+    // …for as long as the clip RUNS, not a flat second: a missile's Death is its whole
+    // impact, and the authors size it to the burst — 0.9 s for ChimaeraLightningMissile, 2.33 s
+    // for ChimaeraAcidMissile, whose acid splash was being cut off well under halfway. An interval we cannot read keeps
+    // the old second.
+    const iv = inst.model.sequences[death]?.interval;
+    this.effects.push({ inst, t: iv && iv[1] > iv[0] ? (iv[1] - iv[0]) / 1000 : 1.0 });
   }
 
   private async loadProjectile(id: number, art: string): Promise<void> {
@@ -15398,7 +15410,7 @@ export class MapViewerScene {
         // both ends are re-read from the units every frame in the render pass below, so a
         // bolt stays attached to a target that walks out from under it.
         for (const l of this.rts!.drainFxLightnings()) {
-          this.lightning?.add({ type: l.id, srcId: l.sourceId, dstId: l.targetId, sx: l.sx, sy: l.sy, sz: l.sz, tx: l.tx, ty: l.ty, tz: l.tz, life: l.life, delay: l.delay, tag: l.tag });
+          this.lightning?.add({ type: l.id, srcId: l.sourceId, dstId: l.targetId, slx: l.slx, sly: l.sly, sx: l.sx, sy: l.sy, sz: l.sz, tx: l.tx, ty: l.ty, tz: l.tz, life: l.life, delay: l.delay, tag: l.tag });
         }
         // …and bolts the sim cut short (an interrupted Drain's tether).
         for (const tag of this.rts!.drainFxLightningStops()) this.lightning?.stop(tag);

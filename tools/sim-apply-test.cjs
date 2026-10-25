@@ -28,7 +28,7 @@ function record(over = {}) {
     isHero: false, properName: "", isCreep: false,
     x: 100, y: 100, prevX: 100, prevY: 100, facing: 0, flyHeight: 0, speed: 270, radius: 16,
     flying: false, order: "idle", moving: false, inCombat: false, working: false,
-    swingSeq: 0, chopSeq: 0, swingBroken: false, swingSlam: false, altModel: false,
+    swingSeq: 0, chopSeq: 0, swingBroken: false, swingSlam: false, swingSpell: false, altModel: false,
     spawning: 0, constructing: 0, repair: null,
     inMine: false, insideBuild: false, inBurrow: false, devouredBy: 0, vanished: false, hidden: false,
     invisible: false, ethereal: false,

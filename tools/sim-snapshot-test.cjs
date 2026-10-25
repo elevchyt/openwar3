@@ -42,7 +42,7 @@ const unit = (o) => ({
   isHero: false, properName: "", isCreep: false,
   x: 10, y: 20, facing: 0, flyHeight: 0, speed: 270, radius: 16, flying: false,
   order: "idle", moving: false, inCombat: false, working: false,
-  swingSeq: 0, chopSeq: 0, swingBroken: false, swingSlam: false,
+  swingSeq: 0, chopSeq: 0, swingBroken: false, swingSlam: false, swingSpell: false,
   altModel: false, altFormLeft: 0, spawning: 0, constructing: 0, repair: null,
   inMine: false, insideBuild: false, inBurrow: false, devouredBy: 0, vanished: false,
   invisible: false, ethereal: false,
@@ -701,7 +701,7 @@ console.log("the animation picker answers the same off the payload as off the si
   // sequence numbers make "which branch" readable in the failure output.
   const anims = {
     stand: 1, standVariants: [1], walk: 2, walkFast: 3, attack: 4, attackVariants: [4],
-    attackGold: [], attackLumber: [], attackSlam: -1, death: 5,
+    attackGold: [], attackLumber: [], attackSlam: -1, attackSpell: -1, death: 5,
     standGold: 6, walkGold: 7, standLumber: 8, walkLumber: 9, chopLumber: 10, build: 11,
     decayFlesh: -1, decayBone: -1, morph: -1, seqNames: [], seqMine: [],
   };

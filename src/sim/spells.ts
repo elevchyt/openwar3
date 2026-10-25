@@ -186,9 +186,11 @@ export interface SpellApi {
    *  `id` is a LightningData row, normally taken straight off the ability
    *  (`def.lightning[0]` = the primary bolt, `[1]` = the secondary). `life` 0 = the row's own
    *  fade duration; `delay` staggers a chain's bounces. Ends attach at each unit's own
-   *  missile launch/impact height, so a bolt leaves the caster's hands and lands on the
-   *  target's body rather than at their feet. */
-  emitLightning(id: string, from: SimUnit, to: SimUnit, life?: number, delay?: number, tag?: string): void;
+   *  missile launch/impact POINT, so a bolt leaves the caster's hands (or a Chimaera's jaws)
+   *  and lands on the target's body rather than at their feet. `fromBody` is for a bolt that
+   *  leaves a unit it STRUCK rather than one that threw it — a chain's bounce, a link between
+   *  members, mana drawn OUT of a victim — which starts at that unit's impact point instead. */
+  emitLightning(id: string, from: SimUnit, to: SimUnit, life?: number, delay?: number, tag?: string, fromBody?: boolean): void;
   /** Cut every live bolt carrying `tag` (see SimLightning.tag) — an interrupted channel
    *  taking its tether down with it. */
   stopLightning(tag: string): void;
@@ -952,7 +954,7 @@ function chainBolts(api: SpellApi, caster: SimUnit, def: AbilityDef, chain: SimU
   const [primary, secondary] = bolts(def);
   let prev = caster;
   chain.forEach((u, i) => {
-    api.emitLightning(i === 0 ? primary : secondary, prev, u, 0, i * CHAIN_BOUNCE_DELAY);
+    api.emitLightning(i === 0 ? primary : secondary, prev, u, 0, i * CHAIN_BOUNCE_DELAY, undefined, i > 0);
     prev = u;
   });
 }
@@ -1642,7 +1644,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     // the player at a glance which four are sharing the damage.
     const links = group.length > 2 ? group.length : 1; // a pair needs one bolt, not two on top of each other
     for (let i = 0; i < links; i++) {
-      api.emitLightning(bolts(def)[0], group[i], group[(i + 1) % group.length], linkTime);
+      api.emitLightning(bolts(def)[0], group[i], group[(i + 1) % group.length], linkTime, undefined, undefined, true);
     }
   },
 
@@ -3857,7 +3859,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const lvl = lv(def, rank);
     const stolen = api.burnMana(t, d(lvl, 0, 50));
     caster.mana = Math.min(caster.maxMana, caster.mana + stolen);
-    api.emitLightning(def.lightning[0] ?? "", t, caster);
+    api.emitLightning(def.lightning[0] ?? "", t, caster, undefined, undefined, undefined, true);
     if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
   },
 

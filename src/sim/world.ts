@@ -100,6 +100,11 @@ export interface SimWeapon {
    *  drops unarmed slots, so its index is not the slot either. */
   slot: number;
   enabled: boolean;
+  /** …and that bit as the TYPE's own `weapsOn` set it, before any research rewrote the mask.
+   *  A slot the type leaves OFF is one something else has to give the unit, which is half of
+   *  what makes it an ABILITY's attack (SimWorld.attackAbility). Optional because a slot built
+   *  outside weaponsFromDef (a test's fixture) states nothing — read it as `=== false`. */
+  baseEnabled?: boolean;
   /** "Targets Allowed" (`targs1`/`targs2`). A weapon strikes a target only if its list admits
    *  it — `air` for a flyer, `structure` for a building, `ground` for everything else — which
    *  is why a Footman cannot answer a Gryphon Rider and a Siege Engine only knocks down walls.
@@ -264,6 +269,12 @@ export interface SimLightning {
   id: string; // LightningData row ("CLPB", "AFOD", …)
   sourceId: number; // 0 = a fixed point
   targetId: number;
+  /** The source's weapon LAUNCH offset in its own frame (launchX right, launchY forward — see
+   *  launchPoint), so the bolt leaves from where the unit's missiles do rather than from the
+   *  middle of its body. Carried as an offset, not a point, because the renderer re-anchors a
+   *  unit's end every frame and the unit may have turned: it is rotated by the LIVE facing. */
+  slx?: number;
+  sly?: number;
   sx: number;
   sy: number;
   sz: number;
@@ -377,6 +388,7 @@ export function weaponsFromDef(def: UnitDef): SimWeapon[] {
       baseDamagePoint: s.damagePoint,
       baseBackswing: s.backswing,
       enabled: s.enabled,
+      baseEnabled: s.enabled,
       targets: s.targets,
       spillDist: s.spillDist,
       spillRadius: s.spillRadius,
@@ -1682,6 +1694,9 @@ export interface SimUnit {
   swingCrit: boolean; // Critical Strike (AOcr) hit this swing — dealDamage multiplies it
   swingBash: boolean; // Bash (AHbh) procced this swing — dealDamage adds its bonus + stuns
   swingSlam: boolean; // this swing shows "Attack Slam": a crit, a bash, or the Wind Walk backstab
+  /** This swing is an ABILITY's attack (SimWorld.attackAbility — Corrosive Breath's acid at a
+   *  building) and so shows the model's "Attack Spell" clip rather than its plain swing. */
+  swingSpell: boolean;
   chopSeq: number; // increments each lumber chop (renderer re-triggers the chop clip in sync)
   inCombat: boolean; // engaging in range this tick (drives the attack animation)
   path: Array<[number, number]>; // world waypoints
@@ -3924,7 +3939,10 @@ export class SimWorld {
    *  hear it at all — and neither question can be answered from the target's id once the
    *  blow was the killing one: by the time the drain runs, a reaped unit has no position
    *  left. That is the case the fog test must get right, so the point travels with the hit. */
-  private hits: Array<{ attackerId: number; targetId: number; weaponSound: string; x: number; y: number }> = [];
+  /** `missileArt` is the MISSILE that landed the blow, when one did — its own hit noise is the
+   *  blow's sound (rts playImpacts), and it is the only record of WHICH: a Chimaera throws acid
+   *  at a building and lightning at a soldier, and the unit def names one art for both. */
+  private hits: Array<{ attackerId: number; targetId: number; weaponSound: string; x: number; y: number; missileArt?: string }> = [];
   // Worker ids whose axe just landed a chop this tick — the renderer plays the
   // chop SFX (worker's lumber-weapon material vs Wood).
   private chops: number[] = [];
@@ -5484,7 +5502,7 @@ export class SimWorld {
   /** Weapon hits (melee + projectile) landed since the last drain. Each names the weapon
    *  that landed it, which the renderer pairs with the struck unit's material to get the
    *  combat-impact sound — see `hits`. */
-  drainHits(): Array<{ attackerId: number; targetId: number; weaponSound: string; x: number; y: number }> {
+  drainHits(): Array<{ attackerId: number; targetId: number; weaponSound: string; x: number; y: number; missileArt?: string }> {
     if (!this.hits.length) return this.hits;
     const out = this.hits;
     this.hits = [];
@@ -9264,6 +9282,7 @@ export class SimWorld {
       | "swingCrit"
       | "swingBash"
       | "swingSlam"
+      | "swingSpell"
       | "chopSeq"
       | "inCombat"
       | "neutralPassive"
@@ -9553,6 +9572,7 @@ export class SimWorld {
       swingCrit: false,
       swingBash: false,
       swingSlam: false,
+      swingSpell: false,
       chopSeq: 0,
       inCombat: false,
       neutralPassive: false,
@@ -10730,6 +10750,7 @@ export class SimWorld {
     u.swingCrit = false; // crit, bash and backstab are all blows on a UNIT
     u.swingBash = false;
     u.swingSlam = false;
+    u.swingSpell = false;
     u.desiredFacing = u.facing;
     u.swingSeq++; // renderer restarts the attack clip so the blow lines up
   }
@@ -10857,6 +10878,7 @@ export class SimWorld {
     u.swingCrit = false; // crit, bash and backstab are all blows on a UNIT
     u.swingBash = false;
     u.swingSlam = false;
+    u.swingSpell = false;
     u.desiredFacing = u.facing;
     u.swingSeq++; // renderer restarts the attack clip so the blow lines up
   }
@@ -11033,6 +11055,7 @@ export class SimWorld {
     u.swingCrit = false; // crit, bash and backstab are all blows on a UNIT
     u.swingBash = false;
     u.swingSlam = false;
+    u.swingSpell = false;
     u.desiredFacing = u.facing;
     u.swingSeq++; // renderer restarts the attack clip so the shot lines up
   }
@@ -19323,15 +19346,25 @@ export class SimWorld {
     emitSplat: (splatId, x, y) => {
       if (splatId) this.spellSplats.push({ splatId, x, y });
     },
-    emitLightning: (id, from, to, life, delay, tag) => {
+    emitLightning: (id, from, to, life, delay, tag, fromBody) => {
       if (!id) return;
+      // The source end is the shooter's LAUNCH POINT — the same `launchX/Y/Z` its missiles leave
+      // from — so the Chimaera's Lightning Attack is breathed out of its jaws (UnitWeapons echm
+      // 10/105/-18) instead of strung from its chest, and a caster's bolt leaves its hand. A
+      // bolt leaving a body it struck (see SpellApi.emitLightning) starts where one LANDS on it.
+      const fw = fromBody ? null : from.weapon;
+      const slx = fw?.launchX ?? 0;
+      const sly = fw?.launchY ?? 0;
+      const [sx, sy] = launchPoint(from, slx, sly, 0);
       this.spellLightnings.push({
         id,
         sourceId: from.id,
         targetId: to.id,
-        sx: from.x,
-        sy: from.y,
-        sz: boltZ(from, "launch"),
+        slx: slx || undefined,
+        sly: sly || undefined,
+        sx,
+        sy,
+        sz: boltZ(from, fromBody ? "impact" : "launch"),
         tx: to.x,
         ty: to.y,
         tz: boltZ(to, "impact"),
@@ -21119,6 +21152,10 @@ export class SimWorld {
     // Transition Time earns nothing (breakInvisibility asks the buff's own `delay`), and a
     // strike that pays no bonus must not be dressed up as the one that does.
     u.swingSlam = u.swingCrit || (u.swingBash && !w.ranged) || u.invisible;
+    // …and a blow an ABILITY strikes shows the model's spell swing: the Chimaera breathes its
+    // Corrosive Breath at a building with "attack spell", and the lightning at everything else
+    // with its plain "Attack" (Chimaera.mdx authors exactly those two).
+    u.swingSpell = !!this.attackAbility(u, w);
     u.swingSeq++; // renderer restarts the attack animation so the strike lines up
     // EVENT_(PLAYER_)UNIT_ATTACKED fires as the attacker commits a swing at the target.
     if (this.captureAttacks) this.attackEvents.push({ attacked: eventInfo(t), attacker: eventInfo(u) });
@@ -22186,8 +22223,12 @@ export class SimWorld {
     // lizards): the shot also strings its row's `LightningEffect` (`CHIM`) from the shooter to
     // the target, DataA "Graphic Delay" (0.25) after the release and for DataB "Graphic
     // Duration" (0.25). Presentation only — the damage is the missile's.
+    // …and only on the shot that is the ability's: the row names its own missile, and a
+    // second slot that throws something else is not a lightning attack. With Corrosive Breath
+    // the Chimaera's acid at a building strung the bolt too, which read as the old attack.
     const li = this.gatedPassive(u, "Alit");
-    if (li?.def.lightning[0]) this.spellApi.emitLightning(li.def.lightning[0], u, t, this.dataOf(li.lvl, 1, 0.25), this.dataOf(li.lvl, 0, 0.25));
+    const liArt = li?.def.missileArt.toLowerCase();
+    if (li?.def.lightning[0] && (!liArt || liArt === w.missileArt.toLowerCase())) this.spellApi.emitLightning(li.def.lightning[0], u, t, this.dataOf(li.lvl, 1, 0.25), this.dataOf(li.lvl, 0, 0.25));
   }
 
   /** Where an artillery shell bursts and what its rings are — the SLOT's, carried on the shell
@@ -22456,7 +22497,14 @@ export class SimWorld {
       const dist = Math.hypot(dx, dy);
       const step = p.speed * dt;
       if (dist <= step + t.radius) {
-        this.projectileImpacts.push({ id: p.id, x: t.x, y: t.y, z: p.impactZ }); // record the hit point
+        // The hit point is where the missile ARRIVES — the edge of the body it struck, on its own
+        // line of flight — and not the body's centre. The two are a few units apart on a soldier
+        // and a whole building apart on a structure: a Barracks' centre at the impactZ of 60 is
+        // inside the model, so every missile burst against a building (the Chimaera's acid splash,
+        // a Glaive's shatter) played its Death clip out of sight within the walls. A client
+        // already bursts at the missile's last position (snapshotApply removedProjectiles).
+        const edge = dist > 0 ? Math.min(t.radius, dist) / dist : 0;
+        this.projectileImpacts.push({ id: p.id, x: t.x - dx * edge, y: t.y - dy * edge, z: p.impactZ }); // record the hit point
         if (p.visual) {
           // nothing rides it — the spell already happened (missileBack)
         } else if (p.spell) {
@@ -22470,7 +22518,13 @@ export class SimWorld {
           // Orb of Corruption: "the armor reduction happens before the damage of the hero is
           // dealt"), so the debuff half of an orb goes on first and the rest after.
           this.applyOrbArmorFirst(this.units.get(p.sourceId), t, p.orb);
+          const hitsBefore = this.hits.length;
           const dealt = this.applyDamage(t, p.damage, p.sourceId, p.attackType ?? AttackType.None, p.weaponSound ?? "", true);
+          // The blow this missile struck is ITS hit: tag it with the art that flew, so the noise
+          // is ChimaeraAcidMissile's "ChimaeraAcidHit" on a building and the lightning ball's
+          // own on a soldier — each read off its model's SND event (AnimLookups MCAH → the three
+          // ChimaeraAlternateMissileHit WAVs) — and not whichever art the unit def lists first.
+          for (let i = hitsBefore; i < this.hits.length; i++) if (this.hits[i].targetId === t.id) this.hits[i].missileArt = p.art;
           this.applyOrbEffect(this.units.get(p.sourceId), t, p.orb, dealt); // the orb this arrow carried
           this.applyLiquidFire(this.units.get(p.sourceId), t); // Batrider: burn a struck building
           this.applyStrikePassives(this.units.get(p.sourceId), t, p.attackType ?? AttackType.None); // Freezing Breath, Flak Cannons
@@ -23393,6 +23447,36 @@ export class SimWorld {
    *  the research-gated attack passives (Freezing Breath `Rufb`, Flak Cannons `Rhfc`,
    *  Fragmentation Shards `Rhfs`, Burning Oil `Robf`), which sit on the unit from birth and do
    *  nothing until the research lands ("abilList membership is not availability"). */
+  /** The ability a weapon SLOT belongs to, if any: one the unit carries (its `Requires` met)
+   *  whose row names the very `Missileart` this slot throws. That is how the data ties an
+   *  attack to an ability, because no column does it outright — `[Acor]` Corrosive Breath
+   *  names `ChimaeraAcidMissile`, the Chimaera's structure slot (slot 1); `[Alit]` Lightning
+   *  Attack names `ChimaeraLightningMissile`, its ground slot (slot 2), and so does every other
+   *  `Alit` carrier's row (the bronze and storm dragons, the lightning lizards). Matched on
+   *  the slot's OWN art, never an orb's: an orb rides a shot, it does not make it another
+   *  ability's attack. */
+  private slotAbility(u: SimUnit, w: SimWeapon): { def: AbilityDef; lvl: AbilityLevel } | null {
+    const art = w.missileArt.toLowerCase();
+    if (!art) return null;
+    for (const a of u.abilities) {
+      if (a.level < 1 || !this.unitMeets(u, a.id)) continue;
+      const def = this.abilityDefOf(a);
+      if (!def?.missileArt || def.missileArt.toLowerCase() !== art) continue;
+      const lvl = def.levelData[Math.min(a.level, def.levelData.length) - 1];
+      if (lvl) return { def, lvl };
+    }
+    return null;
+  }
+
+  /** …and the slot IS that ability's attack when the type leaves it switched OFF: the
+   *  ability is then what the unit attacks WITH there, not a dressing on an attack the unit
+   *  already had. Corrosive Breath is that ("Allows Chimaeras to attack buildings", behind
+   *  `weapsOn` = 2 and `[Recb] renw` = 3); Lightning Attack is not — its slot is the
+   *  Chimaera's own. Such a blow is swung with the model's spell swing (SimUnit.swingSpell). */
+  private attackAbility(u: SimUnit, w: SimWeapon): { def: AbilityDef; lvl: AbilityLevel } | null {
+    return w.baseEnabled === false ? this.slotAbility(u, w) : null;
+  }
+
   private gatedPassive(u: SimUnit, code: string): { def: AbilityDef; lvl: AbilityLevel } | null {
     for (const a of u.abilities) {
       if (a.code !== code || a.level < 1 || !this.unitMeets(u, a.id)) continue;
@@ -29686,7 +29770,10 @@ const WAVE_SWEEP_MARGIN = 128;
  *  rides it up rather than staying where it was when the spell went off. */
 function boltZ(u: SimUnit, end: "launch" | "impact"): number {
   const w = u.weapon;
-  const local = end === "launch" ? (w && w.launchZ > 0 ? w.launchZ : 0) : w && w.impactZ > 0 ? w.impactZ : 0;
+  // A NEGATIVE launch height is one the row states — a flyer's jaw hangs below the pivot its
+  // altitude is measured at (the Chimaera's -18, the Frost Wyrm's -60) — exactly as for the
+  // missiles (spawnSpellProjectile); only a row that says nothing falls back to the default.
+  const local = end === "launch" ? (w && w.launchZ !== 0 ? w.launchZ : 0) : w && w.impactZ > 0 ? w.impactZ : 0;
   return local || DEFAULT_MISSILE_HEIGHT;
 }
 

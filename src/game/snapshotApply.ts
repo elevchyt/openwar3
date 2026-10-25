@@ -109,6 +109,7 @@ export function writeUnitSnapshot(u: SimUnit, s: UnitSnapshot): void {
   u.chopSeq = s.chopSeq;
   u.swingBroken = s.swingBroken;
   u.swingSlam = s.swingSlam;
+  u.swingSpell = s.swingSpell;
   // The killing blow's follow-through (rts.ts `following`). It crossed the wire — it rides the
   // swing counter's top bit (snapshotWire.ts) — and was never written here, so on a client every
   // killing blow snapped straight back to a stand.

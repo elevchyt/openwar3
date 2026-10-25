@@ -200,6 +200,8 @@ export interface RenderUnit {
   readonly inCombat: boolean;
   readonly swingBroken: boolean;
   readonly swingSlam: boolean;
+  /** This swing is an ability's attack (SimUnit.swingSpell): the model's "Attack Spell". */
+  readonly swingSpell: boolean;
   readonly swingSeq: number;
   /** The last swing KILLED its target and is being followed through (SimUnit
    *  .swingFollowThrough) — the attack clip plays out instead of snapping to a stand. */

@@ -927,12 +927,25 @@ export class SoundBoard {
       const code = id.toUpperCase();
       const times = out.eventTimes.get(code) ?? out.eventTimes.set(code, []).get(code)!;
       for (const t of evt.tracks) times.push(t); // one track per clip the event is parked in
+      // A MISSILE's throw and hit are the events parked in its Birth and its Death, whatever
+      // letter they carry: the clip is what says WHEN the engine plays them. ChimaeraLightning
+      // Missile.mdx is why it must be the clip and not the letter — its throw is `SNDXKFAR` at
+      // 1100 (Birth: HeroFarSeerAttack1) and its hit `SNDXAOLB` at 1467 (Death: LightningBolt
+      // .wav), a K and an A, so read by letter alone the Chimaera's every ground shot was
+      // silent. ChimaeraAcidMissile.mdx parks its M events the same way (MCAL in Birth, MCAH in
+      // Death). Only an M event in neither clip falls back on its label.
+      const inClip = (w: [number, number] | null) => !!w && Array.from(evt.tracks).some((t) => t >= w[0] && t <= w[1]);
+      const atLaunch = inClip(out.birth);
+      const atHit = !atLaunch && inClip(out.deathWindow);
+      if (atLaunch) out.launch.push(clip);
+      else if (atHit) out.impact.push(clip);
       if (cat === "K") out.attack.push(clip);
       else if (cat === "D") out.death.push(clip);
       else if (cat === "A") {
         out.ability.push(clip);
         out.abilityByCode.set(code, clip);
       }
+      else if (atLaunch || atHit) continue; // an M event already placed by its clip
       else if (/launch/i.test(label)) out.launch.push(clip);
       else out.impact.push(clip); // "…Hit"/"…Impact", or a single generic missile sound
     }

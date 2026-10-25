@@ -86,6 +86,10 @@ export interface BoltRequest {
   type: string; // LightningData row id
   srcId: number;
   dstId: number;
+  /** The source unit's launch offset in its own frame (SimLightning.slx/sly), turned by its
+   *  live facing when its end is resolved. */
+  slx?: number;
+  sly?: number;
   sx: number;
   sy: number;
   sz: number; // height ABOVE GROUND
