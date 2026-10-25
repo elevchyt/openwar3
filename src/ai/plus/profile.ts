@@ -100,6 +100,10 @@ export interface PlusProfile {
   /** Seconds ADDED to whatever clock the build order set. A weaker player runs the same build
    *  late; they do not run a different build. */
   readonly expandDelay: number;
+  /** …and the same for a race's TIER-3 clock (`PlusRaceTable.tier3Clock`, plus/plan.ts
+   *  `tier3Due`): seconds added to it. The clock is the night elf's plan, and asked for at
+   *  Insane ("tier 3 at 10–12 minutes"); a Normal player runs the same plan later. */
+  readonly tier3Delay: number;
 
   // --- countering: rebuilding against what the enemy turns out to be fielding ---------------
   /**
@@ -525,7 +529,7 @@ export const PLUS_EASY: PlusProfile = {
   // line — an easy computer's Storm Bolt lands on the Tauren and its Death Coil on the
   // Abomination — and it is why its casters never feel like they are answering your army.
   castTargeting: "naive", castMistake: 0.35, heroFocus: 0.3,
-  workers: 8, expansions: 0, expandDelay: 0,
+  workers: 8, expansions: 0, expandDelay: 0, tier3Delay: 0,
   // It does not counter at all: an easy computer builds what it opened with, whatever walks
   // into its base. This is the single biggest thing the top two difficulties do that it doesn't.
   counterWeight: 0, counterSample: Infinity, counterShare: 1, counterMemory: 0,
@@ -583,7 +587,7 @@ export const PLUS_NORMAL: PlusProfile = {
   // spell in seven. It does not price a spell's effect — a nuke goes on whoever is lowest
   // rather than on whoever it can finish.
   castTargeting: "sound", castMistake: 0.15, heroFocus: 0.7,
-  workers: 11, expansions: 1, expandDelay: 180,
+  workers: 11, expansions: 1, expandDelay: 180, tier3Delay: 180,
   // It counters, badly: it wants to have seen a dozen enemy units and half its army to be one
   // thing before it believes it, it only moves its mix a third of the way, and it forgets in a
   // minute and a half. That reads as a player who noticed late and over-corrected slightly.
@@ -666,7 +670,7 @@ export const PLUS_INSANE: PlusProfile = {
   // The whole ladder: kill shots, damage-per-second, and the game's own `herodur1` — so it
   // saves the Hex for the Shaman rather than spending it on a hero that eats a third of it.
   castTargeting: "expert", castMistake: 0, heroFocus: 1,
-  workers: 14, expansions: 3, expandDelay: 0,
+  workers: 14, expansions: 3, expandDelay: 0, tier3Delay: 0,
   // Full countering, off a small sample and a long memory: six units and a quarter of them one
   // type is enough to start shifting, and it remembers what it saw four minutes ago.
   counterWeight: 1, counterSample: 6, counterShare: 0.25, counterMemory: 240,

@@ -703,6 +703,25 @@ const HOLY_LIGHT_TOPUP = 0.9;
 const DISPEL_REACH = 250;
 
 /**
+ * THE BREWMASTER'S COMBO — Drunken Haze, THEN Breath of Fire. The breath ignites what the haze
+ * has soaked ("Units that have Drunken Haze on them will ignite and burn for <ANbf,DataE1> damage
+ * per second", NeutralAbilityStrings `[ANbf]`; sim/spells.ts `ANbf`), which on a non-hero more
+ * than doubles what it takes (Liquipedia, Breath of Fire). So with both buttons up the haze goes
+ * FIRST, at the clump the breath can reach (`hazeFirst`), and the breath waits for the flask to
+ * land and then goes through the soaked bodies, which count `SOAKED_WORTH` times (`corridor`).
+ *
+ * `HAZE_LAND` is the flask's flight and a little: `[ANdh] Missilespeed=1500` over a `Rng1` of
+ * 550 is 0.37 s. `COMBO_WAIT` is how far off its own cooldown a breath may still be for the
+ * haze to be thrown for it. Both OURS, as is `SOAKED_WORTH`.
+ */
+const DRUNKEN_HAZE = "ANdh";
+const BREATH_OF_FIRE = "ANbf";
+const HAZE_LAND = 0.6;
+const COMBO_WAIT = 1;
+const SOAKED_WORTH = 2;
+const soaked = (t: SimUnit): boolean => t.buffs.some((b) => b.group === "haze" && b.timeLeft > 0);
+
+/**
  * What a dispel does to ONE summon, by base code — the column each handler in sim/spells.ts
  * reads, with the same default beside it, so this and the sim agree about whether the press
  * finishes the body. Purge destroys a summon outright (its handler deals 100000).
@@ -800,6 +819,9 @@ export class PlusCaster {
   private offense = new Map<number, boolean>();
   /** Druid of the Claw → the hero it has left Bear Form to Rejuvenate (`druidPass`). */
   private rejuvTask = new Map<number, { hero: number; since: number }>();
+  /** Brewmaster → when it last threw Drunken Haze, so the breath waits for the flask
+   *  (`HAZE_LAND`). Swept with `fightSince`. */
+  private hazedAt = new Map<number, number>();
 
   /**
    * `roll` is the AI's OWN random stream (`AiPlayer.randomInt`), not `Math.random` — a
@@ -861,6 +883,7 @@ export class PlusCaster {
     for (const id of this.burningSince.keys()) if (!alive.has(id)) this.burningSince.delete(id);
     for (const id of this.offense.keys()) if (!alive.has(id)) this.offense.delete(id);
     for (const id of this.rejuvTask.keys()) if (!alive.has(id)) this.rejuvTask.delete(id);
+    for (const id of this.hazedAt.keys()) if (!alive.has(id)) this.hazedAt.delete(id);
   }
 
   /**
@@ -1085,6 +1108,9 @@ export class PlusCaster {
     // `dispelSummon`. Above the whole ladder, because the button is the cheapest kill there is
     // and the summon is only on the field for its own short clock.
     if (this.profile.dispelSummons && this.dispelSummon(u, friends, foes)) return true;
+    // THE BREWMASTER'S HAZE GOES BEFORE HIS BREATH — see `DRUNKEN_HAZE`.
+    if (this.hazeFirst(u, foes, engaged)) return true;
+    const flaskFlying = this.now - (this.hazedAt.get(u.id) ?? -Infinity) < HAZE_LAND;
     const cards: Array<{ role: Role; ab: SimUnit["abilities"][number]; def: AbilityDef; lvl: AbilityLevel }> = [];
     for (const ab of u.abilities) {
       if (ab.level < 1 || ab.cooldownLeft > 0) continue;
@@ -1094,6 +1120,8 @@ export class PlusCaster {
       // An autocast is the sim's job (see armAutocasts) — except a morph, which wears the flag
       // on some rows and is emphatically a decision.
       if (def.autocast && !MORPH_WHEN[def.code]) continue;
+      // …and the breath waits while the flask it is for is still in the air.
+      if (def.code === BREATH_OF_FIRE && flaskFlying) continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
       if (!lvl) continue;
       const role = def.code === WIND_WALK ? this.windWalkRole(u) : roleOf(def, lvl);
@@ -1112,6 +1140,62 @@ export class PlusCaster {
       if (this.aim(u, card.ab.code, card.def, card.lvl, card.role, friends, foes)) return true;
     }
     return false;
+  }
+
+  /**
+   * DRUNKEN HAZE, THROWN FOR THE BREATH — see `DRUNKEN_HAZE` for the combo.
+   *
+   * Only for a hero who holds BOTH, with the breath up (or about to be, `COMBO_WAIT`) and the mana
+   * for the two presses, in a fight this caster is spending mana on. Thrown on the enemy whose
+   * splash (`Area1` 200) soaks the most VALUE that is not soaked already — a clump of at least
+   * `CLUSTER` bodies, which is what the breath's line then goes through — and only within the
+   * breath's own reach plus that splash, so the ignite follows the throw rather than a walk.
+   *
+   * On every rung but Easy (`disable` in `rolesFor`). A haze thrown with NO breath behind it is
+   * still the `debuff` it always was, and still Insane's alone.
+   */
+  private hazeFirst(u: SimUnit, foes: SimUnit[], engaged: boolean): boolean {
+    if (!engaged || !this.roles.has("disable") || this.offense.get(u.id) === false) return false;
+    let haze: { ab: SimUnit["abilities"][number]; def: AbilityDef; lvl: AbilityLevel } | null = null;
+    let breath: { ab: SimUnit["abilities"][number]; def: AbilityDef; lvl: AbilityLevel } | null = null;
+    for (const ab of u.abilities) {
+      if (ab.level < 1) continue;
+      const def = this.view.def(ab.id);
+      if (!def || (def.code !== DRUNKEN_HAZE && def.code !== BREATH_OF_FIRE)) continue;
+      const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
+      if (!lvl) continue;
+      if (def.code === DRUNKEN_HAZE) haze = { ab, def, lvl };
+      else breath = { ab, def, lvl };
+    }
+    if (!haze || !breath || haze.ab.cooldownLeft > 0 || breath.ab.cooldownLeft > COMBO_WAIT) return false;
+    if (u.mana < haze.lvl.cost + breath.lvl.cost) return false;
+    if (!this.ready(u, "disable", engaged)) return false;
+    if (this.view.world.castUseError(u.id, haze.ab.code) !== null) return false;
+    if (this.ctx.holds?.(u, haze.ab.code)) return false;
+    const splash = haze.lvl.area || 200;
+    const reach = Math.min(haze.lvl.castRange, waveDistance(breath.def, breath.lvl) + splash);
+    let best: SimUnit | null = null;
+    let bestValue = 0;
+    for (const t of foes) {
+      if (t.building || !near(u, t, reach)) continue;
+      let count = 0;
+      let value = 0;
+      for (const o of foes) {
+        if (Math.hypot(o.x - t.x, o.y - t.y) > splash + o.radius) continue;
+        if (soaked(o) || !this.counts(u, o, haze.def, "debuff", false)) continue;
+        count++;
+        value += this.value(o, "debuff", haze.lvl);
+      }
+      if (count < CLUSTER || value <= bestValue) continue;
+      if (this.view.world.castError(u.id, haze.ab.code, t.id) !== null) continue;
+      if (this.view.refuses?.(u, haze.ab.code, t)) continue;
+      bestValue = value;
+      best = t;
+    }
+    if (!best) return false;
+    if (!this.view.order({ c: "cast", unitId: u.id, code: haze.ab.code, targetId: best.id, x: 0, y: 0, queued: false })) return false;
+    this.hazedAt.set(u.id, this.now);
+    return true;
   }
 
   /**
@@ -1953,7 +2037,8 @@ export class PlusCaster {
       if (Math.abs(px * -uy + py * ux) > half + t.radius) continue;
       if (!this.counts(u, t, def, role, friendly)) continue;
       count++;
-      value += this.value(t, role, lvl);
+      // A body Drunken Haze has soaked IGNITES under the breath — see `DRUNKEN_HAZE`.
+      value += this.value(t, role, lvl) * (def.code === BREATH_OF_FIRE && soaked(t) ? SOAKED_WORTH : 1);
     }
     return { count, value };
   }

@@ -333,6 +333,7 @@ export const PIT_LORD = "Nplh";
 export const FIRE_LORD = "Nfir";
 export const BEASTMASTER = "Nbst";
 export const DARK_RANGER = "Nbrn";
+export const BREWMASTER = "Npbm";
 
 export const HEALING_SPRAY = "ANhs";
 export const ACID_BOMB = "ANab";
@@ -358,6 +359,10 @@ export const SILENCE = "ANsi";
 export const BLACK_ARROW = "ANba";
 export const LIFE_DRAIN = "ANdr";
 export const CHARM = "ANch";
+export const BREATH_OF_FIRE = "ANbf";
+export const DRUNKEN_HAZE = "ANdh";
+export const DRUNKEN_BRAWLER = "ANdb";
+export const STORM_EARTH_FIRE = "ANef";
 
 // --------------------------------------------------------------------------------------
 //  Scalars

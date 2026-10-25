@@ -1086,8 +1086,16 @@ const isMercCamp = (typeId: string): boolean => typeId === "nmer" || /^nmr[0-9a-
 const MERC_CAMP_REACH = 800;
 const MERC_WINDOW = 10;
 /** The latest an Insane computer waits for its POWER SPIKE before its waves may go at a main
- *  anyway (`spikeHeld`). OURS. */
-const SPIKE_LATEST = 1080;
+ *  anyway (`spikeHeld`). OURS. It was 18 minutes, which with the night elf's tier 3 arriving at
+ *  16–17 meant the spike was never met at all — the waves went at expansions for the whole game.
+ *  Fifteen is a few minutes past where the bears land now that tier 3 has a clock of its own
+ *  (plus/plan.ts `tier3Due`). */
+const SPIKE_LATEST = 900;
+/** …and the ARMY that is a spike whatever it is made of: a wave this many food strong goes at a
+ *  main whether or not the build's own clauses have been met. Reported: an Insane night elf with
+ *  80+ food "was not attacking its opponent", only its expansion, because Master Training and
+ *  four druids were still minutes away. OURS — sixty is three quarters of the tier-2 upkeep line. */
+const SPIKE_ARMY_FOOD = 60;
 /** TANK ORDER (`tankHold`): the ranks, how far off the fight a held hero and a held ranged unit
  *  stand, and the longest the hold lasts per objective. OURS — the standoffs are a little past a
  *  creep's own acquisition (Camp 200 asleep, ~500 awake) so the held line is not pulled in. */
@@ -7136,7 +7144,8 @@ export class ComputerPlusAi {
    * EXPANSION instead, or creeps (`pickTarget`'s last rung), and a fight that comes to it is
    * fought as ever. LATCHED once met — a spike is the moment the army is ready, and losing a
    * fight afterwards is not a reason to sit at home again — and given up at `SPIKE_LATEST`, so a
-   * spike the economy never reaches cannot hold the army home for the rest of the match.
+   * spike the economy never reaches cannot hold the army home for the rest of the match — and
+   * met at once by an army of `SPIKE_ARMY_FOOD`, because an army that size IS the spike.
    */
   private spikeHeld(b: Brain): boolean {
     if (b.spikeMet || b.profile.difficulty !== MELEE_INSANE) return false;
@@ -7145,10 +7154,12 @@ export class ComputerPlusAi {
       b.spikeMet = true;
       return false;
     }
-    const met = (!spike.research || b.ai.upgradeLevel(spike.research[0]) >= spike.research[1])
+    const food = this.squadFood(b);
+    const clauses = (!spike.research || b.ai.upgradeLevel(spike.research[0]) >= spike.research[1])
       && (!spike.units || b.ai.countDone(spike.units[0]) >= spike.units[1])
       && (!spike.tier || this.tier(b) >= spike.tier)
-      && (!spike.armyFood || this.squadFood(b) >= spike.armyFood);
+      && (!spike.armyFood || food >= spike.armyFood);
+    const met = clauses || food >= SPIKE_ARMY_FOOD;
     if (met) b.spikeMet = true;
     return !met;
   }

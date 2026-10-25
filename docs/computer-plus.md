@@ -4978,3 +4978,37 @@ essential rows alone). Before this change, a Normal orc on Echo Isles played fif
 - **Orphaned scaffolds** (`AiPlayer.resumeOrphans`): a building going up with nobody building it
   for `ORPHAN_GRACE` gets one worker sent with `buildresume`, idle before lumber before gold, and
   not while something hostile is within `ORPHAN_DANGER` of it.
+
+### …and tier 3 on a clock, the spike that an army is, and the Brewmaster
+
+Reported: an Insane night elf with 80+ food only ever attacked its opponent's EXPANSION; it
+reached tier 3 at 16–17 minutes after buying most of the Hunter's Hall's upgrades, where its
+bears should be its primary goal at 10–12; and a Keeper opening should be able to hire the
+Pandaren Brewmaster, whose Drunken Haze → Breath of Fire combo must burn.
+
+- **The two reports were one.** The night elf's spike (`Redc` rank 2 and four druids) sits
+  behind the Tree of Eternity, so with tier 3 at 16–17 minutes it was not met before
+  `SPIKE_LATEST`, then 18 minutes — and until then no wave was ever aimed at a main. With
+  nothing left to press after the expansion fell, `objectiveDone` sent the army home.
+- **An army is a spike** (`SPIKE_ARMY_FOOD`, 60 food of squad): met at once whatever the build's
+  own clauses say. `SPIKE_LATEST` is now 15 minutes.
+- **The tier-3 row sat at the bottom of the ladder** (`tierUp`), under the tech buildings, the
+  smith's upgrades, the siege, the expansion and the third hero, and the ladder spends a running
+  budget top-down — so the Tree of Eternity was bought out of whatever all of those left. Now a
+  race may name a tier-3 clock (`PlusRaceTable.tier3Clock`, a build's own over it), and from
+  there `tier3Due` asks for the hall directly under the tier-2 row, so the loop halts and saves
+  for it. The night elf's is 8:30 (the upgrade is 140 s); `PlusProfile.tier3Delay` puts Normal
+  three minutes later. Not while REBUILDING — an army under `TIER3_ARMY` or a gold crew short of
+  five a mine; the rows that replace those are above it. Measured headless (fight-free economy),
+  Insane: Tree of Eternity at 13:07–19:24 before, 11:22–12:27 after.
+- **The Pandaren Brewmaster** is the Keeper's third second-hero option (`combos`, beside the Demon
+  Hunter and the Pit Lord): Breath of Fire first and maxed first, Drunken Haze beside it, Storm,
+  Earth and Fire, then Drunken Brawler (`TAVERN_SKILLS`).
+- **The ignite** (sim/spells.ts `ANbf`): a body the breath reaches with Drunken Haze (`haze`) on
+  it takes a `BNbf` burn of `DataE` a second for `Dur` — the `[ANbf]` Ubertip's own rule, which
+  the handler never read. 5/10/15 in 1.30.4, 7/14/21 from 1.31.0.
+- **The combo** (plus/casting.ts `hazeFirst`): with both buttons up and the mana for both, a
+  Normal or Insane Brewmaster throws the haze FIRST, at the clump of at least two not yet soaked
+  that the breath can reach; the breath waits `HAZE_LAND` for the flask, then goes down the line
+  where a soaked body counts `SOAKED_WORTH` (2×). A haze with no breath behind it stays the
+  Insane-only `debuff` it was.

@@ -298,7 +298,13 @@ console.log("\n--- hero pairings, and the Insane-only builds ---");
   check("…and as a third hero keeps Impale first", undead.skills.Ucrl[0][0], "AUim");
   check("Crypt Lord → Death Knight, then the Dark Ranger", undead.combos.Ucrl.second.join() + "/" + undead.combos.Ucrl.third.flat().join(), "Udea/Nbrn");
   check("Demon Hunter → Keeper or Naga Sea Witch", nightelf.combos.Edem.second.join(), "Ekee,Nngs");
-  check("Keeper → Demon Hunter or Pit Lord", nightelf.combos.Ekee.second.join(), "Edem,Nplh");
+  check("Keeper → Demon Hunter, Pit Lord or Pandaren Brewmaster", nightelf.combos.Ekee.second.join(), "Edem,Nplh,Npbm");
+  // …and the Brewmaster opens on Breath of Fire, maxes it first, and takes Drunken Haze beside
+  // it — the haze is what makes the breath ignite (plus/casting.ts `DRUNKEN_HAZE`).
+  const brew = nightelf.skills.Npbm[0];
+  check("a Brewmaster opens on Breath of Fire", brew[0], "ANbf");
+  check("…and maxes it first", brew.slice(0, 5).filter((s) => s === "ANbf").length, 3);
+  check("…with Drunken Haze as his second skill", brew[1], "ANdh");
   check("every tavern hero has a skill build in every race table",
     Object.values(PLUS_RACES).every((t) => [...TAVERN_HEROES].every((h) => t.skills[h]?.length)), true);
 

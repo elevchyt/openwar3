@@ -30,7 +30,8 @@ import {
   UPG_SORCERY, UPG_STR_MOON, UPG_STR_WILD, UPG_UNHOLY_ARMOR, UPG_UNHOLY_STR, UPG_WOOD,
   UNDEAD_ALTAR, UNDEAD_MINE, VAMP_AURA, VENGEANCE, VOODOO, WAR_STOMP, WARDEN, WATCH_TOWER, WATER_ELEMENTAL,
   WIND_WALK, WISP,
-  ALCHEMIST, NAGA_WITCH, PIT_LORD, FIRE_LORD, BEASTMASTER, DARK_RANGER,
+  ALCHEMIST, NAGA_WITCH, PIT_LORD, FIRE_LORD, BEASTMASTER, DARK_RANGER, BREWMASTER,
+  BREATH_OF_FIRE, DRUNKEN_HAZE, DRUNKEN_BRAWLER, STORM_EARTH_FIRE,
   HEALING_SPRAY, ACID_BOMB, CHEMICAL_RAGE, TRANSMUTE, FORKED_LIGHTNING, FROST_ARROWS, MANA_SHIELD,
   TORNADO, RAIN_OF_FIRE, HOWL_OF_TERROR, CLEAVING_ATTACK, DOOM, INCINERATE, SOUL_BURN, LAVA_SPAWN,
   VOLCANO, SUMMON_BEAR, SUMMON_QUILBEAST, SUMMON_HAWK, STAMPEDE, SILENCE, BLACK_ARROW, LIFE_DRAIN, CHARM,
@@ -244,6 +245,8 @@ export interface PlusStrategy {
    * rush or a fast expand IS — the hall's 300 gold spent on soldiers or a second mine instead.
    */
   readonly tier2Clock?: number;
+  /** The tier-3 clock for THIS build, over the race's (`PlusRaceTable.tier3Clock`). */
+  readonly tier3Clock?: number;
   /** A RUSH: the wave does not wait for the hero's third level in the opening (index.ts
    *  `waveReady`'s `EARLY_GAME` gate) — the whole build is spent before the camps would pay. */
   readonly rush?: boolean;
@@ -328,6 +331,12 @@ const TAVERN_SKILLS: Readonly<Record<string, readonly (readonly string[])[]>> = 
     CLEAVING_ATTACK, HOWL_OF_TERROR, HOWL_OF_TERROR, HOWL_OF_TERROR]],
   [DARK_RANGER]: [[BLACK_ARROW, LIFE_DRAIN, BLACK_ARROW, LIFE_DRAIN, BLACK_ARROW, CHARM,
     LIFE_DRAIN, SILENCE, SILENCE, SILENCE]],
+  // BREATH OF FIRE first and maxed first (the developer's), Drunken Haze beside it: the haze is
+  // what makes the breath IGNITE ("Units that have Drunken Haze on them will ignite and burn",
+  // NeutralAbilityStrings `[ANbf]`), so the two are one combo and plus/casting.ts throws them in
+  // that order. `[Npbm] heroAbilList=ANbf,ANdh,ANdb,ANef`.
+  [BREWMASTER]: [[BREATH_OF_FIRE, DRUNKEN_HAZE, BREATH_OF_FIRE, DRUNKEN_HAZE, BREATH_OF_FIRE,
+    STORM_EARTH_FIRE, DRUNKEN_HAZE, DRUNKEN_BRAWLER, DRUNKEN_BRAWLER, DRUNKEN_BRAWLER]],
 };
 
 /** Every tavern hero Computer+ may hire — what `pickHeroes` asks the map's Tavern about. */
@@ -365,6 +374,19 @@ export interface PlusRaceTable {
    * races to its second tier rather than last.
    */
   readonly tier2Clock?: number;
+  /**
+   * The race's TIER-3 clock, if its tier 3 IS its plan: from here the third hall is asked for
+   * HIGH in the ladder (plan.ts `tier3Due`), above the tech buildings, the smith's upgrades, the
+   * siege, the expansion and the third hero — every row that otherwise spends the gold first.
+   * Absent = the race tiers to 3 only out of what the bottom of the ladder has left over.
+   *
+   * The night elf's, because its whole late game is BEHIND the Tree of Eternity (Bear Form is
+   * `[Redc] Requires1=etoe`). Reported: an Insane night elf reached tier 3 at 16–17 minutes,
+   * having bought most of the Hunter's Hall's upgrades first, against the 10–12 a player
+   * reaches it at. Measured headless (tools/ai-plus-ladder-test.cjs): the Tree of Eternity was
+   * asked for at 10:47–17:04 and stood at 13:07–19:24 across the five Insane builds.
+   */
+  readonly tier3Clock?: number;
   /**
    * The race's own SHOP — Arcane Vault, Voodoo Lounge, Ancient of Wonders, Tomb of Relics.
    *
@@ -1081,6 +1103,10 @@ const NIGHT_ELF: PlusRaceTable = {
   // BEARS WITH MASTER TRAINING (`Redc` rank 2 is Bear Form) — the developer's spike for the race.
   // Four of them is ours: enough bears to be the front of the army rather than a sample of it.
   powerSpike: { research: [UPG_DRUID_CLAW, 2], units: [DRUID_CLAW, 4] },
+  // …and the Tree of Eternity on a CLOCK, so the bears come at 10–12 minutes — see
+  // `PlusRaceTable.tier3Clock`. OURS: the upgrade is 140 s (`[etoe] bldtm`), so asked at eight
+  // and a half minutes it stands by about eleven.
+  tier3Clock: 510,
   units: {
     [ARCHER]: { from: ANCIENT_WAR, tier: 1 },
     [HUNTRESS]: { from: ANCIENT_WAR, needs: [HUNTERS_HALL], tier: 1 }, // `[esen] Requires=edob`
@@ -1208,11 +1234,11 @@ const NIGHT_ELF: PlusRaceTable = {
     ...TAVERN_SKILLS,
   },
   // DEMON HUNTER → the Keeper of the Grove or the Naga Sea Witch (Tavern), then the Alchemist or
-  // the Priestess of the Moon. KEEPER → the Demon Hunter or the Pit Lord (Tavern), then the
-  // Alchemist or the Fire Lord (Lava Spawn).
+  // the Priestess of the Moon. KEEPER → the Demon Hunter, the Pit Lord or the Pandaren
+  // Brewmaster (both Tavern), then the Alchemist or the Fire Lord (Lava Spawn).
   combos: {
     [DEMON_HUNTER]: { second: [KEEPER, NAGA_WITCH], third: [[ALCHEMIST], [MOON_CHICK]] },
-    [KEEPER]: { second: [DEMON_HUNTER, PIT_LORD], third: [[ALCHEMIST], [FIRE_LORD]] },
+    [KEEPER]: { second: [DEMON_HUNTER, PIT_LORD, BREWMASTER], third: [[ALCHEMIST], [FIRE_LORD]] },
   },
 };
 

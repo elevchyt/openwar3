@@ -451,5 +451,32 @@ const round = (n) => Math.round(n * 1000) / 1000;
   setMapMiscOverlay(null);
 }
 
+// Breath of Fire — dataA "Damage" on everything the wave reaches, and an IGNITE on what Drunken
+// Haze has soaked: "Units that have Drunken Haze on them will ignite and burn for <ANbf,DataE1>
+// damage per second over <ANbf,Dur1> seconds" (NeutralAbilityStrings `[ANbf]`). Level 1 of
+// 1.30.4's row: 65 damage, 480 max, 375 distance, 300 final area, 5 dps over 5 s, BuffID BNbf.
+// Drunken Haze is the slow + miss pair under the group `haze` (its own handler, below).
+{
+  const brewer = unit({ id: 1, team: 0, isHero: true, buffs: [] });
+  const soakedFoe = unit({ id: 2, team: 1, x: 100, buffs: [] });
+  const dryFoe = unit({ id: 3, team: 1, x: 200, buffs: [] });
+  const hero = unit({ id: 4, team: 1, x: 150, isHero: true, buffs: [] });
+  const { api, log } = harness([brewer, soakedFoe, dryFoe, hero]);
+  // The haze, thrown first, at the first foe — its splash catches all three of them…
+  const haze = def({ code: "ANdh", data: [0, 0.45, 0.15], duration: 12, area: 200, targetFlags: ["air", "ground", "enemy", "organic", "neutral"] });
+  SPELL_HANDLERS.ANdh({ ...api, applyBuff: (t, b) => { t.buffs.push({ ...b }); api.applyBuff(t, b) } }, brewer, haze, 1, { targetId: 2, x: 100, y: 0 });
+  // …except the dry one, which walked out of the splash before it landed.
+  dryFoe.buffs.length = 0;
+  log.buffs.length = 0;
+  const bf = def({ code: "ANbf", missileArt: "BreathOfFireMissile", data: [65, 480, 375, 300, 5], duration: 5, area: 125,
+    levelData: [{ cost: 75, cooldown: 10, duration: 5, heroDuration: 5, castRange: 375, area: 125, castTime: 0, data: [65, 480, 375, 300, 5], buffs: ["BNbf"], summon: "" }] });
+  // The wave reaching each body is the handler re-entered with that body (SpellApi.launchWave).
+  for (const id of [2, 3, 4]) SPELL_HANDLERS.ANbf(api, brewer, bf, 1, { targetId: id, x: 0, y: 0, wave: { budget: 480 } });
+  check("Breath of Fire deals dataA to every body it reaches", log.damage.map((d) => [d.id, d.amount]), [[2, 65], [3, 65], [4, 65]]);
+  check("…and ignites only the hazed ones, for dataE a second", log.buffs.map((b) => [b.id, b.kind, b.group, b.value]),
+    [[2, "dot", "breathoffire", 5], [4, "dot", "breathoffire", 5]]);
+  check("…for the row's own duration — on a hero too, whose HeroDur1 is the same 5 s", log.buffs.map((b) => b.timeLeft), [5, 5]);
+}
+
 console.log(`\n${failed ? `${failed} FAILED` : "all passed"}`);
 process.exit(failed ? 1 : 0);

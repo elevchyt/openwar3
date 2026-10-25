@@ -106,6 +106,13 @@ const ABILS = {
   Abrf: { code: "Abrf", target: "none", autocast: false, targetFlags: [], levelData: [lvl({ cost: 25, duration: 1.45, castRange: 0, dataStr: ["edoc"] })] },
   Aroa: { code: "Aroa", target: "none", autocast: false, targetFlags: ["air", "ground", "friend", "self"], levelData: [lvl({ area: 500, castRange: 0, cost: 100, duration: 45, heroDuration: 45, buffs: ["Broa"], data: [0.25, 0] })] },
   Arej: { code: "Arej", target: "unit", autocast: false, targetFlags: ["air", "ground", "friend", "vuln", "invu", "self", "organic", "neutral"], levelData: [lvl({ castRange: 400, cost: 125, duration: 12, heroDuration: 12, buffs: ["Brej"], data: [400, 0] })] },
+  // THE BREWMASTER'S PAIR, with their real rows (`Units\AbilityData.slk`, rank 1):
+  //   [ANdh] targs1 "air,ground,enemy,organic,neutral", Cost1 70, Cool1 12, Rng1 550, Area1 200,
+  //          Dur1 12 / HeroDur1 5 — Drunken Haze
+  //   [ANbf] targs1 "ground,air,structure", Cost1 75, Cool1 10, Rng1 375, Area1 125,
+  //          DataA 65, DataB 480, DataC 375 (distance), DataE 5 (the ignite) — Breath of Fire
+  ANdh: { code: "ANdh", target: "unit", autocast: false, targetFlags: ["air", "ground", "enemy", "organic", "neutral"], levelData: [lvl({ area: 200, castRange: 550, cost: 70, duration: 12, heroDuration: 5, buffs: ["BNdh"], data: [0, 0.45, 0.15] })] },
+  ANbf: { code: "ANbf", target: "point", autocast: false, targetFlags: ["ground", "air", "structure"], levelData: [lvl({ area: 125, castRange: 375, cost: 75, duration: 5, heroDuration: 5, buffs: ["BNbf"], data: [65, 480, 375, 300, 5] })] },
   AOmi: { code: "AOmi", target: "none", autocast: false, targetFlags: [], levelData: [lvl({ area: 1000, castRange: 128, cost: 100, duration: 60, heroDuration: 60, buffs: ["BOmi"], data: [1, 0, 2, 0.5] })] },
 };
 
@@ -925,6 +932,55 @@ console.log("\n-- Insane kills enemy SUMMONS with its dispels ------------------
   const theirs = unit({ owner: 1, x: 400, hp: 200, maxHp: 200, summonLeft: 40, isSummon: true });
   const ours = unit({ x: 420, hp: 525, maxHp: 525, summonLeft: 40, isSummon: true });
   check("…and never where it would take our own elemental with it", cast([p2, theirs, ours]), null);
+}
+
+// ==========================================================================================
+console.log("\n-- the Brewmaster throws Drunken Haze, THEN Breath of Fire -------------------");
+// ==========================================================================================
+// The breath IGNITES what the haze has soaked (`[ANbf]` Ubertip; sim/spells.ts `ANbf`), so with
+// both buttons up the haze goes first, at the clump the breath can reach, and the breath then
+// goes through the soaked bodies. Asked of NORMAL, whose `rolesFor` has no `debuff` at all: the
+// haze thrown FOR the breath is the combo, and is on every rung but Easy. Rolled at 0.99 so
+// Normal's misclick (`castMistake`) never lands and the aim is the one being pinned.
+const brewer = (o = {}) => unit({
+  isHero: true, race: "other", mana: 300, maxMana: 300,
+  abilities: [
+    { id: "ANdh", code: "ANdh", level: 1, cooldownLeft: o.hazeCd ?? 0, autocastOn: false },
+    { id: "ANbf", code: "ANbf", level: 1, cooldownLeft: o.breathCd ?? 0, autocastOn: false },
+  ],
+  ...o,
+});
+const hazed = () => [{ kind: "slow", group: "haze", timeLeft: 10, value: 0.15 }, { kind: "miss", group: "haze", timeLeft: 10, value: 0.45 }];
+{
+  const clump = [200, 260, 300].map((x) => unit({ owner: 1, x, maxMana: 0 }));
+  const cmd = cast([brewer(), ...clump], PLUS_NORMAL, { passes: 2, roll: 0.99 });
+  check("with both up, a Normal Brewmaster throws Drunken Haze first", cmd && cmd.code, "ANdh");
+  check("…at the clump", clump.some((u) => u.id === cmd?.targetId), true);
+}
+{
+  // …and once they are soaked, the breath. (A fresh caster: the flask has long since landed.)
+  const clump = [200, 260, 300].map((x) => unit({ owner: 1, x, maxMana: 0, buffs: hazed() }));
+  const cmd = cast([brewer({ hazeCd: 10 }), ...clump], PLUS_NORMAL, { passes: 2, roll: 0.99 });
+  check("…and Breath of Fire through the soaked bodies after it", cmd && cmd.code, "ANbf");
+}
+{
+  // No haze with only the breath's mana behind it: the breath alone is the better press.
+  const clump = [200, 260, 300].map((x) => unit({ owner: 1, x, maxMana: 0 }));
+  const cmd = cast([brewer({ mana: 100 }), ...clump], PLUS_NORMAL, { passes: 2, roll: 0.99 });
+  check("…but not without the mana for BOTH presses", cmd && cmd.code, "ANbf");
+}
+{
+  // THE BREATH GOES THROUGH THE SOAKED PAIR over a dry pair just like it: a soaked body burns.
+  const dry = [200, 300].map((y) => unit({ owner: 1, x: 0, y, maxMana: 0 }));
+  const wet = [200, 300].map((x) => unit({ owner: 1, x, y: 0, maxMana: 0, buffs: hazed() }));
+  const cmd = cast([brewer({ hazeCd: 10 }), ...dry, ...wet], PLUS_NORMAL, { passes: 2, roll: 0.99 });
+  check("…aimed down the soaked line rather than the dry one", cmd && spotOf(cmd).y, 0);
+}
+{
+  // EASY presses no haze for the combo either — it has no `disable` (a novice's buttons).
+  const clump = [200, 260, 300].map((x) => unit({ owner: 1, x, maxMana: 0 }));
+  const cmd = cast([brewer(), ...clump], PLUS_EASY, { passes: 2, roll: 0.99 });
+  check("an EASY Brewmaster just breathes", cmd && cmd.code, "ANbf");
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

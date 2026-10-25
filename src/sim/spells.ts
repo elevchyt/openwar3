@@ -2020,10 +2020,23 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
 
   // Breath of Fire (Brewmaster) — cone/line of flame: dataA damage (dataC distance,
   // area width) to enemies in front of the caster.
+  //
+  // …and it IGNITES what Drunken Haze has soaked: "Units that have Drunken Haze on them will
+  // ignite and burn for <ANbf,DataE1> damage per second over <ANbf,Dur1> seconds"
+  // (NeutralAbilityStrings `[ANbf]` Ubertip). DataE is the burn — 5/10/15 in 1.30.4, 7/14/21
+  // from 1.31.0 — `Dur` its 5 seconds, and the burn wears the row's own `BuffID1` = `BNbf`
+  // ("This unit has been hit by Breath of Fire; it will take damage over time", Targetart
+  // `BreathOfFireDamage.mdl`). A unit with no haze on it takes the initial damage only.
   ANbf: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
     const hit = (t: SimUnit) => {
-      if (api.hostile(caster, t)) api.spellDamage(t, d(lvl, 0, 65), caster.id);
+      if (!api.hostile(caster, t)) return;
+      const soaked = t.buffs.some((b) => b.group === "haze" && b.timeLeft > 0);
+      api.spellDamage(t, d(lvl, 0, 65), caster.id);
+      const dps = d(lvl, 4, 0);
+      if (soaked && dps > 0 && t.hp > 0) {
+        api.applyBuff(t, { kind: "dot", group: "breathoffire", timeLeft: dur(lvl, t) || 5, sourceId: caster.id, value: dps, ...fx(def) });
+      }
     };
     const swept = api.getUnit(ctx.targetId);
     if (swept) return hit(swept);

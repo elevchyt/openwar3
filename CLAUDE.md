@@ -652,7 +652,14 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   dearest in the game. The Sanctum is a human SUPPORT row for the same reason — all five human
   builds name a Priest, a Sorceress or a Spell Breaker — while the Lumber Mill is a TIER-2
   support row, not the tier-1 one it was: nothing a human builds before a Castle needs it, and it
-  was the only second tier-1 support row any race had, sitting above the tier-up. Two ID TRAPS that each cost a whole subsystem and are invisible from the call site:
+  was the only second tier-1 support row any race had, sitting above the tier-up. TIER 3 has
+  no clock by default — the ordinary row is at the BOTTOM of the ladder, bought out of what the
+  upgrades, siege, expansion and third hero leave — so a race whose plan IS tier 3 names one
+  (`PlusRaceTable.tier3Clock`: the night elf's 510 s, for the bears; `tier3Delay` puts Normal
+  three minutes later), and `tier3Due` then asks for the hall right under the tier-2 row. Its
+  bears were also why an Insane night elf never attacked a MAIN: the power spike sat behind a
+  tier 3 that came after `SPIKE_LATEST`, which is why an army of `SPIKE_ARMY_FOOD` now meets the
+  spike by itself. Two ID TRAPS that each cost a whole subsystem and are invisible from the call site:
   the undead altar is **`uaod`** (Altar of Darkness), NOT `utod` (Temple of the Damned, which is
   the CASTER building) — naming the wrong one left the undead with no hero and, because a hero row
   halts the build loop, no army either; and a BURROW is asked for by its hold's ability code

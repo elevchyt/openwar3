@@ -924,6 +924,8 @@ function runEconomy() {
       // report is not that the human never tiers but that it tiers late, and late is only
       // visible on a clock.
       tier2At: Infinity, spikeAt: Infinity,
+      // …and when the THIRD hall stood — the night elf's plan (races.ts `tier3Clock`).
+      tier3At: Infinity,
       // …and when the FIRST expansion was founded (the row reached and paid for) — printed so a
       // race that "rarely expands" shows up as a column rather than as a feeling.
       expandAt: Infinity,
@@ -1198,6 +1200,7 @@ function runEconomy() {
         if (S.t < 150) { S.passesEarly++; if (S.halted === table.halls[1]) S.tierHaltsEarly++ }
       }
       if (S.tier2At === Infinity && doneRaw(table.halls[1]) > 0) S.tier2At = S.t;
+      if (S.tier3At === Infinity && doneRaw(table.halls[2]) > 0) S.tier3At = S.t;
       if (S.spikeAt === Infinity && spike && doneRaw(spike) > 0) S.spikeAt = S.t;
       if (S.towerAt === Infinity && towerIds.some((id) => doneRaw(id) > 0)) S.towerAt = S.t;
       if (S.hero2At === Infinity && ai.heroId2 && countRaw(ai.heroId2) > 0) S.hero2At = S.t;
@@ -1215,7 +1218,7 @@ function runEconomy() {
       // The race's artillery, asked for or standing (plus/plan.ts `siegeLine`).
       siege: table.siegeUnit ? ai.count(table.siegeUnit) : 0,
       tierHaltShare: S.tierHaltsEarly / Math.max(1, S.passesEarly),
-      tier2At: Math.round(S.tier2At), hero2At: Math.round(S.hero2At), spike, spikeAt: Math.round(S.spikeAt),
+      tier2At: Math.round(S.tier2At), tier3At: Math.round(S.tier3At), hero2At: Math.round(S.hero2At), spike, spikeAt: Math.round(S.spikeAt),
       expandAt: Math.round(S.expandAt),
       towerAt: Math.round(S.towerAt),
       back,
@@ -1264,6 +1267,29 @@ function runEconomy() {
         + ` → won@240: expand@${String(won.expandAt).padStart(4)}s  tier2@${base.tier2At}→${won.tier2At}s`);
       check(`${race}/${s.id}: a won fight never makes the expansion LATER`, won.expandAt <= base.expandAt, true);
     }
+  }
+
+  // --- the night elf's TIER 3 on its clock (races.ts `tier3Clock`, plan.ts `tier3Due`) ------
+  //
+  // Reported: an Insane night elf reached tier 3 at 16–17 minutes, having bought most of the
+  // Hunter's Hall's upgrades first, "while this should be its PRIMARY goal … at 10-12 minutes".
+  // Before the clock the Tree of Eternity row sat under the tech, the upgrades, the siege, the
+  // expansion and the third hero, and on this fixture's (fight-free) economy it stood at
+  // 13:07–19:24 across the five Insane builds. Normal runs the same plan `tier3Delay` later.
+  console.log("\n--- the night elf's tier 3 comes on its clock ---");
+  for (const s of TABLES.nightelf.strategies) {
+    if (s.weight <= 0 || s.replaces) continue; // grown into, never opened on
+    const insane = run("nightelf", s.id, PLUS_INSANE, 900);
+    const normal = run("nightelf", s.id, PLUS_NORMAL, 1100);
+    console.log(`      nightelf/${s.id.padEnd(11)} INSA tier3@${String(insane.tier3At).padStart(4)}s`
+      + `  NORM tier3@${String(normal.tier3At).padStart(4)}s`);
+    // Twelve minutes for the builds that open at tier 1 or 2; the Chimaera build opens on its
+    // tier-3 army, so its tier 2 is spent on a Roost's worth of support and it gets 13.
+    check(`nightelf/${s.id} (Insane) has its Tree of Eternity by ${s.tier >= 3 ? 13 : 12} minutes`,
+      insane.tier3At <= (s.tier >= 3 ? 780 : 720), true);
+    // Normal is PRINTED and not pinned: its clock is three minutes later, but a 17-food army
+    // leaves gold over at the bottom of the ladder, where the ordinary tier-3 row can buy the
+    // hall sooner than the clock does (the Chimaera build did, at 672 s, before the clock).
   }
 
   console.log("\n--- ten minutes of build ladder ---");

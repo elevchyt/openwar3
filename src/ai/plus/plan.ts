@@ -442,6 +442,7 @@ export function buildPlan(c: PlusCtx): void {
   abilityUpgrades(c);
   leadUnits(c);
   tierUpDue(c); // …and from three minutes, the Keep — see TIER2_CLOCK
+  tier3Due(c); // …and the race's tier 3 on ITS clock, if it has one — see `tier3Due`
   // …and the undead's SIEGE, up here rather than below the upgrades — see
   // `PlusRaceTable.siegeEarly`. The same row; only its place in the ladder moves. Above the
   // first tower too: both want the same scarce lumber, and below it the Slaughterhouse stood a
@@ -1364,6 +1365,27 @@ function tierUp(c: PlusCtx): void {
 function tierUpDue(c: PlusCtx): void {
   if (c.clock < tier2Clock(c)) return;
   tier2(c);
+}
+
+/**
+ * …and the TIER-3 row HIGH in the ladder, for a race whose tier 3 is its plan
+ * (`PlusRaceTable.tier3Clock`, the build's own over it). The same row `tierUp` asks at the
+ * bottom — asking twice in a pass is free, as for tier 2 — but placed above the tech buildings,
+ * the upgrades, the siege, the expansion and the third hero, so from the clock on the hall is
+ * what the gold is saved for and the loop halts here until it can pay.
+ *
+ * NOT while the player is REBUILDING: an army under `TIER3_ARMY` or a gold crew short of its
+ * five per mine is a player who has just lost a fight or a raid, and a ladder player puts the
+ * bodies back before the tech. The rows that replace them are all ABOVE this one, so the clock
+ * only waits for them and never competes with them; the bottom-of-the-ladder row still applies.
+ */
+function tier3Due(c: PlusCtx): void {
+  const at = c.strategy.tier3Clock ?? c.table.tier3Clock;
+  if (at === undefined || c.clock < at + c.profile.tier3Delay) return;
+  const { ai, profile, table, armyFood, tier } = c;
+  if (profile.techTier < 3 || tier < 2 || armyFood < TIER3_ARMY) return;
+  if (ai.count(table.worker) < MINE_CREW * Math.max(1, ai.minesOwned())) return;
+  ai.setBuildUnit(1, table.halls[2]);
 }
 
 /** …and the clock is the BUILD'S, then the RACE'S — see `PlusStrategy.tier2Clock` and
