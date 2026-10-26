@@ -17324,6 +17324,11 @@ export class SimWorld {
     // even-share loop finds no eligible hero and the global fallback below would still
     // reward the killer's own heroes for a friendly-fire kill.
     if (killer && !this.hostile(killer, victim)) return;
+    // A kill a STRUCTURE lands pays nobody: a body a tower finishes off is experience lost to
+    // its owner's heroes, however near they stand (the original's behaviour — no table says
+    // it; checked in game by the developer). Gold bounty is a separate payment and still pays.
+    // An UPROOTED Ancient is left out: it is walking and fighting as a unit, not standing guard.
+    if (killer?.building && !killer.uprooted) return;
     // A slain enemy hero pays out the (much larger) GrantHeroXP table; everything
     // else pays GrantNormalXP. Both are indexed by the victim's own level.
     let base = grantedXp(victim.level || 0, victim.isHero);

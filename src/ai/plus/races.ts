@@ -482,6 +482,15 @@ export interface PlusRaceTable {
    */
   readonly tier3Clock?: number;
   /**
+   * What the race buys FIRST once its tier-3 hall stands, in this order — research rows of its
+   * own `upgrades`, each saved for to the rank the row names — and then its THIRD HERO, ahead of
+   * the rest of the army. The orc's: the developer's *"orc must make it its number one priority
+   * to get the berserker upgrade upon reaching tier 3, its second priority to get the shaman
+   * master training, its third to buy its last hero and then it should focus on pumping out
+   * units"*. Read by plan.ts `tier3First`; a race without one spends tier 3 the ordinary way.
+   */
+  readonly tier3First?: readonly string[];
+  /**
    * The race's own SHOP — Arcane Vault, Voodoo Lounge, Ancient of Wonders, Tomb of Relics.
    *
    * Without one the AI has nowhere to buy anything, and for most of a match that means nothing
@@ -625,6 +634,10 @@ export interface PlusRaceTable {
    * the build order and the hero order.
    */
   readonly skills: Readonly<Record<string, readonly (readonly string[])[]>>;
+  /** The build a hero takes when it is the OPENING hero, over whatever `skills` would roll —
+   *  a hero whose first skill is what creeps the early camps (the Keeper of the Grove's Force of
+   *  Nature) and who only has the choice once the army is doing that job for him. */
+  readonly openerSkills?: Readonly<Record<string, readonly string[]>>;
   /** The second and third hero after each OPENING hero — see `HeroCombo`. `"*"` is the race's
    *  rule for an opening hero with no row of its own. */
   readonly combos?: Readonly<Record<string, HeroCombo>>;
@@ -879,6 +892,8 @@ const ORC: PlusRaceTable = {
   antiAir: { unit: BATRIDER, count: 4 },
   siegeUnit: CATAPULT,
   tower: ORC_WATCH_TOWER,
+  // Berserkers, then Bloodlust, then the third hero — see `PlusRaceTable.tier3First`.
+  tier3First: [UPG_ORC_BERSERKER, UPG_ORC_SHAMAN],
   units: {
     [GRUNT]: { from: ORC_BARRACKS, tier: 1 },
     // `[ohun] Requires=ofor` — the Head Hunter waits on the WAR MILL, which is why "Far Seer and
@@ -1020,9 +1035,10 @@ const ORC: PlusRaceTable = {
     //
     // …and TWO Kodo Beasts as a count (`lead`): the developer's *"it always tries to have 1 to 2
     // kodo beasts"* — one in the tier-2 armies, two here, each replaced when it falls — with War
-    // Drums researched for them (`upgrades`).
+    // Drums researched for them (`upgrades`). And ONE Raider, likewise replaced: *"orc must
+    // continue trying to maintain at least 1 raider during tier 3"* — the Ensnare it carries.
     { id: "taurens", name: "Berserkers, Shamans and Taurens", tier: 3, weight: 0, expandAt: 420, expandAgainAt: 840,
-      lead: { [KODO_BEAST]: 2 }, waitFor: { [TAUREN]: { research: [UPG_ORC_BERSERKER, 1] } },
+      lead: { [KODO_BEAST]: 2, [RAIDER]: 1 }, waitFor: { [TAUREN]: { research: [UPG_ORC_BERSERKER, 1] } },
       mix: { [TAUREN]: 3, [HEAD_HUNTER]: 2.5, [SHAMAN]: 1.5 } },
   ],
   heroes: [BLADE_MASTER, FAR_SEER, TAUREN_CHIEF, SHADOW_HUNTER],
@@ -1038,8 +1054,11 @@ const ORC: PlusRaceTable = {
       [CRITICAL_STRIKE, MIRROR_IMAGE, CRITICAL_STRIKE, MIRROR_IMAGE, CRITICAL_STRIKE,
         BLADE_STORM, MIRROR_IMAGE, WIND_WALK, WIND_WALK, WIND_WALK],
     ],
-    [FAR_SEER]: [[CHAIN_LIGHTNING, SPIRIT_WOLF, CHAIN_LIGHTNING, SPIRIT_WOLF, CHAIN_LIGHTNING,
-      EARTHQUAKE, SPIRIT_WOLF, FAR_SIGHT, FAR_SIGHT, FAR_SIGHT]],
+    // FERAL SPIRIT FIRST AND MAXED FIRST, Chain Lightning always second — the developer's *"far
+    // seer must ALWAYS start with feral spirit instead of chain lightning (chain lightning second
+    // always and max out feral spirit first)"*.
+    [FAR_SEER]: [[SPIRIT_WOLF, CHAIN_LIGHTNING, SPIRIT_WOLF, CHAIN_LIGHTNING, SPIRIT_WOLF,
+      EARTHQUAKE, CHAIN_LIGHTNING, FAR_SIGHT, FAR_SIGHT, FAR_SIGHT]],
     // Endurance Aura is the constant; the damage skill is the choice. Shock Wave is the wave
     // through a creep camp, War Stomp the stun that holds a line together.
     [TAUREN_CHIEF]: [
@@ -1527,6 +1546,14 @@ const NIGHT_ELF: PlusRaceTable = {
       FAN_KNIVES, BLINK, BLINK, BLINK]],
     ...TAVERN_SKILLS,
   },
+  // THE KEEPER OF THE GROVE OPENS ON FORCE OF NATURE — the developer's *"keeper of the grove must
+  // always start with force of nature (ability) when trained as first hero"*. Its Treants are
+  // what an opening hero creeps with before there is an army to tank for him; maxed first, and
+  // Entangling Roots — his skill beside a real army — comes after.
+  openerSkills: {
+    [KEEPER]: [FORCE_NATURE, ENT_ROOTS, FORCE_NATURE, ENT_ROOTS, FORCE_NATURE, TRANQUILITY,
+      ENT_ROOTS, THORNS_AURA, THORNS_AURA, THORNS_AURA],
+  },
   // DEMON HUNTER → the Keeper of the Grove, the Naga Sea Witch or the Pandaren Brewmaster (both
   // Tavern — the developer added the Brewmaster here too: his Breath of Fire and Drunken Haze
   // are as good behind a Demon Hunter as behind a Keeper), then the Alchemist or the Priestess
@@ -1644,6 +1671,8 @@ export function tableForEdition(table: PlusRaceTable, tech: EditionTech): PlusRa
     units,
     heroes,
     skills: Object.fromEntries(Object.entries(table.skills).filter(([h]) => has(h))),
+    openerSkills: table.openerSkills && Object.fromEntries(Object.entries(table.openerSkills).filter(([h]) => has(h))),
+    tier3First: table.tier3First?.filter((id) => has(id)),
     // Never an empty table: `rollStrategy` has to be able to answer. No real data set gets here.
     strategies: strategies.length ? strategies : table.strategies,
     support: table.support.filter((r) => has(r.build)),

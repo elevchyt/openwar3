@@ -151,5 +151,17 @@ function check(what, got, want) {
   check("SuspendHeroXP(false) lets him earn again", h.xp, at3 + 50);
 }
 
+// A KILL A TOWER LANDS PAYS NO EXPERIENCE — the original's rule (sim/world.ts `awardKillXp`):
+// the same creep, the same hero beside it, and only the killer changes.
+{
+  const h = hero({ x: 3000, y: 3000 });
+  const creep = () => hero({ isHero: false, owner: 24, team: -1, level: 3, x: 3100, y: 3000, hp: 0 });
+  const tower = hero({ isHero: false, building: {}, uprooted: false, x: 3300, y: 3000 });
+  world["awardKillXp"](creep(), tower.id);
+  check("a creep a TOWER kills pays the hero standing beside it nothing", h.xp, 0);
+  world["awardKillXp"](creep(), h.id);
+  check("…and the same creep killed by the hero pays", h.xp > 0, true);
+}
+
 console.log(failed ? `\n${failed} FAILED` : "\nall hero-attribute checks passed");
 process.exit(failed ? 1 : 0);

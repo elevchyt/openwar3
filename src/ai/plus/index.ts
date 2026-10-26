@@ -178,6 +178,10 @@ const REISSUE_SLACK = 128;
  * well inside the base's own radius. (The classic captain musters at home for the same reason.)
  */
 const RALLY_OUT = 300;
+/** How far BEHIND the hall the held Druids of the Claw wait (`deepSpot`), and how far from that
+ *  spot one may stand before it is walked back (`druidPass`). Ours. */
+const DEEP_BACK = 450;
+const DEEP_HOLD_SLACK = 350;
 /** The ROAM (`PlusProfile.roam`, `roamSpot`): how long the army dwells at each free mine before it
  *  walks on; how far off the rock it stands; how close a building or a living creep camp may be
  *  before the mine is not a place to stand; and, with no free mine on our half, how far toward the
@@ -1615,6 +1619,23 @@ const PEEL_MARGIN = 0.8;
  * base is not worth turning round for. OURS; the same scale as `SWAP_LOOK`.
  */
 const RAZE_CLOSE = 500;
+
+/**
+ * THE TOWERS ON THE EDGE OF A BASE — `towerDetail`. The developer's *"it's diving with units
+ * inside a base with towers instead of first destroying the towers guarding it … they shouldn't
+ * be focused too hard but it's a good idea to try to kill them early in the fight"*. The ladder
+ * alone never did it: a tower is worth 1.5 soldiers to `killValue` and every caster and
+ * killable hero outbids it, so the army fought the defenders under the guns and the guns were
+ * never touched until the defence broke.
+ *
+ * So a DETAIL is told off onto the one tower nearest the army that can reach it (inside its own
+ * range plus `TOWER_LOOK` of the squad's centre — the outskirts, never one deeper in the base):
+ * `TOWER_SHARE` of the soldiers that can hit it, the nearest first, never fewer than
+ * `TOWER_CREW_MIN`. The rest — and the heroes — keep fighting the defence. All three OURS.
+ */
+const TOWER_SHARE = 0.4;
+const TOWER_CREW_MIN = 2;
+const TOWER_LOOK = 400;
 
 /** How much further than its own range a siege gun will look for a building of its own when
  *  the wave's target is out of its reach (`siegeReach`). A few steps; OURS. */
@@ -3170,7 +3191,10 @@ export class ComputerPlusAi {
     // of. Off the AI's own stream, so a replay of the same seed picks the same build.
     for (const [hero, builds] of Object.entries(table.skills)) {
       if (!builds.length) continue;
-      const build = combo.skills?.[hero] ?? builds[builds.length === 1 ? 0 : ai.randomInt(1, builds.length) - 1];
+      const rolled = combo.skills?.[hero] ?? builds[builds.length === 1 ? 0 : ai.randomInt(1, builds.length) - 1];
+      // …except the OPENING hero's own build where the race names one (`openerSkills`), asked
+      // after the roll so the stream is drawn the same either way.
+      const build = (hero === first ? table.openerSkills?.[hero] : undefined) ?? rolled;
       for (const slot of [1, 2, 3]) ai.setSkillArray(slot, hero, build);
     }
     return carry;
@@ -3563,6 +3587,7 @@ export class ComputerPlusAi {
     this.scoutEnemy(b);
     this.noteHalls(b);
     this.recruit(b);
+    this.druidPass(b);
     this.hold(b);
     // The base's own defences, and the wounded, before anything is aimed anywhere: a peon in a
     // burrow and a Grunt at a well are both decisions about home, and both are wrong to take
@@ -6535,6 +6560,8 @@ export class ComputerPlusAi {
     const vanguard = b.vanguardUntil > b.clock;
     // TANKS FIRST — see `tankHold`. Decided once for the pass: which RANKS are still held back.
     const heldRanks = travelling || vanguard ? null : this.tankHold(b, x, y, bodies);
+    // …and the share of it told off onto the tower guarding the edge of the base (`towerDetail`).
+    const detail = travelling || vanguard ? null : this.towerDetail(b, assault);
     // The blows the ranged line has been told to put on a wounded body this pass (`finishPick`).
     const owed = new Map<number, number>();
     for (const u of this.squadUnits(b)) {
@@ -6684,6 +6711,13 @@ export class ComputerPlusAi {
           this.issue(b, { c: "order", unitId: u.id, order: { kind: "attack", targetId: aim.id }, queued: false });
           continue;
         }
+      }
+      // THE TOWER DETAIL — see `TOWER_SHARE`. Ahead of the focus pick, which would otherwise
+      // take every one of them off the tower for the first caster that walked into sight.
+      if (detail?.crew.has(u.id)) {
+        if (u.order === "attack" && u.targetId === detail.tower.id) continue;
+        this.issue(b, { c: "order", unitId: u.id, order: { kind: "attack", targetId: detail.tower.id }, queued: false });
+        continue;
       }
       // THE WOUNDED IN REACH COME BEFORE THE GROUP'S FOCUS, for a ranged unit — see
       // `FINISH_HP`. Only what it can shoot from where it stands, under our own eyes.
@@ -6966,6 +7000,44 @@ export class ComputerPlusAi {
       if (Math.hypot(t.x - p.x, t.y - p.y) <= reach) return false;
     }
     return true;
+  }
+
+  /**
+   * WHICH TOWER, AND WHO GOES — see `TOWER_SHARE`. Only on an attack (a defence is fought in our
+   * own base, and a creep camp has no towers), only a tower our own eyes have on it, and never
+   * one that has fallen back behind the buildings (`deepIn`) — that one is the peel's to reach.
+   * The crew is the soldiers nearest the tower that can hit it at all (`weaponVs`), a unit
+   * already on it counting as standing beside it so the detail does not change hands every pass.
+   */
+  private towerDetail(b: Brain, assault: AssaultFrame | null): { tower: SimUnit; crew: Set<number> } | null {
+    if (b.mode !== "attacking" || b.creeping) return null;
+    const from = this.squadCentre(b);
+    if (!from) return null;
+    let tower: SimUnit | null = null;
+    let bestD = Infinity;
+    for (const t of this.host.world.units.values()) {
+      if (!t.building || t.hp <= 0 || t.owner === b.ai.player || t.invulnerable || !isTower(t)) continue;
+      const d = Math.hypot(t.x - from.x, t.y - from.y);
+      if (d > (t.weapon?.range ?? 0) + TOWER_LOOK || d >= bestD) continue;
+      if (!b.ai.hostileTo(t) || !b.ai.knows(t)) continue;
+      if (assault && this.deepIn(assault, t)) continue;
+      bestD = d;
+      tower = t;
+    }
+    if (!tower) return null;
+    const t = tower;
+    const able: Array<{ u: SimUnit; d: number }> = [];
+    for (const u of this.squadUnits(b)) {
+      if (u.hp <= 0 || u.isPeon || u.isHero || isCopy(u) || isSiege(u)) continue;
+      if (this.recovering(u) || pulledOut(b.pulls.get(u.id), b.clock)) continue;
+      if (!this.host.world.weaponVs(u, t)) continue;
+      const d = u.targetId === t.id ? 0 : Math.hypot(u.x - t.x, u.y - t.y);
+      able.push({ u, d });
+    }
+    if (!able.length) return null;
+    able.sort((p, q) => p.d - q.d);
+    const n = Math.min(able.length, Math.max(TOWER_CREW_MIN, Math.ceil(able.length * TOWER_SHARE)));
+    return { tower: t, crew: new Set(able.slice(0, n).map((p) => p.u.id)) };
   }
 
   /** Is this unit following a defender in — its target is an enemy BODY that has fallen back
@@ -7760,6 +7832,47 @@ export class ComputerPlusAi {
     // A projection off the hall, so it can land on the cliff or the treeline the base backs
     // onto — and a whole army mustering at a point none of it may occupy is a whole army
     // standing in a line against that treeline, which is `gathered` never becoming true.
+    const grid = this.host.world.grid;
+    const [cx, cy] = grid.worldToCell(spot.x, spot.y);
+    if (grid.walkable(cx, cy)) return spot;
+    const free = grid.nearestWalkable(cx, cy, SNAP_SEARCH);
+    if (!free) return home;
+    const [wx, wy] = grid.cellToWorld(free[0], free[1]);
+    return { x: wx, y: wy };
+  }
+
+  /**
+   * THE DRUIDS OF THE CLAW WAIT DEEP IN THE BASE — the developer's *"the Computer+ AI (Insane)
+   * night elf must keep its druids of the claw deeper in its base until druids of the claw master
+   * training has been reached"*. `recruit` already keeps them out of the army (`heldAtHome`), but
+   * that left them wherever they walked out of the Ancient of Lore — on the edge of the base, its
+   * rally on the line to the enemy — and the first raid through the outskirts found them there.
+   * So every held druid is walked to `deepSpot`, behind the hall on the side AWAY from the enemy,
+   * and walked back to it whenever it has wandered off (an auto-acquired chase included). A druid
+   * that is casting, or healing at a well, is left to finish.
+   */
+  private druidPass(b: Brain): void {
+    const level = b.ai.upgradeLevel(UPG_DRUID_CLAW);
+    let spot: { x: number; y: number } | null = null;
+    for (const u of b.ai.army()) {
+      if (u.hp <= 0 || b.squad.has(u.id) || !heldAtHome(u.typeId, level)) continue;
+      if (u.order === "cast" || this.recovering(u)) continue;
+      spot ??= this.deepSpot(b);
+      if (Math.hypot(u.x - spot.x, u.y - spot.y) <= DEEP_HOLD_SLACK) continue;
+      const end = moveGoal(u);
+      if (end && Math.hypot(end.x - spot.x, end.y - spot.y) <= REISSUE_SLACK) continue;
+      this.issue(b, { c: "order", unitId: u.id, order: { kind: "move", x: spot.x, y: spot.y }, queued: false });
+    }
+  }
+
+  /** Where `druidPass` keeps them: `DEEP_BACK` behind the main hall, on the far side from the
+   *  enemy — the mirror of `homeRally` — snapped to ground a unit can stand on. */
+  private deepSpot(b: Brain): { x: number; y: number } {
+    const home = b.ai.home();
+    const foe = b.ai.enemyBase();
+    if (!foe) return home;
+    const len = Math.hypot(foe.x - home.x, foe.y - home.y) || 1;
+    const spot = { x: home.x - ((foe.x - home.x) / len) * DEEP_BACK, y: home.y - ((foe.y - home.y) / len) * DEEP_BACK };
     const grid = this.host.world.grid;
     const [cx, cy] = grid.worldToCell(spot.x, spot.y);
     if (grid.walkable(cx, cy)) return spot;

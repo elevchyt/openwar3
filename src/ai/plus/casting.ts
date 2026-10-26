@@ -674,6 +674,17 @@ const MIRROR_IMAGE = "AOmi";
 const ONCE_PER_CAMP: ReadonlySet<string> = new Set(["AHtc"]);
 
 /**
+ * …and a stun that is NOT held back for a bigger camp at all: the Tauren Chieftain's War Stomp.
+ * The developer's *"tauren chieftain must be ok with using war stomp on 2-3 enemy units. Right
+ * now it seems to only look for larger groups but less is ok too"*. Against creeps a three-body
+ * camp rolled `CREEP_SPELL_SMALL` once for the whole fight, so three camps in four never saw the
+ * stomp; it is a six-second cooldown on the hero standing in the middle of them, and two or
+ * three stunned bodies are exactly what it is for. Still `CLUSTER` bodies in the circle
+ * (`pickSpot`). Ours.
+ */
+const ANY_FIGHT: ReadonlySet<string> = new Set(["AOws"]);
+
+/**
  * THE BLOOD MAGE AND THE PALADIN — Siphon Mana (`AHdr`) as a mana PUMP.
  *
  * The developer's pairing (plus/races.ts `HeroCombo`): "the Blood Mage drains mana from enemy
@@ -1201,7 +1212,7 @@ export class PlusCaster {
     for (const card of cards) {
       // ONCE PER CAMP (`ONCE_PER_CAMP`): spent on this camp already → skip; not yet → the
       // engagement's mana roll is not asked.
-      let once = false;
+      let once = ANY_FIGHT.has(card.def.code); // `ANY_FIGHT` — no mana roll either, and never spent
       if (ONCE_PER_CAMP.has(card.def.code) && engaged) {
         if (camp === undefined) camp = this.creepCamp(u, foes);
         if (camp !== null) {
@@ -1216,7 +1227,7 @@ export class PlusCaster {
       if (this.ctx.holds?.(u, card.ab.code)) continue;
       if (!this.wants(u, card.def, card.role, friends, foes, engaged)) continue;
       if (this.aim(u, card.ab.code, card.def, card.lvl, card.role, friends, foes)) {
-        if (once && camp) {
+        if (once && camp && ONCE_PER_CAMP.has(card.def.code)) {
           let spent = this.campCasts.get(u.id);
           if (!spent) this.campCasts.set(u.id, (spent = new Set()));
           spent.add(camp);
@@ -2182,7 +2193,12 @@ export class PlusCaster {
     let count = 0;
     let value = 0;
     for (const t of pool) {
-      if (Math.hypot(t.x - x, t.y - y) > area) continue;
+      // EDGE TO EDGE where the row states a circle, which is how the sim measures one
+      // (`unitsInAreaInternal`: a body is in once its HULL is). Centre to centre it undercounted
+      // every circle by a body's width — a War Stomp's 250 round a Tauren Chieftain read the
+      // two Grunts swinging at him from the far side as out of it, and the stomp waited for a
+      // crowd (`ANY_FIGHT`).
+      if (Math.hypot(t.x - x, t.y - y) - (lvl.area > 0 ? t.radius : 0) > area) continue;
       // A DISPEL IS BLIND — `Adis` clears (and DAMAGES the summons of) every unit in its circle,
       // ours included. So a spot that would take out one of our own summons is not a spot: the
       // Water Elemental we paid for is worth more than a buff taken off a Grunt. Vetoed here

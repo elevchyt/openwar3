@@ -1316,6 +1316,18 @@ press's next base, and the base the wave was walking at when an army met it on t
 (`Brain.resume` — `contactPass` used to overwrite that objective, so winning the skirmish sent the
 wave home). Only then home.
 
+### …and the towers on its EDGE are taken down early, by a share of the army
+
+`killValue` prices a tower at 1.5 soldiers, so every caster and every killable hero outbid it and
+the army fought the defenders under the guns, which were only touched once the defence broke
+(the developer: *"it's diving with units inside a base with towers instead of first destroying the
+towers guarding it"*). `towerDetail` tells off `TOWER_SHARE` (40 %, never fewer than
+`TOWER_CREW_MIN` = 2) of the soldiers that can hit it — the nearest first, heroes and siege
+excluded — onto the one tower nearest the army that can reach it (its range + `TOWER_LOOK` of the
+squad's centre, and never one that has fallen back behind the buildings, `deepIn`). The rest keep
+fighting the defence. "Not too hard" is the share; "early" is that it starts the pass the tower is
+in reach.
+
 ### A fight is LOST when the other army outweighs ours — not when ours is nearly dead
 
 Reported: *"when a fight is being lost, the losing Computer+ AI player must fall back along with

@@ -57,12 +57,14 @@ import { MELEE_INSANE } from "../ids";
  * A much smaller vocabulary than the caster's `Role`, because the item side of the game is
  * small and closed: these are the codes that appear in `abilList` on the things a melee hero
  * actually carries. The order below is the PRIORITY order — the ladder a hero presses down,
- * highest first, one button per pass — and it reads the way a player's hands do: get out, don't
- * die, top up, then everything else.
+ * highest first, one button per pass — and it reads the way a player's hands do: don't die, get
+ * out, top up, then everything else.
  */
-export type Use = "escape" | "panic" | "healSelf" | "disable" | "healArea" | "healOther" | "mana" | "replenish" | "manaRegen" | "raise" | "illusion" | "buff";
+export type Use = "escape" | "panic" | "healSelf" | "disable" | "healArea" | "ward" | "healOther" | "mana" | "replenish" | "manaRegen" | "raise" | "illusion" | "buff";
 
-const LADDER: readonly Use[] = ["escape", "panic", "healSelf", "disable", "healArea", "healOther", "mana", "replenish", "manaRegen", "raise", "illusion", "buff"];
+// "panic" sits ABOVE "escape": a hero holding both drinks the invulnerability potion first and
+// reads the scroll only once it has worn off — see `PANIC_HP`.
+const LADDER: readonly Use[] = ["panic", "escape", "healSelf", "disable", "healArea", "ward", "healOther", "mana", "replenish", "manaRegen", "raise", "illusion", "buff"];
 const useRank = (u: Use): number => LADDER.indexOf(u);
 
 /**
@@ -111,6 +113,9 @@ const USE_OF: Readonly<Record<string, Use>> = {
   // --- hit points, on an AREA around the user ----------------------------------------------
   AIha: "healArea", // Scroll of Healing (and the three Runes of Healing)
   AIra: "healArea", // Scroll of Restoration (and its Rune)
+  // Healing Wards (`whwd`, `AIhw` on code `Ahwd` — the Witch Doctor's own row): a ward dropped at
+  // the hero's feet that regenerates everything friendly around it. See `wardWorthIt`.
+  Ahwd: "ward",
 
   // --- mana ---------------------------------------------------------------------------------
   AIma: "mana", // Potion of Mana / of Greater Mana / Mana Stone
@@ -653,8 +658,16 @@ const ILLUSION_ABILITY = "AIil";
 // All ours; see the file header. Stated as fractions of a unit's own maximum so they mean the
 // same thing on a Peasant and on a level-6 Tauren Chieftain.
 
-/** Hit-point fraction at which the hero reaches for the thing that stops it dying. */
-const PANIC_HP = 0.3;
+/**
+ * Hit-point fraction at which the hero reaches for the thing that stops it dying — and it is
+ * ABOVE `ESCAPE_HP`, on purpose. The developer's *"the hp threshold for using potion of
+ * invulnerability [must be] more than the hp threshold of the scroll of town portal usage so
+ * that invulnerability is used first"*: below the old 0.3 every hero holding both had already
+ * read the scroll at 0.4 and left with the potion still in its belt. Drunk first, the potion buys
+ * the hero its seconds in the fight (and the army its chance to win it); the scroll is still
+ * there under it if the fight is still lost when the potion wears off. Ours.
+ */
+const PANIC_HP = 0.45;
 /**
  * …and at which it LEAVES, which is a higher bar than the one at which it panics.
  *
@@ -698,7 +711,7 @@ const ESCAPE_HP = 0.4;
 const LAST_RESORT_HP = 0.08;
 /**
  * …and the band a hero drinks a HEALING POTION in (`healSelf`: Potion of Healing, of Greater
- * Healing, a Health Stone — every `AIhe`). Higher than `PANIC_HP`, because a hero that waits for
+ * Healing, a Health Stone — every `AIhe`). No lower than `PANIC_HP`, because a hero that waits for
  * the panic line to drink has usually waited too long.
  *
  * A BAND and not a line, and the developer's own numbers: heroes carrying a potion "use it when
@@ -754,6 +767,13 @@ const SCROLL_EMERGENCY_HP = 0.2;
  * does. Ours.
  */
 const WIND_BODY_HP = 800;
+/** The ward unit's regeneration aura (`[ohwd] abilList=Aoar`) and its reach, `[Aoar] Area1` —
+ *  the circle a Healing Ward heals, read off the row when it is there. */
+const WARD_AURA = "Aoar";
+const WARD_AREA = 500;
+/** How many of ours hurt (under `SCROLL_FIGHT_HP`) inside that circle before a ward is dropped
+ *  IN a fight — two is a potion's job, three is a line. Ours. */
+const WARD_FIGHT_COUNT = 3;
 /** How many of ours have to be hurt before an AREA heal is better than a potion. Below this the
  *  scroll is being spent to heal one unit, which is what the potion is for. */
 const CLUSTER = 3;
@@ -1048,13 +1068,23 @@ export function potionKind(use: Use | null): PotionKind | null {
  * least two fewer — a hero with none first, and never a swap that only moves the pile.
  */
 export function potionHandover(
-  belts: ReadonlyArray<{ heal: number; mana: number; invuln?: number; free: number }>,
+  belts: ReadonlyArray<{ heal: number; mana: number; invuln?: number; free: number; caster?: boolean }>,
 ): { from: number; to: number; kind: PotionKind } | null {
   for (const kind of ["heal", "mana"] as const) {
     for (let from = 0; from < belts.length; from++) {
-      if (belts[from][kind] < 2) continue;
+      // A spare is a SECOND potion — or, for MANA, any potion a melee hero holds at all: the
+      // developer's *"mana potions must be passed/given to ranged heroes like far seer, shadow
+      // hunter, keeper of the grove, archmage and also Paladin despite not being ranged"*. A
+      // Blademaster's one Potion of Mana is a Wind Walk; on the Far Seer beside him it is a
+      // Chain Lightning and a pair of wolves. `caster` absent reads as a caster, so a belt that
+      // does not say is shared the old way.
+      const spare = belts[from][kind] >= 2 || (kind === "mana" && belts[from].caster === false && belts[from].mana >= 1);
+      if (!spare) continue;
       for (let to = 0; to < belts.length; to++) {
-        if (to !== from && belts[to][kind] === 0 && belts[to].free > 0) return { from, to, kind };
+        if (to === from || belts[to][kind] !== 0 || belts[to].free <= 0) continue;
+        // …and a caster's mana is never handed to a melee hero (`MELEE_HEROES`).
+        if (kind === "mana" && belts[to].caster === false) continue;
+        return { from, to, kind };
       }
     }
   }
@@ -1299,16 +1329,15 @@ export class PlusItems {
       return;
     }
     const belts = heroes.map((u) => {
-      const belt = { heal: 0, mana: 0, invuln: 0, free: 0 };
+      // A melee hero (`MELEE_HEROES`) is never handed a caster's mana, and hands its own over —
+      // see `potionHandover`. Every other hero, the Paladin included, is a caster here.
+      const belt = { heal: 0, mana: 0, invuln: 0, free: 0, caster: !MELEE_HEROES.has(u.typeId) };
       for (const held of u.inventory) {
         if (!held) { belt.free++; continue; }
         const def = this.view.item(held.itemId);
         const kind = def ? potionKind(this.useOf(def)) : null;
         if (kind) belt[kind]++;
       }
-      // A melee hero is never handed a caster's mana (`MELEE_HEROES`): reading it as holding one
-      // already keeps it off the receiving end without making it a giver.
-      if (MELEE_HEROES.has(u.typeId) && belt.mana === 0) belt.mana = 1;
       return belt;
     });
     for (let i = 0; i < heroes.length; i++) {
@@ -1705,7 +1734,8 @@ export class PlusItems {
         return ctx.losing && ctx.portalWorthIt;
       }
       case "panic":
-        return engaged && hp < PANIC_HP;
+        // …and never a second potion over the first one's shield, which would be a press wasted.
+        return engaged && hp < PANIC_HP && !u.invulnerable;
       case "healSelf":
         return engaged && hp < drinkBar(u.id);
       // The REGENERATION rungs, and they are the only ones gated on there being NO fight.
@@ -1746,6 +1776,9 @@ export class PlusItems {
           !engaged
           && (this.armyHeal(u, own, friends, this.areaOf(def), foes) || this.selfRegenWorthIt(u, hp, def))
         );
+      // HEALING WARDS — see `wardWorthIt`.
+      case "ward":
+        return this.wardWorthIt(u, def, own, friends, foes, engaged);
       // A Wand of the Wind is thrown IN a fight, at the body the fight is decided by — see
       // `windTarget`, which is both the reading and the aim.
       case "disable":
@@ -1927,6 +1960,36 @@ export class PlusItems {
    * standing across the map is not a reason this hero's scroll is being wasted. Putting them in
    * the denominator would mean a computer with a busy ally could never reach the half.
    */
+  /**
+   * IS A HEALING WARD WORTH A CHARGE HERE? — the developer's *"the Computer+ AI is not using
+   * Healing Wards item at all. It must use one even when out of a fight to heal its entire army
+   * and it should also use 1 during a fight for more sustain"*. It was never pressed because
+   * nothing on this file's ladder named its code (`USE_OF`).
+   *
+   * The ward is dropped at the hero's own feet (`aim` leaves a point item there) and heals what
+   * stands around IT — `[Aoar] Area1` on the ward unit, 500 — for its thirty seconds, so:
+   *
+   *  · OUT of a fight it is an army heal like a Scroll of Regeneration (`armyHeal`, over the
+   *    ward's own circle): most of the party in it and the party's pooled health low. Unlike a
+   *    pour, nothing cancels it when the next fight starts.
+   *  · IN a fight it is sustain: `WARD_FIGHT_COUNT` of ours hurt inside the circle.
+   *
+   * Either way ONE at a time: a ward of ours already standing within the circle is the heal,
+   * and a second one beside it heals nobody new (casting.ts `summonStanding`, the same rule).
+   */
+  private wardWorthIt(u: SimUnit, def: ItemDef, own: SimUnit[], friends: SimUnit[], foes: SimUnit[], engaged: boolean): boolean {
+    const row = def.abilities.map((aid) => this.view.def(aid)).find((ad) => ad?.code === "Ahwd");
+    const ward = row?.levelData[0]?.summon;
+    const area = this.view.def(WARD_AURA)?.levelData[0]?.area || WARD_AREA;
+    if (ward) {
+      for (const o of this.view.world.units.values()) {
+        if (o.hp > 0 && o.owner === this.view.player && o.typeId === ward && near(u, o, area)) return false;
+      }
+    }
+    if (engaged) return this.hurtAround(u, friends, area) >= WARD_FIGHT_COUNT;
+    return this.armyHeal(u, own, friends, area, foes);
+  }
+
   /** How many friendly fighting bodies within `radius` of `u` are under `SCROLL_FIGHT_HP` —
    *  heroes, soldiers and summons alike; buildings, workers and illusions are no part of it. */
   private hurtAround(u: SimUnit, friends: SimUnit[], radius: number): number {

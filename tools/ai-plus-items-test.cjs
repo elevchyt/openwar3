@@ -194,6 +194,7 @@ const ITEMS = {
   spro: { id: "spro", gold: 150, usable: true, abilities: ["AIda"] }, // Scroll of Protection
   pman: { id: "pman", gold: 200, usable: true, abilities: ["AIm1"] }, // Potion of Mana
   sreg: { id: "sreg", gold: 100, usable: true, abilities: ["AIsl"] }, // Scroll of Regeneration
+  whwd: { id: "whwd", gold: 450, usable: true, abilities: ["AIhw"] }, // Healing Wards (`AIhw` on `Ahwd`)
   prep: { id: "prep", gold: 100, usable: true, abilities: ["AIp1"] }, // Replenishment Potion
   bspd: { id: "bspd", gold: 250, usable: false, abilities: ["AIms"] }, // Boots of Speed — passive
   will: { id: "will", gold: 150, usable: true, abilities: ["AIil"] }, // Wand of Illusion
@@ -231,6 +232,8 @@ const ABILS = {
   // The `AIrg` family — one code, four answers, each read off its own row.
   AIrl: { code: "AIrg", target: "unit", levelData: [lvl({ castRange: 500, duration: 45, data: [400, 0] })] },
   AIsl: { code: "AIrg", target: "", levelData: [lvl({ area: 600, duration: 45, data: [225, 0] })] },
+  AIhw: { code: "Ahwd", target: "point", levelData: [lvl({ castRange: 500, duration: 30, summon: "ohwd" })] },
+  Aoar: { code: "Aoar", target: "", levelData: [lvl({ area: 500 })] }, // the ward's own aura
   AIpr: { code: "AIrg", target: "", levelData: [lvl({ duration: 45, data: [0, 200] })] },
   AIp1: { code: "AIrg", target: "", levelData: [lvl({ duration: 30, data: [100, 25] })] },
   AIda: { code: "AIda", target: "", levelData: [lvl()] },
@@ -381,11 +384,20 @@ const itemOf = (cmd) => (cmd ? cmd.slot : null);
     itemOf(pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY)), 1);
 }
 
-// --- the Town Portal outranks everything -------------------------------------------------------
+// --- invulnerability, then the Town Portal, then everything else ------------------------------
 {
-  const h = belt(hero({ hp: 200, x: 4000, y: 4000 }), "phea", "pnvl", "stwp");
+  // The developer's: the invulnerability potion's bar is ABOVE the scroll's, so a hero holding
+  // both drinks it first (`PANIC_HP` over `ESCAPE_HP`, "panic" over "escape" on the ladder).
+  const both = belt(hero({ hp: 200, x: 4000, y: 4000 }), "phea", "pnvl", "stwp");
+  check("a lost fight: invulnerability before the scroll",
+    itemOf(pressed([both, enemy({ x: 4200, y: 4000 })], PLUS_INSANE, { ...AWAY, losing: true })), 1);
+  check("…and at 42 % — over the scroll's bar, under the potion's — the potion alone",
+    itemOf(pressed([belt(hero({ hp: 420, x: 4000, y: 4000 }), "pnvl", "stwp"), enemy({ x: 4200, y: 4000 })], PLUS_INSANE, AWAY)), 0);
+  check("…never a second potion over the first one's shield",
+    itemOf(pressed([belt(hero({ hp: 200, x: 4000, y: 4000, invulnerable: true }), "pnvl", "stwp"), enemy({ x: 4200, y: 4000 })], PLUS_INSANE, { ...AWAY, losing: true })), 1);
+  const h = belt(hero({ hp: 200, x: 4000, y: 4000 }), "phea", "stwp");
   const cmd = pressed([h, enemy({ x: 4200, y: 4000 })], PLUS_INSANE, { ...AWAY, losing: true });
-  check("a lost fight: it scrolls out before it drinks anything", itemOf(cmd), 2);
+  check("with no potion, a lost fight: it scrolls out before it drinks anything", itemOf(cmd), 1);
   // THE DOUBLE-CLICK. `itemTownPortal` resolves nearestHall(owner, x, y), so aiming at the hero
   // itself IS "the user's nearest hall" — which is what double-clicking the scroll does in the
   // real game, and the only aim that cannot go out of date while the hero runs.
@@ -411,9 +423,11 @@ const itemOf = (cmd) => (cmd ? cmd.slot : null);
     itemOf(pressed([hurt, enemy({ x: 4200, y: 4000 })], PLUS_INSANE, vsCreeps)), 1); // the potion
   // …and the LAST RESORT, which is the one thing that still spends it there: below 8 % the walk
   // out is not going to finish, and 320 gold is cheaper than a level-6 hero.
-  const dying = belt(hero({ hp: 70, x: 4000, y: 4000 }), "phea", "pnvl", "stwp");
+  const dying = belt(hero({ hp: 70, x: 4000, y: 4000 }), "phea", "stwp");
   check("…but at 7 % it scrolls out of the camp all the same",
-    itemOf(pressed([dying, enemy({ x: 4200, y: 4000 })], PLUS_INSANE, vsCreeps)), 2);
+    itemOf(pressed([dying, enemy({ x: 4200, y: 4000 })], PLUS_INSANE, vsCreeps)), 1);
+  check("…with the invulnerability potion drunk first when it has one",
+    itemOf(pressed([belt(hero({ hp: 70, x: 4000, y: 4000 }), "phea", "pnvl", "stwp"), enemy({ x: 4200, y: 4000 })], PLUS_INSANE, vsCreeps)), 1);
 }
 {
   // The same two bars with NO retreat ordered: `creeping` is a question about the fight the
@@ -476,6 +490,21 @@ const itemOf = (cmd) => (cmd ? cmd.slot : null);
   // A potion is the hero's own answer, and it comes first on the ladder.
   check("…a Potion of Healing beside it is drunk first",
     itemOf(pressed([belt(hero({ hp: 150 }), "shea", "phea"), enemy({ x: 200 })], PLUS_INSANE, AWAY)), 1);
+}
+
+// --- Healing Wards: in a fight for sustain, out of one for the whole army -------------------------
+{
+  const hurt = () => [1, 2, 3].map((i) => unit({ x: 100 * i, hp: 400 }));
+  check("a fight with three of ours hurt round the hero: the ward goes down",
+    itemOf(pressed([belt(hero(), "whwd"), ...hurt(), enemy({ x: 200 })], PLUS_INSANE, AWAY)), 0);
+  check("…but not for one scratched soldier",
+    pressed([belt(hero(), "whwd"), unit({ x: 100, hp: 400 }), enemy({ x: 200 })], PLUS_INSANE, AWAY), null);
+  check("…nor over a ward of ours already standing there",
+    pressed([belt(hero(), "whwd"), ...hurt(), unit({ x: 50, typeId: "ohwd" }), enemy({ x: 200 })], PLUS_INSANE, AWAY), null);
+  check("out of a fight, a hurt army gathered round the hero is healed with one",
+    itemOf(pressed([belt(hero(), "whwd"), ...hurt()], PLUS_INSANE, AWAY)), 0);
+  check("…and a whole one is not",
+    pressed([belt(hero(), "whwd"), ...[1, 2, 3].map((i) => unit({ x: 100 * i }))], PLUS_INSANE, AWAY), null);
 }
 
 // --- the Wand of the Wind: an enemy HERO first ---------------------------------------------------
@@ -1687,6 +1716,12 @@ console.log("\n-- handing a spare potion over ----------------------------------
   check("…nor to one with a full belt", potionHandover([b(2, 0, 3), b(0, 0, 0)]), null);
   check("mana is shared the same way",
     JSON.stringify(potionHandover([b(0, 0, 4), b(1, 2, 2)])), JSON.stringify({ from: 1, to: 0, kind: "mana" }));
+  const m = (mana, free, caster) => ({ heal: 0, mana, free, caster });
+  check("a melee hero's ONE mana potion goes to a caster holding none",
+    JSON.stringify(potionHandover([m(1, 3, false), m(0, 2, true)])), JSON.stringify({ from: 0, to: 1, kind: "mana" }));
+  check("…never to another melee hero", potionHandover([m(1, 3, false), m(0, 2, false)]), null);
+  check("…nor does a caster's one potion move", potionHandover([m(1, 3, true), m(0, 2, true)]), null);
+  check("…and a caster's spare never goes to a melee hero", potionHandover([m(2, 3, true), m(0, 2, false)]), null);
   check("a Scroll of Healing is not a potion", potionKind("healArea"), null);
   check("a Healing Salve is", potionKind("healOther"), "heal");
   check("a Clarity Potion is a mana potion", potionKind("manaRegen"), "mana");

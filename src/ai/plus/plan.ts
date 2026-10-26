@@ -460,6 +460,8 @@ export function buildPlan(c: PlusCtx): void {
   // developer's: *"it should give a higher priority to having 2 obsidian statues first"*). Two
   // is a bounded row, so it costs the army nothing past them.
   if (c.tier >= 3) always(c);
+  // …and the race's TIER-3 RESEARCH, saved for ahead of the army — see `tier3First`.
+  tier3Research(c);
   army(c, coreArmy(c)); // enough not to die to the first raid, cheap enough not to block tech
   // …and on a rung that MATCHES the enemy's air (`PlusProfile.antiAirMatch`), the ANSWER TO AIR
   // comes up here, under the core army and above every row that halts the ladder to save — the
@@ -472,6 +474,8 @@ export function buildPlan(c: PlusCtx): void {
   // research, the Castle, the tech and the upgrades, because at tier 2 that is the order a ladder
   // player spends in. Below the core army, so it can never be the reason there is nothing on the field.
   tierTwoHero(c);
+  // …and the THIRD hero, right behind it, for a race that buys it first at tier 3 (`tier3First`).
+  tier3Hero(c);
   // …and for a missing FIGHT item once the scroll is carried — see `fightSaving`.
   fightSaving(c);
   // …and JUST AFTER A WON FIGHT, the expansion comes up to here from the bottom of the ladder —
@@ -821,6 +825,7 @@ function extraHeroes(c: PlusCtx): void {
     }
     return;
   }
+  if (tier3HeroFirst(c)) return; // `tier3Hero`'s row, much higher up — never twice
   if (profile.heroes >= 3 && ai.count(ai.heroId3) < 1 && armyFood >= HERO3_ARMY) {
     ai.setBuildUnit(1, ai.heroId3);
   }
@@ -2016,11 +2021,59 @@ function abilityUpgrades(c: PlusCtx): void {
   const { ai, table, armyFood } = c;
   for (const row of table.upgrades) {
     if (!row.unlock || ai.countDone(row.from) < 1) continue;
+    if (tier3Owns(c, row.id)) continue; // already asked, far higher up — never twice (`tier3Research`)
     if (armyFood < (row.after ?? 0)) continue;
     if (row.forUnit && ai.townCount(row.forUnit) < 1) continue; // `UpgradeRow.forUnit` — its other forms count too
     if (row.when === "enemyRanged" && (c.enemy.pierce ?? 0) < ENEMY_RANGED) continue;
     ai.setBuildUpgrSaved(row.ranks, row.id);
   }
+}
+
+/**
+ * WHAT TIER 3 BUYS FIRST — `PlusRaceTable.tier3First`, the orc's Berserker Upgrade and then its
+ * Shaman Master Training, saved for in that order (`setBuildUpgrSaved`) from the pass the
+ * tier-3 hall stands, ABOVE the core army: the developer's *"orc must make it its number one
+ * priority to get the berserker upgrade upon reaching tier 3, its second priority to get the
+ * shaman master training"*. A saving row never halts the loop, so the army under it still
+ * trains out of whatever the two researches leave; what changes is that the research is paid
+ * FIRST rather than out of the gold the army rows did not want. No `after` gate — the army food
+ * an unlock usually waits for is the tier-2 army, long out by tier 3 — but a row's `forUnit`
+ * still holds (Master Training with no Shaman yet waits for the first one).
+ */
+function tier3Research(c: PlusCtx): void {
+  const { ai, table } = c;
+  if (c.tier < 3 || !table.tier3First) return;
+  for (const id of table.tier3First) {
+    const row = table.upgrades.find((r) => r.id === id);
+    if (!row || ai.countDone(row.from) < 1) continue;
+    if (row.forUnit && ai.townCount(row.forUnit) < 1) continue;
+    ai.setBuildUpgrSaved(row.ranks, row.id);
+  }
+}
+
+/** Does `tier3Research` own this research row this pass? Then `abilityUpgrades` leaves it alone,
+ *  because a research row emitted twice would be saved for twice. */
+function tier3Owns(c: PlusCtx, id: string): boolean {
+  return c.tier >= 3 && !!c.table.tier3First?.includes(id);
+}
+
+/** Is the THIRD hero `tier3Hero`'s row — tier 3 standing on a race with `tier3First`? */
+function tier3HeroFirst(c: PlusCtx): boolean {
+  return c.tier >= 3 && !!c.table.tier3First;
+}
+
+/**
+ * …and its THIRD priority, the last hero: directly under the second hero's own tier-2 row, and so
+ * under the core army — the one row this file never saves through — but above every other row
+ * of the ladder, which is where `extraHeroes` had it waiting behind the expansion and the tier
+ * rows. Its `HERO3_ARMY` gate goes with it: by tier 3 the army it waits for is out.
+ */
+function tier3Hero(c: PlusCtx): void {
+  const { ai, profile, table } = c;
+  if (!tier3HeroFirst(c) || profile.heroes < 3) return;
+  if (ai.countDone(table.altar) < 1 || ai.count(ai.heroId) < 1 || ai.count(ai.heroId2) < 1) return;
+  if (ai.count(ai.heroId3) >= 1 || !(ai.heroLegal?.(ai.heroId3) ?? true)) return;
+  ai.setBuildUnit(1, ai.heroId3);
 }
 
 /**
