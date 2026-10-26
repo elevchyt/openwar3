@@ -539,6 +539,20 @@ export interface SpellFieldInit {
   /** A model played on every unit a HEALING wave reaches, once per wave — Healing Spray's
    *  `[XNhs] Specialart = HealTarget.mdl`, the flash of the bottle breaking over it. */
   healArt?: string;
+  /**
+   * A field that HOLDS a state on what stands in it rather than hurting it: every wave lays this
+   * buff on each unit the ability's own row admits, HOSTILE to the caster, for a little over one
+   * interval — so it is worn for exactly as long as the field runs and comes off a beat after
+   * the field ends, however it ends (Cloud, `Aclf`). No damage, no impact, nothing provoked.
+   */
+  holdBuff?: { kind: BuffKind; value: number; group: string; art: string; fx: BuffFx[]; buffId: string };
+  /** A channelled code fired with NO channel to break — an ITEM pressing it. The Horn of the
+   *  Clouds is `[AIfg] code = Aclf`, used from a belt with no cast at all, so the channel test
+   *  (CHANNELED) would end its field the tick it began. It runs its course instead. */
+  unchanneled?: boolean;
+  /** The row's Targets Allowed, when the caster does not carry the ability itself — an item
+   *  does not put its ability on the hero's list, which is where the field otherwise reads it. */
+  targetFlags?: string[];
   /** "Max Damage" read as a HEALING budget: the most one wave may restore across everybody it
    *  reaches, split evenly past that — the same rule `maxDamagePerWave` is for a hurting wave. */
   maxHealPerWave?: number;
@@ -3963,21 +3977,40 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
   },
 
-  // Horn of the Clouds (`AIfg`, "Cloud of Fog (Item)") — "stops an area of enemy towers from
-  // attacking for <AIfg,Dur1> seconds". `targs1 = vuln,invu,structure` is the whole targeting
-  // rule: buildings, nothing else. Area1 300, Dur1 30.
-  //
-  // Modelled with the `miss` buff at certainty rather than with a new disarmed state, because
-  // that is the shape the ability's own metadata block describes — its sibling column is
-  // `DataB "Chance To Miss (%)"`. A tower under the cloud swings and the blow goes nowhere,
-  // and its OTHER work (training, research, repair) is untouched, which a stun would have
-  // stopped as well.
+  // CLOUD (`Aclf`, the Dragonhawk Rider's) and the Horn of the Clouds (`AIfg`, the same code)
+  // — "Cast on enemy buildings with ranged attacks to stop the buildings from attacking.
+  // Lasts <Aclf,Dur1> seconds." It is a CLOUD over a spot, not a curse on a building, and every
+  // part of it is a column:
+  //   Area1 300, Dur1 30          the circle, and how long the Rider holds it
+  //   targs1 vuln,invu,structure  buildings, nothing else
+  //   DataA 2 (`Nsi1`, the Silence family's "Attacks Prevented") — a `silenceFlags` BIT
+  //                               field (UI\UnitEditorData.txt: 1 melee, 2 ranged, 4 special,
+  //                               8 spells). 2 is RANGED ATTACKS and nothing else, so a clouded
+  //                               tower still casts, trains and researches, and a building with
+  //                               no ranged weapon is not touched at all.
+  //   BuffID1 Bclf                the buff the tower wears (its status icon, BTNCloudOfFog)
+  //   EfctID1 Xclf                `Effectart = CloudOfFog.mdl` (Birth / Stand / Death, parsed
+  //                               out of the install) + `Effectsoundlooped = CloudOfFogLoop`
+  // `[Aclf] Animnames = stand,channel`: the Rider CHANNELS it (CHANNELED), so the cloud holds
+  // its Stand while he does and dies with his channel — an order, a stun or his death. It is
+  // the field that carries the buff (SpellFieldInit.holdBuff), so a building is clouded for
+  // exactly as long as the cloud hangs over it. The Horn is pressed from a belt with no
+  // channel to hold, and its cloud simply runs the row's 30 seconds (`unchanneled`).
+  // It used to be a 100% `miss` on everything in the circle, drawn with nothing and silent.
   Aclf: (api, caster, def, rank, ctx) => {
     const lvl = lv(def, rank);
-    for (const t of enemiesInArea(api, caster, def, ctx.x, ctx.y, lvl.area || 300)) {
-      api.applyBuff(t, { kind: "miss", group: "cloud", timeLeft: dur(lvl, t) || 30, sourceId: caster.id, value: 1, ...fx(def) });
-    }
-    if (def.targetArt) api.emitEffect(def.targetArt, ctx.x, ctx.y, 0, lvl.duration || 30);
+    const total = lvl.duration || lvl.heroDuration || 30;
+    const interval = 0.5;
+    const pc = caster.pendingCast;
+    api.addSpellField({
+      code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 300,
+      damagePerWave: 0, waves: Math.max(1, Math.round(total / interval)), interval,
+      casterId: caster.id, art: "", loopSound: fieldLoop(def),
+      centerArt: fieldArt(def),
+      holdBuff: { kind: "prevent", value: d(lvl, 0, 2), group: "cloud", buffId: buffIdOf(def, rank), art: def.buffArt, fx: def.buffFx },
+      unchanneled: !pc || pc.code !== def.code,
+      targetFlags: def.targetFlags,
+    });
   },
 
   // Spider Silk Broach (`AIwb`, "ItemWeb") — "Binds a target enemy AIR unit in webbing,

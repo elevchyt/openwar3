@@ -604,6 +604,10 @@ export type BuffKind =
   | "root" // value = move-slow fraction (every net pins to 1.0). Ensnare and Web can still
   //        attack; Entangling Roots (group "roots") DISARMS as well — see SimUnit.disarmed
   | "vuln" // value = fraction of EXTRA damage the holder takes (Berserk +50%)
+  | "prevent" // value = the `silenceFlags` BITS of what the holder may not do — UI\UnitEditorData.txt
+  //            [silenceFlags]: 1 melee attacks, 2 ranged attacks, 4 special, 8 spells (the column
+  //            the Silence family names `Nsi1`). Cloud's `[Aclf] DataA` is 2: a clouded tower
+  //            keeps its order and fires nothing (SimUnit.disarmed), and casts as it likes.
   | "miss" // value = chance this unit's attacks simply MISS (Drunken Haze's `Nsi2 "Chance To
   //         Miss (%)"`). Not a slow and not a damage cut — the blow is rolled and thrown away,
   //         which is why it stacks with neither.
@@ -2012,7 +2016,8 @@ export interface SimUnit {
   /** Derived from a `hex` buff (Hex, Polymorph): a critter — no attack, no spells, walks at
    *  HEX_MOVE_SPEED. */
   hexed: boolean;
-  /** Derived from an Entangling Roots `root` buff (group "roots"): the unit cannot attack at
+  /** Derived from an Entangling Roots `root` buff (group "roots") — or from a `prevent` buff
+   *  whose bits name this unit's kind of weapon (Cloud on a tower): the unit cannot attack at
    *  all — "Immobilizes, disarms, and deals 10 damage/sec" (warcraft.wiki.gg, Poison Treant
    *  and Tree of Life (Warcraft III) pages: "Entangled Units are unable to attack, though
    *  they can still cast spells"). Ensnare and Web hold a unit just as still and leave it
@@ -3147,7 +3152,9 @@ const FACING_CAST_EPS = 0.4; // must roughly face a unit target to cast
 // MANA FLARE (`Amfl`) is the Faerie Dragon's: "Causes the Faerie Dragon to CHANNEL negative
 // magical energies…" (NightElfAbilityStrings), for `Dur1` = 30 — while the channel holds, every
 // enemy spell cast near her is punished (SimWorld.flareStrike), and any order ends it.
-const CHANNELED = new Set(["AHbz", "ANrf", "AEsf", "AEtq", "AUdd", "ANst", "AOeq", "AHdr", "AOvd", "Acan", "ANcl", "Amls", "Amfl"]);
+// CLOUD (`Aclf`) is the Dragonhawk Rider's `Animnames = stand,channel`: the cloud hangs over the
+// towers for as long as he holds it (`Dur1` 30), and an order — or his death — lifts it.
+const CHANNELED = new Set(["AHbz", "ANrf", "AEsf", "AEtq", "AUdd", "ANst", "AOeq", "AHdr", "AOvd", "Acan", "ANcl", "Amls", "Amfl", "Aclf"]);
 /** Is `code` a CHANNEL — held for exactly as long as the caster keeps it up? The renderer asks,
  *  so that a channel's clip ends with the channel rather than with the clip's own hold. */
 export function isChanneled(code: string): boolean {
@@ -13359,6 +13366,11 @@ export class SimWorld {
         slowMove = Math.max(slowMove, b.value); // Banish's Movement Speed Reduction (DataA)
       } else if (b.kind === "stun" || b.kind === "sleep") stun = true; // sleep disables like a stun (wakes on damage)
       else if (b.kind === "silence") silence = true;
+      else if (b.kind === "prevent") {
+        // Which half of the mask bites is a fact about the HOLDER's weapon (BuffKind.prevent).
+        if (b.value & 8) silence = true;
+        if (u.weapon && b.value & (u.weapon.ranged ? 2 : 1)) disarmed = true;
+      }
       else if (b.kind === "hex") hexed = true; // a critter casts nothing either (u.silenced below)
       else if (b.kind === "invisible") {
         cloaked = true; // under the effect from the moment it lands
@@ -18665,7 +18677,7 @@ export class SimWorld {
     const caster = this.units.get(f.casterId);
     const team = caster?.team ?? 0;
     const ab = caster ? this.findAbility(caster, f.code) : undefined;
-    const flags = (ab && this.abilityDefOf(ab)?.targetFlags) ?? [];
+    const flags = f.targetFlags ?? (ab && this.abilityDefOf(ab)?.targetFlags) ?? [];
     // timer counts down to the next wave; seeding it with `delay` (default 0) postpones the
     // FIRST wave without dropping any (Flame Strike's subsiding burn starts after the pillar).
     this.spellFields.push({ ...f, timer: f.delay ?? 0, done: 0, team, flags, ox: caster?.x ?? f.x, oy: caster?.y ?? f.y });
@@ -18723,7 +18735,7 @@ export class SimWorld {
       // final wave on schedule, so no tick is dropped. Fields from fire-and-forget
       // spells (Flame Strike, Volcano, Bladestorm) aren't in CHANNELED and run their
       // full course independently of the caster.
-      if (CHANNELED.has(f.code)) {
+      if (CHANNELED.has(f.code) && !f.unchanneled) {
         const caster = this.units.get(f.casterId);
         const pc = caster?.pendingCast;
         const interrupted = !caster || !pc || pc.code !== f.code || (caster.order !== "cast" && pc.channelLeft > 0);
@@ -18790,7 +18802,8 @@ export class SimWorld {
           // A healing wave heals where and when it LANDS, like the damage beside it.
           healField: f.healPerWave ? f : undefined,
         };
-        if (impact.t > 0) this.waveImpacts.push(impact);
+        if (f.holdBuff) this.holdWave(f);
+        else if (impact.t > 0) this.waveImpacts.push(impact);
         else this.landWave(impact);
         // Scatter the wave effect over the area (WC3 drops the ice shards across the
         // whole circle each wave, not just the centre). `artPerWave` copies land per
@@ -18937,6 +18950,18 @@ export class SimWorld {
   /** One wave of a HEALING field (SpellFieldInit.healPerWave — Tranquility): whoever is in the
    *  circle NOW, admitted by the row as `alliesInArea` admits (the caster's allies, and the
    *  caster itself when `self` is listed), and never a mechanical unit. */
+  /** One wave of a HOLDING field (SpellFieldInit.holdBuff): its buff, re-laid on everything in
+   *  the circle the row admits and that is hostile to the caster's side, kept alive a beat past
+   *  the next wave so it neither blinks between two nor outlives the field by more than that. */
+  private holdWave(f: (typeof this.spellFields)[number]): void {
+    const hb = f.holdBuff;
+    if (!hb) return;
+    for (const t of this.unitsInAreaInternal(f.x, f.y, f.area)) {
+      if (t.neutralPassive || t.team === f.team || !this.areaEffectAffects(f.casterId, f.team, f.flags, t)) continue;
+      this.applyBuffInternal(t, { kind: hb.kind, value: hb.value, group: hb.group, timeLeft: f.interval + 0.25, sourceId: f.casterId, art: hb.art, fx: hb.fx, buffId: hb.buffId });
+    }
+  }
+
   private healWave(f: (typeof this.spellFields)[number], x: number, y: number): void {
     const caster = this.units.get(f.casterId);
     if (!caster) return;
