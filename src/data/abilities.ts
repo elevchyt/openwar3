@@ -173,6 +173,11 @@ export interface BuffFx {
   /** `Effectsoundlooped` — the AbilitySounds LABEL of the bed that plays for as long as a
    *  carrier stands (`[Bcyc] Effectsoundlooped = CycloneLoop`). A label, not a path. */
   loop?: string;
+  /** PLANTED rather than worn: the model rides its attachment point but keeps the facing it
+   *  landed with instead of turning with its holder. Set by the renderer for the art of a buff
+   *  that PINS its holder (`root`: Ensnare, Web, Entangling Roots) — a net thrown over a Grunt
+   *  lies on him, and when he turns to swing at somebody the net does not turn with him. */
+  planted?: boolean;
 }
 
 /** A buff — its own object type in the data, with its own `[B….]` section in the same

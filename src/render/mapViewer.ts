@@ -6485,6 +6485,9 @@ export class MapViewerScene {
    *  Alternate Ref", and a morph onto another model swaps the whole instance), and a model
    *  left hanging off the old node is drawn under a switched-off node or a detached body. */
   private buffFxParented = new Map<string, { host: SpawnInstance; link: string }>();
+  /** A PLANTED buff model's facing (BuffFx.planted): the world rotation it landed with, held
+   *  against its holder's turning by `plantBuffFx` every frame. */
+  private buffFxPlanted = new Map<string, Float32Array>();
   /** buffFx keys still playing their Birth clip (settleBuffFx moves them to Stand). */
   private buffFxBirthing = new Set<string>();
   /** buffFx keys whose model ships one set of clips PER TARGET SIZE, and which set this one
@@ -6566,7 +6569,7 @@ export class MapViewerScene {
           b.fx.forEach((fx, i) =>
             fx.carry
               ? this.trackCarrier(active, `${u.id}|${key}|${i}`, fx, u.id, b.timeLeft, b.total)
-              : this.trackBuffFx(active, `${u.id}|${key}|${i}`, fx, u.id),
+              : this.trackBuffFx(active, `${u.id}|${key}|${i}`, b.kind === "root" && !fx.planted ? { ...fx, planted: true } : fx, u.id),
           );
         }
       }
@@ -6975,6 +6978,7 @@ export class MapViewerScene {
     this.buffFx.delete(key);
     this.buffFxBirthing.delete(key);
     this.buffFxParented.delete(key);
+    this.buffFxPlanted.delete(key);
     const anim = this.buffFxAnim.get(key);
     this.buffFxAnim.delete(key);
     if (this.carrierLoops.delete(key)) this.sounds?.setPathLoop(key, "", false);
@@ -7267,6 +7271,7 @@ export class MapViewerScene {
             this.buffFxParented.set(key, { host, link });
           }
         }
+        if (host) this.plantBuffFx(key, inst, host);
         return;
       }
       const u = this.rts?.simView.units.get(simId);
@@ -7310,6 +7315,10 @@ export class MapViewerScene {
     if (node && host) {
       inst.setParent?.(node); // ride the unit's own animated attachment point
       this.buffFxParented.set(key, { host, link: this.attachLink(simId).join(",") });
+      if (fx.planted) {
+        this.buffFxPlanted.set(key, Float32Array.from(host.localRotation));
+        this.plantBuffFx(key, inst, host);
+      }
     } else {
       this.loc3[0] = u.x;
       this.loc3[1] = u.y;
@@ -7341,6 +7350,30 @@ export class MapViewerScene {
     inst.show();
     this.buffFx.set(key, inst);
   }
+
+  /**
+   * Hold a PLANTED buff model (BuffFx.planted) at the facing it landed with. It stays parented
+   * to its attachment point — so it still sits where the body is, sways with the bone and
+   * scales with the model — and only the holder's FACING is taken back out: the instance's own
+   * rotation is the inverse of the unit's turn since then, `conj(facing now) × facing then`.
+   * Both are pure turns about Z (rts writes the facing as one), so that is exact for the turn
+   * and leaves the bone's own motion alone. A no-op for any other buff model.
+   */
+  private plantBuffFx(key: string, inst: SpawnInstance, host: SpawnInstance): void {
+    const landed = this.buffFxPlanted.get(key);
+    if (!landed) return;
+    const now = host.localRotation;
+    // conj(now) × landed, for unit quaternions [x, y, z, w].
+    const ax = -now[0], ay = -now[1], az = -now[2], aw = now[3];
+    const [bx, by, bz, bw] = landed;
+    const q = this.plantQuat;
+    q[0] = aw * bx + ax * bw + ay * bz - az * by;
+    q[1] = aw * by - ax * bz + ay * bw + az * bx;
+    q[2] = aw * bz + ax * by - ay * bx + az * bw;
+    q[3] = aw * bw - ax * bx - ay * by - az * bz;
+    inst.setRotation(q);
+  }
+  private readonly plantQuat = new Float32Array(4);
 
   /** Birth is done → settle into the looping Stand. A model with no Stand just holds its
    *  last Birth frame, which is what the game does too. */
