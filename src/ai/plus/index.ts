@@ -1128,6 +1128,13 @@ export function backlineSpot(
   return { x: h.x + ((h.x - enemy.x) / len) * BACKLINE_STEP, y: h.y + ((h.y - enemy.y) / len) * BACKLINE_STEP };
 }
 
+/** Is this unit kept AT HOME, out of the army, for now — a Druid of the Claw before Bear Form
+ *  (`Redc` rank 2; `recruit`)? The developer's "druids of the claw must join the army after their
+ *  master training has been researched". Pure, for the test. */
+export function heldAtHome(typeId: string, druidTraining: number): boolean {
+  return typeId === DRUID_CLAW && druidTraining < 2;
+}
+
 /** Who a staff saves first (`staffPass`): a HERO, then a MELEE body, then a ranged one — and the
  *  bigger body of two in the same rung, which is the "beefy" in *"beefy melee units like bears"*. */
 export function staffRank(t: SimUnit): number {
@@ -3632,7 +3639,7 @@ export class ComputerPlusAi {
       // them from tier 2 (`UnitRow.insaneTier`) and keeps them at home, out of every fight, so
       // they are alive and standing the moment Master Training lands — the developer's "protect
       // them so that they stay alive until master training has been reached".
-      if (u.typeId === DRUID_CLAW && b.ai.upgradeLevel(UPG_DRUID_CLAW) < 2) continue;
+      if (heldAtHome(u.typeId, b.ai.upgradeLevel(UPG_DRUID_CLAW))) continue;
       if (u.worker) spare.push(u);
       else b.squad.add(u.id);
     }
@@ -7501,6 +7508,8 @@ export class ComputerPlusAi {
     const food = this.squadFood(b);
     const clauses = (!spike.research || b.ai.upgradeLevel(spike.research[0]) >= spike.research[1])
       && (!spike.units || b.ai.countDone(spike.units[0]) >= spike.units[1])
+      && (!spike.started || b.ai.townCount(spike.started[0]) >= spike.started[1])
+      && (!spike.heroes || [b.ai.heroId, b.ai.heroId2, b.ai.heroId3].filter((id) => !!id && b.ai.count(id) > 0).length >= spike.heroes)
       && (!spike.tier || this.tier(b) >= spike.tier)
       && (!spike.armyFood || food >= spike.armyFood);
     const met = clauses || food >= SPIKE_ARMY_FOOD;

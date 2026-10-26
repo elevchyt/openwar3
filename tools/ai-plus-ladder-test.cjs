@@ -150,12 +150,16 @@ function recorder(table, strategy, profile, opts = {}) {
 console.log("--- Defend waits for enemy ranged units; the ability unlocks come first ---");
 {
   const human = PLUS_RACES.human;
-  const standing = { [human.halls[0]]: 1, [human.barracks]: 1, [human.altar]: 1, [human.farm]: 6 };
+  // A Footman on the field: Defend is the Footman's, and an upgrade waits for one of its unit
+  // (`UpgradeRow.forUnit`, the developer's "first produce at least one of a unit").
+  const standing = { [human.halls[0]]: 1, [human.barracks]: 1, [human.altar]: 1, [human.farm]: 6, hfoo: 1 };
   const asked = (enemy) => recorder(human, human.strategies[0], PLUS_INSANE, { standing, armyFood: 20, gold: 5000, wood: 5000, enemy });
   const has = (r) => { buildPlan(r.ctx); return r.build.some((x) => x.kind === "upgrade" && x.item === "Rhde"); };
   check("no Defend against an army with no ranged units", has(asked({ seen: 8, air: 0, armor: {}, pierce: 0 })), false);
   check("…nor against two archers", has(asked({ seen: 8, air: 0, armor: {}, pierce: 2 })), false);
   check("…but Defend once three are seen", has(asked({ seen: 8, air: 0, armor: {}, pierce: 3 })), true);
+  const noFootman = recorder(human, human.strategies[0], PLUS_INSANE, { standing: { ...standing, hfoo: 0 }, armyFood: 20, gold: 5000, wood: 5000, enemy: { seen: 8, air: 0, armor: {}, pierce: 3 } });
+  check("…and not before there is a Footman to defend with", has(noFootman), false);
   check("Web is the undead's first research row", PLUS_RACES.undead.upgrades[0].id, "Ruwb");
   check("…Berserker Upgrade the orc's", PLUS_RACES.orc.upgrades[0].id, "Robk");
 }
@@ -163,16 +167,25 @@ console.log("--- Defend waits for enemy ranged units; the ability unlocks come f
 // --- the night elf's BEARS: Adept Training at tier 2, druids high in the ladder at tier 3 ---
 //
 // Reported: "the bears/druids of the claw are coming in VERY late, even after transitioning to
-// tier 3". `Redc` rank 1 needs nothing (`[Redc] Requires=`), so it no longer waits for a druid on
-// the field; and the druid is the late grove's `lead` row, above the expansion and the tier rows.
+// tier 3". The druid is the late grove's `lead` row, above the expansion and the tier rows; and on
+// Insane it is a tier-2 unit, asked for at tier 2 (the bear builds' own `lead` of four), with
+// Adept Training after the first one ("first produce at least one of a unit").
 console.log("--- night elf: the bears come as soon as tier 3 does ---");
 {
   const elf = PLUS_RACES.nightelf;
   const bears = elf.strategies.find((s) => s.id === "bears");
   const standing = { [elf.halls[1]]: 1, [elf.barracks]: 1, [elf.altar]: 1, [elf.farm]: 6, eaoe: 1, edob: 1, eden: 1 };
-  const t2 = recorder(elf, bears, PLUS_INSANE, { standing, armyFood: 20, gold: 5000, wood: 5000, tier: 2 });
+  const insaneElf = tableForDifficulty(elf, true);
+  const t2 = recorder(insaneElf, bears, PLUS_INSANE, { standing, armyFood: 20, gold: 5000, wood: 5000, tier: 2 });
   buildPlan(t2.ctx);
-  check("Druid of the Claw training is asked for at tier 2 with no druid out", t2.build.some((x) => x.kind === "upgrade" && x.item === "Redc"), true);
+  check("an Insane night elf asks for Druids of the Claw at tier 2", t2.build.some((x) => x.kind === "unit" && x.item === "edoc"), true);
+  check("…but not their training before the first druid", t2.build.some((x) => x.kind === "upgrade" && x.item === "Redc"), false);
+  const t2d = recorder(insaneElf, bears, PLUS_INSANE, { standing: { ...standing, edoc: 1 }, armyFood: 20, gold: 5000, wood: 5000, tier: 2 });
+  buildPlan(t2d.ctx);
+  check("…and the training once one is out", t2d.build.some((x) => x.kind === "upgrade" && x.item === "Redc"), true);
+  const lore = recorder(insaneElf, bears, PLUS_INSANE, { standing: { ...standing, eaoe: 0 }, armyFood: 20, gold: 5000, wood: 5000, tier: 2 });
+  buildPlan(lore.ctx);
+  check("the Ancient of Lore is a tier-2 support row", lore.build.some((x) => x.item === "eaoe"), true);
   const t3 = recorder(elf, bears, PLUS_INSANE, { standing: { ...standing, [elf.halls[2]]: 1 }, armyFood: 20, gold: 5000, wood: 5000, tier: 3 });
   buildPlan(t3.ctx);
   const at = (pred) => t3.build.findIndex(pred);
@@ -1030,7 +1043,7 @@ function runEconomy() {
       // are what `firstTower` asks for, and paying for them is what keeps its timing honest.
       guardSecondary: (t, q, item) => { if (t === 0) ai.secondaryTown(t, q, item) },
       buildFactory: (item) => ai.setBuildUnit(1, item),
-      count: countRaw, countDone: doneRaw, townCountDone, townCountTotal: () => S.mines,
+      count: countRaw, countDone: doneRaw, townCount, townCountDone, townCountTotal: () => S.mines,
       upgradeLevel: (id) => S.research[id] ?? 0,
       // One town's worth is the whole model here — the run has one base — so a per-town count
       // is the global one. What it is FOR is the undead's Haunted Gold Mine (plan.ts

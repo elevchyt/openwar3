@@ -1787,8 +1787,18 @@ the rush reached its Fortress at 13:29 on average against 9:46 for the build it 
   once a Kodo is out — it was an ordinary three-rank row bought out of leftovers.
 * **Early druids on Insane** (`UnitRow.insaneTier`, `tableForDifficulty`): an Insane night elf's
   Druid of the Claw is a TIER-2 unit, and `recruit` keeps every druid out of the army until Master
-  Training (`Redc` rank 2) — so the bears are standing at home when Bear Form lands, rather than
-  being trained after it. Every other rung keeps the druid at tier 3.
+  Training (`Redc` rank 2, `heldAtHome`) — so the bears are standing at home when Bear Form lands,
+  rather than being trained after it. Every other rung keeps the druid at tier 3.
+* **The night elf's tier-2 order** (the developer's): TWO Ancients of Lore as a tier-2 support row
+  (`SupportRow.count`, asked one more than is begun so the first is not held for the price of
+  both), then the SECOND HERO, and only then the Tree of Eternity (`PlusRaceTable.tier3After`:
+  `started` two Lores, `heroes` two). While it upgrades the bear build's mix trains its druids and
+  a few Dryads, and Adept Training and Abolish Magic follow the first of each. Measured live before
+  the second-hero clause: Lores at 6:52–10:45 and the Tree of Eternity at 12:00–13:31, against ~9:56
+  with one Lore bought late — the night elf economy pays for this order with a later tier 3.
+* **One of a unit before its upgrade** (`UpgradeRow.forUnit`, the developer's standing rule):
+  every upgrade that belongs to one unit waits for one of it on the field or in a queue, its other
+  forms counted (`townCount`: a bear is a druid, a Berserker a Head Hunter).
 * **An undead EXPANSION is fair game** (`mayAssault`): on Insane its own undead-base bar does not
   apply to an undead expansion, so a wave may push it to take the Haunted Gold Mine down early. A
   70-food hold on the undead MAIN was tried beside it and removed — over 48 observed Insane matches

@@ -208,7 +208,7 @@ function tier3Held(c: PlusCtx): boolean {
   if (c.strategy.tier3Clock !== undefined && c.clock < c.strategy.tier3Clock + c.profile.tier3Delay) return true;
   // …and one that names a CONDITION (`PlusStrategy.tier3After`) is held until it holds — or until
   // `TIER3_AFTER_LATEST`, so a seat that keeps losing what it waits for still tiers up.
-  const after = c.strategy.tier3After;
+  const after = c.strategy.tier3After ?? c.table.tier3After;
   return !!after && !holds(c, after) && c.clock < TIER3_AFTER_LATEST + c.profile.tier3Delay;
 }
 
@@ -1338,12 +1338,20 @@ function waiting(c: PlusCtx, strategy: PlusStrategy): PlusStrategy {
   return { ...strategy, mix: Object.fromEntries(Object.entries(strategy.mix).filter(([u]) => !drop.includes(u))) };
 }
 
+/** How many of this player's ordered heroes are trained or in training (`PowerSpike.heroes`). */
+function heroesOut(c: PlusCtx): number {
+  const { ai } = c;
+  return [ai.heroId, ai.heroId2, ai.heroId3].filter((id) => !!id && ai.count(id) > 0).length;
+}
+
 /** Does every clause of `w` hold? A clause left out asks nothing — the same reading index.ts
  *  `spikeHeld` gives a `PowerSpike`, except that a unit is counted with its other forms
  *  (`townCountDone`, `TOWN_COUNT_EQUIVALENTS`): a Druid of the Claw in Bear Form is still one. */
 function holds(c: PlusCtx, w: PowerSpike): boolean {
   return (!w.research || c.ai.upgradeLevel(w.research[0]) >= w.research[1])
     && (!w.units || c.ai.townCountDone(w.units[0]) >= w.units[1])
+    && (!w.started || c.ai.townCount(w.started[0]) >= w.started[1])
+    && (!w.heroes || heroesOut(c) >= w.heroes)
     && (!w.tier || c.tier >= w.tier)
     && (!w.armyFood || c.armyFood >= w.armyFood);
 }
@@ -1519,7 +1527,15 @@ function starved(c: PlusCtx): boolean {
  * scaled by its tier.
  */
 function supportBuildings(c: PlusCtx): void {
-  for (const build of supportDue(c)) c.ai.setBuildUnit(1, build);
+  const due = new Set(supportDue(c));
+  // A row for several (`SupportRow.count`, the night elf's two Lores) asks for ONE MORE THAN IS
+  // BEGUN, not for all of them: a row reserves the price of everything it asks for, and asking for
+  // both Lores at once held the first back until both could be paid for — measured live, the first
+  // Lore went up at 8:00–8:20 instead of 6:45–7:25.
+  for (const r of c.table.support) {
+    if (!due.has(r.build)) continue;
+    c.ai.setBuildUnit(Math.min(r.count ?? 1, c.ai.townCount(r.build) + 1), r.build);
+  }
 }
 
 /** Which of the race's support buildings this pass is asking for — the same answer given to
@@ -1985,7 +2001,7 @@ function abilityUpgrades(c: PlusCtx): void {
   for (const row of table.upgrades) {
     if (!row.unlock || ai.countDone(row.from) < 1) continue;
     if (armyFood < (row.after ?? 0)) continue;
-    if (row.forUnit && ai.count(row.forUnit) < 1) continue; // `UpgradeRow.forUnit`
+    if (row.forUnit && ai.townCount(row.forUnit) < 1) continue; // `UpgradeRow.forUnit` — its other forms count too
     if (row.when === "enemyRanged" && (c.enemy.pierce ?? 0) < ENEMY_RANGED) continue;
     ai.setBuildUpgrSaved(row.ranks, row.id);
   }
@@ -2028,7 +2044,7 @@ function upgrades(c: PlusCtx): void {
     if (row.unlock) continue; // `abilityUpgrades`, much higher up
     if (ai.countDone(row.from) < 1) continue;
     if (armyFood < (row.after ?? 0)) continue;
-    if (row.forUnit && ai.count(row.forUnit) < 1) continue; // `UpgradeRow.forUnit`
+    if (row.forUnit && ai.townCount(row.forUnit) < 1) continue; // `UpgradeRow.forUnit` — its other forms count too
     // …and an upgrade that only answers one thing waits until that thing has been SEEN — see
     // `UpgradeRow.when`. Asked of the scouting read, so it is only as good as the scouting.
     if (row.when === "enemyRanged" && (c.enemy.pierce ?? 0) < ENEMY_RANGED) continue;

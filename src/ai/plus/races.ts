@@ -135,9 +135,16 @@ export interface UpgradeRow {
    * because these are researched in the PRODUCTION buildings the army keeps busy.
    */
   unlock?: boolean;
-  /** Researched only while one of this UNIT of ours is on the field (or in a queue) — an upgrade
-   *  for a unit the active build may not be making at all (Druid Training under a mass-Dryad
-   *  build), so the Ancient of Lore does not spend the army's gold on a body nobody has. */
+  /**
+   * Researched only once one of this UNIT of ours is on the field (or in a queue; its other forms
+   * count — a druid in Bear Form, a Head Hunter turned Berserker). The developer's standing rule:
+   * *"we must make it a common practice to first produce at least one of a unit that we're buying
+   * an upgrade for (e.g. 1 priest first before upgrade, 1 dryad first before abolish magic
+   * upgrade, 1 druid of the claw etc.)"* — so EVERY upgrade that belongs to one unit names it,
+   * and only the smith's army-wide ranks and the buildings' own (Masonry, Lumber Harvesting,
+   * Spiked Barricades) do not. It also keeps a production building from spending the army's gold
+   * and its own queue on a body nobody has.
+   */
   forUnit?: string;
 }
 
@@ -145,6 +152,8 @@ export interface UpgradeRow {
 export interface SupportRow {
   build: string;
   tier: number;
+  /** How many of it (default one) — the night elf's two Ancients of Lore. */
+  count?: number;
   /** Army food that must already be fielded. Teching with nothing on the field is how a
    *  computer dies to the first six Footmen it meets. */
   after: number;
@@ -340,6 +349,10 @@ export interface PowerSpike {
   readonly research?: readonly [string, number];
   /** At least this many of a unit, finished. */
   readonly units?: readonly [string, number];
+  /** At least this many of a unit or building BEGUN — under construction or in a queue counts. */
+  readonly started?: readonly [string, number];
+  /** At least this many of this player's HEROES trained or in training (the hero order's own). */
+  readonly heroes?: number;
   /** The hall tier standing. */
   readonly tier?: number;
   /** Food of the army that would walk (heroes' five included — index.ts `squadFood`). */
@@ -437,6 +450,12 @@ export interface PlusRaceTable {
    * lumber crew as soldiers (the undead's Ghouls). OURS.
    */
   readonly tier2Army?: number;
+  /**
+   * The race's own `PlusStrategy.tier3After` — a condition its third hall waits for, under any
+   * build that names none of its own (plan.ts `tier3Held`). The night elf's: both Ancients of
+   * Lore begun and the second hero out.
+   */
+  readonly tier3After?: PowerSpike;
   /**
    * The race's CARRY whenever he is fielded, for a build that names none of its own and a pairing
    * that does not make its second one (`PlusStrategy.carry`, `HeroCombo.carry`). The human's
@@ -703,15 +722,17 @@ const HUMAN: PlusRaceTable = {
   // of them: measured live, an Insane undead's Web arrived at 13:21 (the developer's "make sure
   // each race uses their upgrades like Web and Berserker Strength").
   upgrades: [
-    { id: UPG_DEFEND, from: BARRACKS, ranks: 1, after: 6, when: "enemyRanged", unlock: true },
+    { id: UPG_DEFEND, from: BARRACKS, ranks: 1, after: 6, when: "enemyRanged", unlock: true, forUnit: FOOTMAN },
     { id: UPG_MELEE, from: BLACKSMITH, ranks: 3, after: 8 },
     { id: UPG_ARMOR, from: BLACKSMITH, ranks: 3, after: 8 },
     { id: UPG_RANGED, from: BLACKSMITH, ranks: 3, after: 12 },
     { id: UPG_LEATHER, from: BLACKSMITH, ranks: 3, after: 16 },
     { id: UPG_MASONRY, from: LUMBER_MILL, ranks: 3, after: 16 },
     { id: UPG_WOOD, from: LUMBER_MILL, ranks: 2, after: 12 },
-    { id: UPG_GUN_RANGE, from: BARRACKS, ranks: 1, after: 16 },
-    { id: UPG_BREEDING, from: BARRACKS, ranks: 1, after: 24 },
+    { id: UPG_GUN_RANGE, from: BARRACKS, ranks: 1, after: 16, forUnit: RIFLEMAN },
+    // Animal War Training is the Knight's, the Gryphon's and the Dragonhawk's; the Knight is the
+    // one every human tier 3 makes.
+    { id: UPG_BREEDING, from: BARRACKS, ranks: 1, after: 24, forUnit: KNIGHT },
     // PRIEST TRAINING is an UNLOCK, saved for: rank 1 is Dispel Magic and rank 2 is INNER FIRE
     // (`[Ainf] Requires=Rhpt Requiresamount=2`, HumanAbilityFunc), the buff the developer names
     // beside the Knights and the Gryphons as what tier 3 is for — and rank 2 is `[Rhpt]
@@ -719,7 +740,7 @@ const HUMAN: PlusRaceTable = {
     // buys. As an ordinary row it was bought out of spare change at the bottom of the ladder. The
     // autocast is the sim's (it goes on the ally in the fight); plus/casting.ts arms it.
     { id: UPG_PRAYING, from: SANCTUM, ranks: 2, after: 12, unlock: true, forUnit: PRIEST },
-    { id: UPG_SORCERY, from: SANCTUM, ranks: 2, after: 20 },
+    { id: UPG_SORCERY, from: SANCTUM, ranks: 2, after: 20, forUnit: SORCERESS },
     // FLAK CANNONS — the Flying Machine's answer to an air ARMY: "an area effect damage attack
     // against air units" (`Aflk`, `Requires=Rhfc`; the sim's splash, world.ts). The human's
     // anti-air row (`antiAir`) is Flying Machines, and against a clump of Gryphons or Frost
@@ -727,8 +748,8 @@ const HUMAN: PlusRaceTable = {
     // for, and only once a Flying Machine is out (`forUnit`) — which is to say only once air
     // has been seen or the build named one. `[Rhfc] Requires=hkee`, at the Workshop.
     { id: UPG_FLAK, from: WORKSHOP, ranks: 1, after: 0, unlock: true, forUnit: COPTER },
-    { id: UPG_HAMMERS, from: AVIARY, ranks: 1, after: 24 },
-    { id: UPG_CLOUD, from: AVIARY, ranks: 1, after: 30 },
+    { id: UPG_HAMMERS, from: AVIARY, ranks: 1, after: 24, forUnit: GRYPHON },
+    { id: UPG_CLOUD, from: AVIARY, ranks: 1, after: 30, forUnit: HUMAN_DRAGON_HAWK },
   ],
   strategies: [
     // THE RIFLE BUILD, and it is a tier-1 build order as much as a tier-2 one: `[hrif]
@@ -877,7 +898,7 @@ const ORC: PlusRaceTable = {
   upgrades: [
     // `[Robk] Requires=ofrt,ofor` — a Fortress and a War Mill, so it comes up at tier 3 and is
     // the first thing bought there. Ensnare (`[Roen]`, no requirement) is the Raider's.
-    { id: UPG_ORC_BERSERKER, from: ORC_BARRACKS, ranks: 1, after: 12, unlock: true },
+    { id: UPG_ORC_BERSERKER, from: ORC_BARRACKS, ranks: 1, after: 12, unlock: true, forUnit: HEAD_HUNTER },
     // …ENSNARE once a Raider is out or in the queue (`forUnit`) — the developer's *"orc must first
     // train 1 raider and then queue ensnare upgrade (instead of getting ensnare first)"*. Bought
     // first, it kept the one Beastiary researching for a minute while the Raiders waited, and
@@ -899,7 +920,7 @@ const ORC: PlusRaceTable = {
     // Requires1=ofrt` — the Fortress the rush buys. The developer's orc tier 3 is "Berserkers,
     // Bloodlust, Taurens".
     { id: UPG_ORC_SHAMAN, from: LODGE, ranks: 2, after: 12, unlock: true, forUnit: SHAMAN },
-    { id: UPG_ORC_PULVERIZE, from: TOTEM, ranks: 1, after: 30 },
+    { id: UPG_ORC_PULVERIZE, from: TOTEM, ranks: 1, after: 30, forUnit: TAUREN },
   ],
   strategies: [
     // THE ORC PLAYS TWO OPENINGS, and each goes one of two ways at tier 2. The developer's:
@@ -1139,14 +1160,14 @@ const UNDEAD: PlusRaceTable = {
     // army answer air at all, which for the undead is most of what a Crypt Fiend is for.
     // `[usep] Researches=Ruac,Ruwb,Rugf,Rusf,Rubu` and `[Ruwb] Requires=ugrv,unp1`. FIRST, with
     // Ghoul Frenzy (`[Rugf] Requires=ugrv,unp2`) — see the human list's note.
-    { id: UPG_FIEND_WEB, from: CRYPT, ranks: 1, after: 6, unlock: true },
-    { id: UPG_GHOUL_FRENZY, from: CRYPT, ranks: 1, after: 8, unlock: true },
+    { id: UPG_FIEND_WEB, from: CRYPT, ranks: 1, after: 6, unlock: true, forUnit: CRYPT_FIEND },
+    { id: UPG_GHOUL_FRENZY, from: CRYPT, ranks: 1, after: 8, unlock: true, forUnit: GHOUL },
     { id: UPG_UNHOLY_STR, from: GRAVEYARD, ranks: 3, after: 8 },
     { id: UPG_UNHOLY_ARMOR, from: GRAVEYARD, ranks: 3, after: 8 },
     { id: UPG_CR_ATTACK, from: GRAVEYARD, ranks: 3, after: 12 },
     { id: UPG_CR_ARMOR, from: GRAVEYARD, ranks: 3, after: 16 },
-    { id: UPG_NECROS, from: DAMNED_TEMPLE, ranks: 2, after: 20 },
-    { id: UPG_BANSHEE, from: DAMNED_TEMPLE, ranks: 2, after: 24 },
+    { id: UPG_NECROS, from: DAMNED_TEMPLE, ranks: 2, after: 20, forUnit: NECRO },
+    { id: UPG_BANSHEE, from: DAMNED_TEMPLE, ranks: 2, after: 24, forUnit: BANSHEE },
     // DESTROYER FORM, off the Slaughterhouse that already makes both statues (`always`). Without
     // it the statue's third button is dead for the whole match — `[Aave] Requires=Rusp`, and
     // `[Rusp] Requires=unp2,utom` (UndeadUpgradeFunc.txt), so the row waits for the Black
@@ -1155,7 +1176,7 @@ const UNDEAD: PlusRaceTable = {
     // statue it spends is rebuilt by `always`, which counts `uobs` alone — Liquipedia's own
     // advice: "Morph your low health statues into destroyers and produce new ones to replace
     // them" (Obsidian Statue, Strategy). 75 gold / 150 lumber, 60 seconds.
-    { id: UPG_BLK_SPHINX, from: SLAUGHTERHOUSE, ranks: 1, after: 30 },
+    { id: UPG_BLK_SPHINX, from: SLAUGHTERHOUSE, ranks: 1, after: 30, forUnit: OBSIDIAN_STATUE },
   ],
   strategies: [
     // DEATH KNIGHT, GHOULS AND FIENDS — the standard one. The Lich comes with tier 2, WEB comes
@@ -1261,7 +1282,28 @@ const NIGHT_ELF: PlusRaceTable = {
   farm: MOON_WELL,
   altar: ELF_ALTAR,
   barracks: ANCIENT_WAR,
-  support: [{ build: HUNTERS_HALL, tier: 1, after: 4 }],
+  // …and the ANCIENT OF LORE the moment the Tree of Ages stands. Every night elf build trains from
+  // it (Dryads at tier 2, the druids at tier 3, and on Insane from tier 2), and as a building the
+  // mix merely implied it sat below the Insane tier-3 rush (plan.ts `tier3Due`): over 48 observed
+  // Insane matches it went up at 8:00–12:00 against a Tree of Ages at 6:20, sometimes after the
+  // Tree of Eternity, and the first druid came at 13:00–16:00 with Bear Form already researched.
+  // A support row is bought above the tier rows, as the human's Arcane Sanctum is.
+  //
+  // TWO of them, and the Tree of Eternity starts the moment the second is begun (`tier3After`) —
+  // the developer's *"tier 3 upgrade must begin right after the two ancients of lore have begun
+  // their construction. then, while tier 3 upgrade is happening, the night elf must start
+  // producing its bears and also a few dryads (and also get their upgrade from the ancient of
+  // lore)"*. While the Insane rush is saving for the Tree its army holds (plan.ts
+  // `tier3Rushing`); once the upgrade is in the queue the bear build's mix trains its druids —
+  // a tier-2 unit on Insane (`insaneTier`), kept at home until Master Training (index.ts
+  // `heldAtHome`) — and its Dryads, and Adept Training and Abolish Magic follow the first of
+  // each (`UpgradeRow.forUnit`).
+  //
+  // …and the SECOND HERO before it too: *"we must also get the second hero for night elf before
+  // beginning the tier 3 upgrade"* (the developer). `tierTwoHero` already asks for him high in the
+  // ladder at tier 2; this is what keeps the Tree's saving from going first.
+  support: [{ build: HUNTERS_HALL, tier: 1, after: 4 }, { build: ANCIENT_LORE, tier: 2, after: 0, count: 2 }],
+  tier3After: { started: [ANCIENT_LORE, 2], heroes: 2 },
   shop: DEN_OF_WONDERS,
   // THE HIPPOGRYPH, off an Ancient of Wind. Like the Flying Machine it is a dedicated anti-air
   // unit, which is what makes it safe to bolt onto a Dryad or a Huntress build.
@@ -1310,7 +1352,7 @@ const NIGHT_ELF: PlusRaceTable = {
     { id: UPG_MOON_ARMOR, from: HUNTERS_HALL, ranks: 3, after: 8 },
     { id: UPG_STR_WILD, from: HUNTERS_HALL, ranks: 3, after: 16 },
     { id: UPG_HIDES, from: HUNTERS_HALL, ranks: 3, after: 16 },
-    { id: UPG_BOWS, from: ANCIENT_WAR, ranks: 1, after: 10 },
+    { id: UPG_BOWS, from: ANCIENT_WAR, ranks: 1, after: 10, forUnit: ARCHER },
     // `Redc` rank TWO is what puts Bear Form on the Druid of the Claw at all
     // (`[Abrf] Requires=Redc Requiresamount=2`), which is why the "bears" build exists and why
     // this row is worth two ranks — see the Computer+ caster.
@@ -1318,24 +1360,23 @@ const NIGHT_ELF: PlusRaceTable = {
     // …and it is a UNIT-ABILITY UNLOCK in the plainest sense — rank 1 is Rejuvenation
     // (`[Arej] Requires=Redc`), rank 2 Bear Form — researched at the Ancient of Lore that is
     // training Druids and Dryads all match, so as an ordinary row it was almost never started.
-    // Saved for (`unlock`), and only once a Druid of the Claw is on the field (`forUnit`).
-    //
-    // …and NOT `forUnit` any more. The druid is a tier-3 unit to Computer+ (see `units`), so a
-    // row waiting for one on the field started Adept Training only once the first druid was out
-    // at tier 3, and Master Training a research after that — the bears came minutes after the
-    // Tree of Eternity. Rank 1 needs nothing (`[Redc] Requires=`, only rank 2 names `etoe`), so it
-    // is bought at tier 2 out of the Lore that is already training Dryads, and rank 2 starts the
-    // moment the Tree of Eternity lands.
-    { id: UPG_DRUID_CLAW, from: ANCIENT_LORE, ranks: 2, after: 12, unlock: true },
+    // Saved for (`unlock`), and only once a Druid of the Claw is on the field or queued (`forUnit`,
+    // the developer's standing rule: one druid first). It went without the clause for a while,
+    // because the druid was a tier-3 unit to Computer+ and waiting for one put Adept Training
+    // behind the Tree of Eternity; on Insane the druid is now a tier-2 unit (`insaneTier`) and the
+    // Lore a tier-2 support row, so the first druid and Adept Training both come at tier 2 and
+    // Master Training (`[Redc]` rank 2 names `etoe`) starts the moment the Tree of Eternity lands.
+    // On the other rungs both come with the first druid at tier 3.
+    { id: UPG_DRUID_CLAW, from: ANCIENT_LORE, ranks: 2, after: 12, unlock: true, forUnit: DRUID_CLAW },
     // MARK OF THE CLAW — "Allows Druids of the Claw to cast Roar while in Bear Form"
     // (NightElfUpgradeStrings `[Reeb]`; the bear's card carries `Ara2`, `Requires=Reeb`). Without
     // it a druid that morphs for the fight gives up its Roar. `[Reeb] Requires=Redc
     // Requiresamount=2`, which `researchDue` asks before it saves a coin; elf.ai buys it beside
     // the second rank too.
-    { id: UPG_MARK_CLAW, from: ANCIENT_LORE, ranks: 1, after: 16, unlock: true },
-    { id: UPG_ABOLISH, from: ANCIENT_LORE, ranks: 1, after: 12, unlock: true },
-    { id: UPG_DRUID_TALON, from: ANCIENT_WIND, ranks: 2, after: 20 },
-    { id: UPG_CHIM_ACID, from: CHIMAERA_ROOST, ranks: 1, after: 30 },
+    { id: UPG_MARK_CLAW, from: ANCIENT_LORE, ranks: 1, after: 16, unlock: true, forUnit: DRUID_CLAW },
+    { id: UPG_ABOLISH, from: ANCIENT_LORE, ranks: 1, after: 12, unlock: true, forUnit: DRYAD },
+    { id: UPG_DRUID_TALON, from: ANCIENT_WIND, ranks: 2, after: 20, forUnit: DRUID_TALON },
+    { id: UPG_CHIM_ACID, from: CHIMAERA_ROOST, ranks: 1, after: 30, forUnit: CHIMAERA },
   ],
   strategies: [
     // The DEMON HUNTER is the carry of every build that opens on him (`carry`, the developer's
