@@ -72,7 +72,7 @@ import type { VoiceLabels } from "./voiceLabels";
 import { INSANE_HARVEST_FACTOR, MELEE_INSANE } from "../ai/ids";
 
 /** What the single-player dev tools can do to the local player's side (RtsController.cheat). */
-export type CheatKind = "gold" | "lumber" | "food" | "fastbuild" | "godmode" | "day" | "night";
+export type CheatKind = "gold" | "lumber" | "food" | "fastbuild" | "godmode" | "day" | "night" | "upgrades";
 
 // Ties the headless SimWorld to the rendered map (plan §5 vertical slice):
 // seeds movable units from the loaded map, syncs sim state → model instances
@@ -9608,6 +9608,11 @@ export class RtsController {
     if (kind === "fastbuild") {
       this.sim.fastBuild = !this.sim.fastBuild; // builds/trains complete in ~1s
       return this.sim.fastBuild;
+    }
+    if (kind === "upgrades") {
+      // `sharpandshiny`: every upgrade in the game, at its last level (SimWorld.researchAll).
+      this.sim.researchAll(this.localPlayer);
+      return false;
     }
     if (kind === "food") {
       this.authority.addFoodBonus(this.localPlayer, 100);

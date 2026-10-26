@@ -9077,6 +9077,30 @@ export class SimWorld {
   /** rtma unit-swap: when an upgrade completes, every existing unit of the withdrawn type
    *  (owned by that player) morphs into the enabled type in place — the Berserker Upgrade
    *  turning all of a player's Headhunters into Troll Berserkers. */
+  /**
+   * The dev panel's Research All cheat — the original game's `sharpandshiny` ("research
+   * upgrades"): every upgrade this tech tree RESEARCHES, at its own `maxlevel`, for `owner`.
+   * Every-race, not the player's own: the cheat is "everything in the game", and an upgrade a
+   * player has no unit for costs nothing to hold. `produces` is the filter that keeps it to the
+   * running edition (docs/editions.md) — a row nothing researches is not part of this game.
+   *
+   * Each one lands the way a finished research does (tickBuildings): the level, then its unit
+   * SWAP (Berserker Upgrade, Barrage), since a research that withdraws a unit type morphs the
+   * ones already standing. Returns how many upgrades it moved.
+   */
+  researchAll(owner: number): number {
+    if (!this.tech || !this.upgradeReg || !this.techReg) return 0;
+    let n = 0;
+    for (const up of this.upgradeReg.all()) {
+      if (!this.techReg.produces(up.id) || this.tech.researchLevel(owner, up.id) >= up.maxLevel) continue;
+      this.tech.setResearchLevel(owner, up.id, up.maxLevel);
+      this.applyUnitSwap(owner, up.id);
+      n++;
+    }
+    this.tech.invalidate();
+    return n;
+  }
+
   private applyUnitSwap(owner: number, upgradeId: string): void {
     const swap = this.tech?.unitSwapForUpgrade(upgradeId);
     if (!swap || !this.tech) return;

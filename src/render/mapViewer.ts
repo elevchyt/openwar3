@@ -10321,8 +10321,8 @@ export class MapViewerScene {
    * never sent as chat. Answered with the game's own `CHEATENABLED`/`CHEATDISABLED` line
    * (GlobalStrings.fdf). Single player only — in any other match the line is ordinary chat.
    *
-   * `toolsofthetrade` is OURS (it opens the dev tools panel); the other three are the
-   * original game's `whosyourdaddy`, `riseandshine` and `lightsout`.
+   * `toolsofthetrade` is OURS (it opens the dev tools panel); the other four are the
+   * original game's `whosyourdaddy`, `riseandshine`, `lightsout` and `sharpandshiny`.
    */
   private typedCheat(text: string): boolean {
     if (!this.cheatsAllowed || !this.rts) return false;
@@ -10335,6 +10335,7 @@ export class MapViewerScene {
     }
     else if (code === "riseandshine") this.rts.cheat("day");
     else if (code === "lightsout") this.rts.cheat("night");
+    else if (code === "sharpandshiny") this.rts.cheat("upgrades");
     else return false;
     const key = on ? "CHEATENABLED" : "CHEATDISABLED";
     this.hud?.showMessage(this.globalStrings?.strings.get(key) ?? (on ? "Cheat enabled!" : "Cheat disabled!"), -1);
