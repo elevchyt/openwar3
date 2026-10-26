@@ -1,5 +1,5 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
-import { SimWorld, weaponsFromDef, inventoryCapacity, isOffField, CREEP_CAMP_ACQUIRE_RANGE, BUILD_START_HP_FRAC, ANIM_FOR_DURATION, HERO_FADE_TIME, HERO_DISSIPATE_TIME, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText, type FallenHero, type SimSpellEffect, type StoredUnitState } from "../sim/world";
+import { SimWorld, weaponsFromDef, inventoryCapacity, isOffField, isChanneled, CREEP_CAMP_ACQUIRE_RANGE, BUILD_START_HP_FRAC, ANIM_FOR_DURATION, HERO_FADE_TIME, HERO_DISSIPATE_TIME, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText, type FallenHero, type SimSpellEffect, type StoredUnitState } from "../sim/world";
 import { FELLS_TREES_UNLISTED, KNOWN_ABILITIES, carriesRally, NO_AOE_CURSOR, REVEAL_CODES, TREE_UPGRADE_ABILITY, aoeCursorRadius } from "../data/abilities";
 import type { Command } from "./commands";
 import { PATHING_CELL, footprintCells, type PathingGrid } from "../sim/pathing";
@@ -5937,7 +5937,12 @@ export class RtsController {
     // A LOOPING gesture keeps it past the cast too, but yields to a walk. The sim has already
     // sized `hold` to the effect it accompanies — Healing Spray's 3/4/5 seconds of falling
     // bottles — so the Alchemist sprays for the whole spray instead of a third of one clip.
-    e.castAnimHeld = loops;
+    // …but never for a CHANNEL, whose clip belongs to the channel and is held by the cast order
+    // alone. Aerial Shackles is the row that showed it: `[Amls] Animnames = spell,looping` made
+    // the Dragonhawk Rider's clip "held while he stands", sized to the full 40 s channel, so
+    // when the bound flyer died (tickDrains ends the channel, the order goes back to stand) he
+    // stood there spinning his lariat at nothing for the rest of it.
+    e.castAnimHeld = loops && !isChanneled(code);
   }
 
   private abilityDefByCode(code: string): AbilityDef | undefined {

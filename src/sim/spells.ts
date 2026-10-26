@@ -414,6 +414,34 @@ function netFx(
   return { art: list[0]?.path ?? def.targetArt, fx: list, buffId };
 }
 
+/**
+ * Aerial Shackles' art on its TARGET. `[Amls] BuffID1 = Bmlc,Bmlt` lists the caster's buff
+ * first and the victim's second, and only the second carries a model:
+ *
+ *     [Bmlt]  Targetart = Abilities\Spells\Human\AerialShackles\AerialShacklesTarget.mdl
+ *             Targetattach = chest,mount
+ *
+ * so `fx(def)` — buffid1's art, i.e. Bmlc's, which is none — drew nothing on the bound flyer.
+ * The model ships the ensnare family's three SIZED sets ("Birth"/"Stand"/"Death", "… Medium",
+ * "… Large", parsed out of the install), so the body's size rides on the buff exactly as a
+ * net's does (BuffFx.anim): Birth as the shackles close, Stand for as long as the buff is
+ * worn — the channel, which tickDrains strips the moment it breaks — and Death as they open.
+ * A map row with one buff falls back to that one.
+ */
+function shackleFx(
+  api: Pick<SpellApi, "buffFxOf" | "bodySize">,
+  def: AbilityDef,
+  lvl: AbilityLevel,
+  t: SimUnit,
+): { art: string; fx: BuffFx[]; buffId: string } {
+  const ids = lvl.buffs?.length ? lvl.buffs : [buffIdOf(def)];
+  const buffId = ids[ids.length - 1];
+  const anim = api.bodySize(t);
+  const list = api.buffFxOf(buffId).map((f) => ({ ...f, anim }));
+  if (!list.length) return { ...fx(def), buffId };
+  return { art: list[0].path, fx: list, buffId };
+}
+
 /** An ability's buff row (`buffid<rank>`, first of the list). Rank is rarely worth passing:
  *  no stock ability changes which buff it applies between ranks — the LEVELS of a spell
  *  differ in numbers, not in the state they put the target in. */
@@ -3278,7 +3306,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     if (!t) return;
     const lvl = def.levelData[rank - 1];
     const d0 = dur(lvl, t) || lvl.duration || 5;
-    api.applyBuff(t, { kind: "stun", group: DRAIN_GROUP, timeLeft: d0, sourceId: caster.id, ...fx(def) });
+    api.applyBuff(t, { kind: "stun", group: DRAIN_GROUP, timeLeft: d0, sourceId: caster.id, ...shackleFx(api, def, lvl, t) });
     const dps = d(lvl, 0, 0);
     if (dps > 0) api.applyBuff(t, { kind: "dot", group: DRAIN_GROUP, timeLeft: d0, sourceId: caster.id, value: dps });
     api.emitLightning(def.lightning[0] ?? "LEAS", caster, t, d0, 0, drainTag(caster.id));

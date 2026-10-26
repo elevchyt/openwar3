@@ -3148,6 +3148,11 @@ const FACING_CAST_EPS = 0.4; // must roughly face a unit target to cast
 // magical energies…" (NightElfAbilityStrings), for `Dur1` = 30 — while the channel holds, every
 // enemy spell cast near her is punished (SimWorld.flareStrike), and any order ends it.
 const CHANNELED = new Set(["AHbz", "ANrf", "AEsf", "AEtq", "AUdd", "ANst", "AOeq", "AHdr", "AOvd", "Acan", "ANcl", "Amls", "Amfl"]);
+/** Is `code` a CHANNEL — held for exactly as long as the caster keeps it up? The renderer asks,
+ *  so that a channel's clip ends with the channel rather than with the clip's own hold. */
+export function isChanneled(code: string): boolean {
+  return CHANNELED.has(code);
+}
 // Delayed-strike abilities that drop their Effectart (a ground "beware" warning) the
 // moment the cast WIND-UP begins — not when it lands — so it charges up in place and
 // REMAINS visible even if the cast is interrupted before ignition. Flame Strike's
