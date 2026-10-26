@@ -505,6 +505,16 @@ export class AiPlayer {
     return this.host.world.tech?.researchLevel(this.player, id) ?? 0;
   }
 
+  /** Has research `id` BEGUN — researched already, or in one of our buildings' queues? */
+  researchBegun(id: string): boolean {
+    if (this.upgradeLevel(id) > 0) return true;
+    for (const u of this.host.world.units.values()) {
+      if (u.owner !== this.player || u.hp <= 0 || !u.building) continue;
+      if (u.building.queue.some((job) => job.kind === "research" && job.unitId === id)) return true;
+    }
+    return false;
+  }
+
   /** `FoodUsed()` / `FoodCap()`. Food made is the LIVE cap, so a Farm still going up
    *  doesn't count — which is why the scripts compare against their own `c_food_made`
    *  (halls × GetFoodMade(hall) + farms × GetFoodMade(farm)) instead. */

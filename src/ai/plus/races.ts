@@ -154,6 +154,9 @@ export interface SupportRow {
   tier: number;
   /** How many of it (default one) — the night elf's two Ancients of Lore. */
   count?: number;
+  /** …and what the copies after the FIRST wait for (plan.ts `supportBuildings`) — the night elf's
+   *  second Lore waits for Abolish Magic to begin. */
+  moreWhen?: PowerSpike;
   /** Army food that must already be fielded. Teching with nothing on the field is how a
    *  computer dies to the first six Footmen it meets. */
   after: number;
@@ -353,6 +356,8 @@ export interface PowerSpike {
   readonly started?: readonly [string, number];
   /** At least this many of this player's HEROES trained or in training (the hero order's own). */
   readonly heroes?: number;
+  /** A research BEGUN — in a queue or done (`AiPlayer.researchBegun`). */
+  readonly researching?: string;
   /** The hall tier standing. */
   readonly tier?: number;
   /** Food of the army that would walk (heroes' five included — index.ts `squadFood`). */
@@ -452,8 +457,8 @@ export interface PlusRaceTable {
   readonly tier2Army?: number;
   /**
    * The race's own `PlusStrategy.tier3After` — a condition its third hall waits for, under any
-   * build that names none of its own (plan.ts `tier3Held`). The night elf's: both Ancients of
-   * Lore begun and the second hero out.
+   * build that names none of its own (plan.ts `tier3Held`). The night elf's: its first Ancient
+   * of Lore begun and the second hero out.
    */
   readonly tier3After?: PowerSpike;
   /**
@@ -1289,21 +1294,33 @@ const NIGHT_ELF: PlusRaceTable = {
   // Tree of Eternity, and the first druid came at 13:00–16:00 with Bear Form already researched.
   // A support row is bought above the tier rows, as the human's Arcane Sanctum is.
   //
-  // TWO of them, and the Tree of Eternity starts the moment the second is begun (`tier3After`) —
-  // the developer's *"tier 3 upgrade must begin right after the two ancients of lore have begun
-  // their construction. then, while tier 3 upgrade is happening, the night elf must start
-  // producing its bears and also a few dryads (and also get their upgrade from the ancient of
-  // lore)"*. While the Insane rush is saving for the Tree its army holds (plan.ts
-  // `tier3Rushing`); once the upgrade is in the queue the bear build's mix trains its druids —
-  // a tier-2 unit on Insane (`insaneTier`), kept at home until Master Training (index.ts
-  // `heldAtHome`) — and its Dryads, and Adept Training and Abolish Magic follow the first of
-  // each (`UpgradeRow.forUnit`).
+  // ONE of them, then the SECOND HERO, then the Tree of Eternity (`tier3After`) — and the SECOND
+  // Lore while the Tree upgrades, once a Dryad is out and ABOLISH MAGIC HAS BEGUN (`moreWhen`),
+  // and only then the druids (the bear builds' `waitFor`). The developer's order: *"we must also
+  // get the second hero for night elf before beginning the tier 3 upgrade"*, then *"what if we
+  // delay building the second lore? it should get the time to begin the tier 3 upgrade
+  // significantly"*, then *"once one dryad is out with abolish magic upgrade, we must first begin
+  // building the second lore before getting the druids … essentially, the second lore must begin
+  // being built after abolish magic has begun being researched"*. Abolish Magic itself waits for
+  // the first Dryad (`UpgradeRow.forUnit`). "Begun" means begun throughout — a Lore under
+  // construction (or one a Wisp is walking to) and a hero in the altar's queue count, exactly as
+  // the developer put it: *"tier 3 upgrade must begin after the lore has begun being built. NOT
+  // after it has finished being built!"* (`PowerSpike.started` is `townCount`, never `…Done`).
+  // A Lore is 155/145 and 70 s (UnitBalance), the Tree's upgrade 140 s, so a second Lore begun
+  // with the upgrade stands well before tier 3 does; bought FIRST it came out of the Tree's purse
+  // (measured live with both Lores first: the Tree of Eternity at 12:00–13:31, against ~9:56).
   //
-  // …and the SECOND HERO before it too: *"we must also get the second hero for night elf before
-  // beginning the tier 3 upgrade"* (the developer). `tierTwoHero` already asks for him high in the
-  // ladder at tier 2; this is what keeps the Tree's saving from going first.
-  support: [{ build: HUNTERS_HALL, tier: 1, after: 4 }, { build: ANCIENT_LORE, tier: 2, after: 0, count: 2 }],
-  tier3After: { started: [ANCIENT_LORE, 2], heroes: 2 },
+  // While the Insane rush is saving for the Tree its army holds (plan.ts `tier3Rushing`); once the
+  // upgrade is in the queue the bear build's mix trains its druids — a tier-2 unit on Insane
+  // (`insaneTier`), kept at home until Master Training (index.ts `heldAtHome`) — and a few Dryads,
+  // and Adept Training and Abolish Magic follow the first of each (`UpgradeRow.forUnit`): the
+  // developer's *"while tier 3 upgrade is happening, the night elf must start producing its bears
+  // and also a few dryads (and also get their upgrade from the ancient of lore)"*.
+  support: [
+    { build: HUNTERS_HALL, tier: 1, after: 4 },
+    { build: ANCIENT_LORE, tier: 2, after: 0, count: 2, moreWhen: { researching: UPG_ABOLISH } },
+  ],
+  tier3After: { started: [ANCIENT_LORE, 1], heroes: 2 },
   shop: DEN_OF_WONDERS,
   // THE HIPPOGRYPH, off an Ancient of Wind. Like the Flying Machine it is a dedicated anti-air
   // unit, which is what makes it safe to bolt onto a Dryad or a Huntress build.
@@ -1388,7 +1405,7 @@ const NIGHT_ELF: PlusRaceTable = {
     // the build's power spike, and it is why this one build is worth two Lores.
     { id: "bears", name: "Dryads and Druids of the Claw", tier: 2, weight: 26, expandAt: 330, expandAgainAt: 750,
       heroes: [DEMON_HUNTER, KEEPER, MOON_CHICK, WARDEN], carry: DEMON_HUNTER,
-      factories: { [ANCIENT_LORE]: 2 }, thenAt3: "lategrove",
+      waitFor: { [DRUID_CLAW]: { started: [ANCIENT_LORE, 2] } }, thenAt3: "lategrove",
       mix: { [DRUID_CLAW]: 2.5, [DRYAD]: 2, [ARCHER]: 1.5 } },
     // KEEPER OF THE GROVE, ARCHERS AND HUNTRESSES — committed to from tier 1 (the Hunter's Hall
     // is what decides it), with the Priestess of the Moon as the second hero.
@@ -1419,7 +1436,7 @@ const NIGHT_ELF: PlusRaceTable = {
     // build's carry (the army's captain, first at the shop and the drop).
     { id: "potmbears", name: "Priestess of the Moon, Archers into Druids of the Claw", tier: 2, weight: 22, expandAt: 330, expandAgainAt: 750,
       heroes: [MOON_CHICK, DEMON_HUNTER, KEEPER, WARDEN],
-      factories: { [ANCIENT_LORE]: 2 }, thenAt3: "lategrove",
+      waitFor: { [DRUID_CLAW]: { started: [ANCIENT_LORE, 2] } }, thenAt3: "lategrove",
       mix: { [ARCHER]: 2.5, [DRUID_CLAW]: 2.5, [DRYAD]: 1.5 } },
     // …and the Chimaera build is the same opening into the same tier 3, with the Roost kept
     // whatever the purse (`chimgrove`): *"night elf must ALWAYS switch to bears + dryads when it

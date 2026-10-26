@@ -1352,6 +1352,7 @@ function holds(c: PlusCtx, w: PowerSpike): boolean {
     && (!w.units || c.ai.townCountDone(w.units[0]) >= w.units[1])
     && (!w.started || c.ai.townCount(w.started[0]) >= w.started[1])
     && (!w.heroes || heroesOut(c) >= w.heroes)
+    && (!w.researching || c.ai.researchBegun(w.researching))
     && (!w.tier || c.tier >= w.tier)
     && (!w.armyFood || c.armyFood >= w.armyFood);
 }
@@ -1534,7 +1535,11 @@ function supportBuildings(c: PlusCtx): void {
   // Lore went up at 8:00–8:20 instead of 6:45–7:25.
   for (const r of c.table.support) {
     if (!due.has(r.build)) continue;
-    c.ai.setBuildUnit(Math.min(r.count ?? 1, c.ai.townCount(r.build) + 1), r.build);
+    const begun = c.ai.townCount(r.build);
+    // …and the copies after the first wait for `SupportRow.moreWhen` (the night elf's second Lore,
+    // for Abolish Magic to begin).
+    const more = begun < 1 || !r.moreWhen || holds(c, r.moreWhen);
+    c.ai.setBuildUnit(Math.min(r.count ?? 1, more ? begun + 1 : Math.max(1, begun)), r.build);
   }
 }
 

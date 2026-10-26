@@ -95,7 +95,7 @@ function recorder(table, strategy, profile, opts = {}) {
     // fixture withholds something (a Lumber Mill, for the Guard Tower).
     techMeets: (id) => (opts.meets ? opts.meets(id) : true),
     buildFactory: (item) => ai.setBuildUnit(1, item),
-    count, countDone: count, upgradeLevel: () => 0, townCountTotal: () => opts.towns ?? 1,
+    count, countDone: count, upgradeLevel: () => 0, researchBegun: (id) => (opts.researching ?? []).includes(id), townCountTotal: () => opts.towns ?? 1,
     // `TownCount` FOLDS a type's upgraded forms into it and the raw counts do not — a Keep is a
     // Town Hall, a Spirit Tower is a Ziggurat (`TOWN_COUNT_EQUIVALENTS`, `AiPlayer.townCountEx`).
     // The distinction is not decoration: `startUnit` compares a row's quantity against the
@@ -174,7 +174,8 @@ console.log("--- night elf: the bears come as soon as tier 3 does ---");
 {
   const elf = PLUS_RACES.nightelf;
   const bears = elf.strategies.find((s) => s.id === "bears");
-  const standing = { [elf.halls[1]]: 1, [elf.barracks]: 1, [elf.altar]: 1, [elf.farm]: 6, eaoe: 1, edob: 1, eden: 1 };
+  // Both Lores begun: the bear builds' druids wait for the second (`waitFor`).
+  const standing = { [elf.halls[1]]: 1, [elf.barracks]: 1, [elf.altar]: 1, [elf.farm]: 6, eaoe: 2, edob: 1, eden: 1 };
   const insaneElf = tableForDifficulty(elf, true);
   const t2 = recorder(insaneElf, bears, PLUS_INSANE, { standing, armyFood: 20, gold: 5000, wood: 5000, tier: 2 });
   buildPlan(t2.ctx);
@@ -384,9 +385,16 @@ console.log("\n--- a build order's second producer ---");
   const one = recorder(elf, bears, PLUS_NORMAL, { standing, tier: 2, armyFood: 20 });
   buildPlan(one.ctx);
   check("the first Ancient of Lore is asked for", one.build.some((x) => x.item === "eaoe"), true);
-  const two = recorder(elf, bears, PLUS_NORMAL, { standing: { ...standing, eaoe: 1 }, tier: 2, armyFood: 20 });
-  buildPlan(two.ctx);
-  check("…and a second once it stands", Math.max(0, ...two.build.filter((x) => x.item === "eaoe").map((x) => x.qty)), 2);
+  // The night elf's second Lore is its support row's, and waits for Abolish Magic to BEGIN
+  // (`SupportRow.moreWhen` — the developer's "the second lore must begin being built after abolish
+  // magic has begun being researched").
+  const lore2 = (researching) => {
+    const r = recorder(elf, bears, PLUS_NORMAL, { standing: { ...standing, eaoe: 1 }, tier: 2, armyFood: 20, researching });
+    buildPlan(r.ctx);
+    return Math.max(0, ...r.build.filter((x) => x.item === "eaoe").map((x) => x.qty));
+  };
+  check("…not a second before Abolish Magic has begun", lore2([]), 1);
+  check("…and a second once it has", lore2(["Resi"]), 2);
   // A build that names no second producer never gets one from this row.
   const talons = elf.strategies.find((x) => x.id === "talons");
   const plain = recorder(elf, talons, PLUS_NORMAL, { standing: { ...standing, eaow: 1 }, tier: 2, armyFood: 20 });
@@ -1045,6 +1053,7 @@ function runEconomy() {
       buildFactory: (item) => ai.setBuildUnit(1, item),
       count: countRaw, countDone: doneRaw, townCount, townCountDone, townCountTotal: () => S.mines,
       upgradeLevel: (id) => S.research[id] ?? 0,
+      researchBegun: (id) => (S.research[id] ?? 0) > 0 || S.bldgs.some((b) => b.job?.kind === "research" && b.job.id === id),
       // One town's worth is the whole model here — the run has one base — so a per-town count
       // is the global one. What it is FOR is the undead's Haunted Gold Mine (plan.ts
       // `mineBuildings`), which must not be asked for twice.

@@ -7510,6 +7510,7 @@ export class ComputerPlusAi {
       && (!spike.units || b.ai.countDone(spike.units[0]) >= spike.units[1])
       && (!spike.started || b.ai.townCount(spike.started[0]) >= spike.started[1])
       && (!spike.heroes || [b.ai.heroId, b.ai.heroId2, b.ai.heroId3].filter((id) => !!id && b.ai.count(id) > 0).length >= spike.heroes)
+      && (!spike.researching || b.ai.researchBegun(spike.researching))
       && (!spike.tier || this.tier(b) >= spike.tier)
       && (!spike.armyFood || food >= spike.armyFood);
     const met = clauses || food >= SPIKE_ARMY_FOOD;

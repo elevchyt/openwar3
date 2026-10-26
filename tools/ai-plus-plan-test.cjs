@@ -44,7 +44,7 @@ function check(what, got, want) {
 function ctx(table, strategy, profile, standing, tier) {
   const have = new Set(standing);
   return {
-    ai: { countDone: (id) => (have.has(id) ? 1 : 0), townCountDone: (id) => (have.has(id) ? 1 : 0), upgradeLevel: () => 0, minesOwned: () => 1, gold: () => 0, wood: () => 0 },
+    ai: { countDone: (id) => (have.has(id) ? 1 : 0), townCountDone: (id) => (have.has(id) ? 1 : 0), townCount: (id) => (have.has(id) ? 1 : 0), upgradeLevel: () => 0, researchBegun: () => false, minesOwned: () => 1, gold: () => 0, wood: () => 0 },
     profile, table, strategy, tier,
     // Nothing scouted, so the counter half of the weighting is off and the weights under test
     // are the build order's own.
@@ -199,15 +199,23 @@ console.log("\n--- night elf: bears first, Chimaeras after ---");
   const { tableForDifficulty } = require(join(REPO, ".sim-build", "src", "ai", "plus", "races.js"));
   const bears = elf.strategies.find((s) => s.id === "bears");
   const t2 = [elf.halls[1], elf.barracks, "eaoe", "edob", "eden"];
-  const at2 = (insane) => buildableMix(ctx(tableForDifficulty(elf, insane), bears, insane ? PLUS_INSANE : PLUS_NORMAL, t2, 2)).some((r) => r.unit === "edoc");
+  const at2 = (insane, lores = 2) => {
+    const c = ctx(tableForDifficulty(elf, insane), bears, insane ? PLUS_INSANE : PLUS_NORMAL, t2, 2);
+    c.ai.townCount = (id) => (id === "eaoe" ? lores : t2.includes(id) ? 1 : 0);
+    return buildableMix(c).some((r) => r.unit === "edoc");
+  };
   check("an Insane night elf trains Druids of the Claw at tier 2", at2(true), true);
   check("…a Normal one waits for tier 3", at2(false), false);
+  check("…and the Insane druids wait for the second Lore to be begun", at2(true, 1), false);
   check("…and the table is only changed for Insane", tableForDifficulty(elf, false), elf);
   const { heldAtHome } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
   check("a druid stays home until Master Training", [0, 1, 2].map((r) => heldAtHome("edoc", r)).join(), "true,true,false");
   check("…and nothing else does", heldAtHome("edry", 0), false);
-  check("two Ancients of Lore are a tier-2 support row", JSON.stringify(elf.support.find((r) => r.build === "eaoe")), JSON.stringify({ build: "eaoe", tier: 2, after: 0, count: 2 }));
-  check("…and the Tree of Eternity waits for both to be begun", elf.tier3After?.started?.join(), "eaoe,2");
+  check("an Ancient of Lore is a tier-2 support row, two of them", elf.support.find((r) => r.build === "eaoe")?.count, 2);
+  check("…the Tree of Eternity waits for it to be begun", elf.tier3After?.started?.join(), "eaoe,1");
+  check("…a second Lore waits for Abolish Magic to begin", elf.support.find((r) => r.build === "eaoe").moreWhen?.researching, "Resi");
+  check("…and the bear builds' druids wait for the second Lore",
+    ["bears", "potmbears"].every((id) => elf.strategies.find((x) => x.id === id).waitFor?.edoc?.started?.join() === "eaoe,2"), true);
   check("…and for the second hero", elf.tier3After?.heroes, 2);
   check("…and asks for eight of them high in the ladder", grove.lead.edoc, 8);
   check("no Chimaeras beside four bears", rich(4).some((r) => r.unit === "echm"), false);

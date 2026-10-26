@@ -1789,13 +1789,14 @@ the rush reached its Fortress at 13:29 on average against 9:46 for the build it 
   Druid of the Claw is a TIER-2 unit, and `recruit` keeps every druid out of the army until Master
   Training (`Redc` rank 2, `heldAtHome`) — so the bears are standing at home when Bear Form lands,
   rather than being trained after it. Every other rung keeps the druid at tier 3.
-* **The night elf's tier-2 order** (the developer's): TWO Ancients of Lore as a tier-2 support row
-  (`SupportRow.count`, asked one more than is begun so the first is not held for the price of
-  both), then the SECOND HERO, and only then the Tree of Eternity (`PlusRaceTable.tier3After`:
-  `started` two Lores, `heroes` two). While it upgrades the bear build's mix trains its druids and
-  a few Dryads, and Adept Training and Abolish Magic follow the first of each. Measured live before
-  the second-hero clause: Lores at 6:52–10:45 and the Tree of Eternity at 12:00–13:31, against ~9:56
-  with one Lore bought late — the night elf economy pays for this order with a later tier 3.
+* **The night elf's tier-2 order** (the developer's): the first Ancient of Lore BEGUN (a tier-2
+  support row), the SECOND HERO, then the Tree of Eternity (`PlusRaceTable.tier3After`: `started`
+  one Lore, `heroes` two — begun and queued count, never finished). While the Tree upgrades: a
+  Dryad, ABOLISH MAGIC begun, then the SECOND Lore (`SupportRow.moreWhen: { researching: Resi }`,
+  `AiPlayer.researchBegun`), and only then the druids (the bear builds' `waitFor` two Lores begun),
+  with Adept Training after the first druid. Both Lores first was tried: live,
+  the Tree of Eternity came at 12:00–13:31 against ~9:56, because the second Lore's 155/145 came out
+  of the Tree's purse. (`SupportRow.count` asks one more than is begun, for a row that wants several.)
 * **One of a unit before its upgrade** (`UpgradeRow.forUnit`, the developer's standing rule):
   every upgrade that belongs to one unit waits for one of it on the field or in a queue, its other
   forms counted (`townCount`: a bear is a druid, a Berserker a Head Hunter).
