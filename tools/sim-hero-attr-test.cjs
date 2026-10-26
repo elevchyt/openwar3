@@ -159,6 +159,9 @@ function check(what, got, want) {
   const tower = hero({ isHero: false, building: {}, uprooted: false, x: 3300, y: 3000 });
   world["awardKillXp"](creep(), tower.id);
   check("a creep a TOWER kills pays the hero standing beside it nothing", h.xp, 0);
+  const ancient = hero({ isHero: false, building: {}, uprooted: true, x: 3200, y: 3000 });
+  world["awardKillXp"](creep(), ancient.id);
+  check("…nor does one an UPROOTED Ancient kills", h.xp, 0);
   world["awardKillXp"](creep(), h.id);
   check("…and the same creep killed by the hero pays", h.xp > 0, true);
 }
