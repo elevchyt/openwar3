@@ -6836,6 +6836,28 @@ export class RtsController {
         if (any) this.flashTarget(mine.x, mine.y, mine.radius * MINE_RING_SCALE);
         return true;
       }
+      // A spell aimed at a TREE — War Club (`[Agra] targs1 = tree`), Eat Tree on an uprooted
+      // Ancient — names a TRUNK, picked off the click the way a harvest click picks one: the
+      // raised tree plane, then the nearest trunk within 140. The sim takes the tree nearest the
+      // aim point inside the caster's own radius (SimWorld.grabTree), so the raw ground hit
+      // under a click on a tree's crown pulled nothing at all — the Giant played his pull and
+      // stood there with no club. Snapped to the trunk, and flashed as a harvest click on a
+      // trunk is: the ring and the tree's pulse.
+      if (this.abilityDefByCode(cast.code)?.targetFlags.includes("tree")) {
+        const g = this.groundHitAt(cssX, cssY);
+        const tp = g ? (this.treePickPoint() ?? g) : null;
+        const tree = tp ? this.sim.nearestTree(tp[0], tp[1], 140) : null;
+        if (!tree) return this.refuseOrder("Targettree"); // "Must target a tree."
+        const err = this.castRefusal(cast.code, 0, tree.x, tree.y);
+        if (err !== null) return this.refuseOrder(err);
+        this.orderMode = null;
+        this.armedCast = null;
+        if (this.castFromSelection(cast.code, 0, tree.x, tree.y, queued)) {
+          this.flashTarget(tree.x, tree.y, 76);
+          this.treePulses.push({ x: tree.x, y: tree.y });
+        }
+        return true;
+      }
       const hit = this.groundHitAt(cssX, cssY); // point-target spell
       if (!hit) return this.refuseOrder("Canttargetloc"); // "Unable to target there."
       // The POINT goes with the question: a refusal can depend on what is at the spot you
@@ -7290,7 +7312,7 @@ export class RtsController {
    *  is what hands the NEXT click to another Dryad rather than re-aiming the first one; and
    *  the focused sub-group (the card the button was pressed on) is asked before the rest of
    *  the selection. A NO-TARGET press (castNoTarget) still reaches everyone who knows it. */
-  private castFromSelection(code: string, targetId: number, x: number, y: number, queued = false, aimed = true): void {
+  private castFromSelection(code: string, targetId: number, x: number, y: number, queued = false, aimed = true): boolean {
     let any = false;
     if (!aimed) {
       // An instant press goes to the FOCUSED SUB-GROUP — the units whose card the button is on —
@@ -7306,7 +7328,7 @@ export class RtsController {
         if (this.execute(this.localPlayer, { c: "cast", unitId: id, code, targetId, x, y, queued })) any = true;
       }
       if (any) this.ack(false);
-      return;
+      return any;
     }
     const t = targetId ? this.sim.units.get(targetId) : undefined;
     const tx = t ? t.x : x;
@@ -7327,6 +7349,7 @@ export class RtsController {
       break; // one caster — the nearest that took the order
     }
     if (any) this.ack(false);
+    return any;
   }
 
   /** Can ANY unit in the selection cast this at that target? Returns null when one can,

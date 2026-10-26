@@ -13460,6 +13460,12 @@ export class SimWorld {
     // both carry Forged Talons, and a Flying Machine that researches Bombs must find its bomb
     // slot already carrying its armour/damage upgrades the moment the slot switches on.
     for (const w of u.weapons) {
+      // Every pass starts from the TYPE's own `weapsOn` bit, and everything below lays its
+      // override on top. Without the reset an override was never taken back: a War Club's 15th
+      // strike cleared `warClub`, and the Giant went on swinging the tree — siege, 250 range —
+      // for the rest of the game, because nothing put slot 0 back on or slot 1 back off. (An
+      // orb's woken slot outlived the orb the same way.)
+      if (w.baseEnabled !== undefined) w.enabled = w.baseEnabled;
       // `renw` REPLACES weapsOn (see upgradeBonuses) — hence a bit test against the new mask
       // rather than an OR with the old one, which is what lets Impaling Bolt take the Glaive
       // Thrower OFF its original weapon.
