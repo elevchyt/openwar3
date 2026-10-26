@@ -821,6 +821,13 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   masses out on its half of the map, never idle at home. The caster's `NEVER` holds the HARVEST
   codes — a Ghoul is not `isPeon`, so `roleOf` derived its `Ahrl` as a spell and threw it at the
   creep it was swinging at, cancelling the swing every pass (the "Ghouls don't hit creeps" bug).
+  On INSANE a MINED-OUT map (no mine with gold anywhere, `noteMinedOut`) ends in ONE FINAL FIGHT:
+  every wave gate is lifted (each waits for something to be BOUGHT), nothing breaks off, and the
+  outcome concedes (`finalLost`). A unit has ONE autocast slot, as the game's toggle does: the
+  HEAL holds it (`autocastSlot`) and every other autocast is pressed by hand off the ladder —
+  arming both flipped a Priest's Heal off every other pass. And a MOVE that reaches the crowd at
+  its goal ENDS as a stop (sim `CROWD_ARRIVE`): parked on it, the muster's outer ring neither
+  auto-acquired nor autocast.
   **AMAI is GPL** — it was studied for the shape of the strategy table and nothing else; never
   lift its code or its numbers.
 - **A bare `\r` is a JASS line terminator.** JASS is LINE-ORIENTED — a statement ends at the end

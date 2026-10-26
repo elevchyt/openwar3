@@ -1085,6 +1085,31 @@ const ORC: PlusRaceTable = {
 //  UNDEAD
 // --------------------------------------------------------------------------------------
 
+/**
+ * THE UNDEAD TIER 3, after the Black Citadel — the developer's: *"after reaching 3-4
+ * abominations, it should start trying to produce 1-2 frost wyrms or go down the route of
+ * producing more banshees or necromancers"*. Every undead tier-3 build is one of two ROUTES,
+ * rolled per seat (`thenAt3Or`) and held for the match:
+ *
+ *  · `THEN_WYRMS` — four Abominations as the build's LEAD (`leadUnits`, high in the ladder), then
+ *    TWO Frost Wyrms as a lead count of their own once three Abominations stand (`waitFor` holds
+ *    the Wyrms, and with them the Boneyard, back until then — plan.ts `waiting`).
+ *  · `THEN_CASTERS` — the same four Abominations, then the Temple of the Damned's casters, held
+ *    out of the mix until three Abominations stand and weighted up in the `…casters` builds.
+ *
+ * Either way the two Obsidian Statues come first (`always`, which plan.ts puts above the army at
+ * tier 3). The counts are the developer's; the weights beside them are OURS.
+ */
+const ABOMS_FIRST: PowerSpike = { units: [ABOMINATION, 3] };
+const THEN_WYRMS = {
+  lead: { [ABOMINATION]: 4, [FROST_WYRM]: 2 },
+  waitFor: { [FROST_WYRM]: ABOMS_FIRST },
+} as const;
+const THEN_CASTERS = {
+  lead: { [ABOMINATION]: 4 },
+  waitFor: { [NECRO]: ABOMS_FIRST, [BANSHEE]: ABOMS_FIRST },
+} as const;
+
 const UNDEAD: PlusRaceTable = {
   race: "undead",
   worker: ACOLYTE,
@@ -1189,13 +1214,13 @@ const UNDEAD: PlusRaceTable = {
     // Banshees are what it adds once there are fiends to stand in front of them. Both Obsidian
     // Statues are the race's rather than the build's — see `always`.
     { id: "fiends", name: "Ghouls and Crypt Fiends", tier: 2, weight: 30, expandAt: 300, expandAgainAt: 720,
-      heroes: [DEATH_KNIGHT, LICH, CRYPT_LORD, DREAD_LORD], thenAt3: "fiendaboms",
+      heroes: [DEATH_KNIGHT, LICH, CRYPT_LORD, DREAD_LORD], thenAt3: "fiendaboms", thenAt3Or: ["fiendcasters"],
       mix: { [CRYPT_FIEND]: 3, [GHOUL]: 2.5, [BANSHEE]: 1 } },
     // CRYPT LORD, and the widest mix the race has: ghouls and fiends from the opening, then Meat
     // Wagons and Necromancers at tier 2. The Death Knight is the SECOND hero here rather than the
     // first — he heals the Crypt Lord, who is already the one that can be stood in front.
     { id: "meatwagons", name: "Fiends, Meat Wagons and Necromancers", tier: 2, weight: 24, expandAt: 330, expandAgainAt: 750,
-      heroes: [CRYPT_LORD, DEATH_KNIGHT, LICH, DREAD_LORD], thenAt3: "aboms",
+      heroes: [CRYPT_LORD, DEATH_KNIGHT, LICH, DREAD_LORD], thenAt3: "aboms", thenAt3Or: ["abomcasters"],
       mix: { [CRYPT_FIEND]: 2.5, [GHOUL]: 2, [MEAT_WAGON]: 1, [NECRO]: 1.2 } },
     // DREAD LORD MASS GHOULS — the fast one. Vampiric Aura is what makes those ghouls farm, so it
     // expands early, and it is the one undead build that names its SECOND CRYPT: a ghoul army is
@@ -1203,11 +1228,14 @@ const UNDEAD: PlusRaceTable = {
     // is the second hero (a Death Coil on a ghoul is the same aura read from the other end).
     { id: "ghouls", name: "Mass Ghouls and Gargoyles", tier: 2, weight: 22, expandAt: 240, expandAgainAt: 640,
       heroes: [DREAD_LORD, DEATH_KNIGHT, LICH, CRYPT_LORD],
-      factories: { [CRYPT]: 2 }, thenAt3: "ghoulaboms",
+      factories: { [CRYPT]: 2 }, thenAt3: "ghoulaboms", thenAt3Or: ["ghoulcasters"],
       mix: { [GHOUL]: 4, [GARGOYLE]: 1.5, [CRYPT_FIEND]: 1 } },
     { id: "aboms", name: "Abominations and Meat Wagons", tier: 3, weight: 16, expandAt: 420, expandAgainAt: 840,
-      heroes: [CRYPT_LORD, DEATH_KNIGHT, LICH, DREAD_LORD],
+      heroes: [CRYPT_LORD, DEATH_KNIGHT, LICH, DREAD_LORD], thenAt3: "aboms", thenAt3Or: ["abomcasters"], ...THEN_WYRMS,
       mix: { [ABOMINATION]: 3, [CRYPT_FIEND]: 1.5, [MEAT_WAGON]: 1.2, [NECRO]: 1 } },
+    { id: "abomcasters", name: "Abominations, Necromancers and Banshees", tier: 3, weight: 0, expandAt: 420, expandAgainAt: 840,
+      ...THEN_CASTERS,
+      mix: { [ABOMINATION]: 2.5, [NECRO]: 1.5, [BANSHEE]: 1.5, [CRYPT_FIEND]: 1, [MEAT_WAGON]: 0.8 } },
     { id: "frostwyrms", name: "Gargoyles and Frost Wyrms", tier: 3, weight: 12, expandAt: 450, expandAgainAt: 870,
       mix: { [GARGOYLE]: 2.5, [FROST_WYRM]: 1, [CRYPT_FIEND]: 1.5, [NECRO]: 0.8, [ABOMINATION]: 0.8 } },
     // THE UNDEAD TIER-3 TRANSITIONS — never rolled (weight 0), only grown into (`thenAt3`). The
@@ -1218,10 +1246,19 @@ const UNDEAD: PlusRaceTable = {
     // (`[uabo] Requires=unp2`, off the Slaughterhouse `always` already stands): the fiend build's
     // fiends and Banshees behind them, the ghoul build's ghouls and Gargoyles beside them. The
     // Meat Wagon build grows into `aboms` itself, which is its own army with more Abominations.
+    // …and each comes in the two routes `THEN_WYRMS` / `THEN_CASTERS` describe.
     { id: "fiendaboms", name: "Crypt Fiends and Abominations", tier: 3, weight: 0, expandAt: 420, expandAgainAt: 840,
+      ...THEN_WYRMS,
       mix: { [CRYPT_FIEND]: 2.5, [ABOMINATION]: 2, [GHOUL]: 1, [BANSHEE]: 0.8 } },
+    { id: "fiendcasters", name: "Crypt Fiends, Abominations and casters", tier: 3, weight: 0, expandAt: 420, expandAgainAt: 840,
+      ...THEN_CASTERS,
+      mix: { [CRYPT_FIEND]: 2, [ABOMINATION]: 2, [BANSHEE]: 1.5, [NECRO]: 1.5 } },
     { id: "ghoulaboms", name: "Ghouls, Abominations and Gargoyles", tier: 3, weight: 0, expandAt: 420, expandAgainAt: 840,
+      ...THEN_WYRMS,
       mix: { [GHOUL]: 2.5, [ABOMINATION]: 2, [GARGOYLE]: 1.2, [CRYPT_FIEND]: 1 } },
+    { id: "ghoulcasters", name: "Ghouls, Abominations and casters", tier: 3, weight: 0, expandAt: 420, expandAgainAt: 840,
+      ...THEN_CASTERS,
+      mix: { [GHOUL]: 2, [ABOMINATION]: 2, [NECRO]: 1.5, [BANSHEE]: 1, [GARGOYLE]: 0.8 } },
     // THE FAST EXPAND — INSANE ONLY, and EVERY Crypt Lord or Dreadlord opening there. The
     // developer's: "a fast expansion with mass ghouls and/or crypt fiends (so it delays its main
     // hall upgrade/tier 2 a bit to keep resources for a bigger early game army and extra
@@ -1230,7 +1267,7 @@ const UNDEAD: PlusRaceTable = {
     // Crypts of Ghouls and Fiends, and the Halls of the Dead held to five and a half minutes.
     { id: "fastexpand", name: "Fast expansion, Ghouls and Fiends", tier: 2, weight: 0, expandAt: 150, expandAgainAt: 600,
       replaces: { first: [CRYPT_LORD, DREAD_LORD], chance: 1 }, tier2Clock: 330,
-      factories: { [CRYPT]: 2 }, thenAt3: "aboms",
+      factories: { [CRYPT]: 2 }, thenAt3: "aboms", thenAt3Or: ["abomcasters"],
       mix: { [GHOUL]: 3, [CRYPT_FIEND]: 3, [NECRO]: 0.8, [MEAT_WAGON]: 0.5 } },
   ],
   heroes: [DEATH_KNIGHT, LICH, DREAD_LORD, CRYPT_LORD],

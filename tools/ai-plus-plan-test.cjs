@@ -25,7 +25,7 @@
 const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
-const { buildableMix } = require(join(REPO, ".sim-build", "src", "ai", "plus", "plan.js"));
+const { buildableMix, activeStrategy } = require(join(REPO, ".sim-build", "src", "ai", "plus", "plan.js"));
 const { PLUS_RACES, insaneVariant, rollStrategy, rollTransition, TAVERN_HEROES } = require(join(REPO, ".sim-build", "src", "ai", "plus", "races.js"));
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 
@@ -489,6 +489,35 @@ console.log("\n--- hero pairings, and the Insane-only builds ---");
   }
   check("a Death Knight opening is never the fast expand",
     insaneVariant(undead, undead.strategies.find((x) => x.id === "fiends"), () => 0).id, "fiends");
+}
+
+// The developer's undead tier 3: two Obsidian Statues first (plan.ts puts `always` above the
+// army at tier 3), then 3-4 Abominations, then 1-2 Frost Wyrms OR more Banshees/Necromancers —
+// two ROUTES per tier-3 transition, rolled per seat (races.ts `THEN_WYRMS` / `THEN_CASTERS`).
+console.log("\n--- the undead tier 3: Abominations, then Wyrms or casters ---");
+{
+  const undead = PLUS_RACES.undead;
+  const by = (id) => undead.strategies.find((x) => x.id === id);
+  for (const id of ["fiends", "meatwagons", "ghouls", "fastexpand", "aboms"]) {
+    const routes = [0, 1].map((i) => rollTransition(by(id), () => i).thenAt3);
+    const leads = routes.map((r) => by(r)?.lead ?? {});
+    check(`${id} grows into one of two tier-3 routes`, new Set(routes).size, 2);
+    check(`…both lead with four Abominations`, leads.every((l) => l.uabo === 4), true);
+    check(`…and exactly one of them names Frost Wyrms`, leads.filter((l) => (l.ufro ?? 0) > 0).length, 1);
+  }
+  // Held back until three Abominations stand — the Wyrms out of the lead rows, the casters out
+  // of the mix. `ctx`'s counts are 1-or-0, so the Abominations are counted here.
+  const BUILT = ["unp2", "usep", "uslh", "utod", "ugrv", "utom", "ubon"];
+  const at3 = (strategy, aboms) => {
+    const c = ctx(undead, strategy, PLUS_INSANE, [...BUILT, undead.halls[0], undead.halls[1]], 3);
+    const n = (id) => (id === "uabo" ? aboms : BUILT.includes(id) || id === undead.halls[0] ? 1 : 0);
+    c.ai = { ...c.ai, countDone: n, townCountDone: n, townCount: n, count: n };
+    return activeStrategy(c);
+  };
+  check("no Frost Wyrm with two Abominations", (at3(by("aboms"), 2).lead ?? {}).ufro, undefined);
+  check("…two of them once there are three", (at3(by("aboms"), 3).lead ?? {}).ufro, 2);
+  check("no Necromancer in the caster route with two", "unec" in at3(by("abomcasters"), 2).mix, false);
+  check("…and both casters once there are three", ["unec", "uban"].every((u) => u in at3(by("abomcasters"), 3).mix), true);
 }
 
 console.log(failed === 0 ? "\nAll Computer+ plan checks passed." : `\n${failed} check(s) FAILED.`);

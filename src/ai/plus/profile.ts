@@ -558,6 +558,18 @@ export interface PlusProfile {
    * that holds, a revived hero or one soldier out of a Barracks resets it inside a second.
    */
   readonly concedeAfter: number;
+  /**
+   * Once the map is MINED OUT — not one gold mine left with gold in it, anywhere (index.ts
+   * `noteMinedOut`) — does it go for one FINAL FIGHT? Every wave gate is then lifted (the army
+   * food, the siege, the Town Portal, the refill, the undead bar), the army walks at the enemy's
+   * base and does not break off a fight with a player, and the OUTCOME decides the match: an
+   * army that is gone while theirs still stands concedes (`finalLost`). The developer's Insane:
+   * *"go fully aggressive against its opponent(s) if there are NO MORE GOLD MINES to fight over
+   * … and based on the outcome of that fight, decide to concede or not"* — two Insane computers
+   * with no income otherwise sat at 28–32 food for ten minutes below a tier-3 wave of 36 that
+   * nothing could ever buy. OURS.
+   */
+  readonly finalFight: boolean;
 }
 
 /**
@@ -607,7 +619,7 @@ export const PLUS_EASY: PlusProfile = {
   creepCamps: 2, creepCampMax: CAMP_GREEN_MAX, creepRange: 3000, creepRest: 0, creepGreenUntil: 0, creepHunger: 1,
   harass: false, roam: false, mercChance: 0, scout: false, sweepEvery: Infinity, expansionFirst: 0.5,
   shopping: 0, eagerMana: false, invulnEach: false, itemReserve: Infinity, keepPortal: false, portalToAttack: false,
-  concedeAfter: 24,
+  concedeAfter: 24, finalFight: false,
 };
 
 /**
@@ -704,7 +716,7 @@ export const PLUS_NORMAL: PlusProfile = {
   // fight items are bought past the ceiling — so the belt is thinner, not empty. Insane keeps
   // the full six.
   shopping: 2, eagerMana: false, invulnEach: false, itemReserve: 500, keepPortal: true, portalToAttack: false,
-  concedeAfter: 14,
+  concedeAfter: 14, finalFight: false,
 };
 
 /**
@@ -746,7 +758,7 @@ export const PLUS_INSANE: PlusProfile = {
   // A full belt and a Town Portal on the hero. Both are what separates a player who has been
   // here before from one who has not.
   shopping: 6, eagerMana: true, invulnEach: true, itemReserve: 200, keepPortal: true, portalToAttack: true,
-  concedeAfter: 8,
+  concedeAfter: 8, finalFight: true,
 };
 
 /** The profile a lobby difficulty seats. Anything unrecognised plays Normal, which is what

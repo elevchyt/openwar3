@@ -50,6 +50,8 @@ export interface AiReading {
   player: number;
   build: string;
   mode: string;
+  /** In the final fight of a mined-out map (Computer+ Insane). */
+  final: boolean;
   creeping: boolean;
   retreat: string | null;
   target: string;
@@ -326,6 +328,7 @@ export class MatchLog {
         continue;
       }
       if (was.build !== r.build) this.line(`${stamp} P${r.player} AI build ${was.build} -> ${r.build}`);
+      if (!was.final && r.final) this.line(`${stamp} P${r.player} AI final fight — the map is mined out`);
       if (was.mode !== r.mode || was.creeping !== r.creeping) {
         const label = (x: AiReading) => (x.creeping ? `${x.mode}/creeping` : x.mode) + (x.retreat ? `(${x.retreat})` : "");
         this.line(`${stamp} P${r.player} AI mode ${label(was)} -> ${label(r)}${r.target ? ` (target ${r.target})` : ""}`);
@@ -371,7 +374,7 @@ export class MatchLog {
       this.line(`${stamp} STATUS P${seat.player} buildings=[${countList(x.buildings, (id) => this.name(id), 16)}]`);
     }
     for (const r of this.src.ai()) {
-      this.line(`${stamp} STATUS P${r.player} AI build=${r.build} mode=${r.mode}${r.creeping ? "/creeping" : ""}`
+      this.line(`${stamp} STATUS P${r.player} AI build=${r.build} mode=${r.mode}${r.creeping ? "/creeping" : ""}${r.final ? " final" : ""}`
         + `${r.retreat ? ` retreat=${r.retreat}` : ""} squad=${r.squadFood}food${r.target ? ` target=${r.target}` : ""} enemy=${r.enemy}`);
     }
     const pace = this.src.pace();

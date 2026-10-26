@@ -2763,6 +2763,10 @@ const BLOCKED_REPATH_TIME = 0.3;
 // the destination out of reach ends a move.
 const BLOCKED_WAIT = 0.5;
 const BLOCKED_WAIT_MAX = 3.0;
+// …except within this of a MOVE's goal, where the bodies in the way are the group standing
+// on the spot and the move is simply finished (holdOrGiveUp). Eight cells is the radius of a
+// packed blob of about twenty soldiers. OURS — nothing states the game's own figure.
+const CROWD_ARRIVE = PATHING_CELL * 8;
 const STUCK_TIME = 0.5; // seconds of blocked movement before a unit gives up
 const STUCK_RATIO = 0.3; // "blocked" = actual displacement below this share of expected
 // When two units meet head-on, the lower-priority one pauses for YIELD_TIME so the
@@ -28990,6 +28994,20 @@ export class SimWorld {
    *  itself puts the destination out of reach, because no amount of waiting opens a cliff.
    *  Every give-up path for a move / attack-move / patrol goes through here (issue #108). */
   private holdOrGiveUp(u: SimUnit, tx: number, ty: number): void {
+    // A MOVE THAT HAS GOT AS FAR AS THE CROWD AT ITS GOAL IS OVER. In the game a finished move
+    // leaves the unit on the plain stopped order, and a group sent to one point stops in a
+    // blob AROUND it — nobody in the outer ring stands there "still moving" waiting for the
+    // middle to clear. Parked instead, the ring kept its move for good, re-pathing every few
+    // seconds, and a move is the one order that switches off both auto-acquire and autocast: a
+    // Priest at the edge of an army mustered on a rally point never healed the wounded beside
+    // him. Only near the goal (`CROWD_ARRIVE`) and only for bodies in the way — a unit held
+    // up at a choke on the way still keeps its order (issue #108), and a builder keeps its site.
+    if (u.order === "move" && !u.constructing && Math.hypot(tx - u.x, ty - u.y) <= CROWD_ARRIVE
+        && this.terrainReachable(u, tx, ty)) {
+      this.endWalk(u);
+      u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
+      return;
+    }
     if (this.terrainReachable(u, tx, ty)) {
       this.parkAndWait(u);
       return;

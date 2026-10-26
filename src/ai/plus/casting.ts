@@ -468,6 +468,11 @@ const rejuvenating = (u: SimUnit): boolean => u.buffs.some((b) => b.group === "r
  */
 const PLAYERS_ONLY_AUTOCAST = new Set<string>(["ANfa"]);
 
+/** The share of its mana pool a caster whose autocast slot is a HEAL keeps back from the
+ *  autocasts it presses by hand (`armAutocasts`): a Priest stops buffing with Inner Fire (35)
+ *  at a quarter of his bar, which is still a dozen Heals (5). OURS. */
+const SLOT_HEAL_RESERVE = 0.25;
+
 /** Autocasts the AI must not simply switch on — the same two the classic caster holds back,
  *  for the same reasons (Defend costs 30% move speed and has a condition; Replenish is a job). */
 const HAND_AUTOCAST = new Set<string>([
@@ -1007,26 +1012,53 @@ export class PlusCaster {
   //  Autocast — armed, then left to the sim
   // ====================================================================================
 
-  /** Switch on every autocast the unit owns, and let `SimWorld.tickAutocast` run them. That
-   *  covers Heal, Inner Fire, Slow, Bloodlust, Curse, Faerie Fire, Frost Armor, Abolish Magic,
-   *  Web, Raise Dead, Get Corpse and every arrow orb, with none of it restated here. (Ensnare is
-   *  a target spell, not an autocast, and is cast off `roleOf` as a disable.) */
+  /**
+   * Switch on the unit's autocast, and let `SimWorld.tickAutocast` run it. That covers Heal,
+   * Slow, Bloodlust, Curse, Faerie Fire, Frost Armor, Abolish Magic, Web, Raise Dead, Get Corpse
+   * and every arrow orb, with none of it restated here. (Ensnare is a target spell, not an
+   * autocast, and is cast off `roleOf` as a disable.)
+   *
+   * ONE PER UNIT, the way a player has it: the toggle is the game's one-at-a-time slot
+   * (`SimWorld.toggleAutocast`), and switching a second autocast on puts the first out. A Priest
+   * carries two, Heal and Inner Fire, and this walk used to switch on whichever was off — so
+   * every pass lit one and doused the other, and the Priest spent the fight with Heal off half
+   * the time, standing beside the wounded. The slot goes to the HEAL when the unit has one (the
+   * developer's "leave autocast on Heal"), else to the first; every other autocast it carries is
+   * PRESSED BY HAND off the ladder instead (`tryCast`), which is how a player gets Inner Fire on
+   * the army while the Priest heals. A morph is never the slot — it is a decision (`MORPH_WHEN`).
+   */
   private armAutocasts(u: SimUnit, foes: SimUnit[]): void {
     for (const ab of u.abilities) {
       if (ab.level < 1) continue;
       const def = this.view.def(ab.id);
-      if (!def?.autocast) continue;
-      if (PLAYERS_ONLY_AUTOCAST.has(def.code)) {
-        // A TOGGLE both ways round, so it is only flipped when it disagrees with the fight.
-        const want = this.playerInReach(u, foes);
-        if (want !== ab.autocastOn) this.view.order({ c: "autocast", unitId: u.id, code: ab.code });
-        continue;
-      }
-      if (ab.autocastOn) continue;
-      if (NEVER.has(def.code) || HAND_AUTOCAST.has(def.code) || isRepairCode(def.code)) continue;
-      if (!this.view.world.unitMeets(u, ab.id)) continue;
-      this.view.order({ c: "autocast", unitId: u.id, code: ab.code });
+      if (!def || !PLAYERS_ONLY_AUTOCAST.has(def.code)) continue;
+      // A TOGGLE both ways round, so it is only flipped when it disagrees with the fight.
+      const want = this.playerInReach(u, foes);
+      if (want !== ab.autocastOn) this.view.order({ c: "autocast", unitId: u.id, code: ab.code });
     }
+    const slot = this.autocastSlot(u);
+    if (slot && !slot.autocastOn) this.view.order({ c: "autocast", unitId: u.id, code: slot.code });
+  }
+
+  /** WHICH autocast holds the unit's one slot (`armAutocasts`): its HEAL if it has one, else the
+   *  first it may arm; null for none. Asked by `tryCast` too, which presses the others by hand. */
+  private autocastSlot(u: SimUnit): SimUnit["abilities"][number] | null {
+    let slot: SimUnit["abilities"][number] | null = null;
+    let slotHeals = false;
+    for (const ab of u.abilities) {
+      if (ab.level < 1) continue;
+      const def = this.view.def(ab.id);
+      if (!def?.autocast || PLAYERS_ONLY_AUTOCAST.has(def.code)) continue;
+      if (NEVER.has(def.code) || HAND_AUTOCAST.has(def.code) || isRepairCode(def.code) || MORPH_WHEN[def.code]) continue;
+      if (!this.view.world.unitMeets(u, ab.id)) continue;
+      const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
+      const heals = !!lvl && roleOf(def, lvl) === "heal";
+      if (!slot || (heals && !slotHeals)) {
+        slot = ab;
+        slotHeals = heals;
+      }
+    }
+    return slot;
   }
 
   /** A hostile PLAYER's unit (never a creep, a building or a worker) inside the unit's look —
@@ -1142,6 +1174,7 @@ export class PlusCaster {
     // THE BREWMASTER'S HAZE GOES BEFORE HIS BREATH — see `DRUNKEN_HAZE`.
     if (this.hazeFirst(u, foes, engaged)) return true;
     const flaskFlying = this.now - (this.hazedAt.get(u.id) ?? -Infinity) < HAZE_LAND;
+    const slot = this.autocastSlot(u);
     const cards: Array<{ role: Role; ab: SimUnit["abilities"][number]; def: AbilityDef; lvl: AbilityLevel }> = [];
     for (const ab of u.abilities) {
       if (ab.level < 1 || ab.cooldownLeft > 0) continue;
@@ -1149,8 +1182,10 @@ export class PlusCaster {
       if (!def || def.target === "passive") continue;
       if (NEVER.has(def.code) || HAND_AUTOCAST.has(def.code) || isRepairCode(def.code)) continue;
       // An autocast is the sim's job (see armAutocasts) — except a morph, which wears the flag
-      // on some rows and is emphatically a decision.
-      if (def.autocast && !MORPH_WHEN[def.code]) continue;
+      // on some rows and is emphatically a decision, and an autocast that does NOT hold the
+      // unit's one slot: the Priest's Inner Fire, with Heal on, is pressed by hand like a
+      // spell (armAutocasts).
+      if (def.autocast && !MORPH_WHEN[def.code] && (ab === slot || PLAYERS_ONLY_AUTOCAST.has(def.code))) continue;
       // …and the breath waits while the flask it is for is still in the air.
       if (def.code === BREATH_OF_FIRE && flaskFlying) continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
@@ -1487,8 +1522,25 @@ export class PlusCaster {
         // …nor while the Blademaster is INVULNERABLE: the press dispels everything on him, his
         // own Potion of Invulnerability included (`stripsOwnShield`).
         if (def.code === MIRROR_IMAGE) return engaged && !stripsOwnShield(def.code, u) && !this.imagesStanding(u);
+        // …and an autocast pressed by HAND beside a heal that holds the slot (the Priest's Inner
+        // Fire, see `armAutocasts`) leaves the heal its mana — see `SLOT_HEAL_RESERVE`.
+        if (def.autocast && this.healHoldsSlot(u)) { // (never the slot itself — `tryCast` skips it)
+          const cost = def.levelData[0]?.cost ?? 0;
+          return engaged && u.mana - cost >= u.maxMana * SLOT_HEAL_RESERVE;
+        }
         return engaged;
     }
+  }
+
+  /** Is one of this unit's autocasts a HEAL, switched on — the slot `armAutocasts` gives it? */
+  private healHoldsSlot(u: SimUnit): boolean {
+    for (const ab of u.abilities) {
+      if (!ab.autocastOn || ab.level < 1) continue;
+      const def = this.view.def(ab.id);
+      const lvl = def?.levelData[Math.min(ab.level, def.levelData.length) - 1];
+      if (def && lvl && roleOf(def, lvl) === "heal") return true;
+    }
+    return false;
   }
 
   /**

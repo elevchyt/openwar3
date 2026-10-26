@@ -116,6 +116,14 @@ const ABILS = {
   //          DataA 65, DataB 480, DataC 375 (distance), DataE 5 (the ignite) — Breath of Fire
   ANdh: { code: "ANdh", target: "unit", autocast: false, targetFlags: ["air", "ground", "enemy", "organic", "neutral"], levelData: [lvl({ area: 200, castRange: 550, cost: 70, duration: 12, heroDuration: 5, buffs: ["BNdh"], data: [0, 0.45, 0.15] })] },
   ANbf: { code: "ANbf", target: "point", autocast: false, targetFlags: ["ground", "air", "structure"], levelData: [lvl({ area: 125, castRange: 375, cost: 75, duration: 5, heroDuration: 5, buffs: ["BNbf"], data: [65, 480, 375, 300, 5] })] },
+  // THE PRIEST'S PAIR, with their real rows (`Units\AbilityData.slk`, rank 1) — both AUTOCASTS,
+  // and the game's toggle is one-at-a-time, so a Priest holds one of them on:
+  //   [Ahea] targs1 "air,ground,friend,vuln,invu,self,organic,nonancient,neutral", Cost1 5,
+  //          Rng1 250, Dur1 0, DataA1 25 — Heal
+  //   [Ainf] targs1 "air,ground,friend,neutral,self", Cost1 35, Rng1 500, Dur1 60, BuffID1 Binf
+  //          — Inner Fire
+  Ahea: { code: "Ahea", target: "unit", autocast: true, targetFlags: ["air", "ground", "friend", "vuln", "invu", "self", "organic", "nonancient", "neutral"], levelData: [lvl({ castRange: 250, cost: 5, data: [25, 0], buffs: ["Bhea"] })] },
+  Ainf: { code: "Ainf", target: "unit", autocast: true, targetFlags: ["air", "ground", "friend", "neutral", "self"], levelData: [lvl({ castRange: 500, cost: 35, duration: 60, heroDuration: 60, buffs: ["Binf"], data: [0.1, 0] })] },
   AOmi: { code: "AOmi", target: "none", autocast: false, targetFlags: [], levelData: [lvl({ area: 1000, castRange: 128, cost: 100, duration: 60, heroDuration: 60, buffs: ["BOmi"], data: [1, 0, 2, 0.5] })] },
 };
 
@@ -1020,6 +1028,53 @@ const hazed = () => [{ kind: "slow", group: "haze", timeLeft: 10, value: 0.15 },
   const clump = [200, 260, 300].map((x) => unit({ owner: 1, x, maxMana: 0 }));
   const cmd = cast([brewer(), ...clump], PLUS_EASY, { passes: 2, roll: 0.99 });
   check("an EASY Brewmaster just breathes", cmd && cmd.code, "ANbf");
+}
+
+// ==========================================================================================
+console.log("\n-- The Priest: Heal holds the autocast slot, Inner Fire is pressed by hand ------");
+// ==========================================================================================
+// The developer's: "make Computer+ AI use inner fire manually and leave auto cast on heal". The
+// game's toggle is ONE autocast per unit (`SimWorld.toggleAutocast`), and switching on whichever
+// was off every pass lit Inner Fire and put Heal out half the time.
+{
+  const priest = (o = {}) => unit({
+    typeId: "hmpr", mana: 200, maxMana: 200,
+    abilities: ["Ahea", "Ainf"].map((id) => ({ id, code: id, level: 1, cooldownLeft: 0, autocastOn: false })),
+    ...o,
+  });
+  const allOrders = (units, profile = PLUS_INSANE, passes = 2) => {
+    const orders = [];
+    const world = { units: new Map(units.map((u) => [u.id, u])), nearestTrees: () => [], techMeets: () => true, unitMeets: () => true, castUseError: () => null, targsAdmit: () => true, castError: () => null };
+    const c = new PlusCaster({ world, player: 0, def: (id) => ABILS[id], hostile: (u) => u.owner === 1, allied: (u) => u.owner === 2,
+      order: (cmd) => {
+        orders.push(cmd);
+        // …and the toggle the sim plays out: one on, every other one off.
+        if (cmd.c === "autocast") {
+          const u = units.find((x) => x.id === cmd.unitId);
+          for (const ab of u?.abilities ?? []) ab.autocastOn = ab.code === cmd.code ? !ab.autocastOn : false;
+        }
+        return true;
+      } }, profile, () => 0);
+    for (let i = 0; i < passes; i++) c.pass(100 + i * 10, { holdsPortal: () => false, home: { x: 0, y: 0 } });
+    return orders;
+  };
+  const p = priest();
+  const orders = allOrders([p], PLUS_INSANE, 3);
+  check("Heal is switched on", p.abilities.find((a) => a.code === "Ahea").autocastOn, true);
+  check("…and stays on: Inner Fire is never toggled", orders.filter((o) => o.c === "autocast" && o.code === "Ainf").length, 0);
+  check("…and Heal is toggled once, not every pass", orders.filter((o) => o.c === "autocast" && o.code === "Ahea").length, 1);
+  // In a fight Inner Fire goes on the army by hand…
+  const p2 = priest();
+  const army = [unit({ x: 100 }), unit({ x: 140 })];
+  const foes = [unit({ owner: 1, x: 300 }), unit({ owner: 1, x: 330 })];
+  const pressed = allOrders([p2, ...army, ...foes]).filter((o) => o.c === "cast");
+  check("in a fight the Priest presses Inner Fire by hand", pressed.some((o) => o.code === "Ainf"), true);
+  check("…never Heal, which is the autocast's", pressed.some((o) => o.code === "Ahea"), false);
+  // …but not out of the mana Heal runs on (`SLOT_HEAL_RESERVE`).
+  const p3 = priest({ mana: 80 });
+  p3.abilities[0].autocastOn = true;
+  const low = allOrders([p3, unit({ x: 100 }), unit({ owner: 1, x: 300 }), unit({ owner: 1, x: 330 })]).filter((o) => o.c === "cast");
+  check("…and not below a quarter of the bar", low.some((o) => o.code === "Ainf"), false);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

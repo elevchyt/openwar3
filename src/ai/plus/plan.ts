@@ -453,6 +453,13 @@ export function buildPlan(c: PlusCtx): void {
   // `shop` gives: it is 130 gold, the hero is what it is for, and a row below the army rows is
   // a row that is never reached at all.
   shop(c);
+  // AT TIER 3 THE `always` UNITS COME BEFORE THE ARMY — the undead's two Obsidian Statues, its
+  // only healers. Down at their ordinary place they sat under the tier-3 power rows (the
+  // Abominations, `leadUnits`), which halt the ladder every pass, so a tier-3 undead "only
+  // pumped Abominations" and a statue lost was not replaced for minutes, or ever (the
+  // developer's: *"it should give a higher priority to having 2 obsidian statues first"*). Two
+  // is a bounded row, so it costs the army nothing past them.
+  if (c.tier >= 3) always(c);
   army(c, coreArmy(c)); // enough not to die to the first raid, cheap enough not to block tech
   // …and on a rung that MATCHES the enemy's air (`PlusProfile.antiAirMatch`), the ANSWER TO AIR
   // comes up here, under the core army and above every row that halts the ladder to save — the
@@ -501,7 +508,7 @@ export function buildPlan(c: PlusCtx): void {
   firstTower(c);
   techBuildings(c);
   upgrades(c);
-  always(c);
+  if (c.tier < 3) always(c); // …at tier 3 it is under `shop`, above the army — see there
   // …and SIEGE, the same kind of row for the other thing a build may not have planned for: the
   // towers at the end of the march. Bounded to two bodies, so its reservation ends.
   if (!c.table.siegeEarly) siegeLine(c);
@@ -1335,7 +1342,11 @@ function waiting(c: PlusCtx, strategy: PlusStrategy): PlusStrategy {
   if (!wait) return strategy;
   const drop = Object.entries(wait).filter(([, w]) => !holds(c, w)).map(([u]) => u);
   if (!drop.length) return strategy;
-  return { ...strategy, mix: Object.fromEntries(Object.entries(strategy.mix).filter(([u]) => !drop.includes(u))) };
+  const keep = ([u]: [string, number]): boolean => !drop.includes(u);
+  // …and out of the LEAD rows as well: the undead's Frost Wyrms are a lead count that waits for
+  // the Abominations in front of them (plus/races.ts `THEN_WYRMS`).
+  const lead = strategy.lead && Object.fromEntries(Object.entries(strategy.lead).filter(keep));
+  return { ...strategy, mix: Object.fromEntries(Object.entries(strategy.mix).filter(keep)), lead };
 }
 
 /** How many of this player's ordered heroes are trained or in training (`PowerSpike.heroes`). */

@@ -2231,6 +2231,14 @@ const CAMP_STILL_UP = 0.5;
  *  and the answer costs a walk of the whole unit table — see `alliesOf`. */
 const ALLY_REFRESH = 5;
 
+/** The FINAL FIGHT (`noteMinedOut`): never before ten minutes, a wave every `FINAL_REGROUP`
+ *  seconds once the last one is over (time to gather what came back, not to buy anything), and
+ *  conceded once what is left is under `FINAL_LOST_SHARE` of what was brought (`finalLost`).
+ *  OURS — nothing in the install describes an AI that runs out of gold. */
+const FINAL_NOT_BEFORE = 600;
+const FINAL_REGROUP = 15;
+const FINAL_LOST_SHARE = 0.2;
+
 /**
  * The Orc Burrow's own cargo-hold ability — `Abun` Load, off its `abilList`.
  *
@@ -2624,6 +2632,14 @@ interface Brain {
   mercRolled: Set<number>;
   /** Has this player reached its POWER SPIKE (`spikeHeld`)? Latched. */
   spikeMet: boolean;
+  /** When the map was found MINED OUT and the FINAL FIGHT began (`noteMinedOut`), -1 before.
+   *  Latched: a mined-out map does not grow a mine back. */
+  finalSince: number;
+  /** How the final fight has gone, from its first contact on (`victoryPass`): the most power
+   *  this army brought to it, and the opposition's at the LAST contact — what was left of theirs
+   *  when the fighting stopped, as our own eyes last saw it. null until the armies meet. What
+   *  `finalLost` reads. */
+  finalFought: { ours: number; theirs: number } | null;
   /** The objective the TANK-ORDER hold is timed against, and since when (`tankHold`). */
   tankHoldAt: { x: number; y: number; since: number } | null;
   /** The one opponent of a 1v1, -1 in any other game, and undefined until first asked — the
@@ -2702,6 +2718,8 @@ export interface PlusLogReading {
   /** The rolled build, and what it has grown into when that differs ("rifles>rifleknights"). */
   build: string;
   mode: Mode;
+  /** In the FINAL FIGHT of a mined-out map (`PlusProfile.finalFight`). */
+  final: boolean;
   creeping: boolean;
   retreat: string | null;
   /** What the wave is aimed at, in words ("P1 Town Hall", "camp at 1200,-3400"), or "". */
@@ -2959,6 +2977,8 @@ export class ComputerPlusAi {
       merc: null,
       mercRolled: new Set(),
       spikeMet: false,
+      finalSince: -1,
+      finalFought: null,
       tankHoldAt: null,
       duelFoe: undefined,
       firstHero: new Map(),
@@ -3019,6 +3039,7 @@ export class ComputerPlusAi {
         player: b.ai.player,
         build: active.id === b.strategy.id ? b.strategy.id : `${b.strategy.id}>${active.id}`,
         mode: b.mode,
+        final: b.finalSince >= 0,
         creeping: b.creeping,
         retreat: b.retreatFrom,
         target,
@@ -3537,6 +3558,7 @@ export class ComputerPlusAi {
   // ======================================================================================
 
   private armyPass(b: Brain): void {
+    this.noteMinedOut(b);
     this.prune(b);
     this.scoutEnemy(b);
     this.noteHalls(b);
@@ -4638,7 +4660,9 @@ export class ComputerPlusAi {
     // be fighting (`EARLY_PRESERVE`): a defence that has fallen back under its Guard Towers is
     // not the same fight as one standing in the open.
     const theirs = this.preserving(b) ? this.powerWithTowers(foes, this.towersOnUs(b)) : this.powerOf(foes);
-    if (theirs * CONTACT_ENGAGE <= this.powerOf(this.squadUnits(b))) {
+    // …and in the FINAL FIGHT there is nothing to walk home to — no income will ever rebuild what
+    // a retreat saves, so whatever is in front of the army is the fight (`noteMinedOut`).
+    if (b.finalSince >= 0 || theirs * CONTACT_ENGAGE <= this.powerOf(this.squadUnits(b))) {
       // Remember the base this wave was on its way to, if it was — see `Brain.resume`.
       if (b.mode === "attacking" && !b.creeping && b.target?.id) b.resume = { ...b.target };
       b.creeping = false;
@@ -4728,6 +4752,11 @@ export class ComputerPlusAi {
       battle.y = fy / foes.length;
       for (const u of foes) if (u.isHero) battle.heroes.set(u.id, { owner: u.owner, seen: b.clock });
       b.battle = battle;
+      // The FINAL FIGHT's own record — kept apart from `battle`, which is dropped the moment the
+      // army is gone or walks off, because that is exactly the moment `finalLost` has to read it.
+      if (b.finalSince >= 0) {
+        b.finalFought = { ours: Math.max(b.finalFought?.ours ?? 0, mine), theirs };
+      }
       // THEIR HEROES ARE DOWN, and what is left of their army is no match for ours: the fight is
       // won even though it is not over, and the army walks on into their base through what is
       // left of it (the march is an attack-move, so the stragglers are fought on the way). See
@@ -4770,6 +4799,9 @@ export class ComputerPlusAi {
    * does nothing with the army either.
    */
   private rollWin(b: Brain): WinPlan {
+    // …except in the FINAL FIGHT, where there is no mine to take and nothing to carry on to: a
+    // won fight walks on into their base.
+    if (b.finalSince >= 0) return "attack";
     return winPlan(b.ai.randomInt(0, 9999) / 10000, b.clock, expansionOpen(b.ai, b.profile, b.clock), b.ai.minesOwned());
   }
 
@@ -5122,6 +5154,12 @@ export class ComputerPlusAi {
   private waveReady(b: Brain): boolean {
     // LIVE — after `PlusProfile.unlockAt` a wave waits for a bigger army (`lateAttackFood`).
     const profile = liveProfile(b.profile, b.clock);
+    // THE FINAL FIGHT lifts every gate below — see `noteMinedOut`. Each of them waits for
+    // something more to be BOUGHT (a bigger army, the siege, a Town Portal, a refill), and on a
+    // mined-out map nothing ever will be: two Insane computers sat at 28–32 food under a tier-3
+    // wave of 36 for the last ten minutes of a match. What is left is what goes, once it has
+    // had `FINAL_REGROUP` to gather after the last wave.
+    if (b.finalSince >= 0) return b.clock - b.lastWaveEnd >= FINAL_REGROUP && this.squadFood(b) > 0;
     if (b.clock < b.firstAttackAt) return false;
     // …and a WON fight shortens the gap (`PlusProfile.wonGap`): the army that just beat theirs
     // is back out while their heroes are still in the altar, rather than a full gap later. The
@@ -5323,7 +5361,7 @@ export class ComputerPlusAi {
    * is symmetric because both armies are in the open.
    */
   private mayAssault(b: Brain, target: { id: number; x: number; y: number }): boolean {
-    if (b.creeping || !target.id) return true;
+    if (b.creeping || !target.id || b.finalSince >= 0) return true;
     const u = this.host.world.units.get(target.id);
     if (!u || u.owner < 0 || u.owner >= MELEE.MAX_PLAYERS) return true;
     if (this.host.registry.get(u.typeId)?.race !== "undead") return true;
@@ -5563,6 +5601,7 @@ export class ComputerPlusAi {
   private creepNext(b: Brain): { x: number; y: number; level: number } | null {
     const { profile } = b;
     if (!profile.creeps || b.clock < profile.creepAt || this.creepResting(b)) return null;
+    if (b.finalSince >= 0) return null; // the final fight is with a player — `noteMinedOut`
     const hero = this.squadHero(b);
     if (!hero) return null;
     // THE LEVEL CAP IS A PREFERENCE, not an ability. Past it a camp is worth less to the hero
@@ -5995,16 +6034,21 @@ export class ComputerPlusAi {
     // …and it BREAKS OFF a fight that has gone badly — the other half of not suiciding into
     // one. ONE rule for both kinds of fight (`fightLost`), and note it is a different question
     // from `canClearCamp`, which is the bar for STARTING a creep run.
-    if (this.fightLost(b)) {
+    //
+    // …NONE of which applies to the FINAL FIGHT (`noteMinedOut`): a retreat saves an army for a
+    // later fight, and on a mined-out map there is no later fight it could be rebuilt for. The
+    // army fights it out, and `finalLost` reads how it went.
+    const allIn = b.finalSince >= 0 && !b.creeping;
+    if (!allIn && this.fightLost(b)) {
       this.retreat(b, b.creeping ? "creeps" : "player");
       return;
     }
-    if (b.profile.retreatHp > 0 && this.readiness(b) < b.profile.retreatHp) {
+    if (!allIn && b.profile.retreatHp > 0 && this.readiness(b) < b.profile.retreatHp) {
       this.retreat(b, b.creeping ? "creeps" : "player");
       return;
     }
     // …and a hero low enough that it would rather go home and heal — sometimes. See `healTrip`.
-    if (this.healTrip(b)) return void this.retreat(b, "heal");
+    if (!allIn && this.healTrip(b)) return void this.retreat(b, "heal");
     const target = b.target;
     if (!target) return void this.endWave(b);
     if (b.creeping) {
@@ -7393,6 +7437,14 @@ export class ComputerPlusAi {
     // the list cannot grow for the length of a match.
     if (b.avoid.length) b.avoid = b.avoid.filter((a) => a.until > b.clock);
     const avoided = (p: { x: number; y: number }): boolean => isShunned(b.avoid, p, b.clock, GOAL_MATCH);
+    // THE FINAL FIGHT goes at a player's base and nowhere else — no mine to take, and a creep
+    // camp is experience for a fight that is happening now (`noteMinedOut`). Only when no base
+    // can be reached at all do the rungs below get a say.
+    if (b.finalSince >= 0) {
+      const focus = this.teamFocus(b);
+      const base = (focus >= 0 ? this.baseTarget(b, focus) : null) ?? this.baseTarget(b, -1);
+      if (base) return base;
+    }
     if (ai.takeExp) {
       const foe = ai.expansionFoe();
       // …and it must be somewhere the party can WALK TO. The same test `creepTarget` applies to
@@ -8704,7 +8756,9 @@ export class ComputerPlusAi {
     // …and the one concession that is not a reading of the position at all — see `teamCollapsed`.
     if (this.teamCollapsed(b)) return void this.concede(b);
     if (b.clock < CONCEDE_NOT_BEFORE) return; // nothing is decided this early — see the constant
-    if (!hopeless(this.standing(b), this.host.registry.get(b.table.halls[0])?.goldCost ?? 0)) {
+    // …and the FINAL FIGHT's verdict beside the board's — see `finalLost`. Through the same dwell,
+    // so a hero revived out of the bank un-latches it like anything else.
+    if (!this.finalLost(b) && !hopeless(this.standing(b), this.host.registry.get(b.table.halls[0])?.goldCost ?? 0)) {
       b.hopelessSince = -1;
       return;
     }
@@ -8720,6 +8774,44 @@ export class ComputerPlusAi {
   private concede(b: Brain): void {
     b.concededAt = b.clock;
     this.host.say(b.ai.player, CONCESSIONS[b.ai.randomInt(0, CONCESSIONS.length - 1)]);
+  }
+
+  /**
+   * IS THE MAP MINED OUT? — and if so, the FINAL FIGHT begins (`PlusProfile.finalFight`, Insane).
+   *
+   * Not one gold mine left with gold in it, anywhere: a mine that runs dry is struck off
+   * `SimWorld.mines` and collapses (world.ts), so an empty map is an empty table. Read off the
+   * whole map rather than off what this player has scouted because a gold mine is not hidden
+   * information — every player is shown the map's mines from the first second — and the question
+   * is the developer's own words, "no more gold mines to fight over in the entire map". What
+   * follows is not a cheat either: nothing about the ENEMY is read here, only that nobody,
+   * ourselves included, will ever be paid again.
+   *
+   * Asked once an army pass and latched. `FINAL_NOT_BEFORE` keeps a map that simply has no
+   * mines (nothing a melee map does, but nothing stops one) from opening with an all-in.
+   */
+  private noteMinedOut(b: Brain): void {
+    if (b.finalSince >= 0 || !b.profile.finalFight || b.clock < FINAL_NOT_BEFORE) return;
+    for (const m of this.host.world.mines.values()) if (m.gold > 0) return;
+    b.finalSince = b.clock;
+  }
+
+  /**
+   * DID WE LOSE THE FINAL FIGHT? — the concession that is the fight's outcome rather than the
+   * board's (`noteMinedOut`).
+   *
+   * Lost is: the armies MET (`finalFought`), what we have left on the field — every soldier and
+   * hero standing, wherever it is — is under `FINAL_LOST_SHARE` of the most we brought to it, and
+   * what was left of theirs at the last contact outweighs it. With no mine anywhere nothing on
+   * either side will be rebuilt, so that is the game, and it is what a player types gg at. A
+   * fight we WON leaves their last reading at the stragglers we finished, under what we kept, and
+   * the army walks on into their base instead (`rollWin`).
+   */
+  private finalLost(b: Brain): boolean {
+    const f = b.finalFought;
+    if (b.finalSince < 0 || !f) return false;
+    const ours = this.powerOf([...this.host.world.units.values()].filter((u) => u.owner === b.ai.player));
+    return ours < FINAL_LOST_SHARE * f.ours && f.theirs > ours;
   }
 
   /**

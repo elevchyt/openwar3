@@ -2837,6 +2837,23 @@ neither is ever spent into nothing: with nobody short of its bar inside `Area1` 
 refused, at the press and at the autocast alike (`replenishRefusal`), without which an autocasting
 statue empties its pool on a field of full bars.
 
+**At tier 3 the statues come BEFORE the army.** Down in its ordinary place the `always` row sat
+under the tier-3 Abomination rows, which halt the ladder every pass, so a tier-3 undead "only
+pumped Abominations" and a lost statue was not replaced for minutes, or ever — two Insane undead
+logs had one statue at a time, and one had none for the whole tier 3. plan.ts now asks `always`
+directly above the core army once the third hall stands (`if (c.tier >= 3) always(c)`).
+
+**…and the Abominations lead into WYRMS or CASTERS.** The developer: *"after reaching 3-4
+abominations, it should start trying to produce 1-2 frost wyrms or go down the route of producing
+more banshees or necromancers"*. Every undead tier-3 build is one of two routes, rolled per seat
+through `thenAt3Or` (races.ts `THEN_WYRMS` / `THEN_CASTERS`): both LEAD with four Abominations
+(`leadUnits`, high in the ladder); the Wyrm route then adds two Frost Wyrms as a lead count once
+three Abominations stand, and the caster route holds its Necromancers and Banshees out of the mix
+until then and weights them up after (`fiendcasters`, `ghoulcasters`, `abomcasters`). The hold is
+`waitFor`, which now drops a waiting unit out of the LEAD rows as well as the mix (plan.ts
+`waiting`), so the Boneyard is not put up before it is wanted either. Pinned in
+tools/ai-plus-plan-test.cjs.
+
 ### Moon Wells: the well has to be ARMED
 
 `Ambt` is on plus/casting.ts's `HAND_AUTOCAST` — the short list of autocasts that file deliberately
@@ -3367,6 +3384,27 @@ Three places ask it:
 The classic Blizzard-transcription caster keeps its own coarser reading (`dispellable`: a summon
 or any timed buff, quoted from the observation thread) — it reproduces that AI, warts included.
 
+### One autocast slot: Heal stays on, Inner Fire is pressed by hand
+
+The game's autocast toggle is **one per unit** (`SimWorld.toggleAutocast`: switching one on puts
+the others out), and a Priest carries two — Heal and Inner Fire. `armAutocasts` used to switch on
+whichever was off, every pass, so the two put each other out in turn and the Priest spent half of
+every fight with Heal off, standing beside the wounded. Now the unit's slot goes to its HEAL when
+it has one, else to its first autocast (`autocastSlot`), and is toggled only when it is off; every
+OTHER autocast the unit carries goes through the ordinary role ladder and is pressed by hand
+(`tryCast`) — Inner Fire is a `buff`, so it goes on the army in a fight. The developer's: *"make
+Computer+ AI use inner fire manually and leave auto cast on heal"*. A hand press beside a heal
+slot keeps `SLOT_HEAL_RESERVE` (a quarter of the bar) for the heals. Easy has no `buff` role, so
+an Easy Priest simply heals. Pinned in tools/ai-plus-casting-test.cjs.
+
+The other half of "the Priest never heals" was the SIM: a unit carrying a MOVE has its autocast
+off (correctly — Liquipedia's Autocast page), and a group sent to one point used to leave its outer
+ring PARKED on that move for good, waiting for the cells in the middle. A move that has got as far
+as the crowd at its goal now ENDS as a stop (`holdOrGiveUp`, `CROWD_ARRIVE` = 8 cells; the
+developer: *"move commands turn to simple stop command … in the original game"*), so the muster
+point is a blob of stopped units that auto-acquire and autocast. Pinned in
+tools/sim-move-crowd-test.cjs (13 of 18 Footmen were still "moving" before).
+
 ### Insane kills summons with its dispels FIRST
 
 *"Computer+ Insane AI must use its dispel abilities (Priest's Dispel Magic, Dryad Abolish Magic,
@@ -3375,7 +3413,8 @@ Spirit Walker Disenchant, Destroyer Devour Magic etc.) on enemy summoned units t
 difficulty."* `PlusProfile.dispelSummons`, and `PlusCaster.dispelSummon` runs ABOVE the whole role
 ladder for that rung. The rules above already reached some of these buttons, but on their own
 terms: Dispel Magic is a `debuff` (the last rung before utility), and **Abolish Magic is an
-AUTOCAST** — the ladder never presses an autocast by hand, and its autocast is the *smart* one that
+AUTOCAST** — the ladder never presses the autocast that holds a unit's slot (see "One autocast
+slot" below), and its autocast is the *smart* one that
 leaves summons alone on purpose (`AbolishMagicDispelSmart`). So a Dryad stood next to a Water
 Elemental and never touched it.
 
@@ -4734,6 +4773,35 @@ and it only grows — including a seat that had already left by our first look, 
 still standing to say it was there — because if the roster were re-derived each pass the departing
 player would leave the denominator along with the numerator and the ratio would never move. Half
 or more, counted against the team as it started: one of two concedes, one of three does not.
+
+### …and on Insane, a MINED-OUT map ends in one final fight
+
+`PlusProfile.finalFight` (Insane only). Once **not one gold mine on the map has gold left**
+(`noteMinedOut` — a dry mine is struck off `SimWorld.mines` and collapses, so the test is an empty
+table, and never before ten minutes), nobody on either side will ever be paid again, and every
+gate a wave waits behind is a gate waiting for something to be BOUGHT. Reported: two Insane
+computers sat at 28–32 food for the last ten minutes of a 46-minute Echo Isles match, under a
+tier-3 wave of 36 that neither could ever afford (`attackFood` 16 + `attackFoodPerTier` 10 × 2).
+
+So from then on:
+
+- **`waveReady` lifts every gate** — the army food, the siege, the Town Portal, the refill — and a
+  wave goes out `FINAL_REGROUP` (15 s) after the last one ended, with whatever is left.
+- **It goes at a player's base** (`pickTarget`, the team's focus first) — no creeping
+  (`creepNext`), no undead bar (`mayAssault`), and a won fight is always pressed on (`rollWin`).
+- **It does not break off.** `fightLost`, `retreatHp` and the heal trip are skipped for a wave at
+  a player, and `contactPass` engages whatever it meets instead of walking home: a retreat saves an
+  army for a later fight, and there is none.
+- **The OUTCOME decides the match** (`finalLost`, beside `hopeless` and through the same
+  `concedeAfter` dwell). `victoryPass` keeps a record of the final fight once the armies meet —
+  the most power we brought, and theirs at the last contact. When everything of ours still
+  standing is under `FINAL_LOST_SHARE` (a fifth) of what we brought and what was left of theirs
+  outweighs it, it says gg. A fight it won leaves their last reading at the stragglers it finished,
+  and the army walks on into their base.
+
+The mines are read off the whole map, which is not a fog cheat: a gold mine is not hidden
+information, and nothing about the enemy is read — only that nobody will be paid again. The match
+log writes `AI final fight — the map is mined out` and STATUS lines carry ` final`.
 
 ## Team games: talking to your allies, and scouting once
 
