@@ -1167,6 +1167,12 @@ export class AiPlayer {
     return false;
   }
 
+  /** Is a hero of this type lying DEAD and waiting for an altar — not already on its way back?
+   *  What Computer+'s revive row asks (plus/plan.ts `reviveFirst`). */
+  heroFallen(typeId: string): boolean {
+    return !!typeId && this.fallenFor(typeId) !== null;
+  }
+
   /** The corpse this row would bring back, or null — the same one `reviveFallen` would pick.
    *  A hero already on its way back (`revivingAt`) is not one this row still has to pay for. */
   private fallenFor(typeId: string): { level: number } | null {

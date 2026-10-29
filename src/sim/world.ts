@@ -14210,6 +14210,13 @@ export class SimWorld {
    */
   private shieldCasters = new Map<number, SimUnit>();
 
+  /** Who cast the Lightning Shield whose `sourceId` this is — the live unit, else its dead
+   *  caster, which `shieldCasters` keeps for as long as the shield burns. Read by the AI to tell
+   *  a shield an ENEMY put on its unit from one its own Shaman did (plus/index.ts `shieldPass`). */
+  shieldCaster(sourceId: number): SimUnit | undefined {
+    return this.killerUnit(sourceId);
+  }
+
   /** Who `killerId` is, for crediting a kill: the live unit, else a Lightning Shield's dead
    *  caster (`shieldCasters`). */
   private killerUnit(killerId: number): SimUnit | undefined {

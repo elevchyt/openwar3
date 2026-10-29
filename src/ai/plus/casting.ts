@@ -599,6 +599,12 @@ const OFFENSIVE: ReadonlySet<Role> = new Set<Role>(["nuke", "disable"]);
  * A PLAYER in reach makes it a real fight and the camp is not asked at all. Ours, all three.
  */
 const CAMP_SPENT_HP = 0.25;
+/** `summonAhead`: how near the camp the party is walking to the caster has to be before its
+ *  summon is thrown, and how near that camp's centre a creep has to stand to be part of it.
+ *  OURS — a little past a ranged hero's 600 acquisition, so the summon lands as the army walks
+ *  the last stretch rather than across the map from the camp. */
+const SUMMON_AHEAD = 800;
+const SUMMON_CAMP = 500;
 const CAMP_FEW_BODIES = 2;
 const CAMP_FEW_HP = 0.5;
 /** …and how hurt the CASTER has to be for a panic button. */
@@ -843,6 +849,9 @@ export interface CastCtx {
   /** …and WHICH camp it is, as a stable key (its centre) — what `ONCE_PER_CAMP` remembers a press
    *  against. Optional for the same reason as `campLeft`. */
   campKey?(creep: SimUnit): string | null;
+  /** …and the creep camp the party is WALKING TO, while it is on a creep run — where a summon is
+   *  thrown AHEAD of the army (`summonAhead`). Optional for the same reason as `campLeft`. */
+  creepAim?: { x: number; y: number } | null;
 }
 
 /** One Computer+ player's casters. */
@@ -1548,7 +1557,13 @@ export class PlusCaster {
         return engaged;
       case "summon":
         // NOT ON A CAMP THAT IS ALREADY BEATEN — see `CAMP_SPENT_HP`.
-        return engaged && !this.campSpent(u, foes);
+        // …NOR ON A SCOUT. `engaged` is any hostile body in reach, and the first one a fresh
+        // hero meets is the enemy's scouting worker walking through the base — so an Archmage
+        // out of the altar threw his Water Elemental at a Peasant and stood beside it while its
+        // 60 seconds ran out (reported, and traced live: `hpea` at 639, nothing else within
+        // 900). A summon is for a fight with something in it that FIGHTS BACK (`foughtBack`).
+        if (!engaged) return this.summonAhead(u, foes);
+        return this.foughtBack(u, foes) && !this.campSpent(u, foes);
       case "buff":
       case "utility":
         // MIRROR IMAGE IS NOT RE-PRESSED WHILE ITS OWN IMAGES ARE STILL WALKING — see
@@ -1565,6 +1580,36 @@ export class PlusCaster {
         }
         return engaged;
     }
+  }
+
+  /**
+   * THROW THE SUMMON BEFORE THE ARMY ARRIVES — the creep-run half of the tank order
+   * (`PlusProfile.tankFirst`, Insane). The developer: *"when the Computer+ AI player is using Far
+   * Seer and uses Feral Spirit (wolves) for creeping a creep camp, it must first send the wolves
+   * to attack and then the rest of the army so that the wolves tank most of the damage. same
+   * thing with archmage and water elemental, beastmaster with his summons, Keeper of the Grove
+   * with the Force of Nature ability's Treants etc."* Pressed only once a fight is in reach, the
+   * summon arrives with the Grunts already taking the camp's first blows, and the army manager
+   * has nothing to send in front of them. So on the walk up — the caster within `SUMMON_AHEAD`
+   * of the camp the party is going to (`CastCtx.creepAim`), the camp still standing there and not
+   * already spent — it is pressed early, and `tankHold` (plus/index.ts) holds the rest of the
+   * party back until the summons are in. Force of Nature still needs its trees and its fight
+   * (`treeSpot`), so the Keeper's press goes out as soon as the camp is in that reach instead.
+   */
+  private summonAhead(u: SimUnit, foes: SimUnit[]): boolean {
+    const aim = this.ctx.creepAim;
+    if (!aim || !this.profile.tankFirst || Math.hypot(u.x - aim.x, u.y - aim.y) > SUMMON_AHEAD) return false;
+    const camp = foes.find((f) => f.isCreep && !f.building && Math.hypot(f.x - aim.x, f.y - aim.y) <= SUMMON_CAMP);
+    if (!camp) return false;
+    const left = this.ctx.campLeft?.(camp);
+    return !left || (left.health >= CAMP_SPENT_HP && !(left.alive <= CAMP_FEW_BODIES && left.health < CAMP_FEW_HP));
+  }
+
+  /** Is there a body in this caster's reach that can fight back — anything but a worker or a
+   *  building? `realFight`'s reading in plus/items.ts, asked at the caster's own reach. */
+  private foughtBack(u: SimUnit, foes: SimUnit[]): boolean {
+    const look = Math.max(u.weapon?.acquire ?? 0, MIN_LOOK);
+    return foes.some((f) => !f.building && !f.isPeon && near(u, f, look));
   }
 
   /** Is one of this unit's autocasts a HEAL, switched on — the slot `armAutocasts` gives it? */

@@ -123,6 +123,8 @@ function recorder(table, strategy, profile, opts = {}) {
     // here unless a fixture says so.
     townGuarded: (t) => ((opts.guarded ?? []).includes(t) ? { id: 9001 } : null),
     townThreatened: () => false,
+    // A hero lying dead at an altar's call (`AiPlayer.heroFallen`) — none unless a fixture says so.
+    heroFallen: (id) => (opts.fallen ?? []).includes(id),
   };
   const ctx = {
     ai, profile, table, strategy,
@@ -139,6 +141,27 @@ function recorder(table, strategy, profile, opts = {}) {
     defOf: () => undefined,
   };
   return { ctx, build, harvest, ai };
+}
+
+// --- a DEAD HERO is the first row of the ladder ------------------------------------------
+//
+// The developer's: "when a hero of the Computer+ AI dies, it must make it its number 1 (top)
+// priority to revive them via their Altar" (plan.ts `reviveFirst`).
+console.log("--- a fallen hero is revived before anything else ---");
+{
+  const orc = PLUS_RACES.orc;
+  const strategy = orc.strategies[0];
+  const standing = { [orc.halls[0]]: 1, [orc.barracks]: 1, [orc.altar]: 1, [orc.farm]: 4, opeo: 5 };
+  const dead = (strategy.heroes ?? orc.heroes)[0];
+  const r = recorder(orc, strategy, PLUS_INSANE, { standing, armyFood: 20, gold: 100, wood: 100, fallen: [dead] });
+  buildPlan(r.ctx);
+  check("the first row of the ladder is the fallen hero", r.build[0] && r.build[0].item, dead);
+  const none = recorder(orc, strategy, PLUS_INSANE, { standing, armyFood: 20, gold: 100, wood: 100 });
+  buildPlan(none.ctx);
+  check("…and with nobody dead it is not", none.build[0] && none.build[0].item === dead, false);
+  const noAltar = recorder(orc, strategy, PLUS_INSANE, { standing: { ...standing, [orc.altar]: 0 }, armyFood: 20, fallen: [dead] });
+  buildPlan(noAltar.ctx);
+  check("…nor with no altar to revive at", noAltar.build[0] && noAltar.build[0].item === dead, false);
 }
 
 // --- Defend is researched against RANGED units, and the ability unlocks go first ---------

@@ -216,6 +216,10 @@ const ITEMS = {
   rat3: { id: "rat3", gold: 100, usable: false, pawnable: true, charges: 0, abilities: ["AIat"] }, // Claws of Attack +3
   qbot: { id: "qbot", gold: 50, usable: false, pawnable: false, charges: 0, abilities: ["Ashm"] }, // a quest item: not pawnable
   tdex: { id: "tdex", gold: 150, usable: false, powerup: true, abilities: [] }, // Tome of Agility — a POWERUP (consumed on contact)
+  // --- the ATTRIBUTE items and tomes (`attrOf`): `AIab` and the tomes carry agi/int/str in DataA/B/C.
+  bgst: { id: "bgst", gold: 400, usable: false, pawnable: true, charges: 0, abilities: ["AIs6"] }, // Belt of Giant Strength +6
+  tint: { id: "tint", gold: 150, usable: false, powerup: true, abilities: ["AIim"] }, // Tome of Intelligence
+  ratc: { id: "ratc", gold: 500, usable: false, pawnable: true, charges: 0, abilities: ["AIat"] }, // Claws of Attack +12
 };
 // The ability rows: the `target` that is the whole of how an item is AIMED (items.ts `aim`), the
 // base `code` that decides what pressing it is FOR (items.ts `USE_OF`), and — for the one code
@@ -274,6 +278,10 @@ const ABILS = {
   Ashm: { code: "Ashm", target: "", levelData: [lvl()] },
   // …and Claws of Attack, which IS in `itemBonuses`' switch: two of them are +6 damage.
   AIat: { code: "AIat", target: "", levelData: [lvl({ data: [3, NaN] })] },
+  // `[AIs6] code = AIab` (DataC 6 strength) and `[AIim]` (DataB 1 intelligence).
+  AIs6: { code: "AIab", target: "", levelData: [lvl({ data: [0, 0, 6] })] },
+  AIim: { code: "AIim", target: "", levelData: [lvl({ data: [0, 1, 0] })] },
+  AIsx: { code: "AIas", target: "", levelData: [lvl({ data: [0.15] })] },
 };
 
 let nextId = 1;
@@ -2120,6 +2128,90 @@ console.log("\n-- handing a spare potion over ----------------------------------
   check("an enemy-aimed item goes on the enemy hero", pressed([dia, ...army(), lich], PLUS_INSANE, AWAY)?.targetId, lich.id);
   check("a scripted item still outranks a guess (the Potion of Healing at 20 %)",
     itemOf(pressed([belt(hero({ x: 4000, y: 4000, hp: 200 }), "fgrd", "phea"), ...army()], PLUS_INSANE, AWAY)), 1);
+}
+
+// ==========================================================================================
+console.log("\n-- a Healing Salve is never poured into a summon -----------------------------");
+// ==========================================================================================
+// Reported: the orc salved the Far Seer's Spirit Wolves, which leave on their own clock anyway.
+{
+  const wolf = unit({ typeId: "osw1", hp: 100, maxHp: 400, x: 300, isSummon: true, summonLeft: 40 });
+  check("a hurt Spirit Wolf alone is not salved", pressed([belt(hero({ typeId: "Ofar" }), "hslv"), wolf], PLUS_INSANE, AWAY), null);
+  const grunt = unit({ typeId: "ogru", hp: 400, maxHp: 700, x: 350 });
+  const cmd = pressed([belt(hero({ typeId: "Ofar" }), "hslv"), wolf, grunt], PLUS_INSANE, AWAY);
+  check("…the hurt Grunt beside it is", cmd && cmd.targetId, grunt.id);
+  const copy = unit({ hp: 100, maxHp: 700, x: 300, isIllusion: true });
+  check("…and neither is an illusion", pressed([belt(hero({ typeId: "Ofar" }), "hslv"), copy], PLUS_INSANE, AWAY), null);
+}
+
+// ==========================================================================================
+console.log("\n-- every item to the hero it is for -----------------------------------------");
+// ==========================================================================================
+{
+  const giveOf = (units, opts = {}) => { pressed(units, PLUS_INSANE, { ...AWAY, carry: opts.carry }, opts); return lastOrders.find((c) => c.c === "giveitem") ?? null; };
+  // An attribute item goes to a hero of that attribute.
+  const sh = belt(hero({ typeId: "Oshd", primaryAttr: "INT", x: 4000, y: 4000 }), "bgst");
+  const tc = hero({ typeId: "Otch", primaryAttr: "STR", x: 4300, y: 4000 });
+  const g = giveOf([sh, tc], { race: "orc" });
+  check("the Shadow Hunter hands his Belt of Giant Strength over", g && g.unitId, sh.id);
+  check("…to the Tauren Chieftain", g && g.targetId, tc.id);
+  const tc2 = belt(hero({ typeId: "Otch", primaryAttr: "STR", x: 4000, y: 4000 }), "bgst");
+  check("…who keeps it", giveOf([tc2, hero({ typeId: "Oshd", primaryAttr: "INT", x: 4300, y: 4000 })], { race: "orc" }), null);
+  check("…and with nobody of that attribute it stays put",
+    giveOf([belt(hero({ typeId: "Oshd", primaryAttr: "INT", x: 4000, y: 4000 }), "bgst"), hero({ typeId: "Ofar", primaryAttr: "INT", x: 4300, y: 4000 })], { race: "orc" }), null);
+  // The invulnerability potion goes to the carry.
+  const am = belt(hero({ typeId: "Hamg", primaryAttr: "INT", x: 4000, y: 4000 }), "pnvl");
+  const mk = hero({ typeId: "Hmkg", primaryAttr: "STR", x: 4300, y: 4000 });
+  const inv = giveOf([am, mk], { carry: "Hmkg" });
+  check("the Archmage hands his Potion of Invulnerability to the carry", inv && inv.targetId, mk.id);
+  const mk2 = belt(hero({ typeId: "Hmkg", primaryAttr: "STR", x: 4300, y: 4000 }), "pnvl");
+  check("…not when the carry has one already", giveOf([belt(hero({ typeId: "Hamg", primaryAttr: "INT", x: 4000, y: 4000 }), "pnvl"), mk2], { carry: "Hmkg" }), null);
+  // The orc's claws go to the Blademaster.
+  const fs = belt(hero({ typeId: "Ofar", primaryAttr: "INT", x: 4000, y: 4000 }), "ratc");
+  const bm = hero({ typeId: "Obla", primaryAttr: "AGI", x: 4300, y: 4000 });
+  const cl = giveOf([fs, bm], { race: "orc" });
+  check("an orc hero hands his Claws of Attack to the Blademaster", cl && cl.targetId, bm.id);
+  check("…a human does not", giveOf([belt(hero({ typeId: "Hamg", primaryAttr: "INT", x: 4000, y: 4000 }), "ratc"), hero({ typeId: "Obla", primaryAttr: "AGI", x: 4300, y: 4000 })], { race: "human" }), null);
+  const full = hero({ typeId: "Obla", primaryAttr: "AGI", x: 4300, y: 4000 });
+  belt(full, "phea", "stwp", "shea", "plcl", "pman", "spro");
+  const fs2 = belt(hero({ typeId: "Ofar", primaryAttr: "INT", x: 4000, y: 4000 }), "ratc");
+  pressed([fs2, full], PLUS_INSANE, AWAY, { race: "orc" });
+  check("…nor to a Blademaster with no room", lastOrders.some((c) => c.c === "giveitem" && c.unitId === fs2.id), false);
+}
+{
+  // A tome goes to the hero of its attribute, even past a nearer one.
+  const bm = hero({ typeId: "Obla", primaryAttr: "AGI", x: 0, y: 0 });
+  const am = hero({ typeId: "Hamg", primaryAttr: "INT", x: 900, y: 0 });
+  const tome = drop({ itemId: "tint", x: 200, y: 0 });
+  const got = looted([bm, am], { ground: [tome] });
+  check("a Tome of Intelligence is walked to by the Archmage, not the nearer Blademaster", got && got.unitId, am.id);
+  const alone = looted([hero({ typeId: "Obla", primaryAttr: "AGI", x: 0, y: 0 })], { ground: [drop({ itemId: "tint", x: 1000, y: 0 })] });
+  check("…and with no intelligence hero about, anybody takes it", !!alone, true);
+}
+
+// ==========================================================================================
+console.log("\n-- the orc's second hero buys two salves and a clarity potion ------------------");
+// ==========================================================================================
+{
+  ITEMS.plcl = { id: "plcl", gold: 70, usable: true, abilities: ["AIpl"] }; // (a case above deletes it)
+  const LOUNGE = ["hslv", "plcl", "phea", "pman", "stwp"];
+  const first = belt(hero({ typeId: "Obla" }), "stwp", "hslv", "hslv");
+  const second = hero({ typeId: "Oshd" });
+  const r = shopped([first, second, MERCHANT], PLUS_INSANE, { race: "orc", shelf: LOUNGE });
+  check("the second hero is the buyer", r.pick && r.pick.unitId, second.id);
+  check("…of a Healing Salve first", r.buy && r.buy.itemId, "hslv");
+  const half = belt(hero({ typeId: "Oshd" }), "hslv", "hslv");
+  const r2 = shopped([belt(hero({ typeId: "Obla" }), "stwp", "hslv", "hslv"), half, MERCHANT], PLUS_INSANE, { race: "orc", shelf: LOUNGE });
+  check("…then the Clarity Potion", r2.buy && r2.buy.itemId, "plcl");
+  check("…into his own belt", r2.pick && r2.pick.unitId, half.id);
+  const poor = shopped([belt(hero({ typeId: "Obla" }), "stwp", "hslv", "hslv"), hero({ typeId: "Oshd" }), MERCHANT], PLUS_INSANE, { race: "orc", shelf: LOUNGE, gold: 60 });
+  check("…and with no money for it nothing is bought", poor.buy, null);
+  const normal = shopped([belt(hero({ typeId: "Obla" }), "stwp", "hslv", "hslv"), hero({ typeId: "Oshd" }), MERCHANT], PLUS_NORMAL, { race: "orc", shelf: LOUNGE });
+  check("…Insane only: a Normal orc buys its second hero no salve", normal.buy && normal.buy.itemId === "hslv", false);
+  const tc = belt(hero({ typeId: "Otch" }), "hslv", "hslv");
+  const r3 = shopped([belt(hero({ typeId: "Ofar" }), "stwp", "hslv", "hslv"), tc, MERCHANT], PLUS_INSANE, { race: "orc", shelf: LOUNGE });
+  check("…and a MELEE second hero (the Chieftain) is not sent for the clarity", r3.buy && r3.buy.itemId === "plcl", false);
+  delete ITEMS.plcl;
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

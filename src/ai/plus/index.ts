@@ -1107,8 +1107,17 @@ const BACKLINE_LOOK = 900;
 const BACKLINE_LINE = 1000;
 const BACKLINE_BEHIND = 100;
 const BACKLINE_GAP = 350;
-const BACKLINE_STEP = 300;
+// 450, not the 300 it was: the spot is measured off our melee line, and the enemy is standing AT
+// that line — so 300 behind it was inside `BACKLINE_GAP` of the enemy, and the hero was sent back
+// again on the very next pass, for as long as the fight lasted (traced live: 101 step-backs of an
+// Insane Shadow Hunter in one match). 450 is clear of the gap and still in a 600 range of the line.
+const BACKLINE_STEP = 450;
 const BACKLINE_HOLD = 1.5;
+/** …and how far past its own range an enemy may stand for a READY shot to be fired before the
+ *  step back (`backlinePass`) — the few units a target walking into range covers in a pass. OURS. */
+const BACKLINE_SHOT_SLACK = 50;
+/** …and the rest between two step-backs of one hero, unless something is swinging at him. OURS. */
+const BACKLINE_REST = 3;
 /** A Moon Well's pour, `[Ambt] Area1` — what a drinker must stand inside to be poured into. */
 const WELL_POUR = 400;
 
@@ -1182,6 +1191,13 @@ const TANK_HERO = 2;
 const TANK_RANGED = 3;
 const HOLD_BACK_HERO = 450;
 const HOLD_BACK_RANGED = 650;
+const HOLD_BACK_MELEE = 400;
+/** `shieldPass`: the margin past an enemy Lightning Shield's `Area1` that counts as "touching
+ *  nobody" (a body's own collision is about 30–50, and the army is moving), how far past that
+ *  the first ring of candidate spots is, and the most room a spot is credited with. OURS. */
+const SHIELD_CLEAR = 120;
+const SHIELD_STEP = 200;
+const SHIELD_ROOM_CAP = 2000;
 const TANK_HOLD_MAX = 10;
 /** …and how much further out than its standoff a held unit may stand and count as there. */
 const HOLD_BACK_BAND = 250;
@@ -2168,6 +2184,9 @@ export interface PullBack {
   /** A melee soldier sent all the way HOME rather than behind the line (`sendHomeHp`) — held
    *  out until it has healed or `until` runs out, and never re-ordered off a well it is drinking at. */
   readonly home?: boolean;
+  /** A unit walked away from its own side because it wears an ENEMY's Lightning Shield
+   *  (`shieldPass`) — held out until the shield is gone, and left to that pass alone. */
+  readonly shield?: boolean;
 }
 
 /** Is this unit currently OUT of the line? The one question `commit` and `squadFood` ask, so
@@ -2485,6 +2504,9 @@ interface Brain {
   /** Ranged heroes `backlinePass` has just walked behind the line, and until when they are left
    *  alone there (brain clock). */
   readonly backline: Map<number, number>;
+  /** …and the earliest `clock` at which `backlinePass` may step that hero back AGAIN, unless
+   *  something is swinging at him (`BACKLINE_REST`). */
+  readonly backlineNext: Map<number, number>;
   /**
    * The SECOND HERO's gold while the build order banks for it (plus/plan.ts `secondHeroHold`) —
    * 0 the rest of the time. The belt shops out of the bank minus this, because the shop is the
@@ -2993,6 +3015,7 @@ export class ComputerPlusAi {
       pulls: new Map(),
       stutters: new Map(),
       backline: new Map(),
+      backlineNext: new Map(),
       heroHold,
       waiting: new Map(),
       afield: false,
@@ -3415,6 +3438,7 @@ export class ComputerPlusAi {
             const camp = b.ai.campAt(creep.guardX, creep.guardY);
             return camp ? `${Math.round(camp.x)},${Math.round(camp.y)}` : null;
           },
+          creepAim: b.creeping && b.target ? { x: b.target.x, y: b.target.y } : null,
         });
         simProfile.end("sim.ai.cast");
         simProfile.gauge("aiCastPass", perfNow() - t0);
@@ -3682,6 +3706,9 @@ export class ComputerPlusAi {
     // base and out of one in its own, and `pullPass` reads the fight itself rather than the
     // mode. Inert on Easy (`pullOutHp` 0).
     this.pullPass(b);
+    // …and a unit wearing an ENEMY's Lightning Shield is walked clear of everybody on our side
+    // (`shieldPass`, Insane) — after `pullPass`, whose retreat clears the withdrawals it rebuilds.
+    this.shieldPass(b);
     // …and the Footmen raise their shields for the fight and lower them for the walk — after
     // `pullPass`, which is what decides who is walking out of it. See `stancePass`.
     this.stancePass(b);
@@ -5315,19 +5342,44 @@ export class ComputerPlusAi {
     if (b.profile.difficulty === MELEE_NEWBIE) return;
     const world = this.host.world;
     for (const [id, until] of b.backline) if (b.clock >= until || !world.units.get(id)) b.backline.delete(id);
+    for (const [id, next] of b.backlineNext) if (b.clock >= next || !world.units.get(id)) b.backlineNext.delete(id);
     const squad = [...this.squadUnits(b)];
     for (const h of squad) {
       if (!h.isHero || h.hp <= 0 || isCopy(h) || !h.weapon?.ranged || b.backline.has(h.id)) continue;
       if (world.holdsChannel(h.id) || pulledOut(b.pulls.get(h.id), b.clock)) continue;
       let ex = 0, ey = 0, en = 0, nearest = Infinity;
+      let player = false, onHim = false;
+      const foes: SimUnit[] = [];
       for (const t of world.units.values()) {
         if (t.hp <= 0 || t.building || t.isPeon || t.owner === b.ai.player) continue;
         const d = Math.hypot(t.x - h.x, t.y - h.y);
         if (d > BACKLINE_LOOK || !b.ai.hostileTo(t) || !b.ai.knows(t)) continue;
         ex += t.x; ey += t.y; en++;
+        foes.push(t);
         if (d < nearest) nearest = d;
+        if (!t.isCreep && t.owner >= 0 && t.owner < MELEE.MAX_PLAYERS) player = true;
+        if (t.targetId === h.id && d < BACKLINE_GAP) onHim = true;
       }
       if (!en) continue;
+      // A CREEP CAMP IS NOT A TEAM FIGHT. The rule is the developer's for a fight against a
+      // PLAYER ("so that they don't get nuked"), and a camp has no nukes worth standing off — it
+      // has melee bodies walking at whoever is nearest. Applied there it was the reported "the
+      // Archmage is standing out of fights quite a lot, not doing anything … on some creep camps
+      // as well": every creep that came within `BACKLINE_GAP` walked him another 300 back, under
+      // a plain MOVE that does not acquire, and the hold then refused the army's orders for him.
+      // Traced live (Insane human, Echo Isles): 96 of his move orders in six minutes were this
+      // pass's, with creeps 100–300 from him and four of his soldiers swinging. So against creeps
+      // alone he steps back only from a creep that is actually SWINGING AT HIM.
+      if (!player && !onHim) continue;
+      if (!onHim && b.clock < (b.backlineNext.get(h.id) ?? -Infinity)) continue;
+      // …AND A SHOT THAT IS READY IS FIRED FIRST. Reported next: *"far seer and shadow hunter are
+      // also not having much uptime attacking from afar during fights … especially when sieging a
+      // city"*. Traced live (Insane orc, Echo Isles, 15 minutes): 58 of the Shadow Hunter's move
+      // orders were this pass's, in player fights with enemy bodies 100–350 from him — every
+      // Grunt that closed walked him another 300 and the fight went on without his weapon. The
+      // step back is the stutter-step a player makes: taken while the weapon is COOLING DOWN, and
+      // never instead of a shot it could take right now at something already in its reach.
+      if (h.cooldownLeft <= 0 && foes.some((t) => Math.hypot(t.x - h.x, t.y - h.y) <= (h.weapon?.range ?? 0) + BACKLINE_SHOT_SLACK)) continue;
       ex /= en; ey /= en;
       let fx = 0, fy = 0, fn = 0;
       for (const u of squad) {
@@ -5338,7 +5390,16 @@ export class ComputerPlusAi {
       const spot = backlineSpot(h, { x: ex, y: ey }, nearest, fn ? { x: fx / fn, y: fy / fn } : null);
       if (!spot) continue;
       this.issue(b, { c: "order", unitId: h.id, order: { kind: "move", x: spot.x, y: spot.y }, queued: false });
+      // …AND SHOOTS AGAIN FROM THERE. The step back is a MOVE, so it ends with the hero standing
+      // idle at the spot until something re-orders him — and for `BACKLINE_HOLD` nothing may.
+      // Queued behind the walk: what he was shooting at if it is still there, else whatever is
+      // nearest the spot — a ranged hero 300 behind his line still reaches the fight in front of it.
+      const was = h.targetId !== null ? world.units.get(h.targetId) : undefined;
+      const aim = was && was.hp > 0 && foes.includes(was) ? was
+        : foes.reduce<SimUnit | null>((best, t) => (!best || Math.hypot(t.x - spot.x, t.y - spot.y) < Math.hypot(best.x - spot.x, best.y - spot.y) ? t : best), null);
+      if (aim) this.issue(b, { c: "order", unitId: h.id, order: { kind: "attack", targetId: aim.id }, queued: true });
       b.backline.set(h.id, b.clock + BACKLINE_HOLD);
+      b.backlineNext.set(h.id, b.clock + BACKLINE_REST);
     }
   }
 
@@ -6753,7 +6814,7 @@ export class ComputerPlusAi {
       // reach takes the best building it CAN reach (`siegeNear`) rather than walking through
       // the defence to the one the wave picked.
       if (heldRanks && heldRanks.has(tankRank(u)) && !u.isPeon && !isSiege(u) && !heldRanks.targeted.has(u.id)) {
-        this.holdBack(b, u, x, y, anchor ?? u, tankRank(u) === TANK_RANGED ? HOLD_BACK_RANGED : HOLD_BACK_HERO);
+        this.holdBack(b, u, x, y, anchor ?? u, tankRank(u) === TANK_RANGED ? HOLD_BACK_RANGED : tankRank(u) === TANK_MELEE ? HOLD_BACK_MELEE : HOLD_BACK_HERO);
         continue;
       }
       if (!u.isPeon && isSiege(u)) {
@@ -6941,7 +7002,12 @@ export class ComputerPlusAi {
     }
     const held = new Set<number>() as Set<number> & { targeted: Set<number> };
     held.targeted = targeted;
-    for (const r of [TANK_HERO, TANK_RANGED]) {
+    // On a CREEP RUN the melee line waits for the summons too: the wolves, the Water Elemental,
+    // the Treants and the Beastmaster's pets take the camp's first blows, then the Grunts walk in
+    // (the developer's report — see `summonAhead` in plus/casting.ts, which throws them early so
+    // that there is something in front to wait for). Against a player the soldiers do not wait:
+    // a summon is one body, and the line that stands off an army hands it the first volley.
+    for (const r of b.creeping ? [TANK_MELEE, TANK_HERO, TANK_RANGED] : [TANK_HERO, TANK_RANGED]) {
       const ahead = [...present].filter((p) => p < r);
       if (ahead.length && !ahead.some((p) => engaged.has(p))) held.add(r);
     }
@@ -8140,6 +8206,8 @@ export class ComputerPlusAi {
     // itself out of the line does not count as one (see `armyAnchor`).
     const anchor = this.armyAnchor(b);
     for (const u of this.squadUnits(b)) {
+      // …and a unit `shieldPass` has walked away from the army is that pass's, summons included.
+      if (b.pulls.get(u.id)?.shield && pulledOut(b.pulls.get(u.id), b.clock)) continue;
       // A SUMMON IS NEVER WALKED OUT. It is on a clock, it costs nothing to lose, and taking the
       // blows is what it is for — the developer: *"must not micro away summoned units that are
       // low health … since it's good when summoned units are tanking damage"*. (The same reason
@@ -8205,6 +8273,106 @@ export class ComputerPlusAi {
       });
       this.issue(b, { c: "order", unitId: u.id, order: { kind: "move", x: spot.x, y: spot.y }, queued: false });
     }
+  }
+
+  /**
+   * AN ENEMY'S LIGHTNING SHIELD IS WALKED AWAY FROM THE ARMY — `PlusProfile.shedShield`, Insane.
+   *
+   * `[Alsh]` hurts EVERY unit within its `Area1` of the holder, friend or foe, and never the
+   * holder itself (`SimWorld.tickLightningShields`) — which is why it is cast on an enemy: a creep
+   * Shaman or the other player's puts it on our Grunt, and that Grunt standing in our line deals
+   * 20 a second to each of its neighbours for the shield's 20 seconds. The developer: *"when a
+   * friendly unit has the Lightning Shield status/effect and the owner of that status is a
+   * hostile (e.g. a creep or an enemy player), we must try to have the Computer+ AI micro that
+   * unit away so that it touches nobody so that its surroundings don't get damaged"*.
+   *
+   * WHOSE shield it is decides it: our own Shaman's on our own Grunt is the trick played the other
+   * way round (walked into the enemy) and is left alone. The caster is asked of the sim even once
+   * dead (`SimWorld.shieldCaster`), because the shield outlives the Shaman the camp loses first.
+   *
+   * The unit is walked to the spot round it with the most room from every unit on our side —
+   * eight directions at two distances, `standSpot` for ground it can stand on — and HELD there
+   * on the pull-out channel (`PullBack.shield`, so `commit` does not walk it back into the line)
+   * until the buff is gone, re-picked only if somebody on our side comes within reach again. A
+   * worker is walked away from the mine just the same: the crew beside it is what it would kill.
+   */
+  private shieldPass(b: Brain): void {
+    if (!b.profile.shedShield) return;
+    const world = this.host.world;
+    const ours: SimUnit[] = [];
+    for (const o of world.units.values()) {
+      if (o.hp <= 0 || o.building || o.owner < 0 || o.neutralPassive || b.ai.hostileTo(o)) continue;
+      ours.push(o);
+    }
+    for (const u of ours) {
+      if (u.owner !== b.ai.player || u.speed <= 0) continue;
+      const entry = b.pulls.get(u.id);
+      const shield = this.enemyShield(b, u);
+      if (!shield) {
+        // Gone, or dispelled: back to the army.
+        if (entry?.shield && pulledOut(entry, b.clock)) b.pulls.set(u.id, { ...entry, until: b.clock, next: b.clock });
+        continue;
+      }
+      const reach = shield.radius + SHIELD_CLEAR;
+      const crowded = (p: { x: number; y: number }): boolean =>
+        ours.some((o) => o !== u && Math.hypot(o.x - p.x, o.y - p.y) <= reach);
+      const until = b.clock + shield.timeLeft;
+      if (entry?.shield && pulledOut(entry, b.clock) && !crowded(entry) && !crowded(u)) {
+        // Out and clear: keep it walking there, and extend the hold to the shield's own clock.
+        b.pulls.set(u.id, { ...entry, until });
+        if (u.order !== "move" && Math.hypot(u.x - entry.x, u.y - entry.y) > PULL_BACK_ARRIVE) {
+          this.issue(b, { c: "order", unitId: u.id, order: { kind: "move", x: entry.x, y: entry.y }, queued: false });
+        }
+        continue;
+      }
+      if (!crowded(u)) {
+        // Nobody to hurt where it stands: hold it there rather than let the army walk it back in.
+        b.pulls.set(u.id, { x: u.x, y: u.y, until, next: until, shield: true });
+        if (u.moving || u.order === "attackmove") this.issue(b, { c: "order", unitId: u.id, order: { kind: "stop" }, queued: false });
+        continue;
+      }
+      const spot = this.shieldSpot(u, ours, reach);
+      b.pulls.set(u.id, { x: spot.x, y: spot.y, until, next: until, shield: true });
+      this.issue(b, { c: "order", unitId: u.id, order: { kind: "move", x: spot.x, y: spot.y }, queued: false });
+    }
+  }
+
+  /** An ENEMY's Lightning Shield on this unit — its radius and the seconds it has left — or null
+   *  for none (and for one of our own side's, which is a trick and not a hazard). */
+  private enemyShield(b: Brain, u: SimUnit): { radius: number; timeLeft: number } | null {
+    for (const buff of u.buffs) {
+      if (buff.kind !== "shield" || buff.value <= 0) continue;
+      const caster = this.host.world.shieldCaster(buff.sourceId);
+      if (caster && !b.ai.hostileTo(caster)) continue;
+      return { radius: buff.value2 || 160, timeLeft: Math.max(0, buff.timeLeft) };
+    }
+    return null;
+  }
+
+  /** Where a shielded unit stands to touch nobody on our side: of eight directions at two
+   *  distances, the reachable spot with the most room from the nearest of `ours`, the nearer
+   *  walk winning a tie. */
+  private shieldSpot(u: SimUnit, ours: readonly SimUnit[], reach: number): { x: number; y: number } {
+    let best = { x: u.x, y: u.y };
+    let bestRoom = -1;
+    let bestWalk = Infinity;
+    for (const dist of [reach + SHIELD_STEP, 2 * (reach + SHIELD_STEP)]) {
+      for (let k = 0; k < 8; k++) {
+        const a = (k / 8) * Math.PI * 2;
+        const spot = this.standSpot(u, { x: u.x + Math.cos(a) * dist, y: u.y + Math.sin(a) * dist });
+        let room = SHIELD_ROOM_CAP;
+        for (const o of ours) if (o !== u) room = Math.min(room, Math.hypot(o.x - spot.x, o.y - spot.y));
+        const walk = Math.hypot(spot.x - u.x, spot.y - u.y);
+        // Enough room is enough: past it, the shorter walk is the better spot.
+        const r = Math.min(room, reach + SHIELD_STEP);
+        if (r > bestRoom || (r === bestRoom && walk < bestWalk)) {
+          best = spot;
+          bestRoom = r;
+          bestWalk = walk;
+        }
+      }
+    }
+    return best;
   }
 
   /**

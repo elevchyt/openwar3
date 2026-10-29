@@ -214,7 +214,7 @@ function cast(units, profile = PLUS_INSANE, opts = {}) {
   const t0 = opts.now ?? 100;
   for (let i = 0; i < (opts.passes ?? 1); i++) {
     if (i > 0) orders.length = 0;
-    c.pass(t0 + i * 10, { holdsPortal: () => false, home: { x: 0, y: 0 }, campLeft: opts.camp, campKey: opts.campKey });
+    c.pass(t0 + i * 10, { holdsPortal: () => false, home: { x: 0, y: 0 }, campLeft: opts.camp, campKey: opts.campKey, creepAim: opts.creepAim });
   }
   if (opts.all) return orders.filter((o) => o.c === "cast");
   return orders.find((o) => o.c === "cast") ?? null;
@@ -636,6 +636,32 @@ console.log("\n-- a summon's `Area1` is where the body goes, not who is caught -
   const at = (p) => !!cast([caster({ abilId: "AHwe", isHero: true }), unit({ owner: 1, x: 500 })], p, { passes: 2 });
   check("an EASY computer's Archmage summons too", at(PLUS_EASY), true);
   check("…and a NORMAL one", at(PLUS_NORMAL), true);
+}
+
+{
+  // Reported: the Archmage summoned his Water Elemental in his own base the moment he left the
+  // altar, and stood there with it while it timed out. Traced live: the enemy's scouting
+  // Peasant was the only body within 900 of him. A worker (or a building) is not a fight.
+  const mage = () => caster({ abilId: "AHwe", isHero: true });
+  check("a SCOUTING WORKER in reach is no summon", cast([mage(), unit({ owner: 1, x: 500, isPeon: true })]), null);
+  check("…nor an enemy building", cast([mage(), unit({ owner: 1, x: 500, building: {} })]), null);
+  check("…but a soldier beside the worker is", (cast([mage(), unit({ owner: 1, x: 500, isPeon: true }), unit({ owner: 1, x: 550 })]) ?? {}).code, "AHwe");
+}
+{
+  // Reported: *"it must first send the wolves to attack and then the rest of the army so that the
+  // wolves tank most of the damage"* — so on Insane the summon is thrown on the WALK UP to the
+  // camp the party is going to (`summonAhead`), before anything is in reach.
+  const run = (o = {}) => {
+    const mage = caster({ abilId: "AHwe", isHero: true });
+    const creeps = [unit({ owner: 1, isCreep: true, x: 700 }), unit({ owner: 1, isCreep: true, x: 720, y: 100 })];
+    return (cast([mage, ...creeps], o.profile ?? PLUS_INSANE, { creepAim: o.aim === undefined ? { x: 710, y: 50 } : o.aim, camp: () => o.camp ?? { alive: 2, health: 1 } }) ?? {}).code ?? null;
+  };
+  check("Insane throws its summon AHEAD on the walk to a creep camp", run(), "AHwe");
+  check("…not with no creep run", run({ aim: null }), null);
+  check("…not on a rung without the tank order (Normal)", run({ profile: PLUS_NORMAL }), null);
+  check("…not at a camp already spent", run({ camp: { alive: 2, health: 0.2 } }), null);
+  const far = caster({ abilId: "AHwe", isHero: true });
+  check("…nor from across the map", cast([far, unit({ owner: 1, isCreep: true, x: 3000 })], PLUS_INSANE, { creepAim: { x: 3000, y: 0 } }), null);
 }
 
 // ==========================================================================================

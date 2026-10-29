@@ -363,6 +363,15 @@ const EXPAND_GOLD = 2000;
  *
  * Read the list as a ladder player's priorities, top to bottom.
  */
+/** Every fallen hero of ours, revived at the altar before anything else (see `buildPlan`). */
+function reviveFirst(c: PlusCtx): void {
+  const { ai, table } = c;
+  if (ai.countDone(table.altar) < 1) return;
+  for (const id of [ai.heroId, ai.heroId2, ai.heroId3]) {
+    if (id && ai.heroFallen?.(id)) ai.setBuildUnit(1, id);
+  }
+}
+
 export function buildPlan(c: PlusCtx): void {
   const { ai, table } = c;
   ai.initBuildArray();
@@ -391,6 +400,15 @@ export function buildPlan(c: PlusCtx): void {
   // halt is permanent by construction, because the gold that would clear it comes out of a mine
   // nobody is standing in. A ladder player replaces the dead worker FIRST and rebuilds the hall
   // out of what it earns. So do these two rows, and nothing is ever written above them.
+  // …EXCEPT A DEAD HERO. The developer: *"when a hero of the Computer+ AI dies, it must make it
+  // its number 1 (top) priority to revive them via their Altar"*. Each hero's own row already
+  // turned into a revival (`AiPlayer.reviveFallen`) — but it sat where that hero's PURCHASE
+  // sits, and a dead hero is not the build order's next step: it is the army's captain and most
+  // of its power, standing in a queue behind farms, soldiers and the tier. A revival is
+  // `ReviveBaseFactor`-cheap below level 7 (`rowCost`) and the miners keep earning while the row
+  // saves, so the crew rows lose a few seconds at worst; and a raid that has ALSO killed every
+  // miner is the dead end `releaseStall` exists for, which lets the ladder past.
+  reviveFirst(c);
   mineCrew(c);
   // …and the FOREST crew with it, because a build order that cannot pay its lumber stops dead
   // and the row that would have hired a lumberjack is underneath the row it stopped on. See

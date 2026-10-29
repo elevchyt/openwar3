@@ -1,5 +1,6 @@
 import type { AbilityDef } from "../../data/abilities";
 import { MELEE } from "../../data/gameplayConstants";
+import { PrimaryAttribute } from "../../data/enums";
 import type { ItemDef } from "../../data/items";
 import type { PlayableRace } from "../../data/races";
 import { ITEM_REGEN_GROUP, type SimUnit } from "../../sim/world";
@@ -451,6 +452,23 @@ const RACE_FIRST: Partial<Record<PlayableRace, readonly Want[]>> = {
 const RACE_FIELD: Partial<Record<PlayableRace, readonly Want[]>> = {
   orc: [{ id: "hslv", want: 2 }],
 };
+
+/**
+ * …and what the race's SECOND hero buys the moment it comes out of the altar — Insane alone, and
+ * only out of gold the player actually has (`secondKitChance`). The developer: *"make the 2nd orc
+ * hero buy two healing salves and a clarity potion when it comes out (only if the Computer+ AI
+ * (Insane) player has the money, otherwise just continue as it does now)"*. The salves are
+ * `RACE_FIELD`'s already, but counted across EVERY hero, so a first hero carrying its two left the
+ * second walking out empty-handed; these are counted in the NEW hero's own belt. All three are on
+ * the Voodoo Lounge's shelf (`[ovln] Sellitems` lists `hslv` and `plcl`), which is in the base the
+ * altar is.
+ */
+const SECOND_KIT: Partial<Record<PlayableRace, readonly Want[]>> = {
+  orc: [{ id: "hslv", want: 2 }, { id: "plcl", want: 1 }],
+};
+/** …and for how long after it appears the new hero is still "coming out" — past this the kit
+ *  is the ordinary list's business again. OURS: a walk across the base and back. */
+const SECOND_KIT_WINDOW = 60;
 
 /** Who carries the Healing Salves — the Shadow Hunter (`Oshd`), the orc's healer: his Healing
  *  Wave and the salve's charges are one job, and he is the hero standing at the back of the
@@ -1138,6 +1156,13 @@ const PAWN_PERIOD = SHOP_PERIOD;
  */
 const SHARE_PERIOD = 2;
 const SHARE_REACH = 1500;
+/** `attrOf`: the ability codes whose data columns are an attribute raise — the carried stat item
+ *  and the three single-attribute tomes (sim/world.ts `itemBonuses`, `applyPowerup`). */
+const ATTRIBUTE_CODES: ReadonlySet<string> = new Set(["AIab", "AIam", "AIim", "AIsm"]);
+/** `giveToItsHero`: the orc's carry, and the two item codes that go to him — Claws of Attack
+ *  (`AIat`, +damage) and Gloves of Haste (`AIas`, +attack speed). */
+const BLADEMASTER = "Obla";
+const BLADEMASTER_GEAR: ReadonlySet<string> = new Set(["AIat", "AIas"]);
 /** The mana relay's two bars (`potionHandover`): a hero above `MANA_RELAY_FULL` of its mana hands
  *  its potion to one below `MANA_RELAY_LOW`. The developer's numbers. */
 const MANA_RELAY_FULL = 0.8;
@@ -1336,6 +1361,11 @@ export class PlusItems {
     private readonly race: PlayableRace,
   ) {}
 
+  /** Every hero of ours seen so far, by id, and the second one while its `SECOND_KIT` is still
+   *  being bought — see `secondKitChance`. */
+  private heroesSeen = new Set<number>();
+  private secondHero: { id: number; until: number } | null = null;
+
   pass(now: number, ctx: ItemCtx): void {
     this.carry = ctx.carry;
     this.healScrolls = !!ctx.healScrolls;
@@ -1374,6 +1404,8 @@ export class PlusItems {
     // A missing Town Portal first, and on the BELT's clock rather than the shop's: a hero walking
     // past a Goblin Merchant is in its range for a second or two, and a five-second look misses it.
     if (this.portalChance(now, own, ctx)) return;
+    // …and the SECOND HERO's own first buy, the moment it walks out of the altar (`SECOND_KIT`).
+    if (this.secondKitChance(now, own, ctx)) return;
     // …and the FIGHT items the same way, for the same reason: they are Goblin Merchant wares, and
     // on a map whose Merchant is out in the contested ground (Echo Isles: ~8000 from either
     // start, past `SHOP_REACH`) the ordinary trip from home never goes there at all.
@@ -1471,6 +1503,7 @@ export class PlusItems {
       this.view.order({ c: "giveitem", unitId: from.id, slot, targetId: to.id });
       return;
     }
+    if (this.giveToItsHero(heroes)) return;
     const belts = heroes.map((u) => {
       // A melee hero (`MELEE_HEROES`) is never handed a caster's mana, and hands its own over —
       // see `potionHandover`. Every other hero, the Paladin included, is a caster here.
@@ -1506,6 +1539,97 @@ export class PlusItems {
         return; // one hand-over a look
       }
     }
+  }
+
+  /**
+   * EVERY ITEM TO THE HERO IT IS FOR — three hand-overs the developer named, one a look, between
+   * heroes standing within `SHARE_REACH` of each other (the same `giveitem` walk as the potions):
+   *
+   *  · a POTION OF INVULNERABILITY (`INVULN_ITEMS`) to the CARRY — the build's own
+   *    (`ItemCtx.carry`), else a melee hero (`MELEE_HEROES`) — when he holds none and somebody
+   *    else does: *"carry-type heroes (e.g. tauren chieftain, mountain king etc.) must have priority
+   *    over other types of heroes when it comes to owning a potion of invulnerability, so if
+   *    another friendly hero is carrying one, they must pass it off to the carry hero"*. The shop
+   *    already serves him first (`firstFor`); a drop lands on whoever walked over it.
+   *  · an ATTRIBUTE item (`attrOf`: a Belt of Giant Strength, Slippers of Agility, a Mantle of
+   *    Intelligence — one attribute and only one) held by a hero of ANOTHER primary attribute, to
+   *    one of that attribute: *"if shadow hunter is carrying "belt of giant strength" and the player
+   *    also has a tauren chieftain, then shadow hunter must give the belt of giant strength to the
+   *    tauren chieftain"*. A primary attribute is worth its points twice over — the stat AND the
+   *    damage (`StrAttackBonus` and its siblings, `PrimaryAttribute` in recomputeStats).
+   *  · for the ORC, the CLAWS OF ATTACK and the GLOVES OF HASTE (`AIat`/`AIas`) to the Blademaster,
+   *    the race's carry, whatever hero holds them: *"for orc specifically, all heroes must give claws
+   *    of attack and gloves of haste to the friendly blademaster if there is one available and has
+   *    inventory slots"* — the same two pieces `HERO_GEAR` buys him.
+   */
+  private giveToItsHero(heroes: SimUnit[]): boolean {
+    const near2 = (a: SimUnit, b: SimUnit): boolean => Math.hypot(a.x - b.x, a.y - b.y) <= SHARE_REACH;
+    const free = (u: SimUnit): boolean => u.inventory.indexOf(null) >= 0;
+    const give = (from: SimUnit, slot: number, to: SimUnit): boolean =>
+      this.view.order({ c: "giveitem", unitId: from.id, slot, targetId: to.id });
+    // The carry's potion.
+    const carries = heroes.filter((u) => u.typeId === this.carry && MELEE_HEROES.has(u.typeId));
+    const carry = (carries.length ? carries : heroes.filter((u) => MELEE_HEROES.has(u.typeId)))
+      .find((u) => free(u) && !u.inventory.some((h) => !!h && INVULN_ITEMS.has(h.itemId)));
+    if (carry) {
+      for (const from of heroes) {
+        if (from === carry || !near2(from, carry)) continue;
+        // A melee hero holding his OWN one keeps it: the rule is carry over caster, not one melee
+        // hero over another.
+        if (MELEE_HEROES.has(from.typeId) && from.typeId !== this.carry && carry.typeId !== this.carry) continue;
+        if (MELEE_HEROES.has(from.typeId) && from.typeId === this.carry) continue;
+        const slot = from.inventory.findIndex((h) => !!h && INVULN_ITEMS.has(h.itemId));
+        if (slot >= 0) return give(from, slot, carry);
+      }
+    }
+    // The Blademaster's claws and gloves.
+    if (this.race === "orc") {
+      const bm = heroes.find((u) => u.typeId === BLADEMASTER && free(u));
+      if (bm) {
+        for (const from of heroes) {
+          if (from === bm || !near2(from, bm)) continue;
+          const slot = from.inventory.findIndex((h) => {
+            const def = h ? this.view.item(h.itemId) : null;
+            return !!def && def.abilities.some((aid) => BLADEMASTER_GEAR.has(this.view.def(aid)?.code ?? ""));
+          });
+          if (slot >= 0) return give(from, slot, bm);
+        }
+      }
+    }
+    // Attribute items to their attribute.
+    for (const from of heroes) {
+      for (let slot = 0; slot < from.inventory.length; slot++) {
+        const held = from.inventory[slot];
+        const def = held ? this.view.item(held.itemId) : null;
+        const attr = def ? this.attrOf(def) : null;
+        if (!attr || from.primaryAttr === attr) continue;
+        const to = heroes.find((o) => o !== from && o.primaryAttr === attr && free(o) && near2(o, from));
+        if (to) return give(from, slot, to);
+      }
+    }
+    return false;
+  }
+
+  /**
+   * The ONE primary attribute this item raises, or null — read off its abilities' own data, the
+   * columns `SimWorld.itemBonuses` (`AIab`: DataA agility, DataB intelligence, DataC strength) and
+   * `applyPowerup` (the tomes `AIam`/`AIim`/`AIsm`, the same three columns) spend. An item that
+   * raises two or all three (a Circlet of Nobility, a Crown of Kings, a Tome of Knowledge) is
+   * everybody's and is null.
+   */
+  private attrOf(def: ItemDef): PrimaryAttribute | null {
+    let agi = 0, int = 0, str = 0;
+    for (const aid of def.abilities) {
+      const ad = this.view.def(aid);
+      if (!ad || !ATTRIBUTE_CODES.has(ad.code)) continue;
+      const d = ad.levelData[0]?.data ?? [];
+      agi += d[0] > 0 ? d[0] : 0;
+      int += d[1] > 0 ? d[1] : 0;
+      str += d[2] > 0 ? d[2] : 0;
+    }
+    const raised = [agi > 0, int > 0, str > 0].filter(Boolean).length;
+    if (raised !== 1) return null;
+    return agi > 0 ? PrimaryAttribute.Agility : int > 0 ? PrimaryAttribute.Intelligence : PrimaryAttribute.Strength;
   }
 
   // ==========================================================================================
@@ -1693,6 +1817,26 @@ export class PlusItems {
     }
   }
 
+  /**
+   * WHO A TOME IS FOR — the nearest hero within `LOOT_WALK` whose primary attribute it raises
+   * (`attrOf`), or null for any hero: *"when two or more heroes are near a tome, the one whose
+   * primary attribute matches the tome must pick it up (e.g. archmage must pick up tome of
+   * intelligence, blademaster must pick up tome of agility etc.)"* (the developer). A Tome of
+   * Knowledge or of Experience is everybody's, and so is a tome no hero of that attribute is near.
+   */
+  private tomeFor(def: ItemDef, it: { x: number; y: number }, heroes: readonly SimUnit[]): SimUnit | null {
+    const attr = this.attrOf(def);
+    if (!attr) return null;
+    let best: SimUnit | null = null;
+    let bestD = LOOT_WALK;
+    for (const u of heroes) {
+      if (u.primaryAttr !== attr) continue;
+      const d = Math.hypot(u.x - it.x, u.y - it.y);
+      if (d <= bestD) { bestD = d; best = u; }
+    }
+    return best;
+  }
+
   private loot(now: number, own: SimUnit[], foes: SimUnit[]): void {
     // The at-the-feet look runs every pass (it only SCHEDULES — `tickGrabs` does the bending);
     // the walk below keeps its slower clock.
@@ -1731,8 +1875,12 @@ export class PlusItems {
       if (!this.grabbed.has(it.id)) {
         let feet: SimUnit | null = null;
         let feetD = LOOT_GRAB;
+        // A TOME is the hero's of its attribute (`tomeFor`): the wrong hero does not bend for it
+        // while the right one is near enough to walk to it.
+        const owner = def.powerup ? this.tomeFor(def, it, able) : null;
         for (const u of grabbers) {
           if (taken.has(u.id)) continue;
+          if (owner && u !== owner) continue;
           if (!def.powerup && u.inventory.indexOf(null) < 0) continue;
           if (!roomForOne(u, it.itemId)) continue;
           const d = Math.hypot(u.x - it.x, u.y - it.y);
@@ -1753,8 +1901,10 @@ export class PlusItems {
       if (foes.some((f) => !f.building && Math.hypot(f.x - it.x, f.y - it.y) <= LOOT_DANGER)) continue;
       let best: SimUnit | null = null;
       let bestD = LOOT_WALK;
+      const tome = def.powerup ? this.tomeFor(def, it, heroes) : null;
       for (const u of heroes) {
         if (taken.has(u.id)) continue;
+        if (tome && u !== tome) continue; // the tome's own hero — see `tomeFor`
         // A powerup is consumed on contact and never stored, so a full belt is no obstacle.
         if (!def.powerup && u.inventory.indexOf(null) < 0) continue;
         if (!roomForOne(u, it.itemId)) continue;
@@ -2488,6 +2638,11 @@ export class PlusItems {
     let worst = ALLY_HP;
     for (const o of friends) {
       if (o.building || o.isPeon || !near(u, o, LOOK)) continue;
+      // A SUMMON IS NEVER HEALED. A Spirit Wolf, a Water Elemental, anything on a timed life
+      // (`summonLeft`) or an illusion is leaving on its own clock whatever its hit points are,
+      // so a 100-gold Healing Salve poured into one is poured away — reported off the orc,
+      // whose Far Seer's wolves were the most hurt bodies in every camp it took.
+      if (o.isSummon || o.summonLeft > 0 || o.isIllusion) continue;
       if (this.regenerating(o)) continue; // already pouring — see `regenerating`
       // …and a body that is being swung at pours the salve straight into the damage: the buff
       // is cancelled by the next blow (see the `healOther` rung). The presser's own fight is
@@ -2885,6 +3040,65 @@ export class PlusItems {
       for (const id of HERO_GEAR[h.typeId] ?? []) if (!h.inventory.some((x) => x?.itemId === id)) wanted.push(id);
     }
     for (const id of new Set(wanted)) if (this.itemChance(now, own, fieldCtx, id)) return true;
+    return false;
+  }
+
+  /**
+   * THE SECOND HERO'S OWN FIRST BUY — `SECOND_KIT`, Insane only. The hero is noticed the pass it
+   * appears (the second hero this player has ever had; a revived one keeps its id and is not new)
+   * and for `SECOND_KIT_WINDOW` seconds it buys its rows into ITS OWN belt: at a shop in reach, or
+   * walked to the nearest one round home that stocks the row. A row it cannot pay for is skipped
+   * rather than saved for — "otherwise just continue as it does now" — and the window closes on
+   * whatever is left.
+   */
+  private secondKitChance(now: number, own: SimUnit[], ctx: ItemCtx): boolean {
+    for (const h of own) {
+      if (!h.isHero || h.isIllusion || this.heroesSeen.has(h.id)) continue;
+      this.heroesSeen.add(h.id);
+      if (this.heroesSeen.size === 2) this.secondHero = { id: h.id, until: now + SECOND_KIT_WINDOW };
+    }
+    const kit = this.profile.difficulty === MELEE_INSANE ? SECOND_KIT[this.race] : undefined;
+    const fresh = this.secondHero;
+    if (!kit || !fresh || this.profile.shopping <= 0) return false;
+    const hero = own.find((u) => u.id === fresh.id);
+    if (!hero || now > fresh.until || !this.canAct(hero)) {
+      if (!hero || now > fresh.until) this.secondHero = null;
+      return false;
+    }
+    if (hero.order === "getitem") return false;
+    let short = false;
+    for (const w of kit) {
+      const def = this.view.item(w.id);
+      if (!def) continue;
+      // Counted in CHARGES, so a shop that stacks a second salve onto the first is still read as two.
+      const charges = hero.inventory.reduce((n, x) => n + (x?.itemId === w.id ? x.charges : 0), 0);
+      const have = Math.ceil(charges / (def.charges > 0 ? def.charges : 1));
+      if (have >= w.want || hero.inventory.indexOf(null) < 0) continue;
+      // …and the standing belt rule still holds: a MELEE hero never carries a Clarity Potion
+      // (`suits`), so a Tauren Chieftain coming out second buys the two salves alone.
+      if (!suits(hero, w.id, this.carry)) continue;
+      short = true;
+      if (def.gold > this.view.gold()) continue; // not the money for it: carry on as before
+      const shops = this.shops(ctx).filter((shop) => this.stocks(shop, w.id));
+      const at = shops.find((shop) => this.view.world.shopReaches(shop.id, hero.id));
+      if (at) {
+        if (this.view.world.shopBuyer(at.id, this.view.player)?.id !== hero.id) {
+          this.view.order({ c: "shopbuyer", shopId: at.id, unitId: hero.id });
+        }
+        this.view.order({ c: "buyitem", shopId: at.id, itemId: w.id });
+        if (this.onErrand === hero.id) this.onErrand = 0;
+        return true;
+      }
+      const near = shops.sort((a, b) => Math.hypot(a.x - hero.x, a.y - hero.y) - Math.hypot(b.x - hero.x, b.y - hero.y))[0];
+      if (!near || hero.inCombat) continue;
+      this.onErrand = hero.id;
+      if (now - this.lastDetour < SHOP_PERIOD) return true;
+      this.lastDetour = now;
+      this.view.order({ c: "order", unitId: hero.id, order: { kind: "move", x: near.x, y: near.y }, queued: false });
+      return true;
+    }
+    if (!short) this.secondHero = null; // all bought (or no room left for it)
+    if (this.onErrand === hero.id) this.onErrand = 0;
     return false;
   }
 

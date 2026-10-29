@@ -5403,3 +5403,60 @@ Pandaren Brewmaster, whose Drunken Haze → Breath of Fire combo must burn.
   that the breath can reach; the breath waits `HAZE_LAND` for the flask, then goes down the line
   where a soaked body counts `SOAKED_WORTH` (2×). A haze with no breath behind it stays the
   Insane-only `debuff` it was.
+
+### …and summons, Lightning Shield, revivals, the belt and the ranged heroes' uptime
+
+- **A summon is for a fight that fights back** (plus/casting.ts `foughtBack`). The Archmage
+  summoned his Water Elemental in his own base the moment he left the altar and stood beside it
+  while it timed out; traced live, the enemy's scouting Peasant was the only body within 900 of
+  him. `engaged` is any hostile body in reach, so a worker or a building was a "fight". Now a
+  summon needs something that is neither.
+- **…and on a creep run the summons go in FIRST** (`summonAhead`, `tankHold`, Insane's
+  `tankFirst`). The developer: *"it must first send the wolves to attack and then the rest of the
+  army so that the wolves tank most of the damage"* — the Water Elemental, the Beastmaster's pets
+  and the Treants likewise. The summon is pressed on the walk up, once the caster is within
+  `SUMMON_AHEAD` (800) of the camp the party is going to (`CastCtx.creepAim`) and the camp is not
+  already spent. On a creep run the MELEE rank now waits behind the summons as well as the heroes
+  and the ranged line (`HOLD_BACK_MELEE`, 400), inside the same `TANK_HOLD_MAX`. Against a player
+  the soldiers do not wait.
+- **A Healing Salve is never poured into a summon** (plus/items.ts `hurtest`): a summon, anything
+  on a timed life and an illusion are leaving on their own clock. The Far Seer's wolves were the
+  most hurt bodies in every camp.
+- **An ENEMY's Lightning Shield is walked away from the army** (plus/index.ts `shieldPass`,
+  `PlusProfile.shedShield`, Insane). `[Alsh]` hurts everybody around its holder, friend or foe,
+  so one put on our Grunt by a creep Shaman or the other player kills our own line. The holder is
+  walked to the reachable spot with the most room from everybody on our side, and held there on
+  the pull-out channel (`PullBack.shield`) until the buff is gone. Whose shield it is decides it,
+  asked of the sim even after the caster is dead (`SimWorld.shieldCaster`); our own Shaman's is
+  the trick played the other way round and is left alone.
+- **A dead hero is the first row of the ladder** (plan.ts `reviveFirst`), above even the gold
+  crew. The developer: *"it must make it its number 1 (top) priority to revive them via their
+  Altar"*. A revival below level 7 is cheaper than the hero (`rowCost`), the miners keep earning
+  while the row saves, and a raid that killed every miner as well is the dead end `releaseStall`
+  lets the ladder past.
+- **The orc's second hero buys two Healing Salves and a Lesser Clarity Potion as it comes out**
+  (plus/items.ts `SECOND_KIT`, `secondKitChance`, Insane). For `SECOND_KIT_WINDOW` (60 s), into
+  its OWN belt, only with the gold for each row in hand. The standing belt rule still holds: a
+  melee hero never carries a Clarity Potion (`suits`), so a Chieftain coming out second buys the
+  salves alone.
+- **Every item to the hero it is for** (`giveToItsHero`), one hand-over a look, within
+  `SHARE_REACH`:
+  - a Potion of Invulnerability goes to the CARRY (the build's own, else a melee hero);
+  - a single-attribute item (`attrOf`, read off `AIab`'s DataA/B/C) goes to a hero of that
+    primary attribute;
+  - for the orc, Claws of Attack and Gloves of Haste go to the Blademaster.
+
+  A TOME goes to the nearest hero of its attribute within `LOOT_WALK`, past a nearer one
+  (`tomeFor`). A tome that raises everything is anybody's.
+- **The ranged heroes stay in the fight** (`backlinePass`).
+  - **Archmage.** The developer: *"he is standing out of fights quite a lot, not doing anything
+    … on some creep camps as well"*. Traced live, 96 of the Archmage's move orders in six minutes
+    were the backline's: every creep within `BACKLINE_GAP` walked him another 300 under a plain
+    MOVE, which does not acquire, and the hold then refused the army's orders for him.
+  - **Far Seer and Shadow Hunter.** Then *"not having much uptime attacking from afar during
+    fights"*: 58 of the Shadow Hunter's moves in a player fight.
+  - **The rules now:**
+    - against creeps alone, the hero steps back only from a creep that is swinging at him;
+    - a READY shot at something in reach is fired before any step back (the stutter-step: the
+      walk is taken while the weapon cools);
+    - every step back has an attack queued behind it.
