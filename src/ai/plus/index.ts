@@ -5503,6 +5503,13 @@ export class ComputerPlusAi {
     // dozen seconds of mustering in the base for the one item that saves an army.
     const portal = b.items.portalSaving(this.itemCtx(b));
     if (portal > 0 && b.ai.gold() >= portal) return false;
+    // …AND NOT WITH THE HEROES' MANA SPENT. Reported: the computers "don't seem to buy and use
+    // clarity potions", the orc above all, and the roam is why — the shopping trip only starts
+    // from a muster at home, which a roaming army never is. The scroll's trade again: while the
+    // belt is short of the race's mana (`PlusItems.manaSaving`) and the purse covers it, muster
+    // at home for the pass it takes to buy.
+    const mana = b.items.manaSaving(this.itemCtx(b));
+    if (mana > 0 && b.ai.gold() >= mana) return false;
     return true;
   }
 

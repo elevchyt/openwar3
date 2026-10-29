@@ -919,6 +919,9 @@ const MANA_LOW_EAGER = 0.5;
  * pool waits until there is a potion's worth of room in it.
  */
 const MANA_TOPUP = 0.75;
+/** How many of the race's mana items the heroes carry before a roaming army stops coming home
+ *  for more (`manaSaving`) — Insane's two Clarity Potions (`RACE_MANA_EAGER`). Ours. */
+const MANA_KEEP = 2;
 /**
  * The two bars a REPLENISHMENT POTION is drunk at — and EITHER of them on its own is enough.
  *
@@ -1377,6 +1380,8 @@ export class PlusItems {
     if (this.fightChance(now, own, ctx)) return;
     // …and a hero's OWN orb and gear the same way — see `heroChance`.
     if (this.heroChance(now, own, ctx)) return;
+    // …and the race's MANA the same way, behind the gear the developer put first — see `manaChance`.
+    if (this.manaChance(now, own, ctx)) return;
     this.shop(now, own, ctx);
   }
 
@@ -2745,6 +2750,79 @@ export class PlusItems {
    * them, and a pass that bought a potion with the scroll's gold would be `list`'s order upside
    * down. The first missing one that some shop can sell us wins the pass.
    */
+  /**
+   * `fightChance` for the race's MANA (`RACE_MANA`, Insane's `RACE_MANA_EAGER`): a missing
+   * Clarity Potion or Potion of Mana is bought wherever a hero stands in a shop's range, and
+   * fetched on the field detour.
+   *
+   * Reported: *"the Computer+ AI doesn't seem to buy and use clarity potions. most notably on Orc
+   * and i believe human as well"*, and *"especially during tier 3, Orc must be more keen towards
+   * regenerating its heroes mana"*. The row's place on the list was never the problem: the
+   * ordinary trip only starts from a muster AT HOME (`mayShop`), and an Insane army is almost
+   * never there — from the creep clock on it ROAMS (`roaming`, which writes `afield`), so `shop`
+   * ran in the few passes between a wave coming home and the next roam setting off, and the
+   * belt bought in the first minutes was not bought again as each charge was drunk. The Town
+   * Portal, the fight items and the hero's gear had each been given their own door for exactly
+   * this; this is the mana's. Behind the scroll and the fight items (`list`'s order), never walked
+   * to on a wave, and INSANE's alone (`eagerMana`): it is the rung that roams, and the one whose
+   * habit ceiling is the whole belt, so this door — which has no ceiling, as the scroll's has
+   * none — steps over nothing. A Normal computer musters at home and shops there.
+   */
+  private manaChance(now: number, own: SimUnit[], ctx: ItemCtx): boolean {
+    if (!this.profile.eagerMana || this.profile.shopping <= 0) return false;
+    if (this.profile.keepPortal && this.carried(own, PORTAL.id) <= 0) return false;
+    // At HOME the ordinary trip runs right after this, and its list puts the race's opening buy
+    // (`RACE_FIRST`) ahead of the mana — leave that order to it. Out on the map `shop` does not
+    // run at all, which is the whole reason for this door.
+    if (ctx.mayShop && (RACE_FIRST[this.race] ?? []).some((w) => this.carried(own, w.id) < w.want)) return false;
+    const manaCtx = ctx.wave ? { ...ctx, mayDetour: false } : ctx;
+    for (const w of this.manaRows()) {
+      if (this.carried(own, w.id) >= w.want) continue;
+      if (this.itemChance(now, own, manaCtx, w.id)) return true;
+    }
+    return false;
+  }
+
+  /** The race's mana rows at this difficulty — `RACE_MANA`, or Insane's `RACE_MANA_EAGER`. */
+  private manaRows(): readonly Want[] {
+    return (this.profile.eagerMana ? RACE_MANA_EAGER : RACE_MANA)[this.race] ?? [];
+  }
+
+  /**
+   * The price of the race's next mana item when a ROAMING army should come home for it, or 0 —
+   * read by the army manager (plus/index.ts `roaming`) exactly as `portalSaving` is for the scroll.
+   *
+   * `manaChance` buys what a hero walks past, but a roam musters at the free mines AHEAD of our
+   * base and the race shop is IN it, so a belt emptied on the road could stay empty for the rest
+   * of the match. So while our heroes carry fewer than `MANA_KEEP` of the race's mana items, a
+   * hero who may carry the next one (`suits` — never a melee hero's clarity) has room for it, and
+   * a shop the ordinary trip reaches (`SHOP_REACH` of home) sells it, the party musters at home
+   * for the pass it takes `shop` to buy it. Insane only, like `manaChance`.
+   */
+  manaSaving(ctx: ItemCtx): number {
+    if (!this.profile.eagerMana || this.profile.shopping <= 0) return 0;
+    const rows = this.manaRows();
+    if (!rows.length) return 0;
+    const own: SimUnit[] = [];
+    for (const u of this.view.world.units.values()) if (u.hp > 0 && u.owner === this.view.player) own.push(u);
+    if (this.profile.keepPortal && this.carried(own, PORTAL.id) <= 0) return 0; // the scroll's turn — `portalSaving`
+    if (rows.reduce((n, w) => n + this.carried(own, w.id), 0) >= MANA_KEEP) return 0;
+    for (const w of rows) {
+      if (this.carried(own, w.id) >= w.want) continue;
+      if (!own.some((u) => u.isHero && !u.isIllusion && u.inventory.length && u.inventory.indexOf(null) >= 0
+        && roomForOne(u, w.id) && suits(u, w.id, this.carry))) continue;
+      const def = this.view.item(w.id);
+      if (!def || def.gold <= 0) continue;
+      for (const shop of this.view.world.units.values()) {
+        if (shop.hp <= 0 || !shop.building || shop.building.constructionLeft > 0 || this.view.hostile(shop)) continue;
+        if (!this.view.world.canUseShop(shop.id, this.view.player) || !this.stocks(shop, w.id)) continue;
+        if (this.guarded(shop)) continue;
+        if (Math.hypot(shop.x - ctx.home.x, shop.y - ctx.home.y) <= SHOP_REACH) return def.gold;
+      }
+    }
+    return 0;
+  }
+
   private fightChance(now: number, own: SimUnit[], ctx: ItemCtx): boolean {
     if (!this.profile.keepPortal || this.profile.shopping <= 0) return false;
     if (this.carried(own, PORTAL.id) <= 0) return false;
@@ -3196,7 +3274,7 @@ export class PlusItems {
     // …and the race's MANA, which is bought out of the purse for the same reason but sits one
     // place further down: BEHIND the scroll. A hero with an empty bar has lost its spells; a
     // hero with no Town Portal loses the army, and that is the bigger loss (`PORTAL`).
-    const mana = ((this.profile.eagerMana ? RACE_MANA_EAGER : RACE_MANA)[this.race] ?? []).map((w) => ({ ...w, opening: true }));
+    const mana = this.manaRows().map((w) => ({ ...w, opening: true }));
     const kitRest = [...new Set(heroes.flatMap((h) => (this.kitFor(h) ?? []).slice(1)))].flatMap(kitRow);
     const fight = [...kitRest, ...meleeBelt.filter((m) => !kitRest.some((k) => k.id === m.id)),
       ...FIGHT.filter((w) => !meleeBelt.some((m) => m.id === w.id) && !kitRest.some((k) => k.id === w.id))].map(each);

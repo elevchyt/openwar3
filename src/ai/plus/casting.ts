@@ -685,6 +685,20 @@ const ONCE_PER_CAMP: ReadonlySet<string> = new Set(["AHtc"]);
 const ANY_FIGHT: ReadonlySet<string> = new Set(["AOws"]);
 
 /**
+ * …and the spells NEVER spent on creeps at all, by base code: only a PLAYER's body in reach
+ * (`playerInFight`) unlocks them, asked every pass rather than rolled, so the button is there the
+ * moment an enemy army walks into the camp the party is clearing.
+ *
+ * The developer: *"the Far Seer AI is using too much of the 'Chain Lightning' ability on creep
+ * camps. we must disable its usage against creep camps."* `CREEP_SPELL_SMALL`'s quarter chance
+ * was not enough for this hero: Feral Spirit is its creeping skill (maxed first, `skills`), so the
+ * Far Seer spends more of its game in a camp than anywhere else, and at 120 mana a press
+ * (`[AOcl] Cost1`, `Cool1` 9) two presses are a bar — on Gnolls, with the fight against the
+ * player that decides the game still ahead. Ours.
+ */
+const NO_CREEP_SPELLS: ReadonlySet<string> = new Set(["AOcl"]);
+
+/**
  * THE BLOOD MAGE AND THE PALADIN — Siphon Mana (`AHdr`) as a mana PUMP.
  *
  * The developer's pairing (plus/races.ts `HeroCombo`): "the Blood Mage drains mana from enemy
@@ -1225,6 +1239,7 @@ export class PlusCaster {
       // the same door a player's click asks, so this can never be more permissive.
       if (this.view.world.castUseError(u.id, card.ab.code) !== null) continue;
       if (this.ctx.holds?.(u, card.ab.code)) continue;
+      if (NO_CREEP_SPELLS.has(card.def.code) && !this.playerInFight(u, foes)) continue;
       if (!this.wants(u, card.def, card.role, friends, foes, engaged)) continue;
       if (this.aim(u, card.ab.code, card.def, card.lvl, card.role, friends, foes)) {
         if (once && camp && ONCE_PER_CAMP.has(card.def.code)) {
@@ -1482,6 +1497,15 @@ export class PlusCaster {
    * creep fight whatever the wave was sent at. One hostile PLAYER body in reach is enough to
    * make it a real fight — a scout's Peasant is not (`isPeon`), and neither is a building.
    */
+  /** Is a hostile PLAYER's fighting body in this caster's reach — the half of `worthTheMana`
+   *  that answers "always", asked on its own for `NO_CREEP_SPELLS`. A scout's worker and a
+   *  building do not make it a player fight, exactly as there. */
+  private playerInFight(u: SimUnit, foes: SimUnit[]): boolean {
+    const look = Math.max(u.weapon?.acquire ?? 0, MIN_LOOK);
+    return foes.some((f) => !f.building && !f.isPeon && !f.isCreep && f.owner >= 0 && f.owner < MELEE.MAX_PLAYERS
+      && near(u, f, look));
+  }
+
   private worthTheMana(u: SimUnit, foes: SimUnit[]): boolean {
     const look = Math.max(u.weapon?.acquire ?? 0, MIN_LOOK);
     let bodies = 0;

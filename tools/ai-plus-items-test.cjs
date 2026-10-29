@@ -184,6 +184,7 @@ const ITEMS = {
   shea: { id: "shea", gold: 250, usable: true, abilities: ["AIha"] }, // Scroll of Healing
   hslv: { id: "hslv", gold: 100, usable: true, abilities: ["AIrl"] }, // Healing Salve
   pclr: { id: "pclr", gold: 160, usable: true, abilities: ["AIpr"] }, // Clarity Potion
+  plcl: { id: "plcl", gold: 70, usable: true, abilities: ["AIpl"] }, // Lesser Clarity Potion
   oven: { id: "oven", gold: 325, usable: false, abilities: ["AIpv"] }, // Orb of Venom
   oli2: { id: "oli2", gold: 375, usable: false, abilities: ["AIll"] }, // Orb of Lightning
   gcel: { id: "gcel", gold: 125, usable: false, abilities: ["AIsx"] }, // Gloves of Haste
@@ -241,6 +242,7 @@ const ABILS = {
   AIhw: { code: "Ahwd", target: "point", levelData: [lvl({ castRange: 500, duration: 30, summon: "ohwd" })] },
   Aoar: { code: "Aoar", target: "", levelData: [lvl({ area: 500 })] }, // the ward's own aura
   AIpr: { code: "AIrg", target: "", levelData: [lvl({ duration: 45, data: [0, 200] })] },
+  AIpl: { code: "AIrg", target: "", levelData: [lvl({ duration: 30, data: [0, 100] })] },
   AIp1: { code: "AIrg", target: "", levelData: [lvl({ duration: 30, data: [100, 25] })] },
   AIda: { code: "AIda", target: "", levelData: [lvl()] },
   AIra: { code: "AIra", target: "", levelData: [lvl({ area: 600, data: [300, 150] })] },
@@ -1298,6 +1300,48 @@ const spend = (h, id) => { const i = h.inventory.findIndex((s) => s?.itemId === 
   check("…nor while the Town Portal is the thing missing (portalSaving holds that)", fs([hero(), shop]), 0);
   check("…nor for a Merchant nobody will get to", fs([belt(hero(), "stwp"), { ...MERCHANT, id: nextId++, x: 9000, y: 0 }]), 0);
 }
+// THE RACE'S MANA IS FETCHED LIKE A MISSING SCROLL TOO (`manaChance`), and a ROAMING army comes
+// home for it (`manaSaving`, read by plus/index.ts `roaming`). Reported: the computers "don't
+// seem to buy and use clarity potions", the orc above all — an Insane army roams from the creep
+// clock on, and the ordinary trip only starts from a muster at home (`mayShop`).
+{
+  // [ovln], less the Orb of Lightning: the Far Seer's own orb comes first (`heroChance`).
+  const LOUNGE = ["shas", "hslv", "plcl", "phea", "pman", "stwp", "tgrh"];
+  const lounge = { ...MERCHANT, id: nextId++, x: 600, y: 0 };
+  const seer = (o = {}) => hero({ typeId: "Ofar", ...o });
+  const r = shopped([belt(seer({ x: 600, y: 0 }), "stwp", "hslv", "hslv"), lounge], PLUS_INSANE,
+    { race: "orc", shelf: LOUNGE, mayShop: false, soldOut: ["phea"] });
+  check("a roaming Insane Far Seer standing at its Lounge buys a Lesser Clarity Potion", r.buy?.itemId, "plcl");
+  const r2 = shopped([belt(seer(), "stwp", "hslv", "hslv"), { ...lounge, id: nextId++, x: 1500 }], PLUS_INSANE,
+    { race: "orc", shelf: LOUNGE, inRange: false, mayShop: false, mayDetour: true, soldOut: ["phea"] });
+  check("…and a mustering one detours to it a screen away", !!r2.move && r2.move.order.x === 1500, true);
+  const r3 = shopped([seer({ x: 600, y: 0 }), lounge], PLUS_INSANE, { race: "orc", shelf: LOUNGE, mayShop: false, soldOut: ["hslv"] });
+  check("…but never ahead of a missing Town Portal", r3.buy?.itemId, "stwp");
+  const r4 = shopped([belt(seer(), "stwp", "hslv", "hslv"), { ...lounge, id: nextId++, x: 1500 }], PLUS_NORMAL,
+    { race: "orc", shelf: LOUNGE, inRange: false, mayShop: false, mayDetour: true, soldOut: ["phea"] });
+  check("…and Normal, which musters at home, is not walked to one", !r4.move && !r4.buy, true);
+
+  const saving = (units, profile = PLUS_INSANE) => {
+    const world = {
+      units: new Map(units.map((u) => [u.id, u])), items: new Map(),
+      itemReadyError: () => null, itemUseError: () => null, holdsChannel: () => false,
+      shopReaches: () => false, shopBuyer: () => null, shopStock: () => -1, missingForShop: () => [],
+      isShopUnit: () => true, canUseShop: () => true, canPawnAt: () => false,
+    };
+    const items = new PlusItems({
+      world, player: 0, def: (id) => ABILS[id], hostile: (u) => u.owner !== 0 && u.owner !== 12,
+      order: () => true, item: (id) => ITEMS[id], wares: () => LOUNGE, gold: () => 1000,
+    }, profile, "orc");
+    return items.manaSaving({ home: { x: 0, y: 0 }, losing: false, mayShop: false, portalWorthIt: true });
+  };
+  check("a belt with no mana in it calls the roam home for a Lesser Clarity Potion",
+    saving([belt(seer(), "stwp"), lounge]), 70);
+  check("…one is still short of two", saving([belt(seer(), "stwp", "plcl"), lounge]), 70);
+  check("…two is enough", saving([belt(seer(), "stwp", "plcl", "plcl"), lounge]), 0);
+  check("…not while the scroll is missing (that is portalSaving's)", saving([seer(), lounge]), 0);
+  check("…nor for a shop nobody will walk to", saving([belt(seer(), "stwp"), { ...lounge, id: nextId++, x: 20000 }]), 0);
+  check("…nor on Normal", saving([belt(seer(), "stwp"), lounge], PLUS_NORMAL), 0);
+}
 // Once it has carried one, a missing scroll it cannot yet afford is SAVED for rather than
 // spent past on a cheaper row.
 {
@@ -1488,8 +1532,10 @@ const spend = (h, id) => { const i = h.inventory.findIndex((s) => s?.itemId === 
   // ceiling is lifted, so the only thing left that can refuse the next row is the reserve.
   const stocked = belt(hero(), "hslv", "hslv", "stwp");
   const roomy = { ...PLUS_NORMAL, shopping: 6 };
+  // (The Lesser Clarity Potion is the race's MANA row, bought out of the purse like the salve —
+  // `RACE_MANA` — so it is off the shelf here: this case is about the general list.)
   check("…but the general list still waits above the reserve",
-    shopped([stocked, MERCHANT], roomy, { race: "orc", shelf: LOUNGE, gold: PLUS_NORMAL.itemReserve + 10, soldOut: ["phea"] }).buy, null);
+    shopped([stocked, MERCHANT], roomy, { race: "orc", shelf: LOUNGE, gold: PLUS_NORMAL.itemReserve + 10, soldOut: ["phea", "plcl"] }).buy, null);
 }
 {
   // Nobody else gets the habit: a night elf off the same shelf still opens with the scroll.

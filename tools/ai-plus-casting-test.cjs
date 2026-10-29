@@ -47,6 +47,9 @@ const ABILS = {
   // `Cost1` 90, `Dur1` 5 / `HeroDur1` 3, `DataA1` 60 damage (Units\AbilityData.slk).
   AHtc: { code: "AHtc", target: "none", autocast: false, targetFlags: ["ground", "neutral", "organic"], levelData: [lvl({ area: 300, castRange: 0, cost: 90, duration: 5, heroDuration: 3, data: [60, 0], buffs: ["BHtc"] })] },
   AHtb: { code: "AHtb", target: "unit", autocast: false, targetFlags: ["air", "ground", "enemy", "organic", "vuln", "invu"], levelData: [lvl({ duration: 5, heroDuration: 1.5 })] },
+  // CHAIN LIGHTNING, the Far Seer's nuke: `[AOcl] targs1` "air,ground,enemy,organic,vuln",
+  // `Rng1` 700, `Cost1` 120, `Cool1` 9. Never spent on creeps (plus/casting.ts `NO_CREEP_SPELLS`).
+  AOcl: { code: "AOcl", target: "unit", autocast: false, targetFlags: ["air", "ground", "enemy", "organic", "vuln"], levelData: [lvl({ castRange: 700, cost: 120 })] },
   // Unholy Frenzy — a BUFF whose row names no allegiance at all (`[Auhf] targs1` =
   // "air,ground,organic"), which is the whole of the reported bug: with the flags silent the
   // pool fell through to the enemy list and a Necromancer hasted the other player's army.
@@ -362,6 +365,20 @@ console.log("\n-- a fight has to be worth the mana -----------------------------
   const hurt = unit({ hp: 400, x: 200 });
   const cmd = cast([p, hurt, unit({ owner: 1, isCreep: true, x: 250 })], PLUS_NORMAL, { roll: 0.99 });
   check("Holy Light is not held back by the mana gate", cmd && cmd.targetId, hurt.id);
+}
+
+{
+  // CHAIN LIGHTNING IS NEVER SPENT ON CREEPS — the developer's "we must disable its usage against
+  // creep camps". Not a roll: a five-body camp and the luckiest roll there is still say no…
+  const big = () => [1, 2, 3, 4, 5].map((i) => unit({ owner: 1, isCreep: true, x: 150 + 20 * i }));
+  check("Chain Lightning is never thrown into a creep camp",
+    cast([caster({ abilId: "AOcl", race: "orc" }), ...big()], PLUS_INSANE, { roll: 0 }), null);
+  // …and a player's army walking into the same camp turns it back on, that pass.
+  const cmd = cast([caster({ abilId: "AOcl", race: "orc" }), ...big(), unit({ owner: 1, x: 300 })], PLUS_INSANE, { roll: 0 });
+  check("…but it is the moment a player's army is in reach", cmd && cmd.code, "AOcl");
+  // …and a scout's worker is not a player fight, exactly as `worthTheMana` reads it.
+  check("…and a scouting worker does not count as one",
+    cast([caster({ abilId: "AOcl", race: "orc" }), ...big(), unit({ owner: 1, isPeon: true, x: 300 })], PLUS_INSANE, { roll: 0 }), null);
 }
 
 // ==========================================================================================

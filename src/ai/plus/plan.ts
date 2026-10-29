@@ -291,7 +291,6 @@ const SPARE_WORKERS = 1;
 /** Nobody's second hero before this much army is fielded — the altar's gold is the army's
  *  until there is an army. */
 const HERO2_ARMY = 14;
-const HERO3_ARMY = 30;
 
 /** When a tower goes up unprovoked (seconds). Before this the AI only towers if something is
  *  actually in its base, which is what a player does. */
@@ -462,6 +461,9 @@ export function buildPlan(c: PlusCtx): void {
   if (c.tier >= 3) always(c);
   // …and the race's TIER-3 RESEARCH, saved for ahead of the army — see `tier3First`.
   tier3Research(c);
+  // …and THE THIRD HERO right behind that research once tier 3 stands with an army out — the
+  // second hero's `heroBanked` one tier up. See `tier3Banked`.
+  if (tier3Banked(c)) tier3Hero(c);
   army(c, coreArmy(c)); // enough not to die to the first raid, cheap enough not to block tech
   // …and on a rung that MATCHES the enemy's air (`PlusProfile.antiAirMatch`), the ANSWER TO AIR
   // comes up here, under the core army and above every row that halts the ladder to save — the
@@ -474,8 +476,9 @@ export function buildPlan(c: PlusCtx): void {
   // research, the Castle, the tech and the upgrades, because at tier 2 that is the order a ladder
   // player spends in. Below the core army, so it can never be the reason there is nothing on the field.
   tierTwoHero(c);
-  // …and the THIRD hero, right behind it, for a race that buys it first at tier 3 (`tier3First`).
-  tier3Hero(c);
+  // …and the THIRD hero, right behind it, for every race — saved for while the tier-3 hall goes
+  // up, and asked for here at tier 3 until there is the army that banks it higher (`tier3Banked`).
+  if (!tier3Banked(c)) tier3Hero(c);
   // …and for a missing FIGHT item once the scroll is carried — see `fightSaving`.
   fightSaving(c);
   // …and JUST AFTER A WON FIGHT, the expansion comes up to here from the bottom of the ladder —
@@ -825,10 +828,12 @@ function extraHeroes(c: PlusCtx): void {
     }
     return;
   }
-  if (tier3HeroFirst(c)) return; // `tier3Hero`'s row, much higher up — never twice
-  if (profile.heroes >= 3 && ai.count(ai.heroId3) < 1 && armyFood >= HERO3_ARMY) {
-    ai.setBuildUnit(1, ai.heroId3);
-  }
+  // The THIRD hero is not asked for down here at all any more — it is `tier3Hero`'s, much higher
+  // up, for every race. Two things were wrong with this row. A third hero's requirement is the
+  // tier-3 hall (`[Ofar] Requires2=ofrt`, the same rank on every melee hero and the Tavern's), so
+  // at TIER 2 it was a dead 425-gold reservation sitting directly ABOVE `tierUp` — from
+  // 30 army food on, every pass held a hero's price back from the hall the hero was waiting on.
+  // And at tier 3 it was read after the running budget had paid for everything above it.
 }
 
 /**
@@ -904,13 +909,15 @@ function tierTwoHero(c: PlusCtx): void {
 /**
  * …and the GOLD that row is holding, for the one buyer outside the ladder — the hero's belt
  * (plus/items.ts shops out of `ItemView.gold`). The second hero's price while `heroBanked` is
- * up, or while the Keep is in the hall's queue (`tierTwoHero`'s own reserve), and 0 otherwise.
+ * up, or while the Keep is in the hall's queue (`tierTwoHero`'s own reserve); the third hero's
+ * while the tier-3 hall is (`tier3Hero`'s); and 0 otherwise.
  */
 export function secondHeroHold(c: PlusCtx): number {
   const { ai, profile, table, tier } = c;
   const keepGoingUp = tier < 2 && profile.heroes >= 2 && !!table.halls[1] && ai.count(table.halls[1]) >= 1
     && ai.countDone(table.altar) >= 1 && ai.count(ai.heroId) >= 1 && ai.count(ai.heroId2) < 1;
-  if (!heroBanked(c) && !keepGoingUp) return 0;
+  // …and the THIRD hero's while its tier-3 hall goes up (`tier3Hero`'s reserve).
+  if (!heroBanked(c) && !keepGoingUp) return thirdHallGoingUp(c) ? (c.defOf(ai.heroId3)?.goldCost ?? 0) : 0;
   return c.defOf(ai.heroId2)?.goldCost ?? 0;
 }
 
@@ -1187,7 +1194,7 @@ export function armyTarget(c: PlusCtx): number {
  * bought simply stand in the army.
  */
 export function buildableMix(c: PlusCtx): Array<{ unit: string; weight: number }> {
-  const rows = capCasters(c, strategyMix(c));
+  const rows = massCap(c, capCasters(c, strategyMix(c)));
   if (rows.length > 0) return rows;
   return fallbackMix(c);
 }
@@ -1254,6 +1261,25 @@ function capCasters(c: PlusCtx, rows: Array<{ unit: string; weight: number }>): 
 
 /** The most of the army that may be spellcasters — see `capCasters`. Ours, not the game's. */
 const CASTER_SHARE = 0.5;
+
+/**
+ * …and the race's MASS unit held to its share once there are enough of it — see
+ * `PlusRaceTable.mass`. `capCasters`' arithmetic asked of one unit, and only once `count` of it
+ * stand (queued included, its upgraded form folded in by `townCount`: a Berserker is the Head
+ * Hunter it was trained as). Never when it is all the mix can make — a tier-1 Head Hunter opening
+ * has nothing else to hand the budget to, and the cap would only leave the food unspent.
+ */
+function massCap(c: PlusCtx, rows: Array<{ unit: string; weight: number }>): Array<{ unit: string; weight: number }> {
+  const mass = c.table.mass;
+  if (!mass) return rows;
+  const row = rows.find((r) => r.unit === mass.unit);
+  if (!row || c.ai.townCount(mass.unit) < mass.count) return rows;
+  const others = rows.reduce((n, r) => (r === row ? n : n + r.weight), 0);
+  if (others <= 0) return rows;
+  const allowed = (others * mass.share) / (1 - mass.share);
+  if (row.weight <= allowed) return rows;
+  return rows.map((r) => (r === row ? { ...r, weight: allowed } : r));
+}
 
 /**
  * The race's OPENING SOLDIER — the Footman, the Grunt, the Archer, the Ghoul.
@@ -2023,7 +2049,7 @@ function abilityUpgrades(c: PlusCtx): void {
     if (!row.unlock || ai.countDone(row.from) < 1) continue;
     if (tier3Owns(c, row.id)) continue; // already asked, far higher up — never twice (`tier3Research`)
     if (armyFood < (row.after ?? 0)) continue;
-    if (row.forUnit && ai.townCount(row.forUnit) < 1) continue; // `UpgradeRow.forUnit` — its other forms count too
+    if (row.forUnit && ai.townCount(row.forUnit) < (row.forCount ?? 1)) continue; // `UpgradeRow.forUnit` — its other forms count too
     if (row.when === "enemyRanged" && (c.enemy.pierce ?? 0) < ENEMY_RANGED) continue;
     ai.setBuildUpgrSaved(row.ranks, row.id);
   }
@@ -2057,23 +2083,67 @@ function tier3Owns(c: PlusCtx, id: string): boolean {
   return c.tier >= 3 && !!c.table.tier3First?.includes(id);
 }
 
-/** Is the THIRD hero `tier3Hero`'s row — tier 3 standing on a race with `tier3First`? */
-function tier3HeroFirst(c: PlusCtx): boolean {
-  return c.tier >= 3 && !!c.table.tier3First;
-}
-
 /**
  * …and its THIRD priority, the last hero: directly under the second hero's own tier-2 row, and so
  * under the core army — the one row this file never saves through — but above every other row
  * of the ladder, which is where `extraHeroes` had it waiting behind the expansion and the tier
- * rows. Its `HERO3_ARMY` gate goes with it: by tier 3 the army it waits for is out.
+ * rows. Its old 30-food army gate goes with it: by tier 3 the army it waits for is out.
+ *
+ * FOR EVERY RACE, not only the one with a `tier3First`. Reported: *"the orc ai doesn't seem to
+ * keen towards getting its 3rd hero. same for human … we should have a logic that allows them get
+ * their 3rd hero as part of their tier 3 priorities"*. A race with no `tier3First` still had only
+ * `extraHeroes`, under the tech, the upgrades, the siege and the expansion; on the ladder fixture
+ * two of the five Insane human builds (`sanctums`, `knights`) never asked for a third hero in
+ * twenty minutes and a third asked seven minutes after its Castle.
+ *
+ * …and SAVED FOR while the tier-3 hall goes up (`tierTwoHero`'s own trick, one tier up): a hero
+ * is not legal before that hall stands, so with only the row the saving began the moment the
+ * Fortress or Castle finished, behind the research `tier3First` puts above it. While the upgrade
+ * is in the hall's queue this holds the hero's price back from everything below (`reserveGold`,
+ * which never halts), and the hero is in the altar the pass the hall lands.
  */
 function tier3Hero(c: PlusCtx): void {
-  const { ai, profile, table } = c;
-  if (!tier3HeroFirst(c) || profile.heroes < 3) return;
+  const { ai, profile, table, tier } = c;
+  if (profile.heroes < 3 || !ai.heroId3) return;
   if (ai.countDone(table.altar) < 1 || ai.count(ai.heroId) < 1 || ai.count(ai.heroId2) < 1) return;
-  if (ai.count(ai.heroId3) >= 1 || !(ai.heroLegal?.(ai.heroId3) ?? true)) return;
-  ai.setBuildUnit(1, ai.heroId3);
+  if (ai.count(ai.heroId3) >= 1) return;
+  if (tier >= 3) {
+    if (ai.heroLegal?.(ai.heroId3) ?? true) ai.setBuildUnit(1, ai.heroId3);
+    return;
+  }
+  if (!thirdHallGoingUp(c)) return;
+  const hero = c.defOf(ai.heroId3);
+  if (hero) ai.reserveGold(hero.goldCost, hero.lumberCost);
+}
+
+/**
+ * IS THE THIRD HERO BANKED FOR, ABOVE THE CORE ARMY? — from the pass the tier-3 hall stands with
+ * `HERO3_BANK` of army out, until the hero is in the altar. `heroBanked` one tier up, and for the
+ * reason that row moved: under `army(coreArmy)` the hero waited for the core army to fill, and an
+ * `army` row is `SetBuildNext` — one more soldier per row per pass — so every pass bought a
+ * soldier with the hero's gold. Measured on the ladder fixture with the row only under the core
+ * army: the human's `sanctums` asked for its third hero four and a half minutes after its Castle.
+ * Directly under `tier3Research`, so the orc's own tier-3 order (*Berserkers, then Bloodlust, then
+ * the third hero*) still holds; and `releaseStall` lets the ladder past a hero it has stopped
+ * getting nearer, so a broken base is not locked out of an army.
+ */
+function tier3Banked(c: PlusCtx): boolean {
+  const { ai, profile, table } = c;
+  if (c.tier < 3 || profile.heroes < 3 || !ai.heroId3 || c.armyFood < HERO3_BANK) return false;
+  if (ai.countDone(table.altar) < 1 || ai.count(ai.heroId) < 1 || ai.count(ai.heroId2) < 1) return false;
+  return ai.count(ai.heroId3) < 1;
+}
+
+/** The army that must be out before `tier3Banked` puts the third hero above the core army — the
+ *  food the old bottom-of-the-ladder row waited for. Ours. */
+const HERO3_BANK = 30;
+
+/** Is the tier-3 hall in the queue — counted, none of it finished (`tier` is read off finished
+ *  halls) — with the third hero still to buy? `tier3Hero`'s saving, and `secondHeroHold`'s. */
+function thirdHallGoingUp(c: PlusCtx): boolean {
+  const { ai, profile, table, tier } = c;
+  return tier < 3 && profile.heroes >= 3 && !!ai.heroId3 && !!table.halls[2] && ai.count(table.halls[2]) >= 1
+    && ai.countDone(table.altar) >= 1 && ai.count(ai.heroId2) >= 1 && ai.count(ai.heroId3) < 1;
 }
 
 /**
@@ -2113,7 +2183,7 @@ function upgrades(c: PlusCtx): void {
     if (row.unlock) continue; // `abilityUpgrades`, much higher up
     if (ai.countDone(row.from) < 1) continue;
     if (armyFood < (row.after ?? 0)) continue;
-    if (row.forUnit && ai.townCount(row.forUnit) < 1) continue; // `UpgradeRow.forUnit` — its other forms count too
+    if (row.forUnit && ai.townCount(row.forUnit) < (row.forCount ?? 1)) continue; // `UpgradeRow.forUnit` — its other forms count too
     // …and an upgrade that only answers one thing waits until that thing has been SEEN — see
     // `UpgradeRow.when`. Asked of the scouting read, so it is only as good as the scouting.
     if (row.when === "enemyRanged" && (c.enemy.pierce ?? 0) < ENEMY_RANGED) continue;

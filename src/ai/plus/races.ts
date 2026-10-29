@@ -25,7 +25,7 @@ import {
   UPG_CR_ATTACK, UPG_DEFEND, UPG_DRUID_CLAW, UPG_MARK_CLAW, UPG_DRUID_TALON, UPG_FIEND_WEB, UPG_GHOUL_FRENZY,
   UPG_GUN_RANGE,
   UPG_HAMMERS, UPG_HIDES, UPG_LEATHER, UPG_MASONRY, UPG_MELEE, UPG_MOON_ARMOR, UPG_NECROS,
-  UPG_ORC_ARMOR, UPG_ORC_BERSERKER, UPG_ORC_ENSNARE, UPG_ORC_MELEE, UPG_ORC_PULVERIZE,
+  UPG_ORC_ARMOR, UPG_ORC_BERSERK, UPG_ORC_BERSERKER, UPG_ORC_ENSNARE, UPG_ORC_MELEE, UPG_ORC_PULVERIZE,
   UPG_FLAK, UPG_ORC_RANGED, UPG_ORC_SHAMAN, UPG_ORC_SPIKES, UPG_ORC_WAR_DRUMS, UPG_PRAYING, UPG_RANGED,
   UPG_SORCERY, UPG_STR_MOON, UPG_STR_WILD, UPG_UNHOLY_ARMOR, UPG_UNHOLY_STR, UPG_WOOD,
   UNDEAD_ALTAR, UNDEAD_MINE, VAMP_AURA, VENGEANCE, VOODOO, WAR_STOMP, WARDEN, WATCH_TOWER, WATER_ELEMENTAL,
@@ -146,6 +146,10 @@ export interface UpgradeRow {
    * and its own queue on a body nobody has.
    */
   forUnit?: string;
+  /** …and how many of `forUnit` that takes (default 1). Berserker Strength (`Robs`) is worth a
+   *  Barracks' time once there are Grunts to make stronger, not for the one left from the
+   *  opening — the developer's *"if it has more than 2 grunts"*. */
+  forCount?: number;
 }
 
 /** A support building every build of this race wants, whatever its mix. */
@@ -540,6 +544,19 @@ export interface PlusRaceTable {
    */
   readonly antiAir?: { readonly unit: string; readonly count: number };
   /**
+   * The race's MASS unit, and the point at which it stops being most of the army.
+   *
+   * The developer, of the orc: *"after reaching a number of 7 headhunters/berserkers, its fine to
+   * mix some other units in as well"* — reported against a tier-3 Insane orc that went *"pretty
+   * much straight to berserkers"*. Every orc tier-2 plan is Head Hunters by design (3.5 shares
+   * against a Grunt's half, plus/races.ts), and the share is meant for the FIRST of them. So once
+   * `count` of `unit` stand (its upgraded form counted — a Berserker is a Head Hunter,
+   * `TOWN_COUNT_EQUIVALENTS`), its weight is held to `share` of the mix (plan.ts `massCap`) and the
+   * budget goes to the units around it. Below the count nothing changes. Both numbers are OURS;
+   * the seven is the developer's.
+   */
+  readonly mass?: { readonly unit: string; readonly count: number; readonly share: number };
+  /**
    * The race's ARTILLERY — the Mortar Team, the Demolisher, the Meat Wagon, the Glaive Thrower —
    * which `plan.ts` (`siegeLine`) keeps `PlusProfile.siegeUnits` of once the second tier is
    * standing, whatever build was rolled. A RACE row for `antiAir`'s reason: a build that names
@@ -890,6 +907,10 @@ const ORC: PlusRaceTable = {
   // THE BATS. `[otbr] Requires=ovln` — the Voodoo Lounge, which is also `shop` and is going up
   // for the hero's belt anyway, so the orc's anti-air costs it a Beastiary it may not have had.
   antiAir: { unit: BATRIDER, count: 4 },
+  // SEVEN HEAD HUNTERS, then a mixed army — see `PlusRaceTable.mass`. 45 % rather than a third:
+  // the Head Hunter (the Berserker) is still the army's backbone after its seventh, it simply
+  // stops being all of it.
+  mass: { unit: HEAD_HUNTER, count: 7, share: 0.45 },
   siegeUnit: CATAPULT,
   tower: ORC_WATCH_TOWER,
   // Berserkers, then Bloodlust, then the third hero — see `PlusRaceTable.tier3First`.
@@ -924,6 +945,13 @@ const ORC: PlusRaceTable = {
     // first, it kept the one Beastiary researching for a minute while the Raiders waited, and
     // the first Raider stood at ten minutes.
     { id: UPG_ORC_ENSNARE, from: BESTIARY, ranks: 1, after: 12, unlock: true, forUnit: RAIDER },
+    // BERSERKER STRENGTH (`[Robs] Requires=ostr`, at the Barracks — `[obar] Researches=Robs,Rotr,
+    // Robk,Robf`): the Grunt's hit points and damage. It was on no Computer+ list at all, so no
+    // orc ever bought it. The developer: *"make sure that the orc is getting the Berserker Strength
+    // upgrade on tier 2 if it has more than 2 grunts"* — an unlock row (saved for: the Barracks is
+    // the building the army keeps busy), legal from the Stronghold by its own `Requires`, and only
+    // with three Grunts out (`forCount`).
+    { id: UPG_ORC_BERSERK, from: ORC_BARRACKS, ranks: 1, unlock: true, forUnit: GRUNT, forCount: 3 },
     // WAR DRUMS — the developer's *"make sure that orc gets the kodo drums upgrade as well on tier
     // 3"*. One rank (`[Rwdm] maxlevel=1`, 100/150, UpgradeData.slk) and `Requires=ofrt,ofor`
     // (OrcUpgradeFunc.txt), so the Fortress gates it by itself; saved for like the other unlocks,
@@ -1037,9 +1065,19 @@ const ORC: PlusRaceTable = {
     // kodo beasts"* — one in the tier-2 armies, two here, each replaced when it falls — with War
     // Drums researched for them (`upgrades`). And ONE Raider, likewise replaced: *"orc must
     // continue trying to maintain at least 1 raider during tier 3"* — the Ensnare it carries.
+    //
+    // …AND THE BEASTIARY BESIDE THEM, as shares of the mix and not only the counts. Reported of
+    // this very army: *"it goes pretty much straight to berserkers, which is OK if some units like
+    // shamans or raiders (along with the ensnare upgrade) and kodos and/or wind riders were mixed
+    // from the spirit lodge/bestiary buildings as well so that the army has a bit of variation"* —
+    // *"the raider is an especially important unit since it can immobilize targets to make them
+    // easy kills"*. Until the Berserker Upgrade lands the Taurens wait (`waitFor`), so for that
+    // whole stretch the mix was Head Hunters and Shamans and nothing else. Raiders and Wind Riders
+    // now take a share of it (every orc plan already stands the Beastiary up for its Raiders), and
+    // the Head Hunters are held to their share past the seventh (`PlusRaceTable.mass`).
     { id: "taurens", name: "Berserkers, Shamans and Taurens", tier: 3, weight: 0, expandAt: 420, expandAgainAt: 840,
       lead: { [KODO_BEAST]: 2, [RAIDER]: 1 }, waitFor: { [TAUREN]: { research: [UPG_ORC_BERSERKER, 1] } },
-      mix: { [TAUREN]: 3, [HEAD_HUNTER]: 2.5, [SHAMAN]: 1.5 } },
+      mix: { [TAUREN]: 3, [HEAD_HUNTER]: 2.5, [SHAMAN]: 1.5, [RAIDER]: 1.2, [WYVERN]: 0.8 } },
   ],
   heroes: [BLADE_MASTER, FAR_SEER, TAUREN_CHIEF, SHADOW_HUNTER],
   skills: {

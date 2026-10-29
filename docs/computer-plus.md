@@ -1577,8 +1577,29 @@ Below `HERO2_ARMY` it stays under the core army, as before. Every rung that fiel
 
 The halt is bounded in both directions besides: it is **one** purchase (nothing re-asks once the
 hero is queued — `ai.count` counts a job in a queue), and `releaseStall` lets the ladder past a row
-that has stopped getting nearer its price. Only the second hero moves; the third is a luxury at any
-tier and stays where it was.
+that has stopped getting nearer its price.
+
+### …and the THIRD one comes with the tier-3 hall, for every race
+
+Reported: *"the orc ai doesn't seem to keen towards getting its 3rd hero. same for human … we
+should have a logic that allows them get their 3rd hero as part of their tier 3 priorities."*
+`tier3Hero` had been the orc's alone (behind its `tier3First` research); every other race still
+had only `extraHeroes` at the bottom of the ladder, and that row was wrong twice. It was read after
+the running budget had paid for the tech, the upgrades, the siege and the expansion — on the ladder
+fixture two of the five Insane human builds (`sanctums`, `knights`) never asked for a third hero in
+twenty minutes — and at TIER 2 it was not even legal. A third hero is `Requires2` = the tier-3 hall
+(`[Ofar] Requires1=ostr`, `Requires2=ofrt`; every melee hero alike), so from 30 army food on the
+row was a dead 425-gold reservation sitting directly ABOVE `tierUp`: every pass held a hero's price
+back from the hall the hero was waiting on.
+
+So `tier3Hero` is every race's, and it is `tierTwoHero`'s design one tier up: it SAVES the hero's
+gold and lumber while the tier-3 hall is in the queue (`thirdHallGoingUp`, and `secondHeroHold`
+hands the belt that price too), and once the hall stands with 30 food of army out it is BANKED
+directly under `tier3Research`, above the core army (`tier3Banked`, `heroBanked`'s twin) — so the
+orc's own order (*Berserkers, then Bloodlust, then the third hero*) still holds and every other race
+buys the hero first. `extraHeroes` no longer asks for a third hero at all. Measured on the fixture's
+new twenty-minute Insane run: every build that reaches tier 3 asks for its third hero 0–48 s after
+the hall (pinned at 60 s); `human/sanctums` had been 4½ minutes and two human builds never.
 
 ### …and the undead's second hero is ALWAYS the Death Knight
 
@@ -3494,6 +3515,15 @@ on the ladder (see below), and a heal is never delayed — so the gate in `ready
 The same test is therefore applied inside `pickTarget` to the target's *nuke half*, which is why
 the one nuke the developer named first would otherwise have been the one nuke the rule missed.
 
+**Chain Lightning is not spent on creeps at all** (`NO_CREEP_SPELLS`, keyed on the base code
+`AOcl`). Reported: *"the Far Seer AI is using too much of the 'Chain Lightning' ability on creep
+camps. we must disable its usage against creep camps."* The quarter chance was not enough for this
+hero: Feral Spirit is its creeping skill, maxed first, so the Far Seer spends more of its game in a
+camp than anywhere else, and at 120 mana a press (`[AOcl] Cost1`, `Cool1` 9) two presses are a bar.
+Not a roll — a player's fighting body in reach (`playerInFight`, `worthTheMana`'s own "always"
+half, asked every pass) is the only thing that turns it back on, so the button is there the moment
+an enemy army walks into the camp the party is clearing.
+
 ### Holy Light and Death Coil are two spells on one button
 
 Both were half-broken, silently, for the same reason: `friendlySpell` reads the `targs1` flags,
@@ -4052,6 +4082,23 @@ row directly behind them was never once reached on that rung. It is back DOWN to
 was brought towards Easy ("quite a massive difference … not very friendly for beginners"), so on
 Normal the mana row is once again not reached — deliberately this time: a shorter bar on the hero
 is part of the cut. Insane's six still reach it.
+
+**…and on Insane it has a door of its own, because an Insane army is never at home**
+(`manaChance`, `manaSaving`). Reported later: the computers *"don't seem to buy and use clarity
+potions. most notably on Orc and i believe human as well"* — *"especially during tier 3, Orc must
+be more keen towards regenerating its heroes mana"*. The row's place on the list did not matter:
+the ordinary trip only WALKS from a muster at home (`mayShop`), and from the creep clock on an
+Insane army ROAMS (which sets `afield`), so the belt bought in the first minutes was not bought
+again as each charge was drunk — the salve's story (`RACE_FIELD`) and the orb's (`heroChance`)
+once more. So the race's mana rows get the same field door, behind the hero's own gear: fetched on
+the field detour (never on a wave), bought wherever a hero stands in a shop's range, and — the half
+that actually brings a hero back to the race shop in the base — while the heroes carry fewer than
+`MANA_KEEP` (2) of them, a hero who may carry the next one (`suits`: never a melee hero's clarity)
+has room and a shop within `SHOP_REACH` of home sells it, the roam stands down for a pass and the
+party musters at home (`roaming` asks `manaSaving` exactly as it asks `portalSaving`). Insane only
+(`eagerMana`): it is the rung that roams. Watched live (Echo Isles, Insane orc against Insane human,
+eighteen minutes): both bought Lesser Clarity Potions from about three minutes on and a Potion of
+Mana each at tier 2.
 
 **An opening buy is not discretionary spending** (`Want.opening`). Everything else on the list is
 bought out of the surplus above `itemReserve`; these are bought out of the purse. That is what the
@@ -5325,6 +5372,19 @@ Pandaren Brewmaster, whose Drunken Haze → Breath of Fire combo must burn.
   trained — the same was true of a Druid of the Claw in Bear Form), and `replacedBy` trains the
   unit an `rtma` upgrade put on the shelf in place of the one it withdrew. Bloodlust is the
   sim's autocast and goes on whoever is swinging, Tauren and Berserker alike.
+- **…and the Head Hunters are the first seven of it, not the whole of it** (`PlusRaceTable.mass`,
+  plan.ts `massCap`). Reported of an Insane orc at tier 3: *"it goes pretty much straight to
+  berserkers, which is OK if some units like shamans or raiders (along with the ensnare upgrade) and
+  kodos and/or wind riders were mixed from the spirit lodge/bestiary buildings"*, and *"after
+  reaching a number of 7 headhunters/berserkers, its fine to mix some other units in as well"*.
+  Until the Berserker Upgrade lands the Taurens wait (`waitFor`), so for that whole stretch the
+  tier-3 mix was Head Hunters and Shamans and nothing else. `taurens` now carries Raiders (1.2) and
+  Wind Riders (0.8) as shares besides the Kodo and Raider counts, and once seven Head Hunters stand
+  (a Berserker counted as one — `TOWN_COUNT_EQUIVALENTS`) the Head Hunter's weight is held to 45 %
+  of the mix, `capCasters`' arithmetic asked of one unit; below seven nothing changes. And
+  **Berserker Strength** (`[Robs] Requires=ostr`, at the Barracks) — on no Computer+ list at all
+  before — is an unlock row taken at tier 2 once three Grunts stand (`UpgradeRow.forCount`, the
+  developer's *"if it has more than 2 grunts"*).
 - **What tier 3 is FOR is now bought there.** Priest Training (`Rhpt`, rank 2 is Inner Fire —
   `[Ainf] Requires=Rhpt` ×2, `[Rhpt] Requires1=hcas`) and Shaman Training (`Rost`, rank 2 is
   Bloodlust — `[Ablo] Requires=Rost` ×2, `[Rost] Requires1=ofrt`) are ability UNLOCKS, saved for

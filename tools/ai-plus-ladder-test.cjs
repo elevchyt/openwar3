@@ -39,7 +39,7 @@ const { existsSync, readFileSync, writeFileSync } = require("node:fs");
 
 const REPO = join(__dirname, "..");
 writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
-const { buildPlan, harvestPlan } = require(join(REPO, ".sim-build", "src", "ai", "plus", "plan.js"));
+const { buildPlan, buildableMix, harvestPlan } = require(join(REPO, ".sim-build", "src", "ai", "plus", "plan.js"));
 const { PLUS_RACES, tableForEdition, tableForDifficulty } = require(join(REPO, ".sim-build", "src", "ai", "plus", "races.js"));
 const EDITION = process.env.OW3_EDITION === "roc" ? "roc" : "tft";
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
@@ -194,6 +194,71 @@ console.log("--- night elf: the bears come as soon as tier 3 does ---");
   const expand = at((x) => x.kind === "expand");
   check("at tier 3 the druid row is asked for", druid >= 0, true);
   check("…above the expansion", expand < 0 || druid < expand, true);
+}
+
+// --- the orc's tier-2 and tier-3 army --------------------------------------------------------
+//
+// Reported of an Insane orc: "it goes pretty much straight to berserkers", "make sure that the orc
+// is getting the Berserker Strength upgrade on tier 2 if it has more than 2 grunts", and "after
+// reaching a number of 7 headhunters/berserkers, its fine to mix some other units in as well".
+console.log("--- the orc's Berserker Strength, mass cap and tier-3 Beastiary ---");
+{
+  const orc = PLUS_RACES.orc;
+  const plan2 = orc.strategies.find((s) => s.id === "orcstandard2");
+  const base = { [orc.halls[0]]: 1, [orc.halls[1]]: 1, [orc.barracks]: 1, [orc.altar]: 1, ofor: 1, obea: 1, osld: 1 };
+  const asks = (standing) => {
+    const r = recorder(orc, plan2, PLUS_INSANE, { standing: { ...base, ...standing }, tier: 2, armyFood: 30, gold: 5000, wood: 5000 });
+    buildPlan(r.ctx);
+    return r.build.some((x) => x.kind === "upgrade" && x.item === "Robs");
+  };
+  check("no Berserker Strength for two Grunts", asks({ ogru: 2 }), false);
+  check("…Berserker Strength for three", asks({ ogru: 3 }), true);
+
+  // THE MASS CAP (`PlusRaceTable.mass`): untouched below seven Head Hunters, 45 % of the mix from
+  // the seventh on — and a Berserker is a Head Hunter for the count.
+  const share = (standing, strategy = plan2, tier = 2) => {
+    const r = recorder(orc, strategy, PLUS_INSANE, { standing: { ...base, ...standing }, tier, armyFood: 30 });
+    const rows = buildableMix(r.ctx);
+    const total = rows.reduce((n, x) => n + x.weight, 0);
+    return (rows.find((x) => x.unit === "ohun")?.weight ?? 0) / total;
+  };
+  check("six Head Hunters: the build's own share", share({ ohun: 6 }) > 0.5, true);
+  check("…seven: held to 45 %", Math.abs(share({ ohun: 7 }) - 0.45) < 1e-9, true);
+  check("…and seven Berserkers count the same", Math.abs(share({ otbk: 7 }) - 0.45) < 1e-9, true);
+
+  // THE TIER-3 ARMY trains out of the Beastiary too, before the Taurens' Berserker Upgrade.
+  const taurens = orc.strategies.find((s) => s.id === "taurens");
+  const r3 = recorder(orc, taurens, PLUS_INSANE, { standing: { ...base, [orc.halls[2]]: 1 }, tier: 3, armyFood: 30 });
+  const mix3 = buildableMix(r3.ctx).map((x) => x.unit);
+  check("the orc's tier-3 mix trains Raiders and Wind Riders beside the Berserkers",
+    ["ohun", "orai", "owyv", "oshm"].every((u) => mix3.includes(u)), true);
+}
+
+// --- the THIRD hero is a tier-3 row, not a luxury at the bottom ------------------------------
+//
+// "the orc ai doesn't seem to keen towards getting its 3rd hero. same for human" — for every race
+// but the orc its only row sat under the tech, the upgrades and the expansion, and at tier 2 it
+// was an ILLEGAL row (a third hero is `Requires2` = the tier-3 hall) directly above the tier-up.
+// plan.ts `tier3Hero` / `tier3Banked`.
+console.log("--- the third hero comes with the tier-3 hall ---");
+for (const [race, table] of Object.entries(PLUS_RACES)) {
+  const s = table.strategies[0];
+  const r0 = recorder(table, s, PLUS_INSANE, {});
+  const [h1, h2, h3] = [r0.ai.heroId, r0.ai.heroId2, r0.ai.heroId3];
+  const base = { [table.halls[0]]: 1, [table.halls[1]]: 1, [table.barracks]: 1, [table.altar]: 1, [h1]: 1, [h2]: 1 };
+  const t2 = recorder(table, s, PLUS_INSANE, { standing: base, tier: 2, armyFood: 40, gold: 5000, wood: 5000 });
+  buildPlan(t2.ctx);
+  check(`${race}: no third-hero row at tier 2`, t2.build.some((x) => x.item === h3), false);
+  const up = recorder(table, s, PLUS_INSANE, { standing: { ...base, [table.halls[2]]: 1 }, tier: 2, armyFood: 40, gold: 5000, wood: 5000 });
+  up.ctx.defOf = () => ({ goldCost: 425, lumberCost: 100, foodUsed: 5 });
+  buildPlan(up.ctx);
+  check(`${race}: …its price saved while the tier-3 hall goes up`, up.build.some((x) => x.kind === "reserve" && x.qty === 425), true);
+  const t3 = recorder(table, s, PLUS_INSANE, { standing: { ...base, [table.halls[2]]: 1 }, tier: 3, armyFood: 40, gold: 5000, wood: 5000 });
+  buildPlan(t3.ctx);
+  const at = t3.build.findIndex((x) => x.item === h3);
+  check(`${race}: the third hero is asked for at tier 3`, at >= 0, true);
+  const soldierAt = t3.build.findIndex((x) => x.kind === "unit" && table.units[x.item]);
+  check(`${race}: …above the army once one is out`, soldierAt < 0 || at < soldierAt, true);
 }
 
 // --- the extra production building -----------------------------------------------------
@@ -1007,6 +1072,8 @@ function runEconomy() {
       // …and when the SECOND HERO was asked for (queued counts — an altar's queue is the
       // decision, plan.ts `tierTwoHero`).
       hero2At: Infinity,
+      // …and the THIRD (plan.ts `tier3Hero`), which is legal only from the tier-3 hall.
+      hero3At: Infinity,
     };
     const towerIds = [table.tower, ...(table.towerUpgrades ?? []).map((u) => u.id)];
     const alive = (id) => S.units[id] ?? 0;
@@ -1285,6 +1352,7 @@ function runEconomy() {
       if (S.spikeAt === Infinity && spike && doneRaw(spike) > 0) S.spikeAt = S.t;
       if (S.towerAt === Infinity && towerIds.some((id) => doneRaw(id) > 0)) S.towerAt = S.t;
       if (S.hero2At === Infinity && ai.heroId2 && countRaw(ai.heroId2) > 0) S.hero2At = S.t;
+      if (S.hero3At === Infinity && ai.heroId3 && countRaw(ai.heroId3) > 0) S.hero3At = S.t;
       S.t += DT;
     }
     return {
@@ -1299,7 +1367,7 @@ function runEconomy() {
       // The race's artillery, asked for or standing (plus/plan.ts `siegeLine`).
       siege: table.siegeUnit ? ai.count(table.siegeUnit) : 0,
       tierHaltShare: S.tierHaltsEarly / Math.max(1, S.passesEarly),
-      tier2At: Math.round(S.tier2At), tier3At: Math.round(S.tier3At), hero2At: Math.round(S.hero2At), spike, spikeAt: Math.round(S.spikeAt),
+      tier2At: Math.round(S.tier2At), tier3At: Math.round(S.tier3At), hero2At: Math.round(S.hero2At), hero3At: Math.round(S.hero3At), spike, spikeAt: Math.round(S.spikeAt),
       expandAt: Math.round(S.expandAt),
       towerAt: Math.round(S.towerAt),
       back,
@@ -1421,6 +1489,24 @@ function runEconomy() {
   // …and Normal does NOT rush: it still buys the hall out of what the ladder leaves.
   check("human/rifles (Normal) does not rush its tier 3",
     run("human", "rifles", PLUS_NORMAL, 900).tier3At > run("human", "rifles", PLUS_INSANE, 900).tier3At, true);
+
+  // --- …and twenty minutes of INSANE, for the third hero -----------------------------------
+  //
+  // The third hero is legal only from the tier-3 hall, so its timing is a tier-3 fact and needs a
+  // longer run than the ten minutes below. Pinned as "asked for within a minute of the hall"
+  // (plan.ts `tier3Hero` saves for it while the hall goes up, and `tier3Banked` puts it above the
+  // army; the orc's Berserker Upgrade and Master Training come first by design, `tier3First`).
+  console.log("\n--- twenty minutes of Insane: the third hero ---");
+  for (const [race, table] of Object.entries(TABLES)) {
+    for (const s of table.strategies) {
+      if (s.weight === 0 && !s.replaces) continue; // a grown-into build is measured through its parent
+      const r = run(race, s.id, PLUS_INSANE, 1200);
+      console.log(`      INSA ${(race + "/" + s.id).padEnd(22)} tier=${r.tier} tier3@${String(r.tier3At).padStart(4)}s hero3@${String(r.hero3At).padStart(4)}s`);
+      if (r.tier < 3) continue;
+      check(`${race}/${s.id} (Insane) asks for its third hero within 60s of tier 3`, r.hero3At - r.tier3At <= 60, true);
+      check(`${race}/${s.id} (Insane) …and not before the hall that makes it legal`, r.hero3At >= r.tier3At, true);
+    }
+  }
 
   console.log("\n--- ten minutes of build ladder ---");
   for (const [race, table] of Object.entries(TABLES)) {
