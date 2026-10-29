@@ -76,6 +76,9 @@ export interface PlusCtx {
    * `PlusItems.portalSaving`. 0 or absent when there is nothing to save for. See `portalSaving`.
    */
   readonly portalReserve?: number;
+  /** …and the gold held for the orc's second hero's first Healing Salve while it is coming out —
+   *  `PlusItems.kitSaving`. 0 or absent when there is nothing to save for. */
+  readonly kitReserve?: number;
   /** …and, once the scroll is carried, for a missing FIGHT item (Scroll of Healing, Potion of
    *  Lesser Invulnerability — `PlusItems.fightSaving`), held lower down. See `fightSaving`. */
   readonly fightReserve?: number;
@@ -457,6 +460,8 @@ export function buildPlan(c: PlusCtx): void {
   if (heroBanked(c)) c.ai.setBuildUnit(1, c.ai.heroId2);
   // SAVING FOR A MISSING TOWN PORTAL — see `portalSaving` for why HERE.
   portalSaving(c);
+  // …and for the second hero's first salve, the same way (`PlusItems.kitSaving`).
+  if (c.kitReserve && c.kitReserve > 0) c.ai.reserveGold(c.kitReserve);
   // …and NOW the REST of the economy — the profile's full worker count, whatever it is. This is
   // the hero-delay fix and it is why only a BOUNDED opening crew sits above the hero: `workers`
   // used to sit where `mineCrew` does and ask for the profile's whole number (14 on Insane), and

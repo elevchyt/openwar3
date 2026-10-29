@@ -2208,6 +2208,13 @@ console.log("\n-- the orc's second hero buys two salves and a clarity potion ---
   check("…and with no money for it nothing is bought", poor.buy, null);
   const normal = shopped([belt(hero({ typeId: "Obla" }), "stwp", "hslv", "hslv"), hero({ typeId: "Oshd" }), MERCHANT], PLUS_NORMAL, { race: "orc", shelf: LOUNGE });
   check("…Insane only: a Normal orc buys its second hero no salve", normal.buy && normal.buy.itemId === "hslv", false);
+  // "the second orc hero coming out must buy 1 healing salve if it cannot afford two"
+  const one = hero({ typeId: "Oshd" });
+  const r4 = shopped([belt(hero({ typeId: "Obla" }), "stwp", "hslv", "hslv"), one, MERCHANT], PLUS_INSANE, { race: "orc", shelf: LOUNGE, gold: 150 });
+  check("…on 150 gold it still buys ONE salve", r4.buy && r4.buy.itemId, "hslv");
+  const half2 = belt(hero({ typeId: "Oshd" }), "hslv");
+  const r5 = shopped([belt(hero({ typeId: "Obla" }), "stwp", "hslv", "hslv"), half2, MERCHANT], PLUS_INSANE, { race: "orc", shelf: LOUNGE, gold: 80 });
+  check("…and on 80 the clarity does not go ahead of the second salve", !!(r5.buy && r5.buy.itemId === "plcl"), false);
   const tc = belt(hero({ typeId: "Otch" }), "hslv", "hslv");
   const r3 = shopped([belt(hero({ typeId: "Ofar" }), "stwp", "hslv", "hslv"), tc, MERCHANT], PLUS_INSANE, { race: "orc", shelf: LOUNGE });
   check("…and a MELEE second hero (the Chieftain) is not sent for the clarity", r3.buy && r3.buy.itemId === "plcl", false);

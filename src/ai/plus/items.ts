@@ -3047,9 +3047,9 @@ export class PlusItems {
    * THE SECOND HERO'S OWN FIRST BUY — `SECOND_KIT`, Insane only. The hero is noticed the pass it
    * appears (the second hero this player has ever had; a revived one keeps its id and is not new)
    * and for `SECOND_KIT_WINDOW` seconds it buys its rows into ITS OWN belt: at a shop in reach, or
-   * walked to the nearest one round home that stocks the row. A row it cannot pay for is skipped
-   * rather than saved for — "otherwise just continue as it does now" — and the window closes on
-   * whatever is left.
+   * walked to the nearest one round home that stocks the row. The rows are bought IN ORDER and a
+   * row it cannot pay for stops the pass (only the first salve is saved for, by `kitSaving`) —
+   * "otherwise just continue as it does now" — and the window closes on whatever is left.
    */
   private secondKitChance(now: number, own: SimUnit[], ctx: ItemCtx): boolean {
     for (const h of own) {
@@ -3078,7 +3078,12 @@ export class PlusItems {
       // (`suits`), so a Tauren Chieftain coming out second buys the two salves alone.
       if (!suits(hero, w.id, this.carry)) continue;
       short = true;
-      if (def.gold > this.view.gold()) continue; // not the money for it: carry on as before
+      // Not the money for it: carry on as before — and buy nothing BELOW it either, so a purse of
+      // 70–99 is not spent on the clarity ahead of the salve ("1 healing salve if it cannot afford
+      // two"; `kitSaving` is what holds that first salve's price off the ladder). A SALVE short is
+      // also the rest of the belt's shopping held for the window, or the ordinary list spends the
+      // same 80 gold on a clarity one pass later.
+      if (def.gold > this.view.gold()) return w.id === SALVE;
       const shops = this.shops(ctx).filter((shop) => this.stocks(shop, w.id));
       const at = shops.find((shop) => this.view.world.shopReaches(shop.id, hero.id));
       if (at) {
@@ -3100,6 +3105,30 @@ export class PlusItems {
     if (!short) this.secondHero = null; // all bought (or no room left for it)
     if (this.onErrand === hero.id) this.onErrand = 0;
     return false;
+  }
+
+  /**
+   * How much gold the BUILD LADDER must hold back so the second hero's FIRST salve can be bought —
+   * one Healing Salve's price while `SECOND_KIT`'s window is open and the new hero carries none,
+   * else 0 (plus/plan.ts `kitSaving`). The developer: *"the second orc hero coming out must buy 1
+   * healing salve if it cannot afford two"*. The kit buys row by row and only what the purse covers,
+   * so a hero coming out on 100–199 gold already left with one salve — but the ladder empties the
+   * purse every build pass, and on less than a salve's price it walked out with none at all. The
+   * same half `portalSaving` is for the scroll: the shopping side was waiting, the side that spends
+   * the gold was not. Only the FIRST salve is saved for; the second and the clarity are still bought
+   * only if the gold is there.
+   */
+  kitSaving(ctx: ItemCtx): number {
+    const kit = this.profile.difficulty === MELEE_INSANE ? SECOND_KIT[this.race] : undefined;
+    const fresh = this.secondHero;
+    const first = kit?.[0];
+    if (!first || !fresh || this.profile.shopping <= 0) return 0;
+    const hero = this.view.world.units.get(fresh.id);
+    if (!hero || hero.hp <= 0 || hero.inventory.indexOf(null) < 0) return 0;
+    if (hero.inventory.some((x) => x?.itemId === first.id)) return 0;
+    const def = this.view.item(first.id);
+    if (!def || !this.shops(ctx).some((shop) => this.stocks(shop, first.id))) return 0;
+    return def.gold;
   }
 
   /** Buy `itemId` for our first hero with room if one is standing in range of a shop that sells

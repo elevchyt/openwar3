@@ -5460,3 +5460,20 @@ Pandaren Brewmaster, whose Drunken Haze → Breath of Fire combo must burn.
     - a READY shot at something in reach is fired before any step back (the stutter-step: the
       walk is taken while the weapon cools);
     - every step back has an attack queued behind it.
+- **The second hero's first salve is saved for** (`PlusItems.kitSaving` → plan.ts `kitReserve`,
+  beside the portal's reserve). The developer: *"the second orc hero coming out must buy 1 healing
+  salve if it cannot afford two"*. The kit already bought row by row, but the ladder emptied the
+  purse every pass, so a hero coming out on less than 100 gold walked away with nothing. Now the
+  price of ONE salve is held off the ladder while the new hero carries none. The kit buys its rows
+  IN ORDER: an unaffordable salve stops the pass and holds the rest of the shopping, so 80 gold is
+  not spent on the clarity first.
+- **The friendly end of a Siphon Mana stands still** (plus/index.ts `tetherPass`,
+  `Brain.tethered`). `holdsSiphon` kept the Blood Mage in his channel, but the link snaps past the
+  row's `Area1` (800) whichever END walks, and the receiver was re-ordered with the rest of the
+  army. While one of our Blood Mages channels `AHdr` into one of our own units, that unit is put
+  on Hold Position if it is walking, and `issue` refuses the army's walks for it. It is let go on
+  the caster's own terms (the Blood Mage healthy, the army not retreating) and below
+  `SIPHON_LET_GO_HP` of its own life.
+- **Every ranged hero, not only these three.** `backlinePass` asks `weapon.ranged` (every missile
+  weapon and `instant`, `isRangedWeapon`), so the Blood Mage, the Lich, the Keeper, the Priestess,
+  the Dark Ranger, the Sea Witch and the Tavern's ranged heroes all have the rules above.

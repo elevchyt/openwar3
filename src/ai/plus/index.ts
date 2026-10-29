@@ -2504,6 +2504,9 @@ interface Brain {
   /** Ranged heroes `backlinePass` has just walked behind the line, and until when they are left
    *  alone there (brain clock). */
   readonly backline: Map<number, number>;
+  /** Our units on the RECEIVING end of one of our own Blood Mages' Siphon Mana this step — held
+   *  in place and refused the army's walks (`tetherPass`). */
+  readonly tethered: Set<number>;
   /** …and the earliest `clock` at which `backlinePass` may step that hero back AGAIN, unless
    *  something is swinging at him (`BACKLINE_REST`). */
   readonly backlineNext: Map<number, number>;
@@ -3016,6 +3019,7 @@ export class ComputerPlusAi {
       stutters: new Map(),
       backline: new Map(),
       backlineNext: new Map(),
+      tethered: new Set(),
       heroHold,
       waiting: new Map(),
       afield: false,
@@ -3309,6 +3313,8 @@ export class ComputerPlusAi {
       // sites that re-aim a squad: a pass that forgets to ask is one Starfall thrown away.
       if (this.holdsUltimate(cmd.unitId) || this.holdsSiphon(b, cmd.unitId)) return true;
       const kind = cmd.order.kind;
+      // …and the FRIENDLY end of a Siphon Mana stays where the tether reaches it — see `tetherPass`.
+      if (b.tethered.has(cmd.unitId) && (kind === "move" || kind === "attackmove" || kind === "attack" || kind === "patrol")) return true;
       // …and a unit a STAFF has just sent home is not walked anywhere until it is healed
       // (`staffPass`, `sentHomeHeld`) — the same door, for the same reason: a pass that forgets to
       // ask `recovering` walks it straight back into the fight at a tenth of its life.
@@ -3388,6 +3394,39 @@ export class ComputerPlusAi {
     return u.hp / Math.max(1, u.maxHp) >= SIPHON_LET_GO_HP;
   }
 
+  /**
+   * THE FRIENDLY END OF A SIPHON MANA STANDS STILL FOR IT. The developer: *"while the human army
+   * is moving the unit that the Blood Mage is restoring mana to using Siphon Mana some times
+   * ignores the fact that it is being restored mana and it breaks the tether … let's fix that so
+   * that the FRIENDLY unit that the blood mage is siphoning mana to stops within range to allow the
+   * blood mage to continue his casting of siphon mana until it's over"*.
+   *
+   * `holdsSiphon` already keeps the BLOOD MAGE in his channel, but the link is a pair: past the
+   * row's `Area1` (800 — `SimWorld.drains`' leash) it snaps whichever end did the walking, and the
+   * receiving end — a Paladin, a Priest — is a squad member like any other, re-ordered on the next
+   * march, attack-move or cohesion pass. So while one of our Blood Mages channels `AHdr` into one of
+   * OUR OWN units (`pendingCast.targetId`), that unit is put on HOLD POSITION if it is walking —
+   * it still fights what reaches it, it just does not chase — and the army's walks for it are
+   * refused at `issue` (`Brain.tethered`). Let go on exactly the terms the caster is
+   * (`holdsSiphon`): the Blood Mage healthy and the army not running — and the receiver itself
+   * above `SIPHON_LET_GO_HP`, so the orders that walk a hurt unit out of the fight get through.
+   * Rebuilt every step, so the moment the channel ends the army has the unit back.
+   */
+  private tetherPass(b: Brain): void {
+    b.tethered.clear();
+    const world = this.host.world;
+    for (const c of world.units.values()) {
+      if (c.owner !== b.ai.player || c.hp <= 0 || !this.holdsSiphon(b, c.id)) continue;
+      const t = c.pendingCast?.targetId ? world.units.get(c.pendingCast.targetId) : undefined;
+      if (!t || t === c || t.hp <= 0 || t.owner !== b.ai.player || t.building || t.speed <= 0) continue;
+      if (t.hp / Math.max(1, t.maxHp) < SIPHON_LET_GO_HP) continue;
+      b.tethered.add(t.id);
+      if (t.order !== "hold" && (t.moving || t.order === "move" || t.order === "attackmove" || t.order === "patrol")) {
+        this.issue(b, { c: "order", unitId: t.id, order: { kind: "hold" }, queued: false });
+      }
+    }
+  }
+
   /** `PauseCompAI` — seats whose AI stands still (it decides nothing and issues nothing; what
    *  it already ordered plays out). blizzard.j's PauseAllCompAI freezes every computer for a
    *  cinematic and lets them go at its end. */
@@ -3405,6 +3444,7 @@ export class ComputerPlusAi {
       b.items.tickGrabs(b.clock); // a drop at a hero's feet, picked up once its pause is over
       this.stutterPass(b); // Insane's ranged micro between shots — every step, it is timed to the cooldown
       this.backlinePass(b); // …and the ranged HEROES kept behind the melee line
+      this.tetherPass(b); // …and whoever the Blood Mage is pouring mana INTO stands still for it
       if ((b.buildIn -= dt) <= 0) {
         b.buildIn = b.profile.buildPeriod;
         simProfile.begin("sim.ai.build");
@@ -3594,6 +3634,7 @@ export class ComputerPlusAi {
       // plan's whole-army ceiling prices them as soldiers (plus/plan.ts `soldiers`).
       lumberCrew: this.lumberCrew(b),
       portalReserve: b.items.portalSaving(this.itemCtx(b)),
+      kitReserve: b.items.kitSaving(this.itemCtx(b)),
       fightReserve: b.items.fightSaving(this.itemCtx(b)),
       wonAt: b.wonAt,
       foodOf: (id) => this.host.registry.get(id)?.foodUsed ?? 0,
