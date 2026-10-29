@@ -60,11 +60,11 @@ import { MELEE_INSANE } from "../ids";
  * highest first, one button per pass — and it reads the way a player's hands do: don't die, get
  * out, top up, then everything else.
  */
-export type Use = "escape" | "panic" | "healSelf" | "disable" | "manaSteal" | "healArea" | "ward" | "healOther" | "mana" | "replenish" | "manaRegen" | "raise" | "illusion" | "buff";
+export type Use = "escape" | "panic" | "healSelf" | "disable" | "manaSteal" | "summon" | "generic" | "healArea" | "ward" | "healOther" | "mana" | "replenish" | "manaRegen" | "raise" | "illusion" | "buff";
 
 // "panic" sits ABOVE "escape": a hero holding both drinks the invulnerability potion first and
 // reads the scroll only once it has worn off — see `PANIC_HP`.
-const LADDER: readonly Use[] = ["panic", "escape", "healSelf", "disable", "manaSteal", "healArea", "ward", "healOther", "mana", "replenish", "manaRegen", "raise", "illusion", "buff"];
+const LADDER: readonly Use[] = ["panic", "escape", "healSelf", "disable", "manaSteal", "summon", "healArea", "ward", "healOther", "mana", "replenish", "manaRegen", "raise", "illusion", "buff", "generic"];
 const useRank = (u: Use): number => LADDER.indexOf(u);
 
 /**
@@ -164,6 +164,43 @@ const USE_OF: Readonly<Record<string, Use>> = {
 
 /** The one code that is four different items — see `regenUse`. */
 const REGEN = "AIrg";
+
+/**
+ * THE ITEMS NOBODY WROTE A CARD FOR — `fallbackUse`, read only when no ability on the item has a
+ * `USE_OF` card. The developer's: *"generic logic for Computer+ AI that allows it to use items
+ * that we have not explicitly scripted their behavior … like inferno stone and other summoning
+ * items … use it during a fight with an opponent player (NOT versus creep camps)"*.
+ *
+ * Two rungs, both read off the ability ROW rather than off a list of items:
+ *
+ *  · **`summon`** — the row brings a unit: `UnitID1` (`lvl.summon` — the Inferno Stone's `ninf`,
+ *    the Scepter of the Sea's `nmrr`, the Ancestral Staff's `otbk`), or, for the eight FIGURINES
+ *    on code `AIfs` (Demonic Figurine, Red Drake Egg, Book of the Dead, …), the unit types the row
+ *    keeps in its DATA columns C/D instead (sim/spells.ts `AIfs`). High on the ladder: a summon is
+ *    more bodies in the line, worth most when the fight is starting.
+ *  · **`generic`** — anything else with a press: aimed at an ENEMY (`targs1` names `enemy` — the
+ *    Thunderlizard Diamond's Chain Lightning, the Crown of the Deathlord's Finger of Death, the
+ *    Staff of Silence, the Scepter of Mastery), or fired at the feet (a self buff — the Vampiric
+ *    Potion, the Helm of Battlethirst's Berserk, the Anti-magic Potion — or a CORPSE spell, the
+ *    Scroll of Animate Dead and the Scroll of Resurrection, whose missing corpse the sim refuses
+ *    at `itemUseError`). LAST on the ladder: every scripted press outranks a guess.
+ *
+ * Both are pressed only in a fight with an OPPONENT PLAYER (`playerFight`), never at a creep camp
+ * (`ItemCtx.creeping`, and creeps are not a player's). `NOT_COMBAT` is what the rule must never
+ * reach for: items whose press is a decision about the map, the economy or the hero's own build,
+ * not about the fight in front of it. All ours.
+ */
+const NOT_COMBAT: ReadonlySet<string> = new Set([
+  "AIbk", // Kelen's Dagger of Escape — a blink wants a WHERE
+  "AImt", "AIrt", // Staff of Teleportation, Amulet of Recall — leave the fight
+  "AIta", "Aeye", "AItb", "Ashs", "AIfa", "AIrv", // the reveals: crystal ball, wards, dust, shadowsight, flare, omniscience
+  "AIbl", "Amec", "AImo", "AIpm", "Ablp", // tiny buildings, the critter, the lure, the mines, the skull's blight
+  "Aret", // Tome of Retraining — it UNLEARNS the hero
+  "AIvi", "AIct", "AIso", "AUds", "Aspb", // invisibility, Moonstone, Soul Gem, Diamond of Summoning, Spell Book
+  "ANpr", "ANsa", // the staffs — the army manager's own press (index.ts `staffPass`)
+  "AIdi", "AIdc", "Aprg", "Aclf", // dispels and the cloud — they hit our buffs as readily as theirs
+  "Alsh", // Wand of Lightning Shield — JUNK, pawned
+]);
 
 /** The mana items whose bar moves AT THE PRESS — `SimWorld.useItem` sends both of them to
  *  `itemRestore(u, ad, -1, 0)`, so what they are worth is their `DataA`. The pouring kind is
@@ -835,6 +872,25 @@ const ARMY_HURT = 0.65;
  * that is still going, i.e. the one that needed it.
  */
 const ILLUSION_CAP = 2;
+/** The unit types an ability row SUMMONS — `UnitID1`, or the figurines' DATA columns (`AIfs`,
+ *  sim/spells.ts). Empty when it summons nothing. */
+function summonsOf(ad: AbilityDef): string[] {
+  const lvl = ad.levelData[0];
+  if (!lvl) return [];
+  if (ad.code === "AIfs") return [lvl.dataStr?.[2], lvl.dataStr?.[3]].filter((t): t is string => !!t);
+  return lvl.summon ? [lvl.summon] : [];
+}
+
+/** The fallback `Use` of an ability row with no `USE_OF` card — see `NOT_COMBAT`. */
+export function fallbackUse(ad: AbilityDef): Use | null {
+  if (NOT_COMBAT.has(ad.code) || STACKS.has(ad.code)) return null;
+  if (summonsOf(ad).length) return "summon";
+  // Aimed at somebody: only at an ENEMY. A friendly-aimed press (a Scepter of Healing's Holy
+  // Light, a Tome of Sacrifices' Death Pact) is a decision about which of ours, which this does
+  // not try to make.
+  if (ad.target === "unit" || ad.target === "point") return ad.targetFlags.includes("enemy") ? "generic" : null;
+  return "generic";
+}
 /**
  * Mana fraction at which a hero swallows an INSTANT top-up — a Potion of Mana, a Scroll of Mana.
  *
@@ -1785,7 +1841,79 @@ export class PlusItems {
       const use = ad.code === REGEN ? regenUse(ad) : USE_OF[ad.code];
       if (use) return use;
     }
+    return this.fallbackRow(def)?.use ?? null;
+  }
+
+  /** The row an UNSCRIPTED item is pressed for, and as what — see `NOT_COMBAT`. Only asked once
+   *  no ability on the item has a card of its own, so a scripted item is never second-guessed. */
+  private fallbackRow(def: ItemDef): { ad: AbilityDef; use: Use } | null {
+    for (const aid of def.abilities) {
+      const ad = this.view.def(aid);
+      if (!ad || ad.code === REGEN || USE_OF[ad.code]) return null;
+    }
+    for (const aid of def.abilities) {
+      const ad = this.view.def(aid);
+      const use = ad ? fallbackUse(ad) : null;
+      if (ad && use) return { ad, use };
+    }
     return null;
+  }
+
+  /**
+   * IS THIS A FIGHT WITH AN OPPONENT PLAYER? — the gate on both fallback rungs. The fighting
+   * bodies within `LOOK` that a PLAYER owns (a slot under `MELEE.MAX_PLAYERS`, so never a creep,
+   * which is Neutral Hostile's), a hero counting as `CLUSTER` on its own. Workers and buildings
+   * are not a fight, as in `realFight`.
+   */
+  private playerFight(u: SimUnit, foes: SimUnit[]): number {
+    let n = 0;
+    for (const f of foes) {
+      if (f.building || f.isPeon || f.hp <= 0 || f.owner >= MELEE.MAX_PLAYERS || !near(u, f, LOOK)) continue;
+      n += f.isHero ? CLUSTER : 1;
+    }
+    return n;
+  }
+
+  /** Who an unscripted ENEMY-aimed unit item goes on: an enemy player's hero first (the highest
+   *  level), else the biggest body — inside the row's own `Rng1`, and inside what its `targs1`
+   *  admits (air/ground, hero/nonhero), so the press is not thrown away at `itemUseError`. */
+  private fallbackTarget(u: SimUnit, ad: AbilityDef, foes: SimUnit[]): SimUnit | null {
+    const flags = ad.targetFlags;
+    const range = (ad.levelData[0]?.castRange || 600) + u.radius;
+    const onlyAir = flags.includes("air") && !flags.includes("ground");
+    const onlyGround = flags.includes("ground") && !flags.includes("air");
+    const onlyHero = flags.includes("hero") && !flags.includes("nonhero");
+    const noHero = flags.includes("nonhero") && !flags.includes("hero");
+    let best: SimUnit | null = null;
+    for (const f of foes) {
+      if (f.building || f.hp <= 0 || f.owner >= MELEE.MAX_PLAYERS) continue;
+      if (f.invulnerable || f.magicImmune) continue;
+      if ((onlyAir && !f.flying) || (onlyGround && f.flying) || (onlyHero && !f.isHero) || (noHero && f.isHero)) continue;
+      if (Math.hypot(f.x - u.x, f.y - u.y) > range + f.radius) continue;
+      if (!best || (f.isHero && !best.isHero) || (f.isHero === best.isHero && (f.isHero ? f.level > best.level : f.maxHp > best.maxHp))) best = f;
+    }
+    return best;
+  }
+
+  /** Where an unscripted POINT item lands: on the enemy player's body inside the row's `Rng1`
+   *  that has the most of its own side within the row's `Area1` of it — a hero counting as
+   *  `CLUSTER` — and only where that is a hero or `CLUSTER` bodies, so a Staff of Silence is not
+   *  spent on one Footman. A point SUMMON (the Inferno Stone) asks the same: its landing is
+   *  `Area1` of damage and a stun. */
+  private fallbackSpot(u: SimUnit, ad: AbilityDef, foes: SimUnit[]): { x: number; y: number } | null {
+    const lvl = ad.levelData[0];
+    const range = (lvl?.castRange || 600) + u.radius;
+    const area = lvl?.area || 250;
+    const bodies = foes.filter((f) => !f.building && f.hp > 0 && f.owner < MELEE.MAX_PLAYERS && !f.isPeon);
+    let best: SimUnit | null = null;
+    let bestN = 0;
+    for (const f of bodies) {
+      if (Math.hypot(f.x - u.x, f.y - u.y) > range) continue;
+      let n = 0;
+      for (const o of bodies) if (Math.hypot(o.x - f.x, o.y - f.y) <= area) n += o.isHero ? CLUSTER : 1;
+      if (n > bestN) { bestN = n; best = f; }
+    }
+    return best && bestN >= CLUSTER ? { x: best.x, y: best.y } : null;
   }
 
   /**
@@ -1955,6 +2083,17 @@ export class PlusItems {
       // A buff is pre-fight, and only for a fight worth buffing: one scout walking past is not.
       case "buff":
         return engaged && this.realFight(u, foes) >= CLUSTER;
+      // THE UNSCRIPTED ITEMS — see `NOT_COMBAT`. Only against a PLAYER's army, never at a camp,
+      // and only where the aim `aim` will take has somewhere to land.
+      case "summon":
+      case "generic": {
+        if (ctx.creeping || this.playerFight(u, foes) < CLUSTER) return false;
+        const row = this.fallbackRow(def);
+        if (!row) return false;
+        if (row.ad.target === "unit") return !!this.fallbackTarget(u, row.ad, foes);
+        if (row.ad.target === "point") return !!this.fallbackSpot(u, row.ad, foes);
+        return true;
+      }
     }
   }
 
@@ -1984,7 +2123,20 @@ export class PlusItems {
     // out of that is a press `itemUseError` throws away.
     const aimed = def.abilities.map((aid) => this.view.def(aid)).find((ad) => ad?.target === "point" || ad?.target === "unit");
     let targetId = 0;
-    if (aimed?.target === "unit") {
+    let x = u.x;
+    let y = u.y;
+    // An UNSCRIPTED item is aimed off its own fallback row (`fallbackRow`).
+    const fallback = use === "summon" || use === "generic" ? this.fallbackRow(def) : null;
+    if (fallback?.ad.target === "unit") {
+      const t = this.fallbackTarget(u, fallback.ad, foes);
+      if (!t) return false;
+      targetId = t.id;
+    } else if (fallback?.ad.target === "point") {
+      const at = this.fallbackSpot(u, fallback.ad, foes);
+      if (!at) return false;
+      x = at.x;
+      y = at.y;
+    } else if (aimed?.target === "unit") {
       const t =
         use === "healOther" ? this.hurtest(u, friends, foes)
         : use === "illusion" ? this.toCopy(u, friends, aimed.levelData[0]?.castRange ?? 0)
@@ -2012,7 +2164,7 @@ export class PlusItems {
     // Legality is the sim's, at the same door: `itemUseError` is what the HUD asks before it
     // spends a click, so this can never be more permissive than a player's press.
     if (this.view.world.itemUseError(u.id, slot, targetId) !== null) return false;
-    return this.view.order({ c: "useitem", unitId: u.id, slot, targetId, x: u.x, y: u.y });
+    return this.view.order({ c: "useitem", unitId: u.id, slot, targetId, x, y });
   }
 
   /**

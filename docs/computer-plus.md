@@ -3626,6 +3626,17 @@ more rows in the caster's table.
   reach, the biggest body over `WIND_BODY_HP` (800, a Knight) in a fight of `CLUSTER` — the
   creeping trick. Nothing it would be refused at: flyers, the mechanical, anything already
   stunned, invulnerable or magic-immune.
+* **The UNSCRIPTED items** (`fallbackUse`, `NOT_COMBAT`). An item none of whose abilities has a
+  `USE_OF` card is classified off its own ROW: a `summon` when it brings a unit (`UnitID1`, or the
+  eight `AIfs` figurines' DATA C/D — Red Drake Egg, Book of the Dead, …; the Inferno Stone is
+  `AUin` with `ninf`), else `generic` when it is aimed at an `enemy` or fired at the feet (a self
+  buff, a corpse spell). Both are pressed only in a fight with an opponent PLAYER (`playerFight`:
+  `CLUSTER` of a player's fighting bodies within `LOOK`, a hero counting as three — never Neutral
+  Hostile, never while `creeping`). A unit item goes on the enemy hero, else the biggest body, in
+  `Rng1` and what `targs1` admits (`fallbackTarget`); a point item lands where the most of the
+  enemy army is inside its `Area1` (`fallbackSpot`). `summon` sits under the Wand of Mana Stealing,
+  `generic` last of all. `NOT_COMBAT` names what must never be guessed at: blinks and teleports,
+  the reveals, the tiny buildings, the Tome of Retraining, the dispels, the staffs.
 * **Wand of Mana Stealing** (`woms`, `[Aste]` — 50 mana a charge, `Rng1` 650) is the
   `manaSteal` rung, right under the Wind's: IN a fight, at a BAR, priced as Mana Burn is
   (`stealTarget`): a charge is worth `min(DataA, mana)`, an enemy HERO's bar `STEAL_HERO` (4)

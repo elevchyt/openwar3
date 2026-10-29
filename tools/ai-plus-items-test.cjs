@@ -199,6 +199,11 @@ const ITEMS = {
   bspd: { id: "bspd", gold: 250, usable: false, abilities: ["AIms"] }, // Boots of Speed — passive
   will: { id: "will", gold: 150, usable: true, abilities: ["AIil"] }, // Wand of Illusion
   wcyc: { id: "wcyc", gold: 200, usable: true, charges: 3, abilities: ["AIcy"] }, // Wand of the Wind
+  // --- UNSCRIPTED items, for the generic rungs (items.ts `fallbackUse`) ---
+  fgrd: { id: "fgrd", gold: 400, usable: true, charges: 1, perishable: true, abilities: ["AIfd"] }, // Red Drake Egg
+  infs: { id: "infs", gold: 500, usable: true, charges: 1, perishable: true, abilities: ["AIin"] }, // Inferno Stone
+  thdm: { id: "thdm", gold: 500, usable: true, charges: 3, abilities: ["AIcl"] }, // Thunderlizard Diamond
+  tret: { id: "tret", gold: 300, usable: true, charges: 1, perishable: true, abilities: ["Aret"] }, // Tome of Retraining
   woms: { id: "woms", gold: 400, usable: true, charges: 2, perishable: true, abilities: ["Aste"] }, // Wand of Mana Stealing
   sres: { id: "sres", gold: 400, usable: true, abilities: ["AIra"] }, // Scroll of Restoration
   crys: { id: "crys", gold: 150, usable: true, pawnable: true, charges: 3, abilities: ["AIta"] }, // Crystal Ball
@@ -242,6 +247,13 @@ const ABILS = {
   // `[AIcy] code = Acyc` — Cyclone off a wand: `targs1` ground,enemy,neutral, `Rng1` 600,
   // `Dur1` 20, `HeroDur1` 5.6.
   AIcy: { code: "Acyc", target: "unit", levelData: [lvl({ castRange: 600, duration: 20 })] },
+  // The figurines keep their unit types in DATA C/D, not `UnitID1` (sim/spells.ts `AIfs`).
+  AIfd: { code: "AIfs", target: "passive", targetFlags: [], levelData: [lvl({ area: 200, duration: 180, dataStr: ["1", "0", "nrdk", ""] })] },
+  // `[AIin] code = AUin`: Rng1 900, Area1 250, UnitID1 ninf.
+  AIin: { code: "AUin", target: "point", targetFlags: ["ground", "structure", "debris", "enemy", "neutral"], levelData: [lvl({ castRange: 900, area: 250, summon: "ninf" })] },
+  // `[AIcl] code = AOcl`: Chain Lightning, Rng1 700.
+  AIcl: { code: "AOcl", target: "unit", targetFlags: ["air", "ground", "enemy", "neutral", "organic"], levelData: [lvl({ castRange: 700 })] },
+  Aret: { code: "Aret", target: "none", targetFlags: [], levelData: [lvl()] },
   // `[Aste]` — DataA 50 mana a charge, `Rng1` 650 (sim/spells.ts `Aste`).
   Aste: { code: "Aste", target: "unit", levelData: [lvl({ castRange: 650, data: [50, NaN] })] },
   AIta: { code: "AIta", target: "point", levelData: [lvl({ area: 900, duration: 10 })] },
@@ -2032,6 +2044,36 @@ console.log("\n-- handing a spare potion over ----------------------------------
   const give = lastOrders.find((c) => c.c === "giveitem") ?? null;
   check("the Far Seer at 95 % hands his Potion of Mana to the Shadow Hunter at 10 %",
     give && `${give.unitId}->${give.targetId}`, `${fullH.id}->${dryH.id}`);
+}
+
+// --- the UNSCRIPTED items: summons and the rest, against a PLAYER's army only -------------------
+// The developer's: "generic logic for Computer+ AI that allows it to use items that we have not
+// explicitly scripted their behavior … like inferno stone and other summoning items … use it
+// during a fight with an opponent player (NOT versus creep camps)".
+{
+  const { fallbackUse } = require(join(REPO, ".sim-build", "src", "ai", "plus", "items.js"));
+  check("a figurine is a summon (its units are in DATA C/D)", fallbackUse(ABILS.AIfd), "summon");
+  check("the Inferno Stone is a summon", fallbackUse(ABILS.AIin), "summon");
+  check("an enemy-aimed item is the generic rung", fallbackUse(ABILS.AIcl), "generic");
+  check("a Tome of Retraining is never pressed", fallbackUse(ABILS.Aret), null);
+  const army = () => [enemy({ x: 4300, y: 4000 }), enemy({ x: 4350, y: 4050 }), enemy({ x: 4320, y: 3950 })];
+  const egg = () => belt(hero({ x: 4000, y: 4000 }), "fgrd");
+  check("a Red Drake Egg is hatched in a fight with a player's army", itemOf(pressed([egg(), ...army()], PLUS_INSANE, AWAY)), 0);
+  const camp = [0, 1, 2].map((i) => enemy({ owner: 12, x: 4300 + i * 30, y: 4000 }));
+  check("…never at a creep camp (Neutral Hostile)", pressed([egg(), ...camp], PLUS_INSANE, AWAY), null);
+  check("…nor while creeping, whoever is there", pressed([egg(), ...army()], PLUS_INSANE, { ...AWAY, creeping: true }), null);
+  check("…nor for one soldier walking past", pressed([egg(), enemy({ x: 4300, y: 4000 })], PLUS_INSANE, AWAY), null);
+  check("…but an enemy HERO is a fight", itemOf(pressed([egg(), enemy({ x: 4300, y: 4000, isHero: true })], PLUS_INSANE, AWAY)), 0);
+  const stone = belt(hero({ x: 4000, y: 4000 }), "infs");
+  const foes = army();
+  const cmd = pressed([stone, ...foes, enemy({ x: 4100, y: 3000 })], PLUS_INSANE, AWAY);
+  check("the Inferno Stone lands on the enemy army, not at the hero's feet",
+    !!cmd && Math.hypot(cmd.x - 4320, cmd.y - 4000) < 120, true);
+  const dia = belt(hero({ x: 4000, y: 4000 }), "thdm");
+  const lich = enemy({ x: 4400, y: 4000, isHero: true, level: 5 });
+  check("an enemy-aimed item goes on the enemy hero", pressed([dia, ...army(), lich], PLUS_INSANE, AWAY)?.targetId, lich.id);
+  check("a scripted item still outranks a guess (the Potion of Healing at 20 %)",
+    itemOf(pressed([belt(hero({ x: 4000, y: 4000, hp: 200 }), "fgrd", "phea"), ...army()], PLUS_INSANE, AWAY)), 1);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");
