@@ -32,7 +32,7 @@ import {
   type PlayerName, type SwitchReason,
 } from "./teamchat";
 import { liveProfile, plusProfile, type PlusProfile } from "./profile";
-import { aimCtx, HERO_KILL_HP, heroKillable, isSiege, isTower, killValue, razeCost, razeValue } from "./targeting";
+import { aimCtx, type AimCtx, HERO_KILL_HP, heroKillable, isSiege, isTower, killValue, razeCost, razeValue, reachValue } from "./targeting";
 import { MK_STORM_BOLT, MK_THUNDER_CLAP, PLUS_RACES, TAVERN_HEROES, insaneVariant, tableForDifficulty, rollStrategy, rollTransition, tableForEdition, type HeroCombo, type PlusRaceTable, type PlusStrategy } from "./races";
 import { CRYPT_LORD, DREAD_LORD, DRUID_CLAW, MELEE_INSANE, MELEE_NEWBIE, MILITIA, MIRROR_IMAGE, MTN_KING, UPG_DRUID_CLAW } from "../ids";
 import { isRoc } from "../../data/edition";
@@ -1912,6 +1912,70 @@ export function nettedPick<T extends FinishUnit & { building?: unknown; buffs: r
     best = t;
   }
   return best;
+}
+
+/**
+ * WHAT A MELEE HERO SWINGS AT (`PlusProfile.meleeHeroReach`, Insane) — the developer's *"we only
+ * focus casters if within the immediate attack range of the hero, otherwise focus the best
+ * target within attack range"*. All OURS.
+ *
+ * `MELEE_REACH` is "immediate attack range": hull to hull, the hero's own `range` and this much
+ * more — a step, not a walk. Three answers, in order:
+ *
+ *  1. The GROUP's focus, when it is already in reach — the whole army on one body is still the
+ *     best kill, and that is where a caster standing beside the hero comes from.
+ *  2. The best body in reach off `reachValue` — ranged, then melee, a hero by how hurt it is.
+ *     What it is already swinging at is KEPT unless the best is clearly better
+ *     (`MELEE_SWAP`), because every re-aim is a swing wound up again.
+ *  3. Nothing in reach: the CHEAPEST walk — distance over worth, the same cost shape as
+ *     `razeCost` — within `look`, with a caster priced as the ranged body it is. That is the
+ *     nearest thing worth hitting, never the Priest at the back of the line.
+ *
+ * Null when nothing is within `look`: the caller then leaves the hero to the ordinary rules
+ * minus the group focus. Pure and exported so the rule is pinned (tools/ai-plus-army-test.cjs).
+ */
+export const MELEE_REACH = 48;
+const MELEE_SWAP = 1.35;
+
+export function meleeHeroPick<T extends SimUnit>(
+  u: SimUnit,
+  foes: readonly T[],
+  focus: T | null,
+  ctx: AimCtx,
+  look: number,
+  canHit: (t: T) => boolean,
+): T | null {
+  const w = u.weapon;
+  if (!w || w.ranged) return null;
+  const gap = (t: T): number => Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+  const reach = w.range + MELEE_REACH;
+  if (focus && focus.hp > 0 && gap(focus) <= reach && canHit(focus)) return focus;
+  let best: T | null = null;
+  let bestScore = 0;
+  let held: T | null = null;
+  let heldScore = 0;
+  let walk: T | null = null;
+  let walkCost = Infinity;
+  for (const t of foes) {
+    if (t.hp <= 0) continue;
+    // A building that does not shoot back is not what a hero is for while anything else is here.
+    if (t.building && !isTower(t)) continue;
+    const g = gap(t);
+    if (g > look) continue;
+    if (!canHit(t)) continue;
+    if (g <= reach) {
+      const s = reachValue(t, ctx, true);
+      if (s > bestScore) { bestScore = s; best = t; }
+      if (t.id === u.targetId) { held = t; heldScore = s; }
+    } else {
+      // The anti-chase rule: a healthy hero out of reach is not walked to.
+      if (t.isHero && !heroKillable(t)) continue;
+      const c = Math.max(reach, g) / reachValue(t, ctx, false);
+      if (c < walkCost) { walkCost = c; walk = t; }
+    }
+  }
+  if (held && best && heldScore * MELEE_SWAP >= bestScore) return held;
+  return best ?? walk;
 }
 
 export function finishPick<T extends FinishUnit>(
@@ -6741,7 +6805,20 @@ export class ComputerPlusAi {
           continue;
         }
       }
-      if (focus && !u.isPeon && this.host.world.weaponVs(u, focus)) {
+      // A MELEE HERO swings at what it can REACH — see `meleeHeroPick`. The group's focus is
+      // the answer only when it is already beside the hero; a Priest at the back of the line is
+      // not walked to through everything standing in front of it.
+      const meleeHero = b.profile.meleeHeroReach && u.isHero && !!u.weapon && !u.weapon.ranged;
+      if (meleeHero) {
+        const pick = meleeHeroPick(u, bodies, focus, aimCtx(b.profile), SWAP_LOOK,
+          (t) => b.ai.knows(t) && !!this.host.world.weaponVs(u, t));
+        if (pick) {
+          if (u.order === "attack" && u.targetId === pick.id) continue;
+          this.issue(b, { c: "order", unitId: u.id, order: { kind: "attack", targetId: pick.id }, queued: false });
+          continue;
+        }
+      }
+      if (focus && !meleeHero && !u.isPeon && this.host.world.weaponVs(u, focus)) {
         if (u.order === "attack" && u.targetId === focus.id) continue;
         this.issue(b, { c: "order", unitId: u.id, order: { kind: "attack", targetId: focus.id }, queued: false });
         continue;

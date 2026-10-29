@@ -661,6 +661,50 @@ console.log("\n-- the ranged line finishes the wounded in reach (finishWounded) 
   check("…Normal does not", PLUS_NORMAL.finishWounded, false);
 }
 
+console.log("\n-- a melee hero swings at what it can reach (meleeHeroReach) ------------");
+{
+  // The developer's Insane: "we only focus casters if within the immediate attack range of the
+  // hero, otherwise focus the best target within attack range (e.g ranged units first, melee
+  // units then and heroes depending on what's the best to target e.g. a hero with lower health)".
+  // A Blademaster at the origin, melee range 100.
+  const { meleeHeroPick, MELEE_REACH } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
+  const { aimCtx } = require(join(REPO, ".sim-build", "src", "ai", "plus", "targeting.js"));
+  const ctx = aimCtx(PLUS_INSANE);
+  const bm = { id: 1, x: 0, y: 0, radius: 32, hp: 800, maxHp: 800, isHero: true, targetId: 0,
+    weapon: { ranged: false, range: 100, damage: 25, dice: 1, sides: 12, cooldown: 1.5, enabled: true } };
+  let nid = 10;
+  const body = (o) => ({ id: nid++, y: 0, radius: 16, hp: 400, maxHp: 400, mana: 0, maxMana: 0, isHero: false, isSummon: false,
+    isPeon: false, building: null, level: 1, weapon: { ranged: false, range: 100, damage: 12, dice: 1, sides: 2, cooldown: 1.35, enabled: true }, ...o });
+  const yes = () => true;
+  const close = 100 + MELEE_REACH + 32 + 16 - 10; // centre distance just inside "immediate" reach
+  const priestFar = body({ x: 600, maxMana: 200, mana: 200, weapon: { ranged: true, range: 600, damage: 8, dice: 1, sides: 2, cooldown: 2, enabled: true } });
+  const footman = body({ x: close });
+  const rifleman = body({ x: -close, weapon: { ranged: true, range: 500, damage: 21, dice: 1, sides: 6, cooldown: 1.5, enabled: true } });
+  check("the group's focus — a Priest at the back — is NOT walked to",
+    meleeHeroPick(bm, [priestFar, footman, rifleman], priestFar, ctx, 700, yes) === priestFar, false);
+  check("…a ranged unit in reach comes first", meleeHeroPick(bm, [priestFar, footman, rifleman], priestFar, ctx, 700, yes)?.id, rifleman.id);
+  check("…then a melee one", meleeHeroPick(bm, [priestFar, footman], priestFar, ctx, 700, yes)?.id, footman.id);
+  const priestNear = { ...priestFar, id: nid++, x: 0, y: close };
+  check("a caster IN reach is taken", meleeHeroPick(bm, [priestNear, footman, rifleman], null, ctx, 700, yes)?.id, priestNear.id);
+  check("…and so is the group's focus once it is beside the hero",
+    meleeHeroPick(bm, [priestNear, footman, rifleman], priestNear, ctx, 700, yes)?.id, priestNear.id);
+  const heroLow = body({ x: 0, y: -close, isHero: true, hp: 150, maxHp: 700, level: 3 });
+  const heroFull = body({ x: 0, y: -close, isHero: true, hp: 700, maxHp: 700, level: 3 });
+  check("a hero in reach on low health beats a ranged unit", meleeHeroPick(bm, [heroLow, rifleman], null, ctx, 700, yes)?.id, heroLow.id);
+  check("…a healthy one does not", meleeHeroPick(bm, [heroFull, rifleman], null, ctx, 700, yes)?.id, rifleman.id);
+  const scratched = body({ x: 0, y: close, hp: 330 });
+  check("what it is already swinging at is kept unless the best is clearly better",
+    meleeHeroPick({ ...bm, targetId: footman.id }, [footman, scratched], null, ctx, 700, yes)?.id, footman.id);
+  check("…and a ranged unit in reach IS clearly better",
+    meleeHeroPick({ ...bm, targetId: footman.id }, [footman, rifleman], null, ctx, 700, yes)?.id, rifleman.id);
+  const footFar = body({ x: 300 });
+  check("nothing in reach: the nearest worthwhile body, not the Priest",
+    meleeHeroPick(bm, [priestFar, footFar], priestFar, ctx, 700, yes)?.id, footFar.id);
+  check("nothing it may hit within the look: no pick", meleeHeroPick(bm, [body({ x: 2000 })], null, ctx, 700, yes), null);
+  check("a ranged hero is not this rule's", meleeHeroPick({ ...bm, weapon: { ...bm.weapon, ranged: true } }, [footman], null, ctx, 700, yes), null);
+  check("Insane only", PLUS_INSANE.meleeHeroReach && !PLUS_NORMAL.meleeHeroReach, true);
+}
+
 console.log("\n-- INSANE-ONLY MICRO (rejoin on arrival, send home, dispel summons) ------");
 {
   // The developer's: ranged soldiers walked out at low health rejoin once they reach the spot,

@@ -312,6 +312,31 @@ export function killValue(t: SimUnit, ctx: AimCtx): number {
 }
 
 /**
+ * What an enemy is worth to a MELEE HERO — the ladder `meleeHeroPick` (plus/index.ts) reads.
+ *
+ * `killValue` asks "who should the GROUP kill", and a group has archers that can reach the back
+ * line from where they stand. A melee hero has to WALK there, through everything in between, and
+ * every second of the walk is a second of its damage — usually the biggest in the army — spent
+ * on nothing. The developer's order for it: a caster only when it is already in reach (`inReach`
+ * — out of reach a Priest is priced as the ranged body it is), otherwise ranged units first,
+ * then melee ones, and a hero by how close it is to dying (`bodyValue`'s own ramp). All OURS.
+ */
+export function reachValue(t: SimUnit, ctx: AimCtx, inReach: boolean): number {
+  if (t.building) return isTower(t) ? TOWER : BUILDING;
+  const frac = t.hp / Math.max(1, t.maxHp);
+  const ranged = !!t.weapon?.ranged;
+  const v = t.isHero || t.isSummon || t.isPeon ? bodyValue(t, ctx)
+    : t.maxMana > 0 && inReach ? CASTER
+    : ranged ? RANGED
+    : SOLDIER;
+  return v * (1 + (1 - frac));
+}
+
+/** A RANGED body, to a melee hero: above a soldier (it is the one hurting the army from behind
+ *  the line and cannot hit back as hard up close), below a caster in reach. Ours. */
+const RANGED = 1.6;
+
+/**
  * …and what a BUILDING is worth knocking down, for the units that are there to knock buildings
  * down (`isSiege`) and for the wave once the defence is broken. A separate ladder because it
  * answers a different question: not "what is the dangerous thing here" but "what does razing

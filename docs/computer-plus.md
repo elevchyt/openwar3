@@ -395,6 +395,9 @@ Blizzard's unless a comment says otherwise) every value here is ours.
 | stutter-steps its ranged units | no | no | **yes** |
 | a ranged pull-out rejoins on ARRIVAL; anything under 15 % (heroes too) goes HOME, back at 22 % | no | no | **yes** |
 | ranged units finish the wounded body in reach first (`finishWounded`) | no | no | **yes** |
+| a melee hero swings at what it can REACH, never walks to the group's caster (`meleeHeroReach`) | no | no | **yes** |
+| the orc re-buys its two Healing Salves at the field door, on the Shadow Hunter (`RACE_FIELD`) | no | no | **yes** |
+| a hero above 80 % mana hands its potion to one under 40 % (the mana relay) | no | no | **yes** |
 | rushes tier 3 the moment tier 2 stands, research held until it is paid (`tier3Rush`) | no | no | **yes** |
 | a Potion of Lesser Invulnerability on EVERY hero, melee first (`invulnEach`) | no | no | **yes** |
 | kills enemy summons with its dispels first | no | no | **yes** |
@@ -2812,6 +2815,17 @@ pinned in `tools/ai-plus-items-test.cjs`). It is the sim's own `giveitem` — th
 `GiveItemRange` — so only our OWN heroes, as in the game, and never while either hero is in a
 fight (`underFire`): the walk replaces whatever the giver was doing.
 
+**The MANA RELAY (Insane).** The developer's *"pass a mana potion from a hero that has enough
+mana (more than 80%) to another of its heroes that has mana lower than 40%"*: `potionHandover`'s
+`relay` rung hands the giver's ONE mana potion (not a spare) across when its bar is above
+`MANA_RELAY_FULL` and the other hero's is under `MANA_RELAY_LOW` and holds none — to a melee hero
+too. The melee hero's own give-back rule (a melee hero's mana goes to a caster) stands down while
+its bar is under `MANA_RELAY_LOW`, or the two would hand one potion back and forth.
+
+**The Wand of Mana Stealing goes to a caster.** A melee hero holding one (`woms`, any item on
+`[Aste]`) hands it to the caster within `SHARE_REACH` with the BIGGEST bar and a free slot — the
+Shadow Hunter, in the developer's words. With no caster, it keeps it and presses it itself.
+
 **Invulnerability potions are shared the same way, and further** (`potionKind` "invuln" — every
 `panic` item: the Potion of Invulnerability, its Lesser twin and the Potion of Divinity). The
 developer's: *"if a hero has more than one in their inventory, they must pass it to one of their
@@ -3612,6 +3626,12 @@ more rows in the caster's table.
   reach, the biggest body over `WIND_BODY_HP` (800, a Knight) in a fight of `CLUSTER` — the
   creeping trick. Nothing it would be refused at: flyers, the mechanical, anything already
   stunned, invulnerable or magic-immune.
+* **Wand of Mana Stealing** (`woms`, `[Aste]` — 50 mana a charge, `Rng1` 650) is the
+  `manaSteal` rung, right under the Wind's: IN a fight, at a BAR, priced as Mana Burn is
+  (`stealTarget`): a charge is worth `min(DataA, mana)`, an enemy HERO's bar `STEAL_HERO` (4)
+  times anybody else's, never a press that takes under half a charge (`STEAL_SLIVER`), and a
+  non-hero only while the holder has room for what it hands back. Reported: the AI never pressed
+  it at all — `Aste` had no card on `USE_OF`.
 * **Scroll of Healing as an emergency.** A hero under `SCROLL_EMERGENCY_HP` (20 %) reads its own
   INSTANT area heal (`AIha`, `AIra`) in the middle of a fight; a pour (`AIrg`) is never an
   emergency heal, since the next blow cancels it.
@@ -3977,7 +3997,10 @@ between creep camps*:
   `hslv`; it is 100 gold for three charges, the best hit points per gold in the game; and — the
   part that makes it a *first* buy rather than a cheap potion — its row is a `healOther`
   (`Rng1` 500, no `Area1`), so it goes on whichever soldier came out worst. Two, because the
-  first camp spends one.
+  first camp spends one. On INSANE they are re-bought for the whole match at the FIELD door
+  (`RACE_FIELD`, `heroChance`), because this row is otherwise only read by the home trip and an
+  Insane army roams — reported as "NOT buying healing salves after tier 1 at all". The Shadow
+  Hunter (`SALVE_HERO`) is served first and keeps them (`share` does not count his as a spare).
 - the **human's two Scrolls of Regeneration**. `[hvlt] Makeitems` *opens* with `sreg`; it is the
   same 100 gold; and `[AIsl]` is the AREA version of the same effect — `Area1` 600, 225 hit
   points over 45 seconds into everything standing in the circle. So the human's captain heals the
@@ -4320,6 +4343,14 @@ at the back does not walk another nine hundred units for nothing.
   is not sent again for `PULL_BACK_AGAIN` after that. Between 15 % and the 25 % pull-out bar a
   ranged unit is still only stepped behind the line and straight back in, which the same report
   calls fine.
+* **A MELEE HERO swings at what it can REACH** (`meleeHeroReach`, `meleeHeroPick` — pure and
+  pinned in `tools/ai-plus-army-test.cjs`). Reported: melee heroes walked through the line to the
+  group focus's Priest and lost their damage on the way. In `commit`, before the group's focus: the
+  focus itself only once it is within the hero's `range` + `MELEE_REACH` (48); else the best body
+  in that reach off `reachValue` (targeting.ts — a caster in reach 2.5, ranged 1.6, melee 1, a hero
+  by `bodyValue`'s kill ramp, all × how hurt), keeping what it is already swinging at unless the
+  best beats it by `MELEE_SWAP` (1.35); and with nothing in reach the cheapest WALK (distance over
+  `reachValue` with a caster priced as the ranged body it is, the anti-chase rule on healthy heroes).
 * **A RANGED unit finishes the wounded first** (`finishWounded`, `finishPick` — pure and pinned in
   `tools/ai-plus-army-test.cjs`). The developer's: *"focus down targets with low health first (if
   directly in range)"*. In `commit`, before the group's focus, every ranged soldier and ranged hero

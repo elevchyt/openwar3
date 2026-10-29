@@ -199,6 +199,7 @@ const ITEMS = {
   bspd: { id: "bspd", gold: 250, usable: false, abilities: ["AIms"] }, // Boots of Speed — passive
   will: { id: "will", gold: 150, usable: true, abilities: ["AIil"] }, // Wand of Illusion
   wcyc: { id: "wcyc", gold: 200, usable: true, charges: 3, abilities: ["AIcy"] }, // Wand of the Wind
+  woms: { id: "woms", gold: 400, usable: true, charges: 2, perishable: true, abilities: ["Aste"] }, // Wand of Mana Stealing
   sres: { id: "sres", gold: 400, usable: true, abilities: ["AIra"] }, // Scroll of Restoration
   crys: { id: "crys", gold: 150, usable: true, pawnable: true, charges: 3, abilities: ["AIta"] }, // Crystal Ball
   wswd: { id: "wswd", gold: 150, usable: true, pawnable: true, charges: 2, abilities: ["AIsw"] }, // Sentry Wards
@@ -241,6 +242,8 @@ const ABILS = {
   // `[AIcy] code = Acyc` — Cyclone off a wand: `targs1` ground,enemy,neutral, `Rng1` 600,
   // `Dur1` 20, `HeroDur1` 5.6.
   AIcy: { code: "Acyc", target: "unit", levelData: [lvl({ castRange: 600, duration: 20 })] },
+  // `[Aste]` — DataA 50 mana a charge, `Rng1` 650 (sim/spells.ts `Aste`).
+  Aste: { code: "Aste", target: "unit", levelData: [lvl({ castRange: 650, data: [50, NaN] })] },
   AIta: { code: "AIta", target: "point", levelData: [lvl({ area: 900, duration: 10 })] },
   AIsw: { code: "Aeye", target: "point", levelData: [lvl({ castRange: 500, duration: 300 })] },
   // `[AIil] targs1` = "ground,air,friend,self", `Rng1` = 500, `Dur1` = 60, and DataA "Damage
@@ -1941,6 +1944,94 @@ console.log("\n-- handing a spare potion over ----------------------------------
   check("…to the other hero", give && give.targetId, taker.id);
   delete ITEMS.pnvu;
   delete ABILS.AIvu;
+}
+
+// --- the ORC keeps two Healing Salves after tier 1, on the Shadow Hunter -----------------------
+// Reported: "the Orc AI (Computer+ Insane) is NOT buying healing salves after tier 1 at all! … it
+// should buy them across all games (ideally shadow hunter if it has one otherwise any hero) and it
+// should try to carry 2 of them at most". The home trip never runs once an Insane army roams, so
+// the salves have to be bought at the FIELD door (`RACE_FIELD`), as the orb is.
+{
+  const lounge = ["hslv", "plcl", "phea", "pman", "stwp"];
+  const bm = belt(hero({ typeId: "Obla", level: 5, x: 0, y: 0 }), "stwp", "phea", "pnvl", "shea");
+  const sh = belt(hero({ typeId: "Oshd", level: 3, x: 0, y: 0 }), "phea", "pnvl", "shea");
+  const out = shopped([bm, sh, MERCHANT], PLUS_INSANE, { shelf: lounge, race: "orc", mayShop: false, tier: 2 });
+  check("an Insane orc with the army out buys a salve at the shop it stands at", out.buy?.itemId, "hslv");
+  check("…for the Shadow Hunter, ahead of a higher-level hero", out.pick?.unitId, sh.id);
+  const two = belt(hero({ typeId: "Oshd", x: 0, y: 0 }), "phea", "pnvl", "shea", "hslv", "hslv");
+  check("…and never a third",
+    shopped([two, MERCHANT], PLUS_INSANE, { shelf: lounge, race: "orc", mayShop: false, tier: 2 }).buy?.itemId === "hslv", false);
+  const alone = belt(hero({ typeId: "Obla", x: 0, y: 0 }), "stwp", "phea", "pnvl", "shea");
+  check("with no Shadow Hunter, any hero carries them",
+    shopped([alone, MERCHANT], PLUS_INSANE, { shelf: lounge, race: "orc", mayShop: false, tier: 2 }).buy?.itemId, "hslv");
+  check("…Normal keeps its habit (the field door is Insane's)",
+    shopped([belt(hero({ typeId: "Obla", x: 0, y: 0 }), "stwp", "phea", "pnvl", "shea"), MERCHANT], PLUS_NORMAL,
+      { shelf: lounge, race: "orc", mayShop: false, tier: 2, gold: 700 }).buy?.itemId === "hslv", false);
+  // …and the Shadow Hunter's two salves are his, not a "spare heal" handed to the Blademaster.
+  const shGiver = belt(hero({ typeId: "Oshd", x: 4000, y: 4000 }), "hslv", "hslv");
+  const bmTaker = belt(hero({ typeId: "Obla", x: 4300, y: 4000 }), "stwp");
+  pressed([shGiver, bmTaker], PLUS_INSANE, AWAY);
+  check("the Shadow Hunter keeps his salves", lastOrders.some((c) => c.c === "giveitem"), false);
+}
+
+// --- the WAND OF MANA STEALING is pressed, at a bar ---------------------------------------------
+// Reported: "Computer+ (Insane) is not utilizing the item 'wand of mana stealing' at all! … it must
+// be able to use it against heroes or other units with mana."
+{
+  const wand = () => belt(hero({ typeId: "Oshd", x: 4000, y: 4000, mana: 50, maxMana: 400 }), "woms");
+  const lich = enemy({ x: 4400, y: 4000, isHero: true, mana: 300, maxMana: 400 });
+  const priest = enemy({ x: 4300, y: 4000, mana: 200, maxMana: 200 });
+  const grunt = enemy({ x: 4200, y: 4000, mana: 0, maxMana: 0 });
+  const cmd = pressed([wand(), lich, priest, grunt], PLUS_INSANE, AWAY);
+  check("an enemy hero's mana is stolen first", cmd && cmd.targetId, lich.id);
+  check("…a caster's when no hero is in reach", pressed([wand(), priest, grunt], PLUS_INSANE, AWAY)?.targetId, priest.id);
+  check("…never a body with no bar", pressed([wand(), grunt], PLUS_INSANE, AWAY), null);
+  check("…nor a dry one", pressed([wand(), enemy({ x: 4300, y: 4000, mana: 10, maxMana: 200 })], PLUS_INSANE, AWAY), null);
+  check("…nor one out of the wand's 650",
+    pressed([wand(), enemy({ x: 4800, y: 4000, isHero: true, mana: 300, maxMana: 400 })], PLUS_INSANE, AWAY), null);
+  const full = belt(hero({ typeId: "Oshd", x: 4000, y: 4000, mana: 400, maxMana: 400 }), "woms");
+  check("a full bar still robs a HERO", pressed([full, lich], PLUS_INSANE, AWAY)?.targetId, lich.id);
+  const full2 = belt(hero({ typeId: "Oshd", x: 4000, y: 4000, mana: 400, maxMana: 400 }), "woms");
+  check("…but not a Priest it has no room for", pressed([full2, priest], PLUS_INSANE, AWAY), null);
+}
+// …and a MELEE hero hands it to a caster ("pass it to a unit that makes sense (e.g shadow hunter)").
+{
+  const bm = belt(hero({ typeId: "Obla", x: 4000, y: 4000 }), "woms");
+  const sh = hero({ typeId: "Oshd", x: 4300, y: 4000, maxMana: 400 });
+  pressed([bm, sh], PLUS_INSANE, AWAY);
+  const give = lastOrders.find((c) => c.c === "giveitem") ?? null;
+  check("a Blademaster hands the Wand of Mana Stealing to the Shadow Hunter", give && `${give.unitId}->${give.targetId}`, `${bm.id}->${sh.id}`);
+  const dh = hero({ typeId: "Edem", x: 4300, y: 4000 });
+  const mk = belt(hero({ typeId: "Hmkg", x: 4000, y: 4000 }), "woms");
+  pressed([mk, dh], PLUS_INSANE, AWAY);
+  check("…never to another melee hero", lastOrders.some((c) => c.c === "giveitem"), false);
+  const am = belt(hero({ typeId: "Hamg", x: 4000, y: 4000 }), "woms");
+  pressed([am, hero({ typeId: "Hblm", x: 4300, y: 4000 })], PLUS_INSANE, AWAY);
+  check("…and a caster keeps his", lastOrders.some((c) => c.c === "giveitem"), false);
+}
+
+// --- the MANA RELAY: a full hero's potion goes to an empty one ------------------------------------
+// "pass a mana potion from a hero that has enough mana (more than 80%) to another of its heroes
+// that has mana lower than 40%" — Insane.
+{
+  const { potionHandover } = require(join(REPO, ".sim-build", "src", "ai", "plus", "items.js"));
+  const b = (mana, manaFrac, free = 3, caster = true) => ({ heal: 0, mana, free, caster, manaFrac });
+  check("a hero above 80 % hands its one mana potion to a hero under 40 %",
+    JSON.stringify(potionHandover([b(1, 0.9), b(0, 0.3)], true)), JSON.stringify({ from: 0, to: 1, kind: "mana" }));
+  check("…not below Insane", potionHandover([b(1, 0.9), b(0, 0.3)], false), null);
+  check("…not from a hero at 80 % or less", potionHandover([b(1, 0.8), b(0, 0.3)], true), null);
+  check("…not to a hero at 40 % or more", potionHandover([b(1, 0.9), b(0, 0.4)], true), null);
+  check("…nor to one that already holds a mana potion", potionHandover([b(1, 0.9), b(1, 0.1)], true), null);
+  check("…a melee hero may take it",
+    JSON.stringify(potionHandover([b(1, 0.9), b(0, 0.2, 3, false)], true)), JSON.stringify({ from: 0, to: 1, kind: "mana" }));
+  check("…and a dry melee hero does not hand it straight back", potionHandover([b(1, 0.2, 3, false), b(0, 0.85)], true), null);
+  // End to end.
+  const fullH = belt(hero({ typeId: "Ofar", x: 4000, y: 4000, mana: 380, maxMana: 400 }), "pman");
+  const dryH = hero({ typeId: "Oshd", x: 4300, y: 4000, mana: 40, maxMana: 400 });
+  pressed([fullH, dryH], PLUS_INSANE, AWAY);
+  const give = lastOrders.find((c) => c.c === "giveitem") ?? null;
+  check("the Far Seer at 95 % hands his Potion of Mana to the Shadow Hunter at 10 %",
+    give && `${give.unitId}->${give.targetId}`, `${fullH.id}->${dryH.id}`);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

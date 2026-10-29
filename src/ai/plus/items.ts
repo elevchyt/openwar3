@@ -60,11 +60,11 @@ import { MELEE_INSANE } from "../ids";
  * highest first, one button per pass — and it reads the way a player's hands do: don't die, get
  * out, top up, then everything else.
  */
-export type Use = "escape" | "panic" | "healSelf" | "disable" | "healArea" | "ward" | "healOther" | "mana" | "replenish" | "manaRegen" | "raise" | "illusion" | "buff";
+export type Use = "escape" | "panic" | "healSelf" | "disable" | "manaSteal" | "healArea" | "ward" | "healOther" | "mana" | "replenish" | "manaRegen" | "raise" | "illusion" | "buff";
 
 // "panic" sits ABOVE "escape": a hero holding both drinks the invulnerability potion first and
 // reads the scroll only once it has worn off — see `PANIC_HP`.
-const LADDER: readonly Use[] = ["panic", "escape", "healSelf", "disable", "healArea", "ward", "healOther", "mana", "replenish", "manaRegen", "raise", "illusion", "buff"];
+const LADDER: readonly Use[] = ["panic", "escape", "healSelf", "disable", "manaSteal", "healArea", "ward", "healOther", "mana", "replenish", "manaRegen", "raise", "illusion", "buff"];
 const useRank = (u: Use): number => LADDER.indexOf(u);
 
 /**
@@ -109,6 +109,12 @@ const USE_OF: Readonly<Record<string, Use>> = {
   // `windTarget`. Right below the hero's own potion, because it is pressed IN a fight as that
   // is, and a hero about to die drinks before it throws anything.
   Acyc: "disable",
+  // Wand of Mana Stealing (`woms`, `[Aste]`): "Steals mana from a target unit and gives it to the
+  // Hero" — DataA 50 a charge, `Rng1` 650, two charges, a level-3 creep drop. Aimed at a BAR, as
+  // Mana Burn is: see `stealTarget`. Beside the Wand of the Wind because it is the same kind of
+  // press — IN a fight, at one of theirs — and below it because a cycloned hero casts nothing at
+  // all, while a robbed one has only lost a spell.
+  Aste: "manaSteal",
 
   // --- hit points, on an AREA around the user ----------------------------------------------
   AIha: "healArea", // Scroll of Healing (and the three Runes of Healing)
@@ -391,6 +397,29 @@ const RACE_FIRST: Partial<Record<PlayableRace, readonly Want[]>> = {
   human: [{ id: "sreg", want: 2 }],
   undead: [{ id: "rnec", want: 1 }],
 };
+
+/**
+ * …and the race's opening buy that is still wanted ONCE THE ARMY STOPS COMING HOME — bought at
+ * the field door (`heroChance`) as well as on the home trip.
+ *
+ * Reported: *"the Orc AI (Computer+ Insane) is NOT buying healing salves after tier 1 at all! it
+ * should buy them across all games (ideally shadow hunter if it has one otherwise any hero) and
+ * it should try to carry 2 of them at most"*. The cause is the door, not the list: `RACE_FIRST`
+ * is read only by `shop`, whose trip starts only while the army is MASSING AT HOME, and an
+ * Insane army roams (`PlusProfile.roam`) — so the salves bought in the opening were the only ones
+ * the match ever saw. The same reason `heroChance` exists for the orb. TWO, counted across every
+ * hero, and the Shadow Hunter is served first (`SALVE_HERO`). Orc only: it is the one race whose
+ * opening item is still the right item at tier 3. Insane only (`fieldRows`).
+ */
+const RACE_FIELD: Partial<Record<PlayableRace, readonly Want[]>> = {
+  orc: [{ id: "hslv", want: 2 }],
+};
+
+/** Who carries the Healing Salves — the Shadow Hunter (`Oshd`), the orc's healer: his Healing
+ *  Wave and the salve's charges are one job, and he is the hero standing at the back of the
+ *  army it is poured into. The developer's pick; any hero carries them when he is not there. */
+const SALVE = "hslv";
+const SALVE_HERO = "Oshd";
 
 /**
  * …and the MANA the race can actually get, which is not the same item for all four.
@@ -767,6 +796,15 @@ const SCROLL_EMERGENCY_HP = 0.2;
  * does. Ours.
  */
 const WIND_BODY_HP = 800;
+/** The Wand of Mana Stealing's ability CODE — keyed on the code, as `USE_OF` is, so a custom
+ *  map's re-skinned wand is pressed too. */
+const MANA_STEAL = "Aste";
+/** `stealTarget`'s prices, Mana Burn's own (plus/casting.ts `MANA_BURN_HERO`, `MANA_BURN_SLIVER`,
+ *  `MANA_BURN_SUMMON`) for the same reason: an enemy hero's bar first, a charge that can take
+ *  less than half its own worth never. Ours. */
+const STEAL_HERO = 4;
+const STEAL_SLIVER = 0.5;
+const STEAL_SUMMON = 0.5;
 /** The ward unit's regeneration aura (`[ohwd] abilList=Aoar`) and its reach, `[Aoar] Area1` —
  *  the circle a Healing Ward heals, read off the row when it is there. */
 const WARD_AURA = "Aoar";
@@ -1041,6 +1079,10 @@ const PAWN_PERIOD = SHOP_PERIOD;
  */
 const SHARE_PERIOD = 2;
 const SHARE_REACH = 1500;
+/** The mana relay's two bars (`potionHandover`): a hero above `MANA_RELAY_FULL` of its mana hands
+ *  its potion to one below `MANA_RELAY_LOW`. The developer's numbers. */
+const MANA_RELAY_FULL = 0.8;
+const MANA_RELAY_LOW = 0.4;
 
 /** Which bar a potion refills — the two a hero is handed a spare of. A Scroll of Healing or
  *  Restoration (`healArea`) is not a potion and is the whole army's, so it is not in either. */
@@ -1068,7 +1110,8 @@ export function potionKind(use: Use | null): PotionKind | null {
  * least two fewer — a hero with none first, and never a swap that only moves the pile.
  */
 export function potionHandover(
-  belts: ReadonlyArray<{ heal: number; mana: number; invuln?: number; free: number; caster?: boolean }>,
+  belts: ReadonlyArray<{ heal: number; mana: number; invuln?: number; free: number; caster?: boolean; manaFrac?: number }>,
+  relay = false,
 ): { from: number; to: number; kind: PotionKind } | null {
   for (const kind of ["heal", "mana"] as const) {
     for (let from = 0; from < belts.length; from++) {
@@ -1078,13 +1121,30 @@ export function potionHandover(
       // Blademaster's one Potion of Mana is a Wind Walk; on the Far Seer beside him it is a
       // Chain Lightning and a pair of wolves. `caster` absent reads as a caster, so a belt that
       // does not say is shared the old way.
-      const spare = belts[from][kind] >= 2 || (kind === "mana" && belts[from].caster === false && belts[from].mana >= 1);
+      // …unless that melee hero's own bar is the one running dry (`MANA_RELAY_LOW`): a potion
+      // handed to him by the relay below is his to drink, not to hand straight back.
+      const spare = belts[from][kind] >= 2
+        || (kind === "mana" && belts[from].caster === false && belts[from].mana >= 1 && (belts[from].manaFrac ?? 1) >= MANA_RELAY_LOW);
       if (!spare) continue;
       for (let to = 0; to < belts.length; to++) {
         if (to === from || belts[to][kind] !== 0 || belts[to].free <= 0) continue;
         // …and a caster's mana is never handed to a melee hero (`MELEE_HEROES`).
         if (kind === "mana" && belts[to].caster === false) continue;
         return { from, to, kind };
+      }
+    }
+  }
+  // THE MANA RELAY (Insane) — the developer's *"pass a mana potion from a hero that has enough
+  // mana (more than 80%) to another of its heroes that has mana lower than 40%"*. Not a spare:
+  // the giver's ONE potion, because a hero sitting on a full bar is not going to drink it before
+  // the hero beside it has run out of spells. Only to a hero holding none, so it is never a pile.
+  if (relay) {
+    for (let from = 0; from < belts.length; from++) {
+      if (belts[from].mana < 1 || (belts[from].manaFrac ?? 0) <= MANA_RELAY_FULL) continue;
+      for (let to = 0; to < belts.length; to++) {
+        if (to === from || belts[to].mana !== 0 || belts[to].free <= 0) continue;
+        if ((belts[to].manaFrac ?? 1) >= MANA_RELAY_LOW) continue;
+        return { from, to, kind: "mana" };
       }
     }
   }
@@ -1328,12 +1388,39 @@ export class PlusItems {
       this.view.order({ c: "giveitem", unitId: from.id, slot: slots[slots.length - 1], targetId: to.id });
       return;
     }
+    // A WAND OF MANA STEALING goes to a CASTER — the developer's *"pass it to a unit that makes
+    // sense (e.g shadow hunter)"*. It is a creep drop, so it lands on whichever hero walked over
+    // it, which is usually the melee one in front; the mana it hands back is a Wind Walk there and
+    // a Healing Wave on the hero behind him. The caster with the BIGGEST bar takes it — the one
+    // whose spells the stolen mana pays for most often. With no caster to hand it to, the melee
+    // hero keeps it and presses it himself (`stealTarget`): an enemy hero's mana is worth taking
+    // whoever is holding the wand.
+    for (const from of heroes) {
+      if (!MELEE_HEROES.has(from.typeId)) continue;
+      const slot = from.inventory.findIndex((h) => !!h && this.stealsMana(h.itemId));
+      if (slot < 0) continue;
+      let to: SimUnit | null = null;
+      for (const o of heroes) {
+        if (o === from || MELEE_HEROES.has(o.typeId) || o.maxMana <= 0 || o.inventory.indexOf(null) < 0) continue;
+        if (o.inventory.some((h) => !!h && this.stealsMana(h.itemId))) continue;
+        if (Math.hypot(o.x - from.x, o.y - from.y) > SHARE_REACH) continue;
+        if (!to || o.maxMana > to.maxMana) to = o;
+      }
+      if (!to) continue;
+      this.view.order({ c: "giveitem", unitId: from.id, slot, targetId: to.id });
+      return;
+    }
     const belts = heroes.map((u) => {
       // A melee hero (`MELEE_HEROES`) is never handed a caster's mana, and hands its own over —
       // see `potionHandover`. Every other hero, the Paladin included, is a caster here.
-      const belt = { heal: 0, mana: 0, invuln: 0, free: 0, caster: !MELEE_HEROES.has(u.typeId) };
+      const belt = {
+        heal: 0, mana: 0, invuln: 0, free: 0, caster: !MELEE_HEROES.has(u.typeId),
+        manaFrac: u.maxMana > 0 ? u.mana / u.maxMana : 1,
+      };
       for (const held of u.inventory) {
         if (!held) { belt.free++; continue; }
+        // The Shadow Hunter's salves are where they belong (`SALVE_HERO`), not a spare.
+        if (held.itemId === SALVE && u.typeId === SALVE_HERO) continue;
         const def = this.view.item(held.itemId);
         const kind = def ? potionKind(this.useOf(def)) : null;
         if (kind) belt[kind]++;
@@ -1343,7 +1430,7 @@ export class PlusItems {
     for (let i = 0; i < heroes.length; i++) {
       // Only heroes standing near THIS one are offered it: a hero across the map is not walked to.
       const group = heroes.filter((o) => Math.hypot(o.x - heroes[i].x, o.y - heroes[i].y) <= SHARE_REACH);
-      const pick = potionHandover(group.map((o) => belts[heroes.indexOf(o)]));
+      const pick = potionHandover(group.map((o) => belts[heroes.indexOf(o)]), this.profile.difficulty === MELEE_INSANE);
       if (!pick || group[pick.from] !== heroes[i]) continue;
       const from = group[pick.from];
       const to = group[pick.to];
@@ -1351,6 +1438,7 @@ export class PlusItems {
       // (`press` walks the slots in order) stays where it is.
       for (let slot = from.inventory.length - 1; slot >= 0; slot--) {
         const held = from.inventory[slot];
+        if (held?.itemId === SALVE && from.typeId === SALVE_HERO) continue; // kept — see above
         const def = held ? this.view.item(held.itemId) : null;
         if (!def || potionKind(this.useOf(def)) !== pick.kind) continue;
         this.view.order({ c: "giveitem", unitId: from.id, slot, targetId: to.id });
@@ -1783,6 +1871,9 @@ export class PlusItems {
       // `windTarget`, which is both the reading and the aim.
       case "disable":
         return engaged && !!this.windTarget(u, def, foes);
+      // …and the Wand of Mana Stealing, the same shape: `stealTarget` is the reading and the aim.
+      case "manaSteal":
+        return engaged && !!this.stealTarget(u, def, foes);
       case "healOther":
         return !engaged && !!this.hurtest(u, friends, foes);
       // Mana is topped up for the fight, not during the panic — a hero with no mana is a hero
@@ -1898,6 +1989,7 @@ export class PlusItems {
         use === "healOther" ? this.hurtest(u, friends, foes)
         : use === "illusion" ? this.toCopy(u, friends, aimed.levelData[0]?.castRange ?? 0)
         : use === "disable" ? this.windTarget(u, def, foes)
+        : use === "manaSteal" ? this.stealTarget(u, def, foes)
         : u;
       if (!t) return false;
       targetId = t.id;
@@ -2144,6 +2236,53 @@ export class PlusItems {
       }
     }
     return hero ?? (fighting >= CLUSTER ? body : null);
+  }
+
+  /**
+   * WHOSE MANA THE WAND OF MANA STEALING TAKES — the developer's *"it must be able to use it
+   * against heroes or other units with mana"*.
+   *
+   * Priced the way Mana Burn is (plus/casting.ts `manaBurnValue`), because it is the same press
+   * aimed at the same thing: a charge is worth what it TAKES, `min(DataA, mana)`, so the body
+   * that has been saving its bar is the target, and an enemy HERO's bar is worth `STEAL_HERO`
+   * times anybody else's — every point of it is a Storm Bolt or a Death Coil not cast. A charge
+   * that would take less than `STEAL_SLIVER` of what it can is not pressed at all.
+   *
+   * The other half of the item is the mana it HANDS OVER, and that half is only worth a charge on
+   * a hero with room for it. Denying a hero its mana is reason enough on its own; robbing a Priest
+   * into a full bar is half a charge thrown away, so a non-hero is only a target while the holder
+   * has room for most of what it takes. Everything the sim would refuse is left out here, as
+   * `windTarget` leaves it out: nothing invulnerable or magic-immune, and only inside the wand's
+   * own `Rng1` (650), so the hero never walks forward to press it. `[Aste] targs1` is `notself`
+   * and nothing more (sim/targetRules.ts), so a flyer and a mechanical body with a bar are both
+   * legal — and a building is left out because a Moon Well is not what a fight is about.
+   */
+  private stealTarget(u: SimUnit, def: ItemDef, foes: SimUnit[]): SimUnit | null {
+    const lvl = def.abilities.map((aid) => this.view.def(aid)).find((ad) => ad?.code === MANA_STEAL)?.levelData[0];
+    const cap = lvl && lvl.data[0] > 0 ? lvl.data[0] : 50;
+    const range = (lvl?.castRange || 650) + u.radius;
+    const room = u.maxMana - u.mana;
+    let best: SimUnit | null = null;
+    let bestWorth = 0;
+    for (const f of foes) {
+      if (f.building || f.hp <= 0 || f.maxMana <= 0) continue;
+      if (f.invulnerable || f.magicImmune) continue;
+      if (Math.hypot(f.x - u.x, f.y - u.y) > range + f.radius) continue;
+      const take = Math.min(cap, f.mana);
+      if (take < cap * STEAL_SLIVER) continue;
+      if (!f.isHero && room < take * STEAL_SLIVER) continue;
+      const worth = take * (f.isHero ? STEAL_HERO : f.isSummon ? STEAL_SUMMON : 1);
+      if (worth > bestWorth) {
+        bestWorth = worth;
+        best = f;
+      }
+    }
+    return best;
+  }
+
+  /** Does this item carry the Wand of Mana Stealing's ability (`MANA_STEAL`)? */
+  private stealsMana(itemId: string): boolean {
+    return !!this.view.item(itemId)?.abilities.some((aid) => this.view.def(aid)?.code === MANA_STEAL);
   }
 
   private selfRegenWorthIt(u: SimUnit, hp: number, def: ItemDef): boolean {
@@ -2508,6 +2647,9 @@ export class PlusItems {
       const orb = orbFor(h, this.carry);
       if (orb && !h.inventory.some((x) => x?.itemId === orb)) wanted.push(orb);
     }
+    // …the race's opening buy that a roaming army never goes home for (`RACE_FIELD`), behind the
+    // orb (a hero's damage for the rest of the match) and ahead of the gear.
+    wanted.push(...this.fieldRows().filter((w) => this.carried(own, w.id) < w.want).map((w) => w.id));
     for (const h of own) {
       if (!h.isHero || h.isIllusion) continue;
       for (const id of HERO_GEAR[h.typeId] ?? []) if (!h.inventory.some((x) => x?.itemId === id)) wanted.push(id);
@@ -2797,13 +2939,15 @@ export class PlusItems {
    * Who is served FIRST with `itemId`: 2 for a melee hero short of its `MELEE_BELT` piece, 1 for
    * any hero holding no invulnerability potion at all on a rung where every hero carries one
    * (`PlusProfile.invulnEach` — the developer's "melee heroes must prioritize buying one before
-   * ranged heroes"), 0 for everybody else.
+   * ranged heroes") or the Shadow Hunter for a Healing Salve (`SALVE_HERO`), 0 for everybody else.
    */
   private firstFor(itemId: string, u: SimUnit): number {
     // A hero's own KIT (`HERO_KIT`) goes to that hero before anybody.
     if (this.kitFor(u)?.includes(itemId) && !u.inventory.some((h) => h?.itemId === itemId)) return 3;
     if (this.meleeFirst(itemId, u)) return 2;
     if (this.profile.invulnEach && itemId === INVULN_BUY && !u.inventory.some((h) => h !== null && INVULN_ITEMS.has(h.itemId))) return 1;
+    // …and the orc's salves to the Shadow Hunter (`SALVE_HERO`).
+    if (itemId === SALVE && u.typeId === SALVE_HERO) return 1;
     return 0;
   }
 
@@ -2960,6 +3104,13 @@ export class PlusItems {
     return HERO_KIT[u.typeId]
       ?? (u.typeId === this.carry && MELEE_HEROES.has(u.typeId) ? CARRY_KIT : undefined)
       ?? (this.vsUndead && !MELEE_HEROES.has(u.typeId) ? RANGED_KIT : undefined);
+  }
+
+  /** This player's `RACE_FIELD` rows — on Insane, the rung whose army roams (`PlusProfile.roam`).
+   *  Below it the field door would also step past `PlusProfile.shopping`'s habit ceiling, which
+   *  the home trip still keeps for this row. */
+  private fieldRows(): readonly Want[] {
+    return this.profile.difficulty === MELEE_INSANE ? RACE_FIELD[this.race] ?? [] : [];
   }
 
   /** This player's `RACE_STAFF` row, out of the purse — on Insane, for the races that have one. */
