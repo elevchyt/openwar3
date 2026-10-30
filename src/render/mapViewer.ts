@@ -2687,7 +2687,19 @@ export class MapViewerScene {
       // The destructibles get their own registry: they have life, and a script can end it —
       // a gate OPENS by dying (see mapDestructibles.ts), which swaps its collider for the
       // `pathTexDeath` one that blocks only the posts.
-      this.destructibles = collectMapDestructibles(doodads, (id) => destr.getRow(id) ?? undefined);
+      // `selectable` is the one column Reign of Chaos's tables state nothing in: it is 0 on ALL
+      // 129 rows of `Custom_V0` and `Melee_V0`, gates and crates included, and read literally no
+      // RoC chapter has a gate you can hit — while Exodus of the Horde's own hint says "You can
+      // attack gates to destroy them" and hangs triggers off its cages dying. So the answer is
+      // asked of the expansion's copy of the same row, which does tell a gate from a stone wall.
+      // (An MPQ-era install has no such folder, and no RoC tables to be misled by: `destr` it is.)
+      const expansionRows = isRoc() ? this.slkText("Custom_V1\\Units\\DestructableData.slk") : "";
+      const selectableData = expansionRows ? new MappedData(expansionRows) : destr;
+      this.destructibles = collectMapDestructibles(
+        doodads,
+        (id) => destr.getRow(id) ?? undefined,
+        (id) => selectableData.getRow(id)?.string("selectable") === "1",
+      );
       // …and the ones it placed dead are drawn dead, once their models arrive (poseDeadPlaced).
       this.deadPlacedAwaitingPose = new Set(this.destructibles.filter((d) => d.life <= 0).map((d) => d.id));
       // A record the editor placed DEAD (the pre-felled trees a few maps scatter) stamps its
@@ -8459,7 +8471,11 @@ export class MapViewerScene {
   }
 
   /** Play one of a destructible's own clips on its scene-animated stand-in. `hold` keeps the
-   *  final frame (an open gate stays open); otherwise it settles back into "stand". */
+   *  final frame (an open gate stays open). A "stand" loops; any other clip — the Birth a
+   *  `DestructableRestoreLife(d, life, true)` asks for (Exodus of the Horde's bridge, whose
+   *  Birth builds the whole span) — plays ONCE and settles back into "stand", through the
+   *  same `revertEnd` a flinch uses. Looped, the thing rebuilds itself for the rest of the
+   *  match while its collider has long since been standing. */
   private playDestructibleClip(d: MapDestructible, re: RegExp, hold: boolean): void {
     const map = this.viewer.map;
     if (!map) return;
@@ -8475,11 +8491,13 @@ export class MapViewerScene {
     }
     const seq = this.seqByName(a.inst.model.sequences, re);
     if (seq < 0) return;
+    const clip = a.inst.model.sequences[seq];
+    const idles = !hold && /^stand/i.test(clip.name);
     a.inst.setSequence(seq);
-    a.inst.setSequenceLoopMode(hold ? 0 : 2);
+    a.inst.setSequenceLoopMode(idles ? 2 : 0);
     a.dead = hold;
-    a.revertEnd = 0;
-    a.clipT = hold ? 0 : -1; // a held clip (the gate swinging open) runs off-camera too
+    a.revertEnd = hold || idles ? 0 : clip.interval?.[1] ?? 0;
+    a.clipT = idles ? -1 : 0; // a one-shot clip (the gate swinging open) runs off-camera too
   }
 
   /**

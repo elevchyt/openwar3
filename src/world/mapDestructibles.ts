@@ -100,7 +100,13 @@ export interface MapDestructible {
 /** Read one destructible's row. Returns undefined for a plain doodad (no DestructableData row). */
 export type DestructableRow = (typeId: string) => { string(col: string): string | undefined } | undefined;
 
-export function collectMapDestructibles(doodads: DoodadInstance[], rowOf: DestructableRow): MapDestructible[] {
+export function collectMapDestructibles(
+  doodads: DoodadInstance[],
+  rowOf: DestructableRow,
+  /** The `selectable` answer for a type — a separate question because it is not always this
+   *  row's to give: Reign of Chaos's tables hold 0 for every type (see the caller). */
+  selectableOf: (typeId: string) => boolean,
+): MapDestructible[] {
   const out: MapDestructible[] = [];
   for (let i = 0; i < doodads.length; i++) {
     const d = doodads[i];
@@ -136,7 +142,7 @@ export function collectMapDestructibles(doodads: DoodadInstance[], rowOf: Destru
       isTree: targType === "tree",
       walkable: row.string("walkable") === "1",
       targType,
-      selectable: row.string("selectable") === "1",
+      selectable: selectableOf(d.id),
       radius: Number(row.string("radius")) || 0,
       selCircle: Number(row.string("selcircsize")) || 0,
       armorSound: tex(row.string("armor")),

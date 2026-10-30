@@ -131,7 +131,11 @@ const { collectMapDestructibles, findDestructibleAt } = require(join(REPO, ".sim
     // A GATE with the same 0 — which several campaigns write and none of them mean.
     { id: "LTg3", x: 900, y: 900, z: 0, angle: 0, scale: [1, 1, 1], life: 0, scriptCreated: false },
   ];
-  const list = collectMapDestructibles(doodads, rowOf);
+  // Reign of Chaos's tables hold `selectable` 0 for EVERY type, gate included, so the answer is
+  // a separate question and the row's own column must not leak into it (issue #226).
+  const list = collectMapDestructibles(doodads, rowOf, (id) => id === "LTg3");
+  check("`selectable` comes from the answer asked for, not this row's column", list[0].selectable && !list[1].selectable,
+    `${list[0].selectable}/${list[1].selectable}`);
   check("scenery is not a destructible", list.length === 4, `got ${list.length}`);
   // The id is the .doo INDEX (1-based), not a position in the filtered list — that is the
   // identity a `destructable` handle carries, and the scenery record must not shift it.

@@ -371,7 +371,7 @@ The data decides which ones, and it is unambiguous:
 
 | `DestructableData` | what it means here |
 | --- | --- |
-| `selectable` | can a click pick it up at all — 0 on the invisible platforms a map lays down by the hundred |
+| `selectable` | can a click pick it up at all — 0 on the invisible platforms a map lays down by the hundred. **0 on all 129 rows of Reign of Chaos's tables**, gates and all, so a RoC match asks `Custom_V1`'s row of the same id instead (issue #226: Exodus of the Horde's gates) |
 | `targType` | the weapon-target class. `debris` (77 types) and `wall` (15) are attackable; **every** melee unit's Targets Allowed reads `ground,structure,debris,item,ward`. `bridge` (100) and `decoration` (28) are in nobody's list |
 | `HP` / `radius` | life and the collider a unit stands off from |
 | `armor` | the MATERIAL struck (Wood/Stone/Flesh) — the impact SOUND, not a damage class. There is no destructable row in the damage table, so a blow lands undivided |

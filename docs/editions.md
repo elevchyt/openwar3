@@ -105,6 +105,13 @@ they do not agree ("Medium armor takes extra damage from Magic attacks" against 
 full damage to Medium armor"). A file that describes both is a file for an engine that reads
 both.
 
+**One column does not survive the overlay:** `DestructableData.slk`'s `selectable` is 0 on all 129
+rows of `Melee_V0\` and `Custom_V0\` (the expansion's tables say 1 for 27 of those same ids:
+every gate, the crates, the cage). Reading it literally left every RoC gate with no sim body,
+so nothing could click or break one, and Exodus of the Horde's "You can attack gates to destroy
+them" was a lie (issue #226). So a RoC match asks `Custom_V1\`'s row of the same id; that one
+column is the only thing the destructible registry borrows across the switch.
+
 ### 2. `Units\MiscGame.txt` — compiled in, so restated
 
 The gameplay constants are literals in `src/data/gameplayConstants.ts` (checked by
