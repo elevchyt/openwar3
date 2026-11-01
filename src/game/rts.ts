@@ -6370,6 +6370,9 @@ export class RtsController {
     const u = this.sim.units.get(this.hovered);
     if (!u) return { has: false, category: "neutral" };
     if (u.neutralPassive || this.guised(u)) return { has: true, category: "neutral" }; // shops, critters
+    // A Haunted or Entangled Gold Mine is a mine to the cursor whoever owns it: the real client
+    // draws YOUR OWN yellow, hand and reticle, inside your own green selection ring.
+    if (this.coverGold(u.id) !== null) return { has: true, category: "neutral" };
     if (u.owner === this.localPlayer) return { has: true, category: "friendly" };
     const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
     // A WATCHER's cursor reads its OWN diplomacy and never the selection's: it is allied with
@@ -6377,6 +6380,44 @@ export class RtsController {
     // its own could do anything to either of them.
     const hostile = prim && !this.observing ? this.sim.hostile(prim, u) : !this.localAlly(u.owner);
     return { has: true, category: hostile ? "enemy" : "friendly" };
+  }
+
+  /** The allegiance the armed reticle wears, or null for its resting teal: a reticle is tinted
+   *  only over something the armed order may actually TAKE, and the colour never says what the
+   *  order is. An A-click is teal over bare ground like every other order. Read off the real
+   *  1.30.4 client (Undead, Booty Bay): Attack is teal on the ground, on the unit it would be
+   *  aimed by and on a Gold Mine, green on another of ours and on our buildings, red on an
+   *  enemy. Move is teal on an enemy BUILDING and yellow on a mine, Patrol teal on any building
+   *  or mine but green on a unit, Unsummon teal on everything it refuses. Attack Ground, Unload
+   *  and the Signal name a point and nothing else, so they stay teal (inferred: no unit tested). */
+  reticleAim(): "friendly" | "neutral" | "enemy" | null {
+    const hover = this.hoverInfo();
+    if (!hover.has) return null;
+    const id = this.hovered;
+    const target = id !== null ? this.sim.units.get(id) : undefined;
+    const aimable = (): boolean => {
+      switch (this.orderMode) {
+        case "attack":
+          // An item on the ground is the one thing with no unit behind it the Attack may strike (issue #186).
+          if (!target) return this.hoveredItem !== null;
+          return !target.invulnerable && !this.onlyOrderee(target.id);
+        case "move":
+          return this.hoveredItem === null && !(target?.building && hover.category === "enemy");
+        case "patrol":
+          return !!target && !target.building;
+        case "cast":
+          return !!target && this.armedCast?.target === "unit" && this.castRefusal(this.armedCast.code, target.id) === null;
+        case "item":
+          return !!target && this.armedItem?.mode === "useunit" && this.primary !== null && this.sim.itemUseError(this.primary, this.armedItem.slot, target.id, true) === null;
+        case "attackground":
+        case "unload":
+        case "signal":
+          return false;
+        default:
+          return true; // rally (real client: tints over everything), and the worker and shop picks
+      }
+    };
+    return aimable() ? hover.category : null;
   }
 
   /** Live units, for the metrics overlay. */

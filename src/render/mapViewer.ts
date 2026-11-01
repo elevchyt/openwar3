@@ -444,19 +444,24 @@ const SPELL_SOUND_ART: Record<string, (d: AbilityDef) => string[]> = {
 // The item icon carried on the cursor while moving it, as a fraction of an inventory
 // slot: just under it, so the hand looks like it's holding that same icon.
 const CARRIED_ITEM_SCALE = 0.85;
+// The colours the armed reticle comes in (reticleImg). The hover hand has no teal: it is only up
+// over something.
+type ReticleTint = "teal" | "green" | "yellow" | "red";
 // The race cursor's hotspot — the texel that sits ON the pointer. It is (3, 3) in the sheet's
 // own 32-px cell, and so cursorPx(3) in the enlarged art we actually draw. Named once because
 // THREE things have to agree on it: the `cursor:` rule, the tinted hover hand's (overlayCursor)
 // and the carried gauntlet below. A DOM stand-in that skips it moves the aiming point out
 // from under the player mid-gesture, which is the whole complaint.
 const CURSOR_HOTSPOT: [number, number] = [cursorPx(3), cursorPx(3)];
-// The hover hand's pulse (overlayCursor): brightness 1 → 1.85 → 1 over PULSE_MS, the timing the
-// old CSS `reticle-pulse` animation had. A cursor image cannot animate, so the cycle is baked into
-// PULSE_FRAMES stills — 100 ms apiece, which still reads as a glow, not a blink. The armed
-// RETICLE does not pulse: the model's "Target" sequence is one frame ([0, 33]) with no geoset
-// colour or alpha track (UI\Cursor\HumanCursor.mdx), so the real one is a steady picture.
-const PULSE_MS = 800;
-const PULSE_FRAMES = 8;
+// The pulse a TINTED cursor wears, the hover hand and the reticle over a target alike (overlayCursor):
+// a triangle over PULSE_MS, in eight held steps, measured at 30 fps off the real 1.30.4 client under
+// Wine. Each table is the gain per step on a fixed texel: the hand against the idle hand, the reticle
+// against the resting teal one (which does not pulse, as the model's one-frame "Target" sequence with
+// no colour track says, UI\Cursor\HumanCursor.mdx). A cursor image cannot animate, so these are baked
+// into stills and stepped on the wall clock.
+const PULSE_MS = 500;
+const HAND_PULSE = [1, 1.23, 1.45, 1.69, 1.9, 1.69, 1.45, 1.23];
+const RETICLE_PULSE = [0.61, 0.71, 0.76, 0.87, 1, 0.87, 0.76, 0.71];
 // Where the carried item's icon sits against the gauntlet holding it, straight off
 // `UI\Cursor\<race>Cursor.mdx`: "HoldItem" shows geoset 1 — the replaceable-21 quad that is
 // the item's own icon — at model x[-0.020, 0.007] y[-0.0186, 0.008], BEHIND (z -0.0192) the
@@ -14306,8 +14311,8 @@ export class MapViewerScene {
     // Normal = the WC3 arrow everywhere. The reticle and the recoloured hand are REAL cursors
     // too, swapped in through --ow3-reticle-cursor / --ow3-hand-cursor (updateReticle); the DOM
     // stand-ins left, the scroll chevron and the carried item, hide it instead.
-    //  - `reticle-on` (the recoloured hover HAND) only ever happens over the map, so
-    //    it's scoped to the canvas and HUD buttons keep the plain arrow.
+    //  - `reticle-on` (a TINTED cursor: the hover HAND, or the armed reticle over a target) only
+    //    ever happens over the map, so it's scoped to the canvas and HUD buttons don't wear it.
     //  - `armed-on` (an armed order's target reticle) is body-wide: in WC3 the reticle
     //    IS the cursor while an order is armed, over the console too. Scoping this one
     //    to #map was the bug — hovering the HUD showed the reticle AND the hand.
@@ -14358,12 +14363,14 @@ export class MapViewerScene {
   /** The real WC3 target reticle (row 2 of the race cursor sheet: a circle with
    *  four brackets + centre pip), recoloured to `colorKey` and cached. Replaces
    *  the old canvas-drawn brackets. Null until the cursor sheet loads. */
-  private reticleImg(colorKey: "green" | "yellow" | "red"): HTMLCanvasElement | null {
+  private reticleImg(colorKey: ReticleTint): HTMLCanvasElement | null {
     const cached = this.reticleImgs.get(colorKey);
     if (cached) return cached;
     const sheet = this.cursorSheet;
     if (!sheet) return null;
-    const color = { green: [72, 255, 72], yellow: [255, 226, 58], red: [255, 26, 20] }[colorKey]; // harsher, purer red
+    // Measured off the real 1.30.4 client under Wine, at the brightest texel of the reticle's
+    // arms: teal is the armed cursor at rest, the other three what it turns over a target.
+    const color = { teal: [64, 255, 255], green: [0, 255, 0], yellow: [255, 255, 0], red: [255, 0, 0] }[colorKey];
     const cell = Math.round(sheet.width / 8);
     const size = cursorPx(cell);
     const c = document.createElement("canvas");
@@ -14375,12 +14382,13 @@ export class MapViewerScene {
     const img = ctx.getImageData(0, 0, size, size);
     const d = img.data;
     for (let i = 0; i < d.length; i += 4) {
-      // Grayscale art → tint by intensity (with a floor so outlines keep colour).
-      const inten = Math.max(d[i], d[i + 1], d[i + 2]) / 255;
-      const f = Math.min(1, 0.45 + 0.75 * inten);
-      d[i] = color[0] * f;
-      d[i + 1] = color[1] * f;
-      d[i + 2] = color[2] * f;
+      // Grayscale art × the tint, as the real one reads: its arms fade from full colour at the
+      // root to 70 % of it (64,255,255 → 45,182,182). The art peaks at 213 once scaled up and the
+      // real reticle's arms reach 255, hence the 1.2 (clamped by the canvas).
+      const inten = (1.2 * Math.max(d[i], d[i + 1], d[i + 2])) / 255;
+      d[i] = color[0] * inten;
+      d[i + 1] = color[1] * inten;
+      d[i + 2] = color[2] * inten;
       // alpha (d[i+3]) preserved — defines the reticle shape
     }
     ctx.putImageData(img, 0, 0);
@@ -14396,7 +14404,9 @@ export class MapViewerScene {
     if (cached) return cached;
     const sheet = this.cursorSheet;
     if (!sheet) return null;
-    const color = { green: [130, 255, 130], yellow: [255, 235, 110], red: [255, 48, 40] }[colorKey]; // harsh red, not pink
+    // The real client keeps the art's own channels and zeroes the rest: (127,140,212) reads
+    // (x,0,0) on an enemy, (0,y,0) on a friend and (x,y,0) on a neutral, with the same x and y.
+    const color = { green: [0, 255, 0], yellow: [255, 255, 0], red: [255, 0, 0] }[colorKey];
     const cell = Math.round(sheet.width / 8);
     const size = cursorPx(cell);
     const c = document.createElement("canvas");
@@ -14422,27 +14432,23 @@ export class MapViewerScene {
    *
    *  These used to be a DOM element moved to the pointer every frame, and so drew a frame or two
    *  behind it — the reticle you aim with visibly trailed the mouse. A real cursor is drawn by the
-   *  OS wherever the pointer IS. What that costs is the hand's pulse: a cursor cannot run a CSS
-   *  animation, so the old `reticle-pulse` (brightness 1 → 1.85 → 1 over 0.8 s, ease-in-out,
-   *  colour only) is baked into PULSE_FRAMES images and stepped on the wall clock. The reticle is
-   *  always frame 0 — unfiltered — because the game's own does not pulse (see PULSE_MS), and
-   *  because a pulse is a NEW cursor ten times a second: while an order was armed that was a
-   *  style recalc of every element in the document per step (the rule is body-wide) and a fresh
-   *  OS cursor bitmap each time, measured at 5–6× the idle style time. Empty until the cursor
-   *  sheet loads. */
-  private overlayCursor(kind: "reticle" | "hand", colorKey: "green" | "yellow" | "red"): string {
-    const frame = kind === "reticle" ? 0 : Math.floor((performance.now() % PULSE_MS) / (PULSE_MS / PULSE_FRAMES));
+   *  OS wherever the pointer IS. What that costs is the pulse: a cursor cannot run a CSS animation,
+   *  so it is baked into stills (HAND_PULSE, RETICLE_PULSE) and stepped on the wall clock. The
+   *  resting teal reticle is always one still, and that one is the rule the whole document inherits
+   *  (setOverlayCursor). Empty until the cursor sheet loads. */
+  private overlayCursor(kind: "reticle" | "hand", colorKey: ReticleTint): string {
+    const pulse = kind === "hand" ? HAND_PULSE : RETICLE_PULSE;
+    const frame = colorKey === "teal" ? -1 : Math.floor((performance.now() % PULSE_MS) / (PULSE_MS / pulse.length));
     const key = `${kind}:${colorKey}:${frame}`;
     const cached = this.overlayCursors.get(key);
     if (cached !== undefined) return cached;
-    const base = kind === "reticle" ? this.reticleImg(colorKey) : this.handImg(colorKey);
+    const base = kind === "reticle" ? this.reticleImg(colorKey) : colorKey === "teal" ? null : this.handImg(colorKey);
     if (!base) return "";
     const c = document.createElement("canvas");
     c.width = base.width;
     c.height = base.height;
     const ctx = c.getContext("2d")!;
-    // A cosine through the cycle stands in for ease-in-out there and back.
-    ctx.filter = `brightness(${1 + (0.85 * (1 - Math.cos((2 * Math.PI * frame) / PULSE_FRAMES))) / 2})`;
+    if (frame >= 0) ctx.filter = `brightness(${pulse[frame]})`;
     ctx.drawImage(base, 0, 0);
     // The reticle is aimed from its CENTRE; the hand from the gauntlet's fingertip, as the plain one.
     const rule = kind === "reticle"
@@ -14452,15 +14458,15 @@ export class MapViewerScene {
     return rule;
   }
 
-  /** Point the reticle's or the hand's custom property at `rule`. Written only when it changes:
-   *  this runs every frame, and a custom property is inherited by everything under the element
-   *  that holds it, so every write is a style recalc of that whole subtree.
+  /** Point the resting reticle's or the map's pulsing cursor's custom property at `rule`. Written
+   *  only when it changes: this runs every frame, and a custom property is inherited by everything
+   *  under the element that holds it, so every write is a style recalc of that whole subtree.
    *
-   *  Which is why the two live on different elements. The RETICLE is body-wide (`armed-on`), so
-   *  its property has to sit on <body> — and it changes only with its colour. The HAND pulses,
-   *  ten writes a second for as long as a unit is hovered, and is only ever drawn over the map,
-   *  so its property sits on the map CANVAS, which has no children: a step restyles one element
-   *  instead of the ~940 in the document. */
+   *  Which is why the two live on different elements. The resting RETICLE is body-wide (`armed-on`),
+   *  so its property has to sit on <body> — and it never changes during an aim. A PULSING cursor, the
+   *  hand or the reticle over a target, steps sixteen writes a second for as long as something is
+   *  hovered, and hover only ever happens over the map, so its property sits on the map CANVAS, which
+   *  has no children: a step restyles one element instead of the ~940 in the document. */
   private setOverlayCursor(kind: "reticle" | "hand", rule: string): void {
     if (kind === "reticle") {
       if (rule === this.reticleCursorRule) return;
@@ -17530,9 +17536,10 @@ export class MapViewerScene {
   }
 
   /** Pick the cursor for what the mouse is doing. While an order is ARMED (Move/Attack/
-   *  Patrol/Rally/Repair) it is the WC3 **target reticle**; while merely hovering a
+   *  Patrol/Rally/Repair) it is the WC3 **target reticle** — teal, and tinted only over a
+   *  target that order may take (RtsController.reticleAim); while merely hovering a
    *  unit/mine it keeps the race **hand cursor** but recoloured — green friendly / yellow
-   *  neutral / red enemy; the hand pulses (colour only), the reticle holds still. While an item is
+   *  neutral / red enemy. Anything tinted pulses (colour only); teal holds still. While an item is
    *  being moved it is the gauntlet holding it (updateCarriedItem, DOM). The reticle and the
    *  hand are real `cursor:` images, swapped in through --ow3-reticle-cursor under the
    *  `armed-on` (screen-wide) class or --ow3-hand-cursor under `reticle-on` (map-only) — never
@@ -17547,23 +17554,26 @@ export class MapViewerScene {
     if (this.updateCarriedItem(carrySlot)) return this.hideCursorOverlay();
     const hover = this.rts.hoverInfo();
     let kind: "reticle" | "hand" | null = null;
-    let colorKey: "green" | "yellow" | "red" = "green";
+    let colorKey: ReticleTint = "teal";
+    let tinted: ReticleTint | null = null; // the armed reticle's colour over a target the order may take
     if (mode || this.devPlace) {
       kind = "reticle";
-      // The Attack order shows a RED reticle (WC3), the other armed orders green
-      // (yellow while hovering a unit for a move-type order).
-      if (mode === "attack" || mode === "attackground") colorKey = "red";
-      else colorKey = hover.has ? "yellow" : "green";
+      const aim = mode ? this.rts.reticleAim() : null;
+      if (aim !== null) tinted = aim === "friendly" ? "green" : aim === "enemy" ? "red" : "yellow";
     } else if (hover.has) {
       kind = "hand";
       colorKey = hover.category === "friendly" ? "green" : hover.category === "enemy" ? "red" : "yellow";
     }
     const rule = kind ? this.overlayCursor(kind, colorKey) : "";
     if (!kind || !rule) return this.hideCursorOverlay();
+    // The armed reticle owns the cursor screen-wide, resting teal; a tinted cursor, the hover hand
+    // or the reticle over a target, is only ever up over the map and pulses there (the `#map` rule
+    // outranks the armed one, so the console stays teal).
+    const onMap = kind === "hand" ? rule : tinted ? this.overlayCursor("reticle", tinted) : "";
     this.setOverlayCursor(kind, rule);
-    // The armed reticle owns the cursor screen-wide; the hover hand only over the map.
+    if (onMap) this.setOverlayCursor("hand", onMap);
     document.body.classList.toggle("armed-on", kind === "reticle");
-    document.body.classList.toggle("reticle-on", kind === "hand");
+    document.body.classList.toggle("reticle-on", !!onMap);
   }
 
   /** The carried cursor — the model's "HoldItem": the closed gauntlet with the item's icon

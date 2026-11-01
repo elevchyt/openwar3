@@ -161,3 +161,33 @@ focused (Tab / Shift+Tab, or a click on a grid icon). Ctrl bends both halves of 
 | `pickAt` / `pickVolumes` / `boxSweep` / `boxPicks` | [`src/game/rts.ts`](../src/game/rts.ts) |
 | the wireframe overlay | `pushColliderVolume` in [`src/render/mapViewer.ts`](../src/render/mapViewer.ts) |
 | headless test | `tools/render-model-pick-test.cjs` (`pnpm sim:test`) |
+
+---
+
+## The armed reticle's colour
+
+The reticle an armed order wears says **whether this order may take what is under it**, and not
+which order it is. It rests TEAL `(64,255,255)` and is tinted by allegiance only over a legal
+target: green `(0,255,0)` ours or an ally's, yellow `(255,255,0)` neutral, red `(255,0,0)` enemy
+(`RtsController.reticleAim`). Measured off the real 1.30.4 client under Wine, on an Undead start:
+
+| Order | Teal | Tinted |
+| --- | --- | --- |
+| Attack | ground, console, minimap, Gold Mine, the lone unit being ordered | another of ours, our buildings, enemy units and buildings |
+| Move | ground, enemy building | our units and buildings, enemy unit, Gold Mine |
+| Patrol | ground, any building, Gold Mine | a unit |
+| Set Rally Point | ground | our unit, our building, Gold Mine |
+| Unsummon | ground, a unit, enemy building | our building |
+
+So an A-click over open ground is teal, not red: it was red in OpenWar3 until this was measured.
+A Haunted or Entangled Gold Mine is yellow whoever owns it.
+A spell or item uses its own refusal (`castRefusal`, `itemUseError`). Repair, Gather, Load and the
+shop's purchaser pick were not measured and tint over anything hovered; Attack Ground, Unload and
+the Minimap Signal name only a point and are assumed to stay teal.
+
+The hover HAND (no order armed) reads the same three allegiances. Its tint keeps the art's own
+channels and zeroes the rest: `(127,140,212)` reads `(x,0,0)` on an enemy, `(0,y,0)` on a friend
+and `(x,y,0)` on a neutral. Everything tinted PULSES, teal never does: a triangle over 500 ms in
+eight held steps (30 fps capture), hand gain 1 to 1.9 against the idle hand, reticle gain 0.61 to
+1 against the teal one. A step is a new `cursor:` value, so tinted rules live on the map canvas,
+which has no children, and only the resting teal one is on `<body>`.
