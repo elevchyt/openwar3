@@ -3600,7 +3600,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..94a8e474c893e10a837832ffde05fe78
                  const metadata = metadataMap.getRow(modification.id);
                  if (metadata) {
 diff --git a/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js b/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
-index c2a27060799ff26b5c86ccedd0bedda2d6a54746..92c8814a6c7e216be2bf34d040bf682eb56472bf 100644
+index c2a27060799ff26b5c86ccedd0bedda2d6a54746..f67b5d69ef088a653c5cdaaa702057ce5153b117 100644
 --- a/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
 +++ b/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
 @@ -9,6 +9,45 @@ ${precision_glsl_1.default}
@@ -3649,7 +3649,7 @@ index c2a27060799ff26b5c86ccedd0bedda2d6a54746..92c8814a6c7e216be2bf34d040bf682e
  varying vec3 v_normal;
  varying vec2 v_uv;
  varying float v_texture;
-@@ -35,6 +74,37 @@ void main() {
+@@ -35,6 +74,42 @@ void main() {
  
    // color *= clamp(dot(normal, lightDirection) + 0.45, 0.1, 1.0);
  
@@ -3681,7 +3681,12 @@ index c2a27060799ff26b5c86ccedd0bedda2d6a54746..92c8814a6c7e216be2bf34d040bf682e
 +  // OpenWar3: dim the cliff by the fog-of-war brightness at this fragment's world XY.
 +  if (u_fogEnabled > 0.5) {
 +    vec2 fogUv = (v_position.xy - u_fogParams.xy) * u_fogParams.zw;
-+    color.rgb *= texture2D(u_fogTexture, fogUv).r;
++    float lit = texture2D(u_fogTexture, fogUv).r;
++    // The same result as FogOverlay's veil on the ground beside this tile: FoggedTerrain
++    // (170,16,16,32) in the remembered range, running to black past it. Dimming alone left every
++    // cliff and ramp tile plain dark green against blue-grey ground, with a hard line at each cell.
++    vec3 fogged = vec3(16.0, 16.0, 32.0) / 255.0 * clamp(lit * 3.0, 0.0, 1.0);
++    color.rgb = color.rgb * lit + fogged * (1.0 - lit);
 +  }
 +
    gl_FragColor = color;

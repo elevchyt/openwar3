@@ -285,5 +285,6 @@ Both from 1.30.4 at 30 fps, driving the real client under Wine:
   It reads the world's `dt`, so a pause holds the fog. Sight itself is unaffected: gameplay and the
   unit-hiding gate still read the hard `vision.stateAt`.
 * **Remembered ground is `FoggedTerrain`** 170,16,16,32 rather than black at 0.5: land (20,71,22)
-  lit is (12,31,26) under it, its blue going UP. The cliff and water shaders multiply by the same
-  1/3. A remembered building or tree is `FoggedObject` 64,64,96, not a flat half.
+  lit is (12,31,26) under it, its blue going UP. `cliffs.frag` blends to the same tint, or each
+  cliff and ramp tile is plain dark green beside blue-grey ground, with a hard line at every cell.
+  Water only multiplies by the same 1/3, which is what it measures on the real client. A remembered building or tree is `FoggedObject` 64,64,96, not a flat half.
