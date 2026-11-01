@@ -12,7 +12,7 @@ shadowing engine would move us *away* from the original rather than toward it:
 | What | Where it comes from | Where we implement it |
 | --- | --- | --- |
 | Unit shadows | `Units\UnitUI.slk` `unitShadow` — a black-RGB/alpha blob texture, sized `shadowW`×`shadowH` and offset by `shadowX`/`shadowY` | [`render/shadowOverlay.ts`](../src/render/shadowOverlay.ts) |
-| Building shadows | the same table's `buildingShadow`, one baked texture per building, sized by the file (13² for a Town Hall) at 48 world units a texel — a fit against 1.30.4, no file states it | the second `ShadowOverlay` pass in `mapViewer` |
+| Building shadows | the same table's `buildingShadow`, one baked 1-bit texture per building, FIRST ROW NORTH, sized by the file (13² for a Town Hall) at 48 world units a texel, a fit against 1.30.4 that no file states | the second `ShadowOverlay` pass in `mapViewer` |
 | **Static map shadows** | **`war3map.shd`** — the mask the World Editor bakes for cliffs, doodads and scenery | [`render/terrainShadowOverlay.ts`](../src/render/terrainShadowOverlay.ts) |
 | Time-of-day shading | `Environment\DNC\*.mdx` — a keyframed directional light per tileset | [`render/dayNight.ts`](../src/render/dayNight.ts) + the shader patch |
 
@@ -23,6 +23,12 @@ they morph across slopes and ramps instead of floating over them.
 texture's alpha. Shadow.blp peaks at 191, so bare dirt goes 145 → ~72 under a Peasant, which is what
 1.30.4 measures. An earlier 0.32 here left units with no visible shadow at all. The blob sits where
 `shadowX`/`shadowY` put it, with no extra push.
+
+A BUILDING is not on that number. Its map is 1-bit, so `ShadowImageColor` would put 0.667 of black
+over whole plateaus, and the real client does not: in the column north of an Altar of Storms, grass
+goes (34,112,22) → (25,70,22) with blue unmoved. `BUILDING_SHADOW` is the fit, alpha 0.44 over
+(16,16,22). The 1.30.4 reading is one measurement on one tileset, and the reason the two differ is
+not known.
 
 ## `war3map.shd` — the static shadow layer
 

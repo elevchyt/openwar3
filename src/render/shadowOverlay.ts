@@ -43,6 +43,7 @@ const FRAG_SRC = `
 precision mediump float;
 uniform sampler2D uTex;
 uniform float uStrength; // overall shadow darkness scale (0..1)
+uniform vec3 uTint; // what the shadow blends toward: black for a unit, blue-grey for a building
 varying vec2 vUv;
 void main() {
   // Cells we tessellated may spill past the shadow's [0,1] box — clip to it.
@@ -51,11 +52,12 @@ void main() {
   float a = texture2D(uTex, vUv).a * uStrength;
   // Feather the box border to 0 so a texture that fills its bounds (the building shadows,
   // whose alpha runs right to the edge) fades out instead of ending on a hard rectangle.
-  // Unit blobs already go transparent well inside their box, so this trims nothing visible.
+  // Unit blobs already go transparent well inside their box, so this trims nothing visible. Kept
+  // narrow: an Altar of Storms' column starts in the file's very first row.
   float edge = min(min(vUv.x, 1.0 - vUv.x), min(vUv.y, 1.0 - vUv.y));
-  a *= smoothstep(0.0, 0.10, edge);
+  a *= smoothstep(0.0, 0.04, edge);
   if (a < 0.004) discard;
-  gl_FragColor = vec4(0.0, 0.0, 0.0, a);
+  gl_FragColor = vec4(uTint, a);
 }`;
 
 // Match UberSplatOverlay's proven coplanar-decal biases so the shadow reliably wins
@@ -68,7 +70,16 @@ const POLYGON_OFFSET_UNITS = -4;
 // alpha times this. Shadow.blp peaks at 191, so a unit's blob takes the ground to half brightness,
 // which is what the real client measures (bare dirt 145 → ~72 under a Peasant, 1.30.4 at 1920×1080).
 const DEFAULT_STRENGTH = FOG_OF_WAR.ShadowImageColor[0] / 255;
+const BLACK: readonly [number, number, number] = [0, 0, 0];
 const BUILDING_SHADOW_TEXEL = 48;
+
+/**
+ * A building's map is 1-bit, so its full strength is on the ground over whole footprints and it
+ * cannot run on the blob's number. Read off 1.30.4 on grass, in the 2-texel column north of an Altar of
+ * Storms: (34,112,22) → (25,70,22), blue unmoved, which is NOT black at any alpha. These are the
+ * best fit of `ground·(1-a) + tint·a` to it; no file states them.
+ */
+export const BUILDING_SHADOW = { strength: 0.44, tint: [16 / 255, 16 / 255, 22 / 255] as const };
 
 type GL = WebGLRenderingContext;
 
@@ -103,11 +114,15 @@ export class ShadowOverlay {
   private uTex: WebGLUniformLocation;
   private uStrength: WebGLUniformLocation;
   private maxAttribs: number;
-  private strength = DEFAULT_STRENGTH;
+  private strength: number;
+  private tint: readonly [number, number, number];
+  private uTint: WebGLUniformLocation;
   private batches = new Map<string, Batch>(); // key = texture path
   private textures = new Map<string, CachedTexture>();
 
-  constructor(gl: GL, terrain: TerrainData, loader: TextureLoader) {
+  constructor(gl: GL, terrain: TerrainData, loader: TextureLoader, look: { strength: number; tint: readonly [number, number, number] } = { strength: DEFAULT_STRENGTH, tint: BLACK }) {
+    this.strength = look.strength;
+    this.tint = look.tint;
     this.gl = gl;
     this.terrain = terrain;
     this.loader = loader;
@@ -118,6 +133,7 @@ export class ShadowOverlay {
     this.uViewProj = gl.getUniformLocation(this.program, "uViewProj")!;
     this.uTex = gl.getUniformLocation(this.program, "uTex")!;
     this.uStrength = gl.getUniformLocation(this.program, "uStrength")!;
+    this.uTint = gl.getUniformLocation(this.program, "uTint")!;
   }
 
   /** Start a fresh frame: drop last frame's geometry (the GPU buffers/textures are
@@ -143,7 +159,7 @@ export class ShadowOverlay {
    * because the file IS its size: these are tiny maps (ShadowTownhall 13², ShadowHouse 9²), one
    * texel per BUILDING_SHADOW_TEXEL world units, centred on the building. That is why a Town Hall's
    * reaches past its 512-unit footprint. No file states the 48: it is the best of 32…64 rendered
-   * against a Town Hall on 1.30.4, whose stem falls on the dirt to its north-east at exactly this.
+   * against a Great Hall and an Altar of Storms on 1.30.4.
    */
   addBuilding(x: number, y: number, texture: string): void {
     const canvas = this.cached(texture).canvas;
@@ -204,6 +220,7 @@ export class ShadowOverlay {
     gl.uniformMatrix4fv(this.uViewProj, false, viewProj as Float32Array);
     gl.uniform1i(this.uTex, 0);
     gl.uniform1f(this.uStrength, this.strength);
+    gl.uniform3f(this.uTint, this.tint[0], this.tint[1], this.tint[2]);
     gl.enableVertexAttribArray(this.aPos);
     gl.enableVertexAttribArray(this.aUv);
 
@@ -265,7 +282,9 @@ export class ShadowOverlay {
       pos[pi++] = wy;
       pos[pi++] = cw(gxi, gyi);
       uv[ui++] = (wx - minX) / w;
-      uv[ui++] = (wy - minY) / h;
+      // A shadow file's FIRST row is its NORTH edge: an Altar of Storms' two-texel column in rows
+      // 0-2 stands north of it on 1.30.4. Read the other way, every building cast south-west.
+      uv[ui++] = 1 - (wy - minY) / h;
     };
     for (let gy = gy0; gy < gy1; gy++) {
       for (let gx = gx0; gx < gx1; gx++) {

@@ -33,7 +33,7 @@ import MdlxModel from "mdx-m3-viewer/dist/cjs/parsers/mdlx/model";
 import { WalkableSurfaces, type WalkableGeoset } from "./walkableHeight";
 import { FOG_FADE_PER_MS, FogOverlay, type BoundaryMask } from "./fogOverlay";
 import { UberSplatOverlay } from "./uberSplatOverlay";
-import { ShadowOverlay } from "./shadowOverlay";
+import { BUILDING_SHADOW, ShadowOverlay } from "./shadowOverlay";
 import { Shoreline } from "./shoreline";
 import { parseTerrainShadows, TerrainShadowOverlay } from "./terrainShadowOverlay";
 import { CameraHeightField } from "./cameraHeight";
@@ -2258,7 +2258,7 @@ export class MapViewerScene {
       // occlude it), while building shadows draw AFTER the ubersplats so they darken the
       // foundation decal, not just the grass around it.
       this.shadows = new ShadowOverlay(this.viewer.gl, terrain, splatLoader);
-      this.buildingShadows = new ShadowOverlay(this.viewer.gl, terrain, splatLoader);
+      this.buildingShadows = new ShadowOverlay(this.viewer.gl, terrain, splatLoader, BUILDING_SHADOW);
       // …and the STATIC half of WC3's shadows: the mask the World Editor bakes for
       // everything that never moves (render/terrainShadowOverlay.ts). Maps without one
       // simply get no layer.
