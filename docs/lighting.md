@@ -257,6 +257,14 @@ Only Bandit Ridge has been compared against the real client for this. A map whos
 the view (a low start, or a dark clock like Extreme Candy War's) now gets more haze than the 0.65
 gave it, and that has not been compared.
 
+## A building placed but not yet begun
+
+`UI\MiscData.txt` [Placement]: `PaidStructureColor` 96,128,128,255 and `UnpaidStructureColor`
+96,255,128,128, ARGB. The model wears the whole row (see-through, team colour showing through as a
+dim red on 1.30.4), and its foundation splat wears the colour at full alpha. That split is read off
+the real client and no file states it. The price goes at the click there too (500 → 180 gold for two
+Barracks before either had started), so a real queue only ever showed Paid.
+
 ## Water and shoreline
 
 Read off `TerrainArt\Water.slk` and checked against 1.30.4 on Booty Bay:

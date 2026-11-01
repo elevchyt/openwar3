@@ -668,6 +668,12 @@ export const MINIMAP = {
  * ground itself, and it is harsher: a unit or doodad inside the boundary is a full-alpha
  * black silhouette.
  */
+/** `UI\MiscData.txt` [Placement]: the tint of a building that has been placed but not begun. */
+export const PLACEMENT = {
+  PaidStructureColor: [96, 128, 128, 255],
+  UnpaidStructureColor: [96, 255, 128, 128],
+} as const;
+
 export const FOG_OF_WAR = {
   /** Explored, not currently seen — the blue-grey veil over remembered ground. */
   FoggedTerrain: [170, 16, 16, 32],

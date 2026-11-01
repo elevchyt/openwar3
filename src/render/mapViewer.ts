@@ -71,7 +71,7 @@ import { isDesktopApp } from "../assets/nativeInstall";
 import { loadCommandStrings, disabledIconPath, placeholderIcon, iconFileCandidates, type CommandStrings } from "../data/commandStrings";
 import { resolveTipRefs } from "../data/tipRefs";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
-import { CAMERA, FOG_OF_WAR, MELEE, MINIMAP, MISC_DATA, TEXT_TAG, heroReviveCost, mapMiscEpoch, miscKeyIsRead, setMapMiscOverlay, type ReviveMode } from "../data/gameplayConstants";
+import { CAMERA, FOG_OF_WAR, PLACEMENT, MELEE, MINIMAP, MISC_DATA, TEXT_TAG, heroReviveCost, mapMiscEpoch, miscKeyIsRead, setMapMiscOverlay, type ReviveMode } from "../data/gameplayConstants";
 import { DayNightCycle, type DayNightLight } from "./dayNight";
 import { fogForZoom, makeFog, type DistFog } from "./fog";
 import { TimeIndicatorClock, timeIndicatorPath } from "./timeIndicator";
@@ -1777,7 +1777,7 @@ export class MapViewerScene {
   // site's ghost is created once and dropped the instant its worker's order clears
   // (build starts, is canceled, or the worker is re-tasked). pendingGhostLoading guards
   // the async model load so a site isn't double-spawned.
-  private pendingGhosts = new Map<string, { inst: SpawnInstance; defId: string; frame: number }>();
+  private pendingGhosts = new Map<string, { key: string; inst: SpawnInstance; defId: string; frame: number }>();
   private pendingGhostLoading = new Set<string>();
   // The sites the last rebuild wanted. A model that finishes streaming in after its order went
   // (built, cancelled, re-tasked, the worker dead) is not placed at all, rather than standing
@@ -14186,6 +14186,7 @@ export class MapViewerScene {
     for (const [key, g] of this.pendingGhosts) {
       if (!desired.has(key)) {
         g.inst.detach();
+        this.splats?.remove(`pending:${g.key}`);
         this.pendingGhosts.delete(key);
       }
     }
@@ -14221,16 +14222,16 @@ export class MapViewerScene {
     inst.setScene(this.viewer.map.worldScene);
     inst.setUniformScale(def.modelScale || 1);
     inst.setTeamColor(this.rts?.unitColor(this.localPlayer) ?? this.localPlayer);
-    const g = { inst, defId: def.id, frame: this.applyGhostPose(inst) };
+    const g = { key, inst, defId: def.id, frame: this.applyGhostPose(inst) };
     this.pendingGhosts.set(key, g);
     this.placePendingGhost(g, x, y, blocked);
   }
 
   /** Position a pending-build ghost on its site — seated on the tallest terrain its
-   *  footprint spans (like the real building, issue #15), pinned to the built pose, and
-   *  tinted a hard dark blue so it reads clearly as "about to be built" — or dark RED when
-   *  the site is no longer one, which is a silhouette announcing that it will never rise. */
-  private placePendingGhost(g: { inst: SpawnInstance; defId: string; frame: number }, x: number, y: number, blocked = false): void {
+   *  footprint spans (like the real building, issue #15), pinned to the built pose, and wearing
+   *  [Placement]'s colour over the model AND its foundation decal, as 1.30.4 draws it — or the
+   *  red row when the site is no longer one. */
+  private placePendingGhost(g: { key: string; inst: SpawnInstance; defId: string; frame: number }, x: number, y: number, blocked = false): void {
     const def = this.registry.get(g.defId);
     const fp = def?.pathTex ? this.footprintFor(def.pathTex) : null;
     this.loc3[0] = x;
@@ -14239,12 +14240,24 @@ export class MapViewerScene {
       fp && def && this.footMaxHeight ? this.footMaxHeight(x, y, ...seatHalfExtents(def, fp)) : (this.rts?.groundHeightAt(x, y) ?? 0);
     g.inst.setLocation(this.loc3);
     if (g.frame >= 0) g.inst.frame = g.frame; // keep it fully built, not mid-animation
-    g.inst.setVertexColor(blocked ? PENDING_GHOST_BLOCKED_TINT : PENDING_GHOST_TINT);
+    const tint = blocked ? PENDING_GHOST_BLOCKED_TINT : PENDING_GHOST_TINT;
+    g.inst.setVertexColor(tint);
     g.inst.show();
+    // The foundation is one more splat, under a key of its own, and goes with the ghost. It takes
+    // the row's colour but NOT its alpha: on 1.30.4 its tiles stand solid lavender under a body you
+    // can see through, and at 96 they all but vanish into the grass.
+    if (def?.uberSplat && this.splats) {
+      const key = `pending:${g.key}`;
+      if (!this.splats.has(key)) this.addBuildingSplat(key, def, x, y);
+      this.splats.setTint(key, [tint[0], tint[1], tint[2]]);
+    }
   }
 
   private clearPendingGhosts(): void {
-    for (const g of this.pendingGhosts.values()) g.inst.detach();
+    for (const g of this.pendingGhosts.values()) {
+      g.inst.detach();
+      this.splats?.remove(`pending:${g.key}`);
+    }
     this.pendingGhosts.clear();
     this.pendingGhostLoading.clear();
     this.pendingGhostWanted.clear();
@@ -18179,16 +18192,13 @@ function zQuat(out: Float32Array, angle: number): void {
 const ATTACH_LINK_WORDS = new Set(["alternate"]);
 
 // --- Debug collider overlay geometry helpers (interleaved [x,y,z, r,g,b,a]) ---
-// Hard dark-blue vertex tint for the "pending build" ghost (issue #18). setVertexColor
-// multiplies the model's texture, so low red/green + strong blue reads as a dark-blue
-// silhouette across any building. "Hard" dark blue is opaque, hence alpha 1.0 — a
-// translucent alpha now genuinely fades the model (issue #66) rather than making it
-// vanish, so this is a look, not a constraint.
-const PENDING_GHOST_TINT = [0.12, 0.22, 0.85, 1.0] as const;
-// …and its refusal twin: the same hard, opaque treatment swung to red, for a pending build
-// standing where one can no longer go (see updatePendingBuildGhosts). Deliberately the same
-// vocabulary as the placement grid's red squares — one colour means "not here" everywhere.
-const PENDING_GHOST_BLOCKED_TINT = [0.85, 0.12, 0.12, 1.0] as const;
+// A building placed but not begun, in `UI\MiscData.txt` [Placement]'s ARGB. Paid is what every ghost in a real 1.30.4 queue wore (the price goes at the
+// click: 500 → 180 gold for two Barracks before either had started).
+const argb = (c: readonly number[]): readonly [number, number, number, number] => [c[1] / 255, c[2] / 255, c[3] / 255, c[0] / 255];
+const PENDING_GHOST_TINT = argb(PLACEMENT.PaidStructureColor);
+// …and for a site that cannot go up: a queued build the purse cannot pay for, which is the row's own
+// meaning, or ground that has since been taken, which is ours. Neither was produced on 1.30.4.
+const PENDING_GHOST_BLOCKED_TINT = argb(PLACEMENT.UnpaidStructureColor);
 const COLLIDER_LIFT = 12; // raise shapes above the ground so they read clearly
 // "Show Regions" overlay palette: cyan outline + a faint cyan wash inside each rect.
 const REGION_COLORS = { outline: [0.2, 0.95, 1.0, 0.9] as const, fill: [0.2, 0.85, 1.0, 0.12] as const };
