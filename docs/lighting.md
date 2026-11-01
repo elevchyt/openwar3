@@ -12,7 +12,7 @@ shadowing engine would move us *away* from the original rather than toward it:
 | What | Where it comes from | Where we implement it |
 | --- | --- | --- |
 | Unit shadows | `Units\UnitUI.slk` `unitShadow` — a black-RGB/alpha blob texture, sized `shadowW`×`shadowH` and offset by `shadowX`/`shadowY` | [`render/shadowOverlay.ts`](../src/render/shadowOverlay.ts) |
-| Building shadows | the same table's `buildingShadow`, one baked 1-bit texture per building, FIRST ROW NORTH, sized by the file (13² for a Town Hall) at 48 world units a texel, a fit against 1.30.4 that no file states | the second `ShadowOverlay` pass in `mapViewer` |
+| Building shadows | the same table's `buildingShadow`, one baked 1-bit texture per building, FIRST ROW NORTH, sized by the file (13² for a Town Hall) at 32 world units a texel and shifted (48, 32) to the north-east, both a fit against 1.30.4 that no file states | the second `ShadowOverlay` pass in `mapViewer` |
 | **Static map shadows** | **`war3map.shd`** — the mask the World Editor bakes for cliffs, doodads and scenery | [`render/terrainShadowOverlay.ts`](../src/render/terrainShadowOverlay.ts) |
 | Time-of-day shading | `Environment\DNC\*.mdx` — a keyframed directional light per tileset | [`render/dayNight.ts`](../src/render/dayNight.ts) + the shader patch |
 
@@ -29,6 +29,10 @@ over whole plateaus, and the real client does not: in the column north of an Alt
 goes (34,112,22) → (25,70,22) with blue unmoved. `BUILDING_SHADOW` is the fit, alpha 0.44 over
 (16,16,22). The 1.30.4 reading is one measurement on one tileset, and the reason the two differ is
 not known.
+
+Overlapping shadows STACK on the real client as far as could be measured: a Farm's shadow took grass
+already partly in a Town Hall's shadow by ×0.76, and clear grass beside it by ×0.80 (rough, read off
+one frame). So they are blended one over the other here too, rather than unioned.
 
 ## `war3map.shd` — the static shadow layer
 

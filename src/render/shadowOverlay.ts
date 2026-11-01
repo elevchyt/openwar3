@@ -71,7 +71,9 @@ const POLYGON_OFFSET_UNITS = -4;
 // which is what the real client measures (bare dirt 145 → ~72 under a Peasant, 1.30.4 at 1920×1080).
 const DEFAULT_STRENGTH = FOG_OF_WAR.ShadowImageColor[0] / 255;
 const BLACK: readonly [number, number, number] = [0, 0, 0];
-const BUILDING_SHADOW_TEXEL = 48;
+const BUILDING_SHADOW_TEXEL = 32;
+const BUILDING_SHADOW_OFFSET_X = 48;
+const BUILDING_SHADOW_OFFSET_Y = 32;
 
 /**
  * A building's map is 1-bit, so its full strength is on the ground over whole footprints and it
@@ -157,16 +159,21 @@ export class ShadowOverlay {
   /**
    * Append one BUILDING's shadow. `UnitUI.slk` gives a building's `buildingShadow` no size at all,
    * because the file IS its size: these are tiny maps (ShadowTownhall 13², ShadowHouse 9²), one
-   * texel per BUILDING_SHADOW_TEXEL world units, centred on the building. That is why a Town Hall's
-   * reaches past its 512-unit footprint. No file states the 48: it is the best of 32…64 rendered
-   * against a Great Hall and an Altar of Storms on 1.30.4.
+   * texel per pathing cell, 32 world units.
+   *
+   * They are NOT centred on the building. The Altar of Kings' file reaches 5 texels west and 5.5 east
+   * of its middle, yet on 1.30.4 the ground to its west does not change at all when it goes up (ratio
+   * 1.00, under construction and finished) while the ground to its east drops to ×0.8. So the whole
+   * map sits to the north-east, as the unit blobs' own shadowX/Y put theirs. Neither the size nor the
+   * offset is stated by a file: 32 and (48, 32) are the best of the candidates rendered against a
+   * Town Hall and an Altar of Kings. Centred, the Altar cast left while the Hall cast right.
    */
   addBuilding(x: number, y: number, texture: string): void {
     const canvas = this.cached(texture).canvas;
     if (!canvas) return;
     const w = canvas.width * BUILDING_SHADOW_TEXEL;
     const h = canvas.height * BUILDING_SHADOW_TEXEL;
-    this.add(x, y, w, h, w / 2, h / 2, texture);
+    this.add(x + BUILDING_SHADOW_OFFSET_X, y + BUILDING_SHADOW_OFFSET_Y, w, h, w / 2, h / 2, texture);
   }
 
   private cached(texture: string): CachedTexture {
