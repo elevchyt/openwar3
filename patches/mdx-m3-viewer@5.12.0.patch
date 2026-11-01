@@ -856,7 +856,7 @@ index 26347d6d988194c95415c2a40597123e80bd61a2..3d28cc4165be8474ed4005abfe3ce726
      }
  }
 diff --git a/dist/cjs/viewer/handlers/mdx/batchgroup.js b/dist/cjs/viewer/handlers/mdx/batchgroup.js
-index 7fe06bd7314e83b578dc8987e819b08cea287dfb..5fd7c8cafea4782e3833d3992fe245fb834a333f 100644
+index 7fe06bd7314e83b578dc8987e819b08cea287dfb..0b5e75ea27d085e88048eb0be92bbfbbf3848e80 100644
 --- a/dist/cjs/viewer/handlers/mdx/batchgroup.js
 +++ b/dist/cjs/viewer/handlers/mdx/batchgroup.js
 @@ -2,6 +2,8 @@
@@ -868,7 +868,7 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..5fd7c8cafea4782e3833d3992fe245fb
  /**
   * A group of batches that are going to be rendered together.
   */
-@@ -31,11 +33,117 @@ class BatchGroup {
+@@ -31,11 +33,134 @@ class BatchGroup {
          const shader = handler_1.default.getBatchShader(viewer, skinningType, isHd);
          shader.use();
          const uniforms = shader.uniforms;
@@ -904,6 +904,22 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..5fd7c8cafea4782e3833d3992fe245fb
 +        // src/render/menuScene.ts from the backdrop instance's LITE nodes). Array uniforms are
 +        // keyed by their first element here (gl/shader.js expands them), and one uniform3fv on
 +        // that location writes the whole array. Same no-op rule as dnc.
++        // OpenWar3: the fixed-function lighting path (scene.ffp; see sd.vert).
++        const ffp = scene.ffp;
++        if (ffp) {
++            gl.uniform1f(uniforms['u_ffpEnabled'], 1);
++            gl.uniform1f(uniforms['u_ffpLit'], 1);
++            gl.uniform3fv(uniforms['u_ffpEmissive'], ffp.emissive);
++            gl.uniform3fv(uniforms['u_ffpLightPos[0]'], ffp.positions);
++            gl.uniform3fv(uniforms['u_ffpLightColor[0]'], ffp.colors);
++            gl.uniform4fv(uniforms['u_ffpAtten'], ffp.atten);
++            gl.uniform1f(uniforms['u_lodBias'], ffp.lodBias);
++        }
++        else {
++            gl.uniform1f(uniforms['u_ffpEnabled'], 0);
++            gl.uniform1f(uniforms['u_ffpLit'], 0);
++            gl.uniform1f(uniforms['u_lodBias'], 0);
++        }
 +        const omni = scene.omniLights;
 +        if (omni && omni.count > 0) {
 +            gl.uniform1f(uniforms['u_omniEnabled'], 1);
@@ -920,6 +936,7 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..5fd7c8cafea4782e3833d3992fe245fb
 +        const distFog = scene.distFog;
 +        if (distFog && distFog.enabled) {
 +            gl.uniform1f(uniforms['u_distFogEnabled'], 1);
++            gl.uniform1f(uniforms['u_distFogFlags'], distFog.honourFlags ? 1 : 0);
 +            gl.uniform1f(uniforms['u_distFogStart'], distFog.start);
 +            gl.uniform1f(uniforms['u_distFogEnd'], distFog.end);
 +            gl.uniform3fv(uniforms['u_distFogColor'], distFog.color);
@@ -987,7 +1004,7 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..5fd7c8cafea4782e3833d3992fe245fb
              gl.uniform1f(uniforms['u_hasBones'], 1);
              gl.uniform1i(uniforms['u_boneMap'], 15);
              gl.uniform1f(uniforms['u_vectorSize'], 1 / boneTexture.width);
-@@ -44,24 +152,14 @@ class BatchGroup {
+@@ -44,24 +169,14 @@ class BatchGroup {
          else {
              gl.uniform1f(uniforms['u_hasBones'], 0);
          }
@@ -1014,7 +1031,7 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..5fd7c8cafea4782e3833d3992fe245fb
              for (const index of this.objects) {
                  const batch = batches[index];
                  const geoset = batch.geoset;
-@@ -115,6 +213,14 @@ class BatchGroup {
+@@ -115,6 +230,14 @@ class BatchGroup {
              const uvAnims = instance.uvAnims;
              gl.uniform4fv(uniforms['u_vertexColor'], instance.vertexColor);
              gl.uniform1i(uniforms['u_texture'], 0);
@@ -1029,7 +1046,7 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..5fd7c8cafea4782e3833d3992fe245fb
              for (const object of this.objects) {
                  const batch = batches[object];
                  const geoset = batch.geoset;
-@@ -133,7 +239,7 @@ class BatchGroup {
+@@ -133,7 +256,7 @@ class BatchGroup {
                      gl.uniform2f(uniforms['u_uvTrans'], uvAnim[0], uvAnim[1]);
                      gl.uniform2f(uniforms['u_uvRot'], uvAnim[2], uvAnim[3]);
                      gl.uniform1f(uniforms['u_uvScale'], uvAnim[4]);
@@ -1038,6 +1055,28 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..5fd7c8cafea4782e3833d3992fe245fb
                      let texture = textureOverrides.get(textureIndex);
                      if (!texture) {
                          const replaceable = layerTexture.replaceableId;
+diff --git a/dist/cjs/viewer/handlers/mdx/geometryemitterfuncs.js b/dist/cjs/viewer/handlers/mdx/geometryemitterfuncs.js
+index f99a7bfa398290e89ccd13ed7e1490808a1d3185..eb407c69c0c201899f7e93ce3a405d0904f244a4 100644
+--- a/dist/cjs/viewer/handlers/mdx/geometryemitterfuncs.js
++++ b/dist/cjs/viewer/handlers/mdx/geometryemitterfuncs.js
+@@ -124,6 +124,17 @@ function bindParticleEmitter2Shader(emitter, shader) {
+     let mdxTexture = emitterObject.internalTexture;
+     gl.blendFunc(emitterObject.blendSrc, emitterObject.blendDst);
+     gl.uniform1f(uniforms['u_filterMode'], emitterObject.filterMode);
++    // OpenWar3: distance fog on particles, where the scene asks for it (see particles.frag).
++    const distFog = scene.distFog;
++    if (distFog && distFog.enabled && distFog.honourFlags && !emitterObject.unfogged) {
++        gl.uniform1f(uniforms['u_pFogOn'], 1);
++        gl.uniform1f(uniforms['u_pFogStart'], distFog.start);
++        gl.uniform1f(uniforms['u_pFogEnd'], distFog.end);
++        gl.uniform3fv(uniforms['u_pFogColor'], distFog.color);
++    }
++    else {
++        gl.uniform1f(uniforms['u_pFogOn'], 0);
++    }
+     // Determine where this texture is coming from.
+     // This is to get the texture wrap modes.
+     // The texture is either a replaceable in which case it's stored internally, a team color in which case it's stored in the handler, or a reference to one of the model textures.
 diff --git a/dist/cjs/viewer/handlers/mdx/handler.js b/dist/cjs/viewer/handlers/mdx/handler.js
 index 87e3bbdbf1377c888ac650cf23029492fc1a05f7..b92458b2d3645c0bcec2169797706a84d66ac9f1 100644
 --- a/dist/cjs/viewer/handlers/mdx/handler.js
@@ -1057,10 +1096,10 @@ index 87e3bbdbf1377c888ac650cf23029492fc1a05f7..b92458b2d3645c0bcec2169797706a84
              const params = reforged ? { reforged: true } : undefined;
              for (let i = 0; i < teams; i++) {
 diff --git a/dist/cjs/viewer/handlers/mdx/layer.js b/dist/cjs/viewer/handlers/mdx/layer.js
-index 0d26837b8214841c35ccc52702bb9593a1cc18fc..da36f77883806182bb3b4b37a0f89e3c17ca894f 100644
+index 0d26837b8214841c35ccc52702bb9593a1cc18fc..7a1c682731017a3c17b2bbb98894770e63c9c41e 100644
 --- a/dist/cjs/viewer/handlers/mdx/layer.js
 +++ b/dist/cjs/viewer/handlers/mdx/layer.js
-@@ -48,14 +48,36 @@ class Layer extends animatedobject_1.default {
+@@ -48,14 +48,37 @@ class Layer extends animatedobject_1.default {
          this.addVariants('KMTA', 'alpha');
          this.addVariants('KMTF', 'textureId');
      }
@@ -1087,6 +1126,7 @@ index 0d26837b8214841c35ccc52702bb9593a1cc18fc..da36f77883806182bb3b4b37a0f89e3c
 +        // its effect glows as Unshaded so they stay lit at midnight. Warsmash's mdx
 +        // shader does the same (`if (!u_unshaded) { ...lightSystem... }`).
 +        gl.uniform1f(shader.uniforms['u_unshaded'], this.unshaded ? 1 : 0);
++        gl.uniform1f(shader.uniforms['u_unfogged'], this.unfogged ? 1 : 0);
          gl.uniform1f(shader.uniforms['u_filterMode'], this.filterMode);
          if (this.blended) {
              gl.enable(gl.BLEND);
@@ -1099,7 +1139,7 @@ index 0d26837b8214841c35ccc52702bb9593a1cc18fc..da36f77883806182bb3b4b37a0f89e3c
          else {
              gl.disable(gl.BLEND);
          }
-@@ -71,7 +93,7 @@ class Layer extends animatedobject_1.default {
+@@ -71,7 +94,7 @@ class Layer extends animatedobject_1.default {
          else {
              gl.enable(gl.DEPTH_TEST);
          }
@@ -2180,11 +2220,60 @@ index 3e7460e457fec7d247ebcb2b8641ffb028f47736..6bca9cb85b2e627bb4b110d8f4cc0655
    vec3 position_mv = vec3(u_MV * vec4(position, 1));
  
    mat3 mv = mat3(u_MV);
+diff --git a/dist/cjs/viewer/handlers/mdx/shaders/particles.frag.js b/dist/cjs/viewer/handlers/mdx/shaders/particles.frag.js
+index 02d85e9c496c09ed63c71e49e4d2e5abec3c4187..f0f5e133920c4568c2234633a048d8121a8343f3 100644
+--- a/dist/cjs/viewer/handlers/mdx/shaders/particles.frag.js
++++ b/dist/cjs/viewer/handlers/mdx/shaders/particles.frag.js
+@@ -13,6 +13,11 @@ uniform float u_filterMode;
+ 
+ varying vec2 v_texcoord;
+ varying vec4 v_color;
++varying float v_depth;
++uniform float u_pFogOn;
++uniform float u_pFogStart;
++uniform float u_pFogEnd;
++uniform vec3 u_pFogColor;
+ 
+ void main() {
+   vec4 texel = texture2D(u_texture, v_texcoord);
+@@ -33,6 +38,12 @@ void main() {
+     discard;
+   }
+ 
++  // OpenWar3: the scene's distance fog, for an emitter not flagged Unfogged. As on a model's
++  // layers, the real client draws additive particles with fog OFF (traced, docs/lighting.md).
++  if (u_pFogOn > 0.5) {
++    float f = clamp((u_pFogEnd - v_depth) / (u_pFogEnd - u_pFogStart), 0.0, 1.0);
++    if (u_filterMode == 0.0 || u_filterMode == 4.0) color.rgb = mix(u_pFogColor, color.rgb, f);
++  }
+   gl_FragColor = color;
+ }
+ `;
+diff --git a/dist/cjs/viewer/handlers/mdx/shaders/particles.vert.js b/dist/cjs/viewer/handlers/mdx/shaders/particles.vert.js
+index 394717c8138c40ad4b5222f6d54f32c8239771dc..12d7bfbd0a0301f663be9e25952990e86a3f17b5 100644
+--- a/dist/cjs/viewer/handlers/mdx/shaders/particles.vert.js
++++ b/dist/cjs/viewer/handlers/mdx/shaders/particles.vert.js
+@@ -42,6 +42,7 @@ attribute vec3 a_leftRightTop;
+ 
+ varying vec2 v_texcoord;
+ varying vec4 v_color;
++varying float v_depth; // OpenWar3: view depth, for the scene's distance fog
+ 
+ float getCell(vec3 interval, float factor) {
+   float start = interval[0];
+@@ -262,6 +263,7 @@ void main() {
+   } else if (u_emitter == EMITTER_UBERSPLAT) {
+     ubersplat();
+   }
++  v_depth = gl_Position.w;
+ }
+ `;
+ exports.default = shader;
 diff --git a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js b/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
-index 235f29101256617d34587316e8f40984a8f95685..efd0ab860407bc107bf5f61eb26f48c2f4915fe8 100644
+index 235f29101256617d34587316e8f40984a8f95685..db5926774ecbfd14234e94fc4718717cef18b42f 100644
 --- a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
 +++ b/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
-@@ -11,12 +11,146 @@ uniform sampler2D u_texture;
+@@ -11,12 +11,154 @@ uniform sampler2D u_texture;
  uniform float u_filterMode;
  uniform bool u_unshaded;
  
@@ -2227,6 +2316,8 @@ index 235f29101256617d34587316e8f40984a8f95685..efd0ab860407bc107bf5f61eb26f48c2
 +// the WC3 environment/menu haze. Distinct from the fog-of-war uniforms in the terrain
 +// shaders (u_fog*). u_distFogEnabled is 0 for scenes with no fog (keeps stock output).
 +uniform float u_distFogEnabled;
++uniform float u_distFogFlags; // OpenWar3: scene honours the layer's Unfogged flag
++uniform float u_unfogged; // OpenWar3: the layer's own Unfogged flag (MDX layer flag 32)
 +uniform float u_distFogStart;
 +uniform float u_distFogEnd;
 +uniform vec3 u_distFogColor;
@@ -2270,12 +2361,18 @@ index 235f29101256617d34587316e8f40984a8f95685..efd0ab860407bc107bf5f61eb26f48c2
  varying float v_uvScale;
  varying vec3 v_lightDir;
 +varying vec3 v_worldPos;
++varying vec3 v_ffpLight; // OpenWar3: the fixed-function vertex light (see sd.vert)
++uniform float u_ffpLit; // OpenWar3: same switch as the vertex shader's u_ffpEnabled
++uniform float u_lodBias; // OpenWar3: D3DSAMP_MIPMAPLODBIAS, -0.5 in the real client
 +
 +// Blend rgb toward the fog colour by camera distance. Additive layers (filterMode
 +// 3/4) fade to black instead — black is the additive identity, so distant glows just
 +// disappear rather than tint the scene with fog colour.
 +vec3 applyDistFog(vec3 rgb, float filterMode) {
 +  if (u_distFogEnabled < 0.5) return rgb;
++  // OpenWar3: the real client turns D3D fog OFF for an Unfogged layer and for every additive one
++  // (traced, docs/lighting.md) rather than fading it to black.
++  if (u_distFogFlags > 0.5 && (u_unfogged > 0.5 || (filterMode >= 3.0 && filterMode <= 4.0))) return rgb;
 +  float dist = dot(u_distFogEye - v_worldPos, u_distFogDir); // view depth — see u_distFogDir
 +  float f = clamp((u_distFogEnd - dist) / (u_distFogEnd - u_distFogStart), 0.0, 1.0);
 +  if (filterMode >= 3.0 && filterMode <= 4.0) return rgb * f;
@@ -2331,7 +2428,16 @@ index 235f29101256617d34587316e8f40984a8f95685..efd0ab860407bc107bf5f61eb26f48c2
  
  vec4 getDiffuseColor() {
    vec2 uv = v_uv;
-@@ -43,7 +177,7 @@ vec4 getDiffuseColor() {
+@@ -30,7 +172,7 @@ vec4 getDiffuseColor() {
+   // Scale animation
+   uv = v_uvScale * (uv - 0.5) + 0.5;
+ 
+-  vec4 texel = texture2D(u_texture, uv);
++  vec4 texel = texture2D(u_texture, uv, u_lodBias);
+   vec4 color = texel * v_color;
+ 
+   // 1bit Alpha
+@@ -43,7 +185,7 @@ vec4 getDiffuseColor() {
      discard;
    }
  
@@ -2340,7 +2446,7 @@ index 235f29101256617d34587316e8f40984a8f95685..efd0ab860407bc107bf5f61eb26f48c2
  }
  
  void onlyTexCoords() {
-@@ -55,19 +189,44 @@ void onlyNormals() {
+@@ -55,19 +197,46 @@ void onlyNormals() {
  }
  
  void onlyDiffuse() {
@@ -2356,9 +2462,9 @@ index 235f29101256617d34587316e8f40984a8f95685..efd0ab860407bc107bf5f61eb26f48c2
    if (!u_unshaded) {
 -    float lambertFactor = clamp(dot(v_normal, v_lightDir), 0.0, 1.0);
 -    lambertFactor = clamp(lambertFactor + 0.7, 0.0, 1.0);
--
--    color.rgb *= lambertFactor;
-+    if (u_omniEnabled > 0.5) {
++    if (u_ffpLit > 0.5) {
++      color.rgb *= v_ffpLight;
++    } else if (u_omniEnabled > 0.5) {
 +      // The model's own lights (see the u_omni* block): ambient + Σ colour·attenuation·N·L.
 +      vec3 n = normalize(v_normal);
 +      vec3 light = u_omniAmbient;
@@ -2381,7 +2487,8 @@ index 235f29101256617d34587316e8f40984a8f95685..efd0ab860407bc107bf5f61eb26f48c2
 +    } else {
 +      float lambertFactor = clamp(dot(v_normal, v_lightDir), 0.0, 1.0);
 +      lambertFactor = clamp(lambertFactor + 0.7, 0.0, 1.0);
-+
+ 
+-    color.rgb *= lambertFactor;
 +      color.rgb *= lambertFactor;
 +    }
    }
@@ -2391,7 +2498,7 @@ index 235f29101256617d34587316e8f40984a8f95685..efd0ab860407bc107bf5f61eb26f48c2
  }
  
 diff --git a/dist/cjs/viewer/handlers/mdx/shaders/sd.vert.js b/dist/cjs/viewer/handlers/mdx/shaders/sd.vert.js
-index 49733805785c0ef269901d8928e47a953ada93a9..f15149f33f353822f4cb73eaf85eb727ea0415ab 100644
+index 49733805785c0ef269901d8928e47a953ada93a9..4e5021c0dda272b8648a10faa812e1f695952450 100644
 --- a/dist/cjs/viewer/handlers/mdx/shaders/sd.vert.js
 +++ b/dist/cjs/viewer/handlers/mdx/shaders/sd.vert.js
 @@ -12,6 +12,12 @@ uniform vec2 u_uvTrans;
@@ -2407,15 +2514,26 @@ index 49733805785c0ef269901d8928e47a953ada93a9..f15149f33f353822f4cb73eaf85eb727
  
  attribute vec3 a_position;
  attribute vec3 a_normal;
-@@ -23,6 +29,7 @@ varying vec4 v_color;
+@@ -23,6 +29,18 @@ varying vec4 v_color;
  varying vec4 v_uvTransRot;
  varying float v_uvScale;
  varying vec3 v_lightDir;
 +varying vec3 v_worldPos; // OpenWar3: world-space position for distance fog (see sd.frag)
++// OpenWar3: WC3's own lighting, which is Direct3D's FIXED-FUNCTION pipeline — traced off the real
++// client (docs/lighting.md): evaluated per VERTEX, the light at each one is the sum of
++// diffuse · max(N·L, 0) / (a0 + a1·d + a2·d²) out to the light's range, clamped, and the triangle
++// interpolates the answer. u_ffpEnabled is 0 for every scene that has not asked for it.
++#define MAX_FFP 8
++uniform float u_ffpEnabled;
++uniform vec3 u_ffpEmissive;
++uniform vec3 u_ffpLightPos[MAX_FFP];
++uniform vec3 u_ffpLightColor[MAX_FFP];
++uniform vec4 u_ffpAtten; // (a0, a1, a2, range)
++varying vec3 v_ffpLight;
  
  ${bonetexture_glsl_1.default}
  ${transforms_glsl_1.default}
-@@ -35,12 +42,22 @@ void main() {
+@@ -35,12 +53,36 @@ void main() {
      transformVertexGroups(position, normal);
    }
  
@@ -2436,11 +2554,25 @@ index 49733805785c0ef269901d8928e47a953ada93a9..f15149f33f353822f4cb73eaf85eb727
    v_uvScale = u_uvScale;
    v_lightDir = normalize(u_lightPos - position);
 +  v_worldPos = position; // world space (skinned above; gl_Position needs no model matrix)
++
++  v_ffpLight = vec3(1.0);
++  if (u_ffpEnabled > 0.5) {
++    vec3 light = u_ffpEmissive;
++    for (int i = 0; i < MAX_FFP; i++) {
++      vec3 toLight = u_ffpLightPos[i] - position;
++      float dist = length(toLight);
++      if (dist <= u_ffpAtten.w) {
++        float atten = 1.0 / (u_ffpAtten.x + u_ffpAtten.y * dist + u_ffpAtten.z * dist * dist);
++        light += u_ffpLightColor[i] * (atten * max(dot(normal, toLight / max(dist, 0.001)), 0.0));
++      }
++    }
++    v_ffpLight = clamp(light, 0.0, 1.0);
++  }
  
    gl_Position = u_VP * vec4(position, 1.0);
  }
 diff --git a/dist/cjs/viewer/handlers/w3x/map.js b/dist/cjs/viewer/handlers/w3x/map.js
-index e4c8ea760e92653ef6423bd34f9111d0b062a901..d417c0f50c527866c6ffc35954c452d017370105 100644
+index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be62ac005c 100644
 --- a/dist/cjs/viewer/handlers/w3x/map.js
 +++ b/dist/cjs/viewer/handlers/w3x/map.js
 @@ -11,11 +11,46 @@ const variations_1 = require("./variations");

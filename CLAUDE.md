@@ -320,7 +320,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   its click volumes stay put (`RtsController.setRide`); its landing is timed to the buff's clock
   (`CARRIER_CLIPS`: Cyclone pre-rolls its Death clip, Impale plays its one Birth clip at the rate of Air Time).
 - **Lighting & shadows:** read [`docs/lighting.md`](docs/lighting.md) before adding anything light- or
-  shadow-shaped. WC3 has **no real-time shadows** — a shadow is a blob decal, a baked `war3map.shd` mask
+  shadow-shaped. **The real client is Direct3D FIXED-FUNCTION** and Wine can log it: per-vertex
+  light, 1/(1+0.0005·d²), no base ambient, linear fog, additive drawn unfogged. The expansion's menu is
+  on that path (`scene.ffp`), with every value traced; before fitting any look by eye, TRACE the
+  screen instead (the recipe is in that doc). WC3 has **no real-time shadows** — a shadow is a blob decal, a baked `war3map.shd` mask
   (16 bytes per terrain CELL, 0-or-255, no header), or nothing — and the glue screens are lit by the
   models' OWN `LITE` omni lights, sized for a diorama the camera sits 340 units from. It also has the
   trap that costs an hour: after editing the mdx-m3-viewer patch, restart the dev server and delete

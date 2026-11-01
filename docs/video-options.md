@@ -111,7 +111,8 @@ the frame to a machine whose GPU is the bottleneck and nearly nothing to one who
 emission rate of particle emitters depending on the particles setting. High seems to double the
 emission"* — and ships `SETTING_PARTICLES_HIGH = 2`, which every emitter object multiplies its
 authored rate by. So **the rate written into an MDX is Warcraft III's Medium**, and High is twice
-it. We leave that 2 where it is and scale it, which makes our High exactly what OpenWar3 has
+it. (The real client's main menu at its highest rung holds 0.45 × what that rate gives, traced, so this
+may simply be wrong: see lighting.md. Only that scene has moved so far.) We leave that 2 where it is and scale it, which makes our High exactly what OpenWar3 has
 always drawn and our Medium the game's own middle rung. Every other rung in the file is OURS and
 says so at its definition. Nothing in the install describes what a quality setting does — these
 were engine settings, not data — so there is nothing to check them against.

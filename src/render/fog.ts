@@ -12,6 +12,9 @@ export interface DistFog {
   end: number;
   /** Fog colour, rgb in 0..1. */
   color: Float32Array;
+  /** Draw the way the real client does: an Unfogged layer and every additive one take no fog, and
+   *  blended particles do. Off, additive layers fade to black and particles are never fogged. */
+  honourFlags?: boolean;
 }
 
 /** Build a fog config (rgb in 0..1). */

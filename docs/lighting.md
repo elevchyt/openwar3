@@ -123,10 +123,60 @@ the tower, the chains, the ice spikes, the bergs and the ocean all change. What 
 is any shadow art — the model names 49 textures and not one of them is a shadow — so there is
 nothing further to hook up there; a glue scene's shadows are painted into its textures.
 
-If a glue scene looks *sharper* than a screenshot of the real client, that is very likely the
-screenshot rather than the renderer — see **"Calibrate a screenshot reference on something you
-render identically"** in [`REFERENCES.md`](REFERENCES.md), which measures it and also rules out the
-mip chain, a missing shading layer and the install's `*_mip1.blp` files as causes.
+If a glue scene looks *noisier* than the real client, it is the LIGHTING and not the textures: see
+the next section, which is what that turned out to be on the main menu.
+
+### What the real client actually does: a Direct3D trace
+
+**The expansion's main menu no longer guesses any of this.** Wine logs every Direct3D call a game
+makes, so the real client's numbers can be read rather than fitted. Everything in this table was
+read off 1.30.4 at its main menu (recipe below), at 1920×1080 with Particles on its highest rung:
+
+| What | The real client | What we had fitted by eye |
+| --- | --- | --- |
+| Pipeline | **fixed-function**: no shader in the frame, `SetFVF` + CPU-skinned dynamic buffers | per-pixel |
+| Lighting | per VERTEX, then interpolated | per pixel |
+| Light colour | the colour **as stored** × intensity (Omni: `90.35, 240, 184.47`, teal) | BGR swap, which gives yellow-green |
+| Attenuation | **1 / (1 + 0.0005·d²)**, range 10000 (`D3DLIGHT9` read out of memory) | a linear 80→200 window |
+| Base ambient | none: `D3DRS_AMBIENT` is never set, and each light's own ambient is 0 | 0.65 |
+| Fog | `FOGTABLEMODE` linear, **0 → 7000**, colour `0xB2B2CC` | 1800 → 4800 |
+| Additive layers and particles | drawn with fog **off** | faded to black, or never fogged |
+| Blended particles | fogged | never fogged |
+| `Unfogged` layer | fog off | ignored |
+| Texture filter | bilinear, **POINT** mip filter, LOD bias **-0.5** | trilinear, no bias |
+| Eye and target | the model's camera **exactly**, no dolly or pan | zoom 0.82, pan 10 |
+| Projection | x 2.3098, y 3.0797 (vertical 35.98° off a 60° field: tan(v/2) = tan(f/2) · 9/16), near 331 | 0.72 × the field |
+| Particle counts | **0.45 ×** the viewer's rate on every steady emitter (809 / 1800 snow, 61 / 135 fog sheets, 27 / 60 clouds) | 1 × |
+
+That table is the whole "noise": a flat 0.65 wash shows every texel at full contrast, where the real
+scene is lit by inverse-square falloff from five coloured points and sits in a fog that starts at the
+eye. It is also why the water is teal: the teal omni sits just above it. No texture blur is involved,
+and the real client's bias makes its surfaces SHARPER than plain trilinear.
+
+The path is `scene.ffp` (`FixedFunctionLights` in `render/menuScene.ts`, `sd.vert` in the viewer
+patch) and `DistFog.honourFlags`, both off for every other scene. **Only the expansion's menu is on
+it.** The campaign backdrops and Reign of Chaos's menu still wear values fitted by eye; a trace of each
+of those screens is how to retire them, and `BackdropTuning` with them.
+
+Not settled:
+
+* **Material.** `SetMaterial` passes a stack pointer the trace does not dereference, so its contents
+  were never read. Emissive 0 is the best fit (edge correlation 0.74 at 0, 0.61 at 0.3) rather than an
+  observation.
+* **Whether the constants are global.** 0.0005 and 0.45 were read on this one model. In particular
+  the emission scale contradicts `SETTING_PARTICLES_HIGH` (docs/video-options.md), and is applied to
+  this scene's emitters rather than to `PARTICLE_SCALE` until a match has been traced as well.
+* **The projection on another window.** The 9/16 was read at 1920×1080.
+* **Splashes.** The real client draws MORE splash particles at once (90 in one draw against our 48)
+  and they read much dimmer, so the gap is not a count; our bursts can still saturate to white.
+
+**Recipe.** `flatpak run --user --filesystem=home --env=WINEDEBUG=+d3d9 org.winehq.Wine "Warcraft
+III.exe" -launch -windowmode windowed`, inside the private Xephyr, piped through `gzip`; `+d3d9,+d3d`
+adds light and matrix VALUES at 30× the log (2 GB of gzip in 4½ minutes, still only about a minute to
+the menu). Take the frame between the last two `d3d9_device_Present`s. Attenuation is not in any trace
+line: read the `D3DLIGHT9` the `SetLight` line points at with `winedbg --file <script> 0x<pid>`, from
+a shell inside the SAME `flatpak run` (each run has its own wineserver). Offset 84 is Attenuation0;
+attaching ends the game, so read everything in one attach.
 
 ### A glue scene's shadows are painted, and one of them is painted 178 times
 

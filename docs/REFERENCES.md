@@ -124,6 +124,11 @@ Practical notes:
 
 ### Calibrate a screenshot reference on something you render identically
 
+**The conclusion below was wrong about the main menu**, and is kept for its method. A sharp capture of
+the real client showed the same smooth look, and a Direct3D trace found the actual causes, lighting
+and fog (lighting.md, "What the real client actually does"). When you can run the real client, trace it;
+do not reason from a frame. The first stop for any glue-screen look is that trace rather than this table.
+
 Most of our visual references are frames lifted from YouTube, and **a YouTube frame is soft**. Ours
 is not. Compare the two directly and every textured surface in the reference reads as lower detail
 than ours, which invites a hunt for a rendering fault that is not there.

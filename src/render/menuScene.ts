@@ -41,8 +41,8 @@ const LOGO_ROC = "UI\\Glues\\MainMenu\\WarCraftIIILogo\\WarCraftIIILogo.mdx";
 /** The expansion scene's camera, fog and light — the values `MenuScene.tuning` is declared with,
  *  restated so switching back from Reign of Chaos restores them (see `MenuScene.load`). */
 const TFT_SCENE_TUNING = {
-  camZoom: 0.82, camPanX: 0, camPanY: 10, camFov: 0.72, camYaw: 0, camPitch: 0, camRoll: 0,
-  lightAmbient: 0.65, fogStart: 1800, fogEnd: 4800, fogR: 0.67, fogG: 0.7, fogB: 0.83,
+  camZoom: 1, camPanX: 0, camPanY: 0, camFov: 0.6003, camYaw: 0, camPitch: 0, camRoll: 0,
+  lightAmbient: 0.65, fogStart: 0, fogEnd: 7000, fogR: 178 / 255, fogG: 178 / 255, fogB: 204 / 255,
 };
 
 /**
@@ -292,12 +292,14 @@ interface Scene {
   camera: Camera;
   distFog?: DistFog; // OpenWar3: read by the patched SD shaders
   omniLights?: OmniLights | null; // …as is this (the model's own LITE lights)
+  ffp?: FixedFunctionLights | null; // …and this (the same lights, as the real client sets them)
   removeInstance(instance: unknown): void;
   /** The viewer's broad-phase cull: one huge cell here, tested against the frustum before any
    *  instance in it is stepped (viewer/scene.js `update`). See `neverCull`. */
   grid: { cells: Array<{ isVisible(camera: unknown): boolean }> };
 }
 interface Viewer {
+  gl: WebGLRenderingContext;
   on(event: string, cb: (e: unknown) => void): void;
   addHandler(handler: unknown, ...args: unknown[]): boolean;
   addScene(): Scene;
@@ -317,6 +319,7 @@ interface MdxInstance {
   /** The instance's own nodes, laid out bones-then-lights-then-helpers (mdx/modelinstance.js),
    *  so light i is at `model.bones.length + i` and carries that light's animated world position. */
   nodes: Array<{ worldLocation: Float32Array }>;
+  particleEmitters2: Array<{ emitterObject: { emissionRate: number } }>;
   /** Where the instance is in its clip — what the lights' animated tracks are sampled at. */
   sequence: number;
   frame: number;
@@ -359,6 +362,7 @@ interface MdxModel {
   eventObjects: MdxEventObject[];
   lights: MdxLight[];
   bones: unknown[];
+  textures: Array<{ texture?: { webglResource?: WebGLTexture | null } }>;
   addInstance(): MdxInstance;
 }
 
@@ -547,6 +551,20 @@ const BACKDROP_DEFAULTS: Record<string, Partial<BackdropTuning>> = {
   },
 };
 
+const REAL_EMISSION_SCALE = 0.45;
+const scaledEmitters = new WeakSet<object>();
+
+/** The light state the patched SD vertex shader reads (scene.ffp). Every value is the real
+ *  client's, traced off its Direct3D calls: docs/lighting.md. */
+interface FixedFunctionLights {
+  emissive: Float32Array;
+  positions: Float32Array;
+  colors: Float32Array;
+  /** (a0, a1, a2, range) */
+  atten: Float32Array;
+  lodBias: number;
+}
+
 export class MenuScene {
   private viewer: Viewer;
   private scene3d: Scene; // perspective background
@@ -628,28 +646,21 @@ export class MenuScene {
   // frame the buttons on a 16:9 screen. The three `*StretchX` values are the 16:9 ones; at any
   // narrower aspect they are blended back towards 1 (ui/widescreen.ts), which is 4:3's.
   readonly tuning = {
-    camZoom: 0.82, // dolly the eye toward the target (<1 closer)
+    camZoom: 1, // dolly the eye toward the target (<1 closer)
     camPanX: 0, // pan the eye+target screen-right (world units)
-    camPanY: 10, // pan the eye+target screen-up (world units)
-    camFov: 0.72, // field-of-view multiplier
+    camPanY: 0, // pan the eye+target screen-up (world units)
+    // Field-of-view multiplier. The eye and the target are the model's own, untouched: the real
+    // client's view matrix is exactly them (traced, docs/lighting.md), and its projection's
+    // y-scale 3.0797 is a vertical FOV of 35.98° against the model's 59.96° field. Off the same
+    // field, tan(v/2) = tan(field/2) · 9/16.
+    camFov: 0.6003,
     // Orbit off the model's authored angle, in degrees — WC3's own camera fields
     // (docs/camera.md). Zero here: the Icecrown scene is framed by the dolly/pan above.
     camYaw: 0, // rotation about world Z
     camPitch: 0, // angle of attack (positive raises the eye)
     camRoll: 0, // roll on the up vector
-    // Base ambient under the model's own omni lights (see BackdropTuning). This and the fog
-    // below are ONE setting, not two: the Icecrown set is lit almost entirely by ambient (its
-    // five omnis reach 200 units into a scene whose bounds run to ±3000), so ambient decides
-    // how much of the island there is to see and the fog decides how much of it the haze takes
-    // back. Tuned together against the reference in issue #107 — at the old 0.42/1300-3500 the
-    // set was a milk bath: the shipwreck beam, the rock ledges and the teal ice all dissolved
-    // into haze that starts in front of the water, which the reference plainly does not do.
-    //
-    // These two are the ONLY knobs for how much of the set reads. If our scene still looks
-    // crisper than a screenshot of the real client, reach for these rather than for the texture
-    // path: the reference frames are ~0.6 px soft from video compression, and once the chrome
-    // (which we render identically) is blurred to match, the ice and the ocean match too. The
-    // measurement, and the three plausible renderer causes it rules out, are in docs/REFERENCES.md.
+    // Only Reign of Chaos's scene reads this now. The expansion's goes through FixedFunctionLights,
+    // which has no such knob because the real client sets no base ambient at all.
     lightAmbient: 0.65,
     panelCx: -0.31, // panel ortho window centre (panel [0,1] space)
     panelCy: -0.2,
@@ -683,16 +694,25 @@ export class MenuScene {
     // gives at the same height — the 4:3 → 16:9 widening the chrome already wears
     // (`panelStretchX` 1.32, `leftStretchX` 1.23). 1 draws it at true aspect instead.
     logoStretchX: 1.3,
-    // Distance-fog haze on the icy background (world units from the eye; rgb 0..1). The colour
-    // is the reference's, which is a cold LAVENDER rather than the neutral grey this used to
-    // carry — measured off it patch by patch, where every one of them wanted 13-35 more blue
-    // than we were giving. The start sits PAST the near water, which is why the water reads as
-    // deep blue there and as grey here at 1300.
-    fogStart: 1800,
-    fogEnd: 4800,
-    fogR: 0.67,
-    fogG: 0.7,
-    fogB: 0.83,
+    // Distance fog (world units; rgb 0..1), the real client's own D3DRS_FOG* for this scene:
+    // linear, 0 to 7000, in 0xB2B2CC. Traced, docs/lighting.md.
+    fogStart: 0,
+    fogEnd: 7000,
+    fogR: 178 / 255,
+    fogG: 178 / 255,
+    fogB: 204 / 255,
+  };
+
+  /** Whether this menu scene is drawn the way the real client draws it (see FixedFunctionLights).
+   *  The expansion's only so far: the campaign backdrops and Reign of Chaos's menu still carry
+   *  values fitted by eye, and have not been traced. */
+  private ffpScene = false;
+  private ffp: FixedFunctionLights = {
+    emissive: new Float32Array(3),
+    positions: new Float32Array(MAX_OMNI * 3),
+    colors: new Float32Array(MAX_OMNI * 3),
+    atten: new Float32Array([1, 0, 0.0005, 10000]),
+    lodBias: -0.5,
   };
 
   /** The campaign backdrop currently up (its model path), or null on the menu's own scene. */
@@ -743,7 +763,9 @@ export class MenuScene {
   private updateFog(): void {
     // A backdrop's fog is the campaign's (seeded into its tuning block); the menu's is its own.
     const t = this.backdropTuning ?? this.tuning;
-    this.scene3d.distFog = makeFog(t.fogStart, t.fogEnd, t.fogR, t.fogG, t.fogB);
+    const fog = makeFog(t.fogStart, t.fogEnd, t.fogR, t.fogG, t.fogB);
+    fog.honourFlags = this.ffpScene && !this.backdropShown;
+    this.scene3d.distFog = fog;
   }
 
   constructor(private canvas: HTMLCanvasElement, private vfs: DataSource) {
@@ -789,6 +811,7 @@ export class MenuScene {
     // The camera/fog/light block is tuned per SCENE: the expansion's numbers sit the Icecrown
     // seascape behind the panel, and would put Reign of Chaos's set somewhere else entirely.
     Object.assign(this.tuning, tft ? TFT_SCENE_TUNING : ROC_SCENE_TUNING);
+    this.ffpScene = tft;
 
     const bytes = await this.vfs.read(bgPath);
     const bg = (await this.viewer.load(bytes, this.solver)) as MdxModel | undefined;
@@ -804,6 +827,31 @@ export class MenuScene {
     this.frameCameras();
     this.updateFog();
     await this.viewer.whenAllLoaded();
+    if (tft) this.matchRealClient(bg);
+  }
+
+  /**
+   * The two things about the expansion's scene that live on the model's own objects rather than
+   * in a uniform. Both traced off the real client at its highest Particles setting (docs/lighting.md).
+   */
+  private matchRealClient(model: MdxModel): void {
+    // Mip FILTER: D3DSAMP_MIPFILTER is POINT, so a surface takes one mip level rather than a blend
+    // of two. Its D3DSAMP_MIPMAPLODBIAS of -0.5 is scene.ffp.lodBias.
+    const gl = this.viewer.gl;
+    for (const { texture } of model.textures) {
+      if (!texture?.webglResource) continue;
+      gl.bindTexture(gl.TEXTURE_2D, texture.webglResource);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
+    }
+    // Emission: every emitter of this scene holds 0.45× the particles the viewer's rate gives —
+    // 809 snowflakes against 1800, 61 fog sheets against 135, 27 clouds against 60. A model stays
+    // in the viewer's cache across an edition switch, hence the guard.
+    for (const emitter of this.menuInstance?.particleEmitters2 ?? []) {
+      const object = emitter.emitterObject;
+      if (scaledEmitters.has(object)) continue;
+      scaledEmitters.add(object);
+      object.emissionRate *= REAL_EMISSION_SCALE;
+    }
   }
 
   /**
@@ -1231,6 +1279,8 @@ export class MenuScene {
       return;
     }
 
+    this.scene3d.ffp = this.ffpScene && !this.backdropShown ? this.fixedFunctionLights(model, instance) : null;
+
     const o = this.omni;
     o.positions.fill(0);
     o.colors.fill(0);
@@ -1283,6 +1333,29 @@ export class MenuScene {
     // by the ambient rather than dropped back onto the stock 0.7 wash.
     o.count = n;
     this.scene3d.omniLights = o;
+  }
+
+  /** The scene's lights for the fixed-function path (sd.vert), as the real client sets them. */
+  private fixedFunctionLights(model: MdxModel, instance: NonNullable<MenuScene["menuInstance"]>): FixedFunctionLights {
+    const f = this.ffp;
+    f.positions.fill(0);
+    f.colors.fill(0);
+    const lights = model.lights;
+    const v = this.lightVec;
+    const s = this.lightScalar;
+    const { sequence, frame, counter } = instance;
+    let n = 0;
+    for (let i = 0; i < lights.length && n < MAX_OMNI; i++) {
+      const light = lights[i];
+      if (light.type !== 0) continue;
+      const node = instance.nodes[(model.bones.length as number) + i];
+      if (node) f.positions.set(node.worldLocation.subarray(0, 3), n * 3);
+      light.getColor(v, sequence, frame, counter);
+      light.getIntensity(s, sequence, frame, counter);
+      for (let c = 0; c < 3; c++) f.colors[n * 3 + c] = v[c] * s[0];
+      n++;
+    }
+    return f;
   }
 
   /** The edition changed (data/edition.ts): throw the scene's instances away and load the other
