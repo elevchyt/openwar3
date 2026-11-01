@@ -2046,7 +2046,21 @@ index 020a99b949ec1634579d439261027e00b6da23ac..1d5d5653136cfdc12127afc1964eda23
          for (const group of model.translucentGroups) {
              group.render(this);
          }
-@@ -436,6 +1199,7 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -420,7 +1183,13 @@ class MdxModelInstance extends modelinstance_1.default {
+      * Set the team color of this instance.
+      */
+     setTeamColor(id) {
+         this.teamColor = id;
++        // OpenWar3: a model in an attachment is part of this body and wears its colour. The wisps
++        // of EntangledGoldMine.mdx are SharedModels\EntangleWisp.mdx, drawn in team GLOW, and they
++        // stayed slot 0 (red) for every owner and through every Ally Color Mode.
++        for (const attachment of this.attachments) {
++            attachment.internalInstance.setTeamColor(id);
++        }
+         return this;
+     }
+     /**
+@@ -436,6 +1205,7 @@ class MdxModelInstance extends modelinstance_1.default {
      setSequence(id) {
          const model = this.model;
          const sequences = model.sequences;
@@ -2054,7 +2068,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..1d5d5653136cfdc12127afc1964eda23
          this.sequence = id;
          if (id < 0 || id > sequences.length - 1) {
              this.sequence = -1;
-@@ -445,11 +1209,65 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -445,11 +1215,65 @@ class MdxModelInstance extends modelinstance_1.default {
          else {
              this.frame = sequences[id].interval[0];
          }
