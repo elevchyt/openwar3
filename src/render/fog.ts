@@ -23,33 +23,26 @@ export function makeFog(start: number, end: number, r: number, g: number, b: num
 }
 
 /**
- * How much of a MAP's authored haze we actually lay on — a house call, not a WC3 number.
+ * A map's fog as a camera zoomed out past the real client's distance should see it.
  *
- * The engine reads the ramp a map states (`SetTerrainFogEx`, or the w3i's own fog block) and the
- * arithmetic under it is now D3D's — the shaders take the fog distance as the view-space DEPTH
- * rather than the straight-line range from the eye, which is what D3D linear fog does with
- * `D3DRS_RANGEFOGENABLE` off (its default, and WC3 never sets it). What is left after that
- * correction is still heavier than we want it: the maps that turn fog on mostly ask for a bright
- * grey (0.502 or 0.784 across the corpus) that lands on ground far darker than itself, so a 15 %
- * blend triples the brightness of a night tile and flattens its texture with it. Extreme Candy
- * War is the extreme case — it locks the clock at 23:59, so every frame is the dark end.
+ * The real client opens on bj_CAMERA_DEFAULT_DISTANCE (1650) and has no wheel to leave it. Bandit
+ * Ridge's ramp starts at 2000, so through the 32° lens it only just reaches the top of the screen:
+ * measured on 1.30.4, grass is (26,98,23) at the top and the bottom alike. We open at 2400
+ * (docs/camera.md), which puts every piece of ground in view past that same 2000, and a stock melee
+ * map drew grey over all of it: (48,108,46) at the top, bleaching the colours.
  *
- * So: keep every map's ramp SHAPE and scale how far along it we go. Same start, a proportionally
- * longer run to full — which is exactly `haze × STRENGTH` at every distance inside the original
- * ramp, and nothing renders beyond it (a map's fog end sits at the camera's own FarZ, 5000).
- *
- * The EDITOR's fog only — the ramp the w3i states, which the World Editor also writes as a
- * `SetTerrainFogEx` line in `main()`. A ramp a TRIGGER sets is a scene composed to its own
- * numbers (the Frozen Throne credits fog to white by their FarZ) and is laid on exactly as
- * written; `setTerrainFog` in mapViewer.ts tells the two apart.
- *
- * MAP fog only. The glue screens carry hand-tuned fog of their own (`menuScene.ts` — baked
- * against reference shots, see the campaign/menu backdrop work) and must not be re-graded by a
- * knob meant for gameplay.
+ * Scaling the ramp by the distance keeps every row of the screen on the fog value it has at 1650,
+ * since depth along the view axis scales with the camera's distance. So a zoom out shows more of
+ * the world in the light the real client shows it, and no haze the real client cannot show. The
+ * result is one shared object, reused per frame, because this runs every frame.
  */
-const MAP_FOG_STRENGTH = 0.65;
-
-/** A map's own environment haze, at the strength we render maps with (`MAP_FOG_STRENGTH`). */
-export function makeMapFog(start: number, end: number, r: number, g: number, b: number): DistFog {
-  return makeFog(start, start + (end - start) / MAP_FOG_STRENGTH, r, g, b);
+const zoomed: DistFog = { enabled: true, start: 0, end: 0, color: new Float32Array(3) };
+export function fogForZoom(fog: DistFog, distance: number, defaultDistance: number): DistFog {
+  if (distance <= defaultDistance) return fog;
+  const scale = distance / defaultDistance;
+  zoomed.start = fog.start * scale;
+  zoomed.end = fog.end * scale;
+  zoomed.color = fog.color;
+  zoomed.honourFlags = fog.honourFlags;
+  return zoomed;
 }

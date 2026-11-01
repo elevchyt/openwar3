@@ -242,6 +242,21 @@ double any backslash you do keep, since the literal eats one. The failure looks 
 `✘ [ERROR] Syntax error "\"` pointing at a COMMENT, which reads as impossible until you notice
 what the file really is (issue #117).
 
+## A map's distance fog
+
+Laid on exactly as the map states it: a D3D trace of 1.30.4 on Bandit Ridge reads FOGTABLEMODE
+linear, FOGSTART 2000, FOGEND 4000, FOGCOLOR 0x808080, which is its w3i and its `main()` to the
+digit. There used to be a house `MAP_FOG_STRENGTH` of 0.65 here, because the haze looked too heavy.
+It looked too heavy for a different reason: we open at distance 2400 (docs/camera.md) and the real
+client at 1650, which has every piece of ground past that 2000 where the real client has almost
+none. So `fogForZoom` scales the ramp with a PLAYER's zoom past 1650, holding each screen row on the
+value it has at 1650. Grass at the top of the screen on Bandit Ridge: real (26,98,23); ours was
+(48,108,46). A script's camera is not scaled, since its fog is composed for that shot.
+
+Only Bandit Ridge has been compared against the real client for this. A map whose ramp starts inside
+the view (a low start, or a dark clock like Extreme Candy War's) now gets more haze than the 0.65
+gave it, and that has not been compared.
+
 ## Water and shoreline
 
 Read off `TerrainArt\Water.slk` and checked against 1.30.4 on Booty Bay:

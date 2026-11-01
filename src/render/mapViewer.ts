@@ -73,7 +73,7 @@ import { resolveTipRefs } from "../data/tipRefs";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
 import { CAMERA, FOG_OF_WAR, MELEE, MINIMAP, MISC_DATA, TEXT_TAG, heroReviveCost, mapMiscEpoch, miscKeyIsRead, setMapMiscOverlay, type ReviveMode } from "../data/gameplayConstants";
 import { DayNightCycle, type DayNightLight } from "./dayNight";
-import { makeFog, makeMapFog, type DistFog } from "./fog";
+import { fogForZoom, makeFog, type DistFog } from "./fog";
 import { TimeIndicatorClock, timeIndicatorPath } from "./timeIndicator";
 
 /** Per-creep seed data collected from the map (guard post + drop table). */
@@ -1271,7 +1271,6 @@ export class MapViewerScene {
   private w3iFog: DistFog | null = null; // …as the w3i declared it — what ResetTerrainFog restores
   /** The w3i's own fog ramp [z-start, z-end], whether or not its fog is on — what tells the
    *  editor's Environment line in `main()` from a trigger's own `SetTerrainFogEx` (setTerrainFog). */
-  private w3iFogRamp: [number, number] | null = null;
   // The top-bar day/night medallion — the real UI\Console\<Race>\<Race>UI-TimeIndicator
   // model on its own canvas, scrubbed to the sim clock each frame (issue #47).
   private clock: TimeIndicatorClock | null = null;
@@ -2671,10 +2670,9 @@ export class MapViewerScene {
       // z-end] camera distance, fogColor is RGBA bytes. Applied to the world scene so the
       // terrain + units fade to the fog colour with distance, as in the real game.
       const fi = info as unknown as { useTerrainFog: number; fogHeight: Float32Array; fogColor: Uint8Array };
-      this.w3iFogRamp = [fi.fogHeight[0], fi.fogHeight[1]];
       if (fi.useTerrainFog > 0 && fi.fogHeight[1] > fi.fogHeight[0]) {
         const c = fi.fogColor;
-        this.mapFog = makeMapFog(fi.fogHeight[0], fi.fogHeight[1], c[0] / 255, c[1] / 255, c[2] / 255);
+        this.mapFog = makeFog(fi.fogHeight[0], fi.fogHeight[1], c[0] / 255, c[1] / 255, c[2] / 255);
       }
       // Remember it: a script's SetTerrainFogEx replaces the haze, and ResetTerrainFog
       // puts the map's OWN fog back (7.22) — so the w3i's settings are the baseline, not
@@ -3906,18 +3904,10 @@ export class MapViewerScene {
       // lands next frame with no extra plumbing). Our shader is linear, which is all the
       // corpus asks for: every SetTerrainFogEx call in all 165 maps passes style 0.
       //
-      // Two kinds of call reach this, and only one of them is graded by MAP_FOG_STRENGTH. The
-      // World Editor writes a map's Environment fog TWICE — into the w3i's fog block and as a
-      // `SetTerrainFogEx` line at the top of `main()` (every fogged stock melee map does: Bandit
-      // Ridge's 2000/4000 grey is both) — and that is the gameplay haze the house strength is
-      // for. A ramp the w3i does NOT state is a trigger's own: the Frozen Throne credits'
-      // `SetTerrainFogExBJ(0, 1000, 5000, …, 100, 100, 100)` against a w3i 3000/5000, a scene
-      // composed in white to its FarZ, which at 65 % never went white and left the far clip a
-      // visible edge. Those are laid on exactly as written.
+      // Laid on exactly as written, which is what 1.30.4 does: a D3D trace of Bandit Ridge reads
+      // FOGSTART 2000, FOGEND 4000, FOGCOLOR 0x808080, its w3i and its main() to the digit.
       setTerrainFog: (_style, zstart, zend, _density, r, g, b) => {
-        const ramp = this.w3iFogRamp;
-        const editorLine = !!ramp && Math.abs(ramp[0] - zstart) < 0.5 && Math.abs(ramp[1] - zend) < 0.5;
-        this.mapFog = editorLine ? makeMapFog(zstart, zend, r, g, b) : makeFog(zstart, zend, r, g, b);
+        this.mapFog = makeFog(zstart, zend, r, g, b);
       },
       resetTerrainFog: () => {
         this.mapFog = this.w3iFog;
@@ -11221,7 +11211,11 @@ export class MapViewerScene {
    *  Before a match starts there is no sim clock, so the map previews at the melee
    *  opening hour, 08:00 (Blizzard.j bj_MELEE_STARTING_TOD). */
   private applyDayNight(scene: Scene): void {
-    scene.distFog = this.mapFog ?? undefined; // the map's environment fog (w3i)
+    // The map's environment fog (w3i), put back where the real client's camera would see it when
+    // the player has zoomed out past it (fogForZoom). A script's camera is left alone: `distance`
+    // then answers to the script rather than to `playerDistance`.
+    const playerZoom = this.zoomT < 1 || Math.abs(this.distance - this.playerDistance) < 1;
+    scene.distFog = this.mapFog ? fogForZoom(this.mapFog, playerZoom ? this.distance : CAMERA.DEFAULT_DISTANCE, CAMERA.DEFAULT_DISTANCE) : undefined;
     // …and the unplayable area, so a doodad standing in the black is a black silhouette
     // rather than a lit tree floating in it (issue #117). Read fresh each frame like the fog
     // above, which is what makes EnableWorldFogBoundary land with no extra plumbing: the
