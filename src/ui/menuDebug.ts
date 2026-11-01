@@ -62,7 +62,6 @@ const MENU_SLIDERS: Slider<MenuKey>[] = [
   { key: "fogR", label: "Fog R", min: 0, max: 1, step: 0.01 },
   { key: "fogG", label: "Fog G", min: 0, max: 1, step: 0.01 },
   { key: "fogB", label: "Fog B", min: 0, max: 1, step: 0.01 },
-  { key: "lightAmbient", label: "Light ambient", min: 0, max: 1, step: 0.01 },
 ];
 
 const BACKDROP_SLIDERS: Slider<keyof BackdropTuning>[] = [
@@ -73,27 +72,12 @@ const BACKDROP_SLIDERS: Slider<keyof BackdropTuning>[] = [
   { key: "camPanY", label: "Cam pan Y", min: -1500, max: 1500, step: 5 },
   { key: "camFov", label: "Cam FOV ×", min: 0.4, max: 1.6, step: 0.01 },
   ...ROTATION,
-  // The Birth's lead-in: where the arrival sweeps in FROM, eased out by the time it lands, so
-  // these two move the shot without moving the pose the sliders above frame (see `birthPanX`).
-  // To see them, leave the screen and come back — a Birth plays on arrival, not on a re-mount.
-  { key: "birthPanX", label: "Birth lead-in X", min: -1500, max: 1500, step: 5 },
-  { key: "birthPanY", label: "Birth lead-in Y", min: -1500, max: 1500, step: 5 },
   // BackgroundFogEnd runs 1700 (Sentinels) → 16000 (Alliance) in CampaignStrings_exp.txt.
   { key: "fogStart", label: "Fog start (world)", min: 0, max: 20000, step: 100 },
   { key: "fogEnd", label: "Fog end (world)", min: 0, max: 20000, step: 100 },
   { key: "fogR", label: "Fog R", min: 0, max: 1, step: 0.01 },
   { key: "fogG", label: "Fog G", min: 0, max: 1, step: 0.01 },
   { key: "fogB", label: "Fog B", min: 0, max: 1, step: 0.01 },
-  // Colour grade over the whole frame — what fog cannot do, since fog only tints what is far
-  // and the reference's whole scene is darker (MenuScene.updateGrade). Backdrops only: the
-  // menu's canvas also carries the sprite chrome.
-  { key: "gradeBrightness", label: "Grade brightness", min: 0.2, max: 1.6, step: 0.01 },
-  { key: "gradeContrast", label: "Grade contrast", min: 0.4, max: 2, step: 0.01 },
-  { key: "gradeSaturation", label: "Grade saturation", min: 0, max: 2, step: 0.01 },
-  { key: "gradeHue", label: "Grade hue (°)", min: -60, max: 60, step: 1 },
-  // The base ambient under the model's own omni lights — the one lighting number that is NOT
-  // in the file (MenuScene.updateOmniLights explains why it has to exist).
-  { key: "lightAmbient", label: "Light ambient", min: 0, max: 1, step: 0.01 },
 ];
 
 export function mountMenuDebug(root: HTMLElement, scene: MenuScene): { dispose(): void } {

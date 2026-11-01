@@ -96,32 +96,13 @@ lights** in its MDX `LITE` chunk:
 | `MainMenu3D_Exp` | main menu | 5 | omni | 80 → 200 | 170 … 280 |
 
 **`Type` is not always 0**, and Alliance_Exp is the model that proves it: `FDirect01` is
-`Type 1`, a DIRECTIONAL light — a direction and no attenuation, where every other light in the
-glue set is a point. `updateOmniLights` had no filter and uploaded it as an omni at its pivot,
-which put it 6102 units from that model's own camera target against a 200-unit reach: it lit
-nothing, and it spent a shader slot claiming to. Non-omni lights are skipped now. It is skipped
-rather than approximated because the MDX gives no direction to approximate FROM — identity
-rotation, no parent, `Intensity 0.1` — and picking a base axis for it would be inventing what
-the reference shows rather than reading it.
+`Type 1`, a DIRECTIONAL light with identity rotation and `Intensity 0.1`. The MDX gives it no
+direction to read, so it is skipped rather than guessed at.
 
-**Alliance_Exp is lit almost entirely by the base ambient, and that is the data's doing.** Its
-four omnis sit 1361 / 5804 / 7109 / 4206 units from the camera target with the same 80→200 reach
-every glue light has, so barely any of that set is inside a light. Measured by rendering one
-frozen frame with `scene.omniLights` on and then null, mean |Δ| over the scene: Sentinels 17.1,
-Scourge 14.5, Bonus 10.7 — **Alliance 2.8**. That is why its baked `lightAmbient` is 0.83 where
-the others sit near 0.5, and it is the right answer rather than a workaround: with no practical
-lights near the subject, ambient is what the engine has left to light Kael with.
-
-We ignored all of them until issue #105, and with no light on the scene the SD shader fell
-through to mdx-m3-viewer's stock `clamp(N·L + 0.7)` — a 0.7…1.0 wash with no falloff anywhere.
-That is exactly the flat, over-bright look the campaign screen had.
-
-**The main menu is on the same path**, not a special case: `updateOmniLights` reads whatever is
-in the 3D scene (`backdropModel ?? bgModel`), so MainMenu3D_Exp's five lights are sampled and
-uploaded exactly as a backdrop's are. Verified by toggling `scene.omniLights` on a frozen frame:
-the tower, the chains, the ice spikes, the bergs and the ocean all change. What it does NOT have
-is any shadow art — the model names 49 textures and not one of them is a shadow — so there is
-nothing further to hook up there; a glue scene's shadows are painted into its textures.
+**`KLAV` turns a light off.** A flash is a light with a visibility track: `Omni10`, the lightning on
+Exodus of the Horde (intensity 350), and `Omni05boom`, the meteors on Reign of Chaos's menu. Ignored, a
+strike lights the whole set on every frame. The viewer has no getter for a light's track, and a light's
+`getVisibility` reads the generic `KGAO` and answers 1, so `updateLights` asks for `KLAV` by name.
 
 If a glue scene looks *noisier* than the real client, it is the LIGHTING and not the textures: see
 the next section, which is what that turned out to be on the main menu.
@@ -130,7 +111,8 @@ the next section, which is what that turned out to be on the main menu.
 
 **The expansion's main menu no longer guesses any of this.** Wine logs every Direct3D call a game
 makes, so the real client's numbers can be read rather than fitted. Everything in this table was
-read off 1.30.4 at its main menu (recipe below), at 1920×1080 with Particles on its highest rung:
+read off 1.30.4 (recipe below) at 1920×1080 with Particles on its highest rung: the Frozen Throne and
+Reign of Chaos main menus, the Sentinels and Prologue campaign screens, and a chapter in play.
 
 | What | The real client | What we had fitted by eye |
 | --- | --- | --- |
@@ -139,41 +121,51 @@ read off 1.30.4 at its main menu (recipe below), at 1920×1080 with Particles on
 | Light colour | the colour **as stored** × intensity (Omni: `90.35, 240, 184.47`, teal) | BGR swap, which gives yellow-green |
 | Attenuation | **1 / (1 + 0.0005·d²)**, range 10000 (`D3DLIGHT9` read out of memory) | a linear 80→200 window |
 | Base ambient | none: `D3DRS_AMBIENT` is never set, and each light's own ambient is 0 | 0.65 |
-| Fog | `FOGTABLEMODE` linear, **0 → 7000**, colour `0xB2B2CC` | 1800 → 4800 |
+| Fog, campaign screen | the campaign's own `BackgroundFog*` **exactly**: Sentinels 0→1700 `0x664D4D`, Prologue 0→2000 `0x00334D` | replaced per model, and graded |
+| Fog, main menu (in no file) | Icecrown 0→7000 `0xB2B2CC`; Reign of Chaos 100→5500 `0x0B140B` | fitted |
 | Additive layers and particles | drawn with fog **off** | faded to black, or never fogged |
-| Blended particles | fogged | never fogged |
+| Blended particles | fogged, unless the emitter is flagged `Unfogged` | never fogged |
 | `Unfogged` layer | fog off | ignored |
 | Texture filter | bilinear, **POINT** mip filter, LOD bias **-0.5** | trilinear, no bias |
-| Eye and target | the model's camera **exactly**, no dolly or pan | zoom 0.82, pan 10 |
-| Projection | x 2.3098, y 3.0797 (vertical 35.98° off a 60° field: tan(v/2) = tan(f/2) · 9/16), near 331 | 0.72 × the field |
+| Eye, target, near, far | the model's camera **exactly**, no dolly, pan or orbit | fitted per screen |
+| Projection | **vertical FOV = 0.6 × the MDX field** (60→36°, 90→54°, 70→42°), x-scale = y-scale · 3/4 | fitted per screen |
+| Colour grade | none | a CSS filter per screen |
 | Particle counts | **0.45 ×** the viewer's rate on every steady emitter (809 / 1800 snow, 61 / 135 fog sheets, 27 / 60 clouds) | 1 × |
 
 That table is the whole "noise": a flat 0.65 wash shows every texel at full contrast, where the real
-scene is lit by inverse-square falloff from five coloured points and sits in a fog that starts at the
-eye. It is also why the water is teal: the teal omni sits just above it. No texture blur is involved,
-and the real client's bias makes its surfaces SHARPER than plain trilinear.
+scene is lit by inverse-square falloff from a few coloured points and sits in a fog that starts at the
+eye. It is also why Icecrown's water is teal: the teal omni sits just above it. No texture blur is
+involved, and the real client's bias makes its surfaces SHARPER than plain trilinear.
 
-The path is `scene.ffp` (`FixedFunctionLights` in `render/menuScene.ts`, `sd.vert` in the viewer
-patch) and `DistFog.honourFlags`, both off for every other scene. **Only the expansion's menu is on
-it.** The campaign backdrops and Reign of Chaos's menu still wear values fitted by eye; a trace of each
-of those screens is how to retire them, and `BackdropTuning` with them.
+The path is `scene.ffp` (`FixedFunctionLights` in `render/menuScene.ts`, `sd.vert` in the viewer patch)
+and `DistFog.honourFlags`. **Every glue scene is on it, and the per-model tuning table is gone.** Only
+Sentinels and Prologue (plus both main menus) could be reached without unlocking anything, so the other
+backdrops follow from the rules above and have not been compared to the real client themselves.
+
+A MATCH is the same pipeline with other inputs, and is NOT on this path yet: `0x112`/`0x152` FVFs and no
+shader, so units are lit per vertex, by DIRECTIONAL lights (diffuse 1.29, `D3DLIGHT9.Ambient` 0.17…0.29,
+no `D3DRS_AMBIENT` there either), with linear fog from the map. Ours lights a unit per pixel.
 
 Not settled:
 
-* **Material.** `SetMaterial` passes a stack pointer the trace does not dereference, so its contents
-  were never read. Emissive 0 is the best fit (edge correlation 0.74 at 0, 0.61 at 0.3) rather than an
-  observation.
-* **Whether the constants are global.** 0.0005 and 0.45 were read on this one model. In particular
-  the emission scale contradicts `SETTING_PARTICLES_HIGH` (docs/video-options.md), and is applied to
-  this scene's emitters rather than to `PARTICLE_SCALE` until a match has been traced as well.
-* **The projection on another window.** The 9/16 was read at 1920×1080.
+* **Material.** `SetMaterial` passes a stack pointer the trace does not dereference, and reading it with
+  a breakpoint did not work out. Emissive 0 is a fit (edge correlation 0.74 at 0, 0.61 at 0.3 on Icecrown)
+  that also holds on the three other screens compared, not an observation.
+* **Which lights.** Sentinels' `Omni01` and `Omni04` (intensity 6 and 7, no tracks) are never set by the
+  real client, and nothing found explains it. We leave them on; the screen matches regardless.
+* **Whether 0.45 is global.** It held on Icecrown's snow, fog sheets and clouds, and Prologue's rain is
+  658 against 594, but Prologue's second-largest draw is 246 particles against our 33, and a match has not
+  been compared at all. It contradicts `SETTING_PARTICLES_HIGH` (docs/video-options.md), so it is applied
+  to glue emitters rather than to `PARTICLE_SCALE`.
+* **The projection on another window.** All of it was read at 1920×1080.
 * **Splashes.** The real client draws MORE splash particles at once (90 in one draw against our 48)
   and they read much dimmer, so the gap is not a count; our bursts can still saturate to white.
 
 **Recipe.** `flatpak run --user --filesystem=home --env=WINEDEBUG=+d3d9 org.winehq.Wine "Warcraft
 III.exe" -launch -windowmode windowed`, inside the private Xephyr, piped through `gzip`; `+d3d9,+d3d`
 adds light and matrix VALUES at 30× the log (2 GB of gzip in 4½ minutes, still only about a minute to
-the menu). Take the frame between the last two `d3d9_device_Present`s. Attenuation is not in any trace
+the menu), so to walk the client through screens, filter the stream down to the latest frame instead of
+storing it. A screen in play under the trace is still responsive enough to click. Take the frame between the last two `d3d9_device_Present`s. Attenuation is not in any trace
 line: read the `D3DLIGHT9` the `SetLight` line points at with `winedbg --file <script> 0x<pid>`, from
 a shell inside the SAME `flatpak run` (each run has its own wineserver). Offset 84 is Attenuation0;
 attaching ends the game, so read everything in one attach.
@@ -207,23 +199,10 @@ The screen-edge sprite layers (`scenePanel` / `sceneLeft`) deliberately get no l
 flat UI chrome drawn through an orthographic camera, and lighting the metal border with the
 seascape's lamps is not what any of this is for.
 
-**An 80→200 unit reach reads as far too small** for a scene whose bounds run to ±3000 — until
-you read the model's own camera, which sits **340 units** from its target. These are dioramas:
-a small lit set near the eye with a big painted backdrop far behind it, and the lights are
-sized for the set. What covers the far scenery is the campaign's own `BackgroundFog*`.
+**The MDX's 80→200 attenuation window lights nothing.** The real client's falloff is the constant in the
+table above, on every model read so far.
 
-Two things about the implementation are worth knowing before touching it:
-
-* **Colours come out BGR.** The same quirk `dayNight.ts` documents for the day/night lights —
-  neither the parser nor Warsmash swizzles them, and reading them straight gives a scene a
-  mirror-image tint.
-* **The base ambient is NOT from the file**, and is labelled as such wherever it appears. Every
-  one of these lights carries `AmbIntensity 0`, which past 200 units would leave the scene
-  pitch black, and the reference plainly is not. The engine supplies a base we cannot read out
-  of the model, so it lives in `BackdropTuning.lightAmbient` with its own `?menudebug` slider
-  rather than being smuggled in as a constant that looks like data.
-
-The uniforms (`u_omni*`, `u_dnc*`, `u_distFog*`, `u_boundary*`) are all added by
+The uniforms (`u_ffp*`, `u_dnc*`, `u_distFog*`, `u_boundary*`) are all added by
 `patches/mdx-m3-viewer@5.12.0.patch`. Two traps live there, and both cost real time:
 
 **After editing that patch, restart the dev server and delete `node_modules/.vite`** — Vite

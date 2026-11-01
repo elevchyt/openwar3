@@ -41,8 +41,8 @@ const LOGO_ROC = "UI\\Glues\\MainMenu\\WarCraftIIILogo\\WarCraftIIILogo.mdx";
 /** The expansion scene's camera, fog and light — the values `MenuScene.tuning` is declared with,
  *  restated so switching back from Reign of Chaos restores them (see `MenuScene.load`). */
 const TFT_SCENE_TUNING = {
-  camZoom: 1, camPanX: 0, camPanY: 0, camFov: 0.6003, camYaw: 0, camPitch: 0, camRoll: 0,
-  lightAmbient: 0.65, fogStart: 0, fogEnd: 7000, fogR: 178 / 255, fogG: 178 / 255, fogB: 204 / 255,
+  camZoom: 1, camPanX: 0, camPanY: 0, camFov: 1, camYaw: 0, camPitch: 0, camRoll: 0,
+  fogStart: 0, fogEnd: 7000, fogR: 178 / 255, fogG: 178 / 255, fogB: 204 / 255,
 };
 
 /**
@@ -52,16 +52,10 @@ const TFT_SCENE_TUNING = {
  * running scene (`?menudebug`), not read from a file — the engine's framing is not in one.
  */
 const ROC_SCENE_TUNING = {
-  // Dollied in and narrowed so the widescreen frame stays inside the set: at the authored camera
-  // (1 / 1) a 16:9 screen shows the black past the meadow's edges down the left and the bottom.
-  // The lens is the tight end of what the set allows — narrowing it further than the expansion's
-  // is what this diorama needs, since it is built only as wide as its authored 4:3 shot — and the
-  // pan then puts the banner and the shield back under the chrome rather than behind it.
-  camZoom: 0.87, camPanX: -25, camPanY: -25, camFov: 0.61, camYaw: 0, camPitch: 0, camRoll: 0,
-  // Fog and ambient are ONE setting here as they are on Icecrown (see `tuning` below): the haze
-  // starts well past the meadow so it lands on the far ridge instead of on the grass, and its
-  // colour is that ridge's own green rather than the expansion's lavender.
-  lightAmbient: 0.55, fogStart: 9700, fogEnd: 18000, fogR: 0.49, fogG: 0.62, fogB: 0.44,
+  // The real client's D3DRS_FOG* for this scene (docs/lighting.md). Like the expansion's, it is in
+  // no file. The eye is the model's own.
+  camZoom: 1, camPanX: 0, camPanY: 0, camFov: 1, camYaw: 0, camPitch: 0, camRoll: 0,
+  fogStart: 100, fogEnd: 5500, fogR: 11 / 255, fogG: 20 / 255, fogB: 11 / 255,
 };
 
 /**
@@ -203,81 +197,10 @@ export interface BackdropTuning {
   fogR: number;
   fogG: number;
   fogB: number;
-  /** Colour grade over the finished frame — the reference's campaign screens read much darker
-   *  and warmer than our render of the same models, which no fog setting can fix (fog only
-   *  tints what is FAR). 1/1/1/0 is untouched. */
-  gradeBrightness: number;
-  gradeContrast: number;
-  gradeSaturation: number;
-  gradeHue: number;
-  /** Base ambient under the model's own lights — see `MenuScene.updateOmniLights`. NOT from
-   *  the file: every glue model carries `AmbIntensity 0`, and with a light reach of 200 units
-   *  that would leave a scene whose bounds run to ±3000 pitch black past the set, which the
-   *  reference plainly is not. Tuned by eye against a capture of the real client. */
-  lightAmbient: number;
-  /**
-   * An extra pan applied only while the Birth is playing, full at its first keyframe and eased
-   * to nothing by its last — so it moves where the arrival STARTS FROM without touching the
-   * pose it settles on (which is what `camPanX`/`camPanY` frame).
-   *
-   * It exists because the two halves of a backdrop's framing are not the same problem. The
-   * settled pose is a still picture and can be framed by eye; the Birth is a camera MOVE along
-   * the model's own KCTR track, and a set that reads fine at either end of it can still put the
-   * eye through a body on the way. Exodus of the Horde is the case: its sweep drops out of the
-   * sky and passes close enough to Thrall that at our narrowed lens (`camFov` 0.7, which is what
-   * keeps a 16:9 frame inside this small diorama) it goes through his head. Widening the lens
-   * back would show the black past the set, and panning the settled pose away would give up the
-   * framing — so the lead-in is moved instead, and only the lead-in.
-   *
-   * Same axes and units as `camPanX`/`camPanY`: the camera's screen right and up, in world units.
-   */
-  birthPanX: number;
-  birthPanY: number;
 }
 
-/**
- * The model's own lights, evaluated for one frame in the shape the patched SD shader reads
- * (`scene.omniLights`, see patches/mdx-m3-viewer@5.12.0.patch).
- *
- * Every glue model carries them in its MDX **LITE** chunk and we used to ignore all of them,
- * which is why these scenes read flat: with no light on the scene the SD shader falls through
- * to mdx-m3-viewer's stock `clamp(N·L + 0.7)` — a 0.7…1.0 wash with no real falloff anywhere.
- *
- * Dumped from the real models, and the numbers only make sense together:
- *   NightElf_Exp   4 omni, attenuation 80→200, colour (0.82, 1.00, 1.00), intensity 6/250/15/7
- *   Orc_Exp        4 omni, same window, intensity 80/75/80/35
- *   MainMenu3D_Exp 5 omni, same window, intensity 170…280
- *   Undead3D_Exp   4 omni, same window, intensity 120/111/222/40
- *   Alliance_Exp   4 omni, same window, intensity 400/1000/1000/800 — plus one DIRECTIONAL
- * An 80→200 unit reach sounds far too small for a scene whose bounds run to ±3000 — until you
- * read the model's own camera: it sits 340 units from its target. These are **dioramas**, a
- * small lit set close to the eye with a big painted backdrop far behind it, and the lights are
- * sized for the set. The far scenery is what the campaign's own `BackgroundFog*` is for.
- *
- * Every one of them carries `AmbIntensity 0`, so a glue scene's whole illumination is its
- * point lights and the base ambient `BackdropTuning.lightAmbient` supplies.
- *
- * **`Type` is not always 0.** Four of the five glue models carry nothing but omnis, and
- * Alliance_Exp carries `FDirect01`, `Type 1` — a DIRECTIONAL light, which has a direction
- * instead of a position and no attenuation at all. Read as an omni it was a point light at the
- * node's pivot with an 80→200 window, 6102 units from that model's own camera target, so it
- * contributed exactly nothing while occupying a slot and making the loop's arithmetic a lie.
- * It is filtered out rather than approximated: the MDX gives it no orientation to use (identity
- * rotation, no parent, `Intensity 0.1`), and inventing one would be guessing at what the
- * reference shows. See docs/lighting.md.
- */
-export interface OmniLights {
-  /** How many slots are filled; 0 means "no lights", and the shader skips the loop. */
-  count: number;
-  /** Σ (AmbColor × AmbIntensity) over the model's lights. */
-  ambient: Float32Array;
-  positions: Float32Array; // MAX_OMNI × 3, world space
-  colors: Float32Array; // MAX_OMNI × 3, Color × Intensity
-  attenuations: Float32Array; // MAX_OMNI × 2, (start, end)
-}
-
-/** Must match `MAX_OMNI` in the patched sd.frag. */
-const MAX_OMNI = 8;
+/** Must match `MAX_FFP` in the patched sd.vert. */
+const MAX_LIGHTS = 8;
 
 type Solver = (src: unknown) => unknown;
 interface Camera {
@@ -291,8 +214,7 @@ interface Scene {
   viewport: Float32Array;
   camera: Camera;
   distFog?: DistFog; // OpenWar3: read by the patched SD shaders
-  omniLights?: OmniLights | null; // …as is this (the model's own LITE lights)
-  ffp?: FixedFunctionLights | null; // …and this (the same lights, as the real client sets them)
+  ffp?: FixedFunctionLights | null; // …as is this (the model's own LITE lights)
   removeInstance(instance: unknown): void;
   /** The viewer's broad-phase cull: one huge cell here, tested against the frustum before any
    *  instance in it is stepped (viewer/scene.js `update`). See `neverCull`. */
@@ -333,8 +255,9 @@ interface MdxInstance {
 /** An MDX light as the viewer exposes it. Each getter writes the sampled value into `out`
  *  (out[0] for the scalars) and falls back to the model's static value off-sequence. */
 interface MdxLight {
+  getScalarValue(out: Float32Array, name: string, sequence: number, frame: number, counter: number, defaultValue: number): number;
   /** The LITE chunk's own `Type`: 0 omnidirectional, 1 directional, 2 ambient. Only 0 is a
-   *  point light, and only 0 is what `updateOmniLights` uploads — see the filter there. */
+   *  point light, and only 0 is what `updateLights` uploads. */
   type: number;
   getAttenuationStart(out: Float32Array, sequence: number, frame: number, counter: number): number;
   getAttenuationEnd(out: Float32Array, sequence: number, frame: number, counter: number): number;
@@ -404,153 +327,22 @@ function neverCull(scene: Scene): Scene {
 const NEVER_CULLED = { x: 0, y: 0, z: 0, r: 1e9 };
 
 /**
- * What EVERY campaign backdrop starts at.
- *
- * The camera half is the model's own, untouched — multipliers of 1, no pan, no orbit — because
- * framing is per-diorama and a nudge that frames Maiev's ruins says nothing about Durotar.
- *
- * The LOOK half is shared, because it is not per-scene: the grade and the base ambient describe
- * how the campaign screen is lit and printed, and the four campaigns are the same screen. Both
- * were tuned in-browser against a capture of the real client on the Sentinels backdrop
- * (issue #105); the grade is why an untouched backdrop no longer renders at raw texture
- * brightness, and lightAmbient is the base the models themselves do not carry
- * (see `updateOmniLights`).
+ * What EVERY campaign backdrop starts at: the model's own camera, untouched, as the real client
+ * draws it (traced, docs/lighting.md). Its fog is its campaign's `BackgroundFog*`, exactly.
  */
 const NEUTRAL_BACKDROP = {
   camZoom: 1, camPanX: 0, camPanY: 0, camFov: 1, camYaw: 0, camPitch: 0, camRoll: 0,
-  gradeBrightness: 0.67, gradeContrast: 1, gradeSaturation: 0.97, gradeHue: 0,
-  lightAmbient: 0.5,
-  birthPanX: 0, birthPanY: 0, // the arrival starts where the model's own track starts
 } as const;
 
 /**
- * Framing/fog/grade baked per backdrop MODEL, tuned in-browser against a capture of the real
- * client (issue #105). A backdrop with no entry here keeps the authored camera and the fog its
- * campaign's own `BackgroundFog*` keys ask for, so this table is an override list, not a
- * replacement for the data.
- *
- * The fog on a tuned entry deliberately does NOT match `CampaignStrings_exp.txt`: the file's
- * numbers describe the game's own fog (a STYLE and a DENSITY, `BackgroundFogStyle=0`,
- * `Density=0.5`) driving a renderer that is not ours, and feeding its start/end straight into
- * our linear distance fog buries the scene in haze at the depth Blizzard wanted a tint. The
- * values here are the ones that reproduce what the reference SHOWS — which is what
- * "match the original" means when the two disagree (CLAUDE.md).
+ * What the real client renders a glue camera's field of view as: vertical = 0.6 × the MDX field,
+ * on all three scenes traced (MainMenu3D_Exp 60→36°, NightElf_Exp 90→54°, TutorialCampaign3D
+ * 70→42°). The FDF 4:3 box then makes the horizontal y-scale 3/4 of the vertical.
  */
-const BACKDROP_DEFAULTS: Record<string, Partial<BackdropTuning>> = {
-  // Sentinels / Terror of the Tides (and every campaign on the night-elf backdrop). The grade
-  // and ambient this was tuned alongside are in NEUTRAL_BACKDROP, since they are the screen's
-  // look rather than this set's framing.
-  "ui\\glues\\singleplayer\\nightelf_exp\\nightelf_exp.mdx": {
-    camZoom: 1, camPanX: 0, camPanY: -15, camFov: 0.66, camYaw: 10, camPitch: 6, camRoll: 0,
-    fogStart: 0, fogEnd: 13300, fogR: 0.79, fogG: 0.34, fogB: 0.26,
-  },
-  // Alliance / Curse of the Blood Elves. Kael stands in the middle of his own set with the
-  // Outland skerries floating well behind him, so this one is framed by widening the lens and
-  // sliding the subject off-centre rather than by orbiting — the authored camera already looks
-  // at him from the right angle. Its fog is the campaign's red at a start of 0, which is what
-  // paints the whole sky; the ambient is up because Kael's own lights are few and dim against
-  // a set that reads lit from everywhere in the reference.
-  "ui\\glues\\singleplayer\\alliance_exp\\alliance_exp.mdx": {
-    camZoom: 0.91, camPanX: 15, camFov: 0.79,
-    fogStart: 0, fogEnd: 12200, fogR: 0.7, fogG: 0.2, fogB: 0.2,
-    lightAmbient: 0.83, // the grade stays the shared one (NEUTRAL_BACKDROP)
-  },
-  // --- Reign of Chaos (docs/editions.md) -------------------------------------------------
-  // The five `*Campaign3D` sets, the `_V0` twins of the four above. Every one of them is a
-  // SMALLER diorama than the expansion's — an authored 4:3 shot with the set built only as wide
-  // as that frame — so at 16:9 each showed the black past its sky plane in a top or bottom
-  // corner, even though `frameCameras` already keeps the authored HORIZONTAL extent and gives up
-  // height for it. The fix is the lens rather than the pose: every entry here narrows `camFov`
-  // until the frame is inside the set, and the ones that also tilt or turn do it by a couple of
-  // degrees to put the corner that was left behind the ground. Measured on the running screen at
-  // 16:9, one set at a time.
-  //
-  // Unlike the expansion's two, all five carry their OWN grade and ambient rather than leaning on
-  // NEUTRAL_BACKDROP's. That shared pair was tuned on the Sentinels backdrop, and these are five
-  // sets lit five ways — a closed ice cavern, a canyon at sunset, a forest at night — where one
-  // exposure cannot serve them all: the ambient runs from 0.28 on the ravine to 0.73 under
-  // Lordaeron's gate, and it is the ambient rather than the fog that decides how much of each set
-  // there is to see (the models' own omnis reach 200 units into sets that run to thousands).
-  //
-  // The FOG is likewise each set's own, and on four of the five it is pushed well past what the
-  // campaign's `BackgroundFog*` keys ask for, for the reason the expansion's entries give: those
-  // keys end at 1600–2950 units, which in our linear distance fog buries the set itself in haze
-  // where Blizzard's renderer wanted a tint on the far wall.
-  "ui\\glues\\singleplayer\\tutorialcampaign3d\\tutorialcampaign3d.mdx": {
-    // Prologue / Exodus of the Horde — Thrall, torch in hand, in the ravine. Its sky plane stops
-    // just past the top-left rock, so the lens comes in and the eye drops 2°; the pan then lifts
-    // the frame off the ravine floor.
-    camPanY: 15, camFov: 0.7, camPitch: -2,
-    // Its own 0→2000 hazed the rock Thrall is standing on. Pushed right out, the blue-green is
-    // left doing what it is for — the cold cast on the far end of the ravine.
-    fogStart: 1600, fogEnd: 17100, fogR: 0, fogG: 0.2, fogB: 0.302,
-    // The darkest of the five: the ravine is a night scene lit by the torch in Thrall's hand, so
-    // the ambient is barely half the shared default and the contrast carries the firelight.
-    gradeContrast: 1.1, lightAmbient: 0.28,
-    // The one backdrop that needs a lead-in (see `birthPanX`): its Birth drops out of the sky
-    // and swings in past Thrall, and at the 0.7 lens above the last of that swing went THROUGH
-    // his head. Measured on the running screen against 0 / -150 / -300 / -500 — at -150 the
-    // sweep still grazes his shoulder, and by -500 it starts far enough out to be worth
-    // watching the set's own left edge. -300 comes in past the rocks with him entering frame
-    // from the right, and the pose it settles on is untouched.
-    birthPanX: -300,
-  },
-  "ui\\glues\\singleplayer\\humancampaign3d\\humancampaign3d.mdx": {
-    // Human / The Scourge of Lordaeron — the knight under Lordaeron's gate. The arch is the set:
-    // nothing is built outside it, so this is a narrow lens, and the subject slides well LEFT to
-    // sit under the campaign rows rather than behind them, with 2° of yaw to keep the far pier of
-    // the arch in frame as he goes.
-    camPanX: -105, camFov: 0.7, camYaw: 2,
-    fogStart: 8200, fogEnd: 19300, fogR: 0.37, fogG: 0.302, fogB: 0.35,
-    // The brightest of the five — it is the one daylight exterior, and the gate's stone reads
-    // flat grey at the shared exposure.
-    gradeBrightness: 0.78, gradeSaturation: 1.02, lightAmbient: 0.73,
-  },
-  "ui\\glues\\singleplayer\\undeadcampaign3d\\undeadcampaign3d.mdx": {
-    // Undead / Path of the Damned — the crypt lord in the ice cavern. A CLOSED set (walls, roof
-    // and floor all built), so it needs the least framing of the five; the pan drops the eye onto
-    // him rather than onto the roof.
-    camPanY: -45, camFov: 0.78,
-    fogStart: 8400, fogEnd: 20000, fogR: 0, fogG: 0.33, fogB: 0.13,
-    // The saturation is the highest here on purpose: the set's whole palette is the sick green of
-    // its own lights on ice, and at the shared 0.97 it washed to grey.
-    gradeBrightness: 0.72, gradeContrast: 0.98, gradeSaturation: 1.19, lightAmbient: 0.43,
-  },
-  "ui\\glues\\singleplayer\\orccampaign3d\\orccampaign3d.mdx": {
-    // Orc / The Invasion of Kalimdor — Grom at the campfire in the canyon. Same shape of fix as
-    // the Prologue's, and the same set dressing: its own 0→2950 fog painted the whole canyon the
-    // flat ochre of `BackgroundFogColor`, so it is pushed back onto the far mesas and the sunset
-    // sky the model actually carries comes through.
-    camFov: 0.7, camPitch: -2,
-    fogStart: 2000, fogEnd: 20000, fogR: 0.302, fogG: 0.2, fogB: 0,
-    gradeBrightness: 0.82, gradeContrast: 1.13, gradeSaturation: 1.1, lightAmbient: 0.62,
-  },
-  "ui\\glues\\singleplayer\\nightelfcampaign3d\\nightelfcampaign3d.mdx": {
-    // Night Elf / Eternity's End — Tyrande among the Ashenvale trees. The tightest lens of the
-    // five: the canopy ends a little way past the top-left tree and nothing but narrowing moved
-    // that corner (a tilt made it worse, which is how you can tell it is the set's edge and not
-    // the horizon).
-    camPanX: -15, camFov: 0.66, camYaw: 4,
-    // The one entry whose fog is CLOSE, and deliberately so — this is the only set where the haze
-    // is meant to sit between the trees a few hundred units out, which is what makes the forest
-    // read as deep rather than as a wall of trunks. Its own 0→1600 put that haze in front of
-    // Tyrande instead.
-    fogStart: 300, fogEnd: 800, fogR: 0.2, fogG: 0.302, fogB: 0.502,
-    // Desaturated under a raised contrast: moonlight on bark, not the blue-green the raw
-    // textures carry.
-    gradeContrast: 1.16, gradeSaturation: 0.85, lightAmbient: 0.47,
-  },
-  // Bonus / The Founding of Durotar. Its camera sits ~990 units from its subject while the
-  // model's lights only reach 200, so this set is mostly ambient-lit — hence the dolly in and
-  // the ambient a notch above the shared default. Its fog is the campaign's own colour with a
-  // start pushed way out, so the haze lands on the far mesas rather than on Rexxar.
-  "ui\\glues\\singleplayer\\orc_exp\\orc_exp.mdx": {
-    camZoom: 1.03, camFov: 0.68,
-    fogStart: 8600, fogEnd: 19600, fogR: 0.298, fogG: 0.298, fogB: 0.4,
-    lightAmbient: 0.53, // the grade stays the shared one (NEUTRAL_BACKDROP)
-  },
-};
+const GLUE_FOV_SCALE = 0.6;
 
+/** Every emitter of a glue scene holds 0.45× the particles the viewer's rate gives at the real
+ *  client's highest Particles rung (docs/lighting.md). */
 const REAL_EMISSION_SCALE = 0.45;
 const scaledEmitters = new WeakSet<object>();
 
@@ -583,9 +375,7 @@ export class MenuScene {
   /** The frame the current backdrop's Birth ends on, or null once it has settled (see
    *  showBackdrop). Watched by the frame loop rather than timed off a wall clock. */
   private backdropBirthEnd: number | null = null;
-  /** The Birth's FIRST keyframe, held for as long as `backdropBirthEnd` is (see `birthPanX`). */
-  private backdropBirthStart: number | null = null;
-  /** Per-backdrop framing/fog tuning (issue #105) and which one is currently up. */
+  /** Per-backdrop camera/fog block for the debug sliders, and which one is currently up. */
   private backdropTunings = new Map<string, BackdropTuning>();
   private backdropShown: string | null = null;
   /** True while a campaign backdrop is up: the screen-edge sprite layers draw nothing. */
@@ -620,13 +410,6 @@ export class MenuScene {
   /** Unsubscribe from the shared animation clock while this scene is running (see `start`). */
   private offFrame: (() => void) | null = null;
   /** This frame's evaluation of the scene model's own lights, rebuilt in place each frame. */
-  private omni: OmniLights = {
-    count: 0,
-    ambient: new Float32Array(3),
-    positions: new Float32Array(MAX_OMNI * 3),
-    colors: new Float32Array(MAX_OMNI * 3),
-    attenuations: new Float32Array(MAX_OMNI * 2),
-  };
   private lightVec = new Float32Array(3);
   private lightScalar = new Float32Array(1);
   private camVec = new Float32Array(3);
@@ -649,19 +432,12 @@ export class MenuScene {
     camZoom: 1, // dolly the eye toward the target (<1 closer)
     camPanX: 0, // pan the eye+target screen-right (world units)
     camPanY: 0, // pan the eye+target screen-up (world units)
-    // Field-of-view multiplier. The eye and the target are the model's own, untouched: the real
-    // client's view matrix is exactly them (traced, docs/lighting.md), and its projection's
-    // y-scale 3.0797 is a vertical FOV of 35.98° against the model's 59.96° field. Off the same
-    // field, tan(v/2) = tan(field/2) · 9/16.
-    camFov: 0.6003,
+    camFov: 1, // field-of-view multiplier, on top of GLUE_FOV_SCALE
     // Orbit off the model's authored angle, in degrees — WC3's own camera fields
     // (docs/camera.md). Zero here: the Icecrown scene is framed by the dolly/pan above.
     camYaw: 0, // rotation about world Z
     camPitch: 0, // angle of attack (positive raises the eye)
     camRoll: 0, // roll on the up vector
-    // Only Reign of Chaos's scene reads this now. The expansion's goes through FixedFunctionLights,
-    // which has no such knob because the real client sets no base ambient at all.
-    lightAmbient: 0.65,
     panelCx: -0.31, // panel ortho window centre (panel [0,1] space)
     panelCy: -0.2,
     panelHalfX: 0.61, // panel ortho half-width
@@ -703,14 +479,12 @@ export class MenuScene {
     fogB: 204 / 255,
   };
 
-  /** Whether this menu scene is drawn the way the real client draws it (see FixedFunctionLights).
-   *  The expansion's only so far: the campaign backdrops and Reign of Chaos's menu still carry
-   *  values fitted by eye, and have not been traced. */
-  private ffpScene = false;
+  /** The Reign of Chaos set is built only as wide as its 4:3 shot (see frameCameras). */
+  private rocScene = false;
   private ffp: FixedFunctionLights = {
     emissive: new Float32Array(3),
-    positions: new Float32Array(MAX_OMNI * 3),
-    colors: new Float32Array(MAX_OMNI * 3),
+    positions: new Float32Array(MAX_LIGHTS * 3),
+    colors: new Float32Array(MAX_LIGHTS * 3),
     atten: new Float32Array([1, 0, 0.0005, 10000]),
     lodBias: -0.5,
   };
@@ -732,39 +506,13 @@ export class MenuScene {
   onBackdropChange: (() => void) | null = null;
 
   /** Apply the current tuning values (called by the debug controls after a change). */
-  applyTuning(): void { this.frameCameras(); this.updateFog(); this.updateGrade(); }
-
-  /**
-   * The campaign backdrop's colour grade, as a CSS filter on the canvas.
-   *
-   * The reference's campaign screens are markedly darker and warmer than our render of the same
-   * models, and fog cannot close that gap — fog only tints what is FAR, while the whole frame
-   * (Maiev included, a few hundred units from the eye) needs to come down. Grading the finished
-   * frame is what actually matches, and on a canvas that costs one CSS property rather than a
-   * post-process pass through mdx-m3-viewer's render loop.
-   *
-   * Only a BACKDROP is graded. The same canvas carries the menu's sprite-layer chrome, and
-   * dimming the metal panels and their chains along with the seascape is not what any of this
-   * is for; a campaign screen has no chrome on the canvas at all (its viewports are zeroed),
-   * so there the filter reaches only the 3D scene. The DOM text over it is untouched either
-   * way, which is also how the reference reads: bright text on a dark scene.
-   */
-  private updateGrade(): void {
-    const t = this.backdropTuning;
-    if (!t) { this.canvas.style.filter = ""; return; }
-    const parts: string[] = [];
-    if (t.gradeBrightness !== 1) parts.push(`brightness(${t.gradeBrightness})`);
-    if (t.gradeContrast !== 1) parts.push(`contrast(${t.gradeContrast})`);
-    if (t.gradeSaturation !== 1) parts.push(`saturate(${t.gradeSaturation})`);
-    if (t.gradeHue !== 0) parts.push(`hue-rotate(${t.gradeHue}deg)`);
-    this.canvas.style.filter = parts.join(" ");
-  }
+  applyTuning(): void { this.frameCameras(); this.updateFog(); }
 
   private updateFog(): void {
     // A backdrop's fog is the campaign's (seeded into its tuning block); the menu's is its own.
     const t = this.backdropTuning ?? this.tuning;
     const fog = makeFog(t.fogStart, t.fogEnd, t.fogR, t.fogG, t.fogB);
-    fog.honourFlags = this.ffpScene && !this.backdropShown;
+    fog.honourFlags = true;
     this.scene3d.distFog = fog;
   }
 
@@ -811,7 +559,7 @@ export class MenuScene {
     // The camera/fog/light block is tuned per SCENE: the expansion's numbers sit the Icecrown
     // seascape behind the panel, and would put Reign of Chaos's set somewhere else entirely.
     Object.assign(this.tuning, tft ? TFT_SCENE_TUNING : ROC_SCENE_TUNING);
-    this.ffpScene = tft;
+    this.rocScene = !tft;
 
     const bytes = await this.vfs.read(bgPath);
     const bg = (await this.viewer.load(bytes, this.solver)) as MdxModel | undefined;
@@ -827,14 +575,14 @@ export class MenuScene {
     this.frameCameras();
     this.updateFog();
     await this.viewer.whenAllLoaded();
-    if (tft) this.matchRealClient(bg);
+    this.matchRealClient(bg, this.menuInstance);
   }
 
   /**
-   * The two things about the expansion's scene that live on the model's own objects rather than
-   * in a uniform. Both traced off the real client at its highest Particles setting (docs/lighting.md).
+   * The two things about a glue scene that live on the model's own objects rather than in a
+   * uniform. Both traced off the real client at its highest Particles setting (docs/lighting.md).
    */
-  private matchRealClient(model: MdxModel): void {
+  private matchRealClient(model: MdxModel, instance: MdxInstance | null): void {
     // Mip FILTER: D3DSAMP_MIPFILTER is POINT, so a surface takes one mip level rather than a blend
     // of two. Its D3DSAMP_MIPMAPLODBIAS of -0.5 is scene.ffp.lodBias.
     const gl = this.viewer.gl;
@@ -843,10 +591,9 @@ export class MenuScene {
       gl.bindTexture(gl.TEXTURE_2D, texture.webglResource);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
     }
-    // Emission: every emitter of this scene holds 0.45× the particles the viewer's rate gives —
-    // 809 snowflakes against 1800, 61 fog sheets against 135, 27 clouds against 60. A model stays
-    // in the viewer's cache across an edition switch, hence the guard.
-    for (const emitter of this.menuInstance?.particleEmitters2 ?? []) {
+    // Emission: 809 snowflakes against 1800, 61 fog sheets against 135, 27 clouds against 60 on
+    // Icecrown. A model stays in the viewer's cache across a re-entry, hence the guard.
+    for (const emitter of instance?.particleEmitters2 ?? []) {
       const object = emitter.emitterObject;
       if (scaledEmitters.has(object)) continue;
       scaledEmitters.add(object);
@@ -896,10 +643,8 @@ export class MenuScene {
     if (!this.backdropTunings.has(path)) {
       this.backdropTunings.set(path, {
         ...NEUTRAL_BACKDROP,
-        // The campaign's own BackgroundFog* — per-campaign data, so it seeds per campaign and
-        // only a baked entry overrides it.
+        // The campaign's own BackgroundFog*: the real client's fog on this screen is those keys.
         fogStart: fog.start, fogEnd: fog.end, fogR: fog.r, fogG: fog.g, fogB: fog.b,
-        ...BACKDROP_DEFAULTS[path.toLowerCase()],
       });
     }
     // Birth once, then settle into the looping Stand — the same two-step every glue model
@@ -916,14 +661,13 @@ export class MenuScene {
     // animation" symptom by a different route.
     const birthSeq = model.sequences.find((q) => /^birth$/i.test(q.name));
     this.backdropBirthEnd = birthSeq ? birthSeq.interval[1] : null;
-    // …and where it starts, which is the other end of the lead-in pan (`birthPanX`).
-    this.backdropBirthStart = birthSeq ? birthSeq.interval[0] : null;
     // The menu's own scene stops drawing behind it, as do the screen-edge sprite layers.
     if (this.menuInstance) this.scene3d.removeInstance(this.menuInstance);
     this.panelsHidden = true;
     this.updateFog();
-    this.updateGrade();
     this.frameCameras();
+    await this.viewer.whenAllLoaded();
+    this.matchRealClient(model, instance);
     this.onBackdropChange?.();
   }
 
@@ -935,7 +679,6 @@ export class MenuScene {
     if (this.menuInstance) this.menuInstance.setScene(this.scene3d);
     this.panelsHidden = false;
     this.updateFog();
-    this.updateGrade(); // the menu's own scene is never graded — see updateGrade
     this.frameCameras();
     this.onBackdropChange?.();
   }
@@ -949,7 +692,6 @@ export class MenuScene {
     this.backdropModel = null;
     this.backdropShown = null;
     this.backdropBirthEnd = null;
-    this.backdropBirthStart = null;
   }
 
   private async loadPanel(path: string, scene: Scene, side: PanelSide): Promise<void> {
@@ -1210,7 +952,7 @@ export class MenuScene {
       // nodes THIS frame's animation has already moved — a glue model's lights are keyframed
       // and parented into the scene's own hierarchy, so a frame's lag is a frame's lag.
       this.viewer.update(dt);
-      this.updateOmniLights();
+      this.updateLights();
       this.settleBackdrop();
       // A backdrop's camera is keyframed (see frameCameras), so its framing is a per-frame
       // question while one is up — not something to settle once at showBackdrop.
@@ -1233,7 +975,6 @@ export class MenuScene {
     const model = this.backdropModel;
     if (end === null || !instance || !model || instance.frame < end) return;
     this.backdropBirthEnd = null;
-    this.backdropBirthStart = null;
     const stand = model.sequences.findIndex((q) => /^stand$/i.test(q.name));
     if (stand < 0) return;
     instance.setSequenceLoopMode(2);
@@ -1241,113 +982,39 @@ export class MenuScene {
   }
 
   /**
-   * How much of the Birth's lead-in pan is still owed this frame: 1 on the clip's first
-   * keyframe, 0 on its last, on a smoothstep so the offset leaves without a kink in the middle
-   * of a move that is otherwise all Blizzard's.
+   * Evaluate the scene model's own MDX lights for this frame, as the real client hands them to
+   * Direct3D (docs/lighting.md): a point light at the node's world position, with the colour as
+   * stored × the intensity. The MDX's own attenuation window is not what falls off.
    *
-   * Zero whenever there is no Birth running — a backdrop that has settled, one whose model
-   * carries no Birth at all, and the menu's own scene — so nothing here can move a standing
-   * pose. It reads the same `backdropBirthStart`/`End` pair `settleBackdrop` watches, which is
-   * what keeps the two from disagreeing about when the arrival is over.
+   * Only `Type 0` is a point light. Alliance_Exp's `FDirect01` (Type 1) has no orientation to read,
+   * so it is skipped rather than guessed at.
    */
-  private birthLead(): number {
-    const a = this.backdropBirthStart;
-    const b = this.backdropBirthEnd;
-    const instance = this.backdropInstance;
-    if (a === null || b === null || !instance || b <= a) return 0;
-    const p = Math.min(1, Math.max(0, (instance.frame - a) / (b - a)));
-    const eased = p * p * (3 - 2 * p); // smoothstep
-    return 1 - eased;
-  }
-
-  /**
-   * Evaluate the scene model's own MDX lights for this frame (see OmniLights). Whatever is in
-   * the 3D scene is what gets lit — a campaign backdrop, or the menu's own Icecrown model,
-   * both of which ship with omni lights of their own.
-   *
-   * The colours come out of the file **BGR**, the same quirk `dayNight.ts` documents for the
-   * day/night LITE lights: neither the parser nor Warsmash swizzles them, and reading them
-   * straight gives every scene a mirror-image tint.
-   */
-  private updateOmniLights(): void {
+  private updateLights(): void {
     const model = this.backdropModel ?? this.bgModel;
     const instance = this.backdropInstance ?? this.menuInstance;
-    const lights = model?.lights ?? [];
-    if (!model || !instance || !lights.length) {
-      this.omni.count = 0;
-      this.scene3d.omniLights = null;
+    // Options → Video → Lights caps how many are uploaded (render/videoQuality.ts). At its lowest
+    // rung that is none, and the scene falls back to the shader's stock wash rather than black.
+    const cap = Math.min(MAX_LIGHTS, maxOmniLights());
+    if (!model || !instance || !model.lights.length || cap === 0) {
+      this.scene3d.ffp = null;
       return;
     }
-
-    this.scene3d.ffp = this.ffpScene && !this.backdropShown ? this.fixedFunctionLights(model, instance) : null;
-
-    const o = this.omni;
-    o.positions.fill(0);
-    o.colors.fill(0);
-    o.attenuations.fill(0);
-    o.ambient.fill(0);
-
-    const { sequence, frame, counter } = instance;
-    const v = this.lightVec;
-    const s = this.lightScalar;
-    let n = 0; // slots FILLED — not the light's index, since a non-omni is skipped
-    // Options → Video → Lights caps how many of the model's points are uploaded
-    // (render/videoQuality.ts). At its lowest rung that is none, and the loop below never
-    // runs — the ambient term is still uploaded past it, so the screen keeps its own base
-    // wash rather than falling back to the shader's stock one.
-    const cap = Math.min(MAX_OMNI, maxOmniLights());
-    for (let i = 0; i < lights.length && n < cap; i++) {
-      const light = lights[i];
-      // Only `Type 0` is a point light, and everything below it — a world position, a distance
-      // and a linear attenuation window — is a point light's arithmetic. Alliance_Exp carries
-      // the one exception in the glue set (`FDirect01`, type 1); see OmniLights.
-      if (light.type !== 0) continue;
-      // Light i's node sits right after the bones — mdx/modelinstance.js builds them in that
-      // order — and carries the light's animated position in world space. Indexed by `i`, the
-      // light's own index, while the uploaded slot is `n`.
-      const node = instance.nodes[(model.bones.length as number) + i];
-      if (node) o.positions.set(node.worldLocation.subarray(0, 3), n * 3);
-
-      light.getColor(v, sequence, frame, counter);
-      light.getIntensity(s, sequence, frame, counter);
-      for (let c = 0; c < 3; c++) o.colors[n * 3 + c] = v[2 - c] * s[0]; // BGR → RGB
-
-      light.getAttenuationStart(s, sequence, frame, counter);
-      const start = s[0];
-      light.getAttenuationEnd(s, sequence, frame, counter);
-      o.attenuations[n * 2] = start;
-      o.attenuations[n * 2 + 1] = Math.max(s[0], start + 1); // never a zero-width window
-
-      light.getAmbientColor(v, sequence, frame, counter);
-      light.getAmbientIntensity(s, sequence, frame, counter);
-      for (let c = 0; c < 3; c++) o.ambient[c] += v[2 - c] * s[0];
-      n++;
-    }
-
-    // …plus the base ambient the models do NOT carry (see BackdropTuning.lightAmbient).
-    const base = (this.backdropTuning ?? this.tuning).lightAmbient;
-    for (let c = 0; c < 3; c++) o.ambient[c] += base;
-
-    // Uploaded even if the filter left `n` at 0: the base ambient is still this screen's, and
-    // the shader's unused slots are black, so a model of nothing but directional lights is lit
-    // by the ambient rather than dropped back onto the stock 0.7 wash.
-    o.count = n;
-    this.scene3d.omniLights = o;
-  }
-
-  /** The scene's lights for the fixed-function path (sd.vert), as the real client sets them. */
-  private fixedFunctionLights(model: MdxModel, instance: NonNullable<MenuScene["menuInstance"]>): FixedFunctionLights {
     const f = this.ffp;
     f.positions.fill(0);
     f.colors.fill(0);
-    const lights = model.lights;
     const v = this.lightVec;
     const s = this.lightScalar;
     const { sequence, frame, counter } = instance;
     let n = 0;
-    for (let i = 0; i < lights.length && n < MAX_OMNI; i++) {
-      const light = lights[i];
+    for (let i = 0; i < model.lights.length && n < cap; i++) {
+      const light = model.lights[i];
       if (light.type !== 0) continue;
+      // KLAV: a flash (Omni10's lightning on Exodus of the Horde, Omni05boom's meteors on Reign of
+      // Chaos's menu) is off between flashes, and the real client does not set it then. The viewer
+      // has no getter for a light's track, and a read of the generic KGAO would answer 1.
+      light.getScalarValue(s, "KLAV", sequence, frame, counter, 1);
+      if (s[0] <= 0) continue;
+      // Light i's node sits right after the bones (mdx/modelinstance.js).
       const node = instance.nodes[(model.bones.length as number) + i];
       if (node) f.positions.set(node.worldLocation.subarray(0, 3), n * 3);
       light.getColor(v, sequence, frame, counter);
@@ -1355,7 +1022,7 @@ export class MenuScene {
       for (let c = 0; c < 3; c++) f.colors[n * 3 + c] = v[c] * s[0];
       n++;
     }
-    return f;
+    this.scene3d.ffp = f;
   }
 
   /** The edition changed (data/edition.ts): throw the scene's instances away and load the other
@@ -1374,7 +1041,6 @@ export class MenuScene {
 
   dispose(): void {
     this.stop();
-    this.canvas.style.filter = ""; // the grade is ours; don't leave it on the element
     this.chromeTimer?.cancel();
     this.logoTimer?.cancel();
     this.clearSoundTimers();
@@ -1416,22 +1082,16 @@ export class MenuScene {
       // Whichever block is driving this scene — both carry the same camera fields.
       const c = backdrop ? bt ?? NEUTRAL_BACKDROP : t;
       const zoom = c.camZoom;
-      // The settled pan, plus the Birth's own lead-in while one is playing (see `birthPanX`).
-      // `birthLead` is 1 on the clip's first keyframe and 0 on its last, so the extra offset
-      // eases out as the sweep arrives and the pose it lands on is exactly the tuned one.
-      const lead = backdrop ? this.birthLead() : 0;
-      const panX = c.camPanX + (backdrop ? (bt?.birthPanX ?? 0) * lead : 0);
-      const panY = c.camPanY + (backdrop ? (bt?.birthPanY ?? 0) * lead : 0);
-      // A backdrop's camera is authored for the 4:3 screen WC3 shipped on, and it frames the
-      // scene exactly — Maiev's ruins have nothing painted past their edges. Feed that vertical
-      // FOV to a 16:9 viewport and the extra width is scene that was never built: a black void
-      // down one side. So a WIDER screen keeps the authored HORIZONTAL extent and gives up
-      // height for it (tan(v/2)·aspect held at the 4:3 value), which is the only crop that
-      // cannot reveal a hole. The main menu needs none of this — its scene is an open seascape,
-      // and its framing is the tuning above.
-      const fov = backdrop
-        ? 2 * Math.atan(Math.tan(cam.fieldOfView / 2) * Math.min(1, (4 / 3) / (w / h))) * (bt?.camFov ?? 1)
-        : cam.fieldOfView * t.camFov;
+      const panX = c.camPanX;
+      const panY = c.camPanY;
+      // A backdrop's camera, and Reign of Chaos's menu, is authored for the 4:3 box the real client
+      // draws every glue screen in, and frames its set exactly: Maiev's ruins have nothing painted
+      // past their edges. So a WIDER screen keeps that HORIZONTAL extent and gives up height for it
+      // (tan(v/2)·aspect held at the 4:3 value), the only crop that cannot reveal a hole. Icecrown
+      // is an open seascape and needs none of this.
+      const held = backdrop || this.rocScene;
+      const vertical = cam.fieldOfView * GLUE_FOV_SCALE * c.camFov;
+      const fov = held ? 2 * Math.atan(Math.tan(vertical / 2) * Math.min(1, (4 / 3) / (w / h))) : vertical;
       this.scene3d.camera.perspective(fov, w / h, cam.nearClippingPlane || 1, cam.farClippingPlane || 100000);
 
       // The model's camera is ANIMATED, and on a campaign backdrop that animation IS the

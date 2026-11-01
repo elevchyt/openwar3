@@ -205,12 +205,10 @@ The menu's CAMERA is ours, per scene: `TFT_SCENE_TUNING` sits Icecrown behind th
 black past its edges (the authored camera is a 4:3 shot).
 
 The same is true of the campaign BACKDROPS, and more so: each RoC `*Campaign3D` set is a small
-diorama built only as wide as the 4:3 shot it was authored for, so all five needed an entry in
-`BACKDROP_DEFAULTS` (menuScene.ts) before a 16:9 frame stopped showing the black past the sky
-plane. The lens does the work — every entry narrows `camFov`, two drop the eye 2°, and a TILT
-makes it worse rather than better, which is how you can tell the corner is the set's edge and
-not the horizon. Three also push their fog out: those campaigns' own `BackgroundFog*` keys end
-at 1600–2950 units, which in our linear distance fog hazes the subject itself.
+diorama built only as wide as the 4:3 shot it was authored for. A wider screen therefore keeps that
+horizontal extent and gives up height, on those and on this menu (`frameCameras`), rather than
+carrying a fitted camera per model: the camera is the model's own, as the real client draws it
+(`docs/lighting.md`).
 
 ### 5. Campaigns
 

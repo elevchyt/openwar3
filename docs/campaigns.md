@@ -115,27 +115,16 @@ share them: boot with **`?menudebug`** (e.g. `http://localhost:5173/?dev&menudeb
 panel in the top-left drives whichever 3D scene is up. On the campaign screen its title reads
 "Campaign backdrop — NightElf_Exp" and it carries **camera + fog only**, because that screen
 has no sprite-layer chrome to frame anything against. "Log values" prints every backdrop
-touched this session, one line per model path, ready to be baked in.
+touched this session, one line per model path.
 
 The edition is reachable without clicking through the menu: **`?dev&edition=roc`**
 (`src/dev/devBoot.ts`), set before the install door because the switch re-points every object
 table (`docs/editions.md`). A LOCKED campaign's backdrop still cannot be reached from a fresh
-profile — its scene is only up once that campaign has been selected — so tuning one means
+profile — its scene is only up once that campaign has been selected — so seeing one means
 playing far enough to open it, or setting its progress by hand
 (`openwar3.campaigns.<profile>` in localStorage, `data/campaignProgress.ts`). Unlocking them
 all behind the debug flag was tried and taken back out: the tuning flag has no business
 deciding what a profile has finished.
-
-**The arrival is tuned separately from the pose it lands on.** The settled shot is a still
-picture and can be framed by eye; the Birth is a camera MOVE along the model's own KCTR track,
-and a set that reads fine at both ends of it can still put the eye through a body on the way.
-`birthPanX` / `birthPanY` ("Birth lead-in X/Y" on the panel) are an extra pan applied at the
-clip's first keyframe and eased to nothing by its last, so they move where the sweep comes in
-FROM and leave `camPanX`/`camPanY`'s framing alone. Exodus of the Horde is the case that needed
-it — its sweep drops out of the sky and passed through Thrall's head at the narrowed lens the
-small RoC dioramas need — and it is the only baked one. To SEE a lead-in you must leave the
-screen and come back: a Birth plays on arrival, not on a re-mount (`showBackdrop` returns early
-for the backdrop already standing).
 
 The camera sliders are dolly, pan X/Y, FOV × and — since pan and zoom cannot produce them —
 three **orbit** angles in the game's own vocabulary (`docs/camera.md`): **rotation** (yaw about
@@ -145,29 +134,12 @@ moving). They turn the eye about the MODEL's own camera target, which is the sam
 camera setup describes — an angle about a target, not a free-flying eye. The main menu's block
 carries the identical three.
 
-There are also four **colour-grade** sliders (brightness, contrast, saturation, hue), and they
-exist because fog could not do the job: the reference's campaign screens read much darker and
-warmer than our render of the same models, and fog only tints what is FAR — Maiev stands a few
-hundred units from the eye and stays bright at any fog setting. The grade is a CSS filter on the
-canvas (`MenuScene.updateGrade`), which costs one property instead of a post-process pass
-through mdx-m3-viewer's render loop. **Backdrops only**: the same canvas carries the menu's
-sprite-layer chrome, and dimming the metal panels with the seascape is not what this is for.
-
-Two properties of that panel are the point rather than conveniences:
-
-* **One tuning block per backdrop MODEL** (`BackdropTuning`, `render/menuScene.ts`), because the
-  four campaign scenes are four different sets — a nudge that frames Maiev's ruins says nothing
-  about Durotar. Switching campaigns re-binds the sliders and each keeps what you left on it.
-* **A backdrop with no baked entry starts neutral.** Camera multipliers of 1 and no pan, so it
-  renders the model's authored camera exactly; the fog is seeded from that campaign's own
-  `BackgroundFog*` keys. Tuned values are then baked per model path in `BACKDROP_DEFAULTS`
-  (`render/menuScene.ts`) — an override list, never a replacement for the data.
-
-A baked entry's fog will not match `CampaignStrings_exp.txt`, and that is deliberate. The file's
-numbers describe the game's own fog — a `BackgroundFogStyle` and a `BackgroundFogDensity` driving
-a renderer that is not ours — so feeding its start/end into our linear distance fog buries the
-scene in haze at the depth Blizzard wanted a tint. The baked values are the ones that reproduce
-what the reference SHOWS, which is what "match the original" means when the two disagree.
+**Nothing is baked any more, and the sliders are for looking only.** A backdrop renders the model's own
+camera at 0.6 × its field, its campaign's `BackgroundFog*` exactly and the model's own lights, which
+is what a Direct3D trace of the real client showed it does (`docs/lighting.md`). The per-model table of
+fitted cameras, fogs and colour grades this section used to describe is gone: fog looked as though it
+buried the set only because the lighting underneath it was wrong. One block per backdrop MODEL remains
+(`BackdropTuning`), so switching campaigns re-binds the sliders and each keeps what you left on it.
 
 ### The corner logo — currently OFF
 
