@@ -200,9 +200,8 @@ false on Reign of Chaos. The no-script melee fallback in `mapViewer.ts` mirrors 
 `War3XMainScreen.mp3` and not `Mainscreen.mp3`. Both music readers fall back to the expansion's
 list rather than going silent.
 
-The menu's CAMERA is ours, per scene: `TFT_SCENE_TUNING` sits Icecrown behind the panel, and
-`ROC_SCENE_TUNING` dollies Reign of Chaos's meadow in until a 16:9 frame no longer shows the
-black past its edges (the authored camera is a 4:3 shot).
+The menu's CAMERA is each scene's own, at the real client's 0.6 × its field, and its fog is the real
+client's (`TFT_SCENE_TUNING`, `ROC_SCENE_TUNING`; both traced, `docs/lighting.md`).
 
 The same is true of the campaign BACKDROPS, and more so: each RoC `*Campaign3D` set is a small
 diorama built only as wide as the 4:3 shot it was authored for. A wider screen therefore keeps that
