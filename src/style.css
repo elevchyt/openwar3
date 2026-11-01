@@ -3433,6 +3433,27 @@ body.menus-4x3:not(.in-game) #menubg {
   height: min(100vh, calc(100vw * 3 / 4));
 }
 
+/* The two full-window pictures either side of a match take the same box: the loading screen and
+   the score screen, which share this layer. Not gated on `.in-game` as the menus are, because the
+   load straddles that class (enterMap sets it while the bar is still moving). The transform is what
+   boxes them — it makes this layer the containing block of the fixed canvas and FDF overlay under
+   it, and both measure their own element (fdf/layout.ts stretchBox, the scenes' syncCanvasSize), so
+   they lay out at 4:3 with nothing else knowing. The bars are the CANVAS's own shadow, since the
+   match is being stood up underneath a load and body's black is behind it; on the canvas because
+   `hidden` on it is already what says one of the two is up, and an empty layer must cover nothing. */
+body.menus-4x3 #loading-layer {
+  inset: auto;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(100vw, calc(100vh * 4 / 3));
+  height: min(100vh, calc(100vw * 3 / 4));
+}
+
+body.menus-4x3 #loading:not([hidden]) {
+  box-shadow: 0 0 0 100vmax #000;
+}
+
 /* Same for the in-game FDF screens (multiboard, leaderboard, dialogs): they anchor frames
    to the corners of the GAME's frame, as the real game does — not to the browser window's.
    They fit themselves to whatever box this lands them in (mountFdfScreen measures its own

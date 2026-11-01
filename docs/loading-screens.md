@@ -153,7 +153,8 @@ box that is now narrower and offset. On a 1920×962 window that reads as everyth
 minimap hanging out of its painted frame, the name plates overlong.
 
 So the screen has a layer of its own, `#loading-layer`, a sibling of `#ui` in `index.html`. It
-is the browser's frame, like the menus, not the game's.
+is the browser's frame, like the menus, not the game's. (Options → Video → "4:3 Menus" boxes this
+layer on purpose, with the menus: docs/video-options.md.)
 
 And it shows **no cursor**: `mountLoadingScreen` puts `loading-screen` on the body for as long as
 it is up, and `style.css` takes the pointer away for it. There is nothing on that screen to point

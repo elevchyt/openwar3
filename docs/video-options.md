@@ -484,7 +484,7 @@ needs some work") with the string `COLON_FIXED_ASPECT_RATIO`. Nothing says what 
 have fixed, and this one fixes only the menus, so the string here is ours (`MENUS_4_3`, "4:3
 Menus").
 
-**Only the menus.** The match keeps the stage's own aspect (`src/ui/stage.ts`), which is what
+**Not the match.** The match keeps the stage's own aspect (`src/ui/stage.ts`), which is what
 1.30.4 does with a match too. Both halves of the switch stand down while `body.in-game` is set:
 
 - **The box** is CSS: `body.menus-4x3:not(.in-game)` puts `#ui` and `#menubg` in the largest 4:3
@@ -515,8 +515,12 @@ never jumps on screen. The Single Player screen's profile name had the same prob
 way round: its 0.016 nudge was measured at 16:9 and is now blended to 0.002 at 4:3
 (`NAME_NUDGE_43`).
 
-Not boxed: the loading screen and the score screen, which share the loading layer outside `#ui`
-(docs/loading-screens.md). Neither was checked against the real client.
+**The loading and score screens** are boxed with the menus, on the developer's call (neither was
+checked against the real client). They share `#loading-layer`, outside `#ui`
+(docs/loading-screens.md), so the rule is on that layer and is NOT gated on `.in-game`: a load
+straddles that class. Both pictures measure their own element, so they lay out at 4:3 by themselves.
+The bars are the canvas's own `box-shadow`, because the match is built underneath a load and body's
+black is behind it, and it has to be the canvas's because its `hidden` is what says a picture is up.
 
 ## Verifying a change
 

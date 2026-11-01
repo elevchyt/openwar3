@@ -56,7 +56,8 @@ let fixedMenuAspect = false;
 /** Box the menus to 4:3 (or stop). Re-lays whatever glue screen is up: every FDF screen and the
  *  menu scene measure their own element, and the screens re-fit on `resize`, which a class
  *  change does not fire by itself. A match is untouched — the rule and `windowAspect` both stand
- *  down while `body.in-game` is set. */
+ *  down while `body.in-game` is set. The loading and score screens are boxed by the same class
+ *  (`#loading-layer` in style.css) and measure their own elements, so they never ask `windowAspect`. */
 export function setFixedMenuAspect(on: boolean): void {
   if (typeof document === "undefined") return; // headless (the options test compiles this file)
   if (on === fixedMenuAspect) return;
