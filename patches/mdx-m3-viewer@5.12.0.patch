@@ -856,7 +856,7 @@ index 26347d6d988194c95415c2a40597123e80bd61a2..3d28cc4165be8474ed4005abfe3ce726
      }
  }
 diff --git a/dist/cjs/viewer/handlers/mdx/batchgroup.js b/dist/cjs/viewer/handlers/mdx/batchgroup.js
-index 7fe06bd7314e83b578dc8987e819b08cea287dfb..2021a8b015ff4276f14b526d139fb3d833cd27d7 100644
+index 7fe06bd7314e83b578dc8987e819b08cea287dfb..f35c4cabe680a66857764dddab126df12b05a4cc 100644
 --- a/dist/cjs/viewer/handlers/mdx/batchgroup.js
 +++ b/dist/cjs/viewer/handlers/mdx/batchgroup.js
 @@ -2,6 +2,8 @@
@@ -1164,7 +1164,7 @@ index 5f2c0c2ffbfae107c42070fe99e41669814924ef..3101fe8514c3933b217efeeaa2f1397b
              solverParams.hd = true;
              // mdxHandler.loadEnv(viewer);
 diff --git a/dist/cjs/viewer/handlers/mdx/modelinstance.js b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-index 020a99b949ec1634579d439261027e00b6da23ac..1d5d5653136cfdc12127afc1964eda234d5258b4 100644
+index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb67b0ae18d 100644
 --- a/dist/cjs/viewer/handlers/mdx/modelinstance.js
 +++ b/dist/cjs/viewer/handlers/mdx/modelinstance.js
 @@ -21,6 +21,524 @@ const scaleHeap = gl_matrix_1.vec3.create();
@@ -2046,8 +2046,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..1d5d5653136cfdc12127afc1964eda23
          for (const group of model.translucentGroups) {
              group.render(this);
          }
-@@ -420,7 +1183,13 @@ class MdxModelInstance extends modelinstance_1.default {
-      * Set the team color of this instance.
+@@ -421,6 +1184,12 @@ class MdxModelInstance extends modelinstance_1.default {
       */
      setTeamColor(id) {
          this.teamColor = id;
@@ -2269,7 +2268,7 @@ index 394717c8138c40ad4b5222f6d54f32c8239771dc..6ad529ce22ea5de7cc02422ef7cd2864
  `;
  exports.default = shader;
 diff --git a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js b/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
-index 235f29101256617d34587316e8f40984a8f95685..62cb9054108965f1a7e6c94e113dba6c6aba451b 100644
+index 235f29101256617d34587316e8f40984a8f95685..d20085e0dbf2594fc97f4da377601cc11e8a4ff3 100644
 --- a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
 +++ b/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
 @@ -11,12 +11,138 @@ uniform sampler2D u_texture;
@@ -2542,10 +2541,10 @@ index 49733805785c0ef269901d8928e47a953ada93a9..a775564649537a6fcf399023cf671c18
    gl_Position = u_VP * vec4(position, 1.0);
  }
 diff --git a/dist/cjs/viewer/handlers/w3x/map.js b/dist/cjs/viewer/handlers/w3x/map.js
-index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be62ac005c 100644
+index e4c8ea760e92653ef6423bd34f9111d0b062a901..94a8e474c893e10a837832ffde05fe787cc18756 100644
 --- a/dist/cjs/viewer/handlers/w3x/map.js
 +++ b/dist/cjs/viewer/handlers/w3x/map.js
-@@ -11,11 +11,46 @@ const variations_1 = require("./variations");
+@@ -11,17 +11,54 @@ const variations_1 = require("./variations");
  const terrainmodel_1 = require("./terrainmodel");
  const unit_1 = require("./unit");
  const doodad_1 = require("./doodad");
@@ -2593,7 +2592,16 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
  class War3MapViewerMap {
      constructor(viewer, buffer) {
          this.buildVersion = 0;
-@@ -44,6 +79,13 @@ class War3MapViewerMap {
+         this.solverParams = { tileset: 'a' };
+         this.waterIndex = 0;
+-        this.waterIncreasePerFrame = 0;
++        this.waterRate = 0;
++        this.waterCells = 1;
++        this.waterLit = true;
+         this.waterHeightOffset = 0;
+         this.waterTextures = [];
+         this.maxDeepColor = new Float32Array(4);
+@@ -44,6 +81,13 @@ class War3MapViewerMap {
          this.mapSize = new Int32Array(2);
          this.tilesets = [];
          this.blightTextureIndex = -1;
@@ -2607,7 +2615,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
          this.cliffTilesets = [];
          this.columns = 0;
          this.rows = 0;
-@@ -53,6 +95,10 @@ class War3MapViewerMap {
+@@ -53,6 +97,10 @@ class War3MapViewerMap {
          this.textureBuffer = null;
          this.variationBuffer = null;
          this.waterBuffer = null;
@@ -2618,7 +2626,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
          this.heightMap = null;
          this.waterHeightMap = null;
          this.cliffHeightMap = null;
-@@ -85,6 +131,13 @@ class War3MapViewerMap {
+@@ -85,6 +133,13 @@ class War3MapViewerMap {
          this.applyModificationFile(viewer.doodadsData, viewer.destructableMetaData, modifications.w3b);
          this.applyModificationFile(viewer.unitsData, viewer.unitMetaData, modifications.w3u);
          this.applyModificationFile(viewer.unitsData, viewer.unitMetaData, modifications.w3t);
@@ -2632,7 +2640,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
          this.loadDoodadsAndDestructibles();
          this.loadUnitsAndItems();
      }
-@@ -109,9 +162,15 @@ class War3MapViewerMap {
+@@ -109,9 +164,15 @@ class War3MapViewerMap {
          }
          this.solverParams.tileset = parser.tileset.toLowerCase();
          this.buildVersion = parser.getBuildVersion();
@@ -2651,7 +2659,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
      }
      async loadTerrainCliffsAndWater() {
          const mpqFile = this.map.get('war3map.w3e');
-@@ -136,12 +195,32 @@ class War3MapViewerMap {
+@@ -136,12 +197,32 @@ class War3MapViewerMap {
          // Override the grid based on the map.
          this.worldScene.grid = new grid_1.default(centerOffset[0], centerOffset[1], mapSize[0] * 128 - 128, mapSize[1] * 128 - 128, 16 * 128, 16 * 128);
          const texturesExt = this.solverParams.reforged ? '.dds' : '.blp';
@@ -2686,7 +2694,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
              this.tilesets.push(row);
              tilesetTextures.push(this.load(`${row.string('dir')}\\${row.string('file')}${texturesExt}`));
          }
-@@ -165,10 +244,19 @@ class War3MapViewerMap {
+@@ -165,16 +246,33 @@ class War3MapViewerMap {
              Y: 'Village',
              Z: 'Ruins',
          };
@@ -2708,7 +2716,22 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
              this.cliffTilesets.push(row);
              cliffTextures.push(this.load(`${row.string('texDir')}\\${row.string('texFile')}${texturesExt}`));
          }
-@@ -199,6 +287,102 @@ class War3MapViewerMap {
+         const waterRow = viewer.waterData.getRow(`${tileset}Sha`);
+         this.waterHeightOffset = waterRow.number('height');
+-        this.waterIncreasePerFrame = waterRow.number('texRate') / 60;
++        // OpenWar3: Water.slk's texRate is frames per SECOND (45 frames at 15 is the real client's
++        // 3 s roll, measured off 1.30.4), and the stock divide-by-60 ran it 2.4x fast on a 144 Hz
++        // screen. It is advanced by advanceWater(dt) now, from real elapsed time.
++        this.waterRate = waterRow.number('texRate');
++        // OpenWar3: 'cells' is how many terrain cells one water frame covers (2 on every stock
++        // row), and 'lighting' 0 is the three rows that take no day/night light (the dungeon's).
++        // Stock read neither, so the frame repeated every cell -- a grid laid over the whole sea.
++        this.waterCells = waterRow.number('cells') || 1;
++        this.waterLit = waterRow.number('lighting') !== 0;
+         this.waterTextures.length = 0;
+         this.maxDeepColor.set([waterRow.number('Dmax_R'), waterRow.number('Dmax_G'), waterRow.number('Dmax_B'), waterRow.number('Dmax_A')]);
+         this.minDeepColor.set([waterRow.number('Dmin_R'), waterRow.number('Dmin_G'), waterRow.number('Dmin_B'), waterRow.number('Dmin_A')]);
+@@ -199,6 +297,102 @@ class War3MapViewerMap {
          const cliffs = {};
          this.columns = columns - 1;
          this.rows = rows - 1;
@@ -2811,7 +2834,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
          for (let y = 0; y < rows; y++) {
              for (let x = 0; x < columns; x++) {
                  const bottomLeft = corners[y][x];
-@@ -209,8 +393,15 @@ class War3MapViewerMap {
+@@ -209,8 +403,15 @@ class War3MapViewerMap {
                  if (y < rows - 1 && x < columns - 1) {
                      // Water can be used with cliffs and normal corners, so store water state regardless.
                      waterFlags[instance] = this.isWater(x, y);
@@ -2829,7 +2852,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
                          const bottomLeftLayer = bottomLeft.layerHeight;
                          const bottomRightLayer = corners[y][x + 1].layerHeight;
                          const topLeftLayer = corners[y + 1][x].layerHeight;
-@@ -234,38 +425,30 @@ class War3MapViewerMap {
+@@ -234,38 +435,30 @@ class War3MapViewerMap {
                          }
                      }
                      else {
@@ -2887,7 +2910,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
          const gl = this.viewer.gl;
          const webgl = this.viewer.webgl;
          this.vertexBuffer = gl.createBuffer();
-@@ -278,10 +461,25 @@ class War3MapViewerMap {
+@@ -278,10 +471,25 @@ class War3MapViewerMap {
          gl.bindTexture(gl.TEXTURE_2D, this.cliffHeightMap);
          webgl.setTextureMode(gl.CLAMP_TO_EDGE, gl.CLAMP_TO_EDGE, gl.NEAREST, gl.NEAREST);
          gl.texImage2D(gl.TEXTURE_2D, 0, gl.ALPHA, columns, rows, 0, gl.ALPHA, gl.FLOAT, cliffHeights);
@@ -2914,7 +2937,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
          this.waterHeightMap = gl.createTexture();
          gl.bindTexture(gl.TEXTURE_2D, this.waterHeightMap);
          webgl.setTextureMode(gl.CLAMP_TO_EDGE, gl.CLAMP_TO_EDGE, gl.NEAREST, gl.NEAREST);
-@@ -291,10 +489,17 @@ class War3MapViewerMap {
+@@ -291,10 +499,17 @@ class War3MapViewerMap {
          gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(instanceCount).map((currentValue, index) => index), gl.STATIC_DRAW);
          this.textureBuffer = gl.createBuffer();
          gl.bindBuffer(gl.ARRAY_BUFFER, this.textureBuffer);
@@ -2934,7 +2957,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
          this.waterBuffer = gl.createBuffer();
          gl.bindBuffer(gl.ARRAY_BUFFER, this.waterBuffer);
          gl.bufferData(gl.ARRAY_BUFFER, waterFlags, gl.STATIC_DRAW);
-@@ -315,6 +520,165 @@ class War3MapViewerMap {
+@@ -315,6 +530,165 @@ class War3MapViewerMap {
          this.cliffModels = await Promise.all(cliffPromisesForReal);
          this.cliffsReady = true;
      }
@@ -3100,7 +3123,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
      loadDoodadsAndDestructibles() {
          const mpqFile = this.map.get('war3map.doo');
          if (!mpqFile) {
-@@ -354,11 +718,34 @@ class War3MapViewerMap {
+@@ -354,11 +728,34 @@ class War3MapViewerMap {
                              promise = this.load(mpqFile.name);
                          }
                          else {
@@ -3137,7 +3160,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
                              }
                          });
                      }
-@@ -371,32 +758,8 @@ class War3MapViewerMap {
+@@ -371,32 +768,8 @@ class War3MapViewerMap {
                  console.warn(`Failed to load doodad/destructible ID ${doodad.id}: ${e}`);
              }
          }
@@ -3172,7 +3195,33 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
          this.doodadsReady = true;
          this.anyReady = true;
      }
-@@ -485,6 +848,31 @@ class War3MapViewerMap {
+@@ -459,10 +832,6 @@ class War3MapViewerMap {
+      */
+     update() {
+         if (this.anyReady) {
+-            this.waterIndex += this.waterIncreasePerFrame;
+-            if (this.waterIndex >= this.waterTextures.length) {
+-                this.waterIndex = 0;
+-            }
+             for (const doodad of this.doodads) {
+                 doodad.update();
+             }
+@@ -471,6 +840,14 @@ class War3MapViewerMap {
+             }
+         }
+     }
++    /**
++     * OpenWar3: roll the water texture on by real elapsed time, in seconds.
++     */
++    advanceWater(dt) {
++        if (this.anyReady && this.waterTextures.length) {
++            this.waterIndex = (this.waterIndex + dt * this.waterRate) % this.waterTextures.length;
++        }
++    }
+     /**
+      * Render the map.
+      */
+@@ -485,6 +862,31 @@ class War3MapViewerMap {
              worldScene.renderTranslucent();
          }
      }
@@ -3204,7 +3253,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
      renderGround() {
          if (this.terrainReady) {
              const gl = this.viewer.gl;
-@@ -503,6 +891,8 @@ class War3MapViewerMap {
+@@ -503,6 +905,8 @@ class War3MapViewerMap {
              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
              webgl.useShader(shader);
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -3213,7 +3262,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
              gl.uniform2fv(uniforms['u_offset'], this.centerOffset);
              gl.uniform2f(uniforms['u_size'], this.columns, this.rows);
              gl.uniform1i(uniforms['u_heightMap'], 15);
-@@ -527,7 +917,19 @@ class War3MapViewerMap {
+@@ -527,7 +931,19 @@ class War3MapViewerMap {
                  gl.uniform1i(uniforms[`u_tilesets[${i}]`], i);
                  webgl.bindTexture(tilesetTextures[i], i);
              }
@@ -3234,7 +3283,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
              if (tilesetCount > 15) {
                  gl.uniform1f(uniforms['u_baseTileset'], 15);
                  for (let i = 0, l = tilesetCount - 15; i < l; i++) {
-@@ -535,7 +937,7 @@ class War3MapViewerMap {
+@@ -535,7 +951,7 @@ class War3MapViewerMap {
                      gl.uniform1f(uniforms[`u_extended[${i}]`], isExtended);
                      webgl.bindTexture(tilesetTextures[i + 15], i);
                  }
@@ -3243,11 +3292,13 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
              }
              instancedArrays.vertexAttribDivisorANGLE(texturesAttrib, 0);
              instancedArrays.vertexAttribDivisorANGLE(variationsAttrib, 0);
-@@ -558,11 +960,17 @@ class War3MapViewerMap {
+@@ -558,11 +974,19 @@ class War3MapViewerMap {
              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
              webgl.useShader(shader);
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
 +            this.setDayNightUniforms(uniforms); // OpenWar3: day/night shading
++            if (!this.waterLit) gl.uniform1f(uniforms['u_dncEnabled'], 0); // Water.slk lighting = 0
++            gl.uniform1f(uniforms['u_cells'], this.waterCells);
 +            this.setDistFogUniforms(uniforms); // OpenWar3: atmospheric distance fog
              gl.uniform2fv(uniforms['u_offset'], this.centerOffset);
              gl.uniform2f(uniforms['u_size'], this.columns, this.rows);
@@ -3261,7 +3312,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
              gl.uniform1f(uniforms['u_offsetHeight'], this.waterHeightOffset);
              gl.uniform4fv(uniforms['u_maxDeepColor'], this.maxDeepColor);
              gl.uniform4fv(uniforms['u_minDeepColor'], this.minDeepColor);
-@@ -582,7 +990,14 @@ class War3MapViewerMap {
+@@ -582,7 +1006,14 @@ class War3MapViewerMap {
              gl.vertexAttribPointer(isWaterAttrib, 1, gl.UNSIGNED_BYTE, false, 1, 0);
              instancedArrays.vertexAttribDivisorANGLE(isWaterAttrib, 1);
              gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.faceBuffer);
@@ -3277,7 +3328,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
              instancedArrays.vertexAttribDivisorANGLE(isWaterAttrib, 0);
              instancedArrays.vertexAttribDivisorANGLE(instanceAttrib, 0);
          }
-@@ -599,6 +1014,8 @@ class War3MapViewerMap {
+@@ -599,6 +1030,8 @@ class War3MapViewerMap {
              gl.disable(gl.BLEND);
              shader.use();
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -3286,7 +3337,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
              gl.uniform1i(uniforms['u_heightMap'], 0);
              gl.uniform2f(uniforms['u_pixel'], 1 / (this.columns + 1), 1 / (this.rows + 1));
              gl.uniform2fv(uniforms['u_centerOffset'], this.centerOffset);
-@@ -612,6 +1029,23 @@ class War3MapViewerMap {
+@@ -612,6 +1045,23 @@ class War3MapViewerMap {
                  gl.activeTexture(gl.TEXTURE2);
                  gl.bindTexture(gl.TEXTURE_2D, this.cliffTextures[1].webglResource);
              }
@@ -3310,7 +3361,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
              // Set instanced attributes.
              if (!vertexArrayObject) {
                  instancedArrays.vertexAttribDivisorANGLE(attribs['a_instancePosition'], 1);
-@@ -671,6 +1105,86 @@ class War3MapViewerMap {
+@@ -671,6 +1121,86 @@ class War3MapViewerMap {
          const topRight = corners[row + 1][column + 1].layerHeight;
          return bottomLeft !== bottomRight || bottomLeft !== topLeft || bottomLeft !== topRight;
      }
@@ -3397,7 +3448,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
      /**
       * Is the tile at the given column and row water?
       */
-@@ -692,6 +1206,108 @@ class War3MapViewerMap {
+@@ -692,6 +1222,108 @@ class War3MapViewerMap {
          }
          return 0;
      }
@@ -3506,7 +3557,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
      /**
       * Get the ground texture of a corner, whether it's normal ground, a cliff, or a blighted corner.
       */
-@@ -730,17 +1346,37 @@ class War3MapViewerMap {
+@@ -730,17 +1362,37 @@ class War3MapViewerMap {
      applyModificationTable(dataMap, metadataMap, modificationTable) {
          for (const modificationObject of modificationTable.objects) {
              let row;
@@ -3549,7 +3600,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..3d3e15375d46f92f4aa871a3e9a1a1be
                  const metadata = metadataMap.getRow(modification.id);
                  if (metadata) {
 diff --git a/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js b/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
-index c2a27060799ff26b5c86ccedd0bedda2d6a54746..30d514402b5e0504e9b71ae7ea61f902aac45c22 100644
+index c2a27060799ff26b5c86ccedd0bedda2d6a54746..92c8814a6c7e216be2bf34d040bf682eb56472bf 100644
 --- a/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
 +++ b/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
 @@ -9,6 +9,45 @@ ${precision_glsl_1.default}
@@ -3598,13 +3649,19 @@ index c2a27060799ff26b5c86ccedd0bedda2d6a54746..30d514402b5e0504e9b71ae7ea61f902
  varying vec3 v_normal;
  varying vec2 v_uv;
  varying float v_texture;
-@@ -35,6 +74,31 @@ void main() {
+@@ -35,6 +74,37 @@ void main() {
  
    // color *= clamp(dot(normal, lightDirection) + 0.45, 0.1, 1.0);
  
 +  // OpenWar3: day/night shading (ambient + diffuse*N·L), before the fog dimming.
 +  if (u_dncEnabled > 0.5) {
-+    float ndotl = max(dot(normalize(v_normal), u_dncLightDir), 0.0);
++    vec3 n = normalize(v_normal);
++    float ndotl = max(dot(n, u_dncLightDir), 0.0);
++    // A cliff WALL hardly answers the sun. Sampled per wall on 1.30.4 (Booty Bay, noon light), a
++    // face the sun hits square and one it misses are both about 0.3 of the texture, where the full
++    // N.L took them to 1.0 and to 0.17 either side of one tile seam. These two numbers are that
++    // fit; no file states them. What meets the grass (n.z high) stays lit as the ground is.
++    ndotl = mix(0.16 + 0.07 * ndotl, ndotl, smoothstep(0.35, 0.75, n.z));
 +    color.rgb *= clamp(u_dncAmbient + u_dncDiffuse * ndotl, 0.0, 1.0);
 +  }
 +
@@ -3871,10 +3928,18 @@ index 6f31791753b2bf146060b8adfb44767cc468be55..b1bb5154a032f74d93e0b7fe4e876a7d
  `;
  exports.default = shader;
 diff --git a/dist/cjs/viewer/handlers/w3x/shaders/water.vert.js b/dist/cjs/viewer/handlers/w3x/shaders/water.vert.js
-index 3839c8af5d3f624640e87bec6d447483f9d706bf..534256b241c15604b4bc431cb148bce9a8467642 100644
+index 3839c8af5d3f624640e87bec6d447483f9d706bf..5f1ae14a98b5bf0791333865a04bf3021aa6393e 100644
 --- a/dist/cjs/viewer/handlers/w3x/shaders/water.vert.js
 +++ b/dist/cjs/viewer/handlers/w3x/shaders/water.vert.js
-@@ -18,6 +18,7 @@ attribute float a_isWater;
+@@ -7,6 +7,7 @@ uniform sampler2D u_waterHeightMap;
+ uniform vec2 u_size;
+ uniform vec2 u_offset;
+ uniform float u_offsetHeight;
++uniform float u_cells; // OpenWar3: Water.slk 'cells', how many terrain cells one frame covers
+ uniform vec4 u_minDeepColor;
+ uniform vec4 u_maxDeepColor;
+ uniform vec4 u_minShallowColor;
+@@ -18,6 +19,7 @@ attribute float a_isWater;
  
  varying vec2 v_uv;
  varying vec4 v_color;
@@ -3882,6 +3947,18 @@ index 3839c8af5d3f624640e87bec6d447483f9d706bf..534256b241c15604b4bc431cb148bce9
  
  const float minDepth = 10.0 / 128.0;
  const float deepLevel = 64.0 / 128.0;
+@@ -25,10 +27,9 @@ const float maxDepth = 72.0 / 128.0;
+ 
+ void main() {
+   if (a_isWater > 0.5) {
+-    v_uv = a_position;
+-
+     vec2 corner = vec2(mod(a_InstanceID, u_size.x), floor(a_InstanceID / u_size.x));
+     vec2 base = corner + a_position;
++    v_uv = base / u_cells;
+     float height = texture2D(u_heightMap, base / u_size).a;
+     float waterHeight = texture2D(u_waterHeightMap, base / u_size).a + u_offsetHeight;
+     float value = clamp(waterHeight - height, 0.0, 1.0);
 @@ -41,10 +42,12 @@ void main() {
        v_color = mix(u_minDeepColor, u_maxDeepColor, value) / 255.0;
      }

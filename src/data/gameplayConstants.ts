@@ -684,6 +684,8 @@ export const FOG_OF_WAR = {
   /** A unit or doodad standing in the unplayable area: a black silhouette. */
   BoundaryObject: [255, 0, 0, 0],
   FoggedBoundaryObject: [255, 64, 64, 96],
+  /** Every shadow decal's tint: black at this alpha, multiplied into the texture's own. */
+  ShadowImageColor: [170, 0, 0, 0],
 } as const;
 
 /** `UI\MiscData.txt` — the glue (menu) screens' own constants. Not gameplay: this is the

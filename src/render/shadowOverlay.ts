@@ -27,6 +27,7 @@
 
 import { CELL, cornerHeight, type TerrainData } from "../world/terrain";
 import { pipelineState } from "./glPipelineState";
+import { FOG_OF_WAR } from "../data/gameplayConstants";
 
 const VERT_SRC = `
 attribute vec3 aPos;
@@ -63,23 +64,11 @@ const LIFT = 2;
 const POLYGON_OFFSET_FACTOR = -2;
 const POLYGON_OFFSET_UNITS = -4;
 
-// Extra world-space shove toward the top-right on TOP of each shadow's authentic shadowX/Y
-// centring — the game's own offset (~10-20u) reads as "straight under the unit". The push
-// is ASYMMETRIC: mostly EAST (+X = screen-right), only a little NORTH (+Y = screen-up).
-// A tall unit body occupies the screen-up direction, so a big +Y offset just hides the cast
-// behind the model; pushing east keeps it clear of the (thin) body and clearly to the right.
-// Tuned live (issue #58 f/u) — +36 both ways detached it, +20 both ways vanished behind units.
-// HALVED from 24/14 (issue #59): at 24/14 a shadow read as a separate blob lying beside its
-// owner rather than cast by it — worst on the small models (a chest is only ~60u wide, so a
-// 24u shove is a third of it). 12/7 still clears the body to the up-right but the blob stays
-// in contact with the feet/foundation.
-const DIR_PUSH_X = 12;
-const DIR_PUSH_Y = 7;
-
-// Overall darkness. WC3 shadow blobs top out near 0.75 alpha in the texture, so this
-// scale gives ~0.6 peak — a soft, clearly-read contact shadow like the game's, not a
-// hard black splotch. Tuned live against the real client's shadows (issue #58).
-const DEFAULT_STRENGTH = 0.32;
+// `UI\MiscData.txt` [FogOfWar] ShadowImageColor = 170,0,0,0: a shadow image is the texture's
+// alpha times this. Shadow.blp peaks at 191, so a unit's blob takes the ground to half brightness,
+// which is what the real client measures (bare dirt 145 → ~72 under a Peasant, 1.30.4 at 1920×1080).
+const DEFAULT_STRENGTH = FOG_OF_WAR.ShadowImageColor[0] / 255;
+const BUILDING_SHADOW_TEXEL = 48;
 
 type GL = WebGLRenderingContext;
 
@@ -115,10 +104,6 @@ export class ShadowOverlay {
   private uStrength: WebGLUniformLocation;
   private maxAttribs: number;
   private strength = DEFAULT_STRENGTH;
-  // Runtime-tunable top-right push (see DIR_PUSH_X/Y). Instance fields so it can be A/B'd
-  // live in the browser; defaults baked from the live tuning.
-  dirPushX = DIR_PUSH_X;
-  dirPushY = DIR_PUSH_Y;
   private batches = new Map<string, Batch>(); // key = texture path
   private textures = new Map<string, CachedTexture>();
 
@@ -148,12 +133,33 @@ export class ShadowOverlay {
   add(x: number, y: number, w: number, h: number, shadowX: number, shadowY: number, texture: string): void {
     if (w <= 0 || h <= 0 || !texture) return;
     const batch = this.batchFor(texture);
-    // Box min corner = (unit − shadowX, unit − shadowY), then the (asymmetric) push shoves
-    // the whole box toward the top-right so the cast reads clearly up-right (see DIR_PUSH_*).
-    this.tessellate(batch, x - shadowX + this.dirPushX, y - shadowY + this.dirPushY, w, h);
-    if (!this.textures.has(texture)) {
-      this.textures.set(texture, { canvas: this.loader(texture), tex: null });
+    // Box min corner = (unit − shadowX, unit − shadowY), the columns' own offset and nothing more.
+    this.tessellate(batch, x - shadowX, y - shadowY, w, h);
+    this.cached(texture);
+  }
+
+  /**
+   * Append one BUILDING's shadow. `UnitUI.slk` gives a building's `buildingShadow` no size at all,
+   * because the file IS its size: these are tiny maps (ShadowTownhall 13², ShadowHouse 9²), one
+   * texel per BUILDING_SHADOW_TEXEL world units, centred on the building. That is why a Town Hall's
+   * reaches past its 512-unit footprint. No file states the 48: it is the best of 32…64 rendered
+   * against a Town Hall on 1.30.4, whose stem falls on the dirt to its north-east at exactly this.
+   */
+  addBuilding(x: number, y: number, texture: string): void {
+    const canvas = this.cached(texture).canvas;
+    if (!canvas) return;
+    const w = canvas.width * BUILDING_SHADOW_TEXEL;
+    const h = canvas.height * BUILDING_SHADOW_TEXEL;
+    this.add(x, y, w, h, w / 2, h / 2, texture);
+  }
+
+  private cached(texture: string): CachedTexture {
+    let c = this.textures.get(texture);
+    if (!c) {
+      c = { canvas: this.loader(texture), tex: null };
+      this.textures.set(texture, c);
     }
+    return c;
   }
 
   /** Draw all shadow batches. Call every frame AFTER the terrain is drawn and BEFORE the

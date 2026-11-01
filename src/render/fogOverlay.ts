@@ -2,7 +2,7 @@
 //
 // mdx-m3-viewer renders the terrain internally with no shader hook we can reach, so
 // we draw fog as our OWN GL pass after `viewer.render()`, sharing the viewer's canvas
-// and camera. Each vertex carries a "darkness" (0 = in sight, 0.5 = explored grey veil,
+// and camera. Each vertex carries a "darkness" (0 = in sight, 0.67 = explored veil,
 // 1 = unexplored black) sampled from the VisionMap; the GPU interpolates it across the
 // mesh so fog edges are soft.
 //
@@ -38,15 +38,27 @@ void main() {
 
 const FRAG_SRC = `
 precision mediump float;
+uniform vec3 uFogged;
+uniform float uExplored;
 varying float vDark;
 void main() {
-  // Black veil; alpha IS the darkness. Explored ~0.5 dims the terrain, unexplored
-  // 1.0 hides it. Discard fully-clear fragments so visible ground stays untouched.
+  // Alpha IS the darkness. Discard fully-clear fragments so visible ground stays untouched. The
+  // colour is FoggedTerrain's blue-grey up to the explored level and runs to black past it.
   if (vDark <= 0.01) discard;
-  gl_FragColor = vec4(0.0, 0.0, 0.0, vDark);
+  gl_FragColor = vec4(uFogged * clamp((1.0 - vDark) / (1.0 - uExplored), 0.0, 1.0), vDark);
 }`;
 
-const EXPLORED_DARK = 0.5; // grey veil over remembered-but-not-seen terrain
+/** `UI\MiscData.txt` [FogOfWar] FoggedTerrain = 170,16,16,32 — remembered ground, read off the real
+ *  client: land (20,71,22) lit is (12,31,26) under it, its blue going UP. */
+const EXPLORED_DARK = FOG_OF_WAR.FoggedTerrain[0] / 255;
+/**
+ * How fast the drawn fog moves toward the vision map, in darkness per millisecond: black to clear
+ * in one second. Read off 1.30.4 at 30 fps: the image keeps changing for a second after a Peasant
+ * stops, and the slow part of a `iseedeadpeople` reveal is a straight line one second long.
+ */
+export const FOG_FADE_PER_MS = 1 / 1000;
+/** The drawn fog re-uploads at most this often: at FOG_FADE_PER_MS a step is 1/30 of the range. */
+const FADE_STEP_MS = 33;
 /**
  * How dark the UNPLAYABLE area is at its LIGHTEST (issue #117) — `UI\MiscData.txt`
  * [FogOfWar] `BoundaryTerrain = 230,0,0,0`, an ARGB whose alpha is the whole of it.
@@ -109,17 +121,24 @@ export class FogOverlay {
   private aPos: number;
   private aDark: number;
   private uViewProj: WebGLUniformLocation;
+  private uFogged: WebGLUniformLocation;
+  private uExplored: WebGLUniformLocation;
   private indexCount: number;
   private indexType: number; // UNSIGNED_SHORT or UNSIGNED_INT (large maps)
   private maxAttribs: number; // GL_MAX_VERTEX_ATTRIBS, cached for the per-frame attrib sweep
   private vx: Float32Array; // per-vertex world X (for sampling the vision map)
   private vy: Float32Array;
-  private dark: Float32Array; // per-vertex darkness (uploaded each update)
+  private dark: Float32Array; // per-vertex darkness as drawn (uploaded when it changes)
+  private shown: Float32Array; // per-vertex darkness before the boundary floor, easing toward `blurred`
+  private blurred: Float32Array; // per-vertex darkness the vision map asks for
+  private fadeAccum = 0; // ms of fade owed since the last upload
+  private settling = false; // `shown` has not reached `blurred` yet
+  private primed = false; // the first update snaps: a match does not open on a fade
   // Fog mask handed to the viewer's patched CLIFF, WATER and MODEL shaders. The ground veil
   // is a mesh; cliff FACES are batched instanced models inside the viewer's own terrain
   // pass, whose rocky overhang pokes through the veil's diagonal from the WC3 camera —
   // so cliffs stayed fully lit in fog. Instead those shaders multiply their colour by
-  // this per-corner BRIGHTNESS texture (1=in sight, 0.5=explored grey, 0=unexplored),
+  // this per-corner BRIGHTNESS texture (1=in sight, 1/3=explored, 0=unexplored),
   // dimming cliffs exactly like the ground. Same per-corner data as the mesh (1 - dark),
   // so cliff and ground fog agree at every shared corner.
   //
@@ -195,6 +214,8 @@ export class FogOverlay {
     this.aPos = gl.getAttribLocation(this.program, "aPos");
     this.aDark = gl.getAttribLocation(this.program, "aDark");
     this.uViewProj = gl.getUniformLocation(this.program, "uViewProj")!;
+    this.uFogged = gl.getUniformLocation(this.program, "uFogged")!;
+    this.uExplored = gl.getUniformLocation(this.program, "uExplored")!;
     this.posBuf = createBuffer(gl, gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
     this.darkBuf = createBuffer(gl, gl.ARRAY_BUFFER, this.dark, gl.DYNAMIC_DRAW);
     this.idx = idx;
@@ -208,6 +229,8 @@ export class FogOverlay {
     this.bright = new Uint8Array(n * 4); // 0 everywhere = start fully unexplored (black)
     this.boundary = boundaryCorners(terrain);
     this.rawDark = new Float32Array(n);
+    this.shown = new Float32Array(n).fill(1);
+    this.blurred = new Float32Array(n).fill(1);
     this.blurTmp = new Float32Array(n);
     this.fogParams = new Float32Array([
       centerOffset[0], centerOffset[1], 1 / ((width - 1) * CELL), 1 / ((height - 1) * CELL),
@@ -264,20 +287,59 @@ export class FogOverlay {
    *  needs (issue #117). Built once: the object is stable, its contents refresh in update(). */
   readonly boundaryMask: BoundaryMask;
 
-  /** Re-sample the vision map into the per-vertex darkness and upload it. Throttle
-   *  the caller — the vision itself only changes a few times a second. */
+  /** Re-sample the vision map into the darkness the fog is heading for. Throttle the caller —
+   *  the vision itself only changes a few times a second. `fade` does the drawing's half. */
   update(vision: VisionMap): void {
     // 1) Raw per-corner darkness from the hard fog states.
     for (let i = 0; i < this.rawDark.length; i++) {
       const state = vision.stateAt(this.vx[i], this.vy[i]);
       this.rawDark[i] = state === FogState.Visible ? 0 : state === FogState.Explored ? EXPLORED_DARK : 1;
     }
-    // 2) Soften the hard cell edges into gradients (separable box blur) → this.dark.
+    // 2) Soften the hard cell edges into gradients (separable box blur) → this.blurred.
     this.blurDark();
+    this.settling = true;
+    if (!this.primed) {
+      this.primed = true;
+      this.shown.set(this.blurred);
+      this.upload();
+    }
+  }
+
+  /**
+   * Ease what is drawn toward what the vision map says, at FOG_FADE_PER_MS. A straight line rather
+   * than a curve, because that is what the real client's reveal is, and it also means a frame in
+   * which nothing is settling costs one boolean. `dt` is the WORLD's, so a pause holds the fog.
+   */
+  fade(dt: number): void {
+    if (!this.settling) return;
+    this.fadeAccum += dt;
+    if (this.fadeAccum < FADE_STEP_MS) return;
+    const step = this.fadeAccum * FOG_FADE_PER_MS;
+    this.fadeAccum = 0;
+    const shown = this.shown, want = this.blurred;
+    let moved = false;
+    let settling = false;
+    for (let i = 0; i < shown.length; i++) {
+      const d = want[i] - shown[i];
+      if (d === 0) continue;
+      moved = true;
+      if (d > step) { shown[i] += step; settling = true; }
+      else if (d < -step) { shown[i] -= step; settling = true; }
+      else shown[i] = want[i];
+    }
+    this.settling = settling;
+    if (moved) this.upload();
+  }
+
+  /** The eased darkness → the veil's vertices and the mask the cliff, water and model shaders read. */
+  upload(): void {
     // 3) The FOG-only brightness, banked before the boundary touches it (channel G): what an
     //    object standing in the unplayable area needs in order to pick between
     //    `BoundaryObject` and `FoggedBoundaryObject`.
-    for (let i = 0; i < this.dark.length; i++) this.bright[i * 4 + 1] = (1 - this.dark[i]) * 255;
+    for (let i = 0; i < this.dark.length; i++) {
+      this.dark[i] = this.shown[i];
+      this.bright[i * 4 + 1] = (1 - this.shown[i]) * 255;
+    }
     // 4) …then floor the unplayable area at BoundaryTerrain's alpha. After the blur (see
     //    BOUNDARY_DARK) and as a MAX, so fog that is already blacker than the boundary tint
     //    stays that way — `FoggedBoundaryTerrain` is the ordinary fog tint to the byte.
@@ -308,7 +370,7 @@ export class FogOverlay {
    *  hard vision states the sim reads. Symmetric, so the boundary stays centred. */
   private blurDark(): void {
     const W = this.gridW, H = this.gridH, R = FOG_BLUR_RADIUS;
-    const src = this.rawDark, tmp = this.blurTmp, out = this.dark;
+    const src = this.rawDark, tmp = this.blurTmp, out = this.blurred;
     const inv = 1 / (2 * R + 1);
     for (let y = 0; y < H; y++) { // horizontal pass: src → tmp
       const row = y * W;
@@ -382,6 +444,8 @@ export class FogOverlay {
       if (i !== this.aPos && i !== this.aDark) gl.disableVertexAttribArray(i);
     }
     gl.uniformMatrix4fv(this.uViewProj, false, viewProj as Float32Array);
+    gl.uniform3f(this.uFogged, FOG_OF_WAR.FoggedTerrain[1] / 255, FOG_OF_WAR.FoggedTerrain[2] / 255, FOG_OF_WAR.FoggedTerrain[3] / 255);
+    gl.uniform1f(this.uExplored, EXPLORED_DARK);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.posBuf);
     gl.enableVertexAttribArray(this.aPos);
     gl.vertexAttribPointer(this.aPos, 3, gl.FLOAT, false, 0, 0);

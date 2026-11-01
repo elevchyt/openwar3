@@ -332,6 +332,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   `war3map.shd` layer skip it (their ground-grid plane sliced the rock — the dark ramp rectangles
   and black cliff wedges), the ground lights from the RAW ground height (never the cliff layers),
   and a cliff vertex where the mesh meets the grass takes the grass's normal.
+- **Water, shoreline and the fog's fade:** read the last two sections of [`docs/lighting.md`](docs/lighting.md)
+  before touching `render/shoreline.ts`, `advanceWater` or `FogOverlay.fade`. One water frame covers
+  `Water.slk`'s `cells` (2) terrain cells, the coast's foam is particle-only models the engine lays
+  itself (no map places them), and the fog is drawn EASED toward a vision map that stays hard.
 - **Night elf:** read [`docs/night-elf.md`](docs/night-elf.md) before touching the Wisp, the
   Ancients, the Entangled Gold Mine or the Moon Well. The whole race plays a different economic
   game and almost none of it is a tuning value: a Wisp is CONSUMED by an Ancient (UnitBalance

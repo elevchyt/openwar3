@@ -12,12 +12,17 @@ shadowing engine would move us *away* from the original rather than toward it:
 | What | Where it comes from | Where we implement it |
 | --- | --- | --- |
 | Unit shadows | `Units\UnitUI.slk` `unitShadow` — a black-RGB/alpha blob texture, sized `shadowW`×`shadowH` and offset by `shadowX`/`shadowY` | [`render/shadowOverlay.ts`](../src/render/shadowOverlay.ts) |
-| Building shadows | the same table's `buildingShadow`, one baked texture per building | the second `ShadowOverlay` pass in `mapViewer` |
+| Building shadows | the same table's `buildingShadow`, one baked texture per building, sized by the file (13² for a Town Hall) at 48 world units a texel — a fit against 1.30.4, no file states it | the second `ShadowOverlay` pass in `mapViewer` |
 | **Static map shadows** | **`war3map.shd`** — the mask the World Editor bakes for cliffs, doodads and scenery | [`render/terrainShadowOverlay.ts`](../src/render/terrainShadowOverlay.ts) |
 | Time-of-day shading | `Environment\DNC\*.mdx` — a keyframed directional light per tileset | [`render/dayNight.ts`](../src/render/dayNight.ts) + the shader patch |
 
 All three shadow layers are ground decals tessellated over the terrain's own corner grid, so
 they morph across slopes and ramps instead of floating over them.
+
+**How dark:** `UI\MiscData.txt` [FogOfWar] `ShadowImageColor` = 170,0,0,0, multiplied into the
+texture's alpha. Shadow.blp peaks at 191, so bare dirt goes 145 → ~72 under a Peasant, which is what
+1.30.4 measures. An earlier 0.32 here left units with no visible shadow at all. The blob sits where
+`shadowX`/`shadowY` put it, with no extra push.
 
 ## `war3map.shd` — the static shadow layer
 
@@ -81,6 +86,16 @@ lines on cliffs" (Lost Temple shows all three at once):
 
 A trap when testing any of this: `MapViewerScene.ensureFog` rebuilds the veil whenever
 `fog` is null, so setting `mapScene().fog = null` from the page does NOT turn the fog off.
+
+**A cliff WALL hardly answers the sun.** Sampled per wall on 1.30.4 (Booty Bay), walls whose model
+normals give N·L anywhere from 0 to 0.56 all read about 0.3 of the rock texture, while the full
+`ambient + 1.3·N·L` took them to 1.0 and 0.17 either side of a tile seam: alternating bright tan and
+black along one hillside. The Terrain light itself is right (a trace reads direction
+0.675, 0.406, −0.616, diffuse 1.29, ambient 0.168, 0.168, 0.195), and the stock models' normals are
+right too. So `cliffs.frag` replaces N·L with `0.16 + 0.07·N·L` wherever `n.z` is low, blending back
+to the real N·L by 0.75 so the lip that meets the grass stays lit as the ground is. Those two numbers
+are a FIT. Why the real client does this is not known: `SetMaterial`'s values could not be read
+(see "Not settled" below), and a cliff's material is the likely answer.
 
 ## Glue-screen lighting (issue #105)
 
@@ -216,3 +231,34 @@ around a constant's name, however much the rest of the codebase writes them that
 double any backslash you do keep, since the literal eats one. The failure looks like
 `✘ [ERROR] Syntax error "\"` pointing at a COMMENT, which reads as impossible until you notice
 what the file really is (issue #117).
+
+## Water and shoreline
+
+Read off `TerrainArt\Water.slk` and checked against 1.30.4 on Booty Bay:
+
+* **`cells`** (2 on every row) is how many terrain cells one water frame covers. The stock viewer
+  repeated the frame every cell, which laid a one-cell grid over the whole sea.
+* **`texRate`** is frames per second, so `advanceWater(dt)` rolls by real time (real client: a ~3 s
+  loop of 45 frames at 15). The stock `texRate / 60` per frame ran 2.4× fast on a 144 Hz screen.
+* **`lighting`** 0 (the dungeon-like rows D, C, G) takes no day/night light.
+* **The foam is not in the map.** `shoreDir` + `shoreSFile`/`shoreOCFile`/`shoreICFile` name
+  particle-only models the engine lays along the coast itself, and
+  [`render/shoreline.ts`](../src/render/shoreline.ts) does the same off the corners' water flags:
+  two wet corners take the straight model, one the inside corner, three the outside corner, each
+  centred on its cell. The rule is READ OFF THE MODELS (every emitter swims toward the land), since
+  no file states it. `shoreInFog` 0 shows foam only on ground in sight.
+
+## Fog of war: the fade and the tints
+
+Both from 1.30.4 at 30 fps, driving the real client under Wine:
+
+* **It fades.** The image keeps changing for a second after a Peasant stops, and the slow part of an
+  `iseedeadpeople` reveal is a straight line one second long. So the vision map is still sampled at
+  10 Hz, and `FogOverlay.fade` moves what is DRAWN toward it at black-to-clear in one second
+  (`FOG_FADE_PER_MS`), re-uploading at most every 33 ms and not at all once settled. Widgets step at
+  the same rate (`fadeWidgets`). Largest single step while a unit walks: 0.16 before, 0.033 after.
+  It reads the world's `dt`, so a pause holds the fog. Sight itself is unaffected: gameplay and the
+  unit-hiding gate still read the hard `vision.stateAt`.
+* **Remembered ground is `FoggedTerrain`** 170,16,16,32 rather than black at 0.5: land (20,71,22)
+  lit is (12,31,26) under it, its blue going UP. The cliff and water shaders multiply by the same
+  1/3. A remembered building or tree is `FoggedObject` 64,64,96, not a flat half.

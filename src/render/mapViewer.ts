@@ -31,9 +31,10 @@ import { MAP_CONTROL, type CinematicScene, type DestructableSnapshot, type Dialo
 import { makeHeightSampler, makeWaterSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type HeightSampler, type FootprintMaxSampler } from "../game/heightmap";
 import MdlxModel from "mdx-m3-viewer/dist/cjs/parsers/mdlx/model";
 import { WalkableSurfaces, type WalkableGeoset } from "./walkableHeight";
-import { FogOverlay, type BoundaryMask } from "./fogOverlay";
+import { FOG_FADE_PER_MS, FogOverlay, type BoundaryMask } from "./fogOverlay";
 import { UberSplatOverlay } from "./uberSplatOverlay";
 import { ShadowOverlay } from "./shadowOverlay";
+import { Shoreline } from "./shoreline";
 import { parseTerrainShadows, TerrainShadowOverlay } from "./terrainShadowOverlay";
 import { CameraHeightField } from "./cameraHeight";
 import { LightningOverlay } from "./lightningOverlay";
@@ -70,7 +71,7 @@ import { isDesktopApp } from "../assets/nativeInstall";
 import { loadCommandStrings, disabledIconPath, placeholderIcon, iconFileCandidates, type CommandStrings } from "../data/commandStrings";
 import { resolveTipRefs } from "../data/tipRefs";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
-import { CAMERA, MELEE, MINIMAP, MISC_DATA, TEXT_TAG, heroReviveCost, mapMiscEpoch, miscKeyIsRead, setMapMiscOverlay, type ReviveMode } from "../data/gameplayConstants";
+import { CAMERA, FOG_OF_WAR, MELEE, MINIMAP, MISC_DATA, TEXT_TAG, heroReviveCost, mapMiscEpoch, miscKeyIsRead, setMapMiscOverlay, type ReviveMode } from "../data/gameplayConstants";
 import { DayNightCycle, type DayNightLight } from "./dayNight";
 import { makeFog, makeMapFog, type DistFog } from "./fog";
 import { TimeIndicatorClock, timeIndicatorPath } from "./timeIndicator";
@@ -834,11 +835,8 @@ interface W3xMap {
   renderGround(): void;
   renderCliffs(): void;
   renderWater(): void;
-  /** The scrolling water animation: `update()` steps `waterIndex` on by
-   *  `waterIncreasePerFrame` and wraps it at the end of `waterTextures`. Ours to step on the
-   *  frames Animation Quality skips that call — see `updateMapWidgets`. */
-  waterIndex: number;
-  waterIncreasePerFrame: number;
+  /** The scrolling water animation, by real elapsed time in seconds (`Water.slk` texRate). */
+  advanceWater(dt: number): void;
   /** `TerrainArt\Water.slk` `[<tileset>Sha] height`, in cell units — the offset the water
    *  shader lifts every corner's water level by. Filled in by the async terrain load. */
   waterHeightOffset: number;
@@ -1838,6 +1836,8 @@ export class MapViewerScene {
   // buildings after the foundation decals — see the render loop).
   private shadows: ShadowOverlay | null = null;
   private buildingShadows: ShadowOverlay | null = null;
+  /** The foam along every coast (render/shoreline.ts). Built once the viewer's water table is in. */
+  private shoreline: Shoreline | null = null;
   /** The map's own baked shadow layer (war3map.shd) — cliffs, doodads and scenery. */
   private terrainShadows: TerrainShadowOverlay | null = null;
   /** Which terrain cells this frame's ground and water passes draw (render/terrainCull.ts).
@@ -2124,6 +2124,7 @@ export class MapViewerScene {
     this.shadows = null;
     this.buildingShadows?.dispose();
     this.buildingShadows = null;
+    this.shoreline = null; // its instances go with the map's scene
     this.terrainShadows?.dispose();
     this.terrainShadows = null;
     this.groundless = null; // the next map has its own cliffs (syncGroundless)
@@ -3929,6 +3930,7 @@ export class MapViewerScene {
       enableWorldFogBoundary: (flag) => {
         if (!this.fog) return;
         this.fog.boundaryTint = flag;
+        this.fog.upload(); // the floor is laid on at upload, and the fog below it may be at rest
         this.updateFog();
       },
       // --- weather: the map's atmosphere (7.23) ---
@@ -15801,7 +15803,7 @@ export class MapViewerScene {
       // moving.
       perfLog.begin("anim");
       baseUpdate.call(this.viewer, wdt);
-      if (!this.paused) this.updateMapWidgets();
+      if (!this.paused) this.updateMapWidgets(wdt);
       // Re-pin under-construction buildings AFTER the animation advance so a
       // halted build's Birth animation truly freezes (and resumes with progress).
       this.rts?.repinConstructionFrames();
@@ -15816,6 +15818,9 @@ export class MapViewerScene {
           this.fogAccum = 0;
           this.updateFog();
         }
+        // A real client's fog FADES: vision moves ten times a second, what is drawn eases toward it.
+        this.fog.fade(wdt);
+        this.fadeWidgets(wdt);
       }
       perfLog.end("fog");
       perfLog.begin("render");
@@ -15913,6 +15918,9 @@ export class MapViewerScene {
         this.sky?.renderBehind(); // FIRST: a sky neither tests nor writes depth (render/sky.ts)
         this.syncBlight(map); // the Undead's rot, painted onto the ground before it is drawn
         this.syncGroundless(map); // cliff/ramp tiles: shaded by the cliff pass, not the overlays
+        if (!this.shoreline && (map as unknown as { terrainReady?: boolean }).terrainReady && this.fogTerrain) {
+          this.shoreline = new Shoreline(this.fogTerrain, map as unknown as ConstructorParameters<typeof Shoreline>[1], this.viewer, this.solver);
+        }
         map.renderGround();
         map.renderCliffs();
         // Unit shadows draw BEFORE the opaque units: the top-right cast falls north (away
@@ -16047,6 +16055,7 @@ export class MapViewerScene {
     this.shadows = null;
     this.buildingShadows?.dispose();
     this.buildingShadows = null;
+    this.shoreline = null; // its instances go with the map's scene
     this.terrainShadows?.dispose();
     this.terrainShadows = null;
     this.groundless = null; // the next map has its own cliffs (syncGroundless)
@@ -16276,6 +16285,7 @@ export class MapViewerScene {
     if (!this.fog || !this.rts) return;
     const vision = this.rts.getVision();
     this.fog.update(vision);
+    this.shoreline?.applyFog(vision);
     this.fogWidgets(vision);
     this.fogItems(vision);
     // Sight moved, so anything held back for want of it is worth re-asking: blight painted
@@ -16302,7 +16312,13 @@ export class MapViewerScene {
 
   // Explored (remembered-but-not-seen) props are shown at half brightness, matching
   // the ground veil's grey (EXPLORED_DARK 0.5 → 1 - 0.5). In sight = full colour.
-  private static readonly FOG_EXPLORED_BRIGHT = 0.5;
+  private static readonly FOG_LIT_TINT = [1, 1, 1] as const;
+  /** Widgets partway through a change of fog tint, and the colour each is heading for. */
+  private widgetFades = new Map<HideableWidget["instance"], [number, number, number, number]>();
+  /** `FoggedObject`: a remembered building or tree is this colour's multiple, not a flat grey. */
+  private static readonly FOG_EXPLORED_TINT = [
+    FOG_OF_WAR.FoggedObject[1] / 255, FOG_OF_WAR.FoggedObject[2] / 255, FOG_OF_WAR.FoggedObject[3] / 255,
+  ] as const;
 
   /** Fog-of-war for the map's DOODADS and static units (trees, props, structures,
    *  gold mines). The flat ground veil can't darken tall geometry — it pokes above the
@@ -16317,8 +16333,7 @@ export class MapViewerScene {
   /** Rebuild this frame's shadow batch: one soft decal per VISIBLE unit, painted on the
    *  terrain by ShadowOverlay. Mobile units use a blob sized/offset straight from their
    *  UnitDef shadow data (unitUI.slk `unitShadow` + shadowW/H/X/Y); BUILDINGS use their
-   *  baked `buildingShadow` texture stretched over their pathing footprint (no size field
-   *  exists, so the footprint is the size), centred and given the same top-right cast;
+   *  baked `buildingShadow` texture, centred on them (ShadowOverlay.addBuilding);
    *  ground ITEMS all share one global blob from MiscData (see below).
    *  Corpses and fogged/mined units are skipped — a fogged enemy's shadow must not reveal
    *  it. Cheap: a beginFrame + one small tessellation per unit, all drawn later in ~one
@@ -16338,19 +16353,16 @@ export class MapViewerScene {
    * strided, because the sim moves a unit by writing onto its instance and the skeleton is what
    * carries that to the screen (render/videoQuality.ts, ANIM_STRIDE).
    *
-   * So the scan is strided and the water is not: on a frame the scan skips, the roll is stepped
-   * here exactly as `update()` would have, or the sea would run at a quarter speed on Low.
+   * So the scan is strided and the water is not: the roll is stepped here, by real elapsed time,
+   * or the sea would run at a quarter speed on Low (and 2.4x fast on a 144 Hz screen).
    */
-  private updateMapWidgets(): void {
+  private updateMapWidgets(wdt: number): void {
     const map = this.viewer.map;
     if (!map) return;
     const stride = animStride();
-    if (stride <= 1 || this.widgetScanPhase++ % stride === 0) {
-      map.update();
-      return;
-    }
-    map.waterIndex += map.waterIncreasePerFrame;
-    if (map.waterIndex >= map.waterTextures.length) map.waterIndex = 0;
+    map.advanceWater(wdt / 1000);
+    if (stride <= 1 || this.widgetScanPhase++ % stride === 0) map.update();
+    this.shoreline?.update();
   }
 
   private updateShadowBatch(): void {
@@ -16365,16 +16377,8 @@ export class MapViewerScene {
       if (!def) continue;
       if (this.rts!.unitHidden(u.id)) continue; // fogged / in a gold mine — don't draw its shadow
       if (u.building) {
-        // Building: baked shadow texture stretched over the footprint (≈ its ground size),
-        // into the SEPARATE overlay that draws after the foundation decals.
-        if (!def.buildingShadow || !def.pathTex) continue;
-        const fp = this.footprintFor(def.pathTex);
-        if (!fp) continue;
-        // Centre the quad on the footprint (shadowX/Y = half-size) so only DIR_PUSH offsets
-        // it; the texture's own baked shape carries the cast direction.
-        const w = fp.w * PATHING_CELL * MapViewerScene.BUILDING_SHADOW_SCALE;
-        const h = fp.h * PATHING_CELL * MapViewerScene.BUILDING_SHADOW_SCALE;
-        this.buildingShadows.add(u.x, u.y, w, h, w / 2, h / 2, MapViewerScene.SHADOW_DIR + def.buildingShadow + ".blp");
+        // Into the SEPARATE overlay that draws after the foundation decals. The file is its own size.
+        if (def.buildingShadow) this.buildingShadows.addBuilding(u.x, u.y, MapViewerScene.SHADOW_DIR + def.buildingShadow + ".blp");
         continue;
       }
       if (!def.unitShadow || def.shadowW <= 0 || def.shadowH <= 0) continue;
@@ -16400,9 +16404,30 @@ export class MapViewerScene {
       this.shadows.add(it.x, it.y, w, h, ox, oy, texture);
     }
   }
-  // Building shadows have no size field in the data (unlike units' shadowW/H), so we size
-  // them from the pathing footprint and stretch a touch past the base — tuned live.
-  private static readonly BUILDING_SHADOW_SCALE = 1.25;
+  /** Move every widget whose fog tint has changed toward the new one, at the veil's own rate. */
+  private fadeWidgets(wdt: number): void {
+    if (!this.widgetFades.size) return;
+    const step = FOG_FADE_PER_MS * wdt;
+    const s = this.tintScratch;
+    for (const [inst, to] of this.widgetFades) {
+      const cur = inst.vertexColor;
+      // Something else took the colour over (a harvest blink, a spell's green) — it hands it back
+      // through the next tint pass.
+      if (!cur || this.aoeTreeInsts.has(inst) || this.treePulses.some((p) => (p.inst as unknown) === inst)) {
+        this.widgetFades.delete(inst);
+        continue;
+      }
+      let done = true;
+      for (let k = 0; k < 3; k++) {
+        const d = to[k] - cur[k];
+        s[k] = Math.abs(d) <= step ? to[k] : cur[k] + Math.sign(d) * step;
+        if (s[k] !== to[k]) done = false;
+      }
+      s[3] = to[3];
+      inst.setVertexColor?.(s);
+      if (done) this.widgetFades.delete(inst);
+    }
+  }
 
   private fogWidgets(vision: VisionMap): void {
     const map = this.viewer.map;
@@ -16431,12 +16456,13 @@ export class MapViewerScene {
       if (this.aoeTreeInsts.has(inst)) return false; // green AoE-target tree owns its colour this frame
       if (state === FogState.Unexplored) {
         if (inst.rendered === false) return true; // already dark — nothing to do
+        this.widgetFades.delete(inst);
         inst.hide(); // never seen — don't even hint at what's there
         return true;
       }
-      const b = state === FogState.Visible ? 1 : MapViewerScene.FOG_EXPLORED_BRIGHT;
+      const t = state === FogState.Visible ? MapViewerScene.FOG_LIT_TINT : MapViewerScene.FOG_EXPLORED_TINT;
       const base = this.widgetBase(inst);
-      const r = base[0] * b, g = base[1] * b, bl = base[2] * b, a = base[3];
+      const r = base[0] * t[0], g = base[1] * t[1], bl = base[2] * t[2], a = base[3];
       // Already wearing exactly this? Then leave it alone.
       //
       // A widget's fog state almost never changes from one pass to the next, and this pass
@@ -16451,11 +16477,18 @@ export class MapViewerScene {
       // above — but only while they are running), and it must be re-tinted when it comes back
       // rather than left wearing the effect's colour forever.
       const cur = inst.vertexColor;
-      if (inst.rendered !== false && cur && cur[0] === r && cur[1] === g && cur[2] === bl && cur[3] === a) return true;
-      const s = this.tintScratch;
-      s[0] = r; s[1] = g; s[2] = bl; s[3] = a;
-      inst.setVertexColor?.(s);
-      inst.show();
+      if (inst.rendered !== false && cur && cur[0] === r && cur[1] === g && cur[2] === bl && cur[3] === a) {
+        this.widgetFades.delete(inst);
+        return true;
+      }
+      // Coming up out of the black, the fade starts from nothing and the veil beside it agrees.
+      if (inst.rendered === false) {
+        const s = this.tintScratch;
+        s[0] = 0; s[1] = 0; s[2] = 0; s[3] = a;
+        inst.setVertexColor?.(s);
+        inst.show();
+      }
+      this.widgetFades.set(inst, [r, g, bl, a]);
       return true;
     };
     const tintInstance = (inst: HideableWidget["instance"]): void => {
@@ -16930,6 +16963,7 @@ export class MapViewerScene {
     this.baseColors = new WeakMap();
     this.fogTable = null;
     this.fogRecheck.clear();
+    this.widgetFades.clear();
     this.fogAccum = 0;
     // Everything the fog was holding back goes with it — both queues are answers about a map
     // and a viewpoint that no longer exist (see syncBlight / flushPendingFells).
