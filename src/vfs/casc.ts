@@ -225,8 +225,11 @@ const LOCALES = ["enUS", "deDE", "esES", "frFR", "itIT", "koKR", "plPL", "ruRU",
 /** Files big enough — and rare enough per session — that they are read on demand instead of
  *  being held in memory. Audio and video are 1.3 GB of a 1.6 GB install and every one of them
  *  is fetched through the ASYNC `read()` (audio/sounds.ts decodes into an AudioBuffer), so
- *  nothing sync ever asks for them. Everything else preloads; see `CascDataSource.preload`. */
-const STREAMED = /\.(wav|mp3|avi|flac|ogg)$/i;
+ *  nothing sync ever asks for them. A whole MAP is the same (1.31 stores its campaign chapters
+ *  as blobs, a few MB each, read once through `readMapBytes`); 1.30.4 has none — its maps are
+ *  exploded and their entries end in `war3map.j` and the like. Everything else preloads; see
+ *  `CascDataSource.preload`. */
+const STREAMED = /\.(wav|mp3|avi|flac|ogg|w3m|w3x)$/i;
 
 /** One root line: `<archive>:<path>|<ckey>|<locale>`, or an unprefixed installer file. */
 interface RootEntry {
@@ -235,13 +238,88 @@ interface RootEntry {
   ckey: string;
 }
 
+/** 1.31's sub-mods that were nested MPQs inside `War3.mpq` in 1.30 (`War3.mpq:Z.mpq:…`), by the
+ *  name 1.30 gave them. The tilesets are `_Tilesets/<letter>.w3mod` → `<letter>.mpq`. */
+const W3MOD_NESTED: Record<string, string> = {
+  "_low.w3mod": "War3_low.mpq",
+  "_med.w3mod": "War3_med.mpq",
+  "_teen.w3mod": "T.mpq",
+};
+
+/** The archive the store's own melee maps are filed under when they are blobs (1.31): not
+ *  mounted — they are the install's `Maps\` folder (`CascDataSource.storeMaps`). */
+const STORE_MAPS = "Maps";
+
+/**
+ * A 1.31 root name in the 1.30.4 spelling, or null for one 1.30.4 has no place for.
+ *
+ * 1.31.0 replaced the archive NAMES with one `War3.w3mod` tree of sub-mods (docs/casc.md,
+ * "1.31.1"), and that is the build the Internet Archive keeps — the mirror "Download game
+ * files" falls back on (src/assets/downloadInstall.ts). The content is the same shape, so the
+ * whole move is a renaming, measured off both builds' roots:
+ *
+ *   War3.w3mod:<p>                                      → War3.mpq:<p>
+ *   War3.w3mod:_Locales/enUS.w3mod:<p>                  → enUS-War3Local.mpq:<p>
+ *   War3.w3mod:_Deprecated.w3mod:<p>                    → Deprecated.mpq:<p>
+ *   War3.w3mod:_Balance/Melee_V0.w3mod:<p>              → War3.mpq:Melee_V0/<p>   (and the locale's)
+ *   War3.w3mod:_Tilesets/Z.w3mod:<p>                    → War3.mpq:Z.mpq:<p>      (and _Low/_Med/_Teen)
+ *   War3.w3mod:Campaign/FrozenThrone/OrcX01.w3x         → War3.mpq:Maps/FrozenThrone/Campaign/OrcX01.w3x
+ *   War3.w3mod:Maps/(2)BootyBay.w3m                     → the install's Maps\ folder
+ *
+ * The two map rows are the only ones that are not pure renames: 1.31 keeps a map as ONE blob
+ * where 1.30.4 exploded it (`…OrcX01.w3x:war3map.j`), which `readMapBytes` already takes. A
+ * chapter is filed under BOTH spellings (joined by CAMPAIGN_ALIAS), because 1.31's own
+ * `UI\CampaignStrings_exp.txt` names the new one and that file is wording we leave alone.
+ * Every other name passes through unchanged, so a 1.30.4 root is untouched.
+ */
+/** Separates a campaign chapter's 1.30.4 path from its 1.31 one in what `legacyRootName`
+ *  returns — `|` is the root's own field separator, so no path can contain it. */
+const CAMPAIGN_ALIAS = "|War3.mpq:";
+
+export function legacyRootName(name: string): string | null {
+  if (!/^war3\.w3mod:/i.test(name)) return name;
+  const parts = name.split(":").slice(1);
+  let archive = "War3.mpq";
+  const locale = /^_locales\/(\w{4})\.w3mod$/i.exec(parts[0] ?? "");
+  if (locale && parts.length > 1) {
+    archive = `${locale[1].slice(0, 2)}${locale[1].slice(2).toUpperCase()}-War3Local.mpq`;
+    parts.shift();
+  }
+  if (parts.length > 1) {
+    const sub = parts[0].toLowerCase();
+    const balance = /^_balance\/(custom_v0|custom_v1|melee_v0|melee_v1)\.w3mod$/.exec(sub);
+    const tileset = /^_tilesets\/(\w)\.w3mod$/.exec(sub);
+    if (sub === "_deprecated.w3mod" && archive === "War3.mpq") {
+      archive = "Deprecated.mpq";
+      parts.shift();
+    } else if (balance) {
+      const set = parts[0].slice("_Balance/".length, -".w3mod".length);
+      parts.splice(0, 2, `${set}/${parts[1]}`);
+    } else if (tileset) {
+      parts[0] = `${tileset[1].toUpperCase()}.mpq`;
+    } else if (W3MOD_NESTED[sub]) {
+      parts[0] = W3MOD_NESTED[sub];
+    } else if (sub.startsWith("_")) {
+      return null; // a sub-mod 1.30.4 never had
+    }
+  }
+  if (archive === "War3.mpq" && parts.length === 1) {
+    const campaign = /^campaign\/(frozenthrone\/)?(.*)$/i.exec(parts[0]);
+    if (campaign) return `War3.mpq:Maps/${campaign[1] ? "FrozenThrone/" : ""}Campaign/${campaign[2]}${CAMPAIGN_ALIAS}${parts[0]}`;
+    if (/^maps\//i.test(parts[0])) return `${STORE_MAPS}:${parts[0]}`;
+  }
+  return [archive, ...parts].join(":");
+}
+
 export function parseRoot(text: string): Map<string, RootEntry[]> {
   const byArchive = new Map<string, RootEntry[]>();
   for (const line of text.split(/\r?\n/)) {
     if (!line) continue;
     const bar = line.indexOf("|");
     if (bar < 0) continue;
-    const name = line.slice(0, bar);
+    const renamed = legacyRootName(line.slice(0, bar));
+    if (renamed === null) continue;
+    const [name, alias] = renamed.split(CAMPAIGN_ALIAS);
     const colon = name.indexOf(":");
     if (colon < 0) continue; // an installer file (the exes, the .app bundles) — not game data
     const archive = name.slice(0, colon);
@@ -251,6 +329,7 @@ export function parseRoot(text: string): Map<string, RootEntry[]> {
     // The rest of the name keeps its inner `:` separators: a campaign map's contents are
     // `Maps/…/OrcX01.w3x:war3map.j`, and openArchive() finds them by that prefix.
     list.push({ path: name.slice(colon + 1).replace(/\//g, "\\"), ckey });
+    if (alias) list.push({ path: alias.replace(/\//g, "\\"), ckey });
   }
   return byArchive;
 }
@@ -373,6 +452,44 @@ export class CascDataSource implements DataSource {
     if (this.entries.size === 0) {
       throw new Error("no Warcraft III archives in this CASC storage — is Data/ complete?");
     }
+    for (const { path, ckey } of byArchive.get(STORE_MAPS) ?? []) {
+      const ekey = encoding.get(ckey);
+      const location = ekey && index.get(ekey.slice(0, INDEX_KEY_HEX));
+      if (location) this.maps.set(`${STORE_MAPS}\\${path.replace(/^maps\\/i, "")}`, location);
+    }
+  }
+
+  /** The melee and scenario maps the store itself holds as blobs (1.31 — a 1.30.4 store has
+   *  none, its installer copies them out to a loose `Maps\` folder), keyed as the install's own
+   *  `Maps\` files are ("Maps\FrozenThrone\(2)EchoIsles.w3x"). */
+  private maps = new Map<string, Location>();
+
+  /**
+   * Those maps as the install's `Maps\` folder: `File`s to their callers, read off the store
+   * only when one is opened — the same honest stub `lazyMapFile` is for the desktop app, since
+   * reading two hundred maps to LIST them is the thing being avoided.
+   */
+  storeMaps(): Map<string, File> {
+    const out = new Map<string, File>();
+    for (const [key, location] of this.maps) {
+      let bytes: Promise<ArrayBuffer> | null = null;
+      const load = (): Promise<ArrayBuffer> =>
+        (bytes ??= this.readLocation(location, key).then((b) => b.slice().buffer as ArrayBuffer));
+      const stub = {
+        name: key.split("\\").pop() ?? key,
+        size: 0,
+        type: "",
+        lastModified: 0,
+        webkitRelativePath: key,
+        arrayBuffer: load,
+        bytes: async () => new Uint8Array(await load()),
+        text: async () => new TextDecoder().decode(await load()),
+        slice: (start?: number, end?: number) => new Blob([]).slice(start, end),
+        stream: () => new Blob([]).stream(),
+      };
+      out.set(key, stub as unknown as File);
+    }
+    return out;
   }
 
   /**

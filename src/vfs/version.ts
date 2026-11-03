@@ -25,6 +25,17 @@ import type { PickedInstall } from "../assets/opfs";
  *  of the folder dialog before the answer can be remembered; `pnpm app:test` compares them. */
 export const REQUIRED_VERSION = "1.30.4";
 
+/** Builds the mount turns BACK into REQUIRED_VERSION, and so plays as it: the Internet Archive's
+ *  1.31.1, which "Download game files" falls back on (src/assets/downloadInstall.ts). Its store
+ *  is laid out differently (vfs/casc.ts `legacyRootName`) and its game data is put back to
+ *  1.30.4's (src/vfs/downgrade.ts), so every player still plays the same game. MUST equal
+ *  `DOWNGRADE_VERSIONS` in electron/install.mjs; `pnpm app:test` compares them. */
+export const DOWNGRADE_VERSIONS: readonly string[] = ["1.31.1"];
+
+/** Is this a build the mount downgrades to REQUIRED_VERSION? */
+export const isDowngradable = (version: string | null): boolean =>
+  !!version && DOWNGRADE_VERSIONS.includes(version.split(".").slice(0, 3).join("."));
+
 /** What to say about a folder that is the wrong build. One sentence, naming BOTH versions, so
  *  the player can see what they have as well as what is wanted. Shared by the load gate and by
  *  the desktop app's remembered-folder check, which reach the same conclusion by different
@@ -68,6 +79,6 @@ export function checkVersion(install: PickedInstall): VersionVerdict {
     };
   }
   const version = buildInfoVersion(install.casc.buildInfo);
-  if (isRequiredVersion(version)) return { ok: true, version, message: "" };
+  if (isRequiredVersion(version) || isDowngradable(version)) return { ok: true, version, message: "" };
   return { ok: false, version, message: wrongVersionMessage(version) };
 }

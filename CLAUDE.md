@@ -21,6 +21,12 @@ data, or asset behaviour, **consult our sources** and cite what you used.
    - **[`docs/casc.md`](docs/casc.md)** — read this before touching `src/vfs/`, the install picker, or the extractor.
      1.30.4 is a **CASC** content store, not MPQs: nothing in it is addressed by name, a campaign map is no longer a
      file, and six `common.j`/`Blizzard.j` constants became natives the engine has to answer.
+   - **1.31.1 is accepted and DOWNGRADED** (docs/casc.md "1.31.1"): "Download game files" tries
+     the Drive zip of a 1.30.4 install first and falls back on the Internet Archive's 1.31.1 store
+     (fetched member by member out of its RAR). Its `War3.w3mod` tree is renamed back to 1.30's
+     archive names as the root is read (`legacyRootName`), and its object tables are put back to
+     1.30.4's values under the patch chain (`src/vfs/downgrade.ts`); wording, art and scripts
+     stay 1.31's, since restoring them would mean shipping Blizzard's bytes.
    - **Archive split** (`ARCHIVE_ORDER` in `src/vfs/casc.ts`, later wins): `Deprecated.mpq` = art old custom maps
      still reference; `War3.mpq` = everything shared; `<locale>-War3Local.mpq` = localized text, unit voices and the
      campaign maps. 1.30 kept the MPQ *names* after dropping the format. A legacy MPQ-era install is still

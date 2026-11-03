@@ -1,6 +1,6 @@
 import { pickInstall, requestPersistence, type PickedInstall } from "../assets/opfs";
 import {
-  downloadInstall, downloadUrl, gb, rememberedLink, storedInstall, type DownloadProgress,
+  downloadInstall, gameFilesSources, gb, storedInstall, type DownloadProgress, type GameFilesSource,
 } from "../assets/downloadInstall";
 import { cancelNativeDownload, downloadNativeInstall, isDesktopApp, loadNativeInstall, pickNativeInstall, rememberedInstall } from "../assets/nativeInstall";
 import { loadProfile } from "../vfs/loader";
@@ -158,12 +158,8 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
   };
 
   const download = async (): Promise<void> => {
-    const link = rememberedLink();
-    const url = downloadUrl(link);
-    if (!url) {
-      fail("The game files link is not one this can download.");
-      return;
-    }
+    // The Drive install first, the Internet Archive behind it (src/assets/downloadInstall.ts).
+    const sources = gameFilesSources();
     dlCancelled = false;
     btn.setDisabled(true);
     status.textContent = "";
@@ -171,15 +167,26 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
     bar.set(0);
     bar.setLabel("Connecting…");
     showBar(true, true);
+    /** Which source the bytes are coming from — said only once it is a mirror, since the
+     *  primary is the ordinary case and needs no name on the bar. */
+    let from = "";
+    const onSource = (source: GameFilesSource, index: number): void => {
+      from = index > 0 ? ` from ${source.name}` : "";
+      if (index > 0) bar.setLabel(`Trying ${source.name}…`);
+    };
     const progress = (p: DownloadProgress): void => {
       bar.set(p.fraction);
-      bar.setLabel(`Downloading game files… ${gb(p.received)} of ${gb(p.total)}`);
+      bar.setLabel(`Downloading game files${from}… ${gb(p.received)} of ${gb(p.total)}`);
     };
     try {
       if (native) {
         // The shell asks where to put it before a byte moves, and its own dialog cannot be
-        // cancelled from here — only the transfer itself can, once it has started.
-        const folder = await downloadNativeInstall(url, progress);
+        // cancelled from here — only the transfer itself can, once it has started. It walks the
+        // same sources in the same order, and says which one it is on through the progress.
+        const folder = await downloadNativeInstall(sources, (p) => {
+          if (p.source !== undefined) onSource(sources[p.source], p.source);
+          progress(p);
+        });
         if (!folder) {
           showBar(false);
           btn.setDisabled(false);
@@ -189,7 +196,7 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
         return mount(await loadNativeInstall());
       }
       dlAbort = new AbortController();
-      await downloadInstall(link, progress, dlAbort.signal);
+      await downloadInstall(sources, progress, dlAbort.signal, onSource);
       const install = await storedInstall();
       if (!install) throw new Error("the files did not arrive whole.");
       return mount(install);

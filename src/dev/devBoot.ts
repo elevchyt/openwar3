@@ -220,10 +220,12 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   // content store is mounted instead, and the maps beside it are still ordinary files.
   const wanted = DEFAULT_PROFILE.archives;
   const archives = manifest.casc ? [] : manifest.archives.filter((a) => wanted.includes(a.toLowerCase()));
-  const mapPath = wantMap
+  let mapPath = wantMap
     ? manifest.maps.find((m) => m.toLowerCase().includes(wantMap.toLowerCase()))
     : undefined;
-  if (wantMap && !mapPath) throw new Error(`no map matching "${wantMap}" in the install`);
+  // A 1.31 store keeps its maps INSIDE it (vfs/casc.ts `storeMaps`), so a folder that is only
+  // the store has none on disk: those are looked for once it is mounted, below.
+  if (wantMap && !mapPath && !manifest.casc) throw new Error(`no map matching "${wantMap}" in the install`);
 
   // `?maps=N` — mount a HANDFUL of maps so the lobby has a list to choose FROM.
   //
@@ -288,6 +290,12 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   };
   const load = await loadProfile({ files, casc, customKeys, saveCustomKeys, saveMap }, DEFAULT_PROFILE, (msg) => log(msg));
   log(`mounted ${load.mounted.join(", ")} — ${load.fileCount.toLocaleString()} files`);
+  if (wantMap && !mapPath) {
+    mapPath = [...load.maps.keys()]
+      .sort((a, b) => Number(b.includes("FrozenThrone")) - Number(a.includes("FrozenThrone")))
+      .find((m) => m.toLowerCase().includes(wantMap.toLowerCase()));
+    if (!mapPath) throw new Error(`no map matching "${wantMap}" in the install`);
+  }
   hooks.mountInstall(load);
 
   // Re-entry, for automation. `?dev` starts ONE match, and a match is otherwise only

@@ -1,6 +1,6 @@
 import { MpqDataSource } from "./mpq";
 import { LayeredDataSource } from "./layered";
-import { CascDataSource, isCascInstall } from "./casc";
+import { buildInfoVersion, CascDataSource, isCascInstall } from "./casc";
 import type { DataSource, LoadProgress } from "./types";
 import type { ContentProfile } from "./profiles";
 import { installMaps, type PickedInstall } from "../assets/opfs";
@@ -10,6 +10,7 @@ import { setMapWriter } from "../assets/downloadedMaps";
 import { EditionDataSource } from "./edition";
 import { PatchDataSource } from "./patch";
 import { DerivedArtDataSource } from "./derivedArt";
+import { DowngradeDataSource, downgradeEdits } from "./downgrade";
 
 // Turn a picked install into a mounted VFS (plan §1 exit: "enumerate/extract any file by path
 // from a real install").
@@ -62,14 +63,27 @@ export async function loadProfile(
   // here, at the one door, so nothing downstream can read the expansion's tables by accident.
   if (isCascInstall(install.casc)) {
     const casc = await CascDataSource.open(install.casc, onProgress);
+    // A 1.31.1 store (the Internet Archive's copy "Download game files" falls back on) has its
+    // game data put back to 1.30.4's before anything reads it (src/vfs/downgrade.ts) — UNDER the
+    // patches, so they land on the same tables a 1.30.4 install has.
+    const version = buildInfoVersion(install.casc.buildInfo);
+    const downgrade = downgradeEdits(version);
+    const store: DataSource = downgrade ? new DowngradeDataSource(casc, downgrade, version ?? "") : casc;
     // …and the game's later patches UNDER the edition overlay, so they reach the live melee
-    // tables alone (src/vfs/patch.ts, docs/patches.md). A 1.30.4 store only: the patches are
-    // stated against 1.30.4, which an MPQ-era install is older than.
+    // tables alone (src/vfs/patch.ts, docs/patches.md). A CASC store only: the patches are
+    // stated against 1.30.4, which an MPQ-era install is older than (and a 1.31.1 one has been
+    // turned back into, above).
     // …and, over everything, the icons the tables name and the install lacks, derived from the
     // ones it has (src/vfs/derivedArt.ts, docs/icons.md) — computed here, once, after the mount.
-    const vfs = new DerivedArtDataSource(new EditionDataSource(new PatchDataSource(casc)));
+    const vfs = new DerivedArtDataSource(new EditionDataSource(new PatchDataSource(store)));
     onProgress?.("Preparing icons…");
     vfs.prepare();
+    // A 1.31 store carries its maps INSIDE (vfs/casc.ts `storeMaps`) and its folder has no
+    // `Maps\` — the Internet Archive's copy is just the store. A loose file of the same name
+    // wins, as the player's own folder always does.
+    for (const [key, file] of casc.storeMaps()) {
+      if (![...maps.keys()].some((k) => k.toLowerCase() === key.toLowerCase())) maps.set(key, file);
+    }
     return { vfs, mounted: casc.mounted, missing: [], fileCount: casc.list().length, maps };
   }
 

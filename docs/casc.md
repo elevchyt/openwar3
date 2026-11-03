@@ -198,3 +198,53 @@ view *is* the per-archive view.
 - **Some models were re-exported.** `Footman.mdx` lost its `Attack Slam` and gained `Stand
   Defend` / `Walk Defend` / `Attack Defend`. Anything asserting on a specific clip needs
   checking against the 1.30.4 art, not remembered from an earlier patch.
+
+## 1.31.1 — the Internet Archive's copy, played as 1.30.4
+
+"Download game files" (`src/assets/downloadInstall.ts`) tries two sources: the developer's
+zipped 1.30.4 install on Google Drive (fast — the primary), then the Internet Archive's item
+`warcraft-iii-v-1.31` (slow, ~1 MB/s, but it outlives anybody's Drive, and it is the only one a
+HOSTED page can reach: archive.org answers `Access-Control-Allow-Origin: *`, Drive refuses a
+page's fetch outright). That item is a RAR; archive.org unpacks a RAR itself and serves any one
+member by URL, so only the store is fetched — `.build.info`, two configs, the sixteen LIVE
+`…03.idx` buckets (the `…02` twins are stale) and `data.000`/`data.001`, 1.8 GB. Its build is
+**1.31.1.12164**, and two things stand between it and the game we play:
+
+**The layout.** 1.31.0 dropped the archive names for one `War3.w3mod` tree of sub-mods.
+Measured off both roots it is a pure RENAMING, done where the root is read
+(`legacyRootName` in `src/vfs/casc.ts`):
+
+| 1.31.1 | 1.30.4 |
+|---|---|
+| `War3.w3mod:<p>` | `War3.mpq:<p>` |
+| `War3.w3mod:_Locales/enUS.w3mod:<p>` | `enUS-War3Local.mpq:<p>` |
+| `War3.w3mod:_Deprecated.w3mod:<p>` | `Deprecated.mpq:<p>` |
+| `War3.w3mod:[_Locales/…:]_Balance/Melee_V0.w3mod:<p>` | `War3.mpq:Melee_V0/<p>` (and the locale's) |
+| `War3.w3mod:_Tilesets/Z.w3mod:<p>` | `War3.mpq:Z.mpq:<p>` |
+| `_Low` / `_Med` / `_Teen.w3mod` | `War3_low.mpq` / `War3_med.mpq` / `T.mpq` |
+| `War3.w3mod:Campaign/[FrozenThrone/]X.w3x` | `War3.mpq:Maps/[FrozenThrone/]Campaign/X.w3x` |
+| `War3.w3mod:Maps/…` | the install's `Maps\` folder (`storeMaps`) |
+
+The two map rows are the only ones that are not renames: 1.31 keeps a map as ONE blob where
+1.30.4 exploded it, which `readMapBytes` already takes, and it keeps the melee maps INSIDE the
+store where 1.30.4's installer copied them out — so the store answers for a `Maps\` folder the
+downloaded folder does not have. Map blobs are streamed, never preloaded.
+
+**The game data.** `src/patches/downgrade/1.31.1.json` states the 1.30.4 value of every cell
+1.31.0 and 1.31.1 changed in every object table of all four data sets (105 tables, 6553 cells —
+most of them icon paths, which 1.31 respelled `.tga` over the same `.blp` files), and
+`src/vfs/downgrade.ts` lays it UNDER the patches, so the chain lands on 1.30.4's tables exactly
+as it does on a 1.30.4 install. It is made, and checked, by the extraction tool:
+
+    node tools/patch-extract.mjs --install <1.31.1 folder> --downgrade
+
+Applied to the 1.31.1 tables it leaves ONE cell of difference against 1.30.4: a duplicated
+`sppb` row in `Custom_V0\Units\UpgradeEffectMetaData.slk`, World Editor metadata nothing reads.
+
+What is NOT turned back, by design: the WORDING (the `*Strings.txt` files — 1.31 reworded
+tooltips, which is not game data and is Blizzard's text; the patch chain's tooltip `replace`s
+written against 1.30.4 wording therefore log "has no … to replace" on this store and change
+nothing), the ART (1.31 re-encoded ~3 000 textures; they draw the same) and the SCRIPTS (1.31's
+`common.j`/`Blizzard.j` are a superset — the `Blz*` object-field natives and their BJs, three
+camera fields — and an unknown native is stepped over). Shipping any of those back would mean
+shipping Blizzard's bytes.

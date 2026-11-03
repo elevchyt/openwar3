@@ -1,5 +1,5 @@
 import type { PickedInstall, InstallFiles } from "./opfs";
-import type { DownloadProgress } from "./downloadInstall";
+import type { DownloadProgress, GameFilesSource } from "./downloadInstall";
 import {
   fetchCasc, fetchInstallAnsi, fetchInstallFile, lazyMapFile,
   type FileUrl, type InstallManifest,
@@ -27,7 +27,7 @@ interface NativeBridge {
   pickInstall(): Promise<string | null>;
   forgetInstall(): Promise<void>;
   /** Absent on a shell older than "Download game files". */
-  downloadInstall?(url: string, onProgress: (p: DownloadProgress) => void): Promise<string | null>;
+  downloadInstall?(sources: GameFilesSource[], onProgress: (p: DownloadProgress) => void): Promise<string | null>;
   /** The load gate's Cancel: abort that transfer mid-flight. Absent with it. */
   cancelDownload?(): void;
   servers(): Promise<Array<{ id: string; url: string }>>;
@@ -143,12 +143,13 @@ export async function pickNativeInstall(): Promise<string | null> {
   return (await bridge()?.pickInstall()) ?? null;
 }
 
-/** "Download game files" in the desktop app (electron/download.mjs). `url` is the FILE's, already
- *  resolved by `downloadUrl`. Null if the player cancelled the folder dialog. */
-export async function downloadNativeInstall(url: string, onProgress: (p: DownloadProgress) => void): Promise<string | null> {
+/** "Download game files" in the desktop app (electron/download.mjs): the shell asks for a folder
+ *  once and tries `sources` in order (src/assets/downloadInstall.ts). Null if the player
+ *  cancelled the folder dialog. */
+export async function downloadNativeInstall(sources: GameFilesSource[], onProgress: (p: DownloadProgress) => void): Promise<string | null> {
   const native = bridge();
   if (!native?.downloadInstall) throw new Error("This version of the app cannot download. Update it first.");
-  return native.downloadInstall(url, onProgress);
+  return native.downloadInstall(sources, onProgress);
 }
 
 /** The load gate's Cancel during that download (electron/download.mjs). A no-op where there is

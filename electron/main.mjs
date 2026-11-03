@@ -21,7 +21,7 @@ import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
 import { startServer } from "./server.mjs";
 import { installVersion, looksLikeInstall, serveInstall, writeCustomKeys, writeDownloadedMap, REQUIRED_VERSION } from "./install.mjs";
-import { downloadInstall } from "./download.mjs";
+import { downloadFromSources } from "./download.mjs";
 import { detectInstall } from "./locate.mjs";
 import { startBeacon } from "./beacon.mjs";
 import { startUpdates } from "./updates.mjs";
@@ -283,14 +283,14 @@ app.whenReady().then(async () => {
     return picked;
   });
   ipcMain.handle("ow3:install-forget", () => { writeSettings({ installPath: null }); });
-  // "Download game files" (electron/download.mjs): the player's own zipped install, from the
-  // link the page resolved (a Drive share URL becomes the file itself). Where it goes is asked
-  // here with the OS dialog — a 2 GB folder lands where the player says, not in app data — and
+  // "Download game files" (electron/download.mjs): an install, from the first of the page's
+  // sources that works (the Drive zip, then the Internet Archive — src/assets/downloadInstall.ts).
+  // Where it goes is asked here with the OS dialog — a 2 GB folder lands where the player says, not in app data — and
   // the result is remembered only if it is an install the game will take, exactly as a pick is.
   // Resolves to the folder, or null if the player cancelled the dialog. The load gate's Cancel
   // (below) aborts the transfer; pressed during the dialog it takes effect before a byte moves.
   let downloadAbort = null;
-  ipcMain.handle("ow3:install-download", async (event, url) => {
+  ipcMain.handle("ow3:install-download", async (event, sources) => {
     downloadAbort = new AbortController();
     try {
       const { canceled, filePaths } = await dialog.showOpenDialog({
@@ -299,7 +299,7 @@ app.whenReady().then(async () => {
         defaultPath: app.getPath("documents"),
       });
       if (canceled || !filePaths[0] || downloadAbort.signal.aborted) return null;
-      const folder = await downloadInstall(String(url), filePaths[0], (progress) => {
+      const folder = await downloadFromSources(sources, filePaths[0], (progress) => {
         if (!event.sender.isDestroyed()) event.sender.send("ow3:install-download-progress", progress);
       }, downloadAbort.signal);
       if (!looksLikeInstall(folder)) {

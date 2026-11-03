@@ -146,6 +146,11 @@ export async function writeDownloadedMap(root, name, bytes) {
  *  compares the two. */
 export const REQUIRED_VERSION = "1.30.4";
 
+/** The builds the game's mount turns back into REQUIRED_VERSION (src/vfs/version.ts, which says
+ *  why): the Internet Archive's 1.31.1, which "Download game files" falls back on. `pnpm
+ *  app:test` compares the two lists. */
+export const DOWNGRADE_VERSIONS = ["1.31.1"];
+
 /** What `.build.info` says this folder is — "1.30.4.11274" — or null if it says nothing. The
  *  file is a `|`-separated table with a header row; the row to read is the ACTIVE branch. */
 export function installVersion(root) {
@@ -178,7 +183,8 @@ export function looksLikeInstall(root) {
   if (!root || !existsSync(root)) return false;
   if (!existsSync(join(root, "Data"))) return false;
   const version = installVersion(root);
-  return !!version && version.split(".").slice(0, 3).join(".") === REQUIRED_VERSION;
+  const build = version?.split(".").slice(0, 3).join(".");
+  return !!build && (build === REQUIRED_VERSION || DOWNGRADE_VERSIONS.includes(build));
 }
 
 /**

@@ -10,6 +10,8 @@
 //   node tools/patch-extract.mjs --install <folder>         a local CASC install (1.30+, any layout)
 //   node tools/patch-extract.mjs --diff <out>               …then diff it against the 1.30.4 install
 //   node tools/patch-extract.mjs --verify <out>             …and against OUR patch chain (the check)
+//   node tools/patch-extract.mjs --downgrade <out>          write src/patches/downgrade/<version>.json,
+//                                                           the edits that turn it BACK into 1.30.4
 //
 // What comes out is `.cdn-cache/extract/<version>/`, laid out in 1.30.4's paths (`Units\…`,
 // `Custom_V1\Units\…`, `Melee_V0\…`, `Scripts\…`) whatever the build's own layout was, so the two
@@ -80,6 +82,12 @@ function mapRootName(name) {
   // `War3.w3mod:_Locales/enUS.w3mod:Units/…`, `War3.w3mod:_HD.w3mod:…` (Reforged art).
   if (archive === "war3.w3mod") {
     if (parts.length === 2) return { path: parts[1].replace(/\//g, "\\"), layer: 1 };
+    // 1.31 — the locale's own copy of a balance set sits one sub-mod deeper:
+    // `War3.w3mod:_Locales/enUS.w3mod:_Balance/Melee_V0.w3mod:Units/…`.
+    if (parts.length === 4 && parts[1].toLowerCase() === `_locales/${LOCALE.toLowerCase()}.w3mod`) {
+      const hit = mapRootName(`war3.w3mod:${parts[2]}:${parts[3]}`);
+      return hit && hit.layer === 3 ? { path: hit.path, layer: 4 } : null;
+    }
     if (parts.length !== 3) return null;
     const sub = parts[1].replace(/\//g, "\\").toLowerCase();
     const rest = parts[2].replace(/\//g, "\\");
@@ -316,6 +324,47 @@ function printReport(report, title) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Downgrade: the edits that turn an extracted build's tables BACK into the 1.30.4 install's
+// (src/vfs/downgrade.ts). Unlike a diff for a patch this covers all four data sets and every
+// object table but the strings, and it states each cell as 1.30.4 has it — so applying it to the
+// newer tables must leave nothing for `diffTrees` to find, which is checked straight after.
+
+/** The object tables a downgrade puts back: every data set, never the strings (wording is not
+ *  game data, and is Blizzard's text). */
+const DOWNGRADE_ONLY = /^((custom|melee)_v[01]\\)?units\\[^\\]+\.(slk|txt)$/i;
+
+function downgradeEdits(ours, theirs) {
+  const a = listTree(ours), b = listTree(theirs);
+  const files = {};
+  for (const [key, fileB] of b) {
+    if (!DOWNGRADE_ONLY.test(key) || /strings\.txt$/i.test(key)) continue;
+    const fileA = a.get(key);
+    if (!fileA) continue;
+    const ta = table(fileA), tb = table(fileB);
+    const ca = slkColumns(fileA), cb = slkColumns(fileB);
+    const name = path.relative(ours, fileA).split(path.sep).join("\\");
+    const rows = {};
+    for (const id of new Set([...Object.keys(ta.map), ...Object.keys(tb.map)])) {
+      const ra = ta.map[id]?.map, rb = tb.map[id]?.map;
+      if (!ra) { rows[id] = null; continue; } // a row 1.30.4 never had
+      const edit = {};
+      for (const col of new Set([...Object.keys(ra), ...Object.keys(rb ?? {})])) {
+        // A column only the newer SLK has is LAYOUT (1.31's `stockInitial`): 1.30.4's readers
+        // never ask for it, and the rewrite cannot remove a column.
+        if (ca && cb && !ca.has(col)) continue;
+        const va = ra[col] ?? "", vb = rb?.[col] ?? "";
+        if (rb && (va === vb || (empty(va) && empty(vb)))) continue;
+        edit[col] = empty(va) && !rb ? undefined : va === "" ? null : /^-?\d+(\.\d+)?$/.test(va) ? Number(va) : va;
+        if (edit[col] === undefined) delete edit[col];
+      }
+      if (Object.keys(edit).length) rows[id] = edit;
+    }
+    if (Object.keys(rows).length) files[name] = rows;
+  }
+  return files;
+}
+
+// ---------------------------------------------------------------------------------------------
 
 const INSTALL = path.join(REPO, "Warcraft III", "ExtractedData", "merged");
 let out = null;
@@ -350,6 +399,17 @@ if (verifyDir) {
   fs.rmSync(chain, { recursive: true, force: true });
   fs.rmSync(merged, { recursive: true, force: true });
 }
-if (!out && !diffDir && !verifyDir) {
+const downgradeArg = opt("--downgrade")?.[0];
+const downgradeDir = downgradeArg && !downgradeArg.startsWith("--") ? downgradeArg : flag("--downgrade") ? out : null;
+if (downgradeDir) {
+  const version = path.basename(downgradeDir).split(".").slice(0, 3).join(".");
+  const files = downgradeEdits(INSTALL, downgradeDir);
+  const file = path.join(REPO, "src", "patches", "downgrade", `${version}.json`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ from: version, to: "1.30.4", files }, null, 2) + "\n");
+  const cells = Object.values(files).reduce((n, rows) => n + Object.values(rows).reduce((m, r) => m + (r ? Object.keys(r).length : 1), 0), 0);
+  console.log(`wrote ${path.relative(REPO, file)}: ${Object.keys(files).length} files, ${cells} cells`);
+}
+if (!out && !diffDir && !verifyDir && !downgradeDir) {
   console.log("usage: --cdn [--ptr] [<build> <cdn>] | --install <folder>, then --diff / --verify (see the header)");
 }

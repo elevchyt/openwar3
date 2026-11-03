@@ -48,15 +48,16 @@ contextBridge.exposeInMainWorld("ow3native", {
   /** Open the OS folder picker. Resolves to the chosen path, or null if the player cancelled
    *  or picked something that is not an install. */
   pickInstall: () => ipcRenderer.invoke("ow3:install-pick"),
-  /** "Download game files": ask where to put it, then download the player's zipped install from
-   *  `url` (already resolved to the file by the page) and unpack it there. `onProgress` gets
-   *  `{ fraction, received, total }`. Resolves to the folder — now the remembered one — or null
-   *  if the player cancelled the folder dialog. */
-  downloadInstall: async (url, onProgress) => {
+  /** "Download game files": ask where to put it, then fetch an install from the first of
+   *  `sources` that works (src/assets/downloadInstall.ts `GameFilesSource` — plain data, the
+   *  page's list) and unpack it there. `onProgress` gets `{ fraction, received, total, source }`.
+   *  Resolves to the folder — now the remembered one — or null if the player cancelled the
+   *  folder dialog. */
+  downloadInstall: async (sources, onProgress) => {
     const handler = (_event, progress) => onProgress?.(progress);
     ipcRenderer.on("ow3:install-download-progress", handler);
     try {
-      return await ipcRenderer.invoke("ow3:install-download", String(url));
+      return await ipcRenderer.invoke("ow3:install-download", sources);
     } finally {
       ipcRenderer.off("ow3:install-download-progress", handler);
     }

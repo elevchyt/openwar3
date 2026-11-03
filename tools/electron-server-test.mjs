@@ -6,7 +6,7 @@
 // it; this is verified by a test.
 
 import { startServer } from "../electron/server.mjs";
-import { looksLikeInstall, serveInstall, installVersion, REQUIRED_VERSION } from "../electron/install.mjs";
+import { looksLikeInstall, serveInstall, installVersion, REQUIRED_VERSION, DOWNGRADE_VERSIONS } from "../electron/install.mjs";
 import { detectInstall } from "../electron/locate.mjs";
 import { mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { PROTOCOL_VERSION } from "../server/rooms.mjs";
@@ -85,6 +85,9 @@ try {
     const declared = /REQUIRED_VERSION\s*=\s*"([^"]+)"/.exec(ts)?.[1];
     ok("the shell asks for the same version the game does", declared === REQUIRED_VERSION,
        `install.mjs ${REQUIRED_VERSION}, version.ts ${declared}`);
+    const downgrades = /DOWNGRADE_VERSIONS[^=]*=\s*\[([^\]]*)\]/.exec(ts)?.[1].match(/"[^"]+"/g)?.map((v) => v.slice(1, -1)).join(",");
+    ok("…and turns back the same builds", downgrades === DOWNGRADE_VERSIONS.join(","),
+       `install.mjs ${DOWNGRADE_VERSIONS}, version.ts ${downgrades}`);
     // The Windows installer asks the same question before it will install anywhere
     // (packaging/windows-installer.nsh), in NSIS, where it cannot import either file.
     const nsh = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "packaging", "windows-installer.nsh"), "utf8");
@@ -103,8 +106,12 @@ try {
       ok("the build we play is accepted", looksLikeInstall(tmp), installVersion(tmp));
       build("1.29.2.9231");
       ok("an older one is refused", !looksLikeInstall(tmp), installVersion(tmp));
-      build("1.31.1.12164");
+      build("1.32.10.18820");
       ok("…and a newer one too — same data, not later data", !looksLikeInstall(tmp));
+      // …except the one the game turns back into 1.30.4: the Internet Archive's copy, which
+      // "Download game files" falls back on (src/vfs/downgrade.ts).
+      build("1.31.1.12164");
+      ok("the Internet Archive's 1.31.1 is accepted — the mount downgrades it", looksLikeInstall(tmp));
       // The build NUMBER is not part of the rule: it varies with the download and says nothing
       // about the data.
       build("1.30.4.99999");

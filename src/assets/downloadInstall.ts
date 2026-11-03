@@ -1,33 +1,96 @@
 import { installEntries, readZipIndex, ZipCursor, type InstallEntry } from "../../electron/zip.mjs";
 import { readInstallDir, type DirHandle, type PickedInstall } from "./opfs";
 
-// "Download game files" (src/ui/gate.ts): the player's own install, zipped and kept somewhere they
-// can reach from a new machine — a Google Drive share, typically — streamed down and unpacked
-// where the game can read it.
+// "Download game files" (src/ui/gate.ts): a Warcraft III install, fetched from somewhere public
+// and unpacked where the game can read it.
 //
-// The LINK ships with the game (GAME_FILES_LINK below): "Download game files" on the load gate
-// (src/ui/gate.ts) takes the player straight down it — no field to fill, the press IS the start —
-// and what this player typed last time, if anything, wins over the shipped one.
+// Two SOURCES ship with the game, tried in order (`gameFilesSources()`), so the button keeps
+// working the day one of them goes away:
+//
+//   1. **The developer's own zipped 1.30.4 install on Google Drive** (GAME_FILES_LINK) — the
+//      primary, because it is the fast one. Streamed with ranged reads through electron/zip.mjs.
+//   2. **The Internet Archive's Warcraft III 1.31** (ARCHIVE_ORG below) — the mirror: slow
+//      (about 1 MB/s, so half an hour), but it outlives anybody's Drive. It is a RAR, which
+//      neither half can read, but archive.org opens a RAR ITSELF and hands out any one file
+//      inside it by URL (`<item>/<file>.rar/<member>`), with `Access-Control-Allow-Origin: *` —
+//      so a HOSTED page can fetch it, which a Drive file never could (`pageUrl`): there it is
+//      the only source that works. We take only the CASC store out of it: `.build.info`, the
+//      two configs, the LIVE `.idx` of each of the sixteen buckets and the two `data.NNN`. The
+//      build is **1.31.1**, not the 1.30.4 we play; the mount turns it back into 1.30.4
+//      (src/vfs/downgrade.ts, docs/casc.md).
+//
+// A source that fails for any reason but Cancel hands over to the next one; the player sees
+// one bar and, at worst, a line saying the mirror was used.
 //
 // Two homes for the result. The DESKTOP app unpacks into a real folder the shell then remembers
 // (electron/download.mjs) — a downloaded install is an install. A BROWSER has no folder to write
 // to, so it unpacks into OPFS, the origin's private disk, and boots from there on every visit
-// after; that is this file. Both read the archive through electron/zip.mjs.
+// after; that is this file.
 
-/** The link the field starts with, in every build. A developer's `.env.local` used to be the
- *  only home for it (`VITE_GAME_FILES_URL`, read behind `import.meta.env.DEV`); it is the
+/** The primary: the developer's zipped 1.30.4 install. A developer's `.env.local` used to be
+ *  the only home for it (`VITE_GAME_FILES_URL`, read behind `import.meta.env.DEV`); it is the
  *  player's door now, so it ships. */
 const GAME_FILES_LINK =
   "https://drive.google.com/file/d/1hcH5hqQInvvqcGKxe9lj9N9qzCz2EekG/view?usp=sharing";
 const LINK_KEY = "ow3.gameFilesLink";
 
-/** What the link the download starts from: the last one this player used, else the shipped one. */
+/** What the Drive link is: the last one this player used, else the shipped one. */
 export function rememberedLink(): string {
   try {
     return localStorage.getItem(LINK_KEY) ?? GAME_FILES_LINK;
   } catch {
     return GAME_FILES_LINK;
   }
+}
+
+/** One file of a `files` source, at its path in the install folder (`/`-separated). */
+export interface SourceFile {
+  path: string;
+  size: number;
+}
+
+/**
+ * Where "Download game files" gets an install from. Plain data, because the desktop half is
+ * handed the same list over IPC (electron/download.mjs) and tries it the same way.
+ *
+ *   `files` — every file fetched whole from `base + encodeURIComponent(path)`;
+ *   `zip`   — one archive at `url` (already the bytes, see `downloadUrl`), read with ranges.
+ */
+export type GameFilesSource =
+  | { kind: "files"; name: string; base: string; files: SourceFile[] }
+  | { kind: "zip"; name: string; url: string };
+
+/** The sixteen live `.idx` buckets of the 1.31.1 store. Each bucket ships twice (`…02.idx` and
+ *  `…03.idx`) and only the higher version is read (parseIndex in vfs/casc.ts), so the stale
+ *  half is not fetched — every archive.org request costs it a pass over the RAR. */
+const IDX_31 = Array.from({ length: 16 }, (_, b) => ({
+  path: `Data/data/${b.toString(16).padStart(2, "0")}00000003.idx`,
+  size: 65536,
+}));
+
+/** archive.org item `warcraft-iii-v-1.31` ("Warcraft III Reign of Chaos & The Frozen Throne
+ *  v1.31 [PC]"), file `Warcraft III v1.31.rar`; the sizes are the item's own listing. */
+const ARCHIVE_ORG: GameFilesSource = {
+  kind: "files",
+  name: "the Internet Archive",
+  base: "https://archive.org/download/warcraft-iii-v-1.31/Warcraft%20III%20v1.31.rar/Warcraft%20III%2F",
+  files: [
+    { path: ".build.info", size: 683 },
+    { path: "Data/config/2e/04/2e049b3d87b9b73eb2e2fb1638eb0e64", size: 8985 },
+    { path: "Data/config/9d/23/9d237ac1c45b0d44bd40e8b09781235d", size: 7435 },
+    ...IDX_31,
+    { path: "Data/data/data.000", size: 1073741822 },
+    { path: "Data/data/data.001", size: 733908764 },
+  ],
+};
+
+/** The sources, in the order they are tried: the Drive install, then the Internet Archive. */
+export function gameFilesSources(): GameFilesSource[] {
+  const out: GameFilesSource[] = [];
+  const url = downloadUrl(rememberedLink());
+  if (url) out.push({ kind: "zip", name: "Google Drive", url });
+  out.push(ARCHIVE_ORG);
+  return out;
 }
 
 /**
@@ -87,6 +150,8 @@ export interface DownloadProgress {
   fraction: number | null;
   received: number;
   total: number;
+  /** Desktop only: the index into the sources of the one these bytes come from. */
+  source?: number;
 }
 
 /** The OPFS folder the install is unpacked into, and the file written LAST that says it is whole.
@@ -171,28 +236,100 @@ async function unpack(cursor: ZipCursor, entry: InstallEntry, file: FileSystemFi
 }
 
 /**
- * Download the archive behind `link` and unpack the install out of it into OPFS. Replaces any
- * earlier copy, whole or partial. Resolves once the copy is whole; `storedInstall()` then reads
- * it. `signal` is the load gate's Cancel (src/ui/gate.ts): an abort stops the stream and wipes
- * what has been unpacked so far — a cancelled download leaves nothing behind.
+ * Download an install from the first of `sources` that works and unpack it into OPFS. Replaces
+ * any earlier copy, whole or partial. Resolves once the copy is whole; `storedInstall()` then
+ * reads it. `onSource` is told each source as it is started, so the bar can say a mirror is in
+ * use. `signal` is the load gate's Cancel (src/ui/gate.ts): an abort stops the stream and wipes
+ * what has been unpacked so far — a cancelled download leaves nothing behind, and is never
+ * handed on to the next source.
  */
-export async function downloadInstall(link: string, onProgress: (p: DownloadProgress) => void, signal?: AbortSignal): Promise<void> {
-  const direct = downloadUrl(link);
-  if (!direct) throw new Error("That is not a link.");
-  const url = await pageUrl(direct);
+export async function downloadInstall(
+  sources: GameFilesSource[],
+  onProgress: (p: DownloadProgress) => void,
+  signal?: AbortSignal,
+  onSource?: (source: GameFilesSource, index: number) => void,
+): Promise<void> {
   if (!navigator.storage?.getDirectory) throw new Error("This browser cannot store the game files. Try Chrome or Edge.");
+  if (!sources.length) throw new Error("There is nowhere to download the game files from.");
+  let last: unknown = null;
+  for (const [i, source] of sources.entries()) {
+    onSource?.(source, i);
+    try {
+      return await (source.kind === "zip" ? downloadZip(source.url, onProgress, signal) : downloadFiles(source, onProgress, signal));
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      console.warn(`[download] ${source.name} failed:`, err);
+      last = err;
+    }
+  }
+  throw last;
+}
 
-  const { size, read } = await rangeReader(url, signal);
-  const entries = installEntries(await readZipIndex(read, size)).filter((e) => wanted(e.path));
-  const need = entries.reduce((sum, e) => sum + e.uncompressedSize, 0);
+/** A fresh, empty install folder in OPFS. */
+async function freshStore(): Promise<{ opfs: FileSystemDirectoryHandle; root: FileSystemDirectoryHandle }> {
+  const opfs = await navigator.storage.getDirectory();
+  await opfs.removeEntry(STORE_DIR, { recursive: true }).catch(() => {});
+  return { opfs, root: await opfs.getDirectoryHandle(STORE_DIR, { create: true }) };
+}
+
+async function checkQuota(need: number): Promise<void> {
   const { usage, quota } = (await navigator.storage.estimate?.()) ?? {};
   if (quota && need > quota - (usage ?? 0)) {
     throw new Error(`Not enough browser storage: the game files need ${gb(need)} and ${gb(quota - (usage ?? 0))} is free.`);
   }
+}
 
-  const opfs = await navigator.storage.getDirectory();
-  await opfs.removeEntry(STORE_DIR, { recursive: true }).catch(() => {});
-  const root = await opfs.getDirectoryHandle(STORE_DIR, { create: true });
+async function markComplete(root: FileSystemDirectoryHandle, from: string, files: number): Promise<void> {
+  const marker = await (await root.getFileHandle(COMPLETE, { create: true })).createWritable();
+  await marker.write(JSON.stringify({ from, at: new Date().toISOString(), files }));
+  await marker.close();
+}
+
+/** A `files` source: each file fetched whole, one after another, straight into OPFS. Its sizes
+ *  are known up front, so the bar is one fraction over all of them and a file that arrives
+ *  short is caught before the next one starts. */
+async function downloadFiles(source: Extract<GameFilesSource, { kind: "files" }>, onProgress: (p: DownloadProgress) => void, signal?: AbortSignal): Promise<void> {
+  const total = source.files.reduce((sum, f) => sum + f.size, 0);
+  await checkQuota(total);
+  const { opfs, root } = await freshStore();
+  let received = 0;
+  onProgress({ fraction: 0, received: 0, total });
+  const timer = setInterval(() => onProgress({ fraction: received / total, received, total }), 250);
+  try {
+    for (const file of source.files) {
+      const res = await fetch(source.base + encodeURIComponent(file.path), { signal });
+      if (!res.ok || !res.body) throw new Error(`${source.name} answered ${res.status} for ${file.path}.`);
+      const out = await (await fileAt(root, file.path)).createWritable();
+      let got = 0;
+      try {
+        for await (const piece of chunksOf(res.body)) {
+          await out.write(piece as Uint8Array<ArrayBuffer>);
+          got += piece.length;
+          received += piece.length;
+        }
+      } finally {
+        await out.close();
+      }
+      if (got !== file.size) throw new Error(`${file.path} arrived ${got} bytes long, not ${file.size}.`);
+    }
+    await markComplete(root, source.base, source.files.length);
+    onProgress({ fraction: 1, received: total, total });
+  } catch (err) {
+    // Unlike the zip, a partial here is never worth keeping: the next source starts over.
+    await opfs.removeEntry(STORE_DIR, { recursive: true }).catch(() => {});
+    throw err;
+  } finally {
+    clearInterval(timer);
+  }
+}
+
+/** A `zip` source: the archive behind `direct`, its install unpacked out of it. */
+async function downloadZip(direct: string, onProgress: (p: DownloadProgress) => void, signal?: AbortSignal): Promise<void> {
+  const url = await pageUrl(direct);
+  const { size, read } = await rangeReader(url, signal);
+  const entries = installEntries(await readZipIndex(read, size)).filter((e) => wanted(e.path));
+  await checkQuota(entries.reduce((sum, e) => sum + e.uncompressedSize, 0));
+  const { opfs, root } = await freshStore();
 
   try {
     const res = await fetch(url, { signal });
@@ -211,13 +348,11 @@ export async function downloadInstall(link: string, onProgress: (p: DownloadProg
       await cursor.close().catch(() => {});
       await res.body.cancel().catch(() => {});
     }
-    const marker = await (await root.getFileHandle(COMPLETE, { create: true })).createWritable();
-    await marker.write(JSON.stringify({ from: link, at: new Date().toISOString(), files: entries.length }));
-    await marker.close();
+    await markComplete(root, direct, entries.length);
     onProgress({ fraction: 1, received: size, total: size });
   } catch (err) {
     // Cancelled: take the half-unpacked copy with you. A download that died any other way keeps
-    // its partial for the next attempt to wipe (which this function also does, above).
+    // its partial for the next attempt to wipe (which `freshStore` does).
     if (signal?.aborted) await opfs.removeEntry(STORE_DIR, { recursive: true }).catch(() => {});
     throw err;
   }
