@@ -153,7 +153,7 @@ export interface RtsHost {
 }
 
 /** One pocket of the console's cargo panel (SelectionInfo.cargo). */
-export type HudSelectionCargo = { simId: number; icon: string; hpFrac: number; size: number; name: string; desc: string };
+export type HudSelectionCargo = { simId: number; icon: string; disIcon: string | null; hpFrac: number; size: number; name: string; desc: string };
 
 export interface SelectionInfo {
   id: number;
@@ -8228,6 +8228,10 @@ export class RtsController {
     return {
       simId: p.id,
       icon: def?.icon ?? "",
+      // The greyed twin (`CommandButtonsDisabled\DIS<basename>`, disabledIconPath) — what a
+      // MEAL's pocket wears: the unit is out of the fight, and the original draws it with the
+      // same texture swap an unavailable button makes.
+      disIcon: def?.icon ? disabledIconPath(def.icon) : null,
       hpFrac: p.maxHp > 0 ? Math.max(0, Math.min(1, p.hp / p.maxHp)) : 1,
       size: Math.max(1, p.cargoSize),
       name: p.nameOverride ?? def?.name ?? p.typeId,

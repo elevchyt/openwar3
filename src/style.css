@@ -2832,13 +2832,14 @@ body.hud-widget-skinned .hud-cargo-slot {
 }
 /* The red wash, MULTIPLIED over the icon by an overlay of the icon's own box. A background
    colour under the picture showed as a one-pixel red sliver wherever the scaled icon rounded
-   short of its box; over the frame's black that sliver multiplies to black. The red is the
-   reference shot's: a deep red, not a bright one. */
+   short of its box; over the frame's black that sliver multiplies to black. The picture under
+   it is the icon's greyed DIS* twin, and PURE red is what the reference shot measures: its
+   icon has nothing in green or blue at all, only the twin's own shading in the red. */
 .hud-cargo-slot.devoured .hud-cargo-art::after {
   content: "";
   position: absolute;
   inset: 0;
-  background: #b80c0c;
+  background: #ff0000;
   mix-blend-mode: multiply;
 }
 .hud-cargo-slot.devoured .hud-cargo-track {

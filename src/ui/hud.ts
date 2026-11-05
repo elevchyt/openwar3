@@ -240,7 +240,7 @@ export interface HudSelection {
    *  panel that replaces the stat lines while anybody is in there (docs/transports.md). Each
    *  entry is one passenger; `size` is the SEATS it takes (a Demolisher spans two slots, the
    *  second drawn dimmed). Empty for everything with nobody inside. */
-  cargo: Array<{ simId: number; icon: string; hpFrac: number; size: number; name: string; desc: string }>;
+  cargo: Array<{ simId: number; icon: string; disIcon: string | null; hpFrac: number; size: number; name: string; desc: string }>;
   /** The hold's capacity — how many slots the panel draws (8 for a Zeppelin, 10 for a ship). */
   cargoSlots: number;
   /** The one entry is a Kodo Beast's MEAL (Devour), not a passenger: one centred pocket, washed
@@ -4416,7 +4416,10 @@ export class GameHud {
     this.cargoMeal = sel.cargoDevour ? sel.cargo[0] ?? null : null;
     let i = 0;
     for (const c of sel.cargo) {
-      const url = c.icon ? this.driver.blpUrl(c.icon) : null;
+      // A MEAL wears its icon's greyed DIS* twin under the red wash (the reference shot of the
+      // real client), falling back to the live art for an icon that ships no twin.
+      const dis = sel.cargoDevour && c.disIcon ? this.driver.blpUrl(c.disIcon) : null;
+      const url = dis ?? (c.icon ? this.driver.blpUrl(c.icon) : null);
       for (let k = 0; k < c.size && i < this.cargoPockets.length; k++, i++) {
         const p = this.cargoPockets[i];
         p.slot.classList.add("filled");
