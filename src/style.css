@@ -638,6 +638,9 @@ body.hud-tooltip-skinned .game-tip,
    nothing of the player. The exact green is ours — the label is engine-drawn and no string
    in the install carries it. */
 .unit-crew-count.full { color: #00ff00; }
+/* More on the mine than it can take (8/5): the count alone goes red — the game's own pure
+   red, as `|cffff0000` prints it — and the cap keeps the full crew's green. */
+.unit-crew-count .over { color: #ff0000; }
 body.hud-tooltip-skinned .unit-crew-count {
   background: var(--hud-tooltip-fill);
   border: none;

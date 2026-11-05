@@ -95,6 +95,10 @@ export interface CrewLabelSpec {
    *  white — the one glance that says "this mine is saturated, send the next worker to the
    *  trees" — so the label carries the fact and the stylesheet carries the colour. */
   full: boolean;
+  /** More workers on it than it can take (`8/5`): the COUNT is printed red, the cap keeps the
+   *  full crew's colour. Ours — the game prints no such warning — and it says the same thing
+   *  the line of waiting Peasants does: the extra ones are earning nothing here. */
+  over?: boolean;
 }
 
 /**
@@ -337,7 +341,7 @@ function makeHpBar(layer: HTMLElement): HpBar {
  *  `--hud-tooltip-fill`, lifted to `:root` by ui/hud.ts applyWidgetSkin). */
 interface CrewLabel {
   root: HTMLDivElement;
-  last: { text: string; full: boolean; left: number; top: number; hidden: boolean };
+  last: { text: string; full: boolean; over: boolean; left: number; top: number; hidden: boolean };
 }
 
 /** CSS pixels between the top of a unit's status bar and the bottom of its voice tag. */
@@ -368,7 +372,7 @@ function makeCrewLabel(layer: HTMLElement): CrewLabel {
   root.className = "unit-crew-count";
   root.hidden = true;
   layer.appendChild(root);
-  return { root, last: { text: "\0", full: false, left: NaN, top: NaN, hidden: true } };
+  return { root, last: { text: "\0", full: false, over: false, left: NaN, top: NaN, hidden: true } };
 }
 
 /** The hover slab element, into the same world layer as the HP bars so its position
@@ -797,9 +801,20 @@ export class WorldOverlays {
       const label = this.crewLabels[n] ?? (this.crewLabels[n] = makeCrewLabel(worldLayer()));
       n++;
       const last = label.last;
-      if (last.text !== s.text) {
+      const over = !!s.over;
+      if (last.text !== s.text || last.over !== over) {
         last.text = s.text;
-        label.root.textContent = s.text;
+        last.over = over;
+        const slash = s.text.indexOf("/");
+        if (over && slash > 0) {
+          // "8/5": the count in its own span, so only it turns red.
+          const count = document.createElement("span");
+          count.className = "over";
+          count.textContent = s.text.slice(0, slash);
+          label.root.replaceChildren(count, s.text.slice(slash));
+        } else {
+          label.root.textContent = s.text;
+        }
       }
       if (last.full !== s.full) {
         last.full = s.full;

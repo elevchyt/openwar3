@@ -10885,6 +10885,7 @@ export class RtsController {
           radius: m.radius,
           text: crew.cap > 0 ? `${crew.count}/${crew.cap}` : String(crew.count),
           full: crew.cap > 0 && crew.count >= crew.cap,
+          over: crew.cap > 0 && crew.count > crew.cap,
         });
       }
     }
