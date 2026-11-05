@@ -345,8 +345,8 @@ interface Entry {
   /** This building's clock is STOPPED because it is drawn from fog memory — a picture of the
    *  last thing you saw, and a picture does not move (see applyFogFreeze). */
   frozen: boolean;
-  inMine: boolean; // worker is inside a gold mine (the hide cause that also deselects)
-  insideBuild: boolean; // Orc peon inside the structure it is building (also deselects)
+  inMine: boolean; // worker is inside a gold mine (hidden, but it stays selected)
+  insideBuild: boolean; // Orc peon inside the structure it is building (hidden, stays selected)
   inBurrow: boolean; // peon garrisoned inside an Orc Burrow (also deselects)
   devoured: boolean; // unit swallowed by a Kodo (also deselects)
   scriptHidden: boolean; // hidden by the map's script, ShowUnit (also deselects)
@@ -2118,15 +2118,17 @@ export class RtsController {
   private applyVisibility(e: Entry, u: RenderUnit, hide: boolean, dt: number): void {
     if (u.inMine !== e.inMine) {
       e.inMine = u.inMine;
-      if (u.inMine) {
-        this.deselect(e.simId); // a worker entering a mine drops out of the selection
-        if (this.hovered === e.simId) this.hovered = null;
-      }
+      // A worker ducking into a gold mine KEEPS the selection, as it does in the original
+      // game: the second it spends in the shaft is part of its round trip, not a hand-over,
+      // and a Peasant you are watching comes back out still selected. Only the hover goes —
+      // there is no body to hover. Its ring goes with its position (selectionRings skips
+      // anything off the field), so for that second all that stays on screen is the panel.
+      if (u.inMine && this.hovered === e.simId) this.hovered = null;
     }
     if (u.insideBuild !== e.insideBuild) {
       e.insideBuild = u.insideBuild;
-      // An Orc peon vanishing into its build KEEPS the selection (unlike a mine or a burrow,
-      // which take the worker out of your hands): the peon is still yours to order, and the
+      // An Orc peon vanishing into its build KEEPS the selection too (unlike a burrow, which
+      // takes the worker out of your hands): the peon is still yours to order, and the
       // orders you queue on it while it works are what it does the moment it steps back out.
       // Its ring goes with its position (selectionRings skips anything off the field), so all
       // that stays on screen is the panel.
