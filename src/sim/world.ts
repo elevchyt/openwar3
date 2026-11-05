@@ -2576,6 +2576,10 @@ export interface SimUnit {
   pendingDrop: { slot: number; x: number; y: number } | null; // walking to a spot to drop a slot's item
 }
 
+/** The two DEVOUR buttons — the Kodo Beast's `Adev` and the creeps' `ACdv` (the dragons, the
+ *  Dragon Turtle, the Salamander Lord). One behaviour under two ids (spells.ts devourSpell). */
+export const DEVOUR_CODES: ReadonlySet<string> = new Set(["Adev", "ACdv"]);
+
 /**
  * Is this unit OFF THE FIELD — carried inside something, swallowed, or whisked away?
  *
@@ -14812,6 +14816,9 @@ export class SimWorld {
     this.unsettle(prey); // no cell block while inside
     this.cancelSwing(prey);
     prey.devouredBy = kodo.id;
+    // Where it went in, for a missile already in the air at it (missileDisjointed) — the prey
+    // itself is about to ride along inside the Kodo.
+    this.boardedFrom.set(prey.id, { x: prey.x, y: prey.y, host: kodo.id });
     prey.order = "idle";
     prey.moving = false;
     prey.path = [];
@@ -14826,6 +14833,15 @@ export class SimWorld {
       if (u.devouring <= 0) continue;
       const prey = this.units.get(u.devouring);
       if (!prey || prey.hp <= 0) { u.devouring = 0; continue; }
+      // The meal goes where the Kodo goes. Its OWNER keeps its sight the whole time it is being
+      // digested — the unit is alive, only off the field — and sight is cast from where the
+      // unit IS, so a prey left at the spot it was eaten lit that spot and nothing else while
+      // the Kodo walked away with it. Riding along also means the Kodo's death spits it out
+      // beside the body (freePrey) rather than at a spot the fight has long left.
+      prey.prevX = prey.x;
+      prey.prevY = prey.y;
+      prey.x = u.x;
+      prey.y = u.y;
       // The DIGEST RATE is not on the Devour button: `Dev1` on `Adev`/`ACdv` is **"Max Creep
       // Level"** (enforced at the click, see TARGET_RULES), and the damage lives on the
       // HOLD that carries the prey — `Advc` "Cargo Hold (Devour)", whose `Dev2` is **"Damage
@@ -14843,6 +14859,7 @@ export class SimWorld {
   /** Spit a swallowed unit back out beside the Kodo (the Kodo died mid-digest). */
   private freePrey(prey: SimUnit, kodo: SimUnit): void {
     prey.devouredBy = 0;
+    this.boardedFrom.delete(prey.id);
     const [cx, cy] = this.grid.worldToCell(kodo.x, kodo.y);
     const fit = this.grid.nearestWalkable(cx, cy, 6);
     if (fit) [prey.x, prey.y] = this.grid.cellToWorld(fit[0], fit[1]);
@@ -15356,6 +15373,21 @@ export class SimWorld {
   }
 
   /**
+   * Is this a DEVOUR button on a unit that already has somebody in its belly? A Kodo Beast
+   * (`Adev`) or a devouring creep (`ACdv`) holds ONE meal (`Advc` "Cargo Hold (Devour)",
+   * `Car1` = 1), and until that meal is fully digested — or the eater dies and spits it out —
+   * there is no second press: the button leaves the card altogether (the developer's
+   * observation of the real client), and every door into the sim refuses the order too, so a
+   * hotkey, an autocast, a computer and a script all mean what the card shows.
+   *
+   * Asked of `devouring`, which the host's sim keeps and a client's applier DERIVES from the
+   * prey's `devouredBy` (applyWorldSnapshot), so a client's card reads the host's answer.
+   */
+  bellyFull(u: SimUnit, code: string): boolean {
+    return u.devouring > 0 && DEVOUR_CODES.has(code);
+  }
+
+  /**
    * Is this a NIGHT ability and is the sun up? Shadow Meld (`Ashm`, and its `Sshm` instant
    * twin, which shares the code) is the one: its own Ubertip is "remain unseen at night", and
    * by day the button is DEAD — greyed on the card with its DIS twin, refused at every door
@@ -15438,6 +15470,9 @@ export class SimWorld {
     // is nothing to say. Above the cooldown and mana lines deliberately — a wind walking hero
     // is off cooldown for most of its walk, and "not ready yet" would be a lie.
     if (this.alreadyHidden(u, code)) return SILENT_REFUSAL;
+    // …nor a Devour whose belly is already full (see bellyFull). The card has no button to
+    // press, so this is a hotkey's or a computer's refusal, and silent for that reason.
+    if (this.bellyFull(u, code)) return SILENT_REFUSAL;
     // …nor a night ability in daylight (see barredByDay) — greyed, so silent too.
     if (this.barredByDay(u, code)) return SILENT_REFUSAL;
     const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
@@ -15614,6 +15649,8 @@ export class SimWorld {
     // alreadyHidden). Refused at this door as well as at the button, so a trigger, a hotkey
     // and a command off the wire all mean the same thing the card shows.
     if (this.alreadyHidden(u, code)) return false;
+    // …and a second Devour with a meal still inside (bellyFull) — the button is off the card.
+    if (this.bellyFull(u, code)) return false;
     // …and a night ability by day (barredByDay): the card's grey button, kept at the door.
     if (this.barredByDay(u, code)) return false;
     // Entangle pressed on a WALKING tree, which is the only card it is on (UPROOTED_ONLY).
@@ -20672,7 +20709,7 @@ export class SimWorld {
     // ordinary re-acquire below runs and the swing whiffs, which is the same thing WC3 does.
     if (u.swingLeft >= 0) {
       const st = this.units.get(u.swingTargetId);
-      if (st) {
+      if (st && !isOffField(st)) {
         this.engage(u, st);
         return;
       }
@@ -20721,6 +20758,17 @@ export class SimWorld {
     // out-range a fleeing/dying target and were left standing around).
     let w = t ? this.weaponVs(u, t) : null;
     if (!t || !w) {
+      this.reacquireOrStop(u);
+      return;
+    }
+    // It left the FIELD: swallowed by a Kodo (often THIS one — the Devour cast hands the Kodo
+    // straight back to the attack it was making on its meal), loaded into a Burrow or a
+    // Zeppelin, gone into a mine. Nothing is standing there to hit, ordered attack or not, and
+    // the unit left chasing it swung at thin air where the prey had stood until the meal was
+    // digested. "The target is loaded into another unit" is also where a missile at it ends
+    // (missileDisjointed), so this is the same fact for the swing.
+    if (isOffField(t)) {
+      this.cancelSwing(u);
       this.reacquireOrStop(u);
       return;
     }
@@ -21673,6 +21721,11 @@ export class SimWorld {
     // property in WC3, not a personal one: the Shade stands at the back and the whole army
     // sees what it uncovers, which is the entire reason the unit exists.
     if (t.invisible && !this.teamDetects(u.team, t.x, t.y, t)) return false;
+    // …and a unit OFF THE FIELD is nobody's to pick: inside a Burrow or a Zeppelin, down a
+    // mine, swallowed. The meal is the sharp case — it rides INSIDE the Kodo (tickDevour), so
+    // it is the nearest "enemy" there is, and the re-acquire that follows the Kodo's own Devour
+    // handed the Kodo straight back to it, swinging at nothing until it was digested.
+    if (isOffField(t)) return false;
     if (Math.hypot(t.x - u.x, t.y - u.y) - t.radius > this.sightOf(u)) return false;
     if (!this.visibleToTeam(u.team, t.x, t.y)) return false;
     return this.lineOfSight(u.x, u.y, t.x, t.y, u.flying || t.flying);
@@ -21988,6 +22041,7 @@ export class SimWorld {
     }
     const t = this.units.get(u.swingTargetId);
     if (!t) return; // target gone before impact — the swing whiffs
+    if (isOffField(t)) return; // …or swallowed/loaded mid wind-up: nothing there to strike
     // The swing reached its fire frame: play the attacker's own weapon sound (its
     // model's SND "K" event) regardless of whether a melee strike will connect.
     this.attackSwings.push(u.id);
@@ -22627,12 +22681,18 @@ export class SimWorld {
       const b = this.boardedFrom.get(t.id);
       return b && b.host === t.garrisonHost ? { x: b.x, y: b.y } : { x: t.x, y: t.y };
     }
-    // DEVOUR and MIRROR IMAGE leave the same kind of spot behind, and neither has to be written
-    // down: a swallowed unit keeps the position it was eaten at until the Kodo lets it out
-    // (devourInternal moves nothing), and the Blademaster stays where he cast until his image
+    // DEVOUR and MIRROR IMAGE leave the same kind of spot behind: the missile flies on to where
+    // the unit stood as it went. A swallowed unit's spot is written down as it is eaten (it then
+    // rides inside the Kodo, see below); the Blademaster stays where he cast until his image
     // lands and `teleportUnit` sets him down. Mirror Image is a DODGE in the original game —
     // cast under an incoming Storm Bolt and it bursts on the empty ground he vanished from.
-    if (t.devouredBy > 0) return { x: t.x, y: t.y };
+    if (t.devouredBy > 0) {
+      // The prey RIDES inside the Kodo now (tickDevour keeps it at the Kodo's position, which is
+      // what lets its owner go on seeing from the belly), so the spot it was eaten at is the one
+      // written down as it went in — the burrow's own record, keyed on the eater.
+      const b = this.boardedFrom.get(t.id);
+      return b && b.host === t.devouredBy ? { x: b.x, y: b.y } : { x: t.x, y: t.y };
+    }
     if (t.vanished && this.mirrorCasts.some((m) => m.casterId === t.id)) return { x: t.x, y: t.y };
     // The rest — a gold mine, a build site, a Reincarnation's wait, a Soul Gem — still fizzle.
     if (isOffField(t)) return "fizzle";
@@ -25339,6 +25399,7 @@ export class SimWorld {
     if (u.devouring > 0) {
       const prey = this.units.get(u.devouring);
       if (prey && prey.hp > 0) this.freePrey(prey, u);
+      u.devouring = 0;
     }
     if (u.devouredBy > 0) {
       const kodo = this.units.get(u.devouredBy);
@@ -27668,7 +27729,7 @@ export class SimWorld {
     // A committed swing always finishes (a unit never walks mid-strike anyway).
     if (u.swingLeft >= 0) {
       const st = this.units.get(u.swingTargetId);
-      if (st) {
+      if (st && !isOffField(st)) {
         this.engage(u, st, true);
         return;
       }

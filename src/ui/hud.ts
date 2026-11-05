@@ -240,9 +240,12 @@ export interface HudSelection {
    *  panel that replaces the stat lines while anybody is in there (docs/transports.md). Each
    *  entry is one passenger; `size` is the SEATS it takes (a Demolisher spans two slots, the
    *  second drawn dimmed). Empty for everything with nobody inside. */
-  cargo: Array<{ simId: number; icon: string; hpFrac: number; size: number }>;
+  cargo: Array<{ simId: number; icon: string; hpFrac: number; size: number; name: string; desc: string }>;
   /** The hold's capacity — how many slots the panel draws (8 for a Zeppelin, 10 for a ship). */
   cargoSlots: number;
+  /** The one entry is a Kodo Beast's MEAL (Devour), not a passenger: one centred pocket, washed
+   *  red while it is digested, no unload click, and its own name + Ubertip on hover. */
+  cargoDevour: boolean;
 }
 
 /** One row of the dev drawer's spawn catalogue (HudDriver.spawnCatalog). `group` is the race
@@ -1436,6 +1439,8 @@ export class GameHud {
   private cargoGrid!: HTMLDivElement;
   private cargoPockets: Array<{ slot: HTMLButtonElement; art: HTMLDivElement; track: HTMLDivElement; fill: HTMLDivElement }> = [];
   private cargoHostId = 0; // the hold the pockets were last built for
+  private cargoMeal: { name: string; desc: string } | null = null; // a Devour meal's pocket, or none
+  private cargoMealHover = false;
   private portrait!: HTMLDivElement;
   private portraitCanvasEl!: HTMLCanvasElement;
   /** A transmission's speaker is in the portrait (mapViewer `consoleTalk`), so the bust is shown
@@ -1803,6 +1808,7 @@ export class GameHud {
       this.updateTexts();
       this.refreshStatTooltip(); // at the panel's own rate: it reads the numbers the panel just drew
       this.refreshQueueTooltip(); // …and so does the queue's: a finished job shifts the slots under the cursor
+      this.refreshMealTooltip(); // …and a Devour meal's, whose health runs down and which can be digested under it
     }
     // A live ping PULSES, so while one is up the minimap redraws every frame instead of at
     // the 10 Hz the static dots are content with.
@@ -4036,6 +4042,7 @@ export class GameHud {
       this.selGrid.hidden = true;
       this.selDesc.hidden = true; // only the item branch shows it
       this.cargoGrid.hidden = true; // only the cargo branch shows it
+      this.cargoMeal = null; // …and only it names a meal (refreshMealTooltip runs after this pass)
       this.xpBar.hidden = true; // only the hero-stats branch below re-shows it
       const constructing = sel.underConstruction;
       const training = sel.isBuilding && !constructing && sel.queueLength > 0;
@@ -4395,10 +4402,18 @@ export class GameHud {
         fill.className = "hud-sel-icon-fill";
         track.appendChild(fill);
         slot.append(art, track);
+        if (i === 0) this.bindMealTooltip(slot);
         this.cargoGrid.appendChild(slot);
         this.cargoPockets.push({ slot, art, track, fill });
       }
     }
+    // A MEAL (Devour): the one pocket is centred under the name, drawn red — the swallowed unit
+    // is taking damage the whole time it is in there — and hovering it raises the unit's own
+    // slab, name and Ubertip, in the command tooltip's place (the developer's reference shot of
+    // the real client: "Gnoll Brute / Light melee unit to bolster your forces. / Attacks land
+    // units."). There is no clicking it out: only digestion or the eater's death ends a meal.
+    this.cargoGrid.classList.toggle("devour", sel.cargoDevour);
+    this.cargoMeal = sel.cargoDevour ? sel.cargo[0] ?? null : null;
     let i = 0;
     for (const c of sel.cargo) {
       const url = c.icon ? this.driver.blpUrl(c.icon) : null;
@@ -4412,15 +4427,21 @@ export class GameHud {
         // Same bar the group grid draws: the slab clipped to the fraction, tinted by state.
         p.fill.style.clipPath = `inset(0 ${(1 - frac) * 100}% 0 0)`;
         p.fill.dataset.state = barState(frac);
-        onPress(p.slot, () => {
-          this.driver.unloadCargo(sel.id, c.simId);
-          this.refreshSelectionNow();
-        });
+        p.slot.classList.toggle("devoured", sel.cargoDevour);
+        onPress(
+          p.slot,
+          sel.cargoDevour
+            ? null
+            : () => {
+                this.driver.unloadCargo(sel.id, c.simId);
+                this.refreshSelectionNow();
+              },
+        );
       }
     }
     for (; i < this.cargoPockets.length; i++) {
       const p = this.cargoPockets[i];
-      p.slot.classList.remove("filled", "extra");
+      p.slot.classList.remove("filled", "extra", "devoured");
       p.art.style.backgroundImage = "";
       p.track.hidden = true;
       onPress(p.slot, null);
@@ -4432,6 +4453,36 @@ export class GameHud {
     el.style.backgroundImage = url ? `url(${url})` : "";
   }
 
+
+  /** Hovering a Devour meal's pocket raises the swallowed unit's slab (renderCargo). Bound to
+   *  the FIRST cargo pocket, which is the meal's whenever there is one; a passenger's pocket in
+   *  a transport raises nothing. */
+  private bindMealTooltip(el: HTMLElement): void {
+    el.addEventListener("pointerenter", () => {
+      this.cargoMealHover = true;
+      this.refreshMealTooltip();
+    });
+    el.addEventListener("pointerleave", () => {
+      if (!this.cargoMealHover) return;
+      this.cargoMealHover = false;
+      this.cmdTooltip.hidden = true;
+    });
+  }
+
+  /** Re-draw the meal's slab, or take it down once the meal is gone (digested, spat out, or the
+   *  selection changed under the pointer — which sends no `pointerleave`, so `:hover` is asked). */
+  private refreshMealTooltip(): void {
+    if (!this.cargoMealHover) return;
+    const el = this.cargoPockets[0]?.slot;
+    const meal = this.cargoMeal;
+    if (!el || !meal || this.cargoGrid.hidden || !isHovered(el)) {
+      this.cargoMealHover = false;
+      this.cmdTooltip.hidden = true;
+      return;
+    }
+    const desc = meal.desc ? `<div class="hud-tooltip-desc">${wc3ToHtml(meal.desc)}</div>` : "";
+    this.setTooltip(`<div class="hud-tooltip-title">${wc3ToHtml(meal.name)}</div>${desc}`);
+  }
 
   /** Hovering a training-queue icon raises the queued job's own slab in the command tooltip's
    *  place — its name and its `Ubertip`, as its button read when it was bought — under the

@@ -2809,6 +2809,21 @@ body.hud-widget-skinned .hud-cargo-slot {
   bottom: 10%;
   height: 7px;
 }
+/* A DEVOUR meal (a Kodo Beast's swallowed unit): ONE pocket, centred under the name at the
+   size a Zeppelin's pockets are, its icon washed RED — multiplied, so the picture stays
+   readable as a dark-red silhouette rather than vanishing under a flat sheet — because the unit
+   is being digested. Not clickable: nothing puts a meal off. */
+.hud-cargo.devour {
+  grid-template-columns: calc((100% - 3 * 3px) / 4);
+  justify-content: center;
+  padding-top: 6px;
+}
+.hud-cargo-slot.devoured { cursor: default; }
+.hud-cargo-slot.devoured .hud-cargo-art {
+  background-color: #ff2a1a;
+  background-blend-mode: multiply;
+}
+.hud-cargo-slot.devoured.filled:hover .hud-cargo-art { filter: brightness(1.15); }
 
 /* Construction / training progress (WC3 info panel): status icon + gold label,
    a gold progress bar, and the queue slots. */

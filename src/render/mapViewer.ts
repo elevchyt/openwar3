@@ -13176,6 +13176,10 @@ export class MapViewerScene {
       // of a unit that can actually root, so a creep that happens to carry one of those rows
       // is not quietly stripped of it.
       if (rootable && !su.uprooted && UPROOTED_ONLY.has(ab.code)) continue;
+      // DEVOUR holds one meal, and while it is being digested the button is not on the card at
+      // all — not greyed, GONE — until the meal dies or the eater does (SimWorld.bellyFull; the
+      // developer's observation of the real client). The sim refuses the order at its doors too.
+      if (this.rts.simView.bellyFull(su, ab.code)) continue;
       // GATHER and REPAIR are a WORKER'S buttons, and `worker` is the one thing that says a
       // unit still has that job (see SimWorld.morphUnit). The MILITIA is why this is asked:
       // `hmil`'s abilList is `Ahar,Amil,Ahrp` and its `Builds` is the Peasant's whole list, so

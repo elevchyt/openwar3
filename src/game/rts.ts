@@ -152,6 +152,9 @@ export interface RtsHost {
   teamColorCss?(slot: number): string | null;
 }
 
+/** One pocket of the console's cargo panel (SelectionInfo.cargo). */
+export type HudSelectionCargo = { simId: number; icon: string; hpFrac: number; size: number; name: string; desc: string };
+
 export interface SelectionInfo {
   id: number;
   typeId: string;
@@ -252,9 +255,13 @@ export interface SelectionInfo {
   /** Who is ABOARD — the cargo panel's slots (docs/transports.md): each passenger's id, icon,
    *  health, and the SEATS it takes (UnitDef.cargoSize — a Demolisher spans two). Empty for
    *  anything with nobody inside, which is almost everything. */
-  cargo: Array<{ simId: number; icon: string; hpFrac: number; size: number }>;
+  cargo: HudSelectionCargo[];
   /** The hold's capacity in seats (SimUnit.garrisonCap) — how many slots the panel draws. */
   cargoSlots: number;
+  /** The one "passenger" is a MEAL: a Kodo Beast's (or a devouring creep's) swallowed unit,
+   *  being digested. Same panel, one seat, but it cannot be put off, it is drawn red, and
+   *  hovering it raises the unit's own name + Ubertip (HUD renderCargo). */
+  cargoDevour: boolean;
 }
 
 // A ground selection/hover ring the renderer draws as a flat model.
@@ -7867,7 +7874,7 @@ export class RtsController {
       isMine: false, goldRemaining: 0,
       // The info panel prints the item's short `Description`, not the Ubertip a shop button raises.
       isItem: true, description: def ? this.tipText(def.summary) : "",
-      isSummon: false, summonLabel: "", isRaised: false, summonSecondsLeft: 0, summonFrac: 0, timedFormLabel: "", timedFormSecondsLeft: 0, timedFormFrac: 0, hexLabel: "", hexSecondsLeft: 0, hexFrac: 0, buffs: [], cargo: [], cargoSlots: 0,
+      isSummon: false, summonLabel: "", isRaised: false, summonSecondsLeft: 0, summonFrac: 0, timedFormLabel: "", timedFormSecondsLeft: 0, timedFormFrac: 0, hexLabel: "", hexSecondsLeft: 0, hexFrac: 0, buffs: [], cargo: [], cargoSlots: 0, cargoDevour: false,
     };
   }
 
@@ -7894,7 +7901,7 @@ export class RtsController {
       queue: [], icon: def?.icon ?? "", builderId: 0, builderIcon: "", carryGold: 0, carryLumber: 0,
       isMine: true, goldRemaining: m.gold,
       isItem: false, description: "",
-      isSummon: false, summonLabel: "", isRaised: false, summonSecondsLeft: 0, summonFrac: 0, timedFormLabel: "", timedFormSecondsLeft: 0, timedFormFrac: 0, hexLabel: "", hexSecondsLeft: 0, hexFrac: 0, buffs: [], cargo: [], cargoSlots: 0,
+      isSummon: false, summonLabel: "", isRaised: false, summonSecondsLeft: 0, summonFrac: 0, timedFormLabel: "", timedFormSecondsLeft: 0, timedFormFrac: 0, hexLabel: "", hexSecondsLeft: 0, hexFrac: 0, buffs: [], cargo: [], cargoSlots: 0, cargoDevour: false,
     };
   }
 
@@ -8073,6 +8080,10 @@ export class RtsController {
     //  It is read rather than folded away because it is the game's switch, not our policy —
     //  a mod that turns it on turns this on.)
     const status = gameNum("DisplayBuildingStatus") !== 0 || this.readsSideOf(u.owner);
+    // A swallowed unit still being digested (SimWorld.tickDevour) — the console's meal pocket.
+    const mealId = this.sim.units.get(id)?.devouring ?? 0;
+    const mealUnit = mealId > 0 ? this.sim.units.get(mealId) : undefined;
+    const meal = mealUnit && mealUnit.hp > 0 && mealUnit.devouredBy === id ? mealUnit : undefined;
     return {
       id,
       typeId,
@@ -8189,14 +8200,38 @@ export class RtsController {
       // Read by the OWNER'S side only — `garrison` is on the wire for allies as well (a
       // Burrow lists its crew to a team-mate), and an enemy's hold shows nothing of what it
       // carries, exactly as the game's does.
-      cargo: this.readsSideOf(u.owner)
-        ? u.garrison.flatMap((pid) => {
-            const p = this.sim.units.get(pid);
-            if (!p) return [];
-            return [{ simId: pid, icon: this.registry.get(p.typeId)?.icon ?? "", hpFrac: p.maxHp > 0 ? Math.max(0, Math.min(1, p.hp / p.maxHp)) : 1, size: Math.max(1, p.cargoSize) }];
-          })
-        : [],
-      cargoSlots: u.garrisonCap,
+      //
+      // A DEVOURING unit shows its MEAL the same way — one pocket, centred in the panel, with
+      // the swallowed unit's icon, a health bar that runs down as it is digested, a red wash and
+      // its own tooltip on hover (the developer's reference shot of the real client). `Advc`
+      // "Cargo Hold (Devour)" is literally a one-seat hold, so it is this panel. Shown to the
+      // eater's side, and to the meal's: its owner selecting the Kodo is watching its own unit
+      // be eaten (snapshot.ts visibilityFor sends the prey to both).
+      cargo: meal
+        ? [this.cargoEntry(meal)]
+        : this.readsSideOf(u.owner)
+          ? u.garrison.flatMap((pid) => {
+              const p = this.sim.units.get(pid);
+              return p ? [this.cargoEntry(p)] : [];
+            })
+          : [],
+      cargoSlots: meal ? 1 : u.garrisonCap,
+      cargoDevour: !!meal,
+    };
+  }
+
+  /** One pocket of the cargo panel: a passenger aboard a hold, or a meal in a Kodo's belly. The
+   *  name and the Ubertip are the TYPE's (a map's BlzSetUnitName first, as the panel's title
+   *  reads it) — what the meal pocket's hover slab says. */
+  private cargoEntry(p: SimUnit): HudSelectionCargo {
+    const def = this.registry.get(p.typeId);
+    return {
+      simId: p.id,
+      icon: def?.icon ?? "",
+      hpFrac: p.maxHp > 0 ? Math.max(0, Math.min(1, p.hp / p.maxHp)) : 1,
+      size: Math.max(1, p.cargoSize),
+      name: p.nameOverride ?? def?.name ?? p.typeId,
+      desc: def ? this.tipText(def.description) : "",
     };
   }
 

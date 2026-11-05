@@ -165,6 +165,19 @@ the behaviour:
   It is a `creepLevel` rule in `TARGET_RULES` (src/sim/targetRules.ts), which names the column because
   Transmute keeps its cap in DataC and Devour in DataA. The refusal is the game's own
   `Creeptoopowerful` line. (A dragon is refused for magic immunity before the level is asked.)
+- **A meal is OFF THE FIELD, and four things follow from that** (the developer's report against
+  the real client, same for `Adev` and `ACdv`). One meal at a time: while one is digesting the
+  Devour button leaves the card altogether and every cast door refuses it (`SimWorld.bellyFull`).
+  Nothing may keep swinging at it: `canSee` refuses an off-field unit to every automatic pick and
+  `tickAttack`/`tickSwing` drop one already held — the Devour cast hands the Kodo straight back
+  to the attack it was making on its meal, and the meal now rides INSIDE the Kodo, so it was the
+  nearest "enemy" there was. It rides along (`tickDevour` moves it to the eater) because its
+  OWNER keeps its sight from the belly; a missile already in the air at it still lands on the
+  spot it was eaten at (`boardedFrom`). And the eater's console shows it as a one-seat cargo
+  panel — icon, falling health bar, a red wash, and its own name + Ubertip on hover — which is
+  why the snapshot sends a meal to the EATER's side as well as its owner's (`visibilityFor`),
+  and a client derives `devouring` from the prey's `devouredBy`. A slain eater spits it out
+  where it fell (`freePrey`).
 
 ## Three abilities that were half there
 

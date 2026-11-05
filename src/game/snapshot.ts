@@ -152,8 +152,17 @@ export type Visibility = "live" | "remembered" | "omit";
  *     coordinates must not be in the enemy's payload at all.
  *  3. **Fog.** Then the memory split above.
  */
-export function visibilityFor(viewer: SnapshotViewer, u: SimUnit): Visibility {
-  if (isOffField(u)) return viewer.seesFor(u.owner) ? "live" : "omit";
+export function visibilityFor(viewer: SnapshotViewer, u: SimUnit, unitOf?: (id: number) => SimUnit | undefined): Visibility {
+  if (isOffField(u)) {
+    if (viewer.seesFor(u.owner)) return "live";
+    // …and a SWALLOWED unit is also the EATER's side's to know about: selecting a Kodo Beast
+    // with a meal inside shows that meal in the middle of its console, icon, health and
+    // tooltip (the developer's observation of the real client) — and a client's command card
+    // derives the Kodo's full belly from it (applyWorldSnapshot). Only the eater's side: an
+    // onlooker learns nothing about what the Kodo is carrying.
+    const eater = u.devouredBy > 0 ? unitOf?.(u.devouredBy) : undefined;
+    return eater && viewer.seesFor(eater.owner) ? "live" : "omit";
+  }
   if (viewer.invisHides(u)) return "omit";
   // Fog omits, and that now includes the map's FURNITURE. A neutral-passive structure — a
   // shop, a tavern, a fountain — used to be promoted to "remembered" here even where fog
@@ -863,7 +872,7 @@ export function snapshotFor(
 ): WorldSnapshot {
   const units: UnitSnapshot[] = [...ghosts];
   for (const u of world.units.values()) {
-    const vis = visibilityFor(viewer, u);
+    const vis = visibilityFor(viewer, u, (id) => world.units.get(id));
     if (vis === "omit") continue;
     if (vis === "remembered") {
       units.push(rememberedUnit(u));

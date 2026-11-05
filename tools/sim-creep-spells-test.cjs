@@ -330,6 +330,38 @@ console.log("\nDevour: the creeps' own code, and the Max Creep Level nobody was 
   check("…and a Dragon is refused for its spell immunity first", w.castError(kodo.id, "Adev", dragon.id), "Immunetomagic");
 }
 
+console.log("\nDevour: one meal at a time, no swing at it, and its owner sees from the belly");
+{
+  // The developer's report against the real client: while a unit is being digested the eater
+  // may not devour again (the button leaves the card); the Kodo must not go on attacking the
+  // unit it swallowed; the meal's owner keeps its sight, which travels with the Kodo; and a
+  // Kodo killed mid-meal lets it out.
+  const w = world();
+  const kodo = spawn(w, "okod", 1000, 1000, 0, 0);
+  const gnoll = creep(w, "ngno", 1200, 1000); // level 1, inside the Kodo's 500 range
+  const gnoll2 = creep(w, "ngno", 1000, 1200);
+  w.issueAttack(kodo.id, gnoll.id);
+  run(w, null, 1);
+  check("the Kodo is fighting the Gnoll", kodo.targetId, gnoll.id);
+  w.issueCast(kodo.id, "Adev", gnoll.id);
+  run(w, null, 2);
+  check("the Gnoll is inside the Kodo", gnoll.devouredBy, kodo.id);
+  check("…the Kodo is not swinging at its meal", kodo.swingLeft >= 0 && kodo.swingTargetId === gnoll.id, false);
+  check("…nor holding it as a target", kodo.targetId === gnoll.id, false);
+  check("a second Devour is refused at the button (silently)", w.castUseError(kodo.id, "Adev"), "");
+  check("…and at the door", w.issueCast(kodo.id, "Adev", gnoll2.id), false);
+  check("…while digesting", w.bellyFull(kodo, "Adev"), true);
+  // Walk the Kodo away: the meal rides along, so its owner's sight is cast from the belly.
+  w.issueMove(kodo.id, 1800, 1000);
+  run(w, null, 3);
+  check("the meal rides with the Kodo", Math.hypot(gnoll.x - kodo.x, gnoll.y - kodo.y) < 1, true);
+  check("…still alive", gnoll.hp > 0, true);
+  w.kill(kodo);
+  check("killing the Kodo spits the meal out", gnoll.devouredBy, 0);
+  check("…beside the body, not where it was eaten", Math.hypot(gnoll.x - kodo.x, gnoll.y - kodo.y) < 200, true);
+  check("…and the button is free again", w.bellyFull(kodo, "Adev"), false);
+}
+
 console.log("\nReincarnation: the creep row (`ACrn`), on creeps rather than heroes");
 {
   // Wowpedia (Creep): "Centaur Khans, Ancient Wendigos and Ancient Sasquatches come with

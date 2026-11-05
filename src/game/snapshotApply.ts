@@ -317,6 +317,16 @@ export function applyWorldSnapshot(world: ApplyWorld, snap: WorldSnapshot, creat
   // `hauntedMine`/`mineRingStations` ask the MINE, so the link is written from the record that
   // carries it; the release is `removeUnit`'s own (`releaseEntangled`), which already ran above
   // for a building the payload dropped.
+  // A Kodo's belly is not on the wire (`devouring` never crossed) — it is the other half of the
+  // prey's `devouredBy`, which is, so it is derived here off whatever this recipient was sent.
+  // The command card asks it (SimWorld.bellyFull: no second Devour while one is digesting), and
+  // so does the console's devoured-unit panel.
+  for (const u of world.units.values()) u.devouring = 0;
+  for (const u of world.units.values()) {
+    if (u.devouredBy <= 0) continue;
+    const eater = world.units.get(u.devouredBy);
+    if (eater) eater.devouring = u.id;
+  }
   for (const u of world.units.values()) {
     if (!u.mineId) continue;
     const rec = world.mines.get(u.mineId);
