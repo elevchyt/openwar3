@@ -34,3 +34,6 @@ build/
 
 # The 32-bit Linux build's bundled main process (tools/build-legacy-main.mjs → Electron 18, docs/linux.md)
 electron/main-legacy.cjs
+
+# Claude Code local settings and worktrees
+.claude/
