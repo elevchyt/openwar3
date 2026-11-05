@@ -130,6 +130,36 @@ console.log("\nthe mine is the bottleneck, not the pathing (Agld Mining Capacity
   check("…and every one of them still walks", Math.min(...walked.values()) > share, `min ${Math.min(...walked.values()).toFixed(0)} of ${share.toFixed(0)} units`);
 }
 
+console.log("\npast five, the extra workers WAIT OUTSIDE — beside one another, not inside one another");
+for (const [n, angle] of [[8, 45], [12, 200]]) {
+  // The shaft takes one worker at a time, so the line outside is the game's. What it must not
+  // be is a pile: a miner ghosts for its whole round trip, and every waiter used to park on
+  // the one hall-facing entrance spot — eight Peasants read as six bodies, twelve as six.
+  let worst = 0;
+  let mostWaiting = 0;
+  const trips = new Map();
+  const seconds = 90;
+  const { gold } = harvestRun(angle, n, seconds, 1, (world, mine, t) => {
+    for (const u of world.units.values()) {
+      if (!u.worker) continue;
+      if (u.inMine && !trips.has(`${u.id}@${u.inMineId}:${Math.floor(t)}`)) trips.set(`${u.id}@${u.inMineId}:${Math.floor(t)}`, u.id);
+    }
+    if (t < 20) return;
+    const parked = [...world.units.values()].filter((u) => u.worker && !u.inMine && !u.moving && u.order === "harvest");
+    mostWaiting = Math.max(mostWaiting, parked.length);
+    let pairs = 0;
+    for (let i = 0; i < parked.length; i++) for (let j = i + 1; j < parked.length; j++) {
+      if (Math.hypot(parked[i].x - parked[j].x, parked[i].y - parked[j].y) < parked[i].radius + parked[j].radius) pairs++;
+    }
+    worst = Math.max(worst, pairs);
+  });
+  check(`${n} workers, hall ${angle}° — some of them do have to wait`, mostWaiting >= 2, `up to ${mostWaiting} parked`);
+  check("…and no two of the waiting stand in one another", worst === 0, `${worst} overlapping pairs at worst`);
+  const goers = new Set(trips.values());
+  check("…and the line MOVES: every one of them gets its turn in the shaft", goers.size === n, `${goers.size} of ${n}`);
+  check("…for no more than the mine's own rate", gold <= (seconds / MINE_TIME) * GOLD_PER_TRIP, `${gold}`);
+}
+
 console.log("\nan INSANE computer is paid double for the same digging (docs/melee-ai.md)");
 {
   // The one thing MELEE_INSANE gets that is not in common.ai — it never tests for the

@@ -1346,6 +1346,11 @@ export interface SimMine {
    *  mine keeps being the gold. So the two stay separate here as well — the building is the
    *  thing wisps climb into and enemies knock down, and this is the seam between them. */
   entangledBy: number;
+  /** Workers parked OUTSIDE waiting for the shaft, in the order they arrived (mineQueueHead).
+   *  The mine takes one at a time, so a sixth Peasant adds nothing to the income; what it
+   *  must not do is stand INSIDE the fifth — see waitAtMine. Pruned lazily, so an id here may
+   *  be a worker that has since been given something else to do. */
+  waiters?: number[];
 }
 
 /** An Entangled Gold Mine the sim has asked the renderer to raise (`Aent` UnitID1 = `egol`).
@@ -1830,6 +1835,9 @@ export interface SimUnit {
    *  worker is still inside (a re-clicked expansion), and clearing the wrong mine leaves
    *  the real one latched shut with every later worker parked outside forever. */
   inMineId?: number;
+  /** Where a gold worker that found the shaft taken stands until its turn (waitAtMine) — a
+   *  spot of its own beside the entrance, picked once on arrival. Null/absent = not waiting. */
+  mineWait?: { x: number; y: number } | null;
   insideBuild: boolean; // Orc peon hidden INSIDE the structure it is building (renderer hides it)
   inBurrow: boolean; // peon garrisoned inside an Orc Burrow (renderer hides it)
   garrisonHost: number; // Orc Burrow id this peon is garrisoned in (0 = none)
@@ -12448,6 +12456,7 @@ export class SimWorld {
     u.atNode = false;
     u.working = false;
     u.noCollision = false; // manual harvest order restores collision
+    u.mineWait = null; // …and a fresh order is nobody's place in a mine's queue
     this.cancelSwing(u);
     this.detachBuilder(id);
     u.stuckT = 0;
@@ -12549,6 +12558,95 @@ export class SimWorld {
     // Terrain-only reachability line: the workers already queued at the rim are exactly
     // what we're spiralling past, so letting THEIR tiles veto the hop would defeat it.
     return this.nearestFreeBlock(sx, sy, n, 8, false) ?? [sx, sy];
+  }
+
+  /**
+   * Whose turn it is at the shaft: the first worker in the mine's queue that is still
+   * waiting there, or `u` itself if nobody is ahead of it. A worker that has walked off —
+   * a new order, another mine, dead, already down the shaft — is dropped from the queue
+   * here, so the list never holds the door shut for somebody who is not coming.
+   */
+  private mineQueueHead(mine: SimMine, u: SimUnit): number {
+    const q = mine.waiters;
+    if (!q?.length) return u.id;
+    let i = 0;
+    while (i < q.length) {
+      const w = this.units.get(q[i]);
+      if (w && w.hp > 0 && w.order === "harvest" && w.resKind === "gold" && w.resId === mine.id && !w.inMine && w.mineWait) break;
+      i++;
+    }
+    if (i > 0) q.splice(0, i);
+    return q.length ? q[0] : u.id;
+  }
+
+  /**
+   * Park a gold worker that found the shaft taken, until its turn comes.
+   *
+   * The mine holds one worker at a time (`busy`), so five Peasants saturate it and a sixth
+   * only adds to the line: "the extra workers will simply stand around … or wait outside
+   * the mine until one of the active 5 workers comes out" (the developer's account of the
+   * original game; Liquipedia's Gold Mine page caps a mine at five). What they must NOT do
+   * is stand inside one another. A miner ghosts (`noCollision`) for its whole round trip, so
+   * every waiter used to park on the one hall-facing entrance spot (mineApproach) — eight
+   * Peasants on a mine was three of them drawn as one body, twelve was seven.
+   *
+   * So a waiter takes a SPOT OF ITS OWN against the rim, beside the entrance and spreading
+   * round from it (waitSpot), walks there, and stands SOLID on it — it is a unit standing
+   * still, so it holds its cells like one. The entrance itself is left to the crew going in
+   * and out. Its place in the queue is the order it arrived in (mineQueueHead), and the spot
+   * is kept until it goes in, so the line does not shuffle every time the shaft opens.
+   * Nothing here changes the income: the shaft is the bottleneck either way.
+   */
+  private waitAtMine(u: SimUnit, mine: SimMine): void {
+    (mine.waiters ??= []);
+    if (!mine.waiters.includes(u.id)) mine.waiters.push(u.id);
+    if (!u.mineWait) {
+      const spot = this.waitSpot(u, mine);
+      u.mineWait = { x: spot[0], y: spot[1] };
+      u.noCollision = false; // a body waiting its turn is a body, not a ghost
+      if (Math.hypot(spot[0] - u.x, spot[1] - u.y) > 4) {
+        this.unsettle(u);
+        if (this.pathTo(u, spot[0], spot[1])) return;
+      }
+    }
+    if (u.moving) return; // still walking to its place in the line
+    this.settle(u);
+  }
+
+  /** A free spot against the mine's rim for a waiter: the entrance's own direction (toward
+   *  the hall) rotated a step at a time, alternately each way, skipping the entrance itself
+   *  and anywhere another waiter is standing or headed. A second ring a body further out
+   *  takes the overflow, and failing both, the nearest free block to the entrance. */
+  private waitSpot(u: SimUnit, mine: SimMine): [number, number] {
+    const depot = this.nearestGoldDepot(u);
+    const base = Math.atan2((depot?.y ?? u.y) - mine.y, (depot?.x ?? u.x) - mine.x);
+    const n = Math.max(u.footprint, 1);
+    const body = n * PATHING_CELL;
+    const [ex, ey] = this.mineApproach(u, mine);
+    const taken: Array<[number, number]> = [[ex, ey]];
+    for (const id of mine.waiters ?? []) {
+      const w = this.units.get(id);
+      if (w && w !== u && w.mineWait) taken.push([w.mineWait.x, w.mineWait.y]);
+    }
+    const STEP = Math.PI / 18; // 10°: fine enough that a body's width of rim is never skipped
+    for (const ring of [0, body]) {
+      const reach = this.mineStandDist(u, mine) + ring;
+      for (let k = 1; k <= 15; k++) {
+        for (const sign of [1, -1]) {
+          const a = base + sign * k * STEP;
+          const dx = Math.cos(a);
+          const dy = Math.sin(a);
+          const m = Math.max(Math.abs(dx), Math.abs(dy));
+          const [sx, sy] = this.grid.snapForFootprint(mine.x + (dx / m) * reach, mine.y + (dy / m) * reach, n);
+          if (taken.some(([tx, ty]) => Math.max(Math.abs(tx - sx), Math.abs(ty - sy)) < body)) continue;
+          const [cx0, cy0] = this.grid.footprintOrigin(sx, sy, n);
+          if (!this.blockFree(cx0, cy0, n) || this.onBuildSite(u, sx, sy)) continue;
+          return [sx, sy];
+        }
+      }
+    }
+    const [sx, sy] = this.grid.snapForFootprint(ex, ey, n);
+    return this.nearestFreeBlock(sx, sy, n, 8, false) ?? [ex, ey];
   }
 
   /** Nearest gold drop-off (town hall) of the worker's owner — the anchor for the
@@ -23131,7 +23229,15 @@ export class SimWorld {
       // the worker is already standing on.)
       const reach = this.mineStandDist(u, mine) * Math.SQRT2 + PATHING_CELL;
       if (!this.arriveAtNode(u, mine.x, mine.y, reach, () => this.pathToNode(u))) return;
-      if (mine.busy && !this.mineLatchStale(mine)) return; // parked at the entrance, waiting our turn (no re-path)
+      // The shaft takes ONE worker at a time (Agld Mining Capacity) — so anybody past the
+      // fifth only waits. Its turn comes in the order it got here (mineQueueHead), and it
+      // waits at a spot of its own beside the entrance rather than on the entrance itself.
+      if ((mine.busy && !this.mineLatchStale(mine)) || this.mineQueueHead(mine, u) !== u.id) {
+        this.waitAtMine(u, mine);
+        return;
+      }
+      if (mine.waiters?.length) mine.waiters = mine.waiters.filter((id) => id !== u.id);
+      u.mineWait = null;
       mine.busy = true;
       mine.busyBy = u.id;
       u.inMine = true;
