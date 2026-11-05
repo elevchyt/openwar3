@@ -1164,15 +1164,65 @@ index 5f2c0c2ffbfae107c42070fe99e41669814924ef..3101fe8514c3933b217efeeaa2f1397b
              solverParams.hd = true;
              // mdxHandler.loadEnv(viewer);
 diff --git a/dist/cjs/viewer/handlers/mdx/modelinstance.js b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb67b0ae18d 100644
+index 020a99b949ec1634579d439261027e00b6da23ac..24ab8548590cc4db59c0150f34f83952e8efbbf4 100644
 --- a/dist/cjs/viewer/handlers/mdx/modelinstance.js
 +++ b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-@@ -21,6 +21,524 @@ const scaleHeap = gl_matrix_1.vec3.create();
+@@ -21,6 +21,574 @@ const scaleHeap = gl_matrix_1.vec3.create();
  const colorHeap = new Float32Array(3);
  const alphaHeap = new Float32Array(1);
  const textureIdHeap = new Uint32Array(1);
 +// OpenWar3: scratch quat for the animation cross-fade slerp (see updateNodes).
 +const blendRotationHeap = gl_matrix_1.quat.create();
++/**
++ * OpenWar3: slerp from `a` to `b` WITHOUT re-choosing the hemisphere.
++ *
++ * gl-matrix's `slerp` negates `b` whenever `a·b < 0`, i.e. it always takes the SHORTER way
++ * round. That is right for two fixed rotations and wrong for a cross-fade, where `a` is the
++ * new clip's pose MOVING every frame and `b` is the frozen snapshot of the old one: the moment
++ * the moving bone passes 180° from the snapshot, "the shorter way" changes sides, and the
++ * blended bone jumps by about `t × 360°` in one frame. The Kodo Beast showed it on every throw:
++ * its rider's right arm (`Bone Rider R Arm`) swings through that half-turn from the drumming
++ * stand, and with 0.2 of the fade left the arm (at the model's 2.25 scale) leapt 230 units at
++ * frame 183450 of "Attack". So the side is chosen ONCE, on the fade's first frame, and the
++ * caller keeps `a` on a continuous path (see the rotation branch of updateNodes); this
++ * interpolates on whatever side it is given.
++ */
++function ow3SlerpFixed(out, a, b, t) {
++    const ax = a[0], ay = a[1], az = a[2], aw = a[3];
++    const bx = b[0], by = b[1], bz = b[2], bw = b[3];
++    const cosom = Math.max(-1, Math.min(1, ax * bx + ay * by + az * bz + aw * bw));
++    const omega = Math.acos(cosom);
++    const sinom = Math.sin(omega);
++    let s0, s1;
++    if (sinom > 1e-6) {
++        s0 = Math.sin((1 - t) * omega) / sinom;
++        s1 = Math.sin(t * omega) / sinom;
++    }
++    else {
++        // The two are (nearly) equal — or exactly opposite, a single frame on a set of measure
++        // zero, where any great circle is as good as another. Linear, then renormalised below.
++        s0 = 1 - t;
++        s1 = t;
++    }
++    out[0] = s0 * ax + s1 * bx;
++    out[1] = s0 * ay + s1 * by;
++    out[2] = s0 * az + s1 * bz;
++    out[3] = s0 * aw + s1 * bw;
++    const len = Math.hypot(out[0], out[1], out[2], out[3]);
++    if (len > 1e-6 && Math.abs(len - 1) > 1e-6) {
++        out[0] /= len;
++        out[1] /= len;
++        out[2] /= len;
++        out[3] /= len;
++    }
++    else if (len <= 1e-6) {
++        out[0] = ax;
++        out[1] = ay;
++        out[2] = az;
++        out[3] = aw;
++    }
++    return out;
++}
 +// OpenWar3: default animation cross-fade duration in ms. Real WC3's per-unit
 +// "Animation blend time" (UnitUI.slk `blend`) is 0.15s for the overwhelming
 +// majority of units; the app overrides this per instance via setBlendTime().
@@ -1692,7 +1742,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
  /**
   * An MDX model instance.
   */
-@@ -48,12 +566,35 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -48,12 +616,40 @@ class MdxModelInstance extends modelinstance_1.default {
          // Any later non-forced update can then use variancy to skip updating things.
          // It is set to true every time the sequence is set with setSequence().
          this.forced = true;
@@ -1712,6 +1762,11 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
 +        this.blendTime = DEFAULT_BLEND_TIME; // duration (ms), overridable per instance
 +        this.blendRemaining = 0; // ms left in the active cross-fade (0 = not blending)
 +        this.blendSnapshot = null; // Float32Array(nodeCount*10): [loc3, rot4, scale3] per node
++        // OpenWar3: the new clip's rotation per node as last blended (4 floats a node), and
++        // whether this fade has seen the node yet — so the fade keeps ONE side of the sphere
++        // for its whole length instead of re-picking it every frame (see ow3SlerpFixed).
++        this.blendRotPrev = null;
++        this.blendRotSeen = null;
          this.geosetColors = [];
          this.layerAlphas = [];
          this.layerTextures = [];
@@ -1728,7 +1783,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
          for (let i = 0, l = model.geosets.length; i < l; i++) {
              this.geosetColors[i] = new Float32Array(4);
          }
-@@ -216,45 +757,193 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -216,45 +812,221 @@ class MdxModelInstance extends modelinstance_1.default {
       * Updates all of this instance internal nodes and objects.
       * Nodes that are determined to not be visible will not be updated, nor will any of their children down the hierarchy.
       */
@@ -1878,12 +1933,40 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
 +                    const r = node.localRotation;
 +                    genericObject.getRotation(r, sequence, poseFrame, counter);
 +                    if (blending) {
++                        // Keep the fade on ONE side of the sphere (ow3SlerpFixed says why).
++                        // First frame of this fade for this node: take the shorter way from
++                        // where the new clip starts, by flipping the SNAPSHOT's sign (q and -q
++                        // are one rotation) — and keep that. After it: keep the new clip's own
++                        // quaternion continuous frame to frame, so a track whose keys change
++                        // sign is followed rather than mistaken for a half-turn.
++                        const prev = this.blendRotPrev;
++                        const seen = this.blendRotSeen;
++                        const q = i * 4;
++                        if (seen[i] === 0) {
++                            seen[i] = 1;
++                            if (r[0] * snapshot[s + 3] + r[1] * snapshot[s + 4] + r[2] * snapshot[s + 5] + r[3] * snapshot[s + 6] < 0) {
++                                snapshot[s + 3] = -snapshot[s + 3];
++                                snapshot[s + 4] = -snapshot[s + 4];
++                                snapshot[s + 5] = -snapshot[s + 5];
++                                snapshot[s + 6] = -snapshot[s + 6];
++                            }
++                        }
++                        else if (r[0] * prev[q] + r[1] * prev[q + 1] + r[2] * prev[q + 2] + r[3] * prev[q + 3] < 0) {
++                            r[0] = -r[0];
++                            r[1] = -r[1];
++                            r[2] = -r[2];
++                            r[3] = -r[3];
++                        }
++                        prev[q] = r[0];
++                        prev[q + 1] = r[1];
++                        prev[q + 2] = r[2];
++                        prev[q + 3] = r[3];
 +                        blendRotationHeap[0] = snapshot[s + 3];
 +                        blendRotationHeap[1] = snapshot[s + 4];
 +                        blendRotationHeap[2] = snapshot[s + 5];
 +                        blendRotationHeap[3] = snapshot[s + 6];
-+                        // slerp target -> snapshot by blendInv (so blendInv=0 keeps target).
-+                        gl_matrix_1.quat.slerp(r, r, blendRotationHeap, blendInv);
++                        // target -> snapshot by blendInv (so blendInv=0 keeps target).
++                        ow3SlerpFixed(r, r, blendRotationHeap, blendInv);
 +                    }
                  }
                  // Scale
@@ -1935,7 +2018,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
                  // If the attachment/emitter is visible, update it.
                  if (visibilityHeap[0] > 0) {
                      node.object.update(dt);
-@@ -262,13 +951,48 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -262,13 +1034,48 @@ class MdxModelInstance extends modelinstance_1.default {
              }
              // Recalculate and update child nodes.
              // Note that this only affects normal nodes such as instances, and not skeletal nodes.
@@ -1985,7 +2068,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
      }
      /**
       * If a model has no sequences or is running no sequence, it will only update once since it will never be forced to update.
-@@ -362,19 +1086,58 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -362,19 +1169,58 @@ class MdxModelInstance extends modelinstance_1.default {
              }
          }
      }
@@ -2011,22 +2094,22 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
 +        // to send — the texture was filled once, by whoever composed it (`ow3CaptureSkeleton`).
 +        if (this.ow3SharedTexture) {
 +            return;
-+        }
+         }
 +        if (this.boneTexture && (this.ow3BonesDirty || !this.ow3BonesUploaded)) {
 +            // …or from `ow3LocalBones` when this instance wears a shared pose with billboarded
 +            // subtrees of its own in it (ow3FixBillboards).
 +            this.boneTexture.bindAndUpdate(this.ow3LocalBones && this.ow3LocalPose ? this.ow3LocalBones : this.worldMatrices);
 +            this.ow3BonesUploaded = true;
 +            this.ow3BonesDirty = false;
-         }
-     }
++        }
++    }
 +    // OpenWar3 (issue #66): a faded instance (vertex-colour alpha < 1 — Wind Walk,
 +    // Banish, SetUnitVertexColor) has no opaque geometry left. Its "opaque" groups
 +    // move to the translucent pass so they blend over a finished depth buffer instead
 +    // of over whatever the opaque pass happened to have drawn so far.
 +    isFaded() {
 +        return this.vertexColor[3] < 1;
-+    }
+     }
      renderOpaque() {
          const model = this.model;
 +        if (this.isFaded()) {
@@ -2046,7 +2129,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
          for (const group of model.translucentGroups) {
              group.render(this);
          }
-@@ -421,6 +1184,12 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -421,6 +1267,12 @@ class MdxModelInstance extends modelinstance_1.default {
       */
      setTeamColor(id) {
          this.teamColor = id;
@@ -2059,7 +2142,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
          return this;
      }
      /**
-@@ -436,6 +1205,7 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -436,6 +1288,7 @@ class MdxModelInstance extends modelinstance_1.default {
      setSequence(id) {
          const model = this.model;
          const sequences = model.sequences;
@@ -2067,7 +2150,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
          this.sequence = id;
          if (id < 0 || id > sequences.length - 1) {
              this.sequence = -1;
-@@ -445,11 +1215,65 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -445,11 +1298,73 @@ class MdxModelInstance extends modelinstance_1.default {
          else {
              this.frame = sequences[id].interval[0];
          }
@@ -2086,8 +2169,8 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
          this.resetAttachments();
          this.forced = true;
 +        this.ow3PoseReset = true; // OpenWar3 (issue #161): a new clip rewrites every local
-+        return this;
-+    }
+         return this;
+     }
 +    /**
 +     * OpenWar3: set this instance's animation cross-fade duration, in seconds.
 +     * Fed from each unit's UnitUI.slk `blend` value (0.15s for most WC3 units).
@@ -2098,8 +2181,8 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
 +        if (this.blendTime === 0) {
 +            this.blendRemaining = 0;
 +        }
-         return this;
-     }
++        return this;
++    }
 +    /**
 +     * OpenWar3: snapshot every node's current local TRS into the flat blend
 +     * buffer, laid out as [loc.x,loc.y,loc.z, rot.x,rot.y,rot.z,rot.w, sc.x,sc.y,sc.z]
@@ -2111,6 +2194,14 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
 +        let snapshot = this.blendSnapshot;
 +        if (snapshot === null || snapshot.length < l * 10) {
 +            snapshot = this.blendSnapshot = new Float32Array(l * 10);
++        }
++        // A new fade: every node picks its side afresh on its first blended frame.
++        if (this.blendRotSeen === null || this.blendRotSeen.length < l) {
++            this.blendRotSeen = new Uint8Array(l);
++            this.blendRotPrev = new Float32Array(l * 4);
++        }
++        else {
++            this.blendRotSeen.fill(0);
 +        }
 +        for (let i = 0; i < l; i++) {
 +            const node = sortedNodes[i];
@@ -3600,7 +3691,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..94a8e474c893e10a837832ffde05fe78
                  const metadata = metadataMap.getRow(modification.id);
                  if (metadata) {
 diff --git a/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js b/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
-index c2a27060799ff26b5c86ccedd0bedda2d6a54746..f67b5d69ef088a653c5cdaaa702057ce5153b117 100644
+index c2a27060799ff26b5c86ccedd0bedda2d6a54746..0ace06f50aa5d46f61bd8644d9af7eba81b35bb2 100644
 --- a/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
 +++ b/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
 @@ -9,6 +9,45 @@ ${precision_glsl_1.default}

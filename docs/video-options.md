@@ -404,6 +404,33 @@ every map-placed unit (3 300 trees on Twisted Meadows) asking whether a stand cl
 The water roll in that same call is stepped by hand on the frames the scan skips, or the sea runs
 at a quarter speed on Low.
 
+## The animation cross-fade (UnitUI `blend`), and the half-turn trap
+
+Not a row on the panel, but it lives in the same file and every quality rung runs it. Each unit's
+instance gets its `UnitUI.slk` **`blend`** time (`setBlendTime(def.animBlend)`, 0.15 s for most
+units), and on a change between two clips `setSequence` snapshots every node's local TRS and
+`updateNodes` fades from that frozen snapshot into the new clip, which keeps PLAYING underneath.
+Shared poses are off for the fade's length, because the snapshot is the instance's own.
+
+**The rotation must keep ONE side of the sphere for the whole fade.** gl-matrix's `slerp`
+re-picks the shorter way round on every call. Against a fixed snapshot and a moving target, the
+moment the target passes 180° from the snapshot "the shorter way" changes sides, and the bone
+jumps by about `blendInv × 360°` in one frame. The Kodo Beast hit it on every throw: from its
+drumming stand ("Stand Channel - 3") into "Attack", `Bone Rider R Arm` swings through that
+half-turn with a fifth of the fade left, and at the model's 2.25 scale the arm leapt **230 world
+units** in one frame (measured; nothing in a normal swing tops ~98). It looked like "the attack
+doesn't blend". `ow3SlerpFixed` (modelinstance.js in the patch) is a slerp that never flips. The
+side is chosen once, on the node's first blended frame, by flipping the SNAPSHOT's sign toward
+the new clip's starting pose. After that the new clip's quaternion is kept continuous frame to
+frame (`blendRotPrev`), so a track whose keys change sign is followed, not taken for a half-turn.
+Where no bone crosses 180° the result equals the old one; a Grunt's fades measured the same
+before and after.
+
+Verify it NUMERICALLY, like the pose cache: record the largest per-frame bone displacement
+(`instance.worldMatrices`, translation column) for a unit attacking in place and look for a
+single-frame spike at a clip change. A screenshot finds it only if you know which frame to look
+at.
+
 ## Where the settings reach the vendored viewer
 
 Texture Quality and Particles are both read from inside mdx-m3-viewer, which is JavaScript we do
