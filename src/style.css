@@ -2818,10 +2818,20 @@ body.hud-widget-skinned .hud-cargo-slot {
   justify-content: center;
   padding-top: 6px;
 }
-.hud-cargo-slot.devoured { cursor: default; }
+.hud-cargo-slot.devoured { cursor: default; margin-bottom: 11px; }
+/* The icon keeps its own SQUARE shape: the passenger pockets inset it 9% at the sides and 24%
+   at the foot (room for their bar), which squashes a square icon to 82% × 67%. The meal's
+   pocket fills the frame's square instead and hangs its bar just under the frame, where the
+   reference shot of the real client has it. */
 .hud-cargo-slot.devoured .hud-cargo-art {
+  bottom: 9%;
   background-color: #ff2a1a;
   background-blend-mode: multiply;
+}
+.hud-cargo-slot.devoured .hud-cargo-track {
+  left: 6%;
+  right: 6%;
+  bottom: -10px;
 }
 .hud-cargo-slot.devoured.filled:hover .hud-cargo-art { filter: brightness(1.15); }
 

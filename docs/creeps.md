@@ -168,6 +168,9 @@ the behaviour:
 - **A meal is OFF THE FIELD, and four things follow from that** (the developer's report against
   the real client, same for `Adev` and `ACdv`). One meal at a time: while one is digesting the
   Devour button leaves the card altogether and every cast door refuses it (`SimWorld.bellyFull`).
+  The meal itself does NOTHING: the per-tick loop skips it, `castLocked` refuses every order to it
+  (a script's and a computer's as well as a player's), and it is no aura's source — left to its
+  `idle`, it auto-acquired the Kodo it was standing inside and kept hitting it from the belly.
   Nothing may keep swinging at it: `canSee` refuses an off-field unit to every automatic pick and
   `tickAttack`/`tickSwing` drop one already held — the Devour cast hands the Kodo straight back
   to the attack it was making on its meal, and the meal now rides INSIDE the Kodo, so it was the

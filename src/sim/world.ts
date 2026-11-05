@@ -11440,6 +11440,10 @@ export class SimWorld {
   }
 
   private castLocked(u: SimUnit): boolean {
+    // A unit in a Kodo's BELLY does nothing at all until it is digested or spat out — no
+    // order of anybody's reaches it, a script's or a computer's included (the authority only
+    // guards a player's). Its per-tick turn is skipped too; see the order switch's loop.
+    if (u.devouredBy > 0) return true;
     // An Ancient mid-root is locked for exactly the same reason a caster mid-wind-up is: it is
     // committed to something that takes time and cannot be re-tasked out of it.
     if (u.morphT > 0) return true;
@@ -14898,6 +14902,7 @@ export class SimWorld {
     if (!this.abilities) return;
     for (const src of this.units.values()) {
       if (src.hp <= 0) continue;
+      if (src.devouredBy > 0) continue; // a meal in a Kodo's belly is no aura's source (castLocked)
       for (const ab of this.auraSources(src)) {
         const make = AURA_BUFFS[ab.code];
         if (!make) continue;
@@ -20305,6 +20310,12 @@ export class SimWorld {
       u.prevX = u.x;
       u.prevY = u.y;
       if (u.paused) continue; // PauseUnit: no orders/movement/turning until unpaused
+      // SWALLOWED (Devour): no orders, no movement, no auto-acquire, no autocast — it does
+      // nothing at all until it is digested or the eater dies. Left to the order switch, its
+      // `idle` auto-acquired the nearest enemy, which is the Kodo it is standing inside, and it
+      // went on swinging at it from the belly (the developer's report). castLocked refuses
+      // every order to it as well.
+      if (u.devouredBy > 0) continue;
       if (u.spawning > 0) {
         u.spawning -= dt; // still materializing (playing its birth clip) — can't act
         continue;

@@ -362,6 +362,25 @@ console.log("\nDevour: one meal at a time, no swing at it, and its owner sees fr
   check("…and the button is free again", w.bellyFull(kodo, "Adev"), false);
 }
 
+console.log("\nDevour: the meal does NOTHING from the belly");
+{
+  // The developer's report: a swallowed Grunt kept attacking the Kodo it was inside. Its idle
+  // auto-acquired the nearest enemy — the Kodo, at distance zero — and nothing stopped it.
+  const w = world();
+  const kodo = spawn(w, "okod", 1000, 1000, 0, 0);
+  const grunt = spawn(w, "ogru", 1080, 1000, 1, 1);
+  w.issueCast(kodo.id, "Adev", grunt.id);
+  run(w, null, 2);
+  check("the Grunt is inside the Kodo", grunt.devouredBy, kodo.id);
+  const hp = kodo.hp;
+  run(w, null, 4);
+  check("…and has not hit it from the belly", kodo.hp >= hp, true);
+  check("…nor picked it as a target", grunt.targetId, null);
+  check("…nor holds any order but idle", grunt.order, "idle");
+  check("an order to the meal is refused", w.issueAttack(grunt.id, kodo.id, true, true), false);
+  check("…a move too", w.issueMove(grunt.id, 1500, 1500), false);
+}
+
 console.log("\nReincarnation: the creep row (`ACrn`), on creeps rather than heroes");
 {
   // Wowpedia (Creep): "Centaur Khans, Ancient Wendigos and Ancient Sasquatches come with
