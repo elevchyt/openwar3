@@ -2818,20 +2818,34 @@ body.hud-widget-skinned .hud-cargo-slot {
   justify-content: center;
   padding-top: 6px;
 }
-.hud-cargo-slot.devoured { cursor: default; margin-bottom: 11px; }
-/* The icon keeps its own SQUARE shape: the passenger pockets inset it 9% at the sides and 24%
-   at the foot (room for their bar), which squashes a square icon to 82% × 67%. The meal's
-   pocket fills the frame's square instead and hangs its bar just under the frame, where the
-   reference shot of the real client has it. */
+.hud-cargo-slot.devoured { cursor: default; aspect-ratio: 4 / 5; }
+/* The meal's frame is PORTRAIT and holds both halves, as the reference shot of the real client
+   draws it (measured there: a 44 × 55 frame, a ~32-pixel square icon near its top and a thin bar
+   along the inside of its foot). The icon keeps its own square shape — 73% of the frame's width
+   is 58.4% of a 4:5 frame's height — rather than being stretched into the passenger pockets'
+   inset, which squashed it to 82% × 67%. */
 .hud-cargo-slot.devoured .hud-cargo-art {
-  bottom: 9%;
-  background-color: #ff2a1a;
-  background-blend-mode: multiply;
+  left: 13.5%;
+  right: 13.5%;
+  top: 12%;
+  bottom: 29.6%;
+}
+/* The red wash, MULTIPLIED over the icon by an overlay of the icon's own box. A background
+   colour under the picture showed as a one-pixel red sliver wherever the scaled icon rounded
+   short of its box; over the frame's black that sliver multiplies to black. The red is the
+   reference shot's: a deep red, not a bright one. */
+.hud-cargo-slot.devoured .hud-cargo-art::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: #b80c0c;
+  mix-blend-mode: multiply;
 }
 .hud-cargo-slot.devoured .hud-cargo-track {
-  left: 6%;
-  right: 6%;
-  bottom: -10px;
+  left: 9%;
+  right: 9%;
+  bottom: 10%;
+  height: 6%;
 }
 .hud-cargo-slot.devoured.filled:hover .hud-cargo-art { filter: brightness(1.15); }
 
