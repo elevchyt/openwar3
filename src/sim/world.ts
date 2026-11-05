@@ -1127,7 +1127,7 @@ export interface BuildingState {
   stalled?: boolean;
   builderIds: number[]; // workers constructing (empty → progress halts). Extra
   // builders past the first "speed build" it (human peasants): faster, but they
-  // burn extra resources — see SPEED_BUILD_* constants + tickBuildings.
+  // burn extra resources — see POWERBUILD_* constants + tickBuildings.
   goldCost: number; // base build cost, for the speed-build surcharge
   lumberCost: number;
   queue: BuildJob[];
@@ -2794,12 +2794,19 @@ const AIR_SPACING_PER_SEL_SCALE = 36;
 // The max drift speed of that fan-out, as a share of the flyer's own move speed — a
 // share (not full speed) so it reads as a glide rather than a pop.
 const AIR_FANOUT_SPEED = 0.8;
-// Human "speed build": each builder beyond the first adds SPEED_BUILD_BONUS to the
-// build rate (1.0 = one builder) and, spread across the shortened build time, a
-// SPEED_BUILD_SURCHARGE share of the base cost per extra builder. Tuned to WC3's
-// Town Hall reference: 5 peasants take ~53s (from 90s) and cost ~615g (from 385g).
-const SPEED_BUILD_BONUS = 0.17;
-const SPEED_BUILD_SURCHARGE = 0.15;
+// Human "speed build" (powerbuilding): each builder beyond the first adds its repair
+// ability's POWERBUILD RATE to the build rate (1.0 = one builder) and, spread across the
+// shortened build time, its POWERBUILD COST share of the base cost. Both are DATA, read off
+// the builder's own repair row (SimWorld.powerbuild): `[Ahrp]` (Repair, Human) DataC1 = 0.15
+// "Powerbuild Cost", DataD1 = 0.6 "Powerbuild Rate" — patch 1.10's "each additional Peasant
+// contributes 60% of the speed of the first". The orc's `[Arep]` carries 0/0. These two are
+// the fallback for a bare world with no ability registry, and are the same numbers.
+// Checked against Liquipedia's Town Hall (180 s, 385/205): five Peasants build it in
+// 180 / (1 + 4·0.6) = 53 s for 385 + 4·0.15·385 ≈ 616 gold and 328 lumber ("53 seconds …
+// 613 gold and 329 lumber"). The old literal 0.17 had been fitted to a 90-second Town Hall,
+// which left five Peasants at 107 s — the "powerbuild doesn't work" report.
+const POWERBUILD_RATE = 0.6;
+const POWERBUILD_COST = 0.15;
 // A structure is STAMPED at a tenth of its finished hit points and earns the other nine
 // tenths across its build time, so it reaches full life exactly as it finishes.
 export const BUILD_START_HP_FRAC = 0.1;
@@ -2807,7 +2814,7 @@ const BUILD_RAMP_HP_FRAC = 1 - BUILD_START_HP_FRAC;
 // Per-race construction style (engine behaviour, not a data field — observed in-game +
 // Warsmash). ORC/NIGHT ELF workers build from INSIDE the structure (hidden, one worker,
 // no assist); HUMAN peasants build from outside and can "speed build" — extra peasants
-// pile on to finish faster (SPEED_BUILD_*). Undead acolytes summon-and-leave (handled
+// pile on to finish faster (POWERBUILD_*). Undead acolytes summon-and-leave (handled
 // elsewhere).
 //
 // The night elf half of that has a second rule the orc half does not, and it is the one
@@ -5967,13 +5974,14 @@ export class SimWorld {
     const w = this.units.get(workerId);
     const b = this.units.get(buildingId);
     if (!w || !b?.building) return;
+    // Only HUMAN peasants speed-build: extra builders pile on to finish faster. Every
+    // other race builds with a single worker (Orc/NE from inside, Undead summon-and-go),
+    // so refuse a would-be second builder on a non-speed-build construction — BEFORE the
+    // worker is taken off whatever it was doing, so a refused order costs it nothing.
+    if (!speedBuilds(w) && b.building.constructionLeft > 0 && b.building.builderIds.some((id) => id !== workerId && this.units.get(id)?.constructing === buildingId)) return;
     // Release this worker from any previous job, then add it to the site's
     // builder list (multiple workers speed-build a single structure).
     this.detachBuilder(workerId);
-    // Only HUMAN peasants speed-build: extra builders pile on to finish faster. Every
-    // other race builds with a single worker (Orc/NE from inside, Undead summon-and-go),
-    // so refuse a would-be second builder on a non-speed-build construction.
-    if (!speedBuilds(w) && b.building.constructionLeft > 0 && b.building.builderIds.length >= 1) return;
     const byItem = !!w.buildPending?.item;
     w.buildPending = null; // its walk-to-build intent is now realised
     w.constructing = buildingId;
@@ -7781,6 +7789,7 @@ export class SimWorld {
         // died or was re-tasked away, then count who is actually hammering.
         b.builderIds = b.builderIds.filter((id) => this.units.get(id)?.constructing === u.id);
         let present = 0;
+        const hammering: SimUnit[] = [];
         for (const id of b.builderIds) {
           const builder = this.units.get(id)!;
           // Orc peon that has walked up to the site now vanishes inside to build
@@ -7792,6 +7801,7 @@ export class SimWorld {
           if (nearby) {
             if (!builder.insideBuild) builder.desiredFacing = Math.atan2(u.y - builder.y, u.x - builder.x); // face the site while hammering
             present++;
+            hammering.push(builder);
           } else if (!builder.moving && builder.order === "idle" && builder.waitT <= 0 && builder.repathT <= 0) {
             // Holding the job, standing still, and NOT at the site: the walk ended short —
             // shoved off, a spread point that was a ring too far out, a route given up on —
@@ -7812,12 +7822,23 @@ export class SimWorld {
           // resources (HUMAN only — speedBuilds()). If the owner can't pay this
           // tick's surcharge, drop back toward the base rate (only as many extras
           // as they can afford).
-          let extra = speedBuilds(u) ? present - 1 : 0;
+          //
+          // Each extra builder brings its OWN repair row's rate and cost (powerbuild), summed
+          // over however many of them the owner can pay for this tick.
+          const extras = speedBuilds(u) ? hammering.slice(1).map((w) => this.powerbuild(w)) : [];
+          let extra = extras.length;
+          let rate = 1;
           if (extra > 0) {
             const stash = this.stashOf(u.owner);
             while (extra > 0) {
-              const rate = 1 + extra * SPEED_BUILD_BONUS;
-              const frac = extra * SPEED_BUILD_SURCHARGE * ((rate * dt) / b.buildTimeTotal);
+              let bonus = 0;
+              let surcharge = 0;
+              for (let i = 0; i < extra; i++) {
+                bonus += extras[i].rate;
+                surcharge += extras[i].cost;
+              }
+              rate = 1 + bonus;
+              const frac = surcharge * ((rate * dt) / b.buildTimeTotal);
               const g = frac * b.goldCost;
               const l = frac * b.lumberCost;
               if (stash.gold >= g && stash.lumber >= l) {
@@ -7826,9 +7847,9 @@ export class SimWorld {
                 break;
               }
               extra--;
+              rate = 1;
             }
           }
-          const rate = 1 + extra * SPEED_BUILD_BONUS;
           const prevLeft = b.constructionLeft;
           b.constructionLeft = Math.max(0, b.constructionLeft - rate * dt);
           this.addConstructionHp(u, b, prevLeft);
@@ -14515,6 +14536,17 @@ export class SimWorld {
    *  `Acan,Ahrl,Aiun` — no repair row in it. The Acolyte's `Aaha,Arst,Alam,Auns` has one). */
   private repairAbility(u: SimUnit): SimAbility | undefined {
     return u.abilities.find((a) => isRepairCode(a.code) && a.level >= 1);
+  }
+
+  /** What one EXTRA builder adds to a construction it is powerbuilding: its repair row's
+   *  DataD "Powerbuild Rate" (share of one builder's speed) and DataC "Powerbuild Cost" (share
+   *  of the building's base cost, paid across the build). `[Ahrp]` = 0.6 / 0.15. A worker
+   *  with no repair row adds nothing; a bare world with no registry uses the stock numbers. */
+  private powerbuild(w: SimUnit): { rate: number; cost: number } {
+    if (!this.abilities) return { rate: POWERBUILD_RATE, cost: POWERBUILD_COST };
+    const lvl = this.abilities.get(this.repairAbility(w)?.id ?? "")?.levelData[0];
+    if (!lvl) return { rate: 0, cost: 0 };
+    return { rate: this.dataOf(lvl, 3, 0), cost: this.dataOf(lvl, 2, 0) };
   }
 
   /** How close a worker has to be to mend — its repair ability's own `Rng1`, which every

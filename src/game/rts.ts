@@ -7803,6 +7803,15 @@ export class RtsController {
    *  rates: 35% of the build cost and 150% of the build time to go 1 HP→full. */
   private repairAt(picked: number | null, queued = false, skip?: ReadonlySet<number>): boolean {
     if (picked === null) return false;
+    // Repair aimed at one of our own buildings still going up is POWERBUILDING it — the
+    // Peasant joins the construction exactly as a right-click on the site does ("Repair"
+    // is how a Human player sends a second Peasant onto a Town Hall). The authority's
+    // repair order only takes a FINISHED, damaged building, so without this the R-click
+    // on a scaffold was refused outright.
+    const site = this.sim.units.get(picked);
+    if (site?.building && site.building.constructionLeft > 0 && site.owner === this.localPlayer && !skip?.size) {
+      return this.resumeBuildAt(picked, queued);
+    }
     let any = false;
     for (const id of this.orderees) {
       if (skip?.has(id)) continue; // already given this click's other meaning (orderOnBuilding)
@@ -7811,6 +7820,25 @@ export class RtsController {
     return any;
   }
 
+
+  /** Send the selection's workers onto one of our own buildings still going up: they resume
+   *  it, or — for a Human site that already has a builder — powerbuild it alongside
+   *  (SimWorld.assignBuilder / tickBuildings). Fanned WIDE around the footprint (distinct
+   *  approach points, SPEED_BUILD_SPREAD) so they ring the whole structure instead of all
+   *  walking onto the one centre point and shoving — WC3 builders spread over a structure.
+   *  Shared by the right-click on the site and the Repair button aimed at it. */
+  private resumeBuildAt(picked: number, queued: boolean): boolean {
+    const target = this.sim.units.get(picked);
+    if (!target) return false;
+    const workers = [...this.orderees].filter((id) => !!this.sim.units.get(id)?.worker);
+    const spread = ringTargets(this.sim, workers, target.x, target.y, target.radius, SPEED_BUILD_SPREAD);
+    let any = false;
+    for (const id of workers) {
+      const p = spread.get(id);
+      if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "buildresume", buildingId: picked, ax: p?.[0], ay: p?.[1] }, queued })) any = true;
+    }
+    return any;
+  }
 
   selectedInfo(): SelectionInfo | null {
     if (this.selectedMine !== null) return this.mineInfo(this.selectedMine);
@@ -10391,19 +10419,7 @@ export class RtsController {
     }
     let handled = false;
     if (own && target.building && target.building.constructionLeft > 0) {
-      // Own building still going up: workers resume/assist it. Fan the group
-      // around the footprint (distinct approach points) so they don't all walk
-      // onto the one centre point and shove — WC3 builders spread over a structure.
-      const workers = [...this.orderees].filter((id) => !!this.sim.units.get(id)?.worker);
-      // Speed-build: fan the builders WIDE around the structure (extra spacing) so
-      // they ring the whole footprint instead of bunching on the near edge and
-      // shoving. A gold-mine approach stays tight; this doesn't need to.
-      const spread = ringTargets(this.sim, workers, target.x, target.y, target.radius, SPEED_BUILD_SPREAD);
-      for (const id of workers) {
-        const p = spread.get(id);
-        this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "buildresume", buildingId: picked, ax: p?.[0], ay: p?.[1] }, queued: queued });
-      }
-      handled = workers.length > 0;
+      handled = this.resumeBuildAt(picked, queued);
     } else if (own && target.hp < target.maxHp) {
       handled = this.repairAt(picked, queued, carriers); // own damaged building: workers repair
     }
