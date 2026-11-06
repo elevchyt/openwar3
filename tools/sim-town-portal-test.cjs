@@ -52,6 +52,12 @@ const ABILITIES = new Map([
     levelData: [lvl({ castTime: 5, area: 1100, castRange: 99999, data: D(90, 1) })],
   })],
   // A map that has edited the cast away — the instant path still has to work.
+  // `[AImt] code=AHmt targs1=ground,structure,vuln,invu,player,neutral,ally Area1=800
+  // DataA1=24 DataB1=3` — the Staff of Teleportation, which is Mass Teleport on an item.
+  ["AImt", ability("AImt", {
+    code: "AHmt", target: "unit", targetFlags: ["ground", "structure", "friend", "vuln", "invu"],
+    levelData: [lvl({ area: 800, castRange: 99999, data: D(24, 3) })],
+  })],
   ["AItq", ability("AItq", {
     code: "AItp", target: "point", targetFlags: TP_TARGS,
     levelData: [lvl({ castTime: 0, area: 1100, castRange: 99999, data: D(90, 1) })],
@@ -64,7 +70,7 @@ const item = (id, abil) => ({
   droppable: true, sellable: true, pawnable: true, pickRandom: false, maxHp: 75,
   stockMax: 1, stockRegen: 120, stockStart: 0,
 });
-const ITEMS = new Map([["stwp", item("stwp", "AItp")], ["stwq", item("stwq", "AItq")]]);
+const ITEMS = new Map([["stwp", item("stwp", "AItp")], ["stwq", item("stwq", "AItq")], ["stel", { ...item("stel", "AImt"), charges: 0, perishable: false, cooldownGroup: "AImt" }]]);
 // `buffType = "townhall"` is what a Town Portal resolves to — UnitData's own category, so a
 // Great Hall, a Necropolis and a Tree of Life all answer without a per-race list.
 const DEF = { priority: 0, buffType: "", abilities: [], upgradesUsed: [], classification: [], moveHeight: 0, defUp: 2, foodUsed: 0 };
@@ -335,6 +341,62 @@ console.log("\n-- a ward stays where it was planted (issue #208) ---------------
   at("the hero went", h, 1000, 1000);
   at("…and the soldier with it", troop, 1000, 1000);
   at("…while the ward stayed where it was planted", ward, 6100, 6100);
+}
+
+console.log("\n-- a Staff of Teleportation holds its target, and is broken by a stun ---------");
+
+{
+  world = newWorld();
+  const h = give(heroAt(6000, 6000), "stel");
+  const dest = soldier(1000, 1000);
+  check("the staff is accepted", world.useItem(h.id, 0, dest.id, dest.x, dest.y), true);
+  check("…it starts the three-second wait", h.portalLeft, 3);
+  world.issueMove(dest.id, 3000, 1000);
+  step(1);
+  check("the unit it is aimed at cannot move meanwhile", dest.speed, 0);
+  at("…and has not", dest, 1000, 1000);
+  check("…while the caster is NOT invulnerable (that is the scroll's alone)", h.invulnerable, false);
+  step(2.2);
+  at("after the wait the caster is at the target", h, 1000, 1000);
+  check("…and the target walks again", dest.speed > 0, true);
+}
+
+{
+  world = newWorld();
+  const h = give(heroAt(6000, 6000), "stel");
+  const dest = soldier(1000, 1000);
+  world.useItem(h.id, 0, dest.id, dest.x, dest.y);
+  step(1);
+  h.buffs.push({ kind: "stun", group: "stun", timeLeft: 2, total: 2, sourceId: 0, value: 0, value2: 0, art: "", fx: [], buffId: "BPSE", delay: 0 });
+  step(0.1);
+  check("a stunned caster's teleport is broken", h.portalLeft, 0);
+  check("…and the target is let go", dest.speed > 0, true);
+  step(4);
+  at("…and nobody went anywhere", h, 6000, 6000);
+}
+
+{
+  world = newWorld();
+  const h = give(heroAt(6000, 6000), "stel");
+  const dest = soldier(1000, 1000);
+  world.useItem(h.id, 0, dest.id, dest.x, dest.y);
+  step(1);
+  h.buffs.push({ kind: "root", group: "ensnare", timeLeft: 2, total: 2, sourceId: 0, value: 1, value2: 0, art: "", fx: [], buffId: "Beng", delay: 0 });
+  step(0.1);
+  check("…and so is a ROOTED one's", h.portalLeft, 0);
+}
+
+{
+  // …while the SCROLL cannot be broken at all: "under no circumstances can the town portal be
+  // aborted once started" — a stun pushed onto the hero by force changes nothing.
+  world = newWorld();
+  const h = give(heroAt(6000, 6000), "stwp");
+  hall(1000, 1000);
+  world.useItem(h.id, 0, 0, h.x, h.y);
+  step(1);
+  h.buffs.push({ kind: "stun", group: "stun", timeLeft: 2, total: 2, sourceId: 0, value: 0, value2: 0, art: "", fx: [], buffId: "BPSE", delay: 0 });
+  step(4.2);
+  at("the scroll goes through regardless", h, 1000, 1000);
 }
 
 console.log("\n-- a map that edits the cast away -------------------------------------------");

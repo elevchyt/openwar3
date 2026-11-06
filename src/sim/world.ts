@@ -13741,6 +13741,11 @@ export class SimWorld {
     // a just-uprooted Ancient slid across the ground through its own morph clip.
     if (u.morphT > 0) u.speed = 0;
     if (u.portalLeft > 0) u.speed = 0; // "the Hero cannot do any action" — including move
+    // …and the unit a Mass Teleport / Staff of Teleportation is aimed AT stays where it is for
+    // the wait: the party is put down around it when the clock runs out, so a destination that
+    // walked off would drag the arrival with it. Held as a net holds — the speed alone, so its
+    // orders are still there when the channel ends (see `pinned`).
+    if (this.teleportChannels.size && this.portalHolds(u)) u.speed = 0;
     if (root) u.altModel = !u.uprooted; // planted = the alternate half of the Ancient model
     u.manaRegen = this.manaRegenSuspended(u)
       ? 0
@@ -27006,10 +27011,35 @@ export class SimWorld {
     this.recomputeStats(u); // invulnerable (the scroll) and rooted from this instant, not the next tick
   }
 
-  /** The channel, and what it ends in. Nothing here can cancel it: the only way out is the
-   *  caster dying — which cannot happen to a hero holding a scroll, but can to an Archmage —
-   *  or being removed from the world, and `portalLeft` goes with the unit either way. */
+  /** Is `u` the DESTINATION of a teleport being channelled right now? See recomputeStats. */
+  private portalHolds(u: SimUnit): boolean {
+    for (const id of this.teleportChannels) {
+      const c = this.units.get(id);
+      if (c && c !== u && c.portalLeft > 0 && c.portalDestId === u.id) return true;
+    }
+    return false;
+  }
+
+  /** The channel, and what it ends in.
+   *
+   *  The SCROLL cannot be cancelled: "under no circumstances can the town portal be aborted
+   *  once started", and the hero holding it is invulnerable, so nothing can land on him to try.
+   *  MASS TELEPORT and the STAFF OF TELEPORTATION (`AImt`, the same `AHmt` code) are not that:
+   *  their caster is a body like any other for the whole wait, and a body that is STUNNED,
+   *  put to SLEEP, HEXED or ROOTED where it stands is not casting anything — the teleport is
+   *  broken and nobody goes. What was paid for it stays paid; that is the risk of an
+   *  ultimate with a wait in it. Otherwise the only way out is the caster dying or being
+   *  removed from the world, and `portalLeft` goes with the unit either way. */
   private tickTownPortal(u: SimUnit, dt: number): void {
+    const code = this.abilities?.get(u.portalAbil)?.code;
+    if (code === "AHmt" && (u.stunned || this.pinned(u) || u.buffs.some((b) => b.kind === "hex"))) {
+      u.portalLeft = 0;
+      u.portalAbil = "";
+      u.portalDestId = 0;
+      this.teleportChannels.delete(u.id);
+      this.recomputeStats(u);
+      return;
+    }
     u.portalLeft = Math.max(0, u.portalLeft - dt);
     if (u.portalLeft > 0) return;
     const ad = this.abilities?.get(u.portalAbil);
