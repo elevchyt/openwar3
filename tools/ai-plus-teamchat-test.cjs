@@ -23,7 +23,7 @@ const {
   readAllyCall, namedColour, namedRace, namedPlayer, playerNames, plural, switchLine, openerLine,
   attackLine,
   HELP_CALLS, COMING_LINES, PORTAL_LINES, BUSY_LINES, JOIN_LINES, COLOUR_NAMES, RACE_WORDS,
-  RALLY_ACCEPT_LINES, RALLY_ALREADY_LINES, RALLY_BUSY_LINES,
+  RALLY_ACCEPT_LINES, RALLY_ALREADY_LINES, RALLY_BUSY_LINES, FOLLOW_LINES, UNFOLLOW_LINES,
 } = require(join(REPO, ".sim-build", "src", "ai", "plus", "teamchat.js"));
 
 let failed = 0;
@@ -51,6 +51,25 @@ for (const said of ["", "gg", "glhf", "nice one", "that helped", "helping you", 
 // fold turns into a space (so "can't" arrives as "can t" and needs its own alternative).
 for (const said of ["no help needed", "i cant help right now", "i can't help right now", "i'm busy"]) {
   check(`a decline, not a call: ${JSON.stringify(said)}`, readAllyCall(said), "busy");
+}
+
+// --- "follow me" ------------------------------------------------------------------------------
+// A person asking for the army at their side, in the forms it is typed: the word, its typos, and
+// "come" said on its own. "come here" stays a call for HELP and "coming" an answer.
+for (const said of [
+  "follow me", "Follow me!", "FOLLOW", "follow", "folow", "folow me", "follw me", "fallow me",
+  "guys follow me", "pls follow", "follow me lets attack", "come", "Come!", "come on", "come pls",
+  "cmon", "come with me", "stay with me", "go with me",
+]) check(`hears a follow: ${JSON.stringify(said)}`, readAllyCall(said), "follow");
+for (const said of ["stop following me", "dont follow me", "don't follow", "stop follow"]) {
+  check(`hears the follow called off: ${JSON.stringify(said)}`, readAllyCall(said), "unfollow");
+}
+check("\"come here\" is still a call for help", readAllyCall("come here"), "help");
+check("\"coming\" is still an answer", readAllyCall("coming"), "coming");
+check("\"can't come\" is still a decline", readAllyCall("can't come right now, i'm in a fight"), "busy");
+for (const said of [...FOLLOW_LINES, ...UNFOLLOW_LINES]) {
+  const got = readAllyCall(said);
+  check(`a follow answer is no call: ${JSON.stringify(said)}`, got === null || got === "coming", true);
 }
 
 // --- it does not eat its own vocabulary --------------------------------------------------------

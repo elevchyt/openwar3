@@ -29,6 +29,7 @@ import {
   openerLine, readAllyCall, switchLine,
   RALLY_ACCEPT_LINES, RALLY_ALREADY_LINES, RALLY_ANSWER_GAP, RALLY_BUSY_LINES,
   ESCORT_HOLD, ESCORT_NEAR, ESCORT_STAGE, ESCORT_WAIT, TEAM_FOCUS,
+  FOLLOW_LINES, FOLLOW_TIMEOUT, UNFOLLOW_LINES,
   type PlayerName, type SwitchReason,
 } from "./teamchat";
 import { liveProfile, plusProfile, type PlusProfile } from "./profile";
@@ -2706,6 +2707,14 @@ interface Brain {
    *  it stays, 1 it goes home. Re-armed only once the captain is back above the line, so one
    *  wound is one decision — see `healTrip`. */
   healRoll: number;
+  /** A "follow me" not yet answered (-1 = none): who asked, and when this computer's turn to
+   *  answer comes (`HELP_ANSWER_STAGGER`). Parked by `heard` like `called`. */
+  followCall: number;
+  followAt: number;
+  /** The player whose army this one is walking WITH (-1 = none), and when that runs out
+   *  (`FOLLOW_TIMEOUT`). See `answerFollow` / `followWave`. */
+  following: number;
+  followUntil: number;
   /** The ally this relief wave is for (-1 = none), and the clock it gives up on. */
   helping: number;
   helpUntil: number;
@@ -3076,6 +3085,10 @@ export class ComputerPlusAi {
       allyFoeAt: -Infinity,
       escort: null,
       healRoll: -1,
+      followCall: -1,
+      followAt: 0,
+      following: -1,
+      followUntil: 0,
       helping: -1,
       helpUntil: 0,
       helpSince: 0,
@@ -3189,6 +3202,24 @@ export class ComputerPlusAi {
         if (line.from === me || !recipients.includes(me) || !this.host.coAllied(me, line.from)) continue;
         if (b.mode !== "attacking" || b.creeping || this.targetOwner(b) < 0) continue;
         b.escort = { ally: line.from, at: b.clock, holdSince: -1 };
+      }
+      return;
+    }
+    // "follow me" / "stop following me" — a PERSON asking for the army at their side. Parked like a
+    // call for help, each listener on its own turn, and only ever from somebody co-allied.
+    if (call === "follow" || call === "unfollow") {
+      let turn = 0;
+      for (const b of this.brains) {
+        if (b.gone || b.concededAt >= 0) continue;
+        const me = b.ai.player;
+        if (line.from === me || !recipients.includes(me) || !this.host.coAllied(me, line.from)) continue;
+        if (call === "unfollow") {
+          if (b.following === line.from) this.dropFollow(b, true, true);
+          if (b.followCall === line.from) b.followCall = -1;
+          continue;
+        }
+        b.followCall = line.from;
+        b.followAt = b.clock + HELP_ANSWER_STAGGER * turn++;
       }
       return;
     }
@@ -6249,6 +6280,18 @@ export class ComputerPlusAi {
     if (!allIn && this.healTrip(b)) return void this.retreat(b, "heal");
     const target = b.target;
     if (!target) return void this.endWave(b);
+    // FOLLOWING an ally (`answerFollow`): the objective is wherever their army is NOW, so it is
+    // re-aimed every pass and never "done" by arriving — standing beside them IS the job, and the
+    // stall watchdog would read that as a party that cannot get anywhere. Everything above (a
+    // fight gone bad, a hero going home to heal) still applies: following is not dying for them.
+    if (b.following >= 0) {
+      const lead = this.followSpot(b, b.following);
+      if (lead) {
+        target.x = lead.x;
+        target.y = lead.y;
+      }
+      return void this.recommit(b, target.x, target.y);
+    }
     if (b.creeping) {
       // A CREEP RUN IS OVER WHEN THE CAMP IS DEAD, and that is a question about the CAMP rather
       // than about a radius drawn round where it stood. Asked the generic way — "is anybody
@@ -9262,9 +9305,13 @@ export class ComputerPlusAi {
     if (!b.allies.length) {
       b.called = -1; // nobody to have called; a stale one must not fire if a team forms later
       b.joinCall = null;
+      b.followCall = -1;
+      if (b.following >= 0) this.dropFollow(b, true, false);
       return;
     }
     this.openerTalk(b);
+    this.followWave(b);
+    this.answerFollow(b);
     this.helpWave(b);
     this.answerCall(b);
     this.callForHelp(b);
@@ -9618,6 +9665,7 @@ export class ComputerPlusAi {
     if (this.portalHeld(b)) return decline(RALLY_BUSY_LINES.notReady);
     const spot = this.foeBase(b, foe);
     if (!spot) return;
+    if (b.following >= 0) this.dropFollow(b, false, false); // joining an attack ends a follow
     b.joining = foe;
     b.joinUntil = b.clock + JOIN_TIMEOUT;
     b.allyFoe = foe;
@@ -9803,6 +9851,89 @@ export class ComputerPlusAi {
   // --- answering -------------------------------------------------------------------------
 
   /**
+   * "Follow me." Go and walk WITH that player's army, or say why not.
+   *
+   * The army is set "attacking" at the ally's own army (`followSpot`), and `attacking` re-aims it
+   * every pass, so it walks where they walk and fights what they fight — the attack-move the
+   * wave is under acquires on the way, as it does on any push. It ends on "stop following me",
+   * on `FOLLOW_TIMEOUT` (renewed by saying it again), when the ally has no army we can see, and
+   * whenever the wave stops attacking at all (called home to defend, beaten, gone to heal):
+   * `followWave`.
+   *
+   * The declines are the rescue's (`busyLines`) less the two that do not apply to walking beside
+   * somebody — a small army may come along, and a wave already out simply turns round — so the
+   * only no is "my base is under attack" or "my army is dead". A computer already relieving one
+   * ally is not handed to another one.
+   */
+  private answerFollow(b: Brain): void {
+    if (b.followCall < 0 || b.clock < b.followAt) return;
+    const from = b.followCall;
+    b.followCall = -1;
+    if (!b.allies.includes(from)) return;
+    if (b.following === from) {
+      b.followUntil = b.clock + FOLLOW_TIMEOUT; // asked again: the promise is renewed
+      return;
+    }
+    if (b.helping >= 0) return void this.tell(b, RALLY_BUSY_LINES.helping);
+    if (b.mode === "defending" || b.ai.townThreatened()) return void this.tell(b, BUSY_LINES.attacked);
+    if (!this.squadFood(b) && !this.squadHero(b)) return void this.tell(b, BUSY_LINES.broken);
+    const spot = this.followSpot(b, from);
+    if (!spot) return;
+    b.helpResume = b.mode === "attacking" && b.target
+      ? { mode: b.mode, target: { ...b.target }, creeping: b.creeping }
+      : null;
+    b.following = from;
+    b.followUntil = b.clock + FOLLOW_TIMEOUT;
+    b.joining = -1;
+    b.creeping = false;
+    b.press = null;
+    b.target = { id: 0, x: spot.x, y: spot.y };
+    this.setMode(b, "attacking");
+    this.tell(b, FOLLOW_LINES);
+    this.commit(b, spot.x, spot.y);
+  }
+
+  /** Ends a follow — see `answerFollow` for when. */
+  private followWave(b: Brain): void {
+    if (b.following < 0) return;
+    if (b.mode !== "attacking") return void this.dropFollow(b, false, false); // home, defending, or broken
+    if (!b.allies.includes(b.following) || b.clock > b.followUntil || !this.followSpot(b, b.following)) {
+      this.dropFollow(b, true, false);
+    }
+  }
+
+  /** Stop following. `resume` puts the wave back on what it was doing when it was asked (as a
+   *  rescue that ended does, `dropHelp`), else home; `say` answers a "stop following me". */
+  private dropFollow(b: Brain, resume: boolean, say: boolean): void {
+    b.following = -1;
+    if (say) this.tell(b, UNFOLLOW_LINES);
+    const back = b.helpResume;
+    b.helpResume = null;
+    if (!resume || b.mode !== "attacking") return;
+    const still = back?.target && (!back.target.id || (this.host.world.units.get(back.target.id)?.hp ?? 0) > 0);
+    if (!back || !still) return void this.endWave(b);
+    b.target = back.target;
+    b.creeping = back.creeping;
+    this.setMode(b, back.mode);
+  }
+
+  /** Where the army being followed is: the ally's HERO nearest to us, because the hero is what a
+   *  person walks the army about with and what "me" in "follow me" is; else the middle of their
+   *  army. Only what this computer can see (`AiPlayer.knows` — shared vision makes that all of
+   *  it, in a team game). Null when nothing of theirs is in sight. */
+  private followSpot(b: Brain, ally: number): { x: number; y: number } | null {
+    const from = this.squadHero(b) ?? b.ai.home();
+    let best: SimUnit | null = null;
+    let bestD = Infinity;
+    for (const u of this.host.world.units.values()) {
+      if (u.owner !== ally || u.hp <= 0 || !u.isHero || isOffField(u) || !b.ai.knows(u)) continue;
+      const d = Math.hypot(u.x - from.x, u.y - from.y);
+      if (d < bestD) { bestD = d; best = u; }
+    }
+    return best ? { x: best.x, y: best.y } : this.allyArmy(b, ally);
+  }
+
+  /**
    * An ally asked for help. Go, or say why not.
    *
    * The DECLINE is as much of the feature as the relief wave is, and it is the honest half: an
@@ -9830,6 +9961,9 @@ export class ComputerPlusAi {
     if (!spot) return;
     const busy = this.busyLines(b);
     if (busy) return void this.tell(b, busy);
+    // A rescue outranks a walk beside somebody: the follow ends where it is (its own memory of
+    // what the wave was doing becomes the rescue's, below).
+    if (b.following >= 0) b.following = -1;
     // What this wave was doing, so calling the rescue off puts it back rather than leaving it
     // standing in the middle of the map — see `helpWave`. Only a wave in the FIELD is worth
     // remembering; a computer that was massing at home simply goes back to massing.

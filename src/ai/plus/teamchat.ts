@@ -83,7 +83,7 @@ function fold(text: string): string {
  * a QUESTION put to the team, and silence is not an answer to a question — so a rally is always
  * answered, yes or no, and the no says why (`RALLY_BUSY_LINES`).
  */
-export type AllyCall = "help" | "coming" | "busy" | "attack" | "rally" | "joining";
+export type AllyCall = "help" | "coming" | "busy" | "attack" | "rally" | "joining" | "follow" | "unfollow";
 
 /**
  * What an ally just said, or null for anything this AI has no reading of.
@@ -105,7 +105,14 @@ export function readAllyCall(text: string): AllyCall | null {
   if (!said.trim()) return null;
   if (JOINING.some((re) => re.test(said))) return "joining";
   if (COMING.some((re) => re.test(said))) return "coming";
+  // "stop following me" / "dont follow" — before the declines, which would otherwise not read
+  // it at all, and before FOLLOW, whose word it carries.
+  if (UNFOLLOW.some((re) => re.test(said))) return "unfollow";
   if (BUSY.some((re) => re.test(said))) return "busy";
+  // "follow me", "come", "folow" — the speaker wants the army WITH THEM, wherever they walk it.
+  // Above the rally and help readings, because "come with me" and "follow me, lets attack" are
+  // still a request to walk beside this player before they are anything else.
+  if (FOLLOW.some((re) => re.test(said))) return "follow";
   // BEING attacked is not attacking. "im under attack", "they are hitting my base" and "the orc is
   // rushing me" all carry the word both attack readings are recognised by, and every one of them
   // is a call for HELP — so neither attack reading may have them, and they fall through to `HELP`.
@@ -144,6 +151,35 @@ const JOINING: readonly RegExp[] = [
   /^ (?:[a-z]+ ){0,2}on it $/,
 ];
 
+/** The word "follow" as it is typed in a hurry — the typos (`folow`, `follw`, `fallow`, `flw`…)
+ *  are the developer's own list's spirit: a person who means "follow" has said it. Never
+ *  `following`/`followed` (the WORD match), which is how an answer ("ok, following you") stays
+ *  out of the reading. */
+const FOLLOW_WORD = "(follow|folow|follw|foll|fallow|fllow|follwo|foloow|folllow|flw|flollow|follo)";
+
+/**
+ * "Follow me." A person asking for the army to come WITH them — their hero, wherever they walk
+ * it — rather than to their base (`help`) or at a player (`rally`). Three shapes:
+ *
+ *  · the word itself, with or without "me"/"us"/"my army" — "follow me", "folow", "FOLLOW!",
+ *    "guys follow me", "pls follow";
+ *  · COME on its own — "come", "come on", "come pls", "c mon" — a whole line that is just the
+ *    summons. A longer line with "come" in it is already somebody else's: "come here" and "come
+ *    to me" are calls for HELP (`HELP`), "coming" is an answer (`COMING`);
+ *  · WITH ME — "come with me", "go with me", "stay with me", "stick with me".
+ */
+const FOLLOW: readonly RegExp[] = [
+  new RegExp(`\\b${FOLLOW_WORD}\\b`),
+  /^ (?:(?:ok|okay|guys|team|all|now|pls|plz|please|and) ){0,2}(come|cmon|c mon|comon|kom|commme|comee|come on)(?: (?:on|guys|team|all|now|pls|plz|please|quick|fast))? $/,
+  /\b(come|go|stay|stick|walk|move) with (me|us)\b/,
+];
+
+/** "Stop following me" — the follow called off. */
+const UNFOLLOW: readonly RegExp[] = [
+  new RegExp(`\\b(stop|dont|don t|do not|quit|no more) (following|${FOLLOW_WORD.slice(1, -1)})\\b`),
+  /\b(stop|dont|don t|do not) (follow|following|come)\b/,
+];
+
 /** The verbs a rally is made of. `go in`, `all in` and `gank` are how it is typed as often as
  *  `attack` is. */
 const RALLY_VERB = "(attack|atk|hit|push|rush|siege|raid|gank|kill|fight|engage|charge|go in|all in)";
@@ -170,7 +206,7 @@ const RALLY: readonly RegExp[] = [
   /^ (?:ok |okay |guys |come on )?(lets|let s) go(?: (?:guys|team|all|now|in))? $/,
   /^ (?:gogo|go go|go go go|all in) $/,
   new RegExp(`\\b${RALLY_VERB} with me\\b`),
-  /\b(join me|come with me|who s with me|whos with me|who is with me)\b/,
+  /\b(join me|who s with me|whos with me|who is with me)\b/,
   new RegExp(`\\b(we|we should|we must|time to|go|come|come and)\\b ${RALLY_VERB}\\b`),
 ];
 
@@ -260,6 +296,19 @@ export const HELP_CALLS = [
 
 /** Answering, on foot. */
 export const COMING_LINES = ["omw", "on my way", "coming"] as const;
+
+/** Saying yes to "follow me". None of them is a FOLLOW or a call in this file's own reading
+ *  (`following` is not the word `follow`; `tools/ai-plus-teamchat-test.cjs` pins it), so the
+ *  third teammate hears an answer and nothing to do. */
+export const FOLLOW_LINES = ["ok, following you", "following", "ok, with you"] as const;
+
+/** …and calling it off when told to. */
+export const UNFOLLOW_LINES = ["ok", "ok, going back"] as const;
+
+/** How long one "follow me" binds, in seconds — OURS, as every number here is: long enough to
+ *  walk a hero across a map and into a fight, short enough that a person who forgot they asked
+ *  gets their teammate's army back. Saying it again renews it. */
+export const FOLLOW_TIMEOUT = 120;
 
 /** …and answering by scroll, which is worth saying out loud: an ally who knows the reinforcement
  *  arrives in five seconds rather than in twenty plays the fight differently. */
