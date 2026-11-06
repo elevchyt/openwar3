@@ -3033,7 +3033,7 @@ const REBIRTH_MATCH_WINDOW = 2;
 const REBIRTH_ART = "Abilities\\Spells\\Orc\\FeralSpirit\\feralspiritdone.mdl";
 /** The burst a Way Gate leaves on a unit at the gate it enters and the spot it comes out —
  *  the per-body mark of the game's teleports (`[AHmt]`/`[AItp]` Specialart). See tickWaygates. */
-const WAYGATE_TRAVEL_ART = "Abilities\\Spells\\Human\\MassTeleport\\MassTeleportTarget.mdl";
+const WAYGATE_TRAVEL_ART = "Abilities\\Spells\\Human\\MassTeleport\\MassTeleportTarget.mdx"; // .mdx: the viewer loads the binary twin, as every art the tables name is normalised to
 /**
  * How near its gold mine a Tree of Life ROOTS when it roots in order to ENTANGLE it — per axis,
  * a square around the mine's centre rather than a circle. The game's own refusal line is
@@ -19957,6 +19957,12 @@ export class SimWorld {
   /** The active gate standing on region `from` whose landing is on region `to`, the one with the
    *  shortest walk on both sides if there are several. See gateHop. */
   private gateBetween(u: SimUnit, from: number, to: number, tx: number, ty: number): SimUnit | null {
+    // A CREEP never takes a gate. Its whole world is its camp, leashed to a post by straight
+    // distance (MaxGuardDistance 1000), so one that chased a hero through a gate stood 10 000
+    // units from home the moment it came out, leashed straight back in, and — its camp-mates
+    // still fighting at the gate it had left — went through again: a camp bouncing between two
+    // gates for as long as the fight lasted (seen live on (2)MysticIsles' south-west gate).
+    if (u.isCreep) return null;
     const domain = pathDomain(u);
     const n = u.footprint;
     let best: SimUnit | null = null;
