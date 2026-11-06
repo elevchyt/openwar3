@@ -186,6 +186,10 @@ console.log("\nSpell Steal (Asps): a buff the enemy's side hung goes to the Spel
   const grunt = spawn(w, "ogru", C + 300, C, 1, 1);
   const shaman = spawn(w, "oshm", C + 500, C, 1, 1);
   w.spellApi.applyBuff(grunt, { kind: "haste", group: "bloodlust", timeLeft: 40, sourceId: shaman.id, value: 0.25, value2: 0.4, buffId: "Bblo" });
+  // The Shaman's own Bloodlust autocast is switched off: its attack is MAGIC and the Spell
+  // Breaker is magic immune, so it has nothing to swing at and would simply hang a fresh
+  // Bloodlust on the Grunt fighting beside it — the steal is what is measured here.
+  for (const a of shaman.abilities) a.autocastOn = false;
   check("the press is accepted", w.issueCast(breaker.id, "Asps", grunt.id), true);
   run(w, 1.5);
   check("the Grunt has lost its Bloodlust", grunt.buffs.some((b) => b.group === "bloodlust"), false);
