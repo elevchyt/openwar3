@@ -7621,7 +7621,7 @@ export class RtsController {
         // hint. The sim's own price (SimWorld.pawnPrice), so the line cannot quote a number the
         // shop will not pay.
         ...(() => {
-          const p = this.sim.pawnPrice(held.itemId);
+          const p = this.sim.pawnPrice(held.itemId, held.charges);
           return { sellGold: p.gold, sellLumber: p.lumber };
         })(),
       };

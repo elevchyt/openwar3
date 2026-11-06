@@ -5322,11 +5322,20 @@ export class SimWorld {
 
   /** What a shop pays for an item: `PawnItemRate` of its gold and lumber, rounded down — the
    *  one price both the sale (pawnItem) and the inventory tooltip's gold line quote, so the
-   *  number the player reads is the number they are paid. 0/0 for an item nobody will buy. */
-  pawnPrice(itemId: string): { gold: number; lumber: number } {
+   *  number the player reads is the number they are paid. 0/0 for an item nobody will buy.
+   *
+   *  A CHARGED item is paid for by the charge: the rate is taken of the share of its charges
+   *  still in it (`charges / ItemData.uses`), so a full Healing Salve (100 gold, 3 uses) sells
+   *  for 50, one with 2 left for 33 and one with 1 left for 16 — the original game's own
+   *  payouts. Selling a drunk-down bottle at the full-bottle price was a gold printer: buy,
+   *  drink two, sell. An item whose type carries no charges (`uses` 0) is unaffected, and so
+   *  is a call with no held item (a price quoted off the type alone). */
+  pawnPrice(itemId: string, charges?: number): { gold: number; lumber: number } {
     const def = this.itemReg?.get(itemId);
     if (!def?.pawnable) return { gold: 0, lumber: 0 };
-    return { gold: Math.floor(def.gold * gameNum("PawnItemRate")), lumber: Math.floor(def.lumber * gameNum("PawnItemRate")) };
+    const share = def.charges > 0 && charges !== undefined ? Math.max(0, charges) / def.charges : 1;
+    const rate = gameNum("PawnItemRate") * share;
+    return { gold: Math.floor(def.gold * rate), lumber: Math.floor(def.lumber * rate) };
   }
 
   /** Sell an item back to a shop. WC3 pays `PawnItemRate` of its gold value (0.50 in the
@@ -5355,7 +5364,7 @@ export class SimWorld {
     if (!this.inPawnRange(u, shop)) return false;
     u.inventory[slot] = null;
     const stash = this.stashOf(u.owner);
-    const { gold, lumber } = this.pawnPrice(held.itemId);
+    const { gold, lumber } = this.pawnPrice(held.itemId, held.charges);
     stash.gold += gold;
     stash.lumber += lumber;
     // Being paid is a thing you SEE (issue #120), and the seller is where you are looking —
