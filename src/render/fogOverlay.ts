@@ -117,6 +117,15 @@ export class FogOverlay {
   private darkBuf: WebGLBuffer;
   private idxBuf: WebGLBuffer;
   private idx: Uint16Array | Uint32Array; // CPU copy of idxBuf, for skipCells
+  /** The WATER cells' half of the veil (`waterCells`): the same grid and the same six-per-cell
+   *  layout as `idx`, each cell that is not under water collapsed onto one vertex. Null until a
+   *  map with water says which cells those are. */
+  private waterIdxBuf: WebGLBuffer | null = null;
+  private waterIdx: Uint16Array | Uint32Array | null = null;
+  /** The full, uncollapsed index list — what `skipCells`/`waterCells` collapse copies of. */
+  private allIdx: Uint16Array | Uint32Array;
+  private noGround: Uint8Array | null = null;
+  private water: Uint8Array | null = null;
   private idxDirty = false; // idx changed since the last upload (skipCells → render)
   private aPos: number;
   private aDark: number;
@@ -219,6 +228,7 @@ export class FogOverlay {
     this.posBuf = createBuffer(gl, gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
     this.darkBuf = createBuffer(gl, gl.ARRAY_BUFFER, this.dark, gl.DYNAMIC_DRAW);
     this.idx = idx;
+    this.allIdx = idx.slice();
     this.idxBuf = createBuffer(gl, gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
 
     // Per-corner brightness texture for the cliff shader (see field comment). Corner
@@ -268,15 +278,57 @@ export class FogOverlay {
    * render() uploads it, with its own index buffer bound under its own state discipline.
    */
   skipCells(noGround: Uint8Array): void {
+    if (noGround.length !== (this.gridW - 1) * (this.gridH - 1)) return;
+    this.noGround = noGround;
+    this.rebuildIndices();
+  }
+
+  /**
+   * Which cells carry the WATER sheet (one byte per cell, row-major — the viewer's own
+   * `isWater`: any of the four corners flagged water). Those cells are veiled by
+   * `renderUnderWater`, BEFORE the water is drawn, and taken out of `render`'s veil.
+   *
+   * The sheet writes no depth, so the veil — drawn last, laid on the GROUND under the water —
+   * passed the depth test straight through it and darkened the sea a SECOND time, on top of
+   * the fog the water shader already applies to itself (it has to: on a cliff or ramp tile
+   * there is no veil at all, `skipCells`). So every water cell with ground under it was dimmed
+   * twice and every one over a cliff tile once, and where the two kinds alternate — the deep
+   * water along a map's unplayable border, (2)MysticIsles' south edge — the fogged sea broke
+   * into hard-edged rectangles of two brightnesses. Veiled first, the floor is dimmed once and
+   * the water over it dims ITSELF once, the same as it always did over the cliffs.
+   */
+  waterCells(water: Uint8Array): void {
+    if (water.length !== (this.gridW - 1) * (this.gridH - 1)) return;
+    this.water = water;
+    this.rebuildIndices();
+  }
+
+  /** Re-derive both index lists from the full one: the main veil skips groundless and water
+   *  cells, the under-water veil keeps only water cells that have ground. A skipped cell keeps
+   *  its six indices collapsed onto one vertex, so a run of cells is still a run of indices for
+   *  the terrain cull (render()). Uploaded by the draw that next uses each list. */
+  private rebuildIndices(): void {
     const cellsX = this.gridW - 1;
-    if (noGround.length !== cellsX * (this.gridH - 1)) return;
     const idx = this.idx;
-    for (let c = 0; c < noGround.length; c++) {
-      if (!noGround[c]) continue;
-      idx.fill(Math.floor(c / cellsX) * this.gridW + (c % cellsX), c * 6, c * 6 + 6);
+    idx.set(this.allIdx);
+    const water = this.water;
+    let wIdx = this.waterIdx;
+    if (water && !wIdx) {
+      wIdx = this.waterIdx = this.allIdx.slice();
+      this.waterIdxBuf = createBuffer(this.gl, this.gl.ELEMENT_ARRAY_BUFFER, wIdx, this.gl.DYNAMIC_DRAW);
+    }
+    if (wIdx) wIdx.set(this.allIdx);
+    for (let c = 0; c < idx.length / 6; c++) {
+      const collapsed = Math.floor(c / cellsX) * this.gridW + (c % cellsX);
+      const groundless = !!this.noGround?.[c];
+      const wet = !!water?.[c];
+      if (groundless || wet) idx.fill(collapsed, c * 6, c * 6 + 6);
+      if (wIdx && (groundless || !wet)) wIdx.fill(collapsed, c * 6, c * 6 + 6);
     }
     this.idxDirty = true;
+    this.waterIdxDirty = true;
   }
+  private waterIdxDirty = false;
 
   /** The per-corner fog brightness texture, for the viewer's patched cliff shader. */
   get fogTexture(): WebGLTexture {
@@ -403,6 +455,16 @@ export class FogOverlay {
    *  the viewer's cache goes stale and it draws the next frame's whole world with our
    *  fog shader (→ black screen). Every state set below has a matching restore. */
   render(viewProj: Float32Array | Iterable<number>, runs?: Int32Array | null): void {
+    this.draw(viewProj, runs, false);
+  }
+
+  /** The veil over the cells under WATER, drawn just before the water pass — see `waterCells`.
+   *  Nothing to draw on a map with no water. */
+  renderUnderWater(viewProj: Float32Array | Iterable<number>, runs?: Int32Array | null): void {
+    if (this.waterIdxBuf) this.draw(viewProj, runs, true);
+  }
+
+  private draw(viewProj: Float32Array | Iterable<number>, runs: Int32Array | null | undefined, wet: boolean): void {
     if (this.indexCount === 0) return; // map too big for Uint16 and no uint-index ext
     const gl = this.gl;
     const prevProgram = gl.getParameter(gl.CURRENT_PROGRAM) as WebGLProgram | null;
@@ -452,10 +514,18 @@ export class FogOverlay {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.darkBuf);
     gl.enableVertexAttribArray(this.aDark);
     gl.vertexAttribPointer(this.aDark, 1, gl.FLOAT, false, 0, 0);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.idxBuf);
-    if (this.idxDirty) {
-      gl.bufferSubData(gl.ELEMENT_ARRAY_BUFFER, 0, this.idx);
-      this.idxDirty = false;
+    if (wet) {
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.waterIdxBuf);
+      if (this.waterIdxDirty && this.waterIdx) {
+        gl.bufferSubData(gl.ELEMENT_ARRAY_BUFFER, 0, this.waterIdx);
+        this.waterIdxDirty = false;
+      }
+    } else {
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.idxBuf);
+      if (this.idxDirty) {
+        gl.bufferSubData(gl.ELEMENT_ARRAY_BUFFER, 0, this.idx);
+        this.idxDirty = false;
+      }
     }
     // Camera culling (docs/terrain-culling.md). The veil is a second mesh the size of the
     // terrain — one quad per cell over the WHOLE map — so it was the biggest full-map sweep
@@ -494,6 +564,7 @@ export class FogOverlay {
     gl.deleteBuffer(this.posBuf);
     gl.deleteBuffer(this.darkBuf);
     gl.deleteBuffer(this.idxBuf);
+    if (this.waterIdxBuf) gl.deleteBuffer(this.waterIdxBuf);
     gl.deleteTexture(this.fogTex);
     gl.deleteProgram(this.program);
   }

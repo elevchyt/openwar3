@@ -15941,6 +15941,9 @@ export class MapViewerScene {
         if (this.terrainShadows) this.terrainShadows.render(fogScene.camera.viewProjectionMatrix);
         if (this.shadows && unitShadows) this.shadows.render(fogScene.camera.viewProjectionMatrix);
         fogScene.renderOpaque();
+        // The fog veil over the sea FLOOR goes down before the sea (FogOverlay.waterCells): the
+        // water sheet dims itself, and the rest of the veil, drawn last, no longer crosses it.
+        if (this.fog) this.fog.renderUnderWater(fogScene.camera.viewProjectionMatrix, this.terrainCull?.runs());
         map.renderWater();
         if (this.splats) this.splats.render(fogScene.camera.viewProjectionMatrix);
         // Building shadows draw AFTER the foundation decals so a building's shadow darkens
@@ -16287,6 +16290,32 @@ export class MapViewerScene {
       // stores texture + 1); a cliff or ramp tile leaves all four at zero.
       this.groundless ??= Uint8Array.from({ length: tex.length >> 2 }, (_, i) => (tex[i * 4] === 0 ? 1 : 0));
       layer.skipCells(this.groundless);
+      // …and the fog veil also splits off the cells under WATER, which it veils before the
+      // water pass rather than after it (FogOverlay.waterCells: the sheet writes no depth, and
+      // the veil drawn last dimmed it a second time on every cell but the cliffs).
+      if (layer === this.fog) {
+        // A cell is UNDER WATER where the sheet actually stands above the ground at one of its
+        // corners — the w3e water flag alone is not that: it is set under plenty of dry land
+        // (a Town Hall's own cells on Echo Isles), where the sheet is drawn and hidden by the
+        // ground, and a foundation decal drawn after the water there must keep its veil. Same
+        // test the viewer's water shader makes (water.vert: waterHeight + offset − height).
+        type Corner = { water: number; waterHeight: number; groundHeight: number; layerHeight: number };
+        const w = map as unknown as { corners?: Corner[][]; columns?: number; rows?: number; waterHeightOffset?: number };
+        const cols = w.columns ?? 0; // the viewer's columns/rows count CELLS, not corners
+        const rows = w.rows ?? 0;
+        const corners = w.corners;
+        if (corners && cols * rows === this.groundless.length) {
+          const off = w.waterHeightOffset ?? 0;
+          const wet = (c: Corner | undefined): boolean => !!c?.water && c.waterHeight + off > c.groundHeight + c.layerHeight - 2;
+          const water = new Uint8Array(cols * rows);
+          for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+              if (wet(corners[r]?.[c]) || wet(corners[r]?.[c + 1]) || wet(corners[r + 1]?.[c]) || wet(corners[r + 1]?.[c + 1])) water[r * cols + c] = 1;
+            }
+          }
+          this.fog.waterCells(water);
+        }
+      }
       this.groundlessDone.add(layer);
     }
   }

@@ -280,6 +280,15 @@ Read off `TerrainArt\Water.slk` and checked against 1.30.4 on Booty Bay:
   two wet corners take the straight model, one the inside corner, three the outside corner, each
   centred on its cell. The rule is READ OFF THE MODELS (every emitter swims toward the land), since
   no file states it. `shoreInFog` 0 shows foam only on ground in sight.
+* **The sea is fogged ONCE.** The water sheet writes no depth, and it dims itself by the fog mask
+  (it has to: a cliff or ramp tile has no veil under it). The veil drawn LAST passed the depth
+  test straight through the sheet and dimmed it again, so every water cell over ground was
+  darkened twice and every one over a cliff once — hard rectangles of two brightnesses wherever
+  the two alternate, which is the deep water along a map's border ((2)MysticIsles' south edge).
+  So the cells where the sheet stands above the ground (`FogOverlay.waterCells`, the water
+  shader's own `waterHeight + offset > height` test — the w3e water FLAG alone is set under dry
+  land too) are veiled by `renderUnderWater` just BEFORE the water pass, and the last veil skips
+  them.
 
 ## Fog of war: the fade and the tints
 
