@@ -2369,7 +2369,9 @@ export class AiPlayer {
       if (u.owner !== this.player || u.hp <= 0 || u.isIllusion) continue; // an illusion eats no food (GameAuthority.foodFor)
       const def = this.host.registry.get(u.typeId);
       if (!def) continue;
-      if (!u.foodFree) used += def.foodUsed; // nor does a charmed/possessed/reborn unit (SimUnit.foodFree)
+      // …nor a charmed/possessed/reborn unit (SimUnit.foodFree), nor a Wisp merged into a
+      // growing Ancient (SimWorld.mergedIntoAncient — the same reading GameAuthority.foodFor takes).
+      if (!u.foodFree && !this.host.world.mergedIntoAncient(u)) used += def.foodUsed;
       if (!u.building || u.building.constructionLeft <= 0) made += def.foodMade;
       // Every QUEUED unit counts here, and deliberately not the same reading as
       // GameAuthority.foodFor, which counts only what a queue has actually PAID for (food is

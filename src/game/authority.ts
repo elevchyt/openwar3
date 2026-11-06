@@ -348,7 +348,9 @@ export class Authority {
       const def = this.registry.get(u.typeId);
       // …nor does a unit an ABILITY handed over — Charm, Possession, a Rune of Rebirth's
       // monster (SimUnit.foodFree). It still MAKES food if it is a building that does.
-      if (!u.foodFree) used += def?.foodUsed ?? 0;
+      // …nor a Wisp already merged into the Ancient it is growing (SimWorld.mergedIntoAncient):
+      // it is paid for from the moment the build starts, and only a cancel gives it back.
+      if (!u.foodFree && !this.sim.mergedIntoAncient(u)) used += def?.foodUsed ?? 0;
       // A FOOD BUILDING PAYS WHEN IT IS FINISHED, not when it is pegged out (issue #144). A
       // Farm under construction is a foundation: WC3 shows the six it will make only once the
       // last hammer blow has landed, which is exactly why a player queues the Farm BEFORE the

@@ -6128,6 +6128,20 @@ export class SimWorld {
     w.desiredFacing = b.facing;
   }
 
+  /** Is `w` a Wisp MERGED into an Ancient that is still growing — food it no longer eats?
+   *  In the game the Wisp's food comes off the bar the moment the Ancient is pegged out
+   *  (one less in use for the whole of the build), and goes back on if the site is cancelled
+   *  or destroyed and the Wisp steps out again — even past the cap, a 21/20 the player has to
+   *  live with, because nothing about the Wisp coming back asks whether there is room for it.
+   *  Both readers of food in use (GameAuthority.foodFor, AiPlayer.foodOf) ask this, so the
+   *  bar and the computer agree. A Wisp inside a MOON WELL (not an Ancient: it walks back
+   *  out at the end, see finishConstruction) keeps eating, and so does an orc peon. */
+  mergedIntoAncient(w: SimUnit): boolean {
+    if (!w.insideBuild || !w.constructing) return false;
+    const b = this.units.get(w.constructing);
+    return !!b?.ancient && !!b.building && b.building.constructionLeft > 0;
+  }
+
   /** Orc peon leaving a structure it built from inside: place it on a free tile beside
    *  the building's footprint and clear the hidden flag. No-op for a normal builder. */
   private emergeBuilder(w: SimUnit, b: SimUnit): void {
