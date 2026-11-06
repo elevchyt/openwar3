@@ -2020,6 +2020,11 @@ export interface SimUnit {
   stunned: boolean; // derived from buffs (cannot act)
   paused: boolean; // JASS PauseUnit: frozen — no orders, movement, or turning (cinematics)
   waygate?: WaygateState | null; // JASS WaygateSetDestination/Activate — a Way Gate ('nwgt'), 7.22
+  /** The walk this unit is REALLY on while it heads for a Way Gate on the way there: the gate
+   *  it is aiming at (`gx`/`gy`, which is what `chaseX`/`chaseY` hold meanwhile) and the goal
+   *  the order named, re-pathed at the moment the gate throws it out the far end. Set and
+   *  cleared by `pathTo` alone (SimWorld.gateHop); absent for every walk that needs no gate. */
+  viaGate?: { gateId: number; gx: number; gy: number; tx: number; ty: number; hx: number; hy: number } | null;
   silenced: boolean; // derived from buffs (cannot cast spells)
   /** Derived from a `hex` buff (Hex, Polymorph): a critter — no attack, no spells, walks at
    *  HEX_MOVE_SPEED. */
@@ -11541,6 +11546,7 @@ export class SimWorld {
    *  merely ended does not. (Everything else a builder holds is order state, and a builder
    *  on its way to the site holds no other.) */
   private standDown(u: SimUnit, keepSite: boolean): void {
+    u.viaGate = null; // a stopped unit is no longer on its way anywhere, through a gate or not
     // A stopped miner stands on the FIELD. Stop does not come through issueOrder, so a worker
     // stopped mid-shaft (an Amulet of Recall's pull, a script) kept `inMine` with nothing left
     // to clear it and held the mine's `busy` latch shut against its whole crew.
@@ -19850,7 +19856,11 @@ export class SimWorld {
     const moved = new Set<number>();
     for (const g of gates) {
       for (const u of this.units.values()) {
-        if (!this.inWaygate(u, g) || g.waygate!.inside.has(u.id)) continue;
+        if (!this.inWaygate(u, g)) continue;
+        // Already standing in it is no entry — unless this is the gate the unit is WALKING
+        // THROUGH (gateHop): one that came out here and was sent straight back has no edge
+        // left to cross, and would otherwise stand on the gate for ever.
+        if (g.waygate!.inside.has(u.id) && u.viaGate?.gateId !== g.id) continue;
         if (moved.has(u.id)) continue; // one gate per unit per tick
         // The traveller is marked at BOTH ends with the one model: it leaves out of a
         // `MassTeleportTarget.mdx` where it stepped in and materializes out of another where
@@ -19864,6 +19874,13 @@ export class SimWorld {
         if (!u.hidden) {
           this.emitEffectAt(WAYGATE_TRAVEL_ART, fromX, fromY, false, "birth");
           this.emitEffectAt(WAYGATE_TRAVEL_ART, u.x, u.y, false, "birth");
+        }
+        // A unit that walked in ON ITS WAY somewhere (gateHop) carries on to where it was going:
+        // teleportUnit has just dropped its route, and the order it is under is unchanged.
+        const via = u.viaGate;
+        u.viaGate = null;
+        if (via && via.gateId === g.id && u.order !== "idle" && u.hp > 0) {
+          this.pathTo(u, via.tx, via.ty, undefined, false, via.hx > 0 ? { hx: via.hx, hy: via.hy } : undefined);
         }
         moved.add(u.id);
       }
@@ -19887,6 +19904,65 @@ export class SimWorld {
     );
   }
 
+  /** Has any unit on this map ever been made a Way Gate? The cheap test that keeps gate routing
+   *  off every map without one, which is nearly all of them. Never cleared: a gate switched off
+   *  is simply skipped by `gateBetween`. */
+  private waygatesSeen = false;
+
+  /** Pathing's slack around a gate and its landing: the half-width of `Awrp`'s box, in cells.
+   *  Anywhere inside the box is IN the gate, so that is how far the ground under it may lie. */
+  private static readonly GATE_SLACK = Math.floor(SimWorld.WAYGATE_HALF_W / PATHING_CELL);
+
+  /**
+   * The Way Gate a GROUND walk to (tx,ty) has to go through — or null when the goal is on this
+   * unit's own ground (or nowhere a gate leads). The game's pathing treats an active gate as part
+   * of the road: a unit ordered across to ground it cannot walk to walks into the gate that comes
+   * out there, which is the whole of how a melee map like (2)MysticIsles is played — its island
+   * mines are reached through the gates and nothing else. Without this a worker sent to found an
+   * expansion there, or an army sent at the base beside it, stood still at the water's edge.
+   *
+   * Answered off the grid's static region labels, so it costs two O(1) reads when the goal is on
+   * the unit's own ground (every walk on every map without a gate stops at `waygatesSeen`), and a
+   * scan of the gates only when it is not. ONE hop: every stock map's gates come in pairs that
+   * join two pieces of ground, and a second hop is the far side's own walk.
+   */
+  private gateHop(u: SimUnit, tx: number, ty: number, slack: number): SimUnit | null {
+    if (!this.grid || u.flying) return null;
+    const domain = pathDomain(u);
+    if (domain === "ghost") return null; // a body the script turned pathing off on walks anywhere
+    const n = u.footprint;
+    const s = this.grid.footprintAnchor(u.x, u.y, n);
+    const from = this.grid.regionAt(s[0], s[1], domain, n);
+    if (from < 0) return null;
+    const g = this.grid.footprintAnchor(tx, ty, n);
+    const to = this.grid.regionNear(g[0], g[1], domain, n, slack);
+    if (to < 0 || to === from) return null;
+    return this.gateBetween(u, from, to, tx, ty);
+  }
+
+  /** The active gate standing on region `from` whose landing is on region `to`, the one with the
+   *  shortest walk on both sides if there are several. See gateHop. */
+  private gateBetween(u: SimUnit, from: number, to: number, tx: number, ty: number): SimUnit | null {
+    const domain = pathDomain(u);
+    const n = u.footprint;
+    let best: SimUnit | null = null;
+    let bestD = Infinity;
+    for (const g of this.units.values()) {
+      const w = g.waygate;
+      if (!w?.active || g.hp <= 0) continue;
+      const at = this.grid.footprintAnchor(g.x, g.y, n);
+      if (this.grid.regionNear(at[0], at[1], domain, n, SimWorld.GATE_SLACK) !== from) continue;
+      const land = this.grid.footprintAnchor(w.destX, w.destY, n);
+      if (this.grid.regionNear(land[0], land[1], domain, n, SimWorld.GATE_SLACK) !== to) continue;
+      const d = Math.hypot(g.x - u.x, g.y - u.y) + Math.hypot(tx - w.destX, ty - w.destY);
+      if (d < bestD) {
+        bestD = d;
+        best = g;
+      }
+    }
+    return best;
+  }
+
   /** JASS WaygateSetDestination / WaygateActivate — configure a gate. Both natives
    *  work on a unit that isn't a Way Gate (WC3 lets you make anything a gate), so we
    *  don't gate on the type; a unit with no `waygate` record simply isn't one yet.
@@ -19895,6 +19971,7 @@ export class SimWorld {
   private waygateOf(id: number): WaygateState | null {
     const u = this.units.get(id);
     if (!u) return null;
+    this.waygatesSeen = true;
     return (u.waygate ??= { destX: 0, destY: 0, active: false, inside: new Set() });
   }
   setWaygateDestination(id: number, x: number, y: number): void {
@@ -28598,6 +28675,21 @@ export class SimWorld {
       if (!spot) return false;
       [tx, ty] = this.grid.cellToWorld(spot[0], spot[1]);
     }
+    // A WAY GATE is part of the road (see gateHop). A walk to ground this unit's own cannot
+    // reach — an island, the far side of the map's divide — is a walk to the gate that comes out
+    // there, and the goal is picked back up when the gate throws it out (tickWaygates). A re-path
+    // at the gate itself (blocked, the poll, a stall) keeps the plan; any other goal drops it.
+    if (u.viaGate && (tx !== u.viaGate.gx || ty !== u.viaGate.gy)) u.viaGate = null;
+    if (!u.flying && !u.viaGate && this.waygatesSeen) {
+      const slack = 2 + (approach ? Math.ceil(Math.max(approach.hx, approach.hy) / PATHING_CELL) : 0);
+      const gate = this.gateHop(u, tx, ty, slack);
+      if (gate) {
+        u.viaGate = { gateId: gate.id, gx: gate.x, gy: gate.y, tx, ty, hx: approach?.hx ?? 0, hy: approach?.hy ?? 0 };
+        tx = gate.x;
+        ty = gate.y;
+        approach = undefined;
+      }
+    }
     u.chaseX = tx;
     u.chaseY = ty;
     u.chaseHX = approach?.hx ?? 0;
@@ -29443,7 +29535,10 @@ export class SimWorld {
     } else if (u.chaseHX > 0 && tx === u.chaseX && ty === u.chaseY) {
       slack += Math.ceil(Math.max(u.chaseHX, u.chaseHY) / PATHING_CELL);
     }
-    return startRegion === this.grid.regionNear(goal[0], goal[1], domain, n, slack);
+    const goalRegion = this.grid.regionNear(goal[0], goal[1], domain, n, slack);
+    if (startRegion === goalRegion) return true;
+    // …or through a Way Gate: the far side of one is as reachable as anywhere else (gateHop).
+    return goalRegion >= 0 && this.waygatesSeen && this.gateBetween(u, startRegion, goalRegion, tx, ty) !== null;
   }
 
   /** After finishing a path that stopped short of the ordered point, try again
