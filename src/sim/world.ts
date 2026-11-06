@@ -28051,7 +28051,10 @@ export class SimWorld {
       // sleeper that dozed off after the fight started (it had come home and gone idle),
       // and it keeps the non-sleeping members of a mixed camp — who never stop scanning —
       // acting as the camp's eyes all night.
-      if (this.campFightTarget(u)) {
+      // …and so does a camp that is FIGHTING AT ALL (campQuiet), whether or not this creep could
+      // swing at the enemy: a melee Gnoll whose camp is being shot by a Gryphon Rider is awake
+      // and on its feet, not snoring at its post while the rest of the camp dies around it.
+      if (this.campFightTarget(u) || !this.campQuiet(u)) {
         u.asleep = false;
         return false; // awake now — let it acquire this tick
       }
@@ -28385,12 +28388,65 @@ export class SimWorld {
     u.creepFighting = fighting;
   }
 
-  /** Two creeps belong to the same camp when their guard posts were placed within
-   *  CreepCallForHelp of each other. Membership is keyed to the fixed GUARD points,
-   *  NOT live positions — so a creep dragged out to the edge of its leash still
-   *  counts as a camp-mate and can rally (or be rallied by) the ones back home. */
+  /** Two creeps belong to the same CAMP when their guard posts are CHAINED within
+   *  CreepCallForHelp of each other — the camp is the whole cluster of posts, not the ring
+   *  around any one member. Membership is keyed to the fixed GUARD points, NOT live
+   *  positions — so a creep dragged out to the edge of its leash still counts as a
+   *  camp-mate and can rally (or be rallied by) the ones back home.
+   *
+   *  It used to be the pairwise test alone (posts within 600 of EACH OTHER), and that made a
+   *  big camp several camps at once: a red camp laid out wider than 600 end to end had
+   *  members that no fighter's post was within 600 of, and those creeps slept — or stood at
+   *  their posts — through the whole fight beside them, because a helper's call is anchored
+   *  on the post of the creep that called it (one hop, issue #55). The CLUSTER is what one
+   *  hop now reaches, so the call still cannot travel from one camp into the next: a camp
+   *  ends where its posts stop being within CreepCallForHelp of one another. */
   private sameCamp(a: SimUnit, b: SimUnit): boolean {
-    return Math.hypot(a.guardX - b.guardX, a.guardY - b.guardY) <= CREEP_CALL_FOR_HELP();
+    if (a === b) return true;
+    const ids = this.campClusters();
+    const ca = ids.get(a.id);
+    const cb = ids.get(b.id);
+    if (ca === undefined || cb === undefined) return Math.hypot(a.guardX - b.guardX, a.guardY - b.guardY) <= CREEP_CALL_FOR_HELP();
+    return ca === cb;
+  }
+
+  /** Creep id → camp id (see sameCamp), rebuilt only when the set of creeps or a guard post
+   *  has changed. Checked at most once per tick (`campsChecked`): the check is one pass over
+   *  the units, the rebuild a union over creep pairs, and neither happens on a tick that asks
+   *  no camp question. */
+  private campIds = new Map<number, number>();
+  private campSig = NaN;
+  private campsChecked = -1;
+  private campClusters(): Map<number, number> {
+    if (this.campsChecked === this.elapsed) return this.campIds;
+    this.campsChecked = this.elapsed;
+    const creeps: SimUnit[] = [];
+    let sig = 0;
+    for (const c of this.units.values()) {
+      if (!c.isCreep || c.building) continue;
+      creeps.push(c);
+      sig += c.id * 0.001 + c.guardX * 1.31 + c.guardY * 2.71 + 1e6;
+    }
+    if (sig === this.campSig) return this.campIds;
+    this.campSig = sig;
+    const parent = creeps.map((_, i) => i);
+    const root = (i: number): number => {
+      while (parent[i] !== i) i = parent[i] = parent[parent[i]];
+      return i;
+    };
+    const reach = CREEP_CALL_FOR_HELP();
+    for (let i = 0; i < creeps.length; i++) {
+      for (let j = i + 1; j < creeps.length; j++) {
+        const a = creeps[i];
+        const b = creeps[j];
+        if (Math.abs(a.guardX - b.guardX) > reach || Math.abs(a.guardY - b.guardY) > reach) continue;
+        if (Math.hypot(a.guardX - b.guardX, a.guardY - b.guardY) > reach) continue;
+        parent[root(i)] = root(j);
+      }
+    }
+    this.campIds = new Map();
+    for (let i = 0; i < creeps.length; i++) this.campIds.set(creeps[i].id, root(i));
+    return this.campIds;
   }
 
   /** Camp cohesion (MiscGame CreepCallForHelp): a creep that engages a target
@@ -28487,9 +28543,9 @@ export class SimWorld {
     for (const c of this.units.values()) {
       if (c === u || !c.isCreep || c.hp <= 0 || c.returning) continue;
       if (c.order !== "attack" || c.targetId === null) continue;
-      const ax = c.campHelper ? c.campCallX : c.guardX;
-      const ay = c.campHelper ? c.campCallY : c.guardY;
-      if (Math.hypot(u.guardX - ax, u.guardY - ay) > CREEP_CALL_FOR_HELP()) continue;
+      // The CAMP (sameCamp's cluster), helper or not: a helper's call no longer has to have
+      // reached `u` from one particular post — the far end of a wide camp is still the camp.
+      if (!this.sameCamp(c, u)) continue;
       if (atHome && Math.hypot(c.x - c.guardX, c.y - c.guardY) >= GUARD_DISTANCE()) continue;
       const t = this.units.get(c.targetId);
       // …and a fight `u` could actually be in: an enemy of its own that it has a weapon for, and

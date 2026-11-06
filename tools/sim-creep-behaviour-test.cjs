@@ -392,17 +392,36 @@ console.log("\nevery creep in a fight speaks for its camp, not only the one that
   check("its target down, the camp rolls onto the Footman still standing there", [y, z, late].every((c) => c.targetId === f2.id), true);
   check("…rather than walking home past it", [y, z, late].some((c) => c.returning), false);
 
-  // The helper's camp is the camp that CALLED it, which is what keeps issue #55's rule: the
-  // call does not hop. A creep 600 past the helper, and 900 from the post that shouted, stays put.
+  // A camp is the CLUSTER of its posts (sameCamp): a creep 400 past a helper is still the same
+  // camp even 900 from the post that shouted — the wide red camp whose far end used to sleep
+  // through the fight. What keeps issue #55's rule is where the cluster ENDS: a creep further
+  // than CreepCallForHelp from every post of the camp is the camp next door, and stays put.
   const w2 = world();
   const a = creep(w2, "ngno", 1000, 1000, CREEP_CAMP_ACQUIRE_RANGE);
   const b = creep(w2, "ngno", 1500, 1000, CREEP_CAMP_ACQUIRE_RANGE); // a's camp (500)
-  const far = creep(w2, "ngno", 1900, 1000, CREEP_CAMP_ACQUIRE_RANGE); // b's neighbour, 900 from a
+  const wide = creep(w2, "ngno", 1900, 1000, CREEP_CAMP_ACQUIRE_RANGE); // b's camp-mate, 900 from a
+  const next = creep(w2, "ngno", 2600, 1000, CREEP_CAMP_ACQUIRE_RANGE); // 700 past the camp's last post
   const g = footman(w2, 1000, 850);
   w2.issueHold(g.id);
-  runKeeping(w2, null, 4, immortal(a, b, g));
+  runKeeping(w2, null, 4, immortal(a, b, wide, g));
   check("the helper answers", b.targetId, g.id);
-  check("…and the camp next door does not answer the helper", far.order, "idle");
+  check("…and so does the far end of a wide camp", wide.targetId, g.id);
+  check("…but the camp next door does not", next.order, "idle");
+
+  // …and a SLEEPING far end is woken by it, at night, as the rest of the camp is.
+  const w3 = world();
+  w3.timeOfDay = 21;
+  const s1 = creep(w3, "ngno", 1000, 1000, CREEP_CAMP_ACQUIRE_RANGE);
+  const s2 = creep(w3, "ngno", 1500, 1000, CREEP_CAMP_ACQUIRE_RANGE);
+  const s3 = creep(w3, "ngno", 1900, 1000, CREEP_CAMP_ACQUIRE_RANGE);
+  for (const c of [s1, s2, s3]) c.canSleep = true;
+  run(w3, null, 1);
+  check("the wide camp is asleep at night", [s1, s2, s3].every((c) => c.asleep), true);
+  const g3 = footman(w3, 1000, 850);
+  w3.issueAttack(g3.id, s1.id);
+  runKeeping(w3, null, 4, immortal(s1, s2, s3, g3));
+  check("a sleeping wide camp wakes end to end", [s1, s2, s3].every((c) => !c.asleep), true);
+  check("…and the far end joins the fight", s3.targetId, g3.id);
 }
 
 console.log("\na poisoner that has moved on is not pulled back onto the body it already poisoned");
