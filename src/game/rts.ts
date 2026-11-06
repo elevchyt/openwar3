@@ -7766,6 +7766,12 @@ export class RtsController {
   }
 
   /** The primary-selected unit's live sim state (for the command card + HUD). */
+  /** Is this unit the one a Mass Teleport / Staff of Teleportation is aimed at, for the wait?
+   *  Its command card is empty until the party arrives (SimWorld.isTeleportTarget). */
+  isTeleportTarget(id: number): boolean {
+    return this.sim.isTeleportTarget(id);
+  }
+
   selectedSimUnit(): SimUnit | null {
     return this.primary !== null ? (this.sim.units.get(this.primary) ?? null) : null;
   }

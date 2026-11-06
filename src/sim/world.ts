@@ -1492,7 +1492,15 @@ export interface Alert {
 /** A running spell field as the renderer sees it (SimWorld.activeSpellFields). */
 export interface SpellFieldView { code: string; x: number; y: number; loopSound: string; shake: boolean; casterId: number; casterArt: string; centerArt?: string }
 /** A teleport being channelled, as the renderer sees it (SimWorld.activeTeleports). */
-export interface TeleportView { casterId: number; destId: number; art: string }
+export interface TeleportView {
+  casterId: number;
+  destId: number;
+  art: string;
+  /** `destId` is a UNIT the channel is aimed at (Mass Teleport, the Staff) and held for the
+   *  wait, rather than the hall a scroll resolved to — so its command card is emptied
+   *  (SimWorld.isTeleportTarget, which a client answers from this). */
+  held: boolean;
+}
 
 /** What the host tells each recipient that only the sim's tick produces (SimWorld.noticeWire). */
 export interface WireNotices {
@@ -11460,7 +11468,9 @@ export class SimWorld {
     // hands and no inventory — Hex and Polymorph take the unit's whole command card away, the
     // six pockets with it, and a hero who drinks his way out of a Hex would make the spell
     // cost the Shadow Hunter his mana for nothing.
-    return u.hp <= 0 || u.stunned || u.asleep || u.hexed;
+    // …and the unit a Mass Teleport is aimed at holds nothing it can use for the wait: it
+    // loses EVERY action button, the six pockets with the rest (isTeleportTarget).
+    return u.hp <= 0 || u.stunned || u.asleep || u.hexed || this.isTeleportTarget(u.id);
   }
 
   /** `itemsLocked`, for the controller's inventory row — so the six buttons can wear their
@@ -11482,6 +11492,11 @@ export class SimWorld {
     // action (such as move, attack, use any other item nor his spell)", and "under no
     // circumstances can the town portal be aborted once started". See SimUnit.portalLeft.
     if (u.portalLeft > 0) return true;
+    // …and so is the unit a Mass Teleport is aimed AT, for the wait: it has no command card
+    // until the party has arrived (the developer's rule; mapViewer.liveCommandCard), so no
+    // order of anybody's reaches it either. Its own orders are KEPT, as a net keeps them —
+    // the lock refuses new ones, it clears nothing (see recomputeStats).
+    if (this.teleportChannels.size && this.portalHolds(u)) return true;
     const pc = u.pendingCast;
     return u.order === "cast" && pc !== null && pc.started && !pc.fired;
   }
@@ -27039,24 +27054,59 @@ export class SimWorld {
     return false;
   }
 
+  /** Is `u` the unit a running Mass Teleport / Staff of Teleportation is aimed AT? The one
+   *  public answer, and the one a CLIENT can give too: its sim runs no channel, so it reads
+   *  the host's live list (`TeleportView.held`, setClientLiveViews). The renderer asks it to
+   *  empty the unit's command card, and `castLocked`/`itemsLocked` ask it to refuse the presses
+   *  that card would have made — see `portalHolds`. */
+  isTeleportTarget(id: number): boolean {
+    if (this.clientLive) return this.clientLive.teleports.some((t) => t.held && t.destId === id);
+    const u = this.units.get(id);
+    return !!u && this.teleportChannels.size > 0 && this.portalHolds(u);
+  }
+
+  /** Is `u` in a state that cannot take part in a teleport — DISABLED where it stands, or not
+   *  on the field at all? Every disable that stops a unit moving is here, by the state it
+   *  leaves rather than by spell, so a new one needs no line of its own:
+   *    · `stunned` — a stun, and everything the sim models AS a stun: Sleep (`kind: "sleep"`
+   *      folds into it, recomputeStats), Cyclone (`Acyc`'s `stun` half, group "cyclone"),
+   *      Impale's toss (`IMPALE_AIR_GROUP`) and its landing stun, War Stomp, Storm Bolt…;
+   *    · `pinned` — Ensnare, Web, Entangling Roots;
+   *    · a HEX (Hex, Polymorph) — a critter casts nothing and is held to a critter's walk;
+   *    · `paused` — a script's PauseUnit;
+   *    · OFF THE FIELD (`isOffField`) — swallowed by a Kodo's Devour, loaded into a transport or
+   *      a burrow, inside a mine, hidden by a script. There is no body there to arrive at, and
+   *      none to leave with;
+   *    · dead. */
+  private teleportDisabled(u: SimUnit): boolean {
+    return u.hp <= 0 || u.stunned || this.pinned(u) || u.paused || isOffField(u)
+      || u.buffs.some((b) => b.kind === "hex");
+  }
+
   /** The channel, and what it ends in.
    *
    *  The SCROLL cannot be cancelled: "under no circumstances can the town portal be aborted
    *  once started", and the hero holding it is invulnerable, so nothing can land on him to try.
    *  MASS TELEPORT and the STAFF OF TELEPORTATION (`AImt`, the same `AHmt` code) are not that:
-   *  their caster is a body like any other for the whole wait, and a body that is STUNNED,
-   *  put to SLEEP, HEXED or ROOTED where it stands is not casting anything — the teleport is
-   *  broken and nobody goes. What was paid for it stays paid; that is the risk of an
-   *  ultimate with a wait in it. Otherwise the only way out is the caster dying or being
-   *  removed from the world, and `portalLeft` goes with the unit either way. */
+   *  their caster is a body like any other for the whole wait, and a caster that is DISABLED
+   *  (`teleportDisabled`: stunned, asleep, cycloned, impaled, hexed, rooted, devoured…) is
+   *  not casting anything — the teleport is broken and nobody goes. The same holds for the
+   *  unit it is AIMED AT (the developer's rule: "anything that alters the state of the unit
+   *  and disables it from moving must cancel teleportation") — a destination put to sleep,
+   *  tossed into a cyclone, netted or swallowed by a Kodo breaks it exactly as a stunned
+   *  caster does. What was paid for it stays paid; that is the risk of an ultimate with a
+   *  wait in it. Otherwise the only way out is the caster dying or being removed from the
+   *  world, and `portalLeft` goes with the unit either way. */
   private tickTownPortal(u: SimUnit, dt: number): void {
     const code = this.abilities?.get(u.portalAbil)?.code;
-    if (code === "AHmt" && (u.stunned || this.pinned(u) || u.buffs.some((b) => b.kind === "hex"))) {
+    const dest = u.portalDestId ? this.units.get(u.portalDestId) : undefined;
+    if (code === "AHmt" && (this.teleportDisabled(u) || (u.portalDestId && (!dest || this.teleportDisabled(dest))))) {
       u.portalLeft = 0;
       u.portalAbil = "";
       u.portalDestId = 0;
       this.teleportChannels.delete(u.id);
       this.recomputeStats(u);
+      if (dest) this.recomputeStats(dest); // …and the destination is let go this tick, not the next
       return;
     }
     u.portalLeft = Math.max(0, u.portalLeft - dt);
@@ -27164,7 +27214,7 @@ export class SimWorld {
    *  frame, so a town hall knocked down mid-channel takes its half of the art down with it. */
   activeTeleports(): TeleportView[] {
     if (this.clientLive) return this.clientLive.teleports; // a client: the host's list (setClientLiveViews)
-    const out: Array<{ casterId: number; destId: number; art: string }> = [];
+    const out: TeleportView[] = [];
     if (!this.teleportChannels.size) return out;
     for (const id of this.teleportChannels) {
       const u = this.units.get(id);
@@ -27175,7 +27225,7 @@ export class SimWorld {
       const art = this.abilities?.get(u.portalAbil)?.areaArt;
       if (!art) continue;
       const dest = u.portalDestId ? this.units.get(u.portalDestId) : this.nearestHall(u.owner, u.portalX, u.portalY);
-      out.push({ casterId: u.id, destId: dest && dest.hp > 0 ? dest.id : 0, art });
+      out.push({ casterId: u.id, destId: dest && dest.hp > 0 ? dest.id : 0, art, held: u.portalDestId > 0 });
     }
     return out;
   }

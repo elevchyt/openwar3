@@ -12554,6 +12554,12 @@ export class MapViewerScene {
     // button on it: the four order commands, Build Structure and Cancel are pushed by
     // buildCommandCard itself and would each need the same test.
     const su = this.rts?.selectedSimUnit();
+    // The unit a Mass Teleport / Staff of Teleportation is aimed AT loses EVERY button until
+    // the party has arrived — the developer's rule, and a stronger one than the caster's: not
+    // greyed, GONE. The sim refuses its orders and its items for the same wait (castLocked,
+    // itemsLocked), so the empty card is the truth rather than a curtain; a client asks the
+    // host's live list (SimWorld.isTeleportTarget).
+    if (su && this.rts?.isTeleportTarget(su.id)) return [];
     if (!su || su.owner !== this.localPlayer || su.portalLeft <= 0) return card;
     return card.map((b) => (b.disabled ? b : this.cmd({ ...b, disabled: true, active: false, modal: false })));
   }

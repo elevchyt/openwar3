@@ -399,6 +399,72 @@ console.log("\n-- a Staff of Teleportation holds its target, and is broken by a 
   at("the scroll goes through regardless", h, 1000, 1000);
 }
 
+console.log("\n-- ANY disable on the caster or the target breaks a Staff of Teleportation ----");
+
+// The developer's rule: "anything that alters the state of the unit and disables it from moving
+// must cancel teleportation" — Sleep, Cyclone, Ensnare, Impale and a Kodo's Devour named. Each
+// buff is pushed in the shape its spells.ts handler applies it (`Acyc` is a stun of group
+// "cyclone" beside an invuln, Impale's toss a stun of group IMPALE_AIR_GROUP, Ensnare a root).
+const buff = (kind, group, buffId) => ({ kind, group, timeLeft: 2, total: 2, sourceId: 0, value: kind === "root" ? 1 : 0, value2: 0, art: "", fx: [], buffId, delay: 0 });
+const DISABLES = [
+  ["Sleep", (u) => u.buffs.push(buff("sleep", "sleep", "BUsl"))],
+  ["Cyclone", (u) => { u.buffs.push(buff("stun", "cyclone", "Bcyc")); u.buffs.push(buff("invuln", "cyclone", "Bcyc")); }],
+  ["Ensnare", (u) => u.buffs.push(buff("root", "ensnare", "Beng"))],
+  ["Impale", (u) => u.buffs.push(buff("stun", "impaleAir", "BUim"))],
+  ["Hex", (u) => u.buffs.push(buff("hex", "hex", "BOhx"))],
+  ["PauseUnit", (u) => { u.paused = true; }],
+];
+for (const who of ["caster", "target"]) {
+  for (const [name, apply] of DISABLES) {
+    world = newWorld();
+    const h = give(heroAt(6000, 6000), "stel");
+    const dest = soldier(1000, 1000);
+    world.useItem(h.id, 0, dest.id, dest.x, dest.y);
+    step(1);
+    apply(who === "caster" ? h : dest);
+    step(0.1);
+    check(`${name} on the ${who} breaks the teleport`, h.portalLeft, 0);
+    check("…and the target is no longer held", world.isTeleportTarget(dest.id), false);
+    step(4);
+    at("…and nobody went anywhere", h, 6000, 6000);
+  }
+}
+
+{
+  // A Kodo Beast swallowing the unit the staff is aimed at: no body left to arrive at.
+  world = newWorld();
+  const h = give(heroAt(6000, 6000), "stel");
+  const dest = soldier(1000, 1000);
+  const kodo = soldier(1060, 1000, { owner: 1, team: 1, typeId: "okod", name: "Kodo Beast" });
+  world.useItem(h.id, 0, dest.id, dest.x, dest.y);
+  step(1);
+  world.devourInternal(kodo, dest);
+  step(0.1);
+  check("a DEVOURED target breaks the teleport", h.portalLeft, 0);
+  step(4);
+  at("…and the caster stayed home", h, 6000, 6000);
+}
+
+console.log("\n-- the target has no actions for the wait --------------------------------------");
+
+{
+  world = newWorld();
+  const h = give(heroAt(6000, 6000), "stel");
+  const dest = give(heroAt(1000, 1000), "stwp");
+  world.useItem(h.id, 0, dest.id, dest.x, dest.y);
+  step(0.5);
+  check("the target is reported as held (its command card is emptied)", world.isTeleportTarget(dest.id), true);
+  check("…the caster is not a target", world.isTeleportTarget(h.id), false);
+  check("…a move order to it is refused", world.issueMove(dest.id, 3000, 1000), false);
+  check("…its items are locked", world.itemsLockedFor(dest.id), true);
+  check("…and pressing one does nothing", world.useItem(dest.id, 0, 0, dest.x, dest.y), false);
+  check("…while it stands still", dest.speed, 0);
+  step(2.7);
+  check("after the wait it is free again", world.isTeleportTarget(dest.id), false);
+  check("…takes orders", world.issueMove(dest.id, 3000, 1000), true);
+  check("…and may use its items", world.itemsLockedFor(dest.id), false);
+}
+
 console.log("\n-- a map that edits the cast away -------------------------------------------");
 
 {
