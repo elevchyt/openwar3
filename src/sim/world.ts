@@ -3026,6 +3026,9 @@ const REBIRTH_MATCH_RADIUS = 128;
 const REBIRTH_MATCH_WINDOW = 2;
 /** `[BIrb] Effectart` in Units\ItemAbilityFunc.txt — the fallback if the buff row is missing. */
 const REBIRTH_ART = "Abilities\\Spells\\Orc\\FeralSpirit\\feralspiritdone.mdl";
+/** The burst a Way Gate leaves on a unit at the gate it enters and the spot it comes out —
+ *  the per-body mark of the game's teleports (`[AHmt]`/`[AItp]` Specialart). See tickWaygates. */
+const WAYGATE_TRAVEL_ART = "Abilities\\Spells\\Human\\MassTeleport\\MassTeleportTarget.mdl";
 /**
  * How near its gold mine a Tree of Life ROOTS when it roots in order to ENTANGLE it — per axis,
  * a square around the mine's centre rather than a circle. The game's own refusal line is
@@ -19835,7 +19838,19 @@ export class SimWorld {
       for (const u of this.units.values()) {
         if (!this.inWaygate(u, g) || g.waygate!.inside.has(u.id)) continue;
         if (moved.has(u.id)) continue; // one gate per unit per tick
+        // The traveller is marked at BOTH ends with the one model: it leaves out of a
+        // `MassTeleportTarget.mdx` where it stepped in and materializes out of another where
+        // it lands. `Awrp` has no Func row and so names no art of its own; this is the
+        // teleport burst the game's other unit-moving teleports leave on each body they move
+        // (Mass Teleport / Town Portal's `Specialart`, castMassTeleport). Arrival is emitted
+        // AFTER `teleportUnit`, at the position it settled on; both silent, as an arrival is.
+        const fromX = u.x;
+        const fromY = u.y;
         this.teleportUnit(u, g.waygate!.destX, g.waygate!.destY);
+        if (!u.hidden) {
+          this.emitEffectAt(WAYGATE_TRAVEL_ART, fromX, fromY, false, "birth");
+          this.emitEffectAt(WAYGATE_TRAVEL_ART, u.x, u.y, false, "birth");
+        }
         moved.add(u.id);
       }
     }
