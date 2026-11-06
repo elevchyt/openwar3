@@ -2871,6 +2871,11 @@ body.hud-widget-skinned .hud-cargo-slot {
    queue slots take a pointer cursor and brighten on hover — on the local player's own
    building only (`clickable`); a team-mate's queue is read, never cancelled. */
 .hud-status-icon.clickable, .hud-queue-slot.clickable { cursor: pointer; }
+/* The hover's `filter` paints the icon in a layer of its own, and that layer snaps the box's
+   FRACTIONAL edges (it is a percentage of the widget: 802.39 px + 59.56 wide at 1080p)
+   differently from the page — the icon lost a column on its right the moment it was hovered.
+   Keeping both in that layer all the time makes idle and hover the same pixels. */
+.hud-status-icon, .hud-queue-slot { will-change: filter; }
 .hud-status-icon.clickable:hover, .hud-queue-slot.clickable:hover { border-color: rgba(240, 200, 80, 0.95); filter: brightness(1.15); }
 .hud-status-label { font-size: 15px; color: #f0c850; letter-spacing: 0.4px; }
 /* Gold capsule progress bar. */
@@ -2920,13 +2925,19 @@ body.hud-widget-skinned .hud-cargo-slot {
    (luminance > 50) finds the frames exactly: the big slot's are the columns x = 11/12 and
    55/56 and the rows y = 21/22 and 65/66, so its hole is the 42×42 box at (13, 23); the six
    queue frames repeat at a pitch of exactly 40 from x = 10 (left edges 10, 50, 90, 130, 170,
-   210; right edges 43, 83, …, 243) between the rows y = 73/74 and 105/106, so each hole is
-   the 31×30 box at (12 + 40n, 75). Fitting an icon to the OUTER extent instead — the whole
-   opaque run, x 8…59 / y 18…68 — is what made it overhang the border on every side. Each box
-   is then set one texture row LOWER than the hole it fills (y 24 and 76, sizes unchanged):
-   the frame's top edge is a lit bevel and its bottom a dark one, so an icon centred on the
-   hole reads as sitting a pixel high against them. The FDF hangs the whole thing across the bottom of the info
-   panel: SimpleInfoPanelBuildingDetail's SimpleBuildQueueBackdrop is BOTTOMLEFT→BOTTOMRIGHT
+   210; right edges 43, 83, …, 243), so each hole is 31 wide at x = 12 + 40n — but they do
+   NOT share one row: slot 2's frame is the rows y = 73/74 and 105/106 (hole y 75…104) while
+   slots 3…7 are painted ONE TEXEL LOWER, rows 74/75 and 106/107 (hole y 76…105). One `top`
+   for all six put five of them a texel high in their frames. Fitting an icon to the OUTER
+   extent instead — the whole opaque run, x 8…59 / y 18…68 — is what made it overhang the
+   border on every side. The big slot's box then sits +0.72 texel RIGHT of its hole (1 screen
+   px at 1920×1080, where the widget is 363×180 px) and the six exactly at their holes' own
+   left, sizes unchanged — the developer's call, by eye against the running game. Vertically the big slot sits 0.42 texel UP and the six at their
+   holes' own top (slot 2 0.2 texel down), because one texel is 1.4 screen px and a frame's
+   bevel rasterises differently with its phase: those are what put every icon's silver rim
+   the SAME distance inside its frame's gold above as below — measured off the screenshot,
+   all seven agree to 0.2 px (they did not: the six sat 1.3 px high against the big one).
+   The FDF hangs the whole thing across the bottom of the info panel: SimpleInfoPanelBuildingDetail's SimpleBuildQueueBackdrop is BOTTOMLEFT→BOTTOMRIGHT
    with Height 0.1 of that panel's 0.115 — 87%. The texture is 2:1 and that box is
    0.2017 : 0.1, which is 2.017:1, so it lands almost exactly unstretched. */
 body.hud-widget-skinned .hud-progress-wrap {
@@ -2953,11 +2964,11 @@ body.hud-widget-skinned .hud-status-line {
   display: block;
 }
 /* The in-progress unit, INSIDE the big slot's frame: the hole is texture x 13…54, y 23…64
-   of 256×128 — 13/256, 23/128, 42/256, 42/128. */
+   of 256×128 — 13/256, 23/128, 42/256, 42/128 — then the shift right and up described above. */
 body.hud-widget-skinned .hud-status-icon {
   position: absolute;
-  left: 5.08%;
-  top: 18.75%;
+  left: 5.36%;
+  top: 17.64%;
   width: 16.41%;
   height: 32.81%;
   border: none;
@@ -2969,7 +2980,7 @@ body.hud-widget-skinned .hud-status-icon {
    one column at the panel's left edge. */
 body.hud-widget-skinned .hud-status-builder {
   position: absolute;
-  left: 5.08%;
+  left: 5.36%;
   top: 54.7%;
   width: 16.41%;
   height: 32.81%;
@@ -3019,9 +3030,10 @@ body.hud-widget-skinned .hud-progress-fill {
   box-shadow: none;
 }
 /* The six queue slots, INSIDE their own frames: each hole is texture x 12 + 40n … 42 + 40n,
-   y 75…104. The row spans the whole widget so a slot's box is a percentage of the SAME
-   texture the big slot's is, rather than of a band that would have to be kept in step with
-   it. 12/256 = 4.69% with a 40/256 = 15.63% pitch; 31/256 wide, 75/128 down, 30/128 tall. */
+   y 75…104 for the first and 76…105 for the other five (above). The row spans the whole
+   widget so a slot's box is a percentage of the SAME texture the big slot's is, rather than of a band that would have to be kept in step with
+   it. 12/256 = 4.69% with a 40/256 = 15.63% pitch; 31/256 wide, 75/128 (76/128) down,
+   30/128 tall — then the offset above: slot 2 +0.2/128 down. */
 body.hud-widget-skinned .hud-queue {
   position: absolute;
   inset: 0;
@@ -3036,14 +3048,14 @@ body.hud-widget-skinned .hud-queue {
 body.hud-widget-skinned .hud-queue-slot { pointer-events: auto; }
 body.hud-widget-skinned .hud-queue-slot {
   position: absolute;
-  top: 59.38%;
+  top: 59.38%; /* 76 / 128: slots 3…7 */
   width: 12.11%;
   height: 23.44%;
   background-color: transparent;
   border: none;
   border-radius: 0;
 }
-body.hud-widget-skinned .hud-queue-slot:nth-child(1) { left: 4.69%; }
+body.hud-widget-skinned .hud-queue-slot:nth-child(1) { left: 4.69%; top: 58.75%; } /* 75.2 / 128: its frame is a texel higher */
 body.hud-widget-skinned .hud-queue-slot:nth-child(2) { left: 20.31%; }
 body.hud-widget-skinned .hud-queue-slot:nth-child(3) { left: 35.94%; }
 body.hud-widget-skinned .hud-queue-slot:nth-child(4) { left: 51.56%; }
