@@ -13375,6 +13375,15 @@ export class SimWorld {
     if (t.hidden) return null;
     for (const w of u.weapons) {
       if (!w.enabled) continue;
+      // A MAGIC weapon has nothing to strike a magic-immune unit with: MiscGame's
+      // `MagicImmunesResistDamage=1` makes every such blow land for 0, and the game does not
+      // let the unit aim at one at all — a Chimaera or a Druid of the Talon never picks a
+      // Dryad, an ordered attack on one is refused, and the cursor says so. Asked HERE, the one
+      // question every attacking path asks, so the idle scan, hold position, an ordered attack,
+      // the cursor and an attacker whose target turns immune mid-fight (an Anti-magic Potion)
+      // all take the same answer, and a unit with a second weapon of another type falls
+      // through to it. `applyDamage` is the other half, for a blow already in the air.
+      if (w.attackType === AttackType.Magic && t.magicImmune && gameNum("MagicImmunesResistDamage")) continue;
       // No Targets Allowed data at all (a summon or custom unit with no weapons row) → treat
       // the weapon as unrestricted rather than silently disarming the unit.
       if (!w.targets.length) return w;
@@ -24418,6 +24427,10 @@ export class SimWorld {
     // Blademaster, because a silent attacker would give the copy away instantly. So record
     // the hit the way landDamage would and return 0, rather than bailing out before it —
     // bailing early is exactly what left the images swinging in silence.
+    // A MAGIC-type attack does nothing to a magic-immune unit (MiscGame
+    // `MagicImmunesResistDamage`). `weaponVs` already keeps such a weapon off such a target;
+    // this is the shot already in flight when the immunity landed, and splash from one.
+    if (attackType === AttackType.Magic && target.magicImmune && gameNum("MagicImmunesResistDamage")) return 0;
     const attacker = attackerId ? this.units.get(attackerId) : undefined;
     if (attacker?.isIllusion && attacker.illusionDamageDealt <= 0) {
       if (!target.invulnerable) {

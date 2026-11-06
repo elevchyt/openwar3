@@ -36,6 +36,10 @@ export const MISC_GAME = {
   CallForHelp: 600,
   /** Same, for Neutral Hostile: one creep aggroes → the whole camp joins. */
   CreepCallForHelp: 600,
+  /** 1 = a MAGIC-type attack does nothing to a magic-immune unit (a Chimaera against a Dryad,
+   *  a Destroyer against a Spell Breaker's Spell Immunity) — the file's own first row. Read at
+   *  the blow (applyDamage); the targeting half of the same rule is SimWorld.weaponVs. */
+  MagicImmunesResistDamage: 1,
   /** The share a MISSED SPLASH attack loses — a missed single-target blow deals nothing, a
    *  missed artillery shell still bursts, at (1 − this) of every ring (applyAreaSplash). */
   MissDamageReduction: 0.5,
