@@ -11,6 +11,13 @@
 
 const { contextBridge, ipcRenderer } = require("electron");
 
+/** Subscribe to a shell message; returns the unsubscribe. */
+function listen(channel, fn) {
+  const handler = (_event, ...args) => fn(...args);
+  ipcRenderer.on(channel, handler);
+  return () => ipcRenderer.off(channel, handler);
+}
+
 const maxFpsArg = process.argv.find((arg) => arg.startsWith("--ow3-max-fps="));
 
 contextBridge.exposeInMainWorld("ow3native", {
@@ -85,6 +92,28 @@ contextBridge.exposeInMainWorld("ow3native", {
   /** Keep a map a LAN game handed us, in the install's Maps\Download\ (src/assets/downloadedMaps.ts).
    *  The page names a FILE, never a folder: the shell puts it in that one folder or nowhere. */
   saveMap: (name, bytes) => ipcRenderer.invoke("ow3:map-save", String(name), bytes),
+  /**
+   * The map list's Download Maps dialog (src/ui/mapSites.ts, electron/mapSitesView.mjs).
+   * `fetch` reads an EpicWar page or file — the shell refuses any other address
+   * (electron/mapSites.mjs). `view` shows a map site INSIDE the dialog: `show` places the site's
+   * own web view over `rect` (page pixels), `bounds` moves it, `hide` takes it away, `nav` is the
+   * dialog's Back / Forward / Reload / Home / Open-in-browser, `onState` hears where it is, and
+   * `onEscape` the Escape the view swallowed. `onProgress` and `onDownloaded` hear the maps it
+   * downloads — already written into Maps\Download\ (`saveError` says why when they could not be).
+   */
+  mapSites: {
+    fetch: (url) => ipcRenderer.invoke("ow3:mapsite-fetch", String(url)),
+    view: {
+      show: (key, home, rect, cursor) => ipcRenderer.invoke("ow3:mapsite-view-show", String(key), String(home), rect, String(cursor ?? "")),
+      bounds: (rect) => ipcRenderer.send("ow3:mapsite-view-bounds", rect),
+      hide: () => ipcRenderer.send("ow3:mapsite-view-hide"),
+      nav: (what) => ipcRenderer.send("ow3:mapsite-view-nav", String(what)),
+      onState: (fn) => listen("ow3:mapsite-view-state", (state) => fn(state)),
+      onEscape: (fn) => listen("ow3:mapsite-view-escape", () => fn()),
+    },
+    onProgress: (fn) => listen("ow3:mapsite-progress", (p) => fn(p)),
+    onDownloaded: (fn) => listen("ow3:mapsite-downloaded", (name, bytes, saveError) => fn(name, bytes, saveError)),
+  },
 
   /**
    * The OpenWar3s this machine can hear on the local network (electron/beacon.mjs), pushed as

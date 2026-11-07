@@ -53,6 +53,8 @@ export class MapFind {
   private readonly root: HTMLDivElement;
   private readonly input: HTMLInputElement;
   private readonly clear: HTMLButtonElement;
+  /** The box's row — the Download Maps glyph sits at its right end (ui/mapSitesPanel.ts). */
+  readonly row: HTMLDivElement;
   private results: string[] = [];
   private at = 0; // the match the arrows stand on
   /** The box should have the keyboard — kept across a relayout, which takes the focus away. */
@@ -93,6 +95,7 @@ export class MapFind {
     clear.addEventListener("click", () => { this.empty(); input.focus(); });
     box.append(glass, input, clear);
     root.append(box);
+    this.row = box;
 
     this.root = root;
     this.input = input;
@@ -100,6 +103,9 @@ export class MapFind {
     document.addEventListener("pointerdown", this.onPointerDown, true);
     this.paint();
   }
+
+  /** What the box holds, trimmed. */
+  get query(): string { return this.input.value.trim(); }
 
   /** Ctrl+F: give the box the keyboard, its text selected so typing replaces it. */
   focus(): void {

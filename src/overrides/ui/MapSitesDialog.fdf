@@ -1,0 +1,63 @@
+// OpenWar3's own glue dialog — maps from the map sites (src/ui/mapSitesPanel.ts).
+//
+// **Why it exists.** 1.30.4 had no way to fetch a map from anywhere but a lobby's host; a player
+// who wanted one went to a website. The map list's download panel brings three of them to the
+// Custom Game and Create Game screens, and a panel the player works IN — a list of results, a
+// whole website — is a dialog, not a field squeezed onto a screen that has no room for one.
+//
+// **Why a file of ours.** No FrameDef in the install describes it, and `UI\FrameDef\` is the
+// player's (src/overrides/README.md). It is the Join Server dialog's chrome
+// (JoinAddressDialog.fdf), frame for frame: the Battle.net dialogue box, a gold title, and Done
+// with `DialogButtonOK`'s own geometry. What sits between them is not FDF at all — the tabs, the
+// results and the site toolbar are drawn by the panel into `MapSitesBody`, because no 2003
+// control is a result row with a thumbnail and a Download button, and a website is laid over the
+// tab by the desktop app (electron/mapSitesView.mjs).
+//
+// The box's Width and Height are restated by the panel (`buildRoot`), which sizes the body with
+// them — one number for each, in ui/mapSitesPanel.ts.
+
+Frame "DIALOG" "MapSitesDialog" {
+    Height 0.5,
+    Width 0.7,
+
+    DialogBackdrop "MapSitesDialogBackdrop",
+    Frame "BACKDROP" "MapSitesDialogBackdrop" {
+        BackdropTileBackground,
+        BackdropBackground  "UI\Widgets\BattleNet\bnet-dialoguebox-background.blp",
+        BackdropCornerFlags "UL|UR|BL|BR|T|L|B|R",
+        BackdropCornerSize  0.064,
+        BackdropBackgroundSize  0.128,
+        BackdropBackgroundInsets 0.01 0.01 0.01 0.01,
+        BackdropEdgeFile  "UI\Widgets\BattleNet\bnet-dialoguebox-border.blp",
+    }
+
+    // The LABEL gold, as on the Join Server dialog's title.
+    Frame "TEXT" "MapSitesDialogTitle" INHERITS "StandardTitleTextTemplate" {
+        Width 0.6,
+        Height 0.02,
+        SetPoint TOPLEFT, "MapSitesDialog", TOPLEFT, 0.04, -0.028,
+        FontColor 0.99 0.827 0.0705 1.0,
+        FontJustificationH JUSTIFYLEFT,
+    }
+
+    // Filled by the panel. Sized in `buildRoot` off the box: from under the title to above Done.
+    Frame "FRAME" "MapSitesBody" {
+        Width 0.52,
+        Height 0.32,
+        SetPoint TOPLEFT, "MapSitesDialogTitle", BOTTOMLEFT, 0.0, -0.008,
+    }
+
+    // Done — `DialogButtonOK`'s own geometry (DialogWar3.fdf), copied from the Join Server dialog.
+    Frame "BACKDROP" "MapSitesDoneBackdrop" INHERITS "StandardMenuSingleButtonBaseBackdrop" {
+        SetPoint BOTTOM, "MapSitesDialog", BOTTOM, -0.015, 0.008,
+
+        Frame "GLUETEXTBUTTON" "MapSitesDoneButton" INHERITS WITHCHILDREN "StandardButtonTemplate" {
+            Width 0.159,
+            SetPoint TOPRIGHT, "MapSitesDoneBackdrop", TOPRIGHT, -0.032, -0.015625,
+
+            ButtonText "MapSitesDoneButtonText",
+            Frame "TEXT" "MapSitesDoneButtonText" INHERITS "StandardButtonTextTemplate" {
+            }
+        }
+    }
+}

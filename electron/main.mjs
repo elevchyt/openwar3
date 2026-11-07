@@ -28,6 +28,8 @@ import { startUpdates } from "./updates.mjs";
 import { PROTOCOL_VERSION } from "../server/rooms.mjs";
 import { readSettings, useSettingsDir, writeSettings } from "./settings.mjs";
 import { createLogStore } from "./logStore.mjs";
+import { readMapSite } from "./mapSites.mjs";
+import { wireMapSiteViews } from "./mapSitesView.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DIST = join(here, "..", "dist");
@@ -317,6 +319,11 @@ app.whenReady().then(async () => {
   ipcMain.handle("ow3:customkeys-save", (_event, bytes) => writeCustomKeys(currentInstall().path, bytes));
   // …and a map a LAN game handed us, into Maps\Download\ (src/assets/downloadedMaps.ts).
   ipcMain.handle("ow3:map-save", (_event, name, bytes) => writeDownloadedMap(currentInstall().path, name, bytes));
+  // The map list's Download Maps dialog (src/ui/mapSites.ts): EpicWar READ for the page, under
+  // the allow-list in electron/mapSites.mjs — and the sites it cannot read SHOWN in a web view
+  // laid over the dialog, whose map downloads land in Maps\Download\ and on the page's list.
+  ipcMain.handle("ow3:mapsite-fetch", (_event, url) => readMapSite(String(url)));
+  wireMapSiteViews(ipcMain, BrowserWindow, (name, bytes) => writeDownloadedMap(currentInstall().path, name, bytes));
   // Options → Video → "Vertical Sync". The SAVED choice, not the running one: a player who turns it
   // off and reopens the panel before relaunching should see the box they left, not the old state.
   // The match log (see `matchLogs` above). The page names a MAP, never a path: the file is the

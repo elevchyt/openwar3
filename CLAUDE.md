@@ -947,6 +947,16 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   "tank", "take the lead" hands the lead to ONE computer, strength or agility before intelligence,
   for 12–20 s (`leadPass`); "help" is an attack order. Loot and shopping value an item for ITS hero
   (an intelligence hero drops Strength items first).
+- **Download Maps:** read the headers of [`src/ui/mapSites.ts`](src/ui/mapSites.ts) and
+  [`electron/mapSitesView.mjs`](electron/mapSitesView.mjs) before touching the map list's
+  download glyph (right end of the search box) or its dialog. EpicWar is READ — searched and
+  downloaded in place, through the desktop shell or the dev server under ONE allow-list
+  (`electron/mapSites.mjs`; a hosted web build cannot reach it). Hive Workshop and wc3maps sit
+  behind Cloudflare and refuse framing, so they are never fetched: the desktop app lays a real
+  web view over the dialog's tab (one per site, `persist:mapsites`), and a `.w3x`/`.w3m` it
+  downloads lands in `Maps\Download\` and on the list by itself; on the web the tab opens the
+  site in a new tab and Import takes the file back. The view is a separate SURFACE — the page
+  reports its viewport rect and must hide it when the tab or dialog goes.
 - **Transports:** read [`docs/transports.md`](docs/transports.md) before touching the Goblin
   Zeppelin, a transport ship, a cargo hold, or the cargo panel. A transport is the BURROW's
   hold on a body that moves (`Acar` beside `Abun`/`Aenc`, one `garrison` roster), and three

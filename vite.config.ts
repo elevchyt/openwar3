@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { defineConfig } from "vite";
 import { devInstall } from "./tools/vite-plugin-dev-install";
 import { driveProxy } from "./tools/vite-plugin-drive-proxy";
+import { mapSiteProxy } from "./tools/vite-plugin-mapsite-proxy";
 import { matchLog } from "./tools/vite-plugin-match-log";
 import { perfLog, perfLogDefines } from "./tools/vite-plugin-perf-log";
 import { relay } from "./tools/vite-plugin-relay";
@@ -27,6 +28,8 @@ import { relay } from "./tools/vite-plugin-relay";
 //
 // `driveProxy` is the fourth: Drive refuses a page's own fetch (Sec-Fetch-Site), so the browser
 // half of the load gate's "Download game files" reaches the developer's Drive through it.
+// `mapSiteProxy` does the same for the map list's download panel and EpicWar (src/ui/mapSites.ts),
+// under the allow-list the desktop app's main process uses too (electron/mapSites.mjs).
 //
 // Its `define`s, though, are declared HERE and unconditionally, OUTSIDE the serve-only plugin:
 // a build has no flag, and the client's `__OW3_PERF_MS__` must fold to the constant 0 rather
@@ -38,7 +41,7 @@ import { relay } from "./tools/vite-plugin-relay";
 const version = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version as string;
 
 export default defineConfig({
-  plugins: [devInstall(), driveProxy(), perfLog(), matchLog(), relay()],
+  plugins: [devInstall(), driveProxy(), mapSiteProxy(), perfLog(), matchLog(), relay()],
   define: { ...perfLogDefines(), __OW3_VERSION__: JSON.stringify(version) },
   server: {
     port: 5173,

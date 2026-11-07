@@ -13,6 +13,8 @@ import type { FdfLibrary } from "./fdf/library";
 import { uiFont, type FdfScreen } from "./fdf/render";
 import { rankMatches } from "./mapSearch";
 import { MapFind } from "./mapFind";
+import { MapSitesEntry } from "./mapSitesPanel";
+import type { ArrivedMap } from "./mapSites";
 import { gameFontsReady, onGameFontsReady } from "./gameFont";
 import type { ListItem } from "./fdf/widgets";
 import { mountWorking } from "./workingIndicator";
@@ -118,7 +120,8 @@ export function readMapPreviewBytes(vfs: DataSource, bytes: Uint8Array): MapPrev
  * DOM, is where "which folder, which map" lives.
  */
 export class MapBrowser {
-  private readonly entries: MapEntry[];
+  /** Every map on the list — re-derived when one arrives from a map site (`addMap`). */
+  private entries: MapEntry[];
   private readonly icons: Icons;
   private readonly minimapIcons: MinimapIcons;
   /** The folder the list is showing. */
@@ -131,6 +134,8 @@ export class MapBrowser {
   /** The search box across the top of the list (ui/mapFind.ts). It took over from the
    *  type-ahead, so the screens' letter accelerators are theirs again. */
   private readonly finder: MapFind;
+  /** The way to the map sites — the glyph in the search box and its dialog (ui/mapSitesPanel.ts). */
+  private readonly sites: MapSitesEntry;
   /** What the search box has narrowed the list to: the maps shown INSTEAD of the open folder,
    *  best match first — null while it shows the folder. */
   private filter: string[] | null = null;
@@ -210,6 +215,30 @@ export class MapBrowser {
         if (this.screen) this.fillList(this.screen);
       },
     });
+    this.sites = new MapSitesEntry({ vfs, arrive: (m) => void this.addMap(m) });
+  }
+
+  /**
+   * A map came in from a map site (ui/mapSites.ts) — Downloaded, Imported, or handed back by a
+   * site shown in the desktop app's web view. It is in `Maps\Download\` now, so it joins the list there
+   * and is picked, exactly as if the player had walked to it: a map they went and got is the map
+   * they mean to look at. The SAME `maps` the screens share, so the next screen has it too.
+   */
+  async addMap(m: ArrivedMap): Promise<void> {
+    if (!this.alive) return;
+    this.maps.set(m.key, m.file);
+    mapCache.delete(m.key); // a second download of the same name is a different map
+    previewCache.delete(m.key);
+    // Every OTHER entry is kept as it is: its name and player count were read out of its file
+    // (`readFolder`), and a fresh entry is only its file name again.
+    const known = new Map(this.entries.map((x) => [x.path, x]));
+    this.entries = mapEntries(this.maps).map((x) => (x.path === m.key ? x : known.get(x.path) ?? x));
+    const e = this.entries.find((x) => x.path === m.key);
+    readFolders.delete(e?.folder ?? ""); // the new one is read on the way in, its neighbours are cached
+    // A list the search box has narrowed was narrowed before this map existed: ask it again, so
+    // the map the player went and got for that search is among its answers.
+    if (this.filter && this.finder.query) this.filter = this.search(this.finder.query).map((x) => x.path);
+    if (e) await this.jumpTo(e);
   }
 
   /** Hand over the screen's FDF library, for the strings the list shows. */
@@ -254,6 +283,7 @@ export class MapBrowser {
     // map into view — into the room that is left, not under the box.
     this.finder.place(s.element, s.frame("MapListBox"));
     this.fillList(s);
+    this.sites.place(s.frame("MapListBox"), this.finder.row);
     if (this.selected) this.fillInfo(s);
     else clearMapInfo(s);
   }
@@ -528,6 +558,7 @@ export class MapBrowser {
     this.alive = false;
     this.offFontReady();
     this.finder.dispose();
+    this.sites.dispose();
     window.removeEventListener("keydown", this.onKey, true);
   }
 }

@@ -4223,6 +4223,207 @@ body.in-game .fdf-screen.fdf-ingame {
    shorter bar it is clipped rather than left hanging out of the bottom of the list. */
 .fdf-list.ow3-find-docked > .fdf-scrollbar { overflow: hidden; }
 
+/* The map list's Download Maps glyph and dialog (ui/mapSitesPanel.ts) — ours. The glyph is
+   discreet on purpose: the search box's own dim gold, lit only under the pointer, never a glue
+   button. A down-arrow into a tray, drawn in strokes like the search box's magnifier. */
+.ow3-sites-entry {
+  pointer-events: auto;
+  position: relative;
+  flex: 0 0 auto;
+  width: 1.35em;
+  height: 1.35em;
+  margin-left: 0.1em;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid rgba(110, 90, 44, 0.6);
+  background: none;
+}
+.ow3-sites-glyph {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0.72em;
+  height: 0.34em;
+  transform: translate(-50%, 15%);
+  border: 0.12em solid #9c8a4a;
+  border-top: 0;
+}
+.ow3-sites-glyph::before { /* the arrow's shaft */
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 0.12em;
+  width: 0.12em;
+  height: 0.58em;
+  transform: translateX(-50%);
+  background: #9c8a4a;
+}
+.ow3-sites-glyph::after { /* its head */
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 0.06em;
+  width: 0.3em;
+  height: 0.3em;
+  transform: translateX(-50%) rotate(45deg);
+  border: solid #9c8a4a;
+  border-width: 0 0.12em 0.12em 0;
+}
+.ow3-sites-entry:hover .ow3-sites-glyph,
+.ow3-sites-entry.pad-hover .ow3-sites-glyph { border-color: #fcd312; }
+.ow3-sites-entry:hover .ow3-sites-glyph::before,
+.ow3-sites-entry.pad-hover .ow3-sites-glyph::before { background: #fcd312; }
+.ow3-sites-entry:hover .ow3-sites-glyph::after,
+.ow3-sites-entry.pad-hover .ow3-sites-glyph::after { border-color: #fcd312; }
+/* The panel's body: DOM inside the dialog's FDF box (MapSitesDialog.fdf), sized in ems of the
+   tooltip type the panel sets on it. White on black, gold for what can be pressed. */
+.ow3-sites-body {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6em;
+  pointer-events: auto;
+  font-family: var(--ui-font, "Trajan Pro", "Cinzel", serif);
+  color: #fff;
+}
+.ow3-sites-body button { font: inherit; }
+.ow3-sites-tabs { display: flex; gap: 0.2em; border-bottom: 1px solid #6e5a2c; }
+.ow3-sites-tab {
+  padding: 0.35em 0.9em 0.3em;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  background: none;
+  color: rgba(201, 165, 58, 0.75);
+}
+.ow3-sites-tab:hover, .ow3-sites-tab.pad-hover { color: #fcd312; }
+.ow3-sites-tab.on {
+  color: #fcd312;
+  background: rgba(0, 0, 0, 0.7);
+  border-color: #6e5a2c;
+  margin-bottom: -1px;
+  padding-bottom: calc(0.3em + 1px);
+}
+.ow3-sites-page { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.ow3-sites-search { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 0.45em; }
+.ow3-sites-field {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.45em;
+  height: 1.9em;
+  padding: 0 0.5em;
+  background: rgba(0, 0, 0, 0.85);
+  border: 1px solid #6e5a2c;
+}
+.ow3-sites-field:focus-within { border-color: #b8952f; }
+.ow3-sites-field:focus-within .ow3-find-glass { border-color: #fcd312; }
+.ow3-sites-field:focus-within .ow3-find-glass::after { background: #fcd312; }
+.ow3-sites-input {
+  flex: 1 1 auto; min-width: 0; height: 100%; padding: 0; border: 0; outline: none;
+  background: transparent; color: #fff; caret-color: #fcd312; font: inherit;
+}
+.ow3-sites-input::placeholder { color: rgba(255, 255, 255, 0.38); }
+.ow3-sites-results {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.75);
+  border: 1px solid #3c3220;
+  scrollbar-width: thin;
+  scrollbar-color: #6e5a2c transparent;
+}
+.ow3-sites-result {
+  display: flex;
+  align-items: center;
+  gap: 0.7em;
+  padding: 0.35em 0.6em;
+  border-bottom: 1px solid rgba(110, 90, 44, 0.25);
+}
+.ow3-sites-result:hover { background: rgba(252, 211, 18, 0.06); }
+.ow3-sites-thumb { flex: 0 0 auto; width: 3.2em; height: 3.2em; object-fit: cover; background: #111; border: 1px solid #3c3220; }
+.ow3-sites-text { flex: 1 1 auto; min-width: 0; }
+.ow3-sites-name, .ow3-sites-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ow3-sites-meta { font-size: 0.82em; color: rgba(255, 255, 255, 0.55); margin-top: 0.15em; }
+.ow3-sites-dead .ow3-sites-name { color: rgba(255, 255, 255, 0.45); }
+.ow3-sites-empty { padding: 1em; color: rgba(255, 255, 255, 0.5); }
+.ow3-sites-btn {
+  flex: 0 0 auto;
+  padding: 0.3em 0.9em;
+  background: linear-gradient(#2a2418, #120f09);
+  border: 1px solid #7a6330;
+  color: #fcd312;
+  white-space: nowrap;
+}
+.ow3-sites-btn:hover:not(:disabled), .ow3-sites-btn.pad-hover:not(:disabled) { border-color: #fcd312; color: #fff3a0; }
+.ow3-sites-btn:disabled { color: rgba(255, 255, 255, 0.35); border-color: #3c3220; }
+.ow3-sites-btn.done { color: #7fd46a; border-color: #3f6a32; }
+.ow3-sites-link { padding: 0; border: 0; background: none; color: rgba(201, 165, 58, 0.85); white-space: nowrap; }
+.ow3-sites-link:hover, .ow3-sites-link.pad-hover { color: #fcd312; text-decoration: underline; }
+.ow3-sites-foot { display: flex; align-items: baseline; gap: 1em; font-size: 0.9em; }
+.ow3-sites-status { flex: 1 1 auto; min-width: 0; color: rgba(255, 255, 255, 0.65); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ow3-sites-sitepage {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.8em;
+  text-align: center;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid #3c3220;
+}
+.ow3-sites-sitepage .ow3-sites-btn { padding: 0.5em 1.6em; }
+.ow3-sites-sitename { color: #fcd312; font-size: 1.15em; }
+.ow3-sites-blurb { color: rgba(255, 255, 255, 0.82); }
+.ow3-sites-note { color: rgba(255, 255, 255, 0.55); font-size: 0.9em; }
+.ow3-sites-host { color: rgba(255, 255, 255, 0.35); font-size: 0.8em; }
+/* A site shown in the tab (desktop app): our toolbar over the viewport the shell lays its web
+   view on (electron/mapSitesView.mjs). The viewport's own face is only seen while the view loads. */
+.ow3-sites-viewpage { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 0.35em; }
+.ow3-sites-viewbar { display: flex; align-items: center; gap: 0.3em; }
+.ow3-sites-navbtn {
+  flex: 0 0 auto;
+  width: 1.8em;
+  height: 1.8em;
+  padding: 0;
+  background: linear-gradient(#2a2418, #120f09);
+  border: 1px solid #7a6330;
+  color: #fcd312;
+  font-size: 1.1em;
+  line-height: 1;
+}
+.ow3-sites-navbtn:hover:not(:disabled), .ow3-sites-navbtn.pad-hover:not(:disabled) { border-color: #fcd312; color: #fff3a0; }
+.ow3-sites-navbtn:disabled { color: rgba(255, 255, 255, 0.3); border-color: #3c3220; }
+.ow3-sites-where {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 1.8em;
+  line-height: 1.8em;
+  padding: 0 0.6em;
+  margin: 0 0.3em;
+  background: rgba(0, 0, 0, 0.85);
+  border: 1px solid #3c3220;
+  color: rgba(255, 255, 255, 0.7);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ow3-sites-viewpage.loading .ow3-sites-where { border-bottom-color: #b8952f; }
+.ow3-sites-viewport {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  border: 1px solid #3c3220;
+}
+.ow3-sites-viewwait { color: rgba(255, 255, 255, 0.45); }
+.ow3-sites-dropping .ow3-sites-body { outline: 2px dashed #fcd312; outline-offset: 0.3em; }
+
 /* The list's scrollbar is the FDF's own (ui/fdf/widgets.ts draws its four pieces from the
    SCROLLBAR frame's art), so the browser's must go. */
 .fdf-list-rows { scrollbar-width: none; }

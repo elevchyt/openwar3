@@ -6,6 +6,7 @@ import advancedOptionsDisplayFdf from "./ui/AdvancedOptionsDisplay.fdf?raw";
 import globalStringsFdf from "./ui/GlobalStrings.fdf?raw";
 import gameChatroomFdf from "./ui/GameChatroom.fdf?raw";
 import joinAddressDialogFdf from "./ui/JoinAddressDialog.fdf?raw";
+import mapSitesDialogFdf from "./ui/MapSitesDialog.fdf?raw";
 import hotkeyEditorFdf from "./ui/HotkeyEditor.fdf?raw";
 import localMultiplayerCreateFdf from "./ui/LocalMultiplayerCreate.fdf?raw";
 import localMultiplayerJoinFdf from "./ui/LocalMultiplayerJoin.fdf?raw";
@@ -332,6 +333,15 @@ export const LAN_CREATE_OVERRIDE: FdfOverride = {
 export const JOIN_ADDRESS_DIALOG_OVERRIDE: FdfOverride = {
   id: "ow3-join-address-dialog",
   source: joinAddressDialogFdf,
+};
+
+/**
+ * The map list's Download Maps dialog (ui/mapSitesPanel.ts) — the Join Server dialog's chrome around a
+ * body the panel draws itself. A root of its own, layered onto `DialogWar3.fdf` like that one.
+ */
+export const MAP_SITES_DIALOG_OVERRIDE: FdfOverride = {
+  id: "ow3-map-sites-dialog",
+  source: mapSitesDialogFdf,
 };
 
 /**
