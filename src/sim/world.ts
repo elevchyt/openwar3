@@ -2096,6 +2096,10 @@ export interface SimUnit {
    *  morphToggle). It is the same fact about the model either way, so the renderer reads this
    *  one flag rather than knowing about either ability. */
   altModel: boolean;
+  /** Wearing the alternate half BECAUSE of Avatar (`AHav`), so `altModel` is the buff's to
+   *  clear: true from the cast until the last `avatar` buff is gone however it goes (its
+   *  clock, a revive's clean slate, a script's UnitRemoveBuffs) — see tickAvatarForm. */
+  avatarForm: boolean;
   /** The stamped BUILDING footprint an uprooted Ancient is carrying with it, lifted off the
    *  grid while it walks and laid back down where it plants. Null for everything else — and
    *  for a rooted Ancient, whose stamp is live in `pathStamp`. See toggleRoot. */
@@ -9564,6 +9568,7 @@ export class SimWorld {
       | "rootedFootprint"
       | "rootedStamp"
       | "altModel"
+      | "avatarForm"
       | "altFormLeft"
       | "altFormAbil"
       | "invisible"
@@ -9863,6 +9868,7 @@ export class SimWorld {
       rootedFootprint: 0, // set when it uproots, spent when it plants
       rootedStamp: null, //  …and the building footprint it carries with it while it walks
       altModel: false, // derived: rooted Ancients and burrowed units wear the alternate model
+      avatarForm: false, // …and so does an Avatar while its buff holds
       altFormLeft: 0, // no timed form running
       altFormAbil: "",
       invisible: false,
@@ -14399,6 +14405,15 @@ export class SimWorld {
   private dataOf(lvl: AbilityLevel, i: number, fallback = 0): number {
     const v = lvl.data[i];
     return v === undefined || Number.isNaN(v) ? fallback : v;
+  }
+
+  /** Avatar's body ends with Avatar's buff. Asked of the buff list rather than hooked on the
+   *  expiry, because a buff leaves through a dozen doors (its clock, a revive, a dispel, a
+   *  script) and only the list knows it is gone. Only a unit that cast it is asked. */
+  private tickAvatarForm(u: SimUnit): void {
+    if (u.buffs.some((b) => b.group === "avatar")) return;
+    u.avatarForm = false;
+    u.altModel = false;
   }
 
   /** Advance timed buffs; apply DoT/HoT. Returns true if the unit died (DoT). */
@@ -19807,6 +19822,10 @@ export class SimWorld {
     couple: (caster, def, rank) => this.couple(caster, def, rank),
     decouple: (caster, def, rank) => this.decouple(caster, def, rank),
     killUnit: (u) => this.kill(u),
+    wearAvatar: (u) => {
+      u.avatarForm = true;
+      u.altModel = true;
+    },
     transmute: (target, caster, goldFactor, lumberFactor) => this.transmuteInternal(target, caster, goldFactor, lumberFactor),
     fellTrees: (x, y, radius, max) => this.fellTreesInternal(x, y, radius, max),
     toggleImmolation: (u) => this.toggleImmolation(u),
@@ -20464,6 +20483,7 @@ export class SimWorld {
     simProfile.begin("sim.world.units");
     for (const u of this.units.values()) {
       if (this.tickBuffs(u, dt)) continue; // decay timed effects (a DoT may kill)
+      if (u.avatarForm) this.tickAvatarForm(u); // the giant shrinks back when its buff is gone
       this.tickRevive(u, dt); // a reincarnating unit counting down to standing up again
       this.syncCarriedAbilities(u); // a Cloak of Shadows' Shadow Meld comes and goes with the cloak
       this.syncBookAbilities(u); // …and a spellbook's spells with the book

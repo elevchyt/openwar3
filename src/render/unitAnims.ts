@@ -217,7 +217,15 @@ export function applyAnimProps(seqs: Array<{ name: string }>, animProps: string[
   // it does (the busts) it keeps its own name and its own clips.
   const spellsEx = seqs.some((s) => propsOf(s.name).includes("alternateex"));
   const tier = [...new Set(animProps.filter((p) => TIER_PROPS.has(p)).map((p) => (p === "alternateex" && !spellsEx ? "alternate" : p)))];
-  const baseOf = (n: string) => tokens(n).filter((t) => !TIER_PROPS.has(t)); // original order kept
+  // Original order kept. A clip whose only action word is READY is the stand's alert pose
+  // with its "Stand" left off — HeroMountainKing.mdx spells its Avatar half with the state word
+  // FIRST ("Alternate Stand - 1", "Alternate Walk") and that one clip as "Alternate Ready",
+  // the twin of its plain "Stand Ready". Read as a bare "ready" it named no action anything
+  // asks for, and the plain stance survived beside it as the giant's ready pose.
+  const baseOf = (n: string) => {
+    const b = tokens(n).filter((t) => !TIER_PROPS.has(t));
+    return b.length && b.every((t) => t === "ready" || /^\d+$/.test(t)) ? ["stand", ...b] : b;
+  };
   // The ACTION a clip names, for override matching: base tokens minus the identity props AND the
   // numeric variant suffix, compared unordered. Dropping the number is what lets the alternate
   // "Stand Alternate - 1/2/3" override the plain "Stand"/"Stand - 2" (same action, different

@@ -270,6 +270,9 @@ export interface SpellApi {
   unsummonBuilding(caster: SimUnit, target: SimUnit, ratio: number, step: number): boolean;
   /** Kill a unit outright (Death Pact / Dark Ritual sacrifice, Transmute). */
   killUnit(unit: SimUnit): void;
+  /** Avatar's body (`AHav`): wear the ALTERNATE half of the model for as long as the
+   *  `avatar` buff holds (SimUnit.avatarForm). */
+  wearAvatar(unit: SimUnit): void;
   /** Transmute (`ANtm`): melt a unit down for its owner-facing cost and pay the CASTER's
    *  player, then kill it. The factors are the ability's own columns; everything else (what
    *  the victim is worth, whose purse it lands in, the number that floats over the body) is
@@ -1465,11 +1468,22 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
 
   // Avatar (MK ultimate) — become a giant: +armour, +damage, immune to stun/slow
   // (approximated via the invuln flag being magic-immunity here). Big and brief.
+  //
+  // …and a giant is a different BODY. `[AHav]` names no Animnames and no form to morph into:
+  // the stone giant is the other half of the caster's own model, authored with the word
+  // "Alternate" — HeroMountainKing.mdx carries "Alternate Stand - 1..4", "Alternate Walk",
+  // "Alternate Attack -1/-2", "Alternate Death", "Attack Slam Alternate" and the one
+  // transition "Morph Alternate", and its bust "Portrait Alternate" / "Portrait Talk
+  // Alternate". So the caster wears that half for as long as the buff holds — the same flag
+  // a rooted Ancient wears (SimUnit.altModel), keyed on the buff rather than on the hero, so
+  // any unit given Avatar takes its own model's alternate set, and one without one simply
+  // keeps its clips (applyAnimProps' fallback).
   AHav: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
     const t = lvl.duration || lvl.heroDuration || 30;
     api.applyBuff(caster, { kind: "armor", group: "avatar", timeLeft: t, sourceId: caster.id, value: d(lvl, 0, 5) < 1 ? 15 : d(lvl, 0), ...fx(def) });
     api.applyBuff(caster, { kind: "damage", group: "avatar", timeLeft: t, sourceId: caster.id, value: 40 });
+    api.wearAvatar(caster);
   },
 
   // Resurrection (Paladin ultimate) — raise up to dataA dead friendly units near

@@ -449,6 +449,12 @@ interface Entry {
    *  Undefined until a unit first shows it can be in two forms, which is what keeps the sync
    *  off the overwhelming majority of units that only ever have one. */
   altModel?: boolean;
+  /** That alternate half is AVATAR's (the `avatar` buff, not a root or a morph), which plays
+   *  its transition the other way round — see applyFormAnims. */
+  avatarForm?: boolean;
+  /** Avatar's "Morph Alternate" already played as its CAST gesture (playCastAnim), so the
+   *  form change it lands in must not play it a second time. Spent by applyFormAnims. */
+  avatarMorphed?: boolean;
 }
 
 // A unit that is invisible (Wind Walk) or ethereal (Banish, Spirit Walker form) renders
@@ -2253,13 +2259,26 @@ export class RtsController {
     if (e.altModel === alt) return;
     const first = e.altModel === undefined;
     e.altModel = alt;
+    // AVATAR is the one form whose transition belongs to the form being ENTERED. The Mountain
+    // King's model authors a single "Morph Alternate" and no plain "Morph" — it is the hero
+    // swelling into the stone giant, played as the spell lands (the developer's reading of the
+    // real client), and he shrinks back with no clip at all. Read by the Ancient rule it would
+    // play on the way OUT, backwards in meaning. Carried on the entry across the change, since
+    // by the time the giant shrinks the buff that says why is already gone.
+    const avatar = alt ? u.buffs.some((b) => b.group === "avatar") : !!e.avatarForm;
+    e.avatarForm = alt && avatar;
+    if (!alt) e.avatarMorphed = false; // a stale cast gesture (one interrupted before it landed)
     const seqs = e.unit.instance.model?.sequences;
     if (!seqs) return;
     e.anims = this.animSetFor(e.simId, seqs, animPropsFor(def, alt));
     if (first) return; // baseline only — no transition to play
-    // The clip belongs to the form being LEFT, so it is read out of that form's set. One
-    // extra buildAnimSet, only on a form change (twice in an Ancient's life, usually).
-    const morph = this.animSetFor(e.simId, seqs, animPropsFor(def, !alt)).morph;
+    if (avatar && alt && e.avatarMorphed) {
+      e.avatarMorphed = false;
+      return; // the cast already swelled him into it (playCastAnim)
+    }
+    // The clip belongs to the form being LEFT, so it is read out of that form's set (Avatar's
+    // out of the form ENTERED — above). One extra buildAnimSet, only on a form change.
+    const morph = avatar ? e.anims.morph : this.animSetFor(e.simId, seqs, animPropsFor(def, !alt)).morph;
     // Hold the morph clip for its own length: castAnimT keeps the ordinary stand/walk picker
     // off this unit until the Ancient has finished hauling itself up or settling down.
     //
@@ -5824,6 +5843,28 @@ export class RtsController {
     // does NOT score the tokens across the whole set and let a later word outvote the first.
     // That settles the whole family of rows whose caster has no clip for their full list —
     // Shock Wave on the Naga heroes, Death and Decay's `stand,channel`, and ~60 others.
+    // AVATAR's gesture is the transformation itself. `[AHav]` names no Animnames, so the
+    // ladder below would hand the Mountain King his "Spell Throw" — a hammer thrown at
+    // nothing — and only then, as the buff landed, the swelling into the giant. His model's
+    // own clip for it is "Morph Alternate" (the alternate half's morph — see applyFormAnims),
+    // and that is what is played from the first frame of the cast: once, held on its last
+    // frame (the giant) until the form it ends in takes over. A caster whose model authors
+    // no such clip takes the ordinary ladder.
+    if (code === "AHav") {
+      const seqs = e.unit.instance.model?.sequences;
+      const morph = seqs ? this.animSetFor(casterId, seqs, animPropsFor(this.registry.get(e.typeId), true)).morph : -1;
+      if (morph >= 0) {
+        e.unit.instance.setSequence(morph);
+        e.unit.instance.setSequenceLoopMode(SequenceLoopMode.PlayOnce);
+        e.curSeq = morph;
+        e.unit.state = WidgetState.WALK;
+        e.castAnimT = Math.max(hold, seqDuration(e.unit.instance, morph, CAST_ANIM_HOLD));
+        e.castAnimSticky = false;
+        e.castAnimHeld = false;
+        e.avatarMorphed = true; // …so the form change that follows does not play it twice
+        return;
+      }
+    }
     const tags = (def?.animNames ?? []).filter((t) => !ANIM_MODIFIERS.has(t));
     const names = e.anims.seqNames;
     // Set by the form pass below: while true, only the clips of the form the unit is WEARING
