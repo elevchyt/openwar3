@@ -12322,7 +12322,6 @@ export class MapViewerScene {
     // Built from the BUILDING, not the unit type: a Marketplace declares no wares at all and
     // carries only what Blizzard.j's stock timer has put on its shelves (issue #57).
     const wares = world.shopWaresOf(sel.id);
-    this.pushSelectUserButton(sel, out);
     if (!wares.items.length) return;
     const stash = this.rts!.stashFor(this.localPlayer);
     const hasPatron = world.shopPatrons(sel.id, this.localPlayer).length > 0;
@@ -12620,9 +12619,10 @@ export class MapViewerScene {
    *
    * Two passes, because the fall-forward must not evict a button that legitimately owns the
    * cell it lands on: everyone who CAN have their preference gets it first, then the displaced
-   * are seated in emission order, each scanning forward (wrapping) from the cell it asked for
-   * — which is what keeps a bumped hero spell in the bottom row next to its siblings instead
-   * of stranding it up among the orders.
+   * are seated in emission order, each looking along its OWN ROW first (forward, then back)
+   * and only then scanning forward (wrapping) from the cell it asked for — which is what keeps
+   * a bumped hero spell in the bottom row next to its siblings instead of stranding it up
+   * among the orders.
    */
   private layoutCard(cards: CommandButton[]): CommandButton[] {
     const SLOTS = 12;
@@ -12634,14 +12634,30 @@ export class MapViewerScene {
       if (i >= 0 && i < SLOTS && !taken[i]) taken[i] = c;
       else displaced.push(c);
     }
+    const seat = (c: CommandButton, i: number): void => {
+      taken[i] = c;
+      c.col = i % 4;
+      c.row = Math.floor(i / 4);
+    };
     for (const c of displaced) {
       const start = Math.max(0, Math.min(SLOTS - 1, wanted(c)));
+      // Its own ROW first — forward, then back — and only then anywhere. Two measurements
+      // settle it: Skeletorus' Mana Burn, asking for 0, sits at 1 (forward in its row), and
+      // the Ancient of Wonders' Select User, asking for the corner its Uproot holds, sits at
+      // (2,2) — BACK along the bottom row, where a plain forward-and-wrap scan put it up in
+      // the top row among the wares.
+      const row = Math.floor(start / 4) * 4;
+      const inRow = [...Array(4).keys()].map((k) => row + k);
+      const near = [...inRow.filter((i) => i > start), ...inRow.filter((i) => i < start).reverse()];
+      const free = near.find((i) => !taken[i]);
+      if (free !== undefined) {
+        seat(c, free);
+        continue;
+      }
       for (let n = 1; n <= SLOTS; n++) {
         const i = (start + n) % SLOTS;
         if (taken[i]) continue;
-        taken[i] = c;
-        c.col = i % 4;
-        c.row = Math.floor(i / 4);
+        seat(c, i);
         break;
       }
     }
@@ -12818,6 +12834,12 @@ export class MapViewerScene {
       // appears once that research lands, exactly as it does on a unit.
       if (!foreignShop) this.pushAbilityButtons(sel, out);
       else this.pushNeutralCastButtons(sel.id, out); // …the Goblin Laboratory's Reveal, for a patron
+      // Select User LAST, because it is the button that gives way. `[Anei] Buttonpos=3,2` is
+      // the same cell `[Aroo] Buttonpos=3,2` asks for, and on the Ancient of Wonders the real
+      // client keeps Uproot in the corner and seats Select User beside it at (2,2) (the
+      // developer's screenshot). layoutCard is first-come-first-served, so the engine's own
+      // shop button has to come after the unit's own abilities to lose that tie.
+      this.pushSelectUserButton(sel, out);
       return out;
     }
 
