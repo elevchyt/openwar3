@@ -27,7 +27,7 @@ import type { QuestObj } from "../jass/runtime";
 import { blpToCanvas } from "../render/blputil";
 import type { DataSource } from "../vfs/types";
 import type { Arg, FdfFrame, FdfProp } from "./fdf/parser";
-import { cloneNamespaced, strProp, type FdfLibrary } from "./fdf/library";
+import { cloneNamespaced, numProp, strProp, type FdfLibrary } from "./fdf/library";
 import { UI_HEIGHT } from "./fdf/layout";
 import { mountFdfScreen, playFdfClick, type FdfScreen } from "./fdf/render";
 import { fitLine } from "./fdf/widgets";
@@ -260,16 +260,41 @@ export class QuestDialogOverlay {
     const rowTemplate = lib.resolveRoot("QuestListItem");
     if (!dialog) throw new Error('FDF: frame "QuestDialog" not found');
 
-    const children = dialog.children.slice();
+    // Each column is a SCROLLING list, and the file says so: it hangs `QuestMainListScrollBar`
+    // and `QuestOptionalListScrollBar` (EscMenuScrollBarTemplate) off the two containers'
+    // TOPRIGHT, beside containers only 0.11 tall — three rows at ROW_PITCH. A map with more
+    // quests than that (World of Angel Arena: four main, five optional) used to stack its rows
+    // straight down through the details box. So the rows are hung INSIDE their container, the
+    // file's own bar beside them, and the renderer's scroll frame (fdf/render.ts
+    // renderScrollFrame) clips and scrolls them with the bar's own art.
+    const children = dialog.children.map((c) =>
+      c.name === "QuestMainContainer" || c.name === "QuestOptionalContainer" ? { ...c, children: c.children.slice() } : c,
+    );
+    const containers = new Map(children.filter((c) => c.name.endsWith("Container")).map((c) => [c.name, c]));
     if (rowTemplate) {
+      const quests = this.enabled();
+      const fits = Math.floor((numProp(containers.get("QuestMainContainer") ?? dialog, "Height") ?? 0.11) / ROW_PITCH + 1e-6);
+      const counts = { main: quests.filter((q) => q.required).length, opt: quests.filter((q) => !q.required).length };
+      const bars = { main: "QuestMainListScrollBar", opt: "QuestOptionalListScrollBar" } as const;
+      // A column that overruns gets the bar, and its rows give up the bar's width (the view
+      // stops where the bar starts) rather than being cut off under it.
+      const barWidth: Record<"main" | "opt", number> = { main: 0, opt: 0 };
+      for (const key of ["main", "opt"] as const) {
+        const host = containers.get(key === "main" ? "QuestMainContainer" : "QuestOptionalContainer");
+        const bar = counts[key] > fits ? lib.resolveRoot(bars[key]) : undefined;
+        if (!host || !bar) continue;
+        host.children.push(bar);
+        barWidth[key] = numProp(bar, "Width") ?? 0.012;
+      }
       const stack = { main: 0, opt: 0 };
-      for (const q of this.enabled()) {
+      for (const q of quests) {
+        const key = q.required ? "main" : "opt";
         const column = q.required ? "QuestMainContainer" : "QuestOptionalContainer";
-        const at = q.required ? stack.main++ : stack.opt++;
+        const at = stack[key]++;
         const row = cloneNamespaced(rowTemplate, String(q.handleId));
         row.props = [
           ...row.props.filter((p) => p.key !== "SetPoint" && p.key !== "Width"),
-          prop("Width", num(ROW_WIDTH)),
+          prop("Width", num(ROW_WIDTH - barWidth[key])),
           prop("SetPoint", word("TOPLEFT"), s(column), word("TOPLEFT"), num(0), num(-at * ROW_PITCH)),
         ];
         this.applyRowState(lib, row, q);
@@ -318,7 +343,7 @@ export class QuestDialogOverlay {
             prop("FrameFont", s("MasterFont"), num(ROW_TITLE_FONT), s("")),
           ];
         }
-        children.push(row);
+        (containers.get(column)?.children ?? children).push(row);
       }
     }
     return { ...dialog, children };
