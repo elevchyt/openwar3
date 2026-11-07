@@ -1466,8 +1466,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.applyBuff(caster, { kind: "invuln", timeLeft: lvl.duration || lvl.heroDuration, sourceId: caster.id, ...fx(def) });
   },
 
-  // Avatar (MK ultimate) — become a giant: +armour, +damage, immune to stun/slow
-  // (approximated via the invuln flag being magic-immunity here). Big and brief.
+  // Avatar (MK ultimate) — become a giant: +armour, +hit points, +damage and spell immunity.
   //
   // …and a giant is a different BODY. `[AHav]` names no Animnames and no form to morph into:
   // the stone giant is the other half of the caster's own model, authored with the word
@@ -1478,11 +1477,19 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // a rooted Ancient wears (SimUnit.altModel), keyed on the buff rather than on the hero, so
   // any unit given Avatar takes its own model's alternate set, and one without one simply
   // keeps its clips (applyAnimProps' fallback).
+  //
+  // The numbers are the row's, and its own Ubertip names all four: "<AHav,DataA1> bonus armor,
+  // <AHav,DataB1> bonus hit points, <AHav,DataC1> bonus damage and spell immunity" — 5, 500
+  // and 20 at every rank, for Dur1 = 60 s (Units\AbilityData.slk, HumanAbilityStrings). The
+  // hit points ride `maxHp`, the ceiling move that keeps the bar's PROPORTION (recomputeStats),
+  // which is how Metamorphosis' identical 500 lands too.
   AHav: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
-    const t = lvl.duration || lvl.heroDuration || 30;
-    api.applyBuff(caster, { kind: "armor", group: "avatar", timeLeft: t, sourceId: caster.id, value: d(lvl, 0, 5) < 1 ? 15 : d(lvl, 0), ...fx(def) });
-    api.applyBuff(caster, { kind: "damage", group: "avatar", timeLeft: t, sourceId: caster.id, value: 40 });
+    const t = lvl.heroDuration || lvl.duration || 60;
+    api.applyBuff(caster, { kind: "armor", group: "avatar", timeLeft: t, sourceId: caster.id, value: d(lvl, 0, 5), ...fx(def) });
+    api.applyBuff(caster, { kind: "maxHp", group: "avatar", timeLeft: t, sourceId: caster.id, value: d(lvl, 1, 500) });
+    api.applyBuff(caster, { kind: "damage", group: "avatar", timeLeft: t, sourceId: caster.id, value: d(lvl, 2, 20) });
+    api.applyBuff(caster, { kind: "magicImmune", group: "avatar", timeLeft: t, sourceId: caster.id });
     api.wearAvatar(caster);
   },
 
