@@ -49,6 +49,9 @@ Writing a switch per door is what left the scroll half of each pair silently doi
   past two stat rows.
 * `false` — understood, but there was nothing to do. **No charge is spent.** This is what
   refuses a Potion of Healing at full health and a Rod of Necromancy waved over bare ground.
+  An AREA regeneration (`AIrg` with an `Area1` — the Scroll of Regeneration) is NOT refused on
+  full bars: the real client reads it with the whole party at full health and buffs everybody
+  in the circle, so only the single-body rows (salve, Clarity Potion) refuse.
 * `true` — it fired; spend the charge and start the cooldown.
 
 ## Where it is pressed from

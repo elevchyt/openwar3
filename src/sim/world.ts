@@ -26542,12 +26542,20 @@ export class SimWorld {
           // …and that same choice is the icon the info panel's Status line shows: a salve's
           // BTNHealingSalve, a Clarity Potion's BTNPotionOfClarity, a Rejuvenation scroll's
           // BTNGreaterRejuvScroll — one row, one art, one name ("Regeneration").
+          // An AREA row is read off the hero's press, never off a bar: the original reads a
+          // Scroll of Regeneration with the whole party at full health and lays its buff on
+          // everybody in the circle all the same (the developer's check of the real client) —
+          // a scroll is spent BEFORE a fight, and the regeneration rides into it. Only the
+          // single-body rows below refuse a full bar.
+          const area = (lvl?.area ?? 0) > 0;
           for (const t of targets) {
-            // Nothing to restore = nothing to spend. WC3 refuses a salve at full health — and
-            // for an area scroll that means refusing only when NOBODY in the circle wants it.
-            if (hp > 0 && mana <= 0 && t.hp >= t.maxHp) continue;
-            if (mana > 0 && hp <= 0 && t.mana >= t.maxMana) continue;
-            if (hp > 0 && mana > 0 && t.hp >= t.maxHp && t.mana >= t.maxMana) continue;
+            // Nothing to restore = nothing to spend. WC3 refuses a salve or a Clarity Potion on
+            // a full bar ("Already at full health.") without spending the charge.
+            if (!area) {
+              if (hp > 0 && mana <= 0 && t.hp >= t.maxHp) continue;
+              if (mana > 0 && hp <= 0 && t.mana >= t.maxMana) continue;
+              if (hp > 0 && mana > 0 && t.hp >= t.maxHp && t.mana >= t.maxMana) continue;
+            }
             if (hp > 0) {
               this.applyBuffInternal(t, {
                 kind: "hot", group: ITEM_REGEN_GROUP, timeLeft: seconds, sourceId: u.id,
