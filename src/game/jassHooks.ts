@@ -449,7 +449,7 @@ export function unitSnapshots(sim: {
 }): UnitSnapshot[] {
   const snap: UnitSnapshot[] = [];
   for (const u of sim.units.values()) {
-    snap.push({ id: u.id, typeId: u.typeId, owner: jassOwnerOf(u), x: u.x, y: u.y, facing: u.facing });
+    snap.push({ id: u.id, typeId: u.typeId, owner: jassOwnerOf(u), x: u.x, y: u.y, facing: u.facing, locust: u.locust });
   }
   for (const m of sim.mines.values()) {
     snap.push({ id: MINE_ID_BASE + m.id, typeId: "ngol", owner: neutralSlot(PlayerSlot.NeutralPassive), x: m.x, y: m.y, facing: 0 });

@@ -4500,6 +4500,7 @@ export class RtsController {
       if (owned) instance.setTeamColor?.(this.unitColor(owned.owner, entry.colorOverride));
     }
     if (entry.baseColor) instance.setVertexColor?.(entry.baseColor); // a tinted type, worn now
+    this.applyPendingLook(entry); // a script's SetUnitColor / VertexColor / Scale from before the body loaded
     if (anims.stand >= 0) {
       // Play an idle stand on spawn; leave curSeq unset (-1) so the first idle tick starts the
       // fidget cycle (pickSequence → the idle branch rolls the next variant). PlayOnce so a
@@ -4508,6 +4509,15 @@ export class RtsController {
       instance.setSequence(anims.stand);
       instance.setSequenceLoopMode(SequenceLoopMode.PlayOnce);
       entry.curSeq = -1;
+    }
+    // …and a script's SetUnitAnimation from before the body loaded, worn AFTER the spawn stand
+    // it overrides (see pendingLook). The ice dragon a Bleach vs One Piece hero breathes is a
+    // model whose ONLY clip is "Death", told `SetUnitAnimation(u, "death")` on the line after
+    // its CreateUnit: dropped, it had nothing to play and was never seen at all.
+    const anim = this.pendingAnim.get(simId);
+    if (anim !== undefined) {
+      this.pendingAnim.delete(simId);
+      this.setUnitAnimation(simId, anim);
     }
   }
 
@@ -4652,6 +4662,38 @@ export class RtsController {
   setUnitScale(simId: number, scale: number): void {
     const e = this.byId.get(simId);
     if (e) e.baseScale = scale > 0 ? scale : 1;
+    else if (this.sim.units.has(simId)) this.pendingLookFor(simId).scale = scale; // body still loading
+  }
+
+  /**
+   * The look a SCRIPT gave a unit before its body arrived. A `CreateUnit` makes the sim unit at
+   * once and streams the model in afterwards, while the script goes straight on to dress the
+   * handle it was given — `SetUnitColor`, `SetUnitVertexColor`, `SetUnitScale`,
+   * `SetUnitTimeScale`, `SetUnitAnimation` (pendingAnim) on the very next line — and every
+   * one of those used to find no entry and be dropped. Bleach vs One
+   * Piece colours its six taverns that way (`SetUnitColor(udg_VF, ConvertPlayerColor(1))`
+   * straight after the CreateUnit), and all six stood with the Neutral Passive black roof.
+   * Held here per sim id and worn in `attachInstance`, the way `applyFieldOverrides` waits
+   * for the body for a script's unit FIELDS.
+   */
+  private pendingLook = new Map<number, { color?: number; vertex?: [number, number, number, number]; scale?: number; timeScale?: number }>();
+  private pendingLookFor(simId: number): { color?: number; vertex?: [number, number, number, number]; scale?: number; timeScale?: number } {
+    let p = this.pendingLook.get(simId);
+    if (!p) this.pendingLook.set(simId, (p = {}));
+    return p;
+  }
+  /** The clip half of `pendingLook`: a `SetUnitAnimation` waiting for its body. Kept apart
+   *  because it is worn last, after attachInstance has put the spawn stand on. */
+  private pendingAnim = new Map<number, string>();
+  /** Wear (and forget) whatever `pendingLook` holds for this body — attachInstance's call. */
+  private applyPendingLook(e: Entry): void {
+    const p = this.pendingLook.get(e.simId);
+    if (!p) return;
+    this.pendingLook.delete(e.simId);
+    if (p.scale !== undefined) this.setUnitScale(e.simId, p.scale);
+    if (p.vertex) this.setUnitVertexColor(e.simId, ...p.vertex);
+    if (p.color !== undefined) this.setUnitTeamColor(e.simId, p.color);
+    if (p.timeScale !== undefined) this.setUnitTimeScale(e.simId, p.timeScale);
   }
   /** The render half of a script's per-unit FIELDS (`BlzSetUnitRealField` — SimWorld.setUnitField
    *  keeps the values): the model scale, the selection circle and the run-animation speed. Asked
@@ -4670,7 +4712,10 @@ export class RtsController {
    *  multiplies. Reset fogTintB so applyFogTint re-emits with the new base. */
   setUnitVertexColor(simId: number, r: number, g: number, b: number, a: number): void {
     const e = this.byId.get(simId);
-    if (!e) return;
+    if (!e) {
+      if (this.sim.units.has(simId)) this.pendingLookFor(simId).vertex = [r, g, b, a]; // body still loading
+      return;
+    }
     e.baseColor = new Float32Array([r, g, b, a]);
     e.fogTintB = NaN; // force applyFogTint to re-apply next frame
     e.unit.instance.setVertexColor?.([r, g, b, a]);
@@ -4687,7 +4732,10 @@ export class RtsController {
    *  speeds its walk cycle up with a Bloodlust. Applied by setAnimRate. */
   setUnitTimeScale(simId: number, scale: number): void {
     const e = this.byId.get(simId);
-    if (!e) return;
+    if (!e) {
+      if (this.sim.units.has(simId)) this.pendingLookFor(simId).timeScale = scale; // body still loading
+      return;
+    }
     e.timeScale = scale;
     e.curRate = NaN; // force setAnimRate to re-apply against the new override next tick
   }
@@ -4699,7 +4747,10 @@ export class RtsController {
    *  rather than its owner's (see `unitColor`). */
   setUnitTeamColor(simId: number, colorIndex: number): void {
     const e = this.byId.get(simId);
-    if (!e) return;
+    if (!e) {
+      if (this.sim.units.has(simId)) this.pendingLookFor(simId).color = colorIndex; // body still loading
+      return;
+    }
     e.colorOverride = colorIndex;
     const u = this.sim.units.get(simId);
     e.unit.instance.setTeamColor?.(u ? this.unitColor(u.owner, colorIndex) : colorIndex);
@@ -4735,7 +4786,10 @@ export class RtsController {
 
   setUnitAnimation(simId: number, animation: string): void {
     const e = this.byId.get(simId);
-    if (!e) return;
+    if (!e) {
+      if (this.sim.units.has(simId)) this.pendingAnim.set(simId, animation); // body still loading (see pendingLook)
+      return;
+    }
     if (!animation) {
       // Reset: back to the idle stand, released to the normal animation picker.
       e.castAnimT = 0;
@@ -4758,7 +4812,12 @@ export class RtsController {
     e.curSeq = seq;
     e.unit.state = WidgetState.WALK; // hold it against the idle picker
     e.castAnimSticky = false;
-    e.castAnimHeld = false;
+    // Held for as long as the unit stands there, whatever its order — the script's clip is not
+    // a cast, so the `order === "cast"` half of the hold never applied and the clip lasted ONE
+    // frame on anything idle; a unit that WALKS still drops it, as in the game. A dummy whose
+    // only clip is "Death" (Bleach vs One Piece's Hyorinmaru dragon) fell straight to no
+    // sequence at all and was never drawn.
+    e.castAnimHeld = true;
     e.castAnimT = seqDuration(e.unit.instance, seq, CAST_ANIM_HOLD);
   }
 
@@ -5478,6 +5537,8 @@ export class RtsController {
   /** The sim removed this unit: play its death animation, then decay the corpse
    *  (flesh → bone) in place until it's fully removed (see tickCorpses). */
   private onDeath(simId: number): void {
+    this.pendingLook.delete(simId); // a look still waiting for a body that never came
+    this.pendingAnim.delete(simId);
     const e = this.byId.get(simId);
     // An EXPLODED death (SetUnitExploded) leaves nothing to animate: the sim has already put the
     // unit's "Art - Special" burst where it stood, and the body simply goes.
@@ -6279,7 +6340,7 @@ export class RtsController {
       // model was DRAWN at — box-selecting off the sim while drawing off the snapshot would
       // catch units the player can see just outside the box and miss ones inside it.
       const u = this.frameUnit(e.simId);
-      if (!u || e.hidden) continue;
+      if (!u || e.hidden || this.isLocust(e)) continue; // a Locust body is no one's to select
       const own = u.owner === this.localPlayer;
       // Somebody else's body has to pass the same fog gate a CLICK on it does — an explored
       // enemy building is drawn but unseen, and a box may no more grab it than the cursor can
@@ -10611,6 +10672,22 @@ export class RtsController {
   }
 
   /**
+   * Does this body carry LOCUST (`Aloc`, "Locust")? The ability every custom map's dummy caster
+   * wears, and one with no data columns at all: what it does is an engine rule. The install's
+   * `Units\UnitAbilities.slk` puts it on exactly the Locust Swarm's `uloc` (spells.ts), and
+   * hiveworkshop 325292 lists the rest — "unselectable and untargetable … You can't order unit
+   * to target hidden or locust unit". So the body is DRAWN (a dummy's effect model is the point
+   * of it) and nothing else: no click, hover, drag box or health bar. Read off the TYPE's
+   * abilList and off the sim unit (a script's `UnitAddAbility(u, 'Aloc')`, SimUnit.locust).
+   * Bleach vs One Piece is the case that showed it: its "DUMMY GROUND" casters and the
+   * twenty-four invisible "Non-Bankai/Senkei Condition" markers at the hero-pick circles were
+   * hoverable, selectable and floated bars.
+   */
+  private isLocust(e: Entry): boolean {
+    return !!this.sim.units.get(e.simId)?.locust || !!this.registry.get(e.typeId)?.abilities.includes("Aloc");
+  }
+
+  /**
    * Sim id of the unit under the cursor — Warcraft III's own selection hit test.
    *
    * The click ray is cast against the model's OWN collision shapes (the invisible
@@ -10664,6 +10741,9 @@ export class RtsController {
       // grabbing a shop across the map (issue #62). Every click, hover, order and spell target
       // comes through here, so gating the pick gates all of them at once.
       if (e.hidden || this.drawnFromMemory(e.simId)) continue;
+      // A LOCUST unit (`Aloc`) is drawn and nothing more: no click, hover, order or spell may
+      // land on it (see isLocust).
+      if (this.isLocust(e)) continue;
       // Cheap reject before the volumes are built: nothing further from the click's ground
       // point than PICK_WORLD_MAX has a body that could reach the cursor.
       if (ground && Math.hypot(u.x - ground[0], u.y - ground[1]) > PICK_WORLD_MAX) continue;
@@ -10892,11 +10972,18 @@ export class RtsController {
       // payload already said so — `remembered` — and its hp is redacted to 0 anyway, so drawing
       // one would show a full-empty bar over every scouted building.
       if (this.drawnFromMemory(e.simId)) continue;
+      if (this.isLocust(e)) continue; // a Locust unit never carries a bar (see isLocust)
       // An INVULNERABLE Neutral Passive building floats no bar at all — a shop, a tavern, a
       // Fountain of Health, a waygate (`Avul` "Invulnerable (Neutral)", SimUnit.baseInvulnerable).
       // A bar is how you read a body you can hurt, and nobody can hurt these; the developer's
       // rule (2026-09-15), under the cursor as well as under "Always show Health Bars".
-      if (u.building && u.neutralPassive && u.invulnerable) continue;
+      // The same holds for a PLAYER's building whose TYPE is invulnerable — the Circle of
+      // Power (`ncop`/`ncp2`/`ncp3`, `Units\UnitAbilities.slk` abilList = `Avul`), which hero
+      // maps hand each player as the spot they pick from (Bleach vs One Piece seats twelve
+      // between its taverns, and the original draws no bar over any of them). Keyed on the
+      // type's own `Avul` (what `SimUnit.baseInvulnerable` is seeded from), so a player's
+      // building a SCRIPT has made invulnerable keeps its bar.
+      if (u.building && ((u.neutralPassive && u.invulnerable) || this.registry.get(e.typeId)?.abilities.includes("Avul"))) continue;
       const row = this.allyAbilityRow(u);
       specs.push({
         x: u.x,

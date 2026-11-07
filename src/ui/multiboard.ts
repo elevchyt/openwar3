@@ -57,6 +57,19 @@ const ROW_INSET = 0.014;
 const MARGIN_X = 0.006;
 const MARGIN_Y = 0.052; // clears the resource bar — the same top inset the leaderboard uses
 
+/** `frame` with every string argument starting `from` re-prefixed to `to`, all the way down —
+ *  the corner button's state backdrops name their art by skin key (`DecorateFileNames`). */
+function swapSkinKeys(frame: FdfFrame, from: string, to: string): FdfFrame {
+  return {
+    ...frame,
+    props: frame.props.map((p) => ({
+      ...p,
+      args: p.args.map((a) => (a.str && a.s.startsWith(from) ? { ...a, s: to + a.s.slice(from.length) } : a)),
+    })),
+    children: frame.children.map((ch) => swapSkinKeys(ch, from, to)),
+  };
+}
+
 const s = (v: string): Arg => ({ s: v, n: null, str: true });
 const word = (v: string): Arg => ({ s: v, n: null, str: false });
 const num = (v: number): Arg => ({ s: String(v), n: v, str: false });
@@ -131,7 +144,11 @@ export class MultiboardOverlay {
         // them. Repaint from the renderer's own post-build hook; a `resize` listener of ours
         // would run BEFORE it and paint into DOM that is about to be thrown away (the same bug
         // the leaderboard had: the board goes blank until the next revision bump).
-        onBuild: (screen) => this.paintCells(screen, mb),
+        onBuild: (screen) => {
+          // Our hook for the button's pressed and hover looks (style.css `.mb-minimize`).
+          screen.element.querySelector('[data-frame="MultiboardMinimizeButton"]')?.classList.add("mb-minimize");
+          this.paintCells(screen, mb);
+        },
       });
       prev?.dispose(); // swap only once the new one is up, so the board never blinks
     } catch (err) {
@@ -210,6 +227,12 @@ export class MultiboardOverlay {
           ],
         };
       }
+      // The corner button wears the arrow for what a click will DO. war3skins.txt [Default]
+      // carries two sets for it: `MultiboardMinimizeButton*` = Gluescreen-Scrollbar-UpArrow
+      // (an open board folds UP) and `MultiboardMaximizeButton*` = …-DownArrow (a folded board
+      // drops DOWN). MultiBoard.fdf names only the first, so the engine must be swapping the
+      // keys by state — and with the file's names alone a folded board pointed up too.
+      if (c.name === "MultiboardMinimizeButton" && mb.minimized) return swapSkinKeys(c, "MultiboardMinimizeButton", "MultiboardMaximizeButton");
       return c;
     });
 

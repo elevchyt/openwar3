@@ -3752,6 +3752,18 @@ body.in-game .fdf-screen.fdf-ingame {
    arrow button wore two arrows while held. */
 :where(:root:not(.ow3-alt-press)) .fdf-button:active > .fdf-base-face { opacity: 0; }
 
+/* The multiboard's corner button (ui/multiboard.ts). Its pushed and disabled faces are the SAME
+   file as its normal one (war3skins.txt MultiboardMinimizeButtonEnabled/Pushed/Disabled all name
+   Gluescreen-Scrollbar-UpArrow.blp, and the Maximize set the DownArrow), and it has no text for a
+   ButtonPushedTextOffset to move, so as drawn from the data alone a press shows nothing at all.
+   OURS, then: held, the face sinks one FDF thousandth (0.001 of the button's 0.024 = 4%) down and
+   left — the direction StandardTemplates.fdf's glue buttons push their labels (-0.002f -0.003f) —
+   and dims a touch; under the cursor it lifts, as the HUD's own icon buttons do. */
+.mb-minimize > canvas, .mb-minimize > .fdf-base-face { transition: filter 0.08s ease; }
+.mb-minimize:hover > .fdf-base-face,
+.mb-minimize.pad-hover > .fdf-base-face { filter: brightness(1.25); }
+:where(:root:not(.ow3-alt-press)) .mb-minimize:active > .fdf-pushed { transform: translate(-4%, 4%); filter: brightness(0.8); }
+
 /* A latched button stays pressed even when not held — the Options screen's active category
    tab (Gameplay / Video / Sound), which WC3 keeps depressed to show which panel is open. */
 .fdf-button.fdf-latched .fdf-pushed { opacity: 1; }

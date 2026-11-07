@@ -1892,6 +1892,20 @@ export interface SimUnit {
    * tank (`Player_N_Enters_Tank`), and the monsters around the tank entrance kept killing it.
    */
   hidden: boolean;
+  /**
+   * LOCUST (`Aloc`) — the ability every custom map's dummy caster wears. It has no data columns;
+   * what it does is an engine rule, and hiveworkshop 325292 states it beside the hidden unit's
+   * above: "You can't order unit to target hidden or locust unit", "Both unselectable and
+   * untargetable". So, like `hidden`, no weapon reaches it (`weaponVs`), no spell may be aimed
+   * at it (`targetError`), no area effect finds it (`unitsInAreaInternal`) and nothing collides
+   * with it (`ghosting`) — but unlike `hidden` it is ON the field: drawn, and free to attack and
+   * CAST, which is the whole reason a map spawns one (Bleach vs One Piece's "DUMMY GROUND" is a
+   * Locust body that casts the base's heal on a hero and dies a second later). The renderer
+   * keeps it out of every click, box and health bar (RtsController.isLocust), and the JASS area
+   * enumerations skip it (`GroupEnumUnitsInRange`/`InRect` never return a Locust unit, while
+   * `OfPlayer` does). Seeded from the type's abilList and kept in step by add/removeAbility.
+   */
+  locust: boolean;
   /** How many times this unit has been TELEPORTED (`teleportUnit` — Blink, Mass Teleport, a
    *  Way Gate, the staves, a script's `SetUnitPosition`). A counter and not a flag because
    *  the only thing that ever asks is an in-flight missile comparing the count it recorded at
@@ -2904,7 +2918,7 @@ export function pathDomain(u: SimUnit): PathDomain {
  *  Walk (`windWalk`) — and every "can I stand here / who do I have to walk around" test wants
  *  all three. */
 export function ghosting(u: SimUnit): boolean {
-  return u.noCollision || u.pathingOff || u.windWalk;
+  return u.noCollision || u.pathingOff || u.windWalk || u.locust; // a Locust body collides with nothing (SimUnit.locust)
 }
 // Proactive reroute poll (issue #6). A unit's path is computed once, but other
 // units may stop and reserve cells across it while it travels. Rather than let a
@@ -4668,6 +4682,14 @@ export class SimWorld {
     return w.items.length > 0 || w.units.length > 0;
   }
 
+  /** Does this shop sell ITEMS — by data or by a script's `AddItemToStock` — and so need a
+   *  patron to hand them to? (A unit sale walks out by itself and needs nobody.) */
+  private shopSellsItems(shop: SimUnit): boolean {
+    if (this.shopWares(shop.typeId).items.length > 0) return true;
+    for (const s of shop.building?.stock?.values() ?? []) if (s.kind === "item") return true;
+    return false;
+  }
+
   /** Whether this particular building can be bought from — by data OR by script-placed stock.
    *  A Marketplace passes only on the strength of the latter.
    *
@@ -4917,10 +4939,18 @@ export class SimWorld {
    *
    *  Ticked rather than resolved lazily so the choice depends on the sim's clock, not on
    *  who asked. Cheap: it only walks shops that actually nominate a buyer, and only reaches
-   *  for the patron list when that shop+player has no valid one. */
+   *  for the patron list when that shop+player has no valid one.
+   *
+   *  A shop that SELLS ITEMS adopts one whether or not it shows the Select User button. The
+   *  button (`Neu3`, "show select unit button") only says whether the player may CHOOSE the
+   *  patron; an item still has to be handed to somebody. Bleach vs One Piece sets `Neu3` = 0
+   *  on its `Aneu` and `Aall` rows (war3map.w3a) with every one of its eleven item shops
+   *  carrying `Aneu` — gating adoption on the button left every purchase there refused with
+   *  "A valid patron must be nearby." while a hero stood at the counter. */
   private tickShopBuyers(): void {
     for (const shop of this.units.values()) {
-      if (shop.hp <= 0 || !this.isShopUnit(shop.id) || !this.shopSelectsUser(shop.id)) continue;
+      if (shop.hp <= 0 || !this.isShopUnit(shop.id)) continue;
+      if (!this.shopSelectsUser(shop.id) && !this.shopSellsItems(shop)) continue;
       // Which players have a unit here at all — no patrons, nothing to adopt.
       const seen = new Set<number>();
       for (const u of this.units.values()) {
@@ -9612,6 +9642,7 @@ export class SimWorld {
       | "unsummonArt"
       | "vanished"
       | "hidden"
+      | "locust"
       | "teleports"
       | "isIllusion"
       | "illusionOf"
@@ -9912,6 +9943,8 @@ export class SimWorld {
       unsummonArt: "",
       vanished: false,
       hidden: false,
+      // The TYPE's own Locust, or one handed to it in its starting abilities (SimUnit.locust).
+      locust: !!this.unitReg?.get(unit.typeId)?.abilities.includes("Aloc") || (opts?.abilities ?? []).some((a) => a.code === "Aloc"),
       teleports: 0,
       isIllusion: false,
       illusionOf: 0,
@@ -13442,7 +13475,7 @@ export class SimWorld {
     // Nothing strikes a HIDDEN unit (`SimUnit.hidden`): asked here, the one question every
     // attacking path asks, so the idle scan never picks one, an ordered attack is refused, and an
     // attacker whose target is hidden mid-fight rolls onto the next enemy (tickAttack).
-    if (t.hidden) return null;
+    if (t.hidden || t.locust) return null; // …nor a LOCUST one (SimUnit.locust)
     for (const w of u.weapons) {
       if (!w.enabled) continue;
       // A MAGIC weapon has nothing to strike a magic-immune unit with: MiscGame's
@@ -15298,7 +15331,7 @@ export class SimWorld {
     if (target.hp <= 0) return "Notcorpse"; // "Target must be living."
     // A HIDDEN unit is no target at all, friend or foe — "You can't order unit to target hidden
     // or locust unit" (SimUnit.hidden). Nobody can click one, so the game has no line for it.
-    if (target.hidden && target.id !== caster.id) return SILENT_REFUSAL;
+    if ((target.hidden || target.locust) && target.id !== caster.id) return SILENT_REFUSAL; // …nor a Locust one
     if (target.invulnerable && this.hostile(caster, target)) return "Notinvulnerable";
     // Magic Immunity — "That unit is immune to magic." It refuses the ENEMY's spells and
     // only those: you cannot Polymorph, Sleep or Storm Bolt a Spell Breaker, but your own
@@ -17943,26 +17976,49 @@ export class SimWorld {
     // hands a courier or a dummy a backpack — once its own `Requires` is met, like the type's
     // own packs (recomputeStats → openBackpacks, just below).
     if (def.code === "AInv") (u.backpacks ??= []).push({ id: abilityId, slots: inventoryCapacity(def.levelData[0]?.data[0]) });
+    if (def.code === "Aloc") u.locust = true; // a dummy made Locust by its script (SimUnit.locust)
     this.recomputeStats(u); // an ability can carry stat bonuses / an aura
     return true;
   }
 
-  /** UnitRemoveAbility — take an ability away (and any cast of it in flight). */
+  /** UnitRemoveAbility — take an ability away (and any cast of it in flight).
+   *
+   *  A BUFF is an ability on the unit as far as the engine is concerned, which is the whole
+   *  of how Blizzard.j removes one: `UnitRemoveBuffBJ` is `UnitRemoveAbility(whichUnit,
+   *  buffcode)`. So an id the unit carries as a buff (`SimBuff.buffId`) takes that buff off
+   *  instead — every copy of it, the way `removeBuffs` drops what it matched. */
   removeAbility(unitId: number, abilityId: string): boolean {
     const u = this.units.get(unitId);
     if (!u) return false;
     const i = u.abilities.findIndex((a) => a.id === abilityId);
-    if (i < 0) return false;
+    if (i < 0) {
+      if (!abilityId || !u.buffs.some((b) => b.buffId === abilityId)) return false;
+      u.buffs = u.buffs.filter((b) => b.buffId !== abilityId);
+      this.recomputeStats(u); // the stats were derived off a buff that no longer exists
+      return true;
+    }
     u.abilities.splice(i, 1);
     if (u.pendingCast?.abilityId === abilityId) this.stop(u.id);
+    if (abilityId === "Aloc" || this.abilities?.get(abilityId)?.code === "Aloc") u.locust = u.abilities.some((a) => a.code === "Aloc");
     this.recomputeStats(u);
     return true;
   }
 
   /** GetUnitAbilityLevel — the unit's rank in an ability (0 = doesn't have it, or a
-   *  hero ability it hasn't learned). */
+   *  hero ability it hasn't learned).
+   *
+   *  Asked with a BUFF id it answers whether the unit wears that buff: Blizzard.j's
+   *  `UnitHasBuffBJ` is `GetUnitAbilityLevel(whichUnit, buffcode) > 0` and nothing else, so a
+   *  buff the engine could not see through this read was a buff no trigger could see at all.
+   *  Bleach vs One Piece's base heal is the standing case — "if the hero has no `B00A`, have a
+   *  dummy cast Base Heal on it" every second — and with every answer "no" it spawned a dummy
+   *  caster on each hero in the base, every second, for the whole match. */
   abilityLevelOf(unitId: number, abilityId: string): number {
-    return this.units.get(unitId)?.abilities.find((a) => a.id === abilityId)?.level ?? 0;
+    const u = this.units.get(unitId);
+    if (!u) return 0;
+    const ab = u.abilities.find((a) => a.id === abilityId);
+    if (ab) return ab.level;
+    return abilityId && u.buffs.some((b) => b.buffId === abilityId && b.timeLeft > 0) ? 1 : 0;
   }
 
   /** SetUnitAbilityLevel (and Inc/DecUnitAbilityLevel, which ride on it) — set the
@@ -19616,7 +19672,7 @@ export class SimWorld {
     for (const t of this.units.values()) {
       // A HIDDEN unit is in no area: no spell, item circle or aura around it finds it
       // (SimUnit.hidden). The one enumeration every area handler walks, so it is said once.
-      if (t.hp <= 0 || t.hidden) continue;
+      if (t.hp <= 0 || t.hidden || t.locust) continue; // …and neither is a LOCUST one (SimUnit.locust)
       // Too far along either axis is too far: `hypot` is never below either leg, so this drops
       // exactly the units the test below would, without paying for it. Every Moon Well asks
       // this twice a step of the whole map (tickReplenish), and nearly all of the map is out.

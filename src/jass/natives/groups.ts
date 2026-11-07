@@ -110,12 +110,17 @@ function enumInto(c: NativeCtx, g: GroupObj | undefined, filterV: JassValue | un
   }
 }
 
+/** The two AREA tests. Neither admits a LOCUST unit (`Aloc`, SimUnit.locust): the engine
+ *  leaves Locust bodies out of every enumeration by PLACE, which is how a map's dummy casters
+ *  stay out of its own "pick every unit within 600 of the hero" — the standing Hive Workshop
+ *  rule for dummies, beside 325292's "unselectable and untargetable". The by-OWNER and by-TYPE
+ *  enumerations ask nothing about place and still return them. */
 const inRect = (u: UnitSnapshot, r: RectObj | undefined): boolean =>
-  !!r && u.x >= r.minx && u.x <= r.maxx && u.y >= r.miny && u.y <= r.maxy;
+  !!r && !u.locust && u.x >= r.minx && u.x <= r.maxx && u.y >= r.miny && u.y <= r.maxy;
 /** WC3 measures GroupEnumUnitsInRange from the unit's ORIGIN (collision size is not
  *  considered) — a plain circle test. */
 const inRange = (u: UnitSnapshot, x: number, y: number, radius: number): boolean =>
-  (u.x - x) * (u.x - x) + (u.y - y) * (u.y - y) <= radius * radius;
+  !u.locust && (u.x - x) * (u.x - x) + (u.y - y) * (u.y - y) <= radius * radius;
 
 export function registerGroupNatives(rt: Runtime): void {
   // --- the group container ---

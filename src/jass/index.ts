@@ -44,6 +44,15 @@ function readScript(vfs: DataSource | MpqDataSource, ...paths: string[]): string
   return null;
 }
 
+/** How many units the map's war3mapUnits.doo places — 0 when there is no such file (a
+ *  PROTECTED map's protector strips it). The count is the int32 after the header's magic,
+ *  version and subversion ('W3do', two int32s), which is all this needs to know. */
+function placedUnitCount(map: MpqDataSource): number {
+  const b = map.rawBytes("war3mapUnits.doo");
+  if (!b || b.byteLength < 16) return 0;
+  return new DataView(b.buffer, b.byteOffset, b.byteLength).getInt32(12, true);
+}
+
 function readUtf8(vfs: DataSource | MpqDataSource, ...paths: string[]): string | null {
   for (const p of paths) {
     const b = vfs.rawBytes(p);
@@ -160,6 +169,15 @@ export function loadMapScript(
       console.warn("[lua] war3map.lua failed to load (the map will run with no triggers):", err);
     }
   }
+  // The record-only gate on CreateAllUnits exists because we ADOPT the pre-placed units from
+  // war3mapUnits.doo. The game itself never reads that file — it is the World Editor's, and the
+  // game makes every pre-placed unit by running this very function — so a PROTECTED map, whose
+  // protector strips the .doo, still has all of them in the real client. Six of the maps in the
+  // install's own `Maps\Download` ship no .doo (DotA, Bleach vs One Piece, Angel Arena, …); with
+  // nothing adopted, gating the script left those maps without a single pre-placed unit —
+  // Bleach vs One Piece's two "Other Tavern"s and its waygates among them. No units to adopt,
+  // so let the script place them, exactly as the game does.
+  if (placedUnitCount(map) === 0) interp.rt.recordOnlySpawnFns.delete("CreateAllUnits");
   opts.onBoot?.(engine);
   interp.run("config", []);
   if (opts.lobby) interp.rt.applyLobby(opts.lobby.slots, opts.lobby.localPlayer);

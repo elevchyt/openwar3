@@ -534,6 +534,8 @@ export interface UnitSnapshot {
   x: number;
   y: number;
   facing: number;
+  /** Carries Locust (`Aloc`, SimUnit.locust): the AREA enumerations never return it. */
+  locust?: boolean;
 }
 
 /** An item created by the script (CreateItem) or minted for one the sim already has

@@ -190,6 +190,29 @@ console.log("\n…and the adoption pass never hands a shop one either");
   check("the hero who walks up behind it is", world.shopBuyer(s.id, 0)?.id, real.id);
 }
 
+console.log("\nAn ITEM shop with no Select User button still hands its wares to a patron");
+// Bleach vs One Piece sets `Neu3` (DataC, "show select unit button") to 0 on its `Aneu`
+// (war3map.w3a) — and every one of its eleven item shops carries Aneu. The button is only the
+// player's way to CHOOSE the patron; adoption gated on it refused every purchase on that map
+// with "A valid patron must be nearby." while a hero stood at the counter.
+{
+  const stock = ABILITIES.get("Aneu");
+  ABILITIES.set("Aneu", { ...stock, levelData: [lvl({ data: D(1500, 1, 0, 0) })] });
+  try {
+    world = newWorld();
+    const s = shop();
+    check("the shop shows no Select User button", world.shopSelectsUser(s.id), false);
+    const h = hero({ x: 3000, y: 2000, prevX: 3000, prevY: 2000 }); // 1000 out, inside its 1500
+    world.adoptShopBuyers();
+    check("…yet the hero at its counter is its buyer", world.shopBuyer(s.id, 0)?.id, h.id);
+    world.stashOf(0).gold = 500;
+    check("…and the purchase goes through", world.purchaseItem(s.id, h.id, "phea", 0), "ok");
+    check("…while Select User itself stays refused (there is no button to press)", world.setShopBuyer(s.id, 0, h.id), false);
+  } finally {
+    ABILITIES.set("Aneu", stock);
+  }
+}
+
 console.log("\nA hero's image shares HIS experience bar — the one the ENEMY sees (docs/illusions.md)");
 {
   world = newWorld();

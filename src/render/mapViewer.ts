@@ -2164,6 +2164,12 @@ export class MapViewerScene {
     this.repairCustomRowIds(); // …before anything asks a placed unit which type it is
     const map = this.viewer.map;
     if (!map) return;
+    // A PROTECTED map ships no war3mapUnits.doo (its pre-placed units come out of the script's
+    // CreateAllUnits instead — jass/index.ts `placedUnitCount`), and the viewer's
+    // `loadUnitsAndItems` returns on the missing file WITHOUT ever setting `unitsReady`. So
+    // `waitForMapUnits` waited out its whole 30 s cap on every such map — Bleach vs One Piece,
+    // DotA, Angel Arena… — with nothing to wait for. No file, no units: ready now.
+    if (!archive.rawBytes("war3mapUnits.doo")) map.unitsReady = true;
 
     const [cols, rows] = map.mapSize;
     const [ox, oy] = map.centerOffset;

@@ -1047,6 +1047,40 @@ client shows sky and white fog. The lavender corner is the price.
 `tools/sim-stock-abilities-test.cjs` runs each against the install's own rows;
 `tools/sim-map-tables-test.cjs` asserts both maps' stock codes are known.
 
+### Bleach vs One Piece — dummies, protected maps, and a script that dresses units early
+
+Six of the eleven maps in `Maps\Download` are PROTECTED and ship **no `war3mapUnits.doo`**. The game
+never reads that file (it is the World Editor's); it makes every pre-placed unit by running the
+script's own `CreateAllUnits`. We adopt units from the `.doo` and so keep `CreateAllUnits`
+record-only — which, with nothing to adopt, left those maps with no pre-placed unit at all (BvO's two
+"Other Tavern"s, its waygates). `loadMapScript` lifts the gate when the `.doo` places no units, and
+`MapViewerScene.loadMap` marks the viewer's units ready, or every such map sat out the 30 s
+`waitForMapUnits` cap on its loading screen.
+
+**Locust (`Aloc`)** is the ability every dummy caster wears, and nothing about it is data:
+unselectable, untargetable, no collision, no health bar, and out of every enumeration by PLACE
+(`GroupEnumUnitsInRange`/`InRect`) while the by-owner/by-type ones still return it. `SimUnit.locust`
+carries it (from the type's abilList and from `UnitAdd/RemoveAbility`), `RtsController.isLocust`
+keeps it out of clicks, boxes and bars.
+
+**A buff is an ability on the unit.** Blizzard.j's `UnitHasBuffBJ` is `GetUnitAbilityLevel(u, buff)
+> 0` and `UnitRemoveBuffBJ` is `UnitRemoveAbility(u, buff)`; both now see `SimBuff.buffId`. Without
+it BvO's base heal ("no `B00A`? have a dummy cast Base Heal") spawned a dummy on every hero in the
+base every second.
+
+**A script dresses a unit before its model has loaded.** `SetUnitColor`, `SetUnitVertexColor`,
+`SetUnitScale`, `SetUnitTimeScale` and `SetUnitAnimation` on the line after a `CreateUnit` used to
+find no render entry and be dropped (BvO's taverns kept the Neutral Passive black roof; Hitsugaya's
+ice dragon, a model whose only clip is `Death`, played nothing). They wait in `pendingLook` /
+`pendingAnim` and are worn in `attachInstance`. A `SetUnitAnimation` clip is also held while the
+unit stands (`castAnimHeld`) — it used to last one frame on anything not casting.
+
+Two more from the same map: an ITEM shop adopts a patron whether or not its `Aneu` shows the Select
+User button (BvO sets `Neu3` = 0, and every purchase was "A valid patron must be nearby."), and the
+multiboard's corner button wears the skin's `MultiboardMaximizeButton*` down arrow while folded.
+What is NOT ours to fix: Neliel's and Grimmjow's models and icons (`!Neliel!.mdl`,
+`BTNneliel.blp`, …) are simply not in the archive, so they draw as the missing-model case.
+
 ## Traps
 
 * **After editing the viewer patch, restart the dev server AND delete `node_modules/.vite`**, or

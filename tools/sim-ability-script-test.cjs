@@ -59,6 +59,7 @@ const ability = (id, code, target, over = {}) => ({
 const ABILITIES = new Map([
   ["A000", ability("A000", "AHds", "none")],
   ["A001", ability("A001", "AEev", "passive")],
+  ["Aloc", ability("Aloc", "Aloc", "passive")],
 ]);
 const abilityReg = { get: (id) => ABILITIES.get(id), has: (id) => ABILITIES.has(id), buffFx: () => [] };
 const techNode = (id) => [id, {
@@ -151,6 +152,30 @@ world.endUnitAbilityCooldown(u.id, "A000");
 check("BlzEndUnitAbilityCooldown ends it", world.unitAbilityCooldownLeft(u.id, "A000"), 0);
 check("rank 0 of the type's data", JSON.stringify(world.abilityRankData("A000", 0)), JSON.stringify({ cost: 25, cooldown: 10 }));
 check("a rank the row does not have is undefined", world.abilityRankData("A000", 5), undefined);
+
+console.log("\na BUFF is an ability on the unit (Blizzard.j UnitHasBuffBJ / UnitRemoveBuffBJ)");
+// `UnitHasBuffBJ` is `GetUnitAbilityLevel(u, buffcode) > 0` and `UnitRemoveBuffBJ` is
+// `UnitRemoveAbility(u, buffcode)` — nothing else — so both sim reads have to see buffs. Bleach
+// vs One Piece's base heal spawned a dummy caster on every hero every second while they did not.
+const b = caster(0);
+const buff = (buffId, timeLeft) => ({ kind: "hot", group: buffId, timeLeft, total: timeLeft, sourceId: 0, value: 0, value2: 0, art: "", fx: [], buffId, delay: 0 });
+check("no buff, no level", world.abilityLevelOf(b.id, "B00A"), 0);
+b.buffs.push(buff("B00A", 5));
+check("wearing B00A, GetUnitAbilityLevel answers 1", world.abilityLevelOf(b.id, "B00A"), 1);
+check("an ability still answers its own rank", world.abilityLevelOf(b.id, "A000"), 1);
+b.buffs = [buff("B00A", 0)];
+check("a buff whose clock has run out is not worn", world.abilityLevelOf(b.id, "B00A"), 0);
+b.buffs = [buff("B00A", 5), buff("B00A", 5), buff("Binv", 5)];
+check("UnitRemoveAbility on a buff id answers true", world.removeAbility(b.id, "B00A"), true);
+check("…and takes every copy of that buff, and only that one", b.buffs.map((x) => x.buffId), ["Binv"]);
+check("…and a buff it does not wear is nothing to remove", world.removeAbility(b.id, "B00A"), false);
+
+console.log("\nLocust follows the ability (SimUnit.locust)");
+check("a plain unit is not Locust", !!b.locust, false);
+world.addAbility(b.id, "Aloc");
+check("UnitAddAbility(u, 'Aloc') makes it Locust", b.locust, true);
+world.removeAbility(b.id, "Aloc");
+check("UnitRemoveAbility(u, 'Aloc') takes it back", b.locust, false);
 
 console.log(failed ? `\n${failed} FAILED` : "\nall per-unit ability checks passed");
 process.exit(failed ? 1 : 0);
