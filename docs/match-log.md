@@ -80,7 +80,7 @@ largest army, gold, lumber, upkeep lost, tech %, heroes.
 
 ## Testing many matches: the Sim Speed cheat
 
-The dev tools drawer (`toolsofthetrade` in chat) → Cheats → **Sim Speed**: the game's pace as a
+The dev tools drawer (`/dev` in chat) → Cheats → **Sim Speed**: the game's pace as a
 PERCENTAGE of its Game Speed rung, 100 % (off) up to 10 000 % — type a number and press Enter, or
 take a preset (300 / 1000 / 3000 / 10000 %). Single player only, like every cheat
 (`MapViewerScene.setSpeedBoost`). The sim still takes whole fixed steps, so a boosted match plays

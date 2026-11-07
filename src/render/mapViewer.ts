@@ -10369,14 +10369,15 @@ export class MapViewerScene {
    * never sent as chat. Answered with the game's own `CHEATENABLED`/`CHEATDISABLED` line
    * (GlobalStrings.fdf). Single player only — in any other match the line is ordinary chat.
    *
-   * `toolsofthetrade` is OURS (it opens the dev tools panel); the other four are the
-   * original game's `whosyourdaddy`, `riseandshine`, `lightsout` and `sharpandshiny`.
+   * `/dev` is OURS (it opens the dev tools panel — a slash command, so it can never collide
+   * with a cheat code the original game has or a word a player means as chat); the other four
+   * are the original game's `whosyourdaddy`, `riseandshine`, `lightsout` and `sharpandshiny`.
    */
   private typedCheat(text: string): boolean {
     if (!this.cheatsAllowed || !this.rts) return false;
     const code = text.trim().toLowerCase();
     let on = true; // the clock cheats are one-shots, and always "enabled"
-    if (code === "toolsofthetrade") on = this.hud?.toggleDevTools() ?? false;
+    if (code === "/dev") on = this.hud?.toggleDevTools() ?? false;
     else if (code === "whosyourdaddy") {
       on = this.rts.cheat("godmode");
       this.hud?.markCheat("godmode", on);

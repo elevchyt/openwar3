@@ -1596,7 +1596,7 @@ export class GameHud {
       this.buildAutoCameraBox(),
       // The dev tools. Built in every match but SHOWN only in single player (`cheatsAllowed`,
       // re-asked every frame — the LAN wire is attached after the HUD is built), and only once
-      // asked for: typing `toolsofthetrade` in chat toggles them (toggleDevTools), and the dev
+      // asked for: typing `/dev` in chat toggles them (toggleDevTools), and the dev
       // server opens with them up when `?dev` is on the URL (the switch devBoot.ts reads).
       this.buildCheatPanel(),
       this.buildMessageLog(),
@@ -2215,7 +2215,7 @@ export class GameHud {
     return wrapper as unknown as HTMLDivElement;
   }
 
-  /** Flip the dev tools panel (the chat's `toolsofthetrade`). Returns the new state; the
+  /** Flip the dev tools panel (the chat's `/dev`). Returns the new state; the
    *  panel only actually shows while `cheatsAllowed` holds (frame). */
   toggleDevTools(): boolean {
     this.devToolsOn = !this.devToolsOn;

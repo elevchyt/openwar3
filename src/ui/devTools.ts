@@ -1,4 +1,4 @@
-// The dev tools drawer (the chat's `toolsofthetrade`): docked down the right edge of the match,
+// The dev tools drawer (the chat's `/dev`): docked down the right edge of the match,
 // between the resource bar and the console, so the map stays visible and live while you spawn
 // and the command card stays reachable for whatever was just made. Three tabs — Spawn, Cheats,
 // Overlays — replace the old stack of corner buttons.
