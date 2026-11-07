@@ -1,5 +1,5 @@
 import { CHAT_PLAYER_DOT } from "../game/chat";
-import { blpToCanvas } from "../render/blputil";
+import { blpToCanvas, tgaToCanvas } from "../render/blputil";
 import { LoadingScene } from "../render/loadingScene";
 import { teamColorHex } from "../render/teamColor";
 import {
@@ -153,7 +153,14 @@ export async function mountLoadingScreen(opts: LoadingScreenOptions): Promise<Lo
   scene.start();
 
   const rows = rosterRows(config);
-  const melee = info.isMelee;
+  // Which of the FDF's two panels goes up: the PLAYER panel (map name, minimap, who is playing)
+  // or the CUSTOM one (the w3i's title, subtitle and blurb). It follows the SCREEN, not the
+  // melee flag: a map that keeps the default screen gets the player panel, scenario or not.
+  // Bleach vs One Piece is a custom map on the default screen whose w3i still carries a title
+  // ("Credit : Kurogane.") — and the real 1.30.4 client shows its name, its preview and the
+  // seated players, and never that title. The World Editor only offers the title, subtitle and
+  // text beside a campaign screen or an imported one, which is the case the custom panel is for.
+  const melee = info.isMelee || (info.loading.screen < 0 && !info.loading.model);
   // GlobalStrings.fdf, read up front — for the handful of captions the ENGINE fills in rather
   // than the FDF ("Team %d", the game types), and BEFORE the screen is mounted
   // because those captions have to be in hand as `textOverrides` (see `captions`).
@@ -188,7 +195,8 @@ export async function mountLoadingScreen(opts: LoadingScreenOptions): Promise<Lo
   // The minimap's markers arrive a beat after the screen does — they are read out of the map
   // file, which is the first thing the load does — so they live here and are re-stamped by
   // every build (a resize rebuilds the DOM and would otherwise drop them).
-  const icons = melee ? loadMinimapIcons(vfs) : null;
+  // …the start/gold MARKERS stay a melee map's: a custom map's minimap is often a picture.
+  const icons = info.isMelee ? loadMinimapIcons(vfs) : null;
   let preview: MapPreview | null = null;
 
   const screen = await mountFdfScreen({
@@ -202,7 +210,11 @@ export async function mountLoadingScreen(opts: LoadingScreenOptions): Promise<Lo
     // still the only thing on screen (style.css hides the GLUE screens on that class).
     overlayClass: "fdf-loading",
     buildRoot: (built) => buildLoadingRoot(built, rows, melee),
-    hidden: [melee ? "LoadingCustomPanel" : "LoadingMeleePanel"],
+    hidden: melee
+      ? // …and a CUSTOM map on the player panel has no "Game Type:" line: the reference shot of
+        // Bleach vs One Piece shows the name, the picture and the players and nothing between.
+        ["LoadingCustomPanel", ...(info.isMelee ? [] : ["LoadingMeleeGameTypeLabel", "LoadingMeleeGameTypeValue"])]
+      : ["LoadingMeleePanel"],
     /**
      * Every caption goes in as an OVERRIDE rather than being written in afterwards, because
      * these frames declare no size and the layout is what gives them one: a TEXT frame with a
@@ -401,9 +413,18 @@ function paintReady(s: FdfScreen, ready: ReadonlySet<number>): void {
  *   1. the map's OWN imported model, if it shipped one — a map that imported art means it;
  *   2. the `[LoadingScreens]` row it named (`MapLoadingScreen.screen`) — every campaign
  *      chapter, and any scenario that picked one in the editor;
- *   3. on a melee map, which names neither, the LOCAL player's race — `Load-Multiplayer-Orc`
- *      and friends, `-Random` included, because that screen is about who you are;
+ *   3. on a map that names neither, the LOCAL player's race — `Load-Multiplayer-Orc` and
+ *      friends, `-Random` included, because that screen is about who you are. Not only on a
+ *      MELEE map: Bleach vs One Piece is a custom map that names no screen, and the real
+ *      1.30.4 client shows it the Human race screen — wearing the map's own picture, because
+ *      the map imports its art OVER that screen's four quarter textures
+ *      (`UI\Glues\Loading\Multiplayer\Loading-TopLeft.blp`, `…-Human-TopRight.blp`, …). That
+ *      is a common way to give a map a loading screen, and it only works if this is the screen
+ *      a custom map gets;
  *   4. and failing all of it, the generic screen.
+ *
+ *  `vfs` has the map's archive layered over the install (main.ts `showLoadingScreen`), so both
+ *  the map's own model and its texture overrides are found.
  */
 async function chooseBackground(
   vfs: DataSource, info: MapInfo, config: MeleeConfig,
@@ -418,10 +439,8 @@ async function chooseBackground(
     // clip is what lights up THIS chapter's location on the map (data/loadingScreens.ts).
     if (def && vfs.exists(def.model)) return { path: def.model, sequence: def.sequence };
   }
-  if (info.isMelee) {
-    const path = multiplayerLoadingScreen(localRace(config));
-    if (vfs.exists(path)) return { path, sequence: 0 };
-  }
+  const path = multiplayerLoadingScreen(localRace(config));
+  if (vfs.exists(path)) return { path, sequence: 0 };
   return { path: GENERIC_LOADING_SCREEN, sequence: 0 };
 }
 
@@ -593,10 +612,13 @@ function captions(
 function paintMinimap(
   s: FdfScreen, info: MapInfo, preview: MapPreview | null, icons: MinimapIcons | null,
 ): void {
-  const art = info.minimap ? blpToCanvas(info.minimap) : null;
+  // The map's own PREVIEW picture wins over its minimap when it ships one (MapInfo.previewImage):
+  // a poster, so no markers go on it.
+  const poster = info.previewImage ? tgaToCanvas(info.previewImage) : null;
+  const art = poster ?? (info.minimap ? blpToCanvas(info.minimap) : null);
   const box = s.frame("MinimapImage");
   if (!art || !box) return;
-  if (preview && icons) drawPreviewMarkers(art, info, preview, icons);
+  if (!poster && preview && icons) drawPreviewMarkers(art, info, preview, icons);
   box.style.background = `url(${art.toDataURL()}) 0 0/100% 100% no-repeat`;
 }
 

@@ -63,6 +63,8 @@ import { buildTerrainMesh } from "./render/terrainMesh";
 import { makePlaceholderTerrain } from "./world/placeholderTerrain";
 import { loadMapBytes } from "./world/map";
 import { readMapBytes } from "./vfs/mapArchive";
+import { LayeredDataSource } from "./vfs/layered";
+import { MpqDataSource } from "./vfs/mpq";
 import { ModelViewerScene, type SequenceInfo } from "./render/modelViewer";
 import { MapViewerScene } from "./render/mapViewer";
 import { matchLinkFrom, type MatchLinkSetup } from "./game/matchLink";
@@ -940,7 +942,10 @@ async function startGame(
   // browser before running its body — which is not politeness but the whole reason the screen
   // is visible at all: `loadMap` is one long SYNCHRONOUS call, so without a paint between the
   // steps the bar would go up and come down inside a single frame nobody ever saw.
-  const loading = await showLoadingScreen(info, config);
+  // The map's bytes, read ONCE: the loading screen reads its art out of them first (a map may
+  // import its own), and a `File` a browser handed us may not be readable a second time.
+  const mapBytes = map instanceof Uint8Array ? map : new Uint8Array(await map.arrayBuffer());
+  const loading = await showLoadingScreen(info, config, mapBytes);
   if (gate && loading) {
     gate.onReady = (peer) => loading.setPeerReady(peer);
     // …including anyone who reported while the screen was still being built.
@@ -959,8 +964,7 @@ async function startGame(
       return body();
     };
 
-    const bytes = await step(0.05, async () =>
-      map instanceof Uint8Array ? map : new Uint8Array(await map.arrayBuffer()));
+    const bytes = await step(0.05, () => mapBytes);
     // …kept, so the match can be PLAYED AGAIN without going back to the menu: `RestartGame`,
     // the defeat dialog's first button (see restartMatch). The bytes rather than the `File`,
     // because a file handle a browser handed us once may not be readable a second time.
@@ -1108,9 +1112,22 @@ function remotePeers(link: MatchLinkSetup): number[] {
  * same reason the quest log's header takes them: `NightElfX01`'s w3i calls itself "NightElfX01"
  * and the screen the player came from calls it "Chapter One — Rise of the Naga".
  */
-async function showLoadingScreen(info: MapInfo, config: MeleeConfig): Promise<LoadingScreen | null> {
-  const vfs = resolver.installSource;
-  if (!vfs) return null; // the zero-asset fallback has no art to put up
+async function showLoadingScreen(info: MapInfo, config: MeleeConfig, map: Uint8Array): Promise<LoadingScreen | null> {
+  const install = resolver.installSource;
+  if (!install) return null; // the zero-asset fallback has no art to put up
+  // The screen reads the MAP's archive before the install's, as every other asset of the match
+  // does (render/assetSolver.ts). It is where a map's own loading model lives (the w3i's
+  // `loadingScreenModel` — which, read off the install alone, could never be found), and where
+  // a map that names no model puts the art it means instead: it imports textures OVER the stock
+  // screen's. Bleach vs One Piece ships `UI\Glues\Loading\Multiplayer\Loading-TopLeft.blp` and
+  // the rest of the Human race screen's quarters, and the real 1.30.4 client shows its own
+  // picture there; read from the install alone, we showed Blizzard's.
+  let vfs: DataSource = install;
+  try {
+    vfs = new LayeredDataSource([new MpqDataSource("map", map), install]);
+  } catch (err) {
+    console.warn("[OpenWar3] loading screen: map archive unreadable, using the install's art:", err);
+  }
   const chapter = pendingCampaign
     ? campaigns.find((c) => c.key === pendingCampaign?.key)?.missions[pendingCampaign.index]
     : undefined;

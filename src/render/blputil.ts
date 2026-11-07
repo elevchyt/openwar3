@@ -1,4 +1,5 @@
 import { BlpImage } from "mdx-m3-viewer/dist/cjs/parsers/blp/image";
+import TgaImage from "mdx-m3-viewer/dist/cjs/parsers/tga/image";
 
 // Decode BLP1 bytes into DOM-usable images (plan §10: HUD chrome/icons come
 // from the real game files when an install is mounted).
@@ -15,6 +16,24 @@ export function blpToCanvas(bytes: Uint8Array, opts: BlpOptions = {}): HTMLCanva
     image.load(bytes);
     const data = image.getMipmap(0);
     if (opts.reviveDeadAlpha) reviveDeadAlpha(data);
+    const canvas = document.createElement("canvas");
+    canvas.width = data.width;
+    canvas.height = data.height;
+    canvas.getContext("2d")!.putImageData(data, 0, 0);
+    return canvas;
+  } catch {
+    return null;
+  }
+}
+
+/** The TGA twin of `blpToCanvas` — a map's `war3mapPreview.tga` is the one TGA the UI draws
+ *  (Bleach vs One Piece's is a plain 24-bit 256×256). */
+export function tgaToCanvas(bytes: Uint8Array): HTMLCanvasElement | null {
+  try {
+    const image = new TgaImage();
+    image.load(bytes);
+    const data = image.data;
+    if (!data) return null;
     const canvas = document.createElement("canvas");
     canvas.width = data.width;
     canvas.height = data.height;

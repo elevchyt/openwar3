@@ -240,3 +240,23 @@ The gate holds the loading SCREEN, not the simulation: the world starts ticking 
 scene starts, which is well before the gate is consulted. That is no worse than it was — every
 client already began simulating whenever it happened to finish — but it is not lockstep, and it
 is not a fix for drift (see [`docs/multiplayer.md`](./multiplayer.md)).
+
+## 5. A map's art is read out of the MAP first, and the default screen is the race screen
+
+The screen reads its art through the map's archive layered over the install (`main.ts`
+`showLoadingScreen`), as every other asset of a match does. A map that imports its own model
+needs that — read from the install alone, `loadingScreenModel` could never be found — and so does
+the commonest way a custom map gets a loading screen without naming one: it imports textures OVER
+the stock race screen's four quarters (`UI\Glues\Loading\Multiplayer\Loading-TopLeft.blp`,
+`…-Human-TopRight.blp`, …). Bleach vs One Piece does exactly that, and the real 1.30.4 client
+(reference shot, 2026-11-07) shows it:
+
+- the local player's RACE screen for a map that names no screen and no model, melee or NOT
+  (before, a custom map got `Load-Generic`, which the map does not override);
+- the PLAYER panel (map name, picture, seated players) on that default screen, again melee or not
+  — the custom panel's title/subtitle/blurb only go with a campaign screen or an imported one,
+  which is the only case the World Editor offers those fields for (BvO's w3i still carries a stale
+  title, "Credit : Kurogane.", and the real client never shows it);
+- no "Game Type:" line on a custom map's player panel;
+- the map's own `war3mapPreview.tga`, when it ships one, in the picture box instead of the minimap
+  (and without the start/gold markers, which only a melee map gets).

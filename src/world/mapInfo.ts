@@ -147,6 +147,10 @@ export interface MapInfo {
   maxPlayers: number;
   /** The map's own minimap image (war3mapMap.blp), for the Custom Game preview. */
   minimap: Uint8Array | null;
+  /** The map's custom PREVIEW picture (`war3mapPreview.tga`), when the author imported one. The
+   *  loading screen's image box shows it in place of the minimap — Bleach vs One Piece's poster
+   *  is what the real 1.30.4 client puts there, not its terrain. Null on every stock map. */
+  previewImage: Uint8Array | null;
   /** Whether the map is a standard melee map (drives melee vs. custom start). */
   isMelee: boolean;
   /**
@@ -184,10 +188,11 @@ export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
   const mpq = new MpqDataSource("map", bytes);
   const classification = classifyMap(mpq); // melee vs. custom, from the w3i flags
   const minimap = mpq.rawBytes("war3mapMap.blp") ?? null;
+  const previewImage = mpq.rawBytes("war3mapPreview.tga") ?? null;
   const format = readMapFormat(mpq);
   const empty: MapInfo = {
     name: fallbackName, description: "", recommendedPlayers: "", tileset: "", width: 0, height: 0,
-    slots: [], neutralPlayers: [], maxPlayers: 0, minimap, isMelee: classification.isMelee, forces: [], fixedPlayerSettings: false,
+    slots: [], neutralPlayers: [], maxPlayers: 0, minimap, previewImage, isMelee: classification.isMelee, forces: [], fixedPlayerSettings: false,
     loading: { screen: -1, model: "", title: "", subtitle: "", text: "" },
     classification,
     format,
@@ -239,6 +244,7 @@ export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
     neutralPlayers,
     maxPlayers: playable.filter((p) => p.type === 1).length || slots.length,
     minimap,
+    previewImage,
     isMelee: classification.isMelee,
     // Only a map that claims its forces gets to name them; a melee map's single force is an
     // implementation detail of the file, not a heading the lobby should print.
