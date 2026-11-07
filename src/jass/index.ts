@@ -16,9 +16,25 @@ import type { EngineHooks, LobbySlot, MapSetup } from "./runtime";
 import { COMPAT_PRELUDE } from "../compat/prelude";
 import { createLuaMapScript, type LuaMapScript } from "../compat/lua/index";
 
-const decode = (b: Uint8Array): string => new TextDecoder("windows-1252").decode(b);
 // war3map.wts is UTF-8 (with a BOM); decode it as such so authored text isn't mojibake.
 const decodeUtf8 = (b: Uint8Array): string => new TextDecoder("utf-8").decode(b);
+/**
+ * A SCRIPT is UTF-8 too, whenever its bytes are. The game keeps every string as UTF-8 bytes —
+ * the .wts above, the FDF files, and a string literal the World Editor writes straight into
+ * `war3map.j` alike — so a map authored in Russian carries its Cyrillic in the script as two
+ * bytes a letter. Decoded one byte per character (this used to be windows-1252 throughout),
+ * every literal came out as "Ð¡Ñ‚Ð°Ñ‚Ð¸ÑÑ‚Ð¸ÐºÐ°" while the TRIGSTR_ text beside it read
+ * correctly — World of Angel Arena's quest titles, its leaderboard and its chat lines.
+ * Strict, so a script that is NOT valid UTF-8 (an old editor's single-byte code page) keeps
+ * the one-byte reading it always had rather than turning into replacement characters.
+ */
+const decode = (b: Uint8Array): string => {
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(b);
+  } catch {
+    return new TextDecoder("windows-1252").decode(b);
+  }
+};
 
 function readScript(vfs: DataSource | MpqDataSource, ...paths: string[]): string | null {
   for (const p of paths) {
