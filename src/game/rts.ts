@@ -9763,14 +9763,18 @@ export class RtsController {
     return false;
   }
 
-  /** Debug cheats acting on the current selection: refill HP or MP to full, or
-   *  clear every ability (and item) cooldown, on each selected living unit. */
-  cheatSelected(kind: "hp" | "mp" | "cooldown"): void {
+  /** Debug cheats acting on the current selection: refill HP or MP to full, clear every
+   *  ability (and item) cooldown, or KILL it, on each selected living unit. A kill is the
+   *  sim's own `killUnit` (JASS KillUnit: the Death clip, a corpse, drops, a building's
+   *  collapse), whoever owns it — an enemy or a creep selected by a click is fair game. */
+  cheatSelected(kind: "hp" | "mp" | "cooldown" | "kill"): void {
     if (this.networked) return;
-    for (const id of this.selected) {
+    // A copy: a death takes the body out of the selection while we walk it.
+    for (const id of [...this.selected]) {
       const u = this.sim.units.get(id);
       if (!u || u.hp <= 0) continue;
-      if (kind === "hp") u.hp = u.maxHp;
+      if (kind === "kill") this.sim.killUnit(id);
+      else if (kind === "hp") u.hp = u.maxHp;
       else if (kind === "mp") u.mana = u.maxMana;
       else {
         for (const ab of u.abilities) ab.cooldownLeft = 0;

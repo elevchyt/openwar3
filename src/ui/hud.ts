@@ -525,9 +525,9 @@ export interface HudDriver {
    *  online match answers false for its whole length, and the panel can then neither be shown
    *  nor pressed. */
   cheatsAllowed(): boolean;
-  /** Debug cheat on the current selection: refill HP/MP to full, or clear every
-   *  ability + item cooldown, on each selected unit. */
-  cheatSelected(kind: "hp" | "mp" | "cooldown"): void;
+  /** Debug cheat on the current selection: refill HP/MP to full, clear every
+   *  ability + item cooldown, or kill/destroy each selected unit or building. */
+  cheatSelected(kind: "hp" | "mp" | "cooldown" | "kill"): void;
   /** Toggle the debug collider overlay (click/pathing/fog obstruction). Returns the
    *  resulting on/off state so the caller can show/hide the legend. */
   toggleColliders(): boolean;

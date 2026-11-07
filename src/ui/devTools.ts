@@ -457,16 +457,18 @@ export class DevToolsDrawer {
       this.cheatButtons.set(kind, b);
       return b;
     };
-    const sel = (label: string, kind: "hp" | "mp" | "cooldown") => {
+    const sel = (label: string, kind: "hp" | "mp" | "cooldown" | "kill") => {
       const b = el("button", "dev-btn", label);
       b.onclick = () => this.driver.cheatSelected(kind);
       return b;
     };
+    const kill = sel("Kill/Destroy", "kill");
+    setGameTip(kill, "Kill every selected unit, or destroy every selected building");
     page.append(
       this.section("Economy", [mk("+5000 Gold", "gold"), mk("+5000 Lumber", "lumber"), mk("+Food", "food")]),
       // `whosyourdaddy`, `riseandshine`, `lightsout` and `sharpandshiny` — the original game's cheats.
       this.section("Cheats", [mk("Fast Build", "fastbuild"), mk("God Mode", "godmode"), mk("Set Day", "day"), mk("Set Night", "night"), mk("All Upgrades", "upgrades")]),
-      this.section("Selection", [sel("Full HP", "hp"), sel("Full MP", "mp"), sel("Reset Cooldown", "cooldown")]),
+      this.section("Selection", [sel("Full HP", "hp"), sel("Full MP", "mp"), sel("Reset Cooldown", "cooldown"), kill]),
       this.buildSpeed(),
     );
     setGameTip(this.cheatButtons.get("fastbuild")!, "Builds and training finish in about a second");
