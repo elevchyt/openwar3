@@ -27,6 +27,7 @@ import type { DataSource } from "../vfs/types";
 import type { Arg, FdfFrame } from "./fdf/parser";
 import { numProp, type FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
+import { fitLine } from "./fdf/widgets";
 
 const TIMER_FDF = "UI\\FrameDef\\UI\\TimerDialog.fdf";
 
@@ -125,6 +126,7 @@ export class TimerDialogOverlay {
       this.shown = shown;
       this.bindElements();
       this.applyColors(shown);
+      this.fitTitles(shown);
     } catch (err) {
       console.warn("[timerDialog] could not mount the FDF panel:", err);
       this.screen = null;
@@ -162,6 +164,22 @@ export class TimerDialogOverlay {
     this.valueEls = root
       ? this.shown.map((_, i) => root.querySelector<HTMLElement>(`[data-frame="TimerDialogValue${i}"]`)).filter((e): e is HTMLElement => !!e)
       : [];
+  }
+
+  /** A title is ONE line, whatever the map wrote. The window is a fixed 0.17 × 0.03 box and
+   *  its title has the room left of the value's 0.06 column — but `TimerDialogSetTitle` takes
+   *  any string, and a map names its timers in its own words: World of Angel Arena's second
+   *  window is a long Russian phrase that wrapped onto two lines and was sliced through the
+   *  middle by the window's edge. The same policy as the resource bar's Upkeep label, the
+   *  other line a map routinely rewrites (consoleUi `paint`): shrink the type to fit, ellipsis
+   *  past the floor. Re-asked on every mount, which is every title change (revision). */
+  private fitTitles(shown: TimerDialogObj[]): void {
+    const root = this.screen?.element;
+    if (!root) return;
+    shown.forEach((_, i) => {
+      const el = root.querySelector<HTMLElement>(`[data-frame="TimerDialogTitle${i}"]`);
+      if (el) fitLine(el);
+    });
   }
 
   /** TimerDialogSetTitleColor / SetTimeColor. Only applied when the script actually set one
