@@ -2493,6 +2493,22 @@ export interface SimUnit {
   aggroRange: number; // acquisition range (per-placed targetAcquisition, else the weapon's)
   canSleep: boolean; // sleeps at night when guarding at home (UnitData `cansleep`)
   asleep: boolean; // currently asleep (won't auto-acquire; wakes on damage/proximity/camp)
+  /** Under the Dreadlord's SLEEP (a `sleep` buff — `AUsl`/`ACsl`, and Dark Conversion's
+   *  `ANdc`), derived in recomputeStats. A different thing from `asleep`, which is a CREEP
+   *  dozing at night. A slept unit is nobody's target of their own choosing: an idle or
+   *  attack-moving unit never acquires one (acquireTarget / attackMoveTarget) and lets go of
+   *  one it had auto-acquired, while a creep camp ranks it below everything else
+   *  (threatTier) — so it is woken only by an attack ORDERED onto it, which is the whole of
+   *  the counter-play ("A sleeping unit can be awoken by attacking it", the Ubertip). */
+  magicSleep: boolean;
+  /** …and still inside the spell's opening WARD: `[AUsl] DataA` "Stun Delay" (2 s at every
+   *  rank, `ACsl` too), the window Blizzard's own buff list names `[BUsp]` "Sleep pause buff"
+   *  before the stun proper (`[BUst]`). For that window the sleeper is INVULNERABLE — nothing
+   *  can hurt it and so nothing can wake it, which is the "you cannot wake a slept unit during
+   *  the first 1–2 seconds" every guide warns about. Folded into `invulnerable` WITHOUT the
+   *  rising-edge status wipe (clearStatusForInvulnerable): a Sleep does not cleanse its target
+   *  of the Slow it was already under. */
+  sleepWard: boolean;
   returning: boolean; // leashing back to the guard point (ignores enemies until home)
   campHelper: boolean; // fighting only because a camp-mate called for help (may not call for help itself)
   campCallX: number; // …and, while it is, the guard post of the creep whose call it answered (campFightAnchor)
@@ -3574,6 +3590,10 @@ const CREEP_SLOWED_TIER = 5;
 /** The threat ladder's ARMED rung: a target on it or above is one a camp keeps its focus on —
  *  below it (dropped aggro, a worker, a snare, a building, an unarmed unit) it is still choosing. */
 const CREEP_FOCUS_TIER = 3;
+/** The rung UNDER the bottom one, a body under Sleep (`SimUnit.magicSleep`): a camp turns on it
+ *  only when nothing else in reach is left — after the workers, the wards and a unit that has
+ *  dropped aggro (the developer's rule: creeps "must target sleeping targets last"). */
+const CREEP_SLEEPER_TIER = -1;
 /** A creep breaks off a TOWER it is chewing on below this fraction of its own bar — see tickCreep. */
 const CREEP_TOWER_FLEE_HP = 0.6;
 /** The poison-on-hit codes whose carriers spread themselves around — see `spreadsPoison`. */
@@ -9619,6 +9639,8 @@ export class SimWorld {
       | "aggroRange"
       | "canSleep"
       | "asleep"
+      | "magicSleep"
+      | "sleepWard"
       | "returning"
       | "campHelper"
       | "campCallX"
@@ -9918,6 +9940,8 @@ export class SimWorld {
       aggroRange: 0,
       canSleep: false,
       asleep: false,
+      magicSleep: false,
+      sleepWard: false,
       returning: false,
       campHelper: false,
       campCallX: 0,
@@ -13453,7 +13477,9 @@ export class SimWorld {
   }
 
   private recomputeStats(u: SimUnit): void {
-    const wasInvulnerable = u.invulnerable; // for the rising edge — see clearStatusForInvulnerable
+    // For the rising edge — see clearStatusForInvulnerable. A Sleep's opening ward is
+    // invulnerability that wipes nothing (SimUnit.sleepWard), so it is left out of the edge.
+    const wasInvulnerable = u.invulnerable && !u.sleepWard;
     if (u.backpacks) this.openBackpacks(u);
     const item = this.itemBonuses(u);
     // A LEARNED Attribute Bonus (`Aamk`) adds to the same green "+N" pool an item's stats do. It
@@ -13505,6 +13531,8 @@ export class SimWorld {
     let lifestealArt = "";
     let thorns = 0;
     let stun = false;
+    let magicSleep = false;
+    let sleepWard = false;
     let silence = false;
     let hexed = false;
     let disarmed = false;
@@ -13547,7 +13575,12 @@ export class SimWorld {
       else if (b.kind === "ethereal") {
         ethereal = true;
         slowMove = Math.max(slowMove, b.value); // Banish's Movement Speed Reduction (DataA)
-      } else if (b.kind === "stun" || b.kind === "sleep") stun = true; // sleep disables like a stun (wakes on damage)
+      } else if (b.kind === "stun") stun = true;
+      else if (b.kind === "sleep") {
+        stun = true; // sleep disables like a stun (wakes on damage) — which also breaks a channel (interruptForStun)
+        magicSleep = true;
+        if (b.delay > 0) sleepWard = true; // still inside `Stun Delay` — see SimUnit.sleepWard
+      }
       else if (b.kind === "silence") silence = true;
       else if (b.kind === "prevent") {
         // Which half of the mask bites is a fact about the HOLDER's weapon (BuffKind.prevent).
@@ -13892,13 +13925,19 @@ export class SimWorld {
     // It comes back out — and the flag with it — through detachBuilder: on completion, on a
     // cancelled build, or when the half-built structure dies under it.
     if (u.insideBuild) u.invulnerable = true;
+    // The Sleep ward LAST and on its own flag, so the edge below sees only the invulnerability
+    // that is not it (SimUnit.sleepWard).
+    const hardInvulnerable = u.invulnerable;
+    u.magicSleep = magicSleep;
+    u.sleepWard = sleepWard && !hardInvulnerable;
+    if (sleepWard) u.invulnerable = true;
     // Item attribute contribution (shown as green "+N" / red "-N" beside the stat).
     u.bonusStr = item.str;
     u.bonusAgi = item.agi;
     u.bonusInt = item.int;
     // BECOMING invulnerable wipes the unit's status effects — the rising edge only, and after
     // everything above has been derived, since the wipe changes the very list that was read.
-    if (!wasInvulnerable && u.invulnerable) this.clearStatusForInvulnerable(u);
+    if (!wasInvulnerable && hardInvulnerable) this.clearStatusForInvulnerable(u);
   }
 
   /**
@@ -20997,6 +21036,15 @@ export class SimWorld {
       this.reacquireOrStop(u);
       return;
     }
+    // …and it was SLEPT under a lock nobody ordered: a unit does not choose a sleeper for
+    // itself (SimUnit.magicSleep), so it does not keep one it chose either — the idle Footman
+    // that had picked up the enemy hero turns to the next enemy rather than waking it. An
+    // ORDERED attack holds (that is how a sleeper is woken), and a creep's lock is its
+    // ladder's to re-decide (threatTier ranks the sleeper last).
+    if (t.magicSleep && !u.attackOrdered && !u.isCreep) {
+      this.reacquireOrStop(u);
+      return;
+    }
     // A TOWER HOLDS NO GRUDGE. It cannot walk after what you pointed it at, so the moment an
     // ORDERED target steps outside the weapon it would answer with, the order is finished:
     // let go and look again, rather than standing there aimed at something that is never
@@ -21330,6 +21378,8 @@ export class SimWorld {
     for (const t of this.units.values()) {
       if (t === u || t.id === excludeId || !this.hostile(u, t)) continue;
       if (!this.canAttack(u, t)) continue; // no weapon for it — not a candidate at any distance
+      if (t.invulnerable) continue; // nothing to strike — the same line acquireTarget keeps
+      if (t.magicSleep && !u.isCreep) continue; // a sleeper is nobody's own pick (SimUnit.magicSleep); a creep ranks it last
       if (t.isCreep && !this.creepAggroed(t)) continue; // don't pull an idle camp
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
       if (gap > range) continue;
@@ -21611,7 +21661,7 @@ export class SimWorld {
       let t = hadTarget ? this.units.get(u.targetId!) : undefined;
       // Drop the target if it died, turned friendly, went invulnerable (Divine Shield resets aggro), fled past the leash
       // or went into the fog (teleported away — see the same rule in tickAttack).
-      if (t && (!this.hostile(u, t) || t.invulnerable || Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > acq || !this.visibleToTeam(u.team, t.x, t.y))) t = undefined;
+      if (t && (!this.hostile(u, t) || t.invulnerable || t.magicSleep || Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > acq || !this.visibleToTeam(u.team, t.x, t.y))) t = undefined;
       // Holding something the ladder ranks BELOW the army — the Farm that was in range
       // before its defenders were, the Peasant standing in front of the Grunt. Ranking the
       // pick is worth nothing unless it is re-asked, because on the way into a base the
@@ -21817,6 +21867,7 @@ export class SimWorld {
       if (distSkip(u, t, range, true)) continue; // still the cheapest question — see nearestEnemy
       const tier = this.attackMoveTier(t);
       if (tier < bestTier) continue; // outranked already; don't pay for the predicates
+      if (t.magicSleep) continue; // an A-move walks past a sleeper — only an explicit attack wakes it (SimUnit.magicSleep)
       if (!this.engageable(u, t, true)) continue;
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
       if (tier === bestTier && gap >= bestGap) continue;
@@ -21952,6 +22003,10 @@ export class SimWorld {
    * Same tier → distance breaks the tie (see bestCreepTarget).
    */
   private threatTier(t: SimUnit): number {
+    // A SLEEPER is the very last thing a camp turns on — below the workers and wards, below
+    // even a unit that has dropped aggro — so a creep's Sleep (`ACsl`) takes a unit out of the
+    // fight rather than marking it, and a slept body is hit only when nothing else is left.
+    if (t.magicSleep) return CREEP_SLEEPER_TIER;
     if (t.aggroDropped) return 0; // turned on its own side: not a threat (SimUnit.aggroDropped)
     if (this.lowPriorityTarget(t)) return 0; // workers and wards dead last
     if (t.weapon && !t.weapon.ranged && t.buffs.some((b) => b.kind === "root")) return 0; // a snared swordsman is nobody's threat
@@ -22027,7 +22082,7 @@ export class SimWorld {
    */
   private creepScore(u: SimUnit, t: SimUnit, gap: number): number {
     const ladder = this.threatTier(t) * 1e6 - gap; // nearest within a tier
-    if (u.level < CREEP_SMART_LEVEL || this.lowPriorityTarget(t)) return ladder;
+    if (u.level < CREEP_SMART_LEVEL || this.lowPriorityTarget(t) || t.magicSleep) return ladder; // a sleeper stays last for the smart creep too
     const reach = (u.weapon?.range ?? 0) + (u.weapon?.rangeBuffer ?? 0);
     if (gap > reach) return ladder;
     if (t.isSummon) return 8e6 - t.hp;
@@ -24987,8 +25042,14 @@ export class SimWorld {
     // applyDamage because that is only the ATTACK path: spellDamage lands straight here, and
     // Dispel Magic hitting a summon is exactly the case that has to double.
     if (target.isIllusion) amount *= target.illusionDamageTaken;
-    // Sleep (Dreadlord) breaks the instant the sleeper takes damage (WC3).
-    if (target.buffs.some((b) => b.kind === "sleep")) target.buffs = target.buffs.filter((b) => b.kind !== "sleep");
+    // Sleep (Dreadlord) breaks the instant the sleeper takes damage (WC3) — ANY damage, a
+    // friendly blow included, which is how a player wakes their own hero. Never inside the
+    // opening ward (SimUnit.sleepWard): the sleeper is invulnerable then and nothing reaches
+    // here, and the `delay` test keeps it so for a path that skips the invulnerable check.
+    if (target.magicSleep && target.buffs.some((b) => b.kind === "sleep" && b.delay <= 0)) {
+      target.buffs = target.buffs.filter((b) => b.kind !== "sleep");
+      this.recomputeStats(target); // awake THIS blow — it may act on the same tick
+    }
     // …and so does a regeneration item. Drinking a Healing Salve and walking into a fight
     // wastes it — see breakItemRegen for the rule, which is ANY damage and not a threshold.
     // Placed with the sleep break, i.e. BEFORE the mana shield: being hit is being hit even
@@ -28015,6 +28076,7 @@ export class SimWorld {
       if (!this.hostile(u, t)) continue;
       if (t.invulnerable) continue; // invulnerable enemies (goblin merchant, gold mine, Divine Shield, …) aren't attackable (issue #26)
       if (t.critterGuise) continue; // a Mechanical Critter "does not draw aggro" — only an order hits it
+      if (t.magicSleep) continue; // a slept unit is woken only by an attack ORDERED onto it (SimUnit.magicSleep)
       if (t.isCreep && !this.creepAggroed(t)) continue; // don't wake an idle creep camp
       if (!this.canAttack(u, t)) continue; // a Footman never turns on the Gryphon overhead
       if (!this.canSee(u, t)) continue; // out of sight (fog, night, or a treeline) → don't aggro

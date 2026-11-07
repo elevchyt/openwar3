@@ -2319,12 +2319,23 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.applyBuff(t, { kind: "dot", group: "roots", timeLeft: d0, sourceId: caster.id, value: d(lvl, 0, 15) });
   },
 
-  // Sleep (Dreadlord) — put a target to sleep (disabled until it takes damage).
+  // Sleep (Dreadlord, and the creeps' `ACsl`) — "Puts a target enemy unit to sleep for <Dur>
+  // seconds. A sleeping unit can be awoken by attacking it." (UndeadAbilityStrings [AUsl]).
+  //   Dur1/HeroDur1  15/4 · 35/8 · 55/12   the sleep (the hero short-change, via `dur`)
+  //   DataA          2 at every rank        `Usl1` "Stun Delay" — the opening window Blizzard's
+  //                                         buff list calls `[BUsp]` "Sleep pause buff", before
+  //                                         `[BUst]` "Sleep stun buff": the sleeper is
+  //                                         INVULNERABLE for it, so it cannot be woken yet
+  // One `sleep` buff carries both halves: its `delay` is the Stun Delay (SimUnit.sleepWard),
+  // and its clock runs the whole duration from the cast. Being a disable it stops a CHANNEL
+  // the moment it lands (interruptForStun) — Sleep on a hero mid-Blizzard, Starfall,
+  // Tranquility, Death and Decay or Earthquake ends the spell. Any damage after the ward
+  // wakes it (landDamage), and nothing picks a sleeper as its own target (SimUnit.magicSleep).
   AUsl: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t || t.building) return;
     const lvl = def.levelData[rank - 1];
-    api.applyBuff(t, { kind: "sleep", group: "sleep", timeLeft: dur(lvl, t) || 5, sourceId: caster.id, ...fx(def) });
+    api.applyBuff(t, { kind: "sleep", group: "sleep", timeLeft: dur(lvl, t) || 5, sourceId: caster.id, delay: Math.max(0, d(lvl, 0, 2)), ...fx(def) });
   },
 
   // Hex (Shadow Hunter) — "Transforms an enemy unit into a random critter" (the Ubertip).
