@@ -904,7 +904,24 @@ interface SpawnInstance {
   model: {
     sequences: Array<{ name: string; interval?: ArrayLike<number> }>;
     attachments?: Array<{ name: string }>; // "Sprite First Ref", "Hand Right Ref", …
+    // The emitters, read only for how long their last particle outlives the clip (particleTail).
+    particleEmitters?: Array<{ lifeSpan: number }>;
+    particleEmitters2?: Array<{ lifeSpan: number }>;
+    ribbonEmitters?: Array<{ lifeSpan: number }>;
   };
+}
+
+/** How long, in seconds, a model's LAST particle outlives the moment its emitters stop: the
+ *  longest lifespan any of its emitters gives a particle (MDX `LifeSpan`, already seconds).
+ *  A model with no Death clip still has an end in WC3 — the emitters stop and what they
+ *  already threw finishes its life — and this is how long that end takes. */
+function particleTail(inst: SpawnInstance): number {
+  const m = inst.model;
+  let tail = 0;
+  for (const list of [m.particleEmitters, m.particleEmitters2, m.ribbonEmitters]) {
+    for (const e of list ?? []) if (Number.isFinite(e.lifeSpan) && e.lifeSpan > tail) tail = e.lifeSpan;
+  }
+  return Math.min(tail, 5); // a runaway lifespan must not leave an effect up for good
 }
 interface SpawnModel {
   addInstance(): SpawnInstance;
@@ -5864,7 +5881,20 @@ export class MapViewerScene {
     // the ordinary default rather than a zero-length effect that never appears.
     if (life <= 0) {
       const iv = inst.model?.sequences?.[seq]?.interval;
-      life = iv && iv[1] > iv[0] ? (iv[1] - iv[0]) / 1000 : 2.5;
+      if (iv && iv[1] > iv[0]) {
+        // …and then however long its PARTICLES outlive it. The clip ending is not the model
+        // ending: its emitters stop there and what they already threw lives out its own
+        // lifespan, which for a model with no Death clip IS its death. Dust of Appearance's
+        // puff (AItbTarget.mdx, one Stand [0, 933], four emitters switched off at 900 ms with
+        // 0.5–0.6 s particles) was taken down at 933 ms, so the cloud vanished in the middle
+        // of settling. NEVER-loop for the same reason: a STAND is authored to loop, and the
+        // viewer's "play once" mode honours that flag, so it would start throwing dust again
+        // during the tail (mode 1 holds the last frame with spawning off — updateAnimations).
+        life = (iv[1] - iv[0]) / 1000 + particleTail(inst);
+        inst.setSequenceLoopMode(1);
+      } else {
+        life = 2.5;
+      }
     }
     // A HELD effect marks a state, so it has three phases rather than one: Birth now, its
     // looping Stand once that clip ends (updateEffectAnims, the same handoff a dropped item's
