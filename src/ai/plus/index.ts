@@ -2185,7 +2185,7 @@ export interface PullBack {
   /** A melee soldier sent all the way HOME rather than behind the line (`sendHomeHp`) — held
    *  out until it has healed or `until` runs out, and never re-ordered off a well it is drinking at. */
   readonly home?: boolean;
-  /** A unit walked away from its own side because it wears an ENEMY's Lightning Shield
+  /** A unit walked away from its own side because it wears a CREEP's Lightning Shield
    *  (`shieldPass`) — held out until the shield is gone, and left to that pass alone. */
   readonly shield?: boolean;
 }
@@ -3778,7 +3778,7 @@ export class ComputerPlusAi {
     // base and out of one in its own, and `pullPass` reads the fight itself rather than the
     // mode. Inert on Easy (`pullOutHp` 0).
     this.pullPass(b);
-    // …and a unit wearing an ENEMY's Lightning Shield is walked clear of everybody on our side
+    // …and a unit wearing a CREEP's Lightning Shield is walked clear of everybody on our side
     // (`shieldPass`, Insane) — after `pullPass`, whose retreat clears the withdrawals it rebuilds.
     this.shieldPass(b);
     // …and the Footmen raise their shields for the fight and lower them for the walk — after
@@ -8360,7 +8360,7 @@ export class ComputerPlusAi {
   }
 
   /**
-   * AN ENEMY'S LIGHTNING SHIELD IS WALKED AWAY FROM THE ARMY — `PlusProfile.shedShield`, Insane.
+   * A CREEP'S LIGHTNING SHIELD IS WALKED AWAY FROM THE ARMY — `PlusProfile.shedShield`, Insane.
    *
    * `[Alsh]` hurts EVERY unit within its `Area1` of the holder, friend or foe, and never the
    * holder itself (`SimWorld.tickLightningShields`) — which is why it is cast on an enemy: a creep
@@ -8370,8 +8370,11 @@ export class ComputerPlusAi {
    * hostile (e.g. a creep or an enemy player), we must try to have the Computer+ AI micro that
    * unit away so that it touches nobody so that its surroundings don't get damaged"*.
    *
-   * WHOSE shield it is decides it: our own Shaman's on our own Grunt is the trick played the other
-   * way round (walked into the enemy) and is left alone. The caster is asked of the sim even once
+   * WHOSE shield it is decides it, and only a CREEP's is walked away. The developer narrowed the
+   * rule after the fact: it is ONLY for a shield "casted by a creep", with "no special behavior
+   * for enemy players" — so another player's Shaman shielding our Grunt changes nothing here, and
+   * our own Shaman's on our own Grunt is the trick played the other way round (walked into the
+   * enemy) and is left alone too (`enemyShield`). The caster is asked of the sim even once
    * dead (`SimWorld.shieldCaster`), because the shield outlives the Shaman the camp loses first.
    *
    * The unit is walked to the spot round it with the most room from every unit on our side —
@@ -8421,13 +8424,17 @@ export class ComputerPlusAi {
     }
   }
 
-  /** An ENEMY's Lightning Shield on this unit — its radius and the seconds it has left — or null
-   *  for none (and for one of our own side's, which is a trick and not a hazard). */
+  /** A CREEP's Lightning Shield on this unit — its radius and the seconds it has left — or null
+   *  for none. Only a creep's counts (the developer: the walk-away is for a shield "casted by a
+   *  creep", with "no special behavior for enemy players"): a shield an opposing PLAYER's Shaman
+   *  puts on our unit is fought through like any other spell, and one of our own side's is a
+   *  trick, not a hazard. A caster the sim can no longer name is not known to be a creep, so it
+   *  does not count either. */
   private enemyShield(b: Brain, u: SimUnit): { radius: number; timeLeft: number } | null {
     for (const buff of u.buffs) {
       if (buff.kind !== "shield" || buff.value <= 0) continue;
       const caster = this.host.world.shieldCaster(buff.sourceId);
-      if (caster && !b.ai.hostileTo(caster)) continue;
+      if (!caster?.isCreep || !b.ai.hostileTo(caster)) continue;
       return { radius: buff.value2 || 160, timeLeft: Math.max(0, buff.timeLeft) };
     }
     return null;

@@ -1602,11 +1602,24 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     if (!t) return;
     const lvl = def.levelData[rank - 1];
     api.dispel(t); // remove every timed buff (good AND bad)
+    // The art is `[Aprg] Specialart = …\Orc\Purge\PurgeBuffTarget.mdl` (Specialattach origin),
+    // the same model `[Bprg]` wears for the slow. A slowed enemy shows it through the BUFF; every
+    // other target gets no buff, so it is played on them once here — an ally being cleansed, and
+    // a SUMMON, which is destroyed outright and so used to vanish with nothing on it at all.
+    // Played where the target STOOD for a summon (its body is gone by the next frame), riding the
+    // unit otherwise. No `sound`: the model's SNDxAPRG is already the cast's (castFires chain).
+    const flash = (onUnit: boolean) => {
+      if (def.specialArt) api.emitEffect(def.specialArt, t.x, t.y, onUnit ? t.id : 0, undefined, def.specialAttach);
+    };
     if (api.hostile(caster, t)) {
-      if (t.isSummon) { api.spellDamage(t, 100000, caster.id); return; } // Purge destroys summons
+      if (t.isSummon) { flash(false); api.spellDamage(t, 100000, caster.id); return; } // Purge destroys summons
       // dataD = slow duration; heavy MOVE slow that recovers when it expires (no attack slow).
-      api.applyBuff(t, { kind: "slow", group: "purge", timeLeft: d(lvl, 3, 3), sourceId: caster.id, value: 0.75, value2: 0, ...fx(def) });
-    }
+      // The model ships the ensnare family's three SIZED sets ("Birth"/"… Medium"/"… Large"),
+      // so the body's size rides on the buff exactly as a net's does (netFx, BuffFx.anim).
+      const art = fx(def);
+      const anim = api.bodySize(t);
+      api.applyBuff(t, { kind: "slow", group: "purge", timeLeft: d(lvl, 3, 3), sourceId: caster.id, value: 0.75, value2: 0, ...art, fx: art.fx.map((f) => ({ ...f, anim })) });
+    } else flash(true);
     if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
   },
 

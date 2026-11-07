@@ -822,7 +822,13 @@ export class SoundBoard {
    *  effect model's folder (HolyBoltSpecialArt.mdx → HolyBolt.wav, HealTarget.mdx →
    *  HealTarget.wav, AvatarCaster.mdx → Avatar.wav, …), then a curated fallback path. */
   playSpellSound(arts: string[], fallback?: string, at?: SoundPos): void {
-    for (const art of arts) if (art && this.playModelSound(art, at)) return;
+    // The model ARRIVING (playModelBirthSound): its Birth clip's events, and only those. A cast
+    // is the moment an effect model is born, and a three-act buff model parks its END in the
+    // same file — DivineShieldTarget.mdx keys `SNDXAHDI` (DivineShield.wav) at Birth and
+    // `SNDXAHDD` (PaladinDivineShieldDeath1.wav) at Death — so "any event the model carries"
+    // was a coin toss, and half of every Potion of Invulnerability and every Divine Shield
+    // pressed played the bubble POPPING instead of going up.
+    for (const art of arts) if (art && this.playModelBirthSound(art, at)) return;
     // As with missiles, effect-folder WAVs have no SLK row — treat them as WANT3D
     // world sounds so a spell cast pans + attenuates from where it's cast.
     const meta = EFFECT_WAV_META;

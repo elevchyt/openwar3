@@ -396,10 +396,11 @@ export interface PlusProfile {
    */
   readonly dispelSummons: boolean;
   /**
-   * Does it walk a unit wearing an ENEMY's Lightning Shield away from its own side
+   * Does it walk a unit wearing a CREEP's Lightning Shield away from its own side
    * (`ComputerPlusAi.shieldPass`)? The shield hurts every unit around its holder, friend or foe
-   * (`SimWorld.tickLightningShields`), so one cast on our Grunt by a creep Shaman or the other
-   * player is that Grunt killing the army it stands in. The developer: *"we must try to have the
+   * (`SimWorld.tickLightningShields`), so one cast on our Grunt by a creep Shaman is that Grunt
+   * killing the army it stands in. A shield an opposing PLAYER cast gets no special handling —
+   * the developer's later rule: creeps only. The developer: *"we must try to have the
    * Computer+ AI micro that unit away so that it touches nobody so that its surroundings don't get
    * damaged by the lightning shield's effect"*. Insane only.
    */
