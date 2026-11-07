@@ -10326,6 +10326,31 @@ export class SimWorld {
     if (u) u.pathStamp = { fp, x, y };
   }
 
+  /**
+   * Push every ground unit the building's stamped footprint now covers out to the nearest spot
+   * its own footprint fits — the dev drawer's "a unit and a building at the camera" case, where
+   * the unit came first and the building was set down on top of it. The same displacement WC3
+   * gives a unit CREATED on blocked ground (RtsController.createScriptUnit), taken by the unit
+   * the building landed on instead. Asked of the TERRAIN alone (`footprintClear`): a crowd is
+   * not a wall, and the snap (teleportUnit) already steps around the bodies. Flyers, buildings,
+   * hidden bodies (in a mine, a hold, a structure being built) and a unit the script has turned
+   * pathing off on stay where they are.
+   */
+  pushOutOfFootprint(buildingId: number): void {
+    const b = this.units.get(buildingId);
+    const stamp = b?.pathStamp;
+    if (!b || !stamp || !this.grid) return;
+    const halfW = (stamp.fp.w * PATHING_CELL) / 2;
+    const halfH = (stamp.fp.h * PATHING_CELL) / 2;
+    for (const u of this.units.values()) {
+      if (u === b || u.building || u.flying || u.hp <= 0 || u.hidden || u.inMine || u.insideBuild || u.pathingOff) continue;
+      if (Math.abs(u.x - stamp.x) > halfW + u.radius || Math.abs(u.y - stamp.y) > halfH + u.radius) continue;
+      const [cx, cy] = this.grid.footprintAnchor(u.x, u.y, u.footprint);
+      if (this.grid.footprintClear(cx, cy, u.footprint)) continue;
+      this.teleportUnit(u, u.x, u.y); // nearestFit from where it stands
+    }
+  }
+
   /** A building has left the world: lift its footprint off the pathing grid. In WC3
    *  the ground a structure stood on is walkable the moment it dies — the collapse you
    *  watch afterwards is only the death animation playing over open ground, which is
