@@ -80,6 +80,10 @@ export class Viewpoint {
    *  through the fog wherever they stand, which is the punishment itself and the one thing
    *  that can put an enemy unit on screen through black fog. */
   private exposed = new Set<number>();
+  /** Every enemy STRUCTURE these eyes have actually had in sight, by unit id — what the fog
+   *  may draw from memory (`fogHides`). Written at the end of each `rebuild`; ids of units
+   *  that no longer exist are swept there too, so it holds no more than the buildings alive. */
+  private readonly seenBuildings = new Set<number>();
 
   constructor(
     /** The slot these eyes belong to. */
@@ -221,6 +225,18 @@ export class Viewpoint {
       // `hasExplored` (issue #71) — so a start-explored match drew the house glyph on the
       // minimap with nothing but bare grass under the camera.
       if (u.neutralPassive) return !this.hasExplored(u);
+      // In sight right now: drawn, whatever we remember. (`stateAt` only moves at a rebuild,
+      // which is also when `noteSeenBuildings` runs, so a building that is Visible here is
+      // one the next rebuild — or this one — writes into `seenBuildings`.)
+      if (this.vision.bestStateAt(u.x, u.y, u.radius) === FogState.Visible) return false;
+      // Out of sight, it is drawn only as a MEMORY — and a memory is of THIS building, not of
+      // the ground it stands on. Asking only "did I ever see this cell" handed over every
+      // structure an opponent put up on ground you had scouted once: a Great Hall raised at an
+      // expansion you walked past at minute two stood there on your screen and on your minimap
+      // the moment it was laid. WC3 leaves you the last thing you SAW standing there, and that
+      // is empty until you look again. The cell test stays too, because a re-masked rect
+      // (`FogMaskEnable`'s cell layer, VisionMap.stampRect MASKED) forgets its buildings.
+      if (!this.seenBuildings.has(u.id)) return true;
       const [cx, cy] = this.vision.worldToCell(u.x, u.y);
       return !this.vision.hasSeen(cx, cy);
     }
@@ -380,6 +396,20 @@ export class Viewpoint {
     for (const m of modifiers) {
       if (!m.running || !this.seesFor(m.player)) continue;
       this.stampArea(m.area, fogStateOf(m.state));
+    }
+    this.noteSeenBuildings();
+  }
+
+  /** Record the structures in sight after this rebuild (see `seenBuildings`). Asked over the
+   *  building's own collision radius, as a tall prop is (`bestStateAt`): a scout who can see
+   *  the near half of a Town Hall has seen the Town Hall. */
+  private noteSeenBuildings(): void {
+    const seen = this.seenBuildings;
+    const units = this.world.units;
+    for (const id of seen) if (!units.has(id)) seen.delete(id);
+    for (const u of units.values()) {
+      if (u.building == null || u.targetKey || seen.has(u.id)) continue;
+      if (this.vision.bestStateAt(u.x, u.y, u.radius) === FogState.Visible) seen.add(u.id);
     }
   }
 

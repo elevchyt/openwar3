@@ -222,6 +222,38 @@ console.log("\na one-shot SetFogState reaches whoever renders that player's fog"
   check("…and an unrelated player's did not", one.vision.hasSeen(cellOf(128), cellOf(128)), false);
 }
 
+// The memory a fogged building is drawn from is of the BUILDING, not of the ground. Asking only
+// "did I ever see this cell" handed over every structure an opponent laid on ground you had
+// scouted once — a Great Hall raised at an expansion your scout walked past at minute two was on
+// your screen and your minimap the moment it went down.
+console.log("\na building put up AFTER you looked is not remembered  (Viewpoint.fogHides)");
+{
+  const scout = { id: 1, owner: 0, team: 0, x: 900, y: 900, sightDay: 300, sightNight: 300, radius: 16, building: null };
+  const units = new Map([[1, scout]]);
+  const world = { units, isDay: true, activeAttackReveals: () => [], activeDeathReveals: () => [], activeItemReveals: () => [], teamDetects: () => false };
+  const set = new VisionSet(world, noAlliances, () => [], 0, 0, 1024, 1024);
+  const vp = set.viewpointFor(0);
+  vp.setTeam(0);
+  const oldHall = { id: 2, owner: 1, team: 1, x: 880, y: 880, radius: 32, building: {}, neutralPassive: false, targetKey: "" };
+  units.set(2, oldHall);
+  vp.rebuild([]); // the scout is standing there: the hall is seen
+  check("in sight: drawn", vp.fogHides(oldHall), false);
+  scout.x = 100; scout.y = 100; // …and walks home
+  vp.rebuild([]);
+  check("the ground there is now only remembered", vp.vision.stateAt(900, 900), FogState.Explored);
+  check("the hall it SAW stays drawn from memory", vp.fogHides(oldHall), false);
+  const newHall = { id: 3, owner: 1, team: 1, x: 920, y: 920, radius: 32, building: {}, neutralPassive: false, targetKey: "" };
+  units.set(3, newHall); // the expansion goes up behind its back
+  vp.rebuild([]);
+  check("a hall laid on scouted ground nobody is watching is NOT drawn", vp.fogHides(newHall), true);
+  scout.x = 900; scout.y = 900; // look again
+  vp.rebuild([]);
+  check("…until somebody looks", vp.fogHides(newHall), false);
+  scout.x = 100; scout.y = 100;
+  vp.rebuild([]);
+  check("…and from then on it is remembered", vp.fogHides(newHall), false);
+}
+
 console.log("\nevery team gets asked of its OWN grid  (item 7)");
 {
   const units = new Map([
