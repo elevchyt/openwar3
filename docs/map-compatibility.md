@@ -1081,6 +1081,31 @@ multiboard's corner button wears the skin's `MultiboardMaximizeButton*` down arr
 What is NOT ours to fix: Neliel's and Grimmjow's models and icons (`!Neliel!.mdl`,
 `BTNneliel.blp`, …) are simply not in the archive, so they draw as the missing-model case.
 
+### Protected archives — what the MPQ reader tolerates
+
+A protector damages the ARCHIVE as well as the script, in ways Storm (the game's reader) shrugs off.
+The reader is mdx-m3-viewer's, patched (`dist/cjs/parsers/mpq/{archive,hashtable,blocktable,file}.js`
+in `patches/mdx-m3-viewer@5.12.0.patch`), and `tools/mpq-protection-test.cjs` builds each trick by
+hand and asserts every real file still reads back — the unpatched reader fails 7 of its 9 cases:
+
+- **Tables that run past EOF** (or claim 2^28 entries): read for the whole entries the file holds,
+  padded to the stated size with EMPTY slots / blocks that do not exist, so the hash mask is the
+  archive's own; a claim over 2^20 is cut to what the file holds.
+- **Same-name decoys**: a lookup walks EVERY entry with the name in probe order and takes the first
+  whose block exists (`FILE_EXISTS`, data inside the file), preferring the locale-neutral one — the
+  old reader stopped at the first name match and called the file missing.
+- **"MoonLight" positions**: a file's position wraps in 32 bits like the tables' do, so data may sit
+  before the header (`block.offset` itself is untouched — `FILE_OFFSET_ADJUSTED_KEY` keys off it).
+- **A `(listfile)` that does not decode** is no list, not a fatal error.
+- **Junk-filled empty slots** (Bleach vs One Piece fills all 173 with `0xEEEEEEEE` so a probe never
+  ends early) were always fine: the lookup scans the whole table.
+- The header is read through a `DataView`, so a buffer that is a view at an odd offset works.
+
+Not handled: **bzip2**-compressed files (Storm decodes them; the reader throws — no protector in the
+corpus uses it), and a file whose sector table is itself corrupt (that file throws; the archive and
+every other file are unaffected). After this patch changes, the dev server must be restarted with
+`node_modules/.vite` deleted, like any viewer-patch change.
+
 ## Traps
 
 * **After editing the viewer patch, restart the dev server AND delete `node_modules/.vite`**, or

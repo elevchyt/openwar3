@@ -78,12 +78,188 @@ index 819b5459014ef60441683f396f391ec82df03281..401e55a45dd6111fec9d5a4576f4b0ea
      const StepIndexes = new Uint16Array([INITIAL_ADPCM_STEP_INDEX, INITIAL_ADPCM_STEP_INDEX]);
      let ChannelIndex;
      is.readUint8();
+diff --git a/dist/cjs/parsers/mpq/archive.js b/dist/cjs/parsers/mpq/archive.js
+index 47e2551cb38ccd86a82f2f2f36c7cfe63a7eae4d..9bc7102fdbaa5770dfa53fca2f0c72f8af55715f 100644
+--- a/dist/cjs/parsers/mpq/archive.js
++++ b/dist/cjs/parsers/mpq/archive.js
+@@ -12,6 +12,8 @@ const isarchive_1 = require("./isarchive");
+ /**
+  * MoPaQ archive (MPQ) version 0.
+  */
++/** OpenWar3: the largest table we will believe a header about (see load). */
++const MAX_TABLE_ENTRIES = 1 << 20;
+ class MpqArchive {
+     constructor() {
+         this.readonly = false;
+@@ -36,7 +38,13 @@ class MpqArchive {
+             throw new Error('No MPQ header');
+         }
+         // Read the header.
+-        const uint32array = new Uint32Array(bytes.buffer, headerOffset, 8);
++        // OpenWar3: through a DataView, so a buffer that is a VIEW at an odd byteOffset (a Node
++        // Buffer out of the shared pool) is read where it is rather than from its backing store.
++        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
++        const uint32array = new Uint32Array(8);
++        for (let i = 0; i < 8 && headerOffset + i * 4 + 4 <= bytes.byteLength; i++) {
++            uint32array[i] = view.getUint32(headerOffset + i * 4, true);
++        }
+         // let headerSize = uint32array[1];
+         // let archiveSize = uint32array[2];
+         const formatVersionSectorSize = uint32array[3];
+@@ -52,14 +60,30 @@ class MpqArchive {
+         }
+         this.headerOffset = headerOffset;
+         this.sectorSize = 512 * (1 << (formatVersionSectorSize >>> 16)); // Generally 4096
++        // OpenWar3: map PROTECTORS lie in these tables, and a lie that Storm (the game's own MPQ
++        // reader) shrugs off must not be fatal here either. Each table is read for as many whole
++        // entries as the FILE actually holds — a header claiming more than that used to crash
++        // the decrypt ("byte length of Uint32Array should be a multiple of 4") — and padded out
++        // to the size the header states, with EMPTY hash slots and blank (not-existing) blocks, so
++        // the hash mask stays the one the archive was built with. A claim too large to be a real
++        // table (over 2^20 slots, 16 MB) is cut to what the file holds, rounded down to a power
++        // of two, rather than allocated.
++        let hashCount = hashSize;
++        const hashHeld = Math.max(0, Math.floor((bytes.byteLength - Math.min(hashPos, bytes.byteLength)) / 16));
++        if (hashCount > MAX_TABLE_ENTRIES) {
++            hashCount = 1;
++            while (hashCount * 2 <= Math.min(hashHeld, MAX_TABLE_ENTRIES)) hashCount *= 2;
++        }
+         // Read the hash table.
+         // Also clears any existing entries.
+         // Have to copy the data, because hashPos is not guaranteed to be a multiple of 4.
+-        this.hashTable.load(bytes.slice(hashPos, hashPos + hashSize * 16));
+-        // Read the block table.
++        this.hashTable.load(bytes.slice(hashPos, hashPos + Math.min(hashCount, hashHeld) * 16), hashCount);
++        // Read the block table — same rules, padded with blocks that do not exist.
++        const blockHeld = Math.max(0, Math.floor((bytes.byteLength - Math.min(blockPos, bytes.byteLength)) / 16));
++        blockSize = Math.min(blockSize, MAX_TABLE_ENTRIES);
+         // Also clears any existing entries.
+         // Have to copy the data, because blockPos is not guaranteed to be a multiple of 4.
+-        this.blockTable.load(bytes.slice(blockPos, blockPos + blockSize * 16));
++        this.blockTable.load(bytes.slice(blockPos, blockPos + Math.min(blockSize, blockHeld) * 16), blockSize);
+         // Clear any existing files.
+         this.files.length = 0;
+         // Read the files.
+@@ -68,19 +92,33 @@ class MpqArchive {
+             // If the block index is valid, load a file.
+             // This isn't the case when the block is marked as deleted with HASH_ENTRY_DELETED.
+             // This also isn't the case for archives with fake block indices.
+-            if (blockIndex < this.blockTable.entries.length) {
+-                this.files[blockIndex] = new file_1.default(this, hash, this.blockTable.entries[blockIndex], bytes, null);
++            // OpenWar3: nor for a block Storm would not open — one without FILE_EXISTS (a
++            // protector's decoy), or one whose data lies outside the file. A decoy entry that
++            // shares a real file's name is then simply skipped by get() (see there).
++            if (blockIndex < this.blockTable.entries.length && !this.files[blockIndex]) {
++                const block = this.blockTable.entries[blockIndex];
++                if ((block.flags & constants_1.FILE_EXISTS) === 0) continue;
++                const at = (0, typecast_1.numberToUint32)(headerOffset + block.offset);
++                if (at > bytes.byteLength || at + block.compressedSize > bytes.byteLength) continue;
++                this.files[blockIndex] = new file_1.default(this, hash, block, bytes, null);
+             }
+         }
+         // If there is a listfile, use all of the file names in it.
+-        const listfile = this.get('(listfile)');
+-        if (listfile) {
+-            const list = listfile.text();
+-            if (list) {
+-                for (const name of list.split('\r\n')) {
+-                    // get() internally also sets the file's name to the given one.
+-                    this.get(name);
+-                }
++        // OpenWar3: a protector may leave a (listfile) that does not decode (garbage, or encrypted
++        // under a key that is not its name's). Storm treats it as no list at all; so do we — it
++        // only ever NAMED files, and every lookup by name still works without it.
++        let list = null;
++        try {
++            const listfile = this.get('(listfile)');
++            list = listfile ? listfile.text() : null;
++        }
++        catch (e) {
++            list = null;
++        }
++        if (list) {
++            for (const name of list.split(/\r\n|\n|\r/)) {
++                // get() internally also sets the file's name to the given one.
++                if (name) this.get(name);
+             }
+         }
+     }
+@@ -282,19 +320,26 @@ class MpqArchive {
+      * If the file doesn't exist, null is returned.
+      */
+     get(name) {
+-        const hash = this.hashTable.get(name);
+-        if (hash) {
++        // OpenWar3: every hash entry with this name, in probe order, and the first that names a
++        // file that EXISTS wins — preferring the locale-neutral one. That is Storm's rule, and
++        // the one a protector leans on: it plants a same-name decoy pointing at a block that does
++        // not exist (or holds garbage) AHEAD of the real entry, and a reader that stops at the
++        // first name match reports the file missing while the game finds it.
++        let fallback = null;
++        for (const hash of this.hashTable.getAll(name)) {
+             const blockIndex = hash.blockIndex;
+-            // Check if the block exists.
+-            if (blockIndex < constants_1.HASH_ENTRY_DELETED) {
+-                const file = this.files[blockIndex];
+-                if (file) {
+-                    // Save the name in case it wasn't already resolved.
+-                    file.name = name;
+-                    file.nameResolved = true;
+-                    return file;
+-                }
+-            }
++            if (blockIndex >= constants_1.HASH_ENTRY_DELETED) continue;
++            const candidate = this.files[blockIndex];
++            if (!candidate) continue;
++            if (hash.locale === 0) { fallback = candidate; break; }
++            if (!fallback) fallback = candidate;
++        }
++        if (fallback) {
++            const file = fallback;
++            // Save the name in case it wasn't already resolved.
++            file.name = name;
++            file.nameResolved = true;
++            return file;
+         }
+         return null;
+     }
+diff --git a/dist/cjs/parsers/mpq/blocktable.js b/dist/cjs/parsers/mpq/blocktable.js
+index fd8e89f88646430da7048051bd81af9a7f0fb8df..aaafdc6de607cdfa638823e0523edc6278b13b46 100644
+--- a/dist/cjs/parsers/mpq/blocktable.js
++++ b/dist/cjs/parsers/mpq/blocktable.js
+@@ -24,15 +24,17 @@ class BlockTable {
+             this.entries.push(new block_1.default());
+         }
+     }
+-    load(bytes) {
+-        const entriesCount = bytes.byteLength / 16;
+-        const uint32array = new Uint32Array(this.c.decryptBlock(bytes, constants_1.BLOCK_TABLE_KEY).buffer);
++    /** OpenWar3: `count` blocks, of which `bytes` may hold fewer; the rest are blank (no
++     *  FILE_EXISTS), so nothing is ever opened out of them. See MpqHashTable.load. */
++    load(bytes, count = Math.floor(bytes.byteLength / 16)) {
++        const held = Math.min(count, Math.floor(bytes.byteLength / 16));
++        const uint32array = new Uint32Array(this.c.decryptBlock(bytes.slice(0, held * 16), constants_1.BLOCK_TABLE_KEY).buffer);
+         let offset = 0;
+         // Clear the table and add the needed empties.
+         this.clear();
+-        this.addEmpties(entriesCount);
+-        for (const block of this.entries) {
+-            block.load(uint32array.subarray(offset, offset + 4));
++        this.addEmpties(count);
++        for (let i = 0; i < held; i++) {
++            this.entries[i].load(uint32array.subarray(offset, offset + 4));
+             offset += 4;
+         }
+     }
 diff --git a/dist/cjs/parsers/mpq/file.js b/dist/cjs/parsers/mpq/file.js
-index 89dd7786a851dba1409a5fd9e893843cddbf7745..237739e30923cd00d51d3cc47fd3898812e491f7 100644
+index 89dd7786a851dba1409a5fd9e893843cddbf7745..3c5a416591e24741476904f9e349e272316b809a 100644
 --- a/dist/cjs/parsers/mpq/file.js
 +++ b/dist/cjs/parsers/mpq/file.js
-@@ -5,6 +5,8 @@ const utf8_1 = require("../../common/utf8");
+@@ -3,8 +3,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
+ const pako_1 = require("pako");
+ const utf8_1 = require("../../common/utf8");
  const constants_1 = require("./constants");
++const typecast_1 = require("../../common/typecast");
  const explode_1 = require("./explode");
  const isarchive_1 = require("./isarchive");
 +const huffman_1 = require("./huffman");
@@ -91,7 +267,21 @@ index 89dd7786a851dba1409a5fd9e893843cddbf7745..237739e30923cd00d51d3cc47fd38988
  /**
   * A MPQ file.
   */
-@@ -228,12 +230,18 @@ class MpqFile {
+@@ -20,7 +23,12 @@ class MpqFile {
+         this.hash = hash;
+         this.block = block;
+         if (rawBuffer) {
+-            this.rawBuffer = rawBuffer.slice(headerOffset + block.offset, headerOffset + block.offset + block.compressedSize);
++            // OpenWar3: the file's position is header + offset in 32 bits, WRAPPING — the same
++            // "MoonLight" arithmetic the tables' own positions take (MpqArchive.load). A protector
++            // can put a file's data BEFORE the header and say so with an offset that overflows.
++            // `block.offset` itself stays as stored: FILE_OFFSET_ADJUSTED_KEY derives the key from it.
++            const at = (0, typecast_1.numberToUint32)(headerOffset + block.offset);
++            this.rawBuffer = rawBuffer.slice(at, at + block.compressedSize);
+         }
+         if (buffer) {
+             this.buffer = buffer;
+@@ -228,12 +236,18 @@ class MpqFile {
          }
          else {
              const compressionMask = bytes[0];
@@ -111,7 +301,7 @@ index 89dd7786a851dba1409a5fd9e893843cddbf7745..237739e30923cd00d51d3cc47fd38988
                  }
                  catch (e) {
                      throw new Error(`File ${this.name}: failed to decompress with 'explode': ${e}`);
-@@ -241,27 +249,34 @@ class MpqFile {
+@@ -241,27 +255,34 @@ class MpqFile {
              }
              if (compressionMask & constants_1.COMPRESSION_DEFLATE) {
                  try {
@@ -156,6 +346,58 @@ index 89dd7786a851dba1409a5fd9e893843cddbf7745..237739e30923cd00d51d3cc47fd38988
          }
      }
      /**
+diff --git a/dist/cjs/parsers/mpq/hashtable.js b/dist/cjs/parsers/mpq/hashtable.js
+index d5ae4d3bde11c67796628bdf5aa59283e09fbe8b..7e16294b32f22fe6055e48905f674a8a22c8e3bb 100644
+--- a/dist/cjs/parsers/mpq/hashtable.js
++++ b/dist/cjs/parsers/mpq/hashtable.js
+@@ -45,18 +45,41 @@ class MpqHashTable {
+         }
+         return;
+     }
+-    load(bytes) {
+-        const entriesCount = bytes.byteLength / 16;
+-        const uint32array = new Uint32Array(this.c.decryptBlock(bytes, constants_1.HASH_TABLE_KEY).buffer);
++    /**
++     * OpenWar3: `count` is how many slots the table HAS; `bytes` may hold fewer whole entries (a
++     * table cut off by the end of the file). The rest stay EMPTY, which ends a probe there.
++     */
++    load(bytes, count = Math.floor(bytes.byteLength / 16)) {
++        const held = Math.min(count, Math.floor(bytes.byteLength / 16));
++        const uint32array = new Uint32Array(this.c.decryptBlock(bytes.slice(0, held * 16), constants_1.HASH_TABLE_KEY).buffer);
+         let offset = 0;
+         // Clear the table and add the needed empties.
+         this.clear();
+-        this.addEmpties(entriesCount);
+-        for (const hash of this.entries) {
+-            hash.load(uint32array.subarray(offset, offset + 4));
++        this.addEmpties(count);
++        for (let i = 0; i < held; i++) {
++            this.entries[i].load(uint32array.subarray(offset, offset + 4));
+             offset += 4;
+         }
+     }
++    /**
++     * OpenWar3: every entry carrying `name`'s two hashes, in probe order, up to the first EMPTY
++     * slot (a DELETED one does not end a probe). See MpqArchive.get for why all of them.
++     */
++    getAll(name) {
++        const c = this.c;
++        const entries = this.entries;
++        const out = [];
++        if (!entries.length) return out;
++        const offset = c.hash(name, constants_1.HASH_TABLE_INDEX) & (entries.length - 1);
++        const nameA = c.hash(name, constants_1.HASH_NAME_A);
++        const nameB = c.hash(name, constants_1.HASH_NAME_B);
++        for (let i = 0, l = entries.length; i < l; i++) {
++            const hash = entries[(i + offset) % l];
++            if (hash.blockIndex === 0xFFFFFFFF) break;
++            if (nameA === hash.nameA && nameB === hash.nameB) out.push(hash);
++        }
++        return out;
++    }
+     save(bytes) {
+         const uint32array = new Uint32Array(this.entries.length * 4);
+         let offset = 0;
 diff --git a/dist/cjs/parsers/mpq/huffman.js b/dist/cjs/parsers/mpq/huffman.js
 new file mode 100644
 index 0000000000000000000000000000000000000000..083b467106e28ad62dea2290fadf9f9f16d6f0ac
@@ -3600,7 +3842,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..94a8e474c893e10a837832ffde05fe78
                  const metadata = metadataMap.getRow(modification.id);
                  if (metadata) {
 diff --git a/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js b/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
-index c2a27060799ff26b5c86ccedd0bedda2d6a54746..f67b5d69ef088a653c5cdaaa702057ce5153b117 100644
+index c2a27060799ff26b5c86ccedd0bedda2d6a54746..0ace06f50aa5d46f61bd8644d9af7eba81b35bb2 100644
 --- a/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
 +++ b/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
 @@ -9,6 +9,45 @@ ${precision_glsl_1.default}
