@@ -4252,9 +4252,11 @@ body.in-game .fdf-screen.fdf-ingame {
   background: none;
   color: #9c8a4a;
 }
+/* Set a little right of the button's centre: centred, the scroll's left curl all but touched the
+   separator (the button's own border-left). The box's right padding takes the difference. */
 .ow3-sites-glyph {
   position: absolute;
-  left: 50%;
+  left: calc(50% + 0.14em);
   top: 50%;
   width: 1.1em;
   height: 1.1em;
