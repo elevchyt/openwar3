@@ -12,6 +12,10 @@ your own install at runtime. **The Frozen Throne 1.30.4 is required.**
 - **Multiplayer reconnect** — no more dropped games lost
 - **Computer+** — a smarter melee AI that never cheats ([how it works](docs/computer-plus.md))
 - **Huge control groups** and a **select-army hotkey** (-)
+- **Built-in map downloader** — search and download EpicWar maps from the map list, browse Hive
+  Workshop and wc3maps inside the game, and a LAN game fetches the host's map if you don't have it
+- **Hotkey editor** — rebind any command card in-game and save it to your `CustomKeys.txt`
+  (Options → Gameplay → Hotkeys: Custom; [how it works](docs/hotkeys.md#the-editor-issue-156))
 - **Voice control** accessibility mode
 - **Push-to-talk voice chat** in multiplayer
 
