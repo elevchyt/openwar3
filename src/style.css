@@ -4237,7 +4237,8 @@ body.in-game .fdf-screen.fdf-ingame {
 
 /* The map list's Download Maps glyph and dialog (ui/mapSitesPanel.ts) — ours. The glyph is
    discreet on purpose: the search box's own dim gold, lit only under the pointer, never a glue
-   button. A down-arrow into a tray, drawn in strokes like the search box's magnifier. */
+   button. A map scroll with a down-arrow on it (SITES_GLYPH, an inline SVG in currentColor), stroked
+   like the search box's magnifier; the button's colour is the glyph's. */
 .ow3-sites-entry {
   pointer-events: auto;
   position: relative;
@@ -4249,44 +4250,18 @@ body.in-game .fdf-screen.fdf-ingame {
   border: 0;
   border-left: 1px solid rgba(110, 90, 44, 0.6);
   background: none;
+  color: #9c8a4a;
 }
 .ow3-sites-glyph {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 0.72em;
-  height: 0.34em;
-  transform: translate(-50%, 15%);
-  border: 0.12em solid #9c8a4a;
-  border-top: 0;
+  width: 1.1em;
+  height: 1.1em;
+  transform: translate(-50%, -50%);
 }
-.ow3-sites-glyph::before { /* the arrow's shaft */
-  content: "";
-  position: absolute;
-  left: 50%;
-  bottom: 0.12em;
-  width: 0.12em;
-  height: 0.58em;
-  transform: translateX(-50%);
-  background: #9c8a4a;
-}
-.ow3-sites-glyph::after { /* its head */
-  content: "";
-  position: absolute;
-  left: 50%;
-  bottom: 0.06em;
-  width: 0.3em;
-  height: 0.3em;
-  transform: translateX(-50%) rotate(45deg);
-  border: solid #9c8a4a;
-  border-width: 0 0.12em 0.12em 0;
-}
-.ow3-sites-entry:hover .ow3-sites-glyph,
-.ow3-sites-entry.pad-hover .ow3-sites-glyph { border-color: #fcd312; }
-.ow3-sites-entry:hover .ow3-sites-glyph::before,
-.ow3-sites-entry.pad-hover .ow3-sites-glyph::before { background: #fcd312; }
-.ow3-sites-entry:hover .ow3-sites-glyph::after,
-.ow3-sites-entry.pad-hover .ow3-sites-glyph::after { border-color: #fcd312; }
+.ow3-sites-entry:hover,
+.ow3-sites-entry.pad-hover { color: #fcd312; }
 /* The panel's body: DOM inside the dialog's FDF box (MapSitesDialog.fdf), sized in ems of the
    tooltip type the panel sets on it. White on black, gold for what can be pressed. */
 .ow3-sites-body {

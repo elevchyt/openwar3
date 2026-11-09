@@ -51,6 +51,17 @@ const BODY_BOTTOM = 0.066;
 
 const TITLE = "Download Maps";
 
+/** The entry's glyph: a map SCROLL with a down-arrow on it — ours, picked by the developer out of
+ *  six drawn candidates (tray, cloud, folded map, map + arrow, globe + arrow, scroll), as the one
+ *  that says "maps" in the game's own idiom and still reads as a download. Stroked in
+ *  `currentColor`, so the button's colour is its idle/hover state (style.css). */
+const SITES_GLYPH =
+  '<svg class="ow3-sites-glyph" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor"' +
+  ' stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M18 16V5a2 2 0 0 0-2-2H4.5"/>' +
+  '<path d="M8 21h12a2 2 0 0 0 2-2v-.5a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v.5a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2h4"/>' +
+  '<path d="M12 6.5v6.5"/><path d="M9.5 10.5 12 13l2.5-2.5"/></svg>';
+
 // --- the entry point ---------------------------------------------------------------------
 
 export class MapSitesEntry {
@@ -65,7 +76,7 @@ export class MapSitesEntry {
     el.className = "ow3-sites-entry";
     el.addEventListener("pointerdown", (e) => e.stopPropagation());
     el.addEventListener("click", () => this.open());
-    el.append(Object.assign(document.createElement("span"), { className: "ow3-sites-glyph" }));
+    el.insertAdjacentHTML("beforeend", SITES_GLYPH);
     setGameTip(el, TITLE);
     this.el = el;
     // A site view hands its maps back whenever they finish — the dialog may be closed by then.
