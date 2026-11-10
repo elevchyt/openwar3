@@ -395,7 +395,7 @@ function worldAt(hp) {
     // signal to add it here, not to loosen the check.
     ringSlot: 0, altFormLeft: 0, attackUpgrade: 0, armorUpgrade: 0,
     hexForm: "", uprooted: false, morphT: 0, portalLeft: 0, immolation: "", asleep: false,
-    swingFollowThrough: false, hidden: false,
+    swingFollowThrough: false, hidden: false, swingSpell: false, mercenary: false, foodFree: false,
   };
   return { units: new Map([[1, u]]), mines: new Map(), items: new Map(), timeOfDay: 12, dawnDusk: true, stashOf: () => ({ gold: 500, lumber: 150 }) };
 }
