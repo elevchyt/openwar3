@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "//": "vite.config.ts and the tools/*.ts plugins are Node code, so the browser src/ config never saw them. The two *-conformance.ts files are compile-time type assertions already compiled by tools/tsconfig.sim.json on every `pnpm sim:test`; they declare intentionally-unused locals, which this config's noUnusedLocals would flag.",
+  "include": ["vite.config.ts", "tools/*.ts", "types/*.d.ts"],
+  "exclude": ["tools/render-unit-conformance.ts", "tools/snapshot-viewer-conformance.ts"]
+}
