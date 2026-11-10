@@ -11,7 +11,7 @@
 // Run:  pnpm relay:test
 
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
 import WebSocket from "ws";
@@ -236,7 +236,9 @@ try {
     // racing the rejoin checks above against it. A dropped player who never comes back must
     // become a player who LEFT — the host hears `peer-leave` exactly as for a chosen leave, and
     // that is the only thing that ever raises the map's EVENT_PLAYER_LEAVE for them.
-    const { RelayCore } = await import(join(REPO, "server", "rooms.mjs"));
+    // The ESM loader wants a URL, not a path: on Windows a bare `C:\...` is
+    // read as the scheme "c:" and refused. pathToFileURL is the portable form.
+    const { RelayCore } = await import(pathToFileURL(join(REPO, "server", "rooms.mjs")).href);
     const core = new RelayCore({ holdMs: 150 });
     const conn = () => { const c = { got: [], send: (m) => c.got.push(m) }; core.connect(c); return c; };
     const hostC = conn();
@@ -263,7 +265,7 @@ try {
     // every peer hears the same `peer-leave` the hold's own timer would have sent, and the
     // player who comes back afterwards is REFUSED rather than seated as a newcomer in the
     // middle of a match that has already counted them out.
-    const { RelayCore } = await import(join(REPO, "server", "rooms.mjs"));
+    const { RelayCore } = await import(pathToFileURL(join(REPO, "server", "rooms.mjs")).href);
     const core = new RelayCore({ holdMs: 60_000 });
     const conn = () => { const c = { got: [], send: (m) => c.got.push(m) }; core.connect(c); return c; };
     const hostC = conn();
@@ -292,7 +294,7 @@ try {
 
   console.log("from the main menu: is my seat still held, and No gives it up");
   {
-    const { RelayCore } = await import(join(REPO, "server", "rooms.mjs"));
+    const { RelayCore } = await import(pathToFileURL(join(REPO, "server", "rooms.mjs")).href);
     const core = new RelayCore({ holdMs: 60_000 });
     const conn = () => { const c = { got: [], send: (m) => c.got.push(m) }; core.connect(c); return c; };
     const hostC = conn();
