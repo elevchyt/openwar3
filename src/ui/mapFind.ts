@@ -21,6 +21,8 @@
 // causes, so the browser hands the box back through `place` from its `fill` and it keeps its
 // text and focus.
 
+import { setGameTip } from "./gameTip";
+
 /** What the box needs from the map browser it searches. */
 export interface FindHost {
   /** Every playable map `query` fits, best first, by path. */
@@ -91,7 +93,9 @@ export class MapFind {
     clear.type = "button";
     clear.className = "ow3-find-close";
     clear.textContent = "×";
-    clear.title = "Clear (Esc)";
+    clear.setAttribute("aria-label", "Clear");
+    // An in-game hint, not the browser's `title` bubble, and never both (ui/gameTip.ts).
+    setGameTip(clear, "Clear (Esc)");
     clear.addEventListener("click", () => { this.empty(); input.focus(); });
     box.append(glass, input, clear);
     root.append(box);
