@@ -21,13 +21,14 @@
 // Run: pnpm jass:test
 const { join } = require("node:path");
 const { readFileSync, writeFileSync } = require("node:fs");
+const { requireInstallScripts } = require("./jass-install-scripts.cjs");
 const REPO = join(__dirname, "..");
 const BUILD = join(REPO, ".jass-build", "src", "jass");
 writeFileSync(join(REPO, ".jass-build", "package.json"), '{"type":"commonjs"}');
 const { buildInterpreter } = require(join(BUILD, "headless.js"));
 
-const WC3 = join(REPO, "Warcraft III");
-const SCRIPT = (name) => readFileSync(join(WC3, "ExtractedData", "merged", "Scripts", name), "latin1");
+const SCRIPTS = requireInstallScripts("common.j", "Blizzard.j");
+const SCRIPT = (name) => readFileSync(join(SCRIPTS, name), "latin1");
 const COMMON_J = SCRIPT("common.j");
 const BLIZZARD_J = SCRIPT("Blizzard.j");
 

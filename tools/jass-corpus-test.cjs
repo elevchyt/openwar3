@@ -14,6 +14,7 @@
 
 const { readFileSync, readdirSync, existsSync } = require('node:fs');
 const { join, resolve } = require('node:path');
+const { requireInstallScripts } = require('./jass-install-scripts.cjs');
 
 const REPO = resolve(__dirname, '..');
 const WC3 = join(REPO, 'Warcraft III');
@@ -55,6 +56,7 @@ const readBytes = (a, name) => {
   return f ? f.bytes() : null;
 };
 
+requireInstallScripts('common.j', 'Blizzard.j');
 const COMMON_J = readFileSync(join(WC3, 'ExtractedData', 'merged', 'Scripts', 'common.j'), 'latin1');
 const BLIZZARD_J = readFileSync(join(WC3, 'ExtractedData', 'merged', 'Scripts', 'Blizzard.j'), 'latin1');
 
