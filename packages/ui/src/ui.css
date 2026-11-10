@@ -141,16 +141,19 @@
 }
 
 .ow3-glue-btn:not(.is-disabled):hover,
+.ow3-glue-btn:not(.is-disabled).pad-hover,
 .ow3-glue-btn:not(.is-disabled):focus-visible {
   color: #fff;
   outline: none;
   box-shadow: none;
 }
 .ow3-glue-btn:not(.is-disabled):hover .ow3-glue-btn__glow,
+.ow3-glue-btn:not(.is-disabled).pad-hover .ow3-glue-btn__glow,
 .ow3-glue-btn:not(.is-disabled):focus-visible .ow3-glue-btn__glow {
   opacity: 1;
 }
-.ow3-glue-btn:not(.is-disabled):hover .ow3-glue-btn__sub {
+.ow3-glue-btn:not(.is-disabled):hover .ow3-glue-btn__sub,
+.ow3-glue-btn:not(.is-disabled).pad-hover .ow3-glue-btn__sub {
   color: #d6dcf5;
 }
 
