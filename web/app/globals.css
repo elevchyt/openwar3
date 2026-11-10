@@ -141,26 +141,13 @@ a:hover {
   margin-left: 4px;
   padding-left: 12px;
   font-size: 1.15rem;
-  color: #d4d8e2;
+  color: #fff;
   border-left: 1px solid #000;
   box-shadow: inset 1px 0 0 #3a3c3c;
   filter: drop-shadow(1px 1px 0 #000);
 }
 .resource:hover {
   color: var(--gold);
-}
-.resource:hover .resource--kofi .resource__icon {
-  color: #f2f2f2;
-  font-size: 1.3rem;
-}
-.resource__label {
-  color: #fff;
-}
-.resource--kofi:hover .resource__label {
-  color: var(--gold);
-}
-.resource__github {
-  color: #fff;
 }
 
 /* The kit leaves the cursor to its host (the game shows only its own); a web page points. */

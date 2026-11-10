@@ -4091,9 +4091,17 @@ export class GameHud {
         this.selStats.hidden = true;
         this.selSub.textContent = "";
         this.selCarry.hidden = true;
-        // Label the job and the seconds left on it, e.g. "Training (12s)".
+        // Label the job and the seconds left on it, e.g. "Training (12s)". A building's queue
+        // holds research, hero revival and upgrades as well as units, so name the job the head
+        // of the queue actually is — the observer HUD resolves it the same way (renderJob).
         const secs = Math.max(0, Math.ceil(sel.secondsLeft));
-        this.statusLabel.textContent = `${constructing ? "Constructing" : "Training"} (${secs}s)`;
+        const head = constructing ? null : sel.queue[0] ?? null;
+        const verb = constructing ? this.driver.uiString("CONSTRUCTING", "Constructing")
+          : head?.kind === "research" ? this.driver.uiString("RESEARCHING", "Researching")
+          : head?.kind === "revive" ? this.driver.uiString("REVIVING", "Reviving")
+          : head?.kind === "upgrade" ? head.name
+          : this.driver.uiString("TRAINING", "Training");
+        this.statusLabel.textContent = `${verb} (${secs}s)`;
         const frac = Math.max(0, Math.min(1, constructing ? sel.buildProgress : sel.trainProgress));
         this.progressFill.style.width = `${frac * 100}%`;
         // Status icon: the building (constructing) or the unit being trained.

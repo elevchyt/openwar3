@@ -11,7 +11,7 @@
     "build": "node tools/import-cycle-test.mjs && tsc --noEmit && vite build",
     "cycles": "node tools/import-cycle-test.mjs",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.node.json",
     "data:extract": "tsc -p tools/tsconfig.casc.json && node --max-old-space-size=8192 tools/extract-data.mjs",
     "casc:test": "tsc -p tools/tsconfig.casc.json && node --max-old-space-size=8192 tools/casc-test.cjs",
     "data:build": "node tools/build-data-browser.mjs",
@@ -53,6 +53,7 @@
   },
   "devDependencies": {
     "@openwar3/ui": "link:packages/ui",
+    "@types/node": "^24.13.3",
     "electron": "^44.3.0",
     "electron-builder": "^26.15.3",
     "events": "^3.3.0",

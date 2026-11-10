@@ -170,9 +170,10 @@ spot, both in `scoutPass`:
   against — an army, which chose to be there.
 
 Both are asked **only once the scout has left home** (`TOWN_RADIUS`), and that clause is not a
-detail: ending the tour latches `scoutDone` (`release`, in `src/ai/plus/index.ts`), so a rush standing in our own base at the sixtieth second
-would otherwise end scouting for the whole match before the worker had taken a step. Being shot at
-at home is `defendPass`'s business, not the tour's — the tour has not begun.
+detail: ending the tour latches `scoutDone` (`release`, in `src/ai/plus/index.ts`), so a rush
+standing in our own base at the sixtieth second would otherwise end scouting for the whole match
+before the worker had taken a step. Being shot at at home is `defendPass`'s business, not the
+tour's — the tour has not begun.
 
 ### …and it is thought about on its own clock
 
