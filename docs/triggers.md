@@ -331,18 +331,17 @@ killing a unit in ExtremeCandyWar fired 7 death handlers; two hostile units auto
 A trigger's `CreateUnit` now puts a **real** unit on the map, and `RemoveUnit`/`KillUnit` take it off. Built in
 **`src/render/mapViewer.ts`** + the sim/RTS layer:
 
-- **`createUnit` hook** (`authority.createScriptUnit`, `src/game/jassHooks.ts` → `src/game/rts.ts`) — the sim unit exists the
-  instant the native returns, because the next JASS statement may already order or colour it. `createScriptUnit` resolves the
-  rawcode in our `UnitRegistry`, places it the way a freshly-trained unit is placed (buildings snap to their footprint, a
-  ground unit created on a blocked cell moves to the nearest fit), and hands back the sim id up front. JASS facing (degrees)
-  → sim radians.
-- **The BODY is queued, not built** — the render side has no model yet, so `createScriptUnit` pushes the spawn onto
-  `scriptSpawns` and whoever is drawing drains it (`RtsController.drainScriptSpawns`, called from `src/render/mapViewer.ts`) and attaches the model to
-  the sim unit that already exists. A headless host simply never drains, which is correct rather than a gap: the unit the
-  script talks to exists either way.
-- **Pre-placed units are bound, not spawned** — `CreateAllUnits()` is record-only for us (`Runtime.recordOnlySpawnFns`; those units came in from
-  `war3mapUnits.doo` and are adopted), and `findPlacedUnit` (`src/game/jassHooks.ts`) binds the handle a script was just
-  handed to the unit already standing at that type and position, so its `WaygateSetDestination` / `SetUnitColor` / … land.
+- **`createUnit` hook** (`authority.createScriptUnit` in `src/game/jassHooks.ts` → `RtsController.createScriptUnit` in
+  `src/game/rts.ts`) — resolves the rawcode in our `UnitRegistry` and creates the **sim** unit at once, under an id from
+  `RtsController.reserveUnitId()`, because JASS needs the unit handle *synchronously* and the next statement may order
+  or configure it. JASS facing (degrees) → sim radians. The unit's BODY is queued (`scriptSpawns`) and the renderer
+  loads the model and attaches it when it drains the queue (`drainScriptSpawns`); a headless host never drains.
+- **The record-only gate** — the crux of not double-placing pre-placed units. `Runtime.recordOnlySpawnFns`
+  (`src/jass/runtime.ts`) names `CreateAllUnits`, and while a call to it is on the stack (`spawnSuppressed`) a
+  `CreateUnit` records its `JassUnit` row and binds the handle to the unit already standing there
+  (`findPlacedUnit`) instead of spawning — the `.doo` adoption still owns pre-placed units. The gate is scoped to the
+  CALL, not to `main()`, so the melee init's starting units (also created inside `main()`) spawn for real; a map with no
+  `.doo` units drops the gate and lets the script place them (`src/jass/index.ts`).
 - **`RemoveUnit`/`KillUnit`** — `SimWorld.removeUnit` (no death/corpse) and `killUnit` (death anim + corpse), reconciled
   to the render side by the existing `drainRemovals`/`drainDeaths` → `onRemove`/`onDeath` path.
 

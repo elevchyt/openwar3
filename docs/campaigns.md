@@ -601,11 +601,12 @@ invisible and are used as a shadow and as a "this row does not highlight" marker
 
 Human and orc point the same key at art with a live alpha (191 flat — the translucent slate the
 reference screenshot shows), so the channel is honoured wherever it says anything. This is the
-case where it says nothing at all, and the game plainly draws it. So a **BACKDROP's background**
-whose alpha is entirely zero is drawn opaque (`reviveDeadAlpha`, a decode-time option of
-`blpToCanvas` in `src/render/blputil.ts` that only the FDF chrome asks for). A texture that is one
-flat colour end to end is a blank and keeps its zero alpha, so the null shadow and the blank
-highlight are untouched.
+case where it says nothing at all, and the game plainly draws it. So a UI texture whose alpha
+is entirely zero is drawn opaque — the `reviveDeadAlpha` option of the BLP decoder
+(`src/render/blputil.ts`), which the FDF renderer asks for (`src/ui/fdf/render.ts`). It works at
+DECODE time, because a canvas premultiplies and the colour is gone by the time a backdrop is
+composed. A texture that is one flat colour end to end is left alone, so the blank highlight
+stays invisible, and the null shadow never asks for it.
 
 ## Finishing a chapter: Continue plays the next one
 

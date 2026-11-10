@@ -1469,7 +1469,7 @@ and 4 say otherwise and are flagged. Two items are gated on a developer decision
    not reach `sim.removeUnit`. Dropping the guard leaves `typecheck` clean and turns two named
    checks red — confirmed by injecting it, restored after.
 
-   **Left: `createUnit`.** It routes to `spawnScriptUnit`, which loads a model. It is the last
+   **Left: `createUnit`.** It routed to `spawnScriptUnit` (since replaced by `RtsController.createScriptUnit`), which loaded a model. It is the last
    member of this group and belongs with 1g below.
 
 1g. ~~**`createUnit`, and the rest of the presentation half.**~~ **Partly done — and the "rest is

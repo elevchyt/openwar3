@@ -64,7 +64,7 @@ files (`onnx-community/whisper-small.en`, ~250 MB), run by transformers.js in a 
 3. **Installed = in Cache Storage.** transformers.js keeps every file in the `transformers-cache`
    Cache; "installed" is its two ONNX files being there (`whisperFiles`), so a browser clearing
    site data is a model to fetch again, never a broken one. The old Vosk model in IndexedDB
-   (`/vosk`) is deleted at boot (`forgetOldVoiceModels`).
+   (`/vosk`) is deleted at boot (`forgetOldVoiceModels`, `src/voice/model.ts`).
 4. **CPU everywhere — WebGPU was measured and LOSES.** On the developer's RTX 3050 (Chrome,
    WebGPU adapter "nvidia/ampere"), base.en's int8 files answered a 2 s command in **~2.6 s on
    WebGPU against ~0.8 s on the CPU** (eight threads), and an 11 s clip in 9.3 s against 1.2 s:
