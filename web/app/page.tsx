@@ -76,7 +76,14 @@ export default async function Home() {
               </span>
               <span className="resource__label">Support</span>
             </a>
-            <a className="resource" href={REPO_URL} target="_blank" rel="noopener noreferrer" title="Star OpenWar3 on GitHub">
+            <a
+              className="resource"
+              href={REPO_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Star OpenWar3 on GitHub"
+              aria-label={stars != null ? `Star OpenWar3 on GitHub (${stars} stars)` : "Star OpenWar3 on GitHub"}
+            >
               <span className="resource__icon">
                 <StarIcon />
               </span>
@@ -99,7 +106,7 @@ export default async function Home() {
             <Image
               className="hero__logo"
               src="/openwar3-logo.avif"
-              alt="OpenWar3"
+              alt=""
               draggable={false}
               width={1683}
               height={935}
