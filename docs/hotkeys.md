@@ -191,8 +191,9 @@ shop's stock, unspent skill points), so the key and a count read as one family.
   handler skips both. A button you merely cannot afford answers its key, so it keeps it.
 * **The key is always top-left**, in a box about a third of the button (a count's is half), so it
   never collides with a count. A count (a shop's stock) keeps the bottom-right; the learn-skill
-  button's unspent points sit bottom-right too, at the KEY's size (`countKeySize` → `.key-size`). That button is
-  on every hero's card whether or not there is a point to spend; with none it wears no count.
+  button's unspent points sit bottom-right too, in the same box as every other count on the card
+  (`.hud-cmd .hud-count-badge:not(.hud-hotkey-badge)` in `style.css` — a little larger than the
+  key's). That button is on every hero's card whether or not there is a point to spend; with none it wears no count.
 
 ## When a change takes effect
 
