@@ -14,12 +14,13 @@ const SCRIPTS = join(REPO, "Warcraft III", "ExtractedData", "merged", "Scripts")
 
 // Exits the process with the standard hint unless every named script is there.
 // Returns the directory holding them, so a test can read straight from it.
+// The hint is worded exactly as the hand-written guards word it (jass-predicates-test.cjs,
+// jass-imagery-test.cjs: "… reads the install's own common.j and Blizzard.j."), and names
+// everything the test READS rather than only what is missing.
 function requireInstallScripts(...names) {
-  const missing = names.filter((name) => !existsSync(join(SCRIPTS, name)));
-  if (missing.length > 0) {
-    console.error(
-      `Run \`pnpm data:extract\` first - this test reads the install's own ${missing.join(", ")}.`,
-    );
+  if (names.some((name) => !existsSync(join(SCRIPTS, name)))) {
+    const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0];
+    console.error(`Run \`pnpm data:extract\` first — this test reads the install's own ${list}.`);
     process.exit(2);
   }
   return SCRIPTS;

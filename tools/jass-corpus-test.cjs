@@ -56,9 +56,9 @@ const readBytes = (a, name) => {
   return f ? f.bytes() : null;
 };
 
-requireInstallScripts('common.j', 'Blizzard.j');
-const COMMON_J = readFileSync(join(WC3, 'ExtractedData', 'merged', 'Scripts', 'common.j'), 'latin1');
-const BLIZZARD_J = readFileSync(join(WC3, 'ExtractedData', 'merged', 'Scripts', 'Blizzard.j'), 'latin1');
+const SCRIPTS = requireInstallScripts('common.j', 'Blizzard.j');
+const COMMON_J = readFileSync(join(SCRIPTS, 'common.j'), 'latin1');
+const BLIZZARD_J = readFileSync(join(SCRIPTS, 'Blizzard.j'), 'latin1');
 
 function findMaps(dir) {
   const out = [];
