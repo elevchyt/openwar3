@@ -221,6 +221,9 @@ export function mountSinglePlayerMenu(
     s.setEnabled("DeleteProfileButton", picked !== null);
     // Selecting the profile already in play is a no-op, so it is offered only for another one.
     s.setEnabled("SelectProfileButton", picked !== null && picked !== active);
+    // There is no save system yet, so Load Saved Game has nothing to open: offer it only when
+    // the screen was handed a handler for it, the way the Escape menu greys its own Load.
+    s.setEnabled("LoadSavedButton", !!h.onLoadSaved);
   }
 
   // --- the two halves coming and going ------------------------------------------------
