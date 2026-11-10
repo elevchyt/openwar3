@@ -44,7 +44,10 @@ const REASONS = {
 
 /** Which steps run, in order, and why the others do not. */
 export function buildPlan({ hasDist, hasData, hasSimBuild }) {
-  const available = { dist: hasDist, data: hasData, simbuild: hasSimBuild };
+  // sim:test compiles `.sim-build/` as it runs, so when the extracted data is
+  // there the directory will exist by the time relay runs — what is on disk now
+  // is not the question. With no data, nothing builds it at all.
+  const available = { dist: hasDist, data: hasData, simbuild: hasSimBuild || hasData };
   return STEPS.map((step) =>
     step.needs && !available[step.needs]
       ? { ...step, skip: true, reason: REASONS[step.needs] }
