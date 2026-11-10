@@ -201,7 +201,8 @@ body.in-game {
   text-decoration: underline;
   text-underline-offset: 0.12em;
 }
-.update-release-link:hover { filter: brightness(1.2); }
+.update-release-link:hover,
+.update-release-link.pad-hover { filter: brightness(1.2); }
 
 /* The hotkey editor's command card (ui/hotkeyEditor.ts, issue #156). A 4×3 grid of the game's
    own button icons in their Buttonpos slots, each wearing the in-game card's key badge — the
@@ -1317,7 +1318,8 @@ body:not(.hud-tooltip-skinned) .dev-concede { outline: 1px solid rgba(200, 160, 
 .hud-minimap-btn.disabled {
   cursor: default;
 }
-.hud-minimap-btn.disabled:hover {
+.hud-minimap-btn.disabled:hover,
+.hud-minimap-btn.disabled.pad-hover {
   filter: none;
 }
 
@@ -2786,7 +2788,8 @@ body.hud-widget-skinned .hud-cargo-slot {
   background: var(--hud-cargo-slot) 0 0 / 100% 100% no-repeat;
 }
 .hud-cargo-slot.filled { cursor: pointer; }
-.hud-cargo-slot.filled:hover .hud-cargo-art { filter: brightness(1.15); }
+.hud-cargo-slot.filled:hover .hud-cargo-art,
+.hud-cargo-slot.filled.pad-hover .hud-cargo-art { filter: brightness(1.15); }
 /* The icon sits inside the frame's own gold rim (the art's border is ~4 of 64 texels) and
    leaves the pocket's bottom fifth to the bar. */
 .hud-cargo-art {
@@ -2801,7 +2804,8 @@ body.hud-widget-skinned .hud-cargo-slot {
 /* The second (third, fourth) seat of a wide unit: the same picture, dimmed, and no bar —
    "it is taking this seat too", not "here is another one". */
 .hud-cargo-slot.extra .hud-cargo-art { filter: brightness(0.45); top: 9%; bottom: 9%; }
-.hud-cargo-slot.extra.filled:hover .hud-cargo-art { filter: brightness(0.6); }
+.hud-cargo-slot.extra.filled:hover .hud-cargo-art,
+.hud-cargo-slot.extra.filled.pad-hover .hud-cargo-art { filter: brightness(0.6); }
 .hud-cargo-track {
   position: absolute;
   left: 9%;
@@ -2848,7 +2852,8 @@ body.hud-widget-skinned .hud-cargo-slot {
   bottom: 10%;
   height: 6%;
 }
-.hud-cargo-slot.devoured.filled:hover .hud-cargo-art { filter: brightness(1.15); }
+.hud-cargo-slot.devoured.filled:hover .hud-cargo-art,
+.hud-cargo-slot.devoured.filled.pad-hover .hud-cargo-art { filter: brightness(1.15); }
 
 /* Construction / training progress (WC3 info panel): status icon + gold label,
    a gold progress bar, and the queue slots. */
@@ -2876,7 +2881,8 @@ body.hud-widget-skinned .hud-cargo-slot {
    differently from the page — the icon lost a column on its right the moment it was hovered.
    Keeping both in that layer all the time makes idle and hover the same pixels. */
 .hud-status-icon, .hud-queue-slot { will-change: filter; }
-.hud-status-icon.clickable:hover, .hud-queue-slot.clickable:hover { border-color: rgba(240, 200, 80, 0.95); filter: brightness(1.15); }
+.hud-status-icon.clickable:hover, .hud-queue-slot.clickable:hover,
+.hud-status-icon.clickable.pad-hover, .hud-queue-slot.clickable.pad-hover { border-color: rgba(240, 200, 80, 0.95); filter: brightness(1.15); }
 .hud-status-label { font-size: 15px; color: #f0c850; letter-spacing: 0.4px; }
 /* Gold capsule progress bar. */
 .hud-progress {
@@ -3691,7 +3697,8 @@ body.in-game .fdf-screen.fdf-ingame {
   text-decoration: none;
 }
 /* StandardSmallTextTemplate's FontColor 0.99 0.827 0.0705 — the small glue label's gold. */
-.fdf-version-link:hover { color: rgb(252, 211, 18); }
+.fdf-version-link:hover,
+.fdf-version-link.pad-hover { color: rgb(252, 211, 18); }
 
 /* NO focus ring anywhere on an FDF screen.
    The page-wide `*:focus-visible` rule at the top of this file gives everything a gold outline
@@ -4148,7 +4155,8 @@ body.in-game .fdf-screen.fdf-ingame {
   line-height: 1;
   color: rgba(255, 255, 255, 0.35);
 }
-.fdf-list-row:hover .fdf-list-action { color: rgba(255, 255, 255, 0.75); }
+.fdf-list-row:hover .fdf-list-action,
+.fdf-list-row.pad-hover .fdf-list-action { color: rgba(255, 255, 255, 0.75); }
 .fdf-list-action:hover { color: #ff8080; }
 
 /* The map list's search box (ui/mapFind.ts) — ours, as no 2003 screen has one. Always on show
@@ -4228,7 +4236,8 @@ body.in-game .fdf-screen.fdf-ingame {
   line-height: 1;
 }
 .ow3-find-close[hidden] { display: none; }
-.ow3-find-close:hover { color: #fff3a0; }
+.ow3-find-close:hover,
+.ow3-find-close.pad-hover { color: #fff3a0; }
 .fdf-list.ow3-find-docked > .fdf-list-rows,
 .fdf-list.ow3-find-docked > .fdf-scrollbar { top: var(--ow3-find-h) !important; }
 /* The scrollbar's track art is baked at the list's full height (ui/fdf/widgets.ts), so on the
@@ -4330,7 +4339,8 @@ body.in-game .fdf-screen.fdf-ingame {
   padding: 0.35em 0.6em;
   border-bottom: 1px solid rgba(110, 90, 44, 0.25);
 }
-.ow3-sites-result:hover { background: rgba(252, 211, 18, 0.06); }
+.ow3-sites-result:hover,
+.ow3-sites-result.pad-hover { background: rgba(252, 211, 18, 0.06); }
 .ow3-sites-thumb { flex: 0 0 auto; width: 3.2em; height: 3.2em; object-fit: cover; background: #111; border: 1px solid #3c3220; }
 .ow3-sites-text { flex: 1 1 auto; min-width: 0; }
 .ow3-sites-name, .ow3-sites-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
