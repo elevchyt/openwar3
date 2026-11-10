@@ -164,7 +164,9 @@ export async function searchEpicWar(query: string, signal?: AbortSignal): Promis
   return parseEpicWar(html);
 }
 
-/** The rows of an EpicWar listing page. Exported for tools/map-sites-test.cjs. */
+/** The rows of an EpicWar listing page. Exported so a test can feed a saved listing
+ *  page through it (there is no Node DOM in the toolchain, so the fixture would need a
+ *  DOMParser shim). */
 export function parseEpicWar(html: string): EpicWarMap[] {
   const doc = new DOMParser().parseFromString(html, "text/html");
   const out: EpicWarMap[] = [];
