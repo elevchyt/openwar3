@@ -331,13 +331,18 @@ killing a unit in ExtremeCandyWar fired 7 death handlers; two hostile units auto
 A trigger's `CreateUnit` now puts a **real** unit on the map, and `RemoveUnit`/`KillUnit` take it off. Built in
 **`src/render/mapViewer.ts`** + the sim/RTS layer:
 
-- **`createUnit` hook** (`spawnScriptUnit`) — resolves the rawcode in our `UnitRegistry`, then spawns via the existing
-  `spawnUnit` (model instance → `RtsController.addUnit` → sim unit). JASS needs the unit handle *synchronously* but the
-  model loads async, so `RtsController.reserveUnitId()` hands back a sim id up front and `addUnit(..., reservedId)`
-  attaches the render instance to that id when it's ready. JASS facing (degrees) → sim radians.
-- **The `scriptSpawnLive` gate** — the crux of not double-placing pre-placed units. It's `false` while `main()` runs, so
-  `CreateAllUnits()` records `JassUnit` rows only (the `.doo` adoption still owns pre-placed units), and flips `true`
-  once `main()` returns — so only *trigger*-time `CreateUnit` (hero selection, spawns) spawns for real.
+- **`createUnit` hook** (`authority.createScriptUnit`, `src/game/jassHooks.ts` → `src/game/rts.ts`) — the sim unit exists the
+  instant the native returns, because the next JASS statement may already order or colour it. `createScriptUnit` resolves the
+  rawcode in our `UnitRegistry`, places it the way a freshly-trained unit is placed (buildings snap to their footprint, a
+  ground unit created on a blocked cell moves to the nearest fit), and hands back the sim id up front. JASS facing (degrees)
+  → sim radians.
+- **The BODY is queued, not built** — the render side has no model yet, so `createScriptUnit` pushes the spawn onto
+  `scriptSpawns` and whoever is drawing drains it (`drainScriptSpawns`, `src/render/mapViewer.ts`) and attaches the model to
+  the sim unit that already exists. A headless host simply never drains, which is correct rather than a gap: the unit the
+  script talks to exists either way.
+- **Pre-placed units are bound, not spawned** — `CreateAllUnits()` is record-only for us (those units came in from
+  `war3mapUnits.doo` and are adopted), and `findPlacedUnit` (`src/game/jassHooks.ts`) binds the handle a script was just
+  handed to the unit already standing at that type and position, so its `WaygateSetDestination` / `SetUnitColor` / … land.
 - **`RemoveUnit`/`KillUnit`** — `SimWorld.removeUnit` (no death/corpse) and `killUnit` (death anim + corpse), reconciled
   to the render side by the existing `drainRemovals`/`drainDeaths` → `onRemove`/`onDeath` path.
 

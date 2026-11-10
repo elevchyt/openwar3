@@ -602,7 +602,7 @@ invisible and are used as a shadow and as a "this row does not highlight" marker
 Human and orc point the same key at art with a live alpha (191 flat — the translucent slate the
 reference screenshot shows), so the channel is honoured wherever it says anything. This is the
 case where it says nothing at all, and the game plainly draws it. So a **BACKDROP's background**
-whose alpha is entirely zero is drawn opaque (`opaqueIfBlankAlpha`, one WeakMap-cached copy per
+whose alpha is entirely zero is drawn opaque (`reviveDeadAlpha`, one WeakMap-cached copy per
 texture). Scoped to that one draw so the null shadow and the blank highlight are untouched.
 
 ## Finishing a chapter: Continue plays the next one

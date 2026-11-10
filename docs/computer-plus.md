@@ -170,7 +170,7 @@ spot, both in `scoutPass`:
   against — an army, which chose to be there.
 
 Both are asked **only once the scout has left home** (`TOWN_RADIUS`), and that clause is not a
-detail: `tourOver` latches `scoutDone`, so a rush standing in our own base at the sixtieth second
+detail: `scoutDone` latches when the tour ends, so a rush standing in our own base at the sixtieth second
 would otherwise end scouting for the whole match before the worker had taken a step. Being shot at
 at home is `defendPass`'s business, not the tour's — the tour has not begun.
 
