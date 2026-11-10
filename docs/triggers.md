@@ -331,13 +331,17 @@ killing a unit in ExtremeCandyWar fired 7 death handlers; two hostile units auto
 A trigger's `CreateUnit` now puts a **real** unit on the map, and `RemoveUnit`/`KillUnit` take it off. Built in
 **`src/render/mapViewer.ts`** + the sim/RTS layer:
 
-- **`createUnit` hook** (`spawnScriptUnit`) — resolves the rawcode in our `UnitRegistry`, then spawns via the existing
-  `spawnUnit` (model instance → `RtsController.addUnit` → sim unit). JASS needs the unit handle *synchronously* but the
-  model loads async, so `RtsController.reserveUnitId()` hands back a sim id up front and `addUnit(..., reservedId)`
-  attaches the render instance to that id when it's ready. JASS facing (degrees) → sim radians.
-- **The `scriptSpawnLive` gate** — the crux of not double-placing pre-placed units. It's `false` while `main()` runs, so
-  `CreateAllUnits()` records `JassUnit` rows only (the `.doo` adoption still owns pre-placed units), and flips `true`
-  once `main()` returns — so only *trigger*-time `CreateUnit` (hero selection, spawns) spawns for real.
+- **`createUnit` hook** (`authority.createScriptUnit` in `src/game/jassHooks.ts` → `RtsController.createScriptUnit` in
+  `src/game/rts.ts`) — resolves the rawcode in our `UnitRegistry` and creates the **sim** unit at once, under an id from
+  `RtsController.reserveUnitId()`, because JASS needs the unit handle *synchronously* and the next statement may order
+  or configure it. JASS facing (degrees) → sim radians. The unit's BODY is queued (`scriptSpawns`) and the renderer
+  loads the model and attaches it when it drains the queue (`drainScriptSpawns`); a headless host never drains.
+- **The record-only gate** — the crux of not double-placing pre-placed units. `Runtime.recordOnlySpawnFns`
+  (`src/jass/runtime.ts`) names `CreateAllUnits`, and while a call to it is on the stack (`spawnSuppressed`) a
+  `CreateUnit` records its `JassUnit` row and binds the handle to the unit already standing there
+  (`findPlacedUnit`) instead of spawning — the `.doo` adoption still owns pre-placed units. The gate is scoped to the
+  CALL, not to `main()`, so the melee init's starting units (also created inside `main()`) spawn for real; a map with no
+  `.doo` units drops the gate and lets the script place them (`src/jass/index.ts`).
 - **`RemoveUnit`/`KillUnit`** — `SimWorld.removeUnit` (no death/corpse) and `killUnit` (death anim + corpse), reconciled
   to the render side by the existing `drainRemovals`/`drainDeaths` → `onRemove`/`onDeath` path.
 
