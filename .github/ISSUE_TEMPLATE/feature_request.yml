@@ -1,0 +1,27 @@
+name: Feature request
+description: Something from Warcraft III that OpenWar3 does not do yet, or an idea of our own.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What would you like?
+      description: Describe the feature. If it exists in the original game, say how it behaves there.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why?
+      description: What it would let you do, or what is missing without it.
+  - type: textarea
+    id: sources
+    attributes:
+      label: References
+      description: |
+        Anything that pins down how it should work — a screenshot of the real game, a Hive Workshop
+        thread, a classic.battle.net page, or the data file / field it comes from.
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else

@@ -1,0 +1,76 @@
+name: Bug report
+description: Something behaves differently from Warcraft III, breaks, or crashes.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! OpenWar3 aims to match **Warcraft III: The Frozen Throne 1.30.4**, so
+        "the real game does X here, OpenWar3 does Y" is exactly the kind of report we want.
+  - type: input
+    id: map
+    attributes:
+      label: Map
+      description: Which map (and game mode — melee, custom, campaign chapter)?
+      placeholder: "(2)EchoIsles.w3x, melee vs Computer+ Normal"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start a match on …
+        2. Select …
+        3. Press …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What should happen — ideally what the original game does.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What happens instead.
+    validations:
+      required: true
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots or video
+      description: Drag images or a clip in here. A shot of the real game for comparison helps a lot.
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Where were you playing?
+      options:
+        - Desktop app — Windows
+        - Desktop app — Linux
+        - Desktop app — macOS
+        - Browser
+        - Running from source (pnpm dev)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: OpenWar3 version / commit
+      placeholder: "v0.x.y, or a commit hash if running from source"
+  - type: dropdown
+    id: edition
+    attributes:
+      label: Edition
+      options:
+        - The Frozen Throne
+        - Reign of Chaos
+  - type: textarea
+    id: logs
+    attributes:
+      label: Console output or match log
+      description: Errors from the browser console (F12) or the match log in `.logs/`, if you have them.
+      render: text

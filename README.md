@@ -34,6 +34,8 @@ pnpm app     # desktop app (after pnpm build)
 
 LAN and online play works out of the box in the desktop app — see [docs/multiplayer.md](docs/multiplayer.md).
 
+Want to help? Start with [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Legal
 
 Original code, no copyrighted assets. Game files are read locally and never uploaded.
