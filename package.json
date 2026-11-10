@@ -53,7 +53,7 @@
   },
   "devDependencies": {
     "@openwar3/ui": "link:packages/ui",
-    "@types/node": "^26.6.6",
+    "@types/node": "^24.13.3",
     "electron": "^44.3.0",
     "electron-builder": "^26.15.3",
     "events": "^3.3.0",
