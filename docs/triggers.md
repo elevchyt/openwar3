@@ -337,10 +337,10 @@ A trigger's `CreateUnit` now puts a **real** unit on the map, and `RemoveUnit`/`
   ground unit created on a blocked cell moves to the nearest fit), and hands back the sim id up front. JASS facing (degrees)
   → sim radians.
 - **The BODY is queued, not built** — the render side has no model yet, so `createScriptUnit` pushes the spawn onto
-  `scriptSpawns` and whoever is drawing drains it (`drainScriptSpawns`, `src/render/mapViewer.ts`) and attaches the model to
+  `scriptSpawns` and whoever is drawing drains it (`RtsController.drainScriptSpawns`, called from `src/render/mapViewer.ts`) and attaches the model to
   the sim unit that already exists. A headless host simply never drains, which is correct rather than a gap: the unit the
   script talks to exists either way.
-- **Pre-placed units are bound, not spawned** — `CreateAllUnits()` is record-only for us (those units came in from
+- **Pre-placed units are bound, not spawned** — `CreateAllUnits()` is record-only for us (`Runtime.recordOnlySpawnFns`; those units came in from
   `war3mapUnits.doo` and are adopted), and `findPlacedUnit` (`src/game/jassHooks.ts`) binds the handle a script was just
   handed to the unit already standing at that type and position, so its `WaygateSetDestination` / `SetUnitColor` / … land.
 - **`RemoveUnit`/`KillUnit`** — `SimWorld.removeUnit` (no death/corpse) and `killUnit` (death anim + corpse), reconciled
