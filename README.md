@@ -30,6 +30,7 @@ From source:
 pnpm install
 pnpm dev     # http://localhost:5173
 pnpm app     # desktop app (after pnpm build)
+pnpm test    # every check; the data-backed suites skip without an install
 ```
 
 LAN and online play works out of the box in the desktop app — see [docs/multiplayer.md](docs/multiplayer.md).

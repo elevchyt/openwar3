@@ -10,6 +10,7 @@
     "dev:log": "node tools/dev-log.mjs",
     "build": "node tools/import-cycle-test.mjs && tsc --noEmit && vite build",
     "cycles": "node tools/import-cycle-test.mjs",
+    "test": "node tools/test.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.node.json",
     "data:extract": "tsc -p tools/tsconfig.casc.json && node --max-old-space-size=8192 tools/extract-data.mjs",
