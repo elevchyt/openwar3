@@ -20366,6 +20366,10 @@ export class SimWorld {
   getUnitMoveSpeed(id: number): number | undefined {
     return this.units.get(id)?.speed;
   }
+  /** JASS GetUnitTurnSpeed — the 0..1 `turnRate` SetUnitTurnSpeed writes. */
+  getUnitTurnSpeed(id: number): number | undefined {
+    return this.units.get(id)?.turnRate;
+  }
   getUnitFlyHeight(id: number): number | undefined {
     return this.units.get(id)?.flyHeight;
   }

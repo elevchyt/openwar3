@@ -159,6 +159,7 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     getUnitAcquireRange: (id) => sim.getUnitAcquireRange(id),
     getUnitMoveSpeed: (id) => sim.getUnitMoveSpeed(id),
     setUnitTurnSpeed: (id, turn) => sim.setUnitTurnSpeed(id, turn),
+    getUnitTurnSpeed: (id) => sim.getUnitTurnSpeed(id),
     getUnitFacing: (id) => sim.getUnitFacing(id),
     // --- way gates (7.22) ---
     waygateSetDestination: (id, x, y) => sim.setWaygateDestination(id, x, y),

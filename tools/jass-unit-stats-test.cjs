@@ -42,7 +42,7 @@ const check = (name, got, want) => {
 
 // A stand-in world: every stat answers something distinct, and every write is recorded with the
 // SLOT it reached, so the test asserts what the native decided.
-function world() {
+function world(liveTurn) {
   const writes = [];
   const reads = [];
   const hooks = {
@@ -53,6 +53,10 @@ function world() {
         attackCooldown: 1.35, diceNumber: 2, diceSides: 6 }[stat];
     },
     setUnitStat: (id, stat, value, slot) => { writes.push([stat, value, slot]); return true; },
+    // The live turn rate a script has set, distinct from the type's own 0.6.
+    // null stands for a world with no live value (the unit is gone).
+    getUnitTurnSpeed: () => (liveTurn === null ? undefined : liveTurn),
+    unitTypeDefault: (typeId, field) => (typeId === 'hfoo' && field === 'turnRate' ? 0.6 : undefined),
   };
   return { hooks, writes, reads };
 }
@@ -69,6 +73,12 @@ function MaxHp takes nothing returns integer
 endfunction
 function Armor takes nothing returns real
     return BlzGetUnitArmor(u)
+endfunction
+function Turn takes nothing returns real
+    return GetUnitTurnSpeed(u)
+endfunction
+function NullTurn takes nothing returns real
+    return GetUnitTurnSpeed(null)
 endfunction
 function Invuln takes nothing returns boolean
     return BlzIsUnitInvulnerable(u)
@@ -94,8 +104,8 @@ function Dice takes nothing returns nothing
 endfunction
 `;
 
-function boot(base) {
-  const w = world();
+function boot(base, liveTurn = 0.35) {
+  const w = world(liveTurn);
   const quiet = [console.info, console.warn];
   console.info = () => {};
   console.warn = () => {};
@@ -113,6 +123,14 @@ console.log('--- the totals reach the right stat ---');
   check('BlzIsUnitInvulnerable', t.call('Invuln').b, true);
   t.call('SetTotals');
   check('the three totals were written, in order', JSON.stringify(t.writes.map((w) => [w[0], w[1]])), JSON.stringify([['maxHp', 900], ['maxMana', 300], ['armor', 7.5]]));
+}
+
+console.log('\n--- the live turn rate ---');
+{
+  check('GetUnitTurnSpeed reads the unit\'s own', boot().call('Turn').n, 0.35);
+  check('…a rate of 0 is a value, not a missing one', boot(undefined, 0).call('Turn').n, 0);
+  check('…and the type\'s when the world has none', boot(undefined, null).call('Turn').n, 0.6);
+  check('a null unit has no turn rate', boot().call('NullTurn').n, 0);
 }
 
 console.log('\n--- with no map door, the runtime is 1.30.4: weapons count from 1 ---');
