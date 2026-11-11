@@ -121,17 +121,33 @@ corner arcs. Two consequences:
 2. **Only 4 of the band's 16 texels carry ink, and only 2 are opaque.** So the visible gold rule
    is always a quarter of the band, and the frame reads thin however wide the nine-patch is.
 
-`TOOLTIP_BOX.band` is **measured off a reference shot of the real client**, and against the type
-rather than in pixels — the only scale-invariant thing in a screenshot. There the corner arc's
-radius is a little over half the cap height of the title beside it, ≈ 0.55 em, and the band *is*
-the arc.
+`TOOLTIP_BOX.band` is **fitted to the real client's pixels**: **0.0093** of the 0.6-tall UI. It was
+first read off the corner arc against the type (≈ 0.55 em, 0.0067), and that drew the gold rule
+visibly thinner than the original. A 1.30.4 shot at 2000×1500 (the Time of Day slab, issue #245)
+fits the tile's own alpha/colour profile at **1.6 px per texel** on all three edges it shows: a
+3-pixel gold rule between two dark ones. Ours, re-rendered at candidate bands and fitted the same
+way, hits 1.6 at 0.0093 (1.52 at 0.0089, 1.65 at 0.0096). That is about 0.84 em, not 0.55.
+`bgInset` is a third of the band (0.003): in the same shot the slate starts just under the inner
+dark texel, with the map darkened between it and the gold.
+
+**Every surface that wears this dress shares the band.** That covers the command tooltip, the
+world hover slab, our own hints (`.game-tip`), the mine crew count, the observer panels, the dev
+drawer, the gamepad keyboard and the CHAT ENTRY box. The chat box used to carry its own 0.004
+band laid flush on the fill, which drew its rule at barely a quarter of the original's. It is the
+same programmatic backdrop, so it now takes the same band and inset.
+
+**The fill's opacity is the texture's, and it is right.** `human-tooltip-background.blp` is 195/255,
+and ours composites at 0.767 measured: snap the slab, hide it, snap again, solve per pixel. The
+real shot measures 0.77–0.80 from how much of the map's texture leaks through the slate, which is
+the same value within what a lossy screenshot can tell. If ours *looks* more see-through, the map
+behind it is brighter than the original's (a match is not on the fixed-function lighting path
+yet, docs/lighting.md). Do not raise the alpha to compensate.
 
 `Glue/BattleNetChatActionMenu.fdf` dresses the identical bnet strip with `BackdropCornerSize
 0.016` / `BackdropBackgroundInsets 0.005` / a first label anchored 0.0095 in, and 0.016 is
 tempting because it is exactly the tile at 1:1 on a 600-tall screen. **It was tried and it is
-wrong for the tooltip** — 2.4× too heavy, a fat rounded frame nothing like the reference. That
-FDF dresses a 0.18 × 0.2 context menu; 0.016 is the art's own resolution, not a statement about
-the tooltip. The tooltip draws the same tile smaller.
+wrong for the tooltip.** It is 1.7× too heavy, a fat rounded frame. That FDF dresses a 0.18 × 0.2
+context menu; 0.016 is the art's own resolution, not a statement about the tooltip.
 
 ## The box
 

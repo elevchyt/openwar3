@@ -1060,23 +1060,26 @@ const FONT_HEIGHTS = {
  * So only 4 of the band's 16 texels carry ink and only 2 of those are opaque — which is why
  * the real client's frame reads as a THIN gold rule even though the nine-patch is wide.
  *
- * `band` is **measured off the reference shot**, against the type rather than in pixels (the
- * only scale-invariant thing in a screenshot): there, the corner arc's radius is a little over
- * half the cap height of the title beside it, i.e. ~0.55 em, and the band IS the arc. The bnet
- * twin's `BackdropCornerSize 0.016` is 2.4× that and was tried — it draws a fat rounded frame
+ * `band` is **fitted to the real client's pixels**. It was first read off the arc against the
+ * type (~0.55 em, 0.0067), which drew the rule visibly THINNER than the original: a 1.30.4 shot
+ * at 2000×1500 (issue #245's Time of Day slab) fits the tile's own alpha/colour profile at
+ * **1.6 px per texel on all three edges it shows** — a 3-pixel gold rule between two dark ones —
+ * and ours, re-rendered at candidate bands and fitted the same way, lands there at 0.0093 (the
+ * fit reads 1.52 at 0.0089 and 1.65 at 0.0096). So the band is ~0.84 em, not 0.55. The bnet
+ * twin's `BackdropCornerSize 0.016` is 1.7× that and was tried — it draws a fat rounded frame
  * nothing like the reference. Which figures: that frame dresses a 0.18 × 0.2 CONTEXT MENU, and
  * 0.016 is exactly the tile at 1:1 on a 600-tall screen, so it is the art's own resolution
  * rather than a statement about the tooltip. The tooltip draws the same tile smaller.
  */
 const TOOLTIP_BOX = {
-  /** The band — the tile's 16 texels drawn at this height, so the visible stroke is a quarter
-   *  of it. ~0.55 em against ToolTipDesc, which is where the reference shot puts the arc. */
-  band: 0.0067,
+  /** The band — the tile's 16 texels drawn at this height, so the gold is an eighth of it and
+   *  the ink a quarter. Fitted to the real client's pixels (above): 1.6 px/texel at 1500 tall. */
+  band: 0.0093,
   /** `BackdropBackgroundInsets` in spirit — how far inside the frame's OUTER edge the fill
-   *  starts, so the fill underlaps the band and the flat slate sits BEHIND the gold stroke
-   *  instead of leaving a hairline of map showing through it. Scaled to our band from the bnet
-   *  twin's 0.005-against-0.016, i.e. a bit under a third of it. */
-  bgInset: 0.002,
+   *  starts, so the fill underlaps the band's inner half. A third of the band, as the bnet
+   *  twin's 0.005-against-0.016 is, and as the same 1.30.4 shot shows: the slate starts just
+   *  under the inner dark texel, with the map darkened between it and the gold. */
+  bgInset: 0.003,
   /** Text inset from the FILL's edge. The bnet twin anchors its first label 0.0095 in from the
    *  frame corner; the reference shot's text clears the stroke by about the stroke's own width
    *  again, which is what this is. */
@@ -1132,7 +1135,6 @@ const CHAT_BAR = {
   width: 0.4,
   height: 0.029,
   bottom: 0.142,
-  border: 0.004, // the gold frame's drawn thickness
   padX: 0.004, // the prompt's inset from the frame (measured: 6px of a 1532 px/unit shot)
 } as const;
 
@@ -2328,7 +2330,6 @@ export class GameHud {
     this.chatBar.style.width = uiPx(CHAT_BAR.width);
     this.chatBar.style.height = uiPx(CHAT_BAR.height);
     this.chatBar.style.bottom = uiPx(CHAT_BAR.bottom);
-    this.chatBar.style.setProperty("--chat-border", uiPx(CHAT_BAR.border));
     this.chatBar.style.setProperty("--chat-pad", uiPx(CHAT_BAR.padX));
     this.chatPromptEl = document.createElement("span");
     this.chatPromptEl.className = "hud-chat-prompt";

@@ -746,18 +746,19 @@ body.in-game .menu-panel { display: none; }
 body.hud-tooltip-skinned .hud-chatbar {
   background: var(--hud-tooltip-fill);
   border: none;
-  border-radius: 2px;
+  border-radius: calc(var(--tt-band, 10px) * 0.4);
 }
-/* Flush — inset 0, so the frame's band lies ON the fill's edge. The command-card tooltip
-   pulls its nine-patch a few px OUTSIDE the fill, because the engine insets a backdrop's
-   background from its border (BackdropBackgroundInsets); this frame has no backdrop and no
-   insets, and borrowing that offset here just opened a gap of bare map between the two. */
+/* The command tooltip's frame exactly — band, inset and all (TOOLTIP_BOX in ui/hud.ts). This
+   frame used to wear its own 0.004 band laid flush on the fill, which drew the gold rule at
+   barely a quarter of the original's; it is the same programmatic backdrop the tooltip is, so
+   it gets the same band fitted to the real client's pixels, pulled `--tt-bg-inset` outside the
+   fill so the gold lands just outside the slate as it does on the tooltip. */
 body.hud-tooltip-skinned .hud-chatbar::after {
   content: "";
   position: absolute;
-  inset: 0;
-  border: var(--chat-border) solid transparent;
-  border-image: var(--hud-tooltip-border) 16 / var(--chat-border) stretch;
+  inset: calc(var(--tt-bg-inset, 3px) * -1);
+  border: var(--tt-band, 10px) solid transparent;
+  border-image: var(--hud-tooltip-border) 16 / var(--tt-band, 10px) round;
   pointer-events: none;
 }
 .hud-chat-prompt {
