@@ -44,6 +44,7 @@ export interface SimView {
   getUnitFacing(id: number): number | undefined;
   getUnitFlyHeight(id: number): number | undefined;
   getUnitMoveSpeed(id: number): number | undefined;
+  getUnitTurnSpeed(id: number): number | undefined;
   isUnitPaused(id: number): boolean;
 
   inventorySizeOf(unitId: number): number;

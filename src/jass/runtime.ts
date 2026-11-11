@@ -674,6 +674,7 @@ export interface EngineHooks {
   setUnitMoveSpeed?(unitId: number, speed: number): void; // SetUnitMoveSpeed
   getUnitMoveSpeed?(unitId: number): number | undefined; // GetUnitMoveSpeed
   setUnitTurnSpeed?(unitId: number, turn: number): void; // SetUnitTurnSpeed
+  getUnitTurnSpeed?(unitId: number): number | undefined; // GetUnitTurnSpeed
   setUnitTimeScale?(unitId: number, scale: number): void; // SetUnitTimeScale (animation rate)
   // Live position/facing reads — a script-created unit's JASS handle otherwise keeps
   // its spawn-time values, so route Get* through the sim when a sim id is attached.

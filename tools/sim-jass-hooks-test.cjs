@@ -38,7 +38,7 @@ const EXPECTED = [
   "addHeroXp", "addToStock", "createBlightedGoldMine", "createItem", "enumItems",
   "getHeroSkillPoints", "getHeroXp", "getResourceAmount", "killUnit", "removeUnit",
   "getTimeOfDay", "getUnitAbilityLevel", "getUnitAcquireRange", "getUnitFacing", "getUnitFlyHeight", "getUnitLevel",
-  "getUnitMoveSpeed", "getUnitState", "getUnitX", "getUnitY",
+  "getUnitMoveSpeed", "getUnitState", "getUnitTurnSpeed", "getUnitX", "getUnitY",
   "isDawnDuskEnabled", "isPointBlighted", "setBlight", "isUnitPaused", "itemInfo",
   "modifySkillPoints", "pauseUnit", "playerTechCount", "removeFromStock", "removeItem",
   "resetUnitCooldown", "selectHeroSkill", "setAllTypeSlots", "setDawnDusk", "setHeroLevel",
