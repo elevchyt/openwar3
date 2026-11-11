@@ -42,7 +42,11 @@ it.
   aboard, `tickLoad` goes on to the nearest other unit still walking to it, so a group is
   collected rather than made to finish the walk.
 - **Seats, not heads** (`garrisonLoad`, `holdRoom`). A full hold refuses at the door; the card
-  greys Load on `holdRoom <= 0` and the right-click sends only as many as fit.
+  greys Load on `holdRoom <= 0` and the right-click sends only as many as fit. The Entangled
+  Gold Mine HIDES its two instead (seen in the real 1.30.4 client under Wine): an empty mine
+  shows `Slo2` Load Wisp at 0,2 alone, a partly crewed one Load Wisp and `Adri` Unload All at
+  1,2, a full one Unload All alone. Its hold row `Aenc` carries an `Art`/`Unart` pair too, and
+  the game never draws it — the hold is `Abun`/`Acar`'s twin, not a button.
 - **Unloading asks the ground** (`dropSpot`). A transport may put a passenger down only on a
   cell the PASSENGER can stand on within the hold's `Area1` of its centre — a Zeppelin over the
   lake or the forest keeps its cargo, a ship at sea keeps its party, and a ship at the shore

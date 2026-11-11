@@ -6266,8 +6266,8 @@ export class SimWorld {
   }
 
   /** The ability CODE of a unit type's cargo hold ("Abun" / "Aenc" / "Acar"), or "". The card
-   *  needs it: a burrow's buttons are Battle Stations / Stand Down and an Entangled Gold
-   *  Mine's are `Aenc`'s own Load / Unload All. */
+   *  needs it: a burrow's buttons are Battle Stations / Stand Down, while an Entangled Gold
+   *  Mine's are its `Slo2`/`Adri` rows, HIDDEN (not greyed) when they have nothing to do. */
   cargoHoldCode(typeId: string): string {
     return this.cargoHold(typeId)?.code ?? "";
   }

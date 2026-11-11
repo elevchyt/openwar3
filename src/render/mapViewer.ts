@@ -12786,51 +12786,33 @@ export class MapViewerScene {
       // Orc Burrow garrison (UnitAbilities.slk otrb: Abtl Battle Stations + Astd Stand Down).
       // Battle Stations pulls nearby peons in; Stand Down (shown once occupied) sends them
       // back to work. Every word, letter, icon and slot is the ROW's own (OrcAbilityFunc /
-      // OrcAbilityStrings [Abtl]/[Astd], NightElfAbility* [Aenc]) and never retyped here,
-      // because those are exactly the columns a player's CustomKeys.txt rewrites at the SLK
-      // boundary (docs/hotkeys.md) — a literal "B" could not be rebound (issue #246).
-      if (su && su.garrisonCap > 0 && (!su.building || su.building.constructionLeft <= 0)) {
+      // OrcAbilityStrings [Abtl]/[Astd]) and never retyped here, because those are exactly the
+      // columns a player's CustomKeys.txt rewrites at the SLK boundary (docs/hotkeys.md) — a
+      // literal "B" could not be rebound (issue #246).
+      //
+      // The Entangled Gold Mine has NO block here: its card is its abilList's own `Slo2` Load
+      // Wisp and `Adri` Unload All, drawn by the ability loop like any other row. `Aenc` is the
+      // mine's HOLD, the twin of the burrow's `Abun` and a transport's `Acar`, and in the real
+      // 1.30.4 client its `Art`/`Unart` are never drawn (see the loop's `holdGate`).
+      if (su && su.garrisonCap > 0 && world.cargoHoldCode(su.typeId) === "Abun" && (!su.building || su.building.constructionLeft <= 0)) {
         // The unit's OWN row for the code first (a map may carry its own copy), then the
         // stock one.
         const holdDef = (code: string): AbilityDef | undefined => {
           const own = su.abilities.find((a) => a.code === code);
           return (own && this.abilities.get(own.id)) || this.abilityDefByCode(code);
         };
-        // The forward half of a row: `Tip`/`Ubertip`/`Hotkey`/`Art`/`Buttonpos`.
-        const holdButton = (id: string, def: AbilityDef | undefined, extra: Partial<CommandButton> = {}): CommandButton | null =>
+        // `Tip`/`Ubertip`/`Hotkey`/`Art`/`Buttonpos`, as the ability loop reads them.
+        const holdButton = (id: string, def: AbilityDef | undefined): CommandButton | null =>
           def ? this.cmd({
             id, icon: this.blpIcon(iconAt(def, 1)), name: def.name, hotkey: def.hotkey,
             tip: this.abilityTip(def, 1), desc: this.abilityDesc(def, 1),
-            col: def.buttonX, row: def.buttonY, ...extra,
+            col: def.buttonX, row: def.buttonY,
           }) : null;
-        // The Entangled Gold Mine has the same kind of hold and a different card. Its crew is
-        // in there to WORK, not to shoot, so there is no Battle Stations to pull them in and
-        // no Stand Down to send them back — just `Aenc`'s own Unload All, with that row's art
-        // and slot (NightElfAbilityFunc [Aenc] Unart=BTNUnload, Unbuttonpos=0,2; Unhotkey U).
-        // Loading is a right-click: you send a wisp at the mine, you don't fetch it from here.
-        if (world.cargoHoldCode(su.typeId) === "Aenc") {
-          // `Aenc`'s own two halves, at that row's own art and slots (NightElfAbilityFunc
-          // [Aenc]: Art=BTNLoad Buttonpos=1,2, Unart=BTNUnload Unbuttonpos=0,2). Load arms a
-          // pick — "Orders a Wisp to enter the gold mine" — and is greyed once the crew is
-          // full, because there is nowhere left to put one.
-          const enc = holdDef("Aenc");
-          const load = holdButton("load", enc, { disabled: su.garrison.length >= su.garrisonCap });
-          if (load) out.push(load);
-          // …and Unload All is the row's `Un*` half: `Untip`/`Unubertip`/`Unhotkey`/`Unart`.
-          if (enc && su.garrison.length > 0)
-            out.push(this.cmd({
-              id: "standdown", icon: this.blpIcon(enc.unIcon || iconAt(enc, 1)),
-              name: wc3ToPlain(enc.unTip) || enc.name, hotkey: enc.unHotkey,
-              tip: enc.unTip, desc: this.tipText(enc.unUberTip, enc, 1),
-              col: enc.unButtonX, row: enc.unButtonY,
-            }));
-        } else {
-          const battle = holdButton("battlestations", holdDef("Abtl"));
-          if (battle) out.push(battle);
-          if (su.garrison.length > 0) {
-            const stand = holdButton("standdown", holdDef("Astd"));
-            if (stand) out.push(stand);
-          }
+        const battle = holdButton("battlestations", holdDef("Abtl"));
+        if (battle) out.push(battle);
+        if (su.garrison.length > 0) {
+          const stand = holdButton("standdown", holdDef("Astd"));
+          if (stand) out.push(stand);
         }
       }
 
@@ -13363,7 +13345,12 @@ export class MapViewerScene {
       // …and a cargo hold's two buttons answer to the hold: Load with no seat left, Unload
       // All with nobody aboard, are each a press that could only be refused (holdRoom /
       // garrison — docs/transports.md).
-      const holdGate = ab.code === "Aloa" ? this.rts.simView.holdRoom(su) <= 0 : ab.code === "Adro" ? su.garrison.length === 0 : false;
+      const holdGate = ab.code === "Aloa" ? this.rts.simView.holdRoom(su) <= 0 : ab.code === "Adro" || ab.code === "Adri" ? su.garrison.length === 0 : false;
+      // …and the Entangled Gold Mine HIDES them rather than greying them, as the real 1.30.4
+      // client does (seen under Wine): an empty mine shows Load Wisp (`Slo2`, 0,2) alone, a
+      // partly crewed one Load Wisp and Unload All (`Adri`, 1,2), a full one Unload All alone.
+      // A transport's are left greyed — nobody has looked at a full Zeppelin's card yet.
+      if (holdGate && this.rts.simWorld.cargoHoldCode(su.typeId) === "Aenc") continue;
       const col = reversed ? def.unButtonX : def.buttonX; // the ability's real WC3 card slot
       const row = reversed ? def.unButtonY : def.buttonY;
       const passive = def.target === "passive";
@@ -13689,14 +13676,6 @@ export class MapViewerScene {
     if (id === "standdown") {
       const sel = this.rts.selectedInfo();
       if (sel) this.rts.execute(this.localPlayer, { c: "standdown", buildingId: sel.id });
-      return;
-    }
-    if (id === "load") {
-      // The selection is the HOLD and the click picks its passenger — the same shape as the
-      // shop's "Select a unit to purchase" pick, and the opposite way round from every other
-      // order on the card. See RtsController.orderClickAt.
-      const sel = this.rts.selectedInfo();
-      if (sel && this.rts.armLoad(sel.id)) this.hud?.setArmed(true);
       return;
     }
     if (id.startsWith("train:")) {
