@@ -12785,29 +12785,52 @@ export class MapViewerScene {
       }
       // Orc Burrow garrison (UnitAbilities.slk otrb: Abtl Battle Stations + Astd Stand Down).
       // Battle Stations pulls nearby peons in; Stand Down (shown once occupied) sends them
-      // back to work. Icons/hotkeys/slots are the ability data's own (OrcAbilityFunc/Strings).
+      // back to work. Every word, letter, icon and slot is the ROW's own (OrcAbilityFunc /
+      // OrcAbilityStrings [Abtl]/[Astd], NightElfAbility* [Aenc]) and never retyped here,
+      // because those are exactly the columns a player's CustomKeys.txt rewrites at the SLK
+      // boundary (docs/hotkeys.md) — a literal "B" could not be rebound (issue #246).
       if (su && su.garrisonCap > 0 && (!su.building || su.building.constructionLeft <= 0)) {
+        // The unit's OWN row for the code first (a map may carry its own copy), then the
+        // stock one.
+        const holdDef = (code: string): AbilityDef | undefined => {
+          const own = su.abilities.find((a) => a.code === code);
+          return (own && this.abilities.get(own.id)) || this.abilityDefByCode(code);
+        };
+        // The forward half of a row: `Tip`/`Ubertip`/`Hotkey`/`Art`/`Buttonpos`.
+        const holdButton = (id: string, def: AbilityDef | undefined, extra: Partial<CommandButton> = {}): CommandButton | null =>
+          def ? this.cmd({
+            id, icon: this.blpIcon(iconAt(def, 1)), name: def.name, hotkey: def.hotkey,
+            tip: this.abilityTip(def, 1), desc: this.abilityDesc(def, 1),
+            col: def.buttonX, row: def.buttonY, ...extra,
+          }) : null;
         // The Entangled Gold Mine has the same kind of hold and a different card. Its crew is
         // in there to WORK, not to shoot, so there is no Battle Stations to pull them in and
         // no Stand Down to send them back — just `Aenc`'s own Unload All, with that row's art
-        // and slot (NightElfAbilityFunc [Aenc] Unart=BTNUnload, Unbuttonpos=0,2; hotkey U).
+        // and slot (NightElfAbilityFunc [Aenc] Unart=BTNUnload, Unbuttonpos=0,2; Unhotkey U).
         // Loading is a right-click: you send a wisp at the mine, you don't fetch it from here.
         if (world.cargoHoldCode(su.typeId) === "Aenc") {
           // `Aenc`'s own two halves, at that row's own art and slots (NightElfAbilityFunc
           // [Aenc]: Art=BTNLoad Buttonpos=1,2, Unart=BTNUnload Unbuttonpos=0,2). Load arms a
           // pick — "Orders a Wisp to enter the gold mine" — and is greyed once the crew is
           // full, because there is nowhere left to put one.
-          out.push(this.cmd({
-            id: "load", icon: btnIcon("BTNLoad"), name: "Load", hotkey: "L",
-            desc: "Orders a Wisp to enter the gold mine.", col: 1, row: 2,
-            disabled: su.garrison.length >= su.garrisonCap,
-          }));
-          if (su.garrison.length > 0)
-            out.push(this.cmd({ id: "standdown", icon: btnIcon("BTNUnload"), name: "Unload All", hotkey: "U", desc: "Removes all Wisps from the gold mine.", col: 0, row: 2 }));
+          const enc = holdDef("Aenc");
+          const load = holdButton("load", enc, { disabled: su.garrison.length >= su.garrisonCap });
+          if (load) out.push(load);
+          // …and Unload All is the row's `Un*` half: `Untip`/`Unubertip`/`Unhotkey`/`Unart`.
+          if (enc && su.garrison.length > 0)
+            out.push(this.cmd({
+              id: "standdown", icon: this.blpIcon(enc.unIcon || iconAt(enc, 1)),
+              name: wc3ToPlain(enc.unTip) || enc.name, hotkey: enc.unHotkey,
+              tip: enc.unTip, desc: this.tipText(enc.unUberTip, enc, 1),
+              col: enc.unButtonX, row: enc.unButtonY,
+            }));
         } else {
-          out.push(this.cmd({ id: "battlestations", icon: btnIcon("BTNBattleStations"), name: "Battle Stations", hotkey: "B", desc: "Causes nearby Peons to run into the Burrow so that they can defend their base.", col: 0, row: 2 }));
-          if (su.garrison.length > 0)
-            out.push(this.cmd({ id: "standdown", icon: btnIcon("BTNBacktoWork"), name: "Stand Down", hotkey: "D", desc: "Causes Peons within the Burrow to return to work.", col: 1, row: 2 }));
+          const battle = holdButton("battlestations", holdDef("Abtl"));
+          if (battle) out.push(battle);
+          if (su.garrison.length > 0) {
+            const stand = holdButton("standdown", holdDef("Astd"));
+            if (stand) out.push(stand);
+          }
         }
       }
 
