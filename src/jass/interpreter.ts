@@ -263,6 +263,11 @@ type ThreadGen = Generator<number, JassValue, void>;
 const WAIT_FOR_SOUND_SPINS = 120;
 
 const THREAD_NATIVES = new Set(["TriggerSleepAction", "TriggerWaitForSound", "TriggerExecute", "ConditionalTriggerExecute", "ExecuteFunc"]);
+/** …and the two `common.ai` adds, which only an AI script's VM knows (`Interpreter.aiScript`):
+ *  `Sleep(seconds)` parks the calling AI thread, `StartThread(function f)` starts another. A
+ *  map's own script never sees them as thread natives — `common.j` declares neither, and a map
+ *  is free to name a function of its own `Sleep`. */
+const AI_THREAD_NATIVES = new Set(["Sleep", "StartThread"]);
 
 /** A **trigger thread** (7.15). WC3 runs a trigger's actions — and `main()`, and timer
  *  handlers — on a thread that `TriggerSleepAction` can suspend mid-way; the engine
@@ -289,6 +294,9 @@ interface JassThread {
 
 export class Interpreter {
   private depth = 0;
+  /** This VM runs a computer player's `.ai` script (src/ai/scriptAi.ts) rather than a map: it
+   *  owns `common.ai`'s `Sleep` and `StartThread` as thread natives (AI_THREAD_NATIVES). */
+  aiScript = false;
   private globalDecls: VarDecl[] = [];
   private readonly ctx: NativeCtx;
 
@@ -529,7 +537,7 @@ export class Interpreter {
         // Same precedence as callFunction: the engine's meaning wins over a same-named
         // script function. Everything else can't suspend, so it goes through the sync path.
         const args = s.args.map((a) => this.eval(a, frame));
-        if (THREAD_NATIVES.has(s.name)) {
+        if (THREAD_NATIVES.has(s.name) || (this.aiScript && AI_THREAD_NATIVES.has(s.name))) {
           yield* this.execThreadNative(s.name, args);
           return JNULL;
         }
@@ -631,6 +639,20 @@ export class Interpreter {
    *  They still have ordinary native impls in natives/events.ts for the synchronous
    *  path (a `ForGroup` callback that calls `TriggerExecute`, say). */
   private *execThreadNative(name: string, args: JassValue[]): ThreadGen {
+    // common.ai's two (AI_THREAD_NATIVES). `Sleep` is TriggerSleepAction under the AI's name —
+    // game seconds, parked on the scheduler. `StartThread` starts the function as a thread of
+    // its own, run at once up to its first `Sleep` exactly as a trigger thread is
+    // (`startThread`); the caller carries on, which is how `main()` gets past
+    // `StartThread(function WorkerAssignment)` — a function that never returns — to the next line.
+    if (name === "Sleep") {
+      yield Math.max(0, asNum(args[0] ?? jReal(0)));
+      return JNULL;
+    }
+    if (name === "StartThread") {
+      const code = args[0];
+      if (code?.k === "code") this.startThread(`StartThread:${code.fn}`, this.callFunctionG(code.fn, []));
+      return JNULL;
+    }
     if (name === "TriggerSleepAction") {
       // THE suspension point. `TriggerSleepAction(n)` parks this thread for n seconds of
       // GAME time (blizzard.j's PolledWait loops on it, so "Wait" in the GUI lands here).

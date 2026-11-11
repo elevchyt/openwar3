@@ -22,6 +22,9 @@ export function registerConfigNatives(rt: Runtime): void {
   def(rt, "SetMapName", (c, a) => ((c.rt.setup.mapName = asStr(a[0])), JNULL));
   def(rt, "SetMapDescription", (c, a) => ((c.rt.setup.mapDescription = asStr(a[0])), JNULL));
   def(rt, "SetPlayers", (c, a) => ((c.rt.setup.numPlayers = asInt(a[0])), JNULL));
+  // …and what it set. common.ai's StaggerSleep divides by it (`spread * I2R(GetAiPlayer()) /
+  // I2R(GetPlayers())`), so the unimplemented native's 0 slept every AI thread for ever.
+  def(rt, "GetPlayers", (c) => jInt(c.rt.setup.numPlayers));
   def(rt, "SetTeams", (c, a) => ((c.rt.setup.numTeams = asInt(a[0])), JNULL));
   def(rt, "SetGamePlacement", (c, a) => ((c.rt.setup.placement = c.rt.enumIndex(a[0])), JNULL));
 

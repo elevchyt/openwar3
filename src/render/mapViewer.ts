@@ -4324,6 +4324,25 @@ export class MapViewerScene {
         // the interpreter itself (ChooseRandomItem draws from its seeded RNG — 7.18).
         onBoot: (e) => {
           this.mapScript = e;
+          // A computer the map seats on an AI script of its OWN (`StartMeleeAI(p, "war3mapImported\\…ai")`
+          // — src/ai/scriptAi.ts) runs it in a VM of its own on the install's common.j + common.ai,
+          // calling the same engine table as this one. The file is the map's import, else the
+          // install's `Scripts\` (where every campaign .ai lives).
+          if (this.rts) {
+            const archive = this.mapArchive;
+            const install = this.vfs;
+            const text = (b: Uint8Array | null | undefined): string | null => (b ? new TextDecoder("windows-1252").decode(b) : null);
+            this.rts.aiScriptHost = {
+              sources: (name) => {
+                const commonJ = text(install.rawBytes("Scripts\\common.j"));
+                const commonAi = text(install.rawBytes("Scripts\\common.ai"));
+                const base = name.split(/[\\/]/).pop() ?? name;
+                const script = text(archive?.rawBytes(name)) ?? text(install.rawBytes(name)) ?? text(install.rawBytes(`Scripts\\${base}`));
+                return commonJ && commonAi && script ? { commonJ, commonAi, script, players: e.interp.rt.setup.numPlayers } : null;
+              },
+              hooks: () => e.interp.rt.hooks,
+            };
+          }
           // The sim asks whether a cinematic is playing (SimWorld.inCinematic) — Blizzard.j's own
           // flag, set in CinematicModeExBJ's global half, so it is the same answer everywhere.
           const globals = e.interp.rt.globals;

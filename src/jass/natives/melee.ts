@@ -233,8 +233,9 @@ export function registerMeleeNatives(rt: Runtime): void {
   def(rt, "StartMeleeAI", (c, a) => (c.rt.hooks?.startMeleeAI?.(playerIndex(c, a[0]), asStr(a[1])), JNULL));
   // StartCampaignAI stays a no-op: a chapter's computers are the mission's, and what this
   // would load is a per-campaign .ai file we do not run.
+  def(rt, "CommandAI", (c, a) => (c.rt.hooks?.commandAi?.(playerIndex(c, a[0]), asInt(a[1]), asInt(a[2])), JNULL));
   for (const name of [
-    "StartCampaignAI", "CommandAI", "SetPlayerHandicap",
+    "StartCampaignAI", "SetPlayerHandicap",
     "RecycleGuardPosition", "RemoveGuardPosition", "SetUnitCreepGuard", "Preloader", "Preload",
     "PreloadStart", "PreloadEnd", "PreloadEndEx", "PreloadRefresh", "PreloadGenClear", "PreloadGenStart",
   ]) {

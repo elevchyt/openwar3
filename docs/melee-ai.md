@@ -385,6 +385,48 @@ game would never have given them. The one place that still seats a computer with
 `MapViewerScene.startMeleeFallback`, and only because it stands in for a melee map's missing
 script wholesale (roster, purse, hero caps and all).
 
+## A map's own AI: the script is RUN, not ported
+
+`StartMeleeAI(p, name)` takes any filename, and the four race files are only the names Blizzard.j's
+`PickMeleeAI` passes. A map may name its own: (4)Monolith seats its four "Monolithic Creeps"
+players on `war3mapImported\Murloc_AI.ai`, `…\Spider_AI.ai` and six more, imported into the map
+and written in the World Editor's AI Editor. Those used to fall through to the seat's lobby race
+— a Murloc player on `elf.ai`, building nothing a Murloc can build and finishing every match with
+its starting gold untouched. Now a name that is not one of the four race files (matched by
+**basename**, so `Scripts\human.ai` is still the human port) is **run**
+([`src/ai/scriptAi.ts`](../src/ai/scriptAi.ts)), and a file found nowhere seats nothing rather
+than a race AI.
+
+Each such computer gets a JASS VM of its own (the real client keeps an AI's globals per player
+too) loaded with the install's `common.j` + `common.ai` and the script — the map's import first,
+then the install's `Scripts\`. Three seams:
+
+- **Threads.** `main()` is `StartThread(WorkerAssignment)`, `StartThread(AttackAssignment)`,
+  `PlayGame()` — loops that `Sleep`. An AI VM (`Interpreter.aiScript`) owns those two as thread
+  natives: `StartThread` runs the function at once up to its first `Sleep` and RETURNS to its
+  caller, `Sleep` parks on game time. A map's own VM never treats either name specially.
+- **The build loop.** common.ai's `OneBuildLoop` ends in `SetProduce` — placement and training —
+  and that walk IS `AiPlayer.runBuildLoop`. So `OneBuildLoop` is answered by a native of the same
+  name (a native outranks a script function at every call site), which hands the script's
+  `build_*` arrays over row for row (`AiPlayer.setBuildRow`) and runs the ported loop. Everything
+  above it — the editor's priorities, `SetBuildAll`, `HarvestGold` — stays the script's JASS. The
+  same library answers the counts, the harvest split and the targets, so the two AIs agree.
+- **The captain.** `AddAssault`/`CaptainIsFull`/`AttackMoveKill`/`CaptainRetreating`… are engine
+  state in WC3; `ScriptCaptain` is it, breaking and regrouping at the melee port's own fractions.
+  When to form, what to hit and when to give up stay the script's (`FormGroup`, `AttackMoveKillA`,
+  `LaunchAttack`).
+
+`CommandAI(p, command, data)` lands on that computer's command stack (`GetLastCommand` /
+`GetLastData` / `PopLastCommand`). Monolith's "Attack Enemy" trigger is how its creeps are told to
+go after the players — command 1, once a creep hero reaches the map's `aiAttackEnemyHeroLevel` —
+and until then the editor script only creeps (`GetCreepCamp(0, 6, false)`), so a creep player
+whose camps the players have already cleared sits at home and defends: that is the script, not a
+stall. Two engine gaps this surfaced and closed: `GetPlayers()` was unimplemented (common.ai's
+`StaggerSleep` divides by it, so every AI thread slept for ever), and `CommandAI` was a no-op.
+`StartCampaignAI` still is: a campaign's `.ai` files are the same kind of script and would run
+the same way, but their natives (guard posts, waves) are not answered yet.
+`tools/ai-script-test.cjs` runs the real `Murloc_AI.ai` headlessly.
+
 ## Where it runs, and why it cannot cheat
 
 `RtsController.tick` drives `MeleeAi` inside the branch a frozen LAN client never enters, so

@@ -1027,6 +1027,11 @@ export interface EngineHooks {
    *  gets none either. `script` is the .ai filename the game would have loaded; ours are
    *  ports of those four files (src/ai/, docs/melee-ai.md), so the name IS the race. */
   startMeleeAI?(player: number, script: string): void;
+  /** `CommandAI(p, command, data)` — a map trigger leaves an order on a computer's command
+   *  stack, which its `.ai` script reads with GetLastCommand / GetLastData / PopLastCommand.
+   *  (4)Monolith's "Attack Enemy" trigger is how its creep players are told to go after the
+   *  players: command 1, once a creep hero reaches the map's level. */
+  commandAi?(player: number, command: number, data: number): void;
   /** GetPlayerStructureCount / GetPlayerUnitCount — melee defeat is "my team owns no
    *  structures", so these decide who has lost (MeleeCheckForLosersAndVictors). */
   playerStructureCount?(player: number, includeIncomplete: boolean): number;

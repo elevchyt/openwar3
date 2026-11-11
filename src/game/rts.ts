@@ -60,6 +60,7 @@ import { researchableFor, scoreRow, type ScoreRow, type ScoreSeat, type ScoreTab
 import { type ItemRegistry } from "../data/items";
 import { workerProfileFor, harvestAbilityOf, depotRoleFor, isHarvestCode, type PlayableRace } from "../data/races";
 import { MeleeAi, AI_SCRIPT_RACES } from "../ai";
+import { ScriptAi, type ScriptAiSources } from "../ai/scriptAi";
 import { CreepCaster } from "../ai/creeps";
 import { ComputerPlusAi, type ConcedeReading, type PlusHost, type PlusLogReading } from "../ai/plus";
 import { CandyWarAi, type CandyHost } from "../ai/plus/candy";
@@ -1169,6 +1170,7 @@ export class RtsController {
       playerOut: (player) => this.isPlayerOut?.(player) ?? false,
     };
     this.meleeAi = new MeleeAi(host);
+    this.scriptAi = new ScriptAi(host);
     this.computerPlus = new ComputerPlusAi(host);
     // Kept for the one AI that is not seated by a melee script — Extreme Candy War's heroes, which
     // a custom map's start seats itself (`startCandyWarAI`). A new match starts it over.
@@ -1198,6 +1200,23 @@ export class RtsController {
    * by `prepareMeleeAI` before a line of the script ran — the script names who plays, not
    * where they sit.
    */
+  /** Where a map's own `.ai` scripts come from, and the engine table their VM calls — the
+   *  renderer's, published as the map's script boots (MapViewerScene.runMapScript). */
+  aiScriptHost: { sources(name: string): ScriptAiSources | null; hooks(): EngineHooks | null } | null = null;
+
+  /** `StartMeleeAI(p, "war3mapImported\\Murloc_AI.ai")` — a computer on a script of the map's
+   *  own (src/ai/scriptAi.ts). A file nobody can find seats NOTHING (said once): the seat
+   *  simply has no AI, which is what an unreadable script does in the real client too. */
+  private startScriptAI(player: number, script: string, seat: { race: PlayableRace; startX: number; startY: number; difficulty: number }): void {
+    const sources = this.aiScriptHost?.sources(script) ?? null;
+    if (!sources || !this.scriptAi) {
+      console.warn(`[ai] StartMeleeAI(${player}, "${script}"): no such AI script in the map or the install — that computer will not play`);
+      return;
+    }
+    const [startX, startY] = this.townFor(player, seat.startX, seat.startY);
+    this.scriptAi.add(player, script, seat.race, seat.difficulty, startX, startY, this.meleeSeed, sources, this.aiScriptHost?.hooks() ?? null);
+  }
+
   /** Where `player`'s town stands: its main hall (UnitData `buffType` = "townhall") nearest the
    *  given point, else the point itself. See startMeleeAIFor. */
   private townFor(player: number, x: number, y: number): [number, number] {
@@ -1218,7 +1237,14 @@ export class RtsController {
   startMeleeAIFor(player: number, script: string): void {
     const seat = this.meleeSeats.get(player);
     if (!this.meleeAi || !seat) return;
-    const race = AI_SCRIPT_RACES[script.toLowerCase()] ?? seat.race;
+    // The file is named by its BASENAME for the four melee races (`Scripts\human.ai` and
+    // `human.ai` are the same AI). Any other name is the MAP's own script, and it is RUN, never
+    // replaced by a race AI: a Murloc player on elf.ai builds nothing a Murloc can build and
+    // stands still for the match, which is what (4)Monolith's creep players used to do.
+    const file = script.toLowerCase().split(/[\\/]/).pop() ?? "";
+    const raceFile = AI_SCRIPT_RACES[file];
+    if (!raceFile) return this.startScriptAI(player, script, seat);
+    const race = raceFile;
     // WHERE the computer's town is comes from its own buildings, never the lobby. common.ai
     // does not read a start location at all — its towns are the engine's (`TownHasHall`,
     // `TownHasMine`, `TownWithMine`), clusters around the player's halls — and by the time a
@@ -1290,6 +1316,8 @@ export class RtsController {
   }
 
   private meleeAi: MeleeAi | null = null;
+  /** Computers running a script of their MAP's own (src/ai/scriptAi.ts) — (4)Monolith's creeps. */
+  private scriptAi: ScriptAi | null = null;
   /** The Computer+ seats (issue #124, src/ai/plus/). A separate object from `meleeAi` on
    *  purpose: the two AIs share no mutable state, and a seat is in exactly one of them. */
   private computerPlus: ComputerPlusAi | null = null;
@@ -5027,6 +5055,7 @@ export class RtsController {
       // breakdown of the span they sit inside rather than siblings of it.
       perfLog.begin("sim.ai");
       if (this.meleeAi?.active && this.seeded) this.meleeAi.tick(dt);
+      if (this.scriptAi?.active && this.seeded) this.scriptAi.tick(dt);
       if (this.computerPlus?.active && this.seeded) this.computerPlus.tick(dt);
       if (this.candyWar?.active && this.seeded) this.candyWar.tick(dt);
       if (this.warChasers?.active && this.seeded) this.warChasers.tick(dt);
@@ -9650,8 +9679,10 @@ export class RtsController {
       // Here rather than in a sub-module because the brains are the CONTROLLER's: they issue
       // their orders through `execute`, the same door a click goes through.
       startMeleeAI: (player, script) => this.startMeleeAIFor(player, script),
+      commandAi: (player, command, data) => this.scriptAi?.command(player, command, data),
       pauseCompAi: (player, pause) => {
         this.meleeAi?.setPaused(player, pause);
+        this.scriptAi?.setPaused(player, pause);
         this.computerPlus?.setPaused(player, pause);
       },
       // The `BlzSetAbility…` / `BlzSetItemExtendedTooltip` words and art (docs/map-compatibility.md

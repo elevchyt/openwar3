@@ -623,6 +623,13 @@ export class AiPlayer {
     if (qty > 0 && this.makeable(item)) this.buildList.push({ type, qty, item, town });
   }
 
+  /** `SetBuildAll` as a SCRIPT wrote it — a map's own `.ai` (src/ai/scriptAi.ts) fills
+   *  common.ai's `build_*` arrays in JASS, and each pass hands the rows over through here
+   *  exactly as they stand, type and town included. */
+  setBuildRow(type: number, qty: number, item: string, town: number): void {
+    this.setBuildAll(type, qty, item, town);
+  }
+
   /**
    * Does the loaded tech tree have this id AT ALL — a unit, a building or an upgrade this
    * edition's data declares?
