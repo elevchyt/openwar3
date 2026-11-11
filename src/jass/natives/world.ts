@@ -392,6 +392,12 @@ export function registerWorldNatives(rt: Runtime): void {
   def(rt, "GetUnitY", (c, a) => ({ k: "real", n: liveNum(c, unit(c, a[0]), (h, id) => h.getUnitY?.(id), (u) => u.y) }));
   def(rt, "GetUnitFacing", (c, a) => ({ k: "real", n: liveNum(c, unit(c, a[0]), (h, id) => rad2deg(h.getUnitFacing?.(id)), (u) => u.facing) }));
   def(rt, "GetUnitMoveSpeed", (c, a) => ({ k: "real", n: liveNum(c, unit(c, a[0]), (h, id) => h.getUnitMoveSpeed?.(id), () => 0) }));
+  // The live 0..1 `turnRate` SetUnitTurnSpeed writes. With no live value (the handle has no sim
+  // unit, or the sim has dropped it) the type's own rate answers, as GetUnitDefaultTurnSpeed
+  // does; with no engine attached at all there is no type table either, and it is 0.
+  def(rt, "GetUnitTurnSpeed", (c, a) => jReal(liveNum(c, unit(c, a[0]),
+    (h, id) => h.getUnitTurnSpeed?.(id),
+    (u) => c.rt.hooks?.unitTypeDefault?.(u.typeId, "turnRate") ?? 0)));
   def(rt, "GetUnitFlyHeight", (c, a) => ({ k: "real", n: liveNum(c, unit(c, a[0]), (h, id) => h.getUnitFlyHeight?.(id), () => 0) }));
   // A `location` handle for the unit's LIVE position. Locations are the currency of the
   // BJ layer: "pick every unit within 600 of <unit>" compiles to
