@@ -40,7 +40,6 @@ import { UI_HEIGHT, UI_WIDTH } from "./fdf/layout";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { fitLine } from "./fdf/widgets";
 import type { ResourceKind } from "./hud";
-import { setGameTip } from "./gameTip";
 
 const CONSOLE_FDF = "UI\\FrameDef\\UI\\ConsoleUI.fdf";
 const UPPER_BAR_FDF = "UI\\FrameDef\\UI\\UpperButtonBar.fdf";
@@ -158,6 +157,9 @@ export interface ConsoleUiActions {
   /** The mouse is over one of the resource bar's four readouts (null: it has left the bar) —
    *  the HUD raises that readout's slab (GameHud.showResourceTip). */
   resourceHover?(kind: ResourceKind | null): void;
+  /** The mouse is over the day/night medallion (false: it has left) — the HUD raises
+   *  `TIME_OF_DAY_TOOLTIP` in the same slab (GameHud.showClockTip). */
+  clockHover?(on: boolean): void;
   /** Put the day/night medallion in the slot the strip leaves for it (render/timeIndicator.ts).
    *  Returns false when there is no install to render the model from. */
   mountClock(slot: HTMLElement): boolean;
@@ -347,7 +349,14 @@ export class ConsoleUi {
     const slot = this.clockSlot ?? document.createElement("div");
     if (!reused) {
       slot.className = "hud-clock hud-clock-skinned";
-      setGameTip(slot, "Day/night cycle");
+      // The slot is click-through (its box overhangs the map either side of the ring), so the
+      // hover is taken by a disc over the orb alone, and raises the game's own slab over the
+      // console (GameHud.showClockTip) rather than our floating hint.
+      const hit = document.createElement("div");
+      hit.className = "hud-clock-hit";
+      hit.addEventListener("pointerenter", () => this.actions.clockHover?.(true));
+      hit.addEventListener("pointerleave", () => this.actions.clockHover?.(false));
+      slot.appendChild(hit);
     }
     slot.style.left = `${gap.left - host.left}px`;
     slot.style.top = `${gap.top - host.top}px`;

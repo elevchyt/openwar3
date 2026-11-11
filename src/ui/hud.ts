@@ -47,6 +47,13 @@ function printf(fmt: string, args: Array<string | number>): string {
   return fmt.replace(/%%|%[sd]/g, (m) => (m === "%%" ? "%" : String(args[i++] ?? "")));
 }
 
+/** The day/night clock as `TIME_OF_DAY_TOOLTIP`'s `%s` prints it: game hours as `H:MM`, the hour
+ *  unpadded and the minutes padded ("8:18" on the real 1.30.4 client, issue #245). */
+export function clockText(hour: number): string {
+  const total = Math.floor((((hour % 24) + 24) % 24) * 60);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
 /** The band's label, as the resource bar prints it: `UPKEEP_NONE`/`_LOW`/`_HIGH`, which carry
  *  their OWN colour (GlobalStrings.fdf 1025-1027 — green, yellow, red), read by key so a map's
  *  war3mapSkin.txt can rename them (Test of Balance: Balanced / Average / Not Balanced). The
@@ -1809,6 +1816,7 @@ export class GameHud {
       this.refreshStatTooltip(); // at the panel's own rate: it reads the numbers the panel just drew
       this.refreshQueueTooltip(); // …and so does the queue's: a finished job shifts the slots under the cursor
       this.refreshMealTooltip(); // …and a Devour meal's, whose health runs down and which can be digested under it
+      if (this.clockTip) this.showClockTip(true); // …and the medallion's, whose clock runs under a still cursor
     }
     // A live ping PULSES, so while one is up the minimap redraws every frame instead of at
     // the 10 Hz the static dots are content with.
@@ -3949,10 +3957,37 @@ export class GameHud {
         s("RESOURCE_UBERTIP_UPKEEP", "Upkeep is determined by the amount of food your forces are currently using.") + lines);
     }
     this.resourceTip = true;
+    this.clockTip = false;
     this.setTooltip(html);
   }
   /** The slab on display is a resource bar's (so leaving the bar hides it, and nothing else). */
   private resourceTip = false;
+
+  /**
+   * The slab for a hover over the day/night medallion (reported by `ConsoleUi`; false when it
+   * leaves), drawn where the resource bar's is — the real client raises it over the console's
+   * bottom right, not beside the medallion (issue #245, checked against a 1.30.4 screenshot).
+   *
+   * Both lines are GlobalStrings.fdf's: `TIME_OF_DAY_TOOLTIP` ("Time of Day ( |Cfffed312%s|R )",
+   * the `%s` gilded by the string itself) over `TIME_OF_DAY_UBERTIP`. The `%s` is the clock as
+   * `H:MM` — the hour unpadded, the minutes padded ("8:18" in that screenshot) — and the slab is
+   * re-drawn at the text rate while it is up, since the clock runs under a still cursor.
+   */
+  showClockTip(on: boolean): void {
+    if (!on) {
+      if (this.clockTip) this.cmdTooltip.hidden = true;
+      this.clockTip = false;
+      return;
+    }
+    this.clockTip = true;
+    this.resourceTip = false;
+    const s = (key: string, fallback: string): string => this.driver.uiString(key, fallback);
+    const title = printf(s("TIME_OF_DAY_TOOLTIP", "Time of Day ( |Cfffed312%s|R )"), [clockText(this.driver.dayNight().hour)]);
+    const body = s("TIME_OF_DAY_UBERTIP", "This is the current time of day.|N |NThe time of day can affect visibility of units and the use of some abilities.");
+    this.setTooltip(`<div class="hud-tooltip-title">${wc3ToHtml(title)}</div><div class="hud-tooltip-desc">${wc3ToHtml(body)}</div>`);
+  }
+  /** The slab on display is the medallion's — re-drawn as the clock runs, hidden as it leaves. */
+  private clockTip = false;
 
   /** The ONE write to the tooltip slab. Skips the DOM when the text is what is already there
    *  (the per-frame re-show above), and never skips un-hiding it. */

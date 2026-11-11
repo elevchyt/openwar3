@@ -10256,6 +10256,7 @@ export class MapViewerScene {
       disabledPanels: () => this.deadPanels(),
       mountClock: (slot) => this.mountClock(slot),
       resourceHover: (kind) => this.hud?.showResourceTip(kind),
+      clockHover: (on) => this.hud?.showClockTip(on),
     });
     this.consoleUi.setObserver(this.observer);
     this.hud = new GameHud(ui, driver);

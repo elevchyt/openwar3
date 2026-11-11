@@ -1151,6 +1151,19 @@ body:not(.hud-tooltip-skinned) .dev-concede { outline: 1px solid rgba(200, 160, 
   background: none;
   pointer-events: none;
 }
+/* The medallion's hover target (issue #245): a disc the height of the slot over the orb, the
+   one part of the slot that is not click-through. On top of the model's canvas. */
+.hud-clock-hit {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  height: 100%;
+  aspect-ratio: 1;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  pointer-events: auto;
+  z-index: 1;
+}
 /* Rotating sun/moon disc behind the ring; the ring's transparent centre shows
    it. Kept a true circle (equal width/height) so it isn't squished. */
 .hud-clock-face {
