@@ -1299,6 +1299,30 @@ export class AiPlayer {
     });
   }
 
+  /** `SetProduce(qty, id, town)` called by a SCRIPT rather than by the loop above — common.ai's
+   *  `StartUnit` outside `OneBuildLoop` (a campaign's `BuildAttackers` and its farms), and the
+   *  few campaign files that call it by hand (src/ai/scriptAi.ts). */
+  produce(qty: number, id: string, town: number): boolean {
+    return this.setProduce(qty, id, town);
+  }
+
+  /** `SetUpgrade(id)` called by a script (src/ai/scriptAi.ts). */
+  research(id: string): boolean {
+    return this.setUpgrade(id);
+  }
+
+  /** What the last `runBuildLoop` pass left unspent — common.ai's `total_gold`/`total_wood`,
+   *  which every OTHER thread's `StartUnit` prices itself against (src/ai/scriptAi.ts). */
+  budgetLeft(): { gold: number; wood: number } {
+    return { gold: Math.max(0, this.totalGold), wood: Math.max(0, this.totalWood) };
+  }
+
+  /** `ShiftTownSpot(x, y)` — move where the main town's buildings go (its centre), keeping
+   *  its mine. */
+  shiftTownSpot(x: number, y: number): void {
+    if (this.towns[0]) this.towns[0] = { ...this.towns[0], x, y };
+  }
+
   /** `SetUpgrade(id)` — research it at whichever building can. */
   private setUpgrade(id: string): boolean {
     for (const b of this.host.world.units.values()) {

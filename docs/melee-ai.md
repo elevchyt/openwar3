@@ -423,9 +423,66 @@ and until then the editor script only creeps (`GetCreepCamp(0, 6, false)`), so a
 whose camps the players have already cleared sits at home and defends: that is the script, not a
 stall. Two engine gaps this surfaced and closed: `GetPlayers()` was unimplemented (common.ai's
 `StaggerSleep` divides by it, so every AI thread slept for ever), and `CommandAI` was a no-op.
-`StartCampaignAI` still is: a campaign's `.ai` files are the same kind of script and would run
-the same way, but their natives (guard posts, waves) are not answered yet.
 `tools/ai-script-test.cjs` runs the real `Murloc_AI.ai` headlessly.
+
+### Campaign chapters
+
+A chapter seats its computers the same way: `StartCampaignAI(Player(1), "o03_blue.ai")` (30 of
+the RoC/TFT chapters) or, in several Frozen Throne chapters, `StartMeleeAI(Player(2),
+"h02x03.ai")` (HumanX02). Both reach `startMeleeAIFor` and the same runner; the 207 files live
+in the install's `Scripts\`. A campaign seat is normally one of the lobby's computer slots
+(`campaignConfig` keeps the w3i's controllers); one the lobby never armed — a neutral or
+rescuable side the mission hands an AI later — is seated off its own buildings
+(`unseatedComputer`), and a seat a PERSON is playing never is.
+
+Every campaign script is the same shape on common.ai's campaign library: `CampaignAI(farm,
+heroes)` (difficulty from `GetGameDifficulty()`, `SetGroupsFlee(false)`, the `CampaignBasics`
+thread), `CampaignDefenderEx` rows, then per wave `InitAssaultGroup` + `CampaignAttackerEx` +
+`SuicideOnPlayer(Ex)`, often behind a `WaitForSignal()` the map's `CommandAI` releases. All of
+that is the script's JASS; what the engine owes it was measured by running every file headlessly
+on a stub world and listing the natives it reached that were stubs or missing:
+`FillGuardPosts`/`ReturnGuardPosts` (204 files), `GetFoodMade` (204 — a common.j native no map
+needed), `AddDefenders` (150), `IgnoredUnits` (128), `SetReplacementCount` (120),
+`SuicidePlayer` (117), `SetCaptainHome` (30), `SuicideUnit`/`Ex` (26), `Cheat` (8). Only
+`demo.ai`, which no map names, still reaches an unknown. What answers them:
+
+- **A function called from an expression may SLEEP.** The wave loop is `if not
+  PrepSuicideOnPlayer(seconds) then` and `exitwhen SuicidePlayer(p, …)`, each sleeping for
+  minutes. A map's VM adopts such a call as a separate thread and hands the caller a null
+  (`runSync`), so every wave "failed" in the same instant and the loop spun to its cap. In an AI
+  VM, `Interpreter.evalG` evaluates an expression that reaches a SCRIPT function as a generator,
+  and the thread really waits — the JASS VM's own behaviour. Map VMs are untouched.
+- **`total_gold` is written by the native `OneBuildLoop`.** The JASS loop's first line sets it,
+  and `BuildAttackers` (the wave's own training, in the `CampaignBasics` thread) prices itself
+  against it. Answered natively, the loop never wrote it, and not one wave unit was trained;
+  it now writes what `runBuildLoop` left (`AiPlayer.budgetLeft`). `SetProduce`/`SetUpgrade` are
+  answered for the other threads' `StartUnit`.
+- **Two captains.** `CaptainInCombat(attack_captain)` names them; the DEFENSE captain
+  (`AddDefenders`) holds the `CampaignDefender` units at home, attack-moves at an enemy in the
+  town and walks back after. `SetCaptainHome(ATTACK_CAPTAIN | DEFENSE_CAPTAIN, x, y)` moves
+  either home; `TeleportCaptain` puts the attack group through the map's `setUnitPosition`.
+- **Suicide waves.** `SuicidePlayer(p, check_full)` launches the formed group (full, or with
+  whatever it has once common.ai passes `false` a minute late) at `p`'s nearest building, then
+  the next as each falls, never fleeing — `SuicideOnPlayerWave` waits for `CaptainIsEmpty()`.
+  The target is read off the world, not this computer's fog: a campaign AI walks straight to the
+  player's base (OURS, said at `suicidePlayer`). `SuicideUnit(Ex)` sends free units of a type one
+  at a time and asks the build for more.
+- **Guard posts** (`GuardPosts`). The editor's own hints (`UI\TriggerStrings.txt`) say every
+  preplaced non-hero, non-peon unit has one; "Ignore" (`RemoveGuardPosition`) tells the AI to
+  "neither use nor replace" it, and Hive (threads 104831, 357079) adds the rest: the attack
+  captain DRAFTS guards and the post is refilled up to `SetReplacementCount` times; "Recycle"
+  hands the unit to the defense group. Trigger-created units get posts too (HumanX03 ignores a
+  dozen `GetLastCreatedUnit()`s). `IgnoredUnits(id)` counts ignored units AND defenders — what
+  the attack captain cannot have — because `BuildAttackers` trains `harass_qty + IgnoredUnits`
+  against a `TownCount` that counts them all; without the defenders in it, h02_red.ai's wave 1
+  waited on its own defending Head Hunter.
+- `Cheat("showmap")`, `"dg"`… — eight scripts still carry their designers' debug switches, and
+  they are refused.
+
+`tools/ai-campaign-script-test.cjs` runs the real `h02_red.ai` (defenders, guards, Ignore,
+two suicide waves) and `o03_blue.ai` (held by `WaitForSignal` until `CommandAI`). Live, on
+Human02 at Normal with nobody playing the human side, Blackrock's waves of Grunts and Head
+Hunters walked to Uther's camp from 3:13 on and razed it by 28:23.
 
 ## Where it runs, and why it cannot cheat
 
@@ -442,8 +499,9 @@ Two consequences worth keeping:
   drawing from it would advance it on the host and nowhere else. It has its own Park–Miller
   stream, seeded from the match seed plus the slot index.
 - A campaign chapter gets **no** melee AI — and now for the game's own reason rather than ours:
-  its script never calls `MeleeStartingAI` (see above). Its computers are the mission's, driven by
-  its own triggers; handing them a build order would have Illidan's Naga putting up Moon Wells.
+  its script never calls `MeleeStartingAI` (see above). Its computers are the mission's: its own
+  triggers, and the chapter's own `.ai` script (see "Campaign chapters" above), never a race port
+  — which would have Illidan's Naga putting up Moon Wells.
 
 ## Testing it
 

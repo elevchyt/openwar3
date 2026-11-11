@@ -18,7 +18,7 @@
 //   • GetResourceAmount / CreateBlightedGoldmine — the gold-mine fiction (below)
 //   • GetPlayerStructureCount / GetPlayerTypedUnitCount — the victory/defeat inputs
 //
-// Everything the engine owns itself (AI scripts, blight, preloading) is an EXPLICIT
+// Everything the engine owns itself and we do not model (preloading, handicap) is an EXPLICIT
 // no-op here rather than an unimplemented native: same behaviour, no log noise, and it
 // documents what we deliberately don't model.
 
@@ -231,12 +231,29 @@ export function registerMeleeNatives(rt: Runtime): void {
   // runs none of the melee library at all), then gets exactly what the real game gives them —
   // computer slots that sit still, driven by the map's own triggers if it has any.
   def(rt, "StartMeleeAI", (c, a) => (c.rt.hooks?.startMeleeAI?.(playerIndex(c, a[0]), asStr(a[1])), JNULL));
-  // StartCampaignAI stays a no-op: a chapter's computers are the mission's, and what this
-  // would load is a per-campaign .ai file we do not run.
+  // `StartCampaignAI(p, "o03_blue.ai")` — a CHAPTER seating a computer on its own script out of
+  // the install's `Scripts\` (207 of them). Run the same way a map's own `.ai` is
+  // (src/ai/scriptAi.ts, docs/melee-ai.md "A map's own AI"): a chapter's computers are the
+  // mission's, and the mission's AI is that file.
+  def(rt, "StartCampaignAI", (c, a) => (c.rt.hooks?.startCampaignAI?.(playerIndex(c, a[0]), asStr(a[1])), JNULL));
   def(rt, "CommandAI", (c, a) => (c.rt.hooks?.commandAi?.(playerIndex(c, a[0]), asInt(a[1]), asInt(a[2])), JNULL));
+  // The guard posts a script computer keeps for its preplaced units (src/ai/scriptAi.ts
+  // GuardPosts): a trigger "ignores" one before it walks the unit off somewhere itself
+  // (HumanX02, HumanX03), or "recycles" it to hand the unit back to the AI.
+  const simOf = (c: NativeCtx, v: JassValue | undefined): number => (v ? c.rt.data<{ simId: number }>(v)?.simId ?? -1 : -1);
+  def(rt, "RemoveGuardPosition", (c, a) => {
+    const id = simOf(c, a[0]);
+    if (id >= 0) c.rt.hooks?.guardPosition?.(id, "ignore");
+    return JNULL;
+  });
+  def(rt, "RecycleGuardPosition", (c, a) => {
+    const id = simOf(c, a[0]);
+    if (id >= 0) c.rt.hooks?.guardPosition?.(id, "recycle");
+    return JNULL;
+  });
+  def(rt, "RemoveAllGuardPositions", (c, a) => (c.rt.hooks?.removeAllGuardPositions?.(playerIndex(c, a[0])), JNULL));
   for (const name of [
-    "StartCampaignAI", "SetPlayerHandicap",
-    "RecycleGuardPosition", "RemoveGuardPosition", "SetUnitCreepGuard", "Preloader", "Preload",
+    "SetPlayerHandicap", "SetUnitCreepGuard", "Preloader", "Preload",
     "PreloadStart", "PreloadEnd", "PreloadEndEx", "PreloadRefresh", "PreloadGenClear", "PreloadGenStart",
   ]) {
     def(rt, name, () => JNULL);

@@ -539,7 +539,15 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   mission's. A map may name an AI script of its OWN (`StartMeleeAI(p, "war3mapImported\\Murloc_AI.ai")`,
   (4)Monolith's creep players): that file is RUN, in a JASS VM of its own on common.j + common.ai,
   with `OneBuildLoop` and the captain natives answered by the same `AiPlayer` library
-  ([`src/ai/scriptAi.ts`](src/ai/scriptAi.ts)) — never replaced by a race AI. **SPELLS are the exception to "a number here is the game's"**: the race scripts say
+  ([`src/ai/scriptAi.ts`](src/ai/scriptAi.ts)) — never replaced by a race AI. A CAMPAIGN
+  chapter's computers are the same runner (`StartCampaignAI(p, "o03_blue.ai")`, or `StartMeleeAI`
+  with a chapter file in TFT): common.ai's campaign library on top of a DEFENSE captain, suicide
+  waves (`SuicidePlayer` → the player's nearest building, then the next), and GUARD POSTS for
+  every preplaced non-hero non-peon unit (the attack captain drafts them, `SetReplacementCount`
+  refills them, the map's Ignore/Recycle Guard Position reach them). Two traps that each silenced
+  every wave: in an AI VM a function called from an EXPRESSION may sleep (`Interpreter.evalG` —
+  `if not PrepSuicideOnPlayer(…)`), and the native `OneBuildLoop` must still write `total_gold`,
+  which the wave's own `BuildAttackers` thread prices itself against. **SPELLS are the exception to "a number here is the game's"**: the race scripts say
   what a hero LEARNS and nothing about using it, so [`casting.ts`](src/ai/casting.ts) is built on
   Boris_Spider's observation thread (hiveworkshop 193280) instead — every rule quotes its line,
   and it is keyed on the BASE ability code, which is the thread's own point. A WAVE's reach and

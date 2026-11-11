@@ -15,7 +15,7 @@
 //     anywhere inside a trigger's actions, so every enclosing call must be resumable.
 //     Expressions stay synchronous (see JassThread + runSync below).
 
-import type { Expr, FunctionDecl, JassProgram, Stmt, VarDecl } from "./ast";
+import type { BinOp, Expr, FunctionDecl, JassProgram, Stmt, VarDecl } from "./ast";
 import { rawcodeToInt } from "./lexer";
 import { Runtime, JassArray, compareLimit, playerStateHolds, ThreadAbort, unitStateHolds, type BoolExpr, type HostFunction, type JassPlayer, type JassUnit, type NativeCtx, type RectObj, type RegionObj, type SoundObj, type TimerObj, type TriggerObj, type TriggerReg, type UnitSnapshot } from "./runtime";
 import {
@@ -505,7 +505,7 @@ export class Interpreter {
     }
     for (const loc of fn.locals) {
       if (loc.isArray) frame.arrays.set(loc.name, new JassArray(loc.type, () => defaultForType(loc.type)));
-      else frame.vars.set(loc.name, loc.init ? this.eval(loc.init, frame) : defaultForType(loc.type));
+      else frame.vars.set(loc.name, loc.init ? yield* this.evalG(loc.init, frame) : defaultForType(loc.type));
     }
     try {
       yield* this.execBlockG(fn.body, frame);
@@ -536,7 +536,8 @@ export class Interpreter {
         // the *calling* thread (a native impl is a plain JS function — it cannot yield).
         // Same precedence as callFunction: the engine's meaning wins over a same-named
         // script function. Everything else can't suspend, so it goes through the sync path.
-        const args = s.args.map((a) => this.eval(a, frame));
+        const args: JassValue[] = [];
+        for (const a of s.args) args.push(yield* this.evalG(a, frame));
         if (THREAD_NATIVES.has(s.name) || (this.aiScript && AI_THREAD_NATIVES.has(s.name))) {
           yield* this.execThreadNative(s.name, args);
           return JNULL;
@@ -555,9 +556,9 @@ export class Interpreter {
         return JNULL;
       }
       case "set": {
-        const value = this.eval(s.value, frame);
+        const value = yield* this.evalG(s.value, frame);
         if (s.index !== undefined) {
-          const idx = asInt(this.eval(s.index, frame));
+          const idx = asInt(yield* this.evalG(s.index, frame));
           this.arrayFor(s.name, frame).set(idx, value);
         } else if (frame.vars.has(s.name)) {
           frame.vars.set(s.name, value);
@@ -567,8 +568,17 @@ export class Interpreter {
         return JNULL;
       }
       case "return":
-        throw new ReturnSignal(s.value ? this.eval(s.value, frame) : JNULL);
+        throw new ReturnSignal(s.value ? yield* this.evalG(s.value, frame) : JNULL);
       case "if": {
+        // An AI VM has no audience (nothing in it is presentation) and its conditions may
+        // SLEEP — `if not PrepSuicideOnPlayer(seconds) then` is common.ai's own wave loop.
+        if (this.aiScript) {
+          for (const b of s.branches) {
+            if (truthy(yield* this.evalG(b.cond, frame))) return yield* this.execBlockG(b.body, frame);
+          }
+          if (s.elseBody) yield* this.execBlockG(s.elseBody, frame);
+          return JNULL;
+        }
         // The HOST's own pass, unchanged and unmuzzled — this is the statement exactly as it
         // has always run (docs/multiplayer.md Phase E item 7b).
         const before = this.rt.localViewerReads;
@@ -626,7 +636,7 @@ export class Interpreter {
         }
       }
       case "exitwhen":
-        if (truthy(this.eval(s.cond, frame))) throw EXIT_LOOP;
+        if (truthy(yield* this.evalG(s.cond, frame))) throw EXIT_LOOP;
         return JNULL;
     }
   }
@@ -853,6 +863,61 @@ export class Interpreter {
     }
   }
 
+  /**
+   * `eval` for a THREAD in an AI VM, where an expression may suspend.
+   *
+   * The real JASS VM is a bytecode machine: a function called from inside an expression can
+   * `Sleep`, and the whole thread waits there. common.ai is written against that — its wave
+   * loop is `if not PrepSuicideOnPlayer(seconds) then`, `exitwhen SuicidePlayer(p, …)` and
+   * `set have = WaitForSignal()`, each of which sleeps for minutes. `eval` cannot suspend (it
+   * is plain JS), so a map's VM adopts the rest of such a call as a separate thread and hands
+   * the caller a null (see runSync); in an AI script that made every campaign wave "fail" at
+   * once and the next wave start in the same instant, until the loop cap. So in an AI VM an
+   * expression that reaches a SCRIPT function is evaluated here instead, as a generator, and
+   * the thread really does wait. Anything else — and every map VM — takes `eval` unchanged.
+   */
+  private *evalG(e: Expr, frame: Frame): ThreadGen {
+    if (!this.aiScript || !this.mayWait(e)) return this.eval(e, frame);
+    switch (e.kind) {
+      case "index": {
+        const idx = asInt(yield* this.evalG(e.index, frame));
+        return this.arrayFor(e.name, frame).get(idx);
+      }
+      case "call": {
+        const args: JassValue[] = [];
+        for (const a of e.args) args.push(yield* this.evalG(a, frame));
+        return yield* this.callFunctionG(e.name, args);
+      }
+      case "unary":
+        return this.evalUnary(e.op, yield* this.evalG(e.expr, frame));
+      case "binary": {
+        // Both sides, left first — JASS does not short-circuit (evalBinary).
+        const l = yield* this.evalG(e.left, frame);
+        const r = yield* this.evalG(e.right, frame);
+        return this.binaryOf(e.op, l, r);
+      }
+      default:
+        return this.eval(e, frame);
+    }
+  }
+
+  /** Does this expression call a SCRIPT function anywhere (the only thing that can sleep)?
+   *  A property of the tree, so it is worked out once per node. */
+  private mayWait(e: Expr): boolean {
+    const hit = this.waitCache.get(e);
+    if (hit !== undefined) return hit;
+    let r = false;
+    switch (e.kind) {
+      case "index": r = this.mayWait(e.index); break;
+      case "call": r = (!this.rt.natives.has(e.name) && this.rt.functions.has(e.name)) || e.args.some((a) => this.mayWait(a)); break;
+      case "unary": r = this.mayWait(e.expr); break;
+      case "binary": r = this.mayWait(e.left) || this.mayWait(e.right); break;
+    }
+    this.waitCache.set(e, r);
+    return r;
+  }
+  private readonly waitCache = new WeakMap<Expr, boolean>();
+
   private evalUnary(op: "-" | "not" | "+", v: JassValue): JassValue {
     if (op === "not") return jBool(!truthy(v));
     if (op === "+") return v;
@@ -864,9 +929,15 @@ export class Interpreter {
     if (e.op === "and") return jBool(truthy(this.eval(e.left, frame)) && truthy(this.eval(e.right, frame)));
     if (e.op === "or") return jBool(truthy(this.eval(e.left, frame)) || truthy(this.eval(e.right, frame)));
 
-    const l = this.eval(e.left, frame);
-    const r = this.eval(e.right, frame);
-    switch (e.op) {
+    return this.binaryOf(e.op, this.eval(e.left, frame), this.eval(e.right, frame));
+  }
+
+  private binaryOf(op: BinOp, l: JassValue, r: JassValue): JassValue {
+    switch (op) {
+      case "and":
+        return jBool(truthy(l) && truthy(r));
+      case "or":
+        return jBool(truthy(l) || truthy(r));
       case "==":
         return jBool(jassEquals(l, r));
       case "!=":

@@ -1032,6 +1032,17 @@ export interface EngineHooks {
    *  (4)Monolith's "Attack Enemy" trigger is how its creep players are told to go after the
    *  players: command 1, once a creep hero reaches the map's level. */
   commandAi?(player: number, command: number, data: number): void;
+  /** `StartCampaignAI(p, "h02_red.ai")` — the campaign twin of `startMeleeAI`: a chapter seats
+   *  its computers on the install's own `Scripts\<chapter>_<colour>.ai`, which is RUN
+   *  (src/ai/scriptAi.ts). Several Frozen Throne chapters (HumanX02) name the same kind of file
+   *  through `StartMeleeAI` instead, and land in the same place. */
+  startCampaignAI?(player: number, script: string): void;
+  /** `RemoveGuardPosition(u)` ("Ignore Unit Guard Position") / `RecycleGuardPosition(u)` — a map
+   *  trigger telling the unit's computer to leave it alone, or to take it back. `unitId` is the
+   *  sim id. */
+  guardPosition?(unitId: number, op: "ignore" | "recycle"): void;
+  /** `RemoveAllGuardPositions(p)`. */
+  removeAllGuardPositions?(player: number): void;
   /** GetPlayerStructureCount / GetPlayerUnitCount — melee defeat is "my team owns no
    *  structures", so these decide who has lost (MeleeCheckForLosersAndVictors). */
   playerStructureCount?(player: number, includeIncomplete: boolean): number;

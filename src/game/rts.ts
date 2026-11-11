@@ -70,7 +70,7 @@ import { type UpgradeRegistry } from "../data/upgrades";
 import type { SoundBoard, SoundCategory } from "../audio/sounds";
 import { WorldOverlays, healthBarsAlways, type HoverLine, type BarAbility, type BarSpec, type CrewLabelSpec, type VoiceLabelSpec } from "../render/worldOverlays";
 import type { VoiceLabels } from "./voiceLabels";
-import { INSANE_HARVEST_FACTOR, MELEE_INSANE } from "../ai/ids";
+import { INSANE_HARVEST_FACTOR, MELEE_INSANE, MELEE_NORMAL } from "../ai/ids";
 
 /** What the single-player dev tools can do to the local player's side (RtsController.cheat). */
 export type CheatKind = "gold" | "lumber" | "food" | "fastbuild" | "godmode" | "day" | "night" | "upgrades";
@@ -1217,6 +1217,28 @@ export class RtsController {
     this.scriptAi.add(player, script, seat.race, seat.difficulty, startX, startY, this.meleeSeed, sources, this.aiScriptHost?.hooks() ?? null);
   }
 
+  /**
+   * A seat the lobby never armed — a CAMPAIGN computer the chapter's w3i does not list as a
+   * computer slot (a rescuable or neutral-controlled side the mission hands an AI later, as
+   * Orc03 does Grom's `Player(3)` mid-mission). Its town is where its buildings stand (else its
+   * units), its race the one the map gave the slot, its difficulty the middle one — a campaign
+   * script reads `GetGameDifficulty()`, never `MeleeDifficulty()`.
+   */
+  private unseatedComputer(player: number): { player: number; race: PlayableRace; startX: number; startY: number; difficulty: number; plus?: boolean } | null {
+    // Never a PERSON's seat: the lobby's computers are all in `meleeSeats` already, so a seat
+    // that is still PLAYING here is somebody's ("This should only be used for computer-controlled
+    // player slots" — the editor's own hint for Start Campaign AI Script, UI\TriggerStrings.txt).
+    if (this.meleeStarts.some((s) => s.player === player)) return null;
+    let bx = 0, by = 0, bn = 0, ux = 0, uy = 0, un = 0;
+    for (const u of this.sim.units.values()) {
+      if (u.owner !== player || u.hp <= 0) continue;
+      if (u.building) { bx += u.x; by += u.y; bn++; } else { ux += u.x; uy += u.y; un++; }
+    }
+    if (!bn && !un) return null;
+    const [x, y] = bn ? [bx / bn, by / bn] : [ux / un, uy / un];
+    return { player, race: this.meleeRaces.get(player) ?? "human", startX: x, startY: y, difficulty: MELEE_NORMAL };
+  }
+
   /** Where `player`'s town stands: its main hall (UnitData `buffType` = "townhall") nearest the
    *  given point, else the point itself. See startMeleeAIFor. */
   private townFor(player: number, x: number, y: number): [number, number] {
@@ -1235,7 +1257,7 @@ export class RtsController {
   }
 
   startMeleeAIFor(player: number, script: string): void {
-    const seat = this.meleeSeats.get(player);
+    const seat = this.meleeSeats.get(player) ?? this.unseatedComputer(player);
     if (!this.meleeAi || !seat) return;
     // The file is named by its BASENAME for the four melee races (`Scripts\human.ai` and
     // `human.ai` are the same AI). Any other name is the MAP's own script, and it is RUN, never
@@ -2827,6 +2849,9 @@ export class RtsController {
     // The score screen counts what a script hands a player too — the melee starting units are
     // exactly this, and are what each race's opening Unit Score is made of (sim/matchStats.ts).
     if (!creep && !passive) this.sim.noteGained(simId);
+    // …and a computer on a script of its own gives what a trigger hands it a GUARD POST where it
+    // stands, as it does its preplaced units (src/ai/scriptAi.ts GuardPosts).
+    if (!creep && !passive) this.scriptAi?.unitCreated(simId);
     const su = this.sim.units.get(simId);
     if (su && creep) {
       // The same guard behaviour a map-placed creep gets: it holds the ground it was made on,
@@ -9680,6 +9705,10 @@ export class RtsController {
       // their orders through `execute`, the same door a click goes through.
       startMeleeAI: (player, script) => this.startMeleeAIFor(player, script),
       commandAi: (player, command, data) => this.scriptAi?.command(player, command, data),
+      // A chapter's `StartCampaignAI(p, "o03_blue.ai")` — the same seat, the same runner.
+      startCampaignAI: (player, script) => this.startMeleeAIFor(player, script),
+      guardPosition: (unitId, op) => this.scriptAi?.guardPosition(unitId, op),
+      removeAllGuardPositions: (player) => this.scriptAi?.ignoreAllGuardPositions(player),
       pauseCompAi: (player, pause) => {
         this.meleeAi?.setPaused(player, pause);
         this.scriptAi?.setPaused(player, pause);
