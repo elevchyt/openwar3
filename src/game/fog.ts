@@ -19,5 +19,13 @@ export interface FogModifier {
   player: number;
   state: number;
   area: FogArea;
+  /** The natives' last argument, and not a render detail: whether the modifier is laid
+   *  AFTER the units' own sight (and so overrides it) or BEFORE it (and the units still see
+   *  through it). Every BJ passes `false` — `CreateFogModifierRectBJ`, `…RadiusLocBJ` — so a
+   *  GUI modifier is a floor under unit vision, never a lid over it. (4)Monolith marks each
+   *  Monolith with a FOGGED one at 0:45 to show where it is; laid over unit sight, it blinded
+   *  every army standing beside a Monolith, which could then never be auto-acquired or
+   *  attack-moved onto, and no computer ever damaged one. */
+  afterUnits: boolean;
   running: boolean;
 }

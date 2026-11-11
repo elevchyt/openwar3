@@ -2477,6 +2477,18 @@ endfunction
   if (wave.displayed === false) {
     ok(`TimerDialogDisplayBJ(false) takes it off screen (the "…ForPlayer" variant is blizzard.j gating on GetLocalPlayer)`);
   } else fail(`still displayed`);
+  // MAP INITIALIZATION drops a show (Runtime.mapInitializing): (4)Monolith makes its "Monolith
+  // Disruption" window with CreateTimerDialogBJ in its init, and the real client shows none
+  // until a trigger in the game asks again.
+  rt.mapInitializing = true;
+  interp.run('MakeWave', []);
+  const initWave = rt.timerDialogs[rt.timerDialogs.length - 1];
+  rt.mapInitializing = false;
+  if (initWave !== wave && initWave.title === 'Next Level' && initWave.displayed === false && rt.globals.get('udg_shown').b === false) {
+    ok(`a window made during map initialization exists, titled, but is NOT on screen (the BJ's show is dropped there)`);
+  } else fail(`init wave: ${JSON.stringify({ title: initWave.title, shown: initWave.displayed })}`);
+  interp.run('HideWave', []);
+  rt.timerDialogs.splice(rt.timerDialogs.indexOf(initWave), 1); // the melee counts below start from one window
 
   // --- the melee leftover this milestone closes ---------------------------------------
   const before = rt.timerDialogs.length;

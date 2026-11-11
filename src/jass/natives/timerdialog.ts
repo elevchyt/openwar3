@@ -108,7 +108,8 @@ export function registerTimerDialogNatives(rt: Runtime): void {
   });
   def(rt, "TimerDialogDisplay", (c, a) => {
     const d = td(c, a[0]);
-    if (d) {
+    // A show asked for during map initialization never reaches the screen (Runtime.mapInitializing).
+    if (d && !(c.rt.mapInitializing && truthy(a[1]))) {
       d.displayed = truthy(a[1]);
       d.revision++;
     }

@@ -183,10 +183,13 @@ export function loadMapScript(
   if (opts.lobby) interp.rt.applyLobby(opts.lobby.slots, opts.lobby.localPlayer);
   if (opts.runMain) {
     // Best-effort: a script error in main() must never abort the match.
+    interp.rt.mapInitializing = true; // see Runtime.mapInitializing
     try {
       interp.run("main", []);
     } catch (err) {
       console.warn("[jass] map main() failed (non-fatal):", err);
+    } finally {
+      interp.rt.mapInitializing = false;
     }
   }
   return engine;

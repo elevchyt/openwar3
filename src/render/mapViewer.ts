@@ -3462,7 +3462,7 @@ export class MapViewerScene {
     if (!this.rts || !this.viewer.map) return;
     // Custom maps get their starting resources from triggers (not the melee default),
     // so seed empty stashes; the map's own script grants gold/lumber where it wants.
-    this.beginMatch(config, 0, 0);
+    const races = this.beginMatch(config, 0, 0);
 
     // (The map's custom object data is already in — loadMap installs it the moment the
     // archive is opened, so the pre-placed .doo pass and the pathing/ubersplat stamps see
@@ -3510,7 +3510,11 @@ export class MapViewerScene {
     // messages appear in the HUD message log.
     await this.preloadScriptHost();
     const openedAt = [this.target[0], this.target[1]];
-    this.runMapScript({ melee: false, slots: config.slots });
+    // …with the races `beginMatch` already ROLLED. A "random" seat resolved a second time here
+    // played one race in the script (GetPlayerRace → MeleeStartingUnitsForPlayer, the AI's
+    // race file) while the roster, the console skin and the match log reported another — an
+    // observed (4)Monolith listed its Night Elf as "human" and its Human as "orc".
+    this.runMapScript({ melee: false, races, slots: config.slots });
     this.openOnScriptStart(openedAt);
     // COMPUTER+ ON EXTREME CANDY WAR (src/ai/plus/candy/, docs/candy-war-ai.md). A scenario runs none
     // of the melee library, so no script will ever call `StartMeleeAI` here — the lobby's computers

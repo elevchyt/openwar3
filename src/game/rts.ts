@@ -1198,10 +1198,36 @@ export class RtsController {
    * by `prepareMeleeAI` before a line of the script ran — the script names who plays, not
    * where they sit.
    */
+  /** Where `player`'s town stands: its main hall (UnitData `buffType` = "townhall") nearest the
+   *  given point, else the point itself. See startMeleeAIFor. */
+  private townFor(player: number, x: number, y: number): [number, number] {
+    let best: [number, number] = [x, y];
+    let bestD = Infinity;
+    for (const u of this.sim.units.values()) {
+      if (u.owner !== player || !u.building) continue;
+      if (this.registry.get(u.typeId)?.buffType !== "townhall") continue;
+      const d = (u.x - x) ** 2 + (u.y - y) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = [u.x, u.y];
+      }
+    }
+    return best;
+  }
+
   startMeleeAIFor(player: number, script: string): void {
     const seat = this.meleeSeats.get(player);
     if (!this.meleeAi || !seat) return;
     const race = AI_SCRIPT_RACES[script.toLowerCase()] ?? seat.race;
+    // WHERE the computer's town is comes from its own buildings, never the lobby. common.ai
+    // does not read a start location at all — its towns are the engine's (`TownHasHall`,
+    // `TownHasMine`, `TownWithMine`), clusters around the player's halls — and by the time a
+    // script asks for StartMeleeAI its starting units already stand. A melee map puts them on
+    // the start location, so nothing changes there; (4)Monolith shuffles its four start REGIONS
+    // in Init Variables and builds each player's town in whichever one it drew, so a computer
+    // seated by the lobby's coordinates put its Farm and Altar on the far side of the map from
+    // its Town Hall, and an Undead one, with no blight there, never built anything at all.
+    const [startX, startY] = this.townFor(player, seat.startX, seat.startY);
     // COMPUTER+ (issue #124) — the lobby's Advanced Options switch, arriving here as the seat's
     // own flag. It is the same seam, the same moment and the same arguments: the map's melee
     // script still decides WHO plays and as what, and only which of the two AI objects the seat
@@ -1224,7 +1250,7 @@ export class RtsController {
     if (seat.plus && !this.meleeMap) {
       this.warnOncePlusOnCustom();
     } else if (seat.plus) {
-      this.computerPlus?.add(player, race, seat.difficulty, seat.startX, seat.startY, this.meleeSeed);
+      this.computerPlus?.add(player, race, seat.difficulty, startX, startY, this.meleeSeed);
       // Insane Computer+ plays like a skilled player, and a skilled player ANIMATION-CANCELS:
       // it moves out of a blow's backswing and gives its next order the tick a spell goes off
       // (SimWorld.cancelsBackswing). Every other computer plays each animation out.
@@ -1233,7 +1259,7 @@ export class RtsController {
       // docs/computer-plus.md and `AiPlayer.bypassFog`, which it also switches off.
       return;
     }
-    this.meleeAi.add(player, race, seat.difficulty, seat.startX, seat.startY, this.meleeSeed);
+    this.meleeAi.add(player, race, seat.difficulty, startX, startY, this.meleeSeed);
     // The one thing an INSANE computer gets that is the engine's rather than the script's:
     // it is credited TWICE what its workers actually carried home. common.ai never mentions
     // MELEE_INSANE — the difficulty is not in the strategy, it is in the till.

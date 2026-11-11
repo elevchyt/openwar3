@@ -127,7 +127,8 @@ export function registerMultiboardNatives(rt: Runtime): void {
   // --- board-level state ---
   def(rt, "MultiboardDisplay", (c, a) => {
     const mb = board(c, a[0]);
-    if (mb) {
+    // A show asked for during map initialization never reaches the screen (Runtime.mapInitializing).
+    if (mb && !(c.rt.mapInitializing && truthy(a[1]))) {
       mb.displayed = truthy(a[1]);
       mb.revision++;
     }

@@ -353,9 +353,14 @@ export class Viewpoint {
     return true;
   }
 
-  rebuild(modifiers: Iterable<FogModifier>): void {
+  rebuild(registry: Iterable<FogModifier>): void {
     const day = this.world.isDay;
     this.vision.beginFrame();
+    // Read twice below, and the set hands over a Map ITERATOR, which a second pass finds empty.
+    const modifiers = [...registry];
+    // A modifier made with `afterUnits = false` — every BJ's — is laid FIRST, under the units'
+    // own sight, which then lights whatever it reaches through it (FogModifier.afterUnits).
+    this.stampModifiers(modifiers, false);
     for (const u of this.world.units.values()) {
       if (u.neutralPassive) continue; // shops/critters don't scout for you
       if (!this.revealsFor(u)) continue;
@@ -388,16 +393,18 @@ export class Viewpoint {
       if (!this.revealsForOwner(r.owner, r.team)) continue;
       this.vision.reveal(r.x, r.y, r.radius, true);
     }
-    // Script-placed fog modifiers are stamped LAST, over everything the units revealed —
-    // that's what lets a running FOG_OF_WAR_VISIBLE modifier light ground nobody stands near
-    // (a TD showing you its whole maze) and a FOG_OF_WAR_MASKED one black out ground you are
-    // standing in (a cinematic area). Re-applied every rebuild, since the `visible` layer is
-    // cleared and recomputed each time.
+    // …and one made with `afterUnits = true` LAST, over everything the units revealed — that's
+    // what lets a FOG_OF_WAR_MASKED one black out ground you are standing in. Re-applied every
+    // rebuild, since the `visible` layer is cleared and recomputed each time.
+    this.stampModifiers(modifiers, true);
+    this.noteSeenBuildings();
+  }
+
+  private stampModifiers(modifiers: readonly FogModifier[], afterUnits: boolean): void {
     for (const m of modifiers) {
-      if (!m.running || !this.seesFor(m.player)) continue;
+      if (!m.running || m.afterUnits !== afterUnits || !this.seesFor(m.player)) continue;
       this.stampArea(m.area, fogStateOf(m.state));
     }
-    this.noteSeenBuildings();
   }
 
   /** Record the structures in sight after this rebuild (see `seenBuildings`). Asked over the

@@ -74,7 +74,9 @@ export function registerLeaderboardNatives(rt: Runtime): void {
   // --- display / assignment -------------------------------------------------------
   // A board is on screen only if it is DISPLAYED *and* assigned to the viewing player.
   // CreateLeaderboardBJ does both (ForceSetLeaderboardBJ over a force, then Display).
-  def(rt, "LeaderboardDisplay", (c, a) => edit(c, a[0], (lb) => (lb.displayed = truthy(a[1]))));
+  // A show asked for during map initialization never reaches the screen (Runtime.mapInitializing).
+  def(rt, "LeaderboardDisplay", (c, a) =>
+    c.rt.mapInitializing && truthy(a[1]) ? JNULL : edit(c, a[0], (lb) => (lb.displayed = truthy(a[1]))));
   def(rt, "IsLeaderboardDisplayed", (c, a) => jBool(board(c, a[0])?.displayed ?? false));
   def(rt, "PlayerSetLeaderboard", (c, a) => {
     const p = playerIndex(c, a[0]);

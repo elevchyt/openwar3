@@ -351,6 +351,28 @@ const m2 = vh.createFogModifier(1, 4, rect);
 check("modifier ids are distinct across players", m1 !== m2, true);
 check("…and are not per-viewpoint counters starting at the same number", [m1, m2], [1, 2]);
 
+// `afterUnits` (every native's last argument) decides whether a modifier is laid UNDER the
+// units' own sight or OVER it. Every BJ passes false. (4)Monolith marks each Monolith with a
+// FOGGED one to show where it stands; laid over unit sight, it blinded the army beside it, which
+// then never acquired the Monolith and no computer ever damaged one.
+console.log("\nafterUnits: a modifier under unit sight, or over it");
+const vp0 = vset.viewpointFor(0);
+const regs = () => vset.modifiers.values();
+visionWorld.units.set(901, { id: 901, owner: 0, team: 0, x: 600, y: 600, sightDay: 400, sightNight: 400, flying: false, hp: 100, neutralPassive: false });
+const fogUnder = vh.createFogModifier(0, 2, { kind: "circle", x: 640, y: 640, radius: 128 }, false);
+vh.fogModifierStart(fogUnder);
+vp0.rebuild(regs());
+check("afterUnits=false: the unit still SEES the spot the FOGGED modifier covers", vh.isPointVisibleTo(0, 640, 640), true);
+vh.destroyFogModifier(fogUnder);
+const fogOver = vh.createFogModifier(0, 2, { kind: "circle", x: 640, y: 640, radius: 128 }, true);
+vh.fogModifierStart(fogOver);
+vp0.rebuild(regs());
+check("afterUnits=true: the modifier wins over the unit's sight", vh.isPointVisibleTo(0, 640, 640), false);
+check("…and the spot reads as fogged", vh.isPointFoggedTo(0, 640, 640), true);
+vh.destroyFogModifier(fogOver);
+visionWorld.units.delete(901);
+vp0.rebuild(regs());
+
 console.log("\nFogEnable is global, not local-only  (the bug seating exposed)");
 check("fog starts enabled", vh.isFogEnabled(), true);
 vh.fogEnable(false);

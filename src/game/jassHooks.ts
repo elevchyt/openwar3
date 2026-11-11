@@ -759,7 +759,7 @@ export function rosterHooks(
 // object that also holds a camera.
 export function visionHooks(
   vision: {
-    createFogModifier(m: { player: number; state: number; area: FogArea }): number;
+    createFogModifier(m: { player: number; state: number; area: FogArea; afterUnits: boolean }): number;
     fogModifierStart(id: number): void;
     fogModifierStop(id: number): void;
     destroyFogModifier(id: number): void;
@@ -803,7 +803,7 @@ export function visionHooks(
       for (const recipient of toPlayers) vision.setExposed(recipient, player, flag);
     },
     // --- fog of war: script-placed modifiers (7.22) ---
-    createFogModifier: (player, state, area) => vision.createFogModifier({ player, state, area }),
+    createFogModifier: (player, state, area, afterUnits) => vision.createFogModifier({ player, state, area, afterUnits }),
     fogModifierStart: (id) => vision.fogModifierStart(id),
     fogModifierStop: (id) => vision.fogModifierStop(id),
     destroyFogModifier: (id) => vision.destroyFogModifier(id),

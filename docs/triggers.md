@@ -1224,6 +1224,12 @@ Two shapes, both read off the sources:
 - **A `timerdialog` holds no clock.** It is a **view onto a `timer`** — the engine reads that timer's remaining every
   frame. That is why `CreateTimerDialog` *takes* the timer, and why the melee library can create the window at map
   init and only `TimerStart` it two minutes into the game. So the panel polls; nothing is ever pushed.
+- **A show asked for during MAP INITIALIZATION is dropped** (`Runtime.mapInitializing`, set around `main()`), for
+  timer windows, multiboards and leaderboards alike: the object is made and keeps every setting, it is simply not
+  on screen until a trigger running in the game displays it again. Mapmakers' standing advice is "elapsed game
+  time 0.00, never Map Initialization" (hiveworkshop 104417, 226164), and the real client shows (4)Monolith's
+  "Monolith Disruption" window — `CreateTimerDialogBJ` in its Init Variables trigger — only once a shard is
+  disrupted. We used to put it up, reading 0:00, from the first frame.
 - **A dialog over a NULL timer is legal**, and blizzard.j depends on it — `CreateTimerDialog(null)`, commented in
   Blizzard's own source as *"it has no timer because it is driven by real time (outside of the game state to avoid
   desyncs)"*. It shows whatever `TimerDialogSetRealTimeRemaining` last put in it, and must not crash on the null.
@@ -1362,7 +1368,14 @@ The **fog of war** half is the `VisionMap`. A fog modifier holds an area at a `f
 - **`FOG_OF_WAR_MASKED`** blacks out ground you are **standing in** — a cinematic area. This one only works because
   MASKED **clears `explored`**, the one layer that is otherwise write-once.
 
-Modifiers are stamped **last**, over everything the units revealed, on every vision rebuild. And the crux, which the
+**WHEN a modifier is stamped is its last argument, `afterUnits`** — it is not a render detail. `true` lays it over
+everything the units revealed (it wins: MASKED blacks out ground you stand in); `false` lays it UNDER the units'
+own sight, which then lights whatever it reaches through it. **Every BJ passes `false`** (`CreateFogModifierRectBJ`
+below, `…RadiusLocBJ`), so a GUI modifier is a floor, never a lid. Treating them all as `true` broke (4)Monolith:
+its "Create Main Quest" marks each Monolith with a 128-radius FOGGED modifier at 0:45 so players know where they
+are, and laid over unit sight that made the Monolith invisible to the very army beside it — never auto-acquired,
+an attack-move to it ended idle, and no computer damaged one in 90 game-minutes. `Viewpoint.rebuild` stamps the
+two kinds in two passes, around the units' reveals. And the crux, which the
 BJ has to paper over and a naive reading of common.j misses: **`CreateFogModifier*` does not start the modifier.**
 
 ```jass

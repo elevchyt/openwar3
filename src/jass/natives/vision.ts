@@ -69,9 +69,9 @@ const locArea = (c: NativeCtx, v: JassValue, radius: number): JassFogArea => {
 };
 
 /** Create + intern a fogmodifier handle around the engine's id. */
-function makeFogModifier(c: NativeCtx, player: number, state: number, area: JassFogArea | null): JassValue {
+function makeFogModifier(c: NativeCtx, player: number, state: number, area: JassFogArea | null, afterUnits: boolean): JassValue {
   if (!area) return JNULL;
-  const engineId = c.rt.hooks?.createFogModifier?.(player, state, area) ?? -1;
+  const engineId = c.rt.hooks?.createFogModifier?.(player, state, area, afterUnits) ?? -1;
   const m: FogModifierObj = { handleId: 0, engineId };
   m.handleId = c.rt.handles.alloc(m);
   return jHandle(m.handleId, "fogmodifier");
@@ -100,17 +100,18 @@ export function registerVisionNatives(rt: Runtime): void {
   });
 
   // --- fog of war: modifiers -----------------------------------------------
-  // `useSharedVision` (and `afterUnits`) are engine render-ordering details we don't
-  // model — our modifiers are stamped over the units' own vision every rebuild, which is
-  // the behaviour `afterUnits = true` describes anyway.
+  // common.j ends all three with `boolean useSharedVision, boolean afterUnits`. `afterUnits`
+  // decides whether the modifier is laid over the units' own sight or under it (FogModifier),
+  // and matters: every BJ passes false. `useSharedVision` is not modelled — a modifier
+  // reaches whoever shares the player's vision either way (Viewpoint.seesFor).
   def(rt, "CreateFogModifierRect", (c, a) =>
-    makeFogModifier(c, playerIndex(c, a[0]), c.rt.enumIndex(a[1]), rectArea(c, a[2])),
+    makeFogModifier(c, playerIndex(c, a[0]), c.rt.enumIndex(a[1]), rectArea(c, a[2]), truthy(a[4])),
   );
   def(rt, "CreateFogModifierRadius", (c, a) =>
-    makeFogModifier(c, playerIndex(c, a[0]), c.rt.enumIndex(a[1]), circleArea(asNum(a[2]), asNum(a[3]), asNum(a[4]))),
+    makeFogModifier(c, playerIndex(c, a[0]), c.rt.enumIndex(a[1]), circleArea(asNum(a[2]), asNum(a[3]), asNum(a[4])), truthy(a[6])),
   );
   def(rt, "CreateFogModifierRadiusLoc", (c, a) =>
-    makeFogModifier(c, playerIndex(c, a[0]), c.rt.enumIndex(a[1]), locArea(c, a[2], asNum(a[3]))),
+    makeFogModifier(c, playerIndex(c, a[0]), c.rt.enumIndex(a[1]), locArea(c, a[2], asNum(a[3])), truthy(a[5])),
   );
   const modifier = (c: NativeCtx, v: JassValue): FogModifierObj | undefined => c.rt.data<FogModifierObj>(v);
   def(rt, "FogModifierStart", (c, a) => {

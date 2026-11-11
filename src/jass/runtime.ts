@@ -1165,7 +1165,7 @@ export interface EngineHooks {
   // --- fog of war: script-placed modifiers (7.22) ---
   /** CreateFogModifierRect / CreateFogModifierRadius[Loc] — returns the modifier's id.
    *  Created STOPPED: the native does not start it, FogModifierStart does. */
-  createFogModifier?(player: number, state: number, area: JassFogArea): number;
+  createFogModifier?(player: number, state: number, area: JassFogArea, afterUnits: boolean): number;
   fogModifierStart?(id: number): void;
   fogModifierStop?(id: number): void;
   destroyFogModifier?(id: number): void;
@@ -1593,6 +1593,17 @@ export class Runtime {
    *  UI like the boards above, but for a second reason as well: a timer dialog's *time* is
    *  never pushed, it is read live off the timer it is bound to, every frame. */
   readonly timerDialogs: TimerDialogObj[] = [];
+  /**
+   * True while the map's `main()` runs — MAP INITIALIZATION, which in the real client happens
+   * during the load, before the game exists. A request there to SHOW a timer window, a
+   * multiboard or a leaderboard is dropped: the object is made and keeps every setting, it is
+   * just not on screen, and a later Display call (from a trigger that runs in the game) is what
+   * puts it up. That is the community's standing rule for all three ("elapsed game time 0.00",
+   * never Map Initialization — hiveworkshop threads 104417, 226164) and what the real 1.30.4
+   * client does with (4)Monolith, whose Init Variables trigger `CreateTimerDialogBJ`s its
+   * "Monolith Disruption" window at init: no window until a shard is first disrupted.
+   */
+  mapInitializing = false;
   /** Live `sound` handles (7.20). The engine walks these each frame for the two things it
    *  can only do over time: keep an `AttachSoundToUnit`'d sound on its (moving) unit, and
    *  reap a `KillSoundWhenDone` handle once its clip has finished. */
