@@ -1097,6 +1097,86 @@ index 26347d6d988194c95415c2a40597123e80bd61a2..3d28cc4165be8474ed4005abfe3ce726
          this.webglResource = id;
      }
  }
+diff --git a/dist/cjs/viewer/handlers/mdx/attachmentinstance.js b/dist/cjs/viewer/handlers/mdx/attachmentinstance.js
+index f888fee..674005e 100644
+--- a/dist/cjs/viewer/handlers/mdx/attachmentinstance.js
++++ b/dist/cjs/viewer/handlers/mdx/attachmentinstance.js
+@@ -16,6 +16,9 @@ class AttachmentInstance {
+         this.instance = instance;
+         this.attachment = attachment;
+         this.internalInstance = internalInstance;
++        // OpenWar3: the parent sequence the attached clip was last matched against (see ow3Sync).
++        this.ow3ParentSeq = -2;
++        this.ow3Seq = -1;
+     }
+     update() {
+         const instance = this.instance;
+@@ -32,12 +35,64 @@ class AttachmentInstance {
+                     // Every time the attachment becomes visible again, restart its first sequence.
+                     internalInstance.setSequence(0);
+                 }
++                this.ow3Sync();
+             }
+             else {
+                 internalInstance.hide();
+             }
+         }
+     }
++    /**
++     * OpenWar3: an attached model whose clip has the PARENT's clip name plays ON THE PARENT's
++     * clock — the parent's frame, mapped into its own clip.
++     *
++     * Every undead building is the case that matters: its "Birth" carries a `BirthLink`
++     * attachment naming `SharedModels\UBirth.mdl`, and that model IS the summoning — the glyph,
++     * the bone claws rising round it, the runes and the ribbons, over its own 60 s "Birth". The
++     * building's own geosets stay hidden for the first five sixths of the clip, so the
++     * attachment is all there is to see. Left on its own clock it ran at a fixed rate from
++     * whenever it was last shown: it STOPPED while the building was out of view (an attached
++     * instance is only advanced through its parent) while construction went on, never matched a
++     * build time that is not 60 s (the parent is scrubbed to construction PROGRESS), and kept
++     * going while a halted build stood still — so a building summoned off-screen came back as a
++     * bare glyph at any point of its construction.
++     *
++     * Only a NAME match is slaved; an attached model without the parent's clip keeps the
++     * viewer's own behaviour (its first sequence, looping on its own clock).
++     */
++    ow3Sync() {
++        const instance = this.instance;
++        const internalInstance = this.internalInstance;
++        const parentSeq = instance.sequence;
++        if (parentSeq !== this.ow3ParentSeq) {
++            this.ow3ParentSeq = parentSeq;
++            this.ow3Seq = -1;
++            const parent = instance.model.sequences[parentSeq];
++            if (parent) {
++                const name = parent.name.trim().toLowerCase();
++                const own = internalInstance.model.sequences;
++                for (let i = 0; i < own.length; i++) {
++                    if (own[i].name.trim().toLowerCase() === name) {
++                        this.ow3Seq = i;
++                        break;
++                    }
++                }
++            }
++        }
++        if (this.ow3Seq < 0) {
++            return;
++        }
++        if (internalInstance.sequence !== this.ow3Seq) {
++            internalInstance.setSequence(this.ow3Seq);
++        }
++        const p = instance.model.sequences[parentSeq].interval;
++        const a = internalInstance.model.sequences[this.ow3Seq].interval;
++        const span = p[1] - p[0];
++        const t = span > 0 ? Math.min(1, Math.max(0, (instance.frame - p[0]) / span)) : 0;
++        internalInstance.frame = a[0] + t * (a[1] - a[0]);
++        // …and its emitters run at the parent's rate, so a halted build's ribbons hold too.
++        internalInstance.timeScale = instance.timeScale;
++    }
+ }
+ exports.default = AttachmentInstance;
+ //# sourceMappingURL=attachmentinstance.js.map
+\ No newline at end of file
 diff --git a/dist/cjs/viewer/handlers/mdx/batchgroup.js b/dist/cjs/viewer/handlers/mdx/batchgroup.js
 index 7fe06bd7314e83b578dc8987e819b08cea287dfb..f35c4cabe680a66857764dddab126df12b05a4cc 100644
 --- a/dist/cjs/viewer/handlers/mdx/batchgroup.js

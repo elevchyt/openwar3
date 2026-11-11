@@ -190,11 +190,14 @@ check("createBlightedGoldMine returns a script handle", hooks.createBlightedGold
 check("…which resolves back to that mine", hooks.getResourceAmount(hooks.createBlightedGoldMine(0, 1510, 1710, 0)), 500);
 check("…and -1 when nothing is in range", hooks.createBlightedGoldMine(0, 90000, 90000, 0), -1);
 
-// RemoveUnit must REFUSE a mine handle. A mine is not a sim unit, so sim.removeUnit could not
-// take it off the map anyway — but the only caller that tries is the Undead start's mine swap,
-// which puts one straight back, so leaving it standing IS the swap. Spying on the sim rather
-// than driving it, because what is being checked is the routing, not SimWorld.removeUnit.
-console.log("\nRemoveUnit refuses a gold mine, and reaches the sim for anything else");
+// RemoveUnit on a mine handle takes the MINE off the map — through the mine table, never
+// sim.removeUnit, since a mine is not a sim unit. A map may clear a mine for good: Monolith's
+// "Empty Player" removes the mine on every empty start and stands a random neutral building
+// there, and while this was a no-op that building went up INSIDE the mine. Blizzard.j's Undead
+// swap (BlightGoldMineForPlayerBJ) removes and then CreateBlightedGoldmine-s at the same x/y,
+// and must get the very same mine back — same handle, same gold. Spying on the sim's unit
+// removal, because what is being checked is the routing, not SimWorld.removeUnit.
+console.log("\nRemoveUnit takes a gold mine off the map, and reaches the sim for anything else");
 const removed = [];
 const killed = [];
 const realRemove = world.removeUnit.bind(world);
@@ -205,7 +208,15 @@ const spyHooks = simHooks(world, teamOf);
 
 spyHooks.removeUnit(mineHandle);
 check("a mine handle does not reach sim.removeUnit", removed, []);
-check("…and the mine is still standing", !!world.mines.get(3), true);
+check("…but the mine is gone from the map", world.mines.has(3), false);
+check("…and goes quietly: not a collapse", world.drainDepletedMines().length, 0);
+check("a blighted create at the SAME point gets that mine back", spyHooks.createBlightedGoldMine(0, 1500, 1700, 0), mineHandle);
+check("…standing again, with its gold", world.mines.get(3)?.gold, 500);
+check("…and nothing left for the renderer to take down", world.drainRemovedMines().length, 0);
+spyHooks.removeUnit(mineHandle);
+check("a mine removed for good is handed to the renderer once", world.drainRemovedMines().map((m) => m.id), [3]);
+check("…after which no create can bring it back", world.restoreRemovedMine(1500, 1700), undefined);
+world.mines.set(3, { id: 3, x: 1500, y: 1700, radius: 64, gold: 500, busy: false, busyBy: 0, entangledBy: 0 }); // for the checks below
 spyHooks.removeUnit(3);
 check("a real unit id does reach it", removed, [3]);
 spyHooks.killUnit(3);

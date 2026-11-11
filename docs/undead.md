@@ -178,6 +178,21 @@ Two things "then leaves" has to mean literally, and both were missing:
   happens (`playSummonGesture` → `playWorkAnimOnce`) and sized to the clip — held while the
   Acolyte stands there, dropped the moment the player walks it off.
 
+### What a summoning LOOKS like is a second model
+
+Every undead structure's "Birth" is 60 s long and HIDES the building for its first five sixths
+(Ziggurat: every geoset's `KGAO` is 0 until 49667 of 60000; Altar of Darkness: its one visible
+geoset's material alpha is 0 until 53333). What the player watches instead is an ATTACHMENT:
+the Birth clip shows a `BirthLink` node that names `SharedModels\UBirth.mdl` — the green glyph,
+the bone claws that rise round it, the rune beam and the ribbons, over UBirth's own 60 s "Birth".
+The building is scrubbed to construction PROGRESS (`repinConstructionFrames`), so that attached
+clip has to be too: the viewer patch's `AttachmentInstance.ow3Sync` slaves an attached model to
+the parent's frame whenever it has a clip of the parent clip's NAME, mapped proportionally into
+its own interval. Left on its own clock it ran at a fixed rate from whenever it was last shown,
+PAUSED while the building was off-screen (an attached instance is only advanced through its
+parent), ignored a build time that is not 60 s and a halted build — so anything summoned out of
+view came back as a bare glyph at 30 % or 70 % alike.
+
 ## 4. The Haunted Gold Mine: a crew, a clock, and no round trip
 
 `Abgm` "Blighted Gold mine" carries the whole arrangement in four columns:

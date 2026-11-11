@@ -93,11 +93,18 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     // pass-through to `sim.removeUnit`. Only `createUnit` is genuinely entangled, because
     // spawning has to load a model.
     killUnit: (id) => sim.killUnit(id),
-    // A gold mine isn't a sim unit for us, so RemoveUnit can't take it off the map — and the only
-    // caller that tries is the Undead start's mine swap, which puts one straight back (see
-    // createBlightedGoldMine). Leaving it standing IS the swap.
+    // A gold mine is a record in `mines`, not a sim unit, so RemoveUnit on its handle goes to
+    // the mine table: the mine leaves the map (SimWorld.removeMine). It used to be a no-op on
+    // the theory that the only caller was the Undead start's swap — but a MAP may clear a mine
+    // for good, and Monolith does exactly that on every empty start before standing a random
+    // neutral building there, which then went up inside a mine that never left. The Undead swap
+    // still works: createBlightedGoldMine puts the very mine it removed back.
     removeUnit: (id) => {
-      if (mineForScript(sim, id)) return;
+      const mine = mineForScript(sim, id);
+      if (mine) {
+        sim.removeMine(mine.id);
+        return;
+      }
       sim.removeUnit(id);
     },
     // --- gold mines, which are units only to a script (see MINE_ID_BASE) --------------------
@@ -113,12 +120,20 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
       const mine = mineForScript(sim, id);
       if (mine) mine.gold = amount;
     },
-    // The Undead start's mine swap: raise a real Haunted Gold Mine over the nearest mine and
-    // hand back the MINE's handle. `RemoveUnit` deliberately left the mine alone (see the
-    // renderer's removeUnit) because the mine is still where the gold is — the building only
-    // stands over it (SimWorld.hauntMine), and everything Blizzard.j asks this return value
-    // (its gold, its location) is a question about the mine.
+    // The Undead start's mine swap: raise a real Haunted Gold Mine over the mine and hand back
+    // the MINE's handle. The mine stays the gold — the building only stands over it
+    // (SimWorld.hauntMine) — and everything Blizzard.j asks this return value (its gold, its
+    // location) is a question about the mine. With no mine just removed here (a script calling
+    // the native on its own), the nearest mine in the melee search radius is haunted, as before.
     createBlightedGoldMine: (player, x, y) => {
+      // Blizzard.j's BlightGoldMineForPlayerBJ has just RemoveUnit-ed the mine at exactly this
+      // point (it passes the old mine's own GetUnitX/GetUnitY): that mine comes back, under its
+      // old handle, and is haunted where it stood.
+      const restored = sim.restoreRemovedMine(x, y);
+      if (restored) {
+        sim.hauntMine(player, teamOf(player), restored.x, restored.y);
+        return MINE_ID_BASE + restored.id;
+      }
       let best: SimMine | undefined;
       let bestD = MELEE.MELEE_MINE_SEARCH_RADIUS ** 2;
       for (const m of sim.mines.values()) {

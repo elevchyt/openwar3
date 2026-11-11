@@ -1,6 +1,7 @@
 import ModelViewerCtor from "mdx-m3-viewer/dist/cjs/viewer/viewer";
 import mdxHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/mdx/handler";
 import blpHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/blp/handler";
+import tgaHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/tga/handler";
 import { LOAD_BAR_MODEL } from "../data/loadingScreens";
 import { UI_HEIGHT, UI_WIDTH } from "../ui/fdf/layout";
 import type { DataSource } from "../vfs/types";
@@ -132,6 +133,13 @@ export class LoadingScene {
     this.solver = (src) => (typeof src === "string" ? this.vfs.read(src) : src);
     viewer.addHandler(mdxHandler, this.solver, false);
     viewer.addHandler(blpHandler);
+    // …and TGA, which the game reads as readily as BLP: a map's IMPORTED loading screen is
+    // usually TGA, because that is what an author exports. Monolith's own
+    // `war3mapImported\LoadingScreen.mdx` names four quarters `LoadingScreen{TL,TR,BL,BR}.tga`
+    // at the archive root, and with no handler for them every quarter drew as the viewer's
+    // missing-texture white — the whole screen a blank page under the blurb. The match's own
+    // viewer (War3MapViewer) has always registered it.
+    viewer.addHandler(tgaHandler);
 
     const scene = viewer.addScene();
     scene.alpha = transparent; // the loading screen is the whole picture; nothing shows behind it

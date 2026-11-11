@@ -15579,6 +15579,12 @@ export class MapViewerScene {
           this.splats?.remove(`m${mine.id}`); // drop the mine's ground texture
           this.collapseGoldMine(mine, widget);
         }
+        // …and a mine a SCRIPT removed (RemoveUnit on its handle — SimWorld.removeMine) simply
+        // goes: its body, its footprint and its ground texture, with no Death and no dust.
+        for (const mine of world.drainRemovedMines()) {
+          this.removeNodeVisual(mine.id, mine.x, mine.y, map.units as unknown as HideableWidget[]);
+          this.splats?.remove(`m${mine.id}`);
+        }
         // The news the engine announces by itself — a raid, a hero lost, a mine running out
         // (see SimWorld.Alert). Drained before the completion cues so that if a Town Hall
         // finishes in the same frame its site is stormed, the player is told about the raid.
@@ -17178,9 +17184,20 @@ export class MapViewerScene {
     // to ride, a shake. It runs AFTER the player's input so a cinematic wins, and it lets go
     // of each field the moment that field's blend lands. `dtMs` is MILLISECONDS (the frame
     // loop's clock); every duration in a JASS camera call is SECONDS.
-    if (this.scriptCam.active) {
+    //
+    // …and it is GAME time: a camera blend is timed by the same script that times the fade
+    // beside it, so it stands still wherever the world does — paused, and above all HELD AT
+    // THE GATE. Map initialization runs while the loading screen is still waiting for its
+    // key, and Monolith's intro starts there: `CameraSetupApplyForPlayer(…, 0)` then
+    // `ResetToGameCameraForPlayer(…, 6)` beside a 6-second fade. Aged on the frame clock, the
+    // six seconds were spent behind the loading screen, so the shot was already the plain game
+    // camera when the screen came down and the fade then darkened a camera that never moved —
+    // the intro read as "the screen just goes black". Still the frame's own `dt` (scaled to
+    // the game speed) rather than the sim's stepped seconds, so the blend stays smooth on a
+    // 144 Hz screen where half the frames step no sim tick at all.
+    if (this.scriptCam.active && !this.paused && !this.startHeld) {
       const cam = this.readCamera();
-      this.scriptCam.update(Math.min(dtMs, 100) / 1000, cam, (id) => {
+      this.scriptCam.update((Math.min(dtMs, 100) / 1000) * this.speedRate, cam, (id) => {
         const u = this.rts?.simView.units.get(id);
         return u ? { x: u.x, y: u.y } : null;
       });

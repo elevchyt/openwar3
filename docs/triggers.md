@@ -1617,6 +1617,13 @@ Two things the file will not tell you, and blizzard.j will:
 - **A zero-duration apply lands NOW.** Monolith reads the camera back on the very next line
   (`ResetToGameCamera`). Defer the snap by one frame and the reset blends the game camera *to
   the game camera*: the intro shot never appears at all.
+- **A blend runs on GAME time, and map init is not game time yet.** Monolith's whole intro is
+  issued from its Map Init trigger, while the loading screen is still up waiting for its key.
+  The fade beside the camera blend has always aged on the sim's clock, but the blend aged on the
+  FRAME's, so all six seconds were spent behind the loading screen: the shot was already the
+  plain game camera when the screen came down, and the fade then darkened a camera that never
+  moved — "it suddenly goes black". `updateCamera` now advances the script camera only while the
+  world is neither paused nor held at the gate (`startHeld`), at the game speed.
 
 ### Cinematic mode is a checklist, and `CinematicModeExBJ` is the spec
 

@@ -5565,6 +5565,67 @@ export class SimWorld {
     this.depleted.push(mine);
   }
 
+  /**
+   * `RemoveUnit` on a gold mine's handle — the mine leaves the map outright: no collapse, no
+   * dust, no "A gold mine has collapsed.". A script that does this means it: Monolith's
+   * "Empty Player" trigger takes the gold mine off every unoccupied start and stands a random
+   * neutral building (a Tavern, a Fountain of Mana…) on the spot, and with the removal a no-op
+   * the building went up INSIDE the mine — the two models fused into one crooked thing.
+   *
+   * Blizzard.j's own Undead opening is the other caller and reads as the opposite:
+   * `BlightGoldMineForPlayerBJ` saves the mine's x/y/gold, `RemoveUnit`s it and then
+   * `CreateBlightedGoldmine`s at the SAME point. So a removed mine is kept aside
+   * (`removedMines`) rather than forgotten, and `restoreRemovedMine` hands that very record
+   * back — same id, same model, same footprint — to a blighted create standing on it. Both
+   * happen inside one script call, before the renderer drains anything, so the swap never
+   * flickers and the handle the script keeps names the mine it always did.
+   *
+   * A mine the renderer never gave a body (raised by a script earlier in the same init and
+   * still waiting in `addedMines`) is simply un-queued: there is nothing to take down.
+   */
+  removeMine(id: number): boolean {
+    const mine = this.mines.get(id);
+    if (!mine) return false;
+    this.mines.delete(id);
+    this.minesRunningLow.delete(id);
+    const queued = this.addedMines.indexOf(mine);
+    if (queued >= 0) this.addedMines.splice(queued, 1);
+    this.removedMines.push({ mine, bodied: queued < 0 });
+    // A worker down the shaft comes out (tickHarvest emerges it with no mine to pay it), and a
+    // building standing on the mine has nothing left to hold — it goes the way a cancelled one
+    // does, exactly as when the mine runs dry (tickHarvest's crew path).
+    const holder = mine.entangledBy > 0 ? this.units.get(mine.entangledBy) : undefined;
+    if (holder) {
+      this.unloadBurrow(holder.id);
+      this.removeUnit(holder.id);
+    }
+    return true;
+  }
+
+  /** The mine `removeMine` took off the map at (x, y), put back under its old id — see there.
+   *  Undefined when nothing was removed at that point. */
+  restoreRemovedMine(x: number, y: number): SimMine | undefined {
+    const i = this.removedMines.findIndex((r) => Math.abs(r.mine.x - x) < 1 && Math.abs(r.mine.y - y) < 1);
+    if (i < 0) return undefined;
+    const [{ mine, bodied }] = this.removedMines.splice(i, 1);
+    mine.busy = false;
+    mine.busyBy = 0;
+    mine.entangledBy = 0;
+    mine.waiters = undefined;
+    this.mines.set(mine.id, mine);
+    if (!bodied) this.addedMines.push(mine);
+    return mine;
+  }
+
+  private removedMines: Array<{ mine: SimMine; bodied: boolean }> = [];
+  /** Mines a script removed since the last drain that had a body to take down. */
+  drainRemovedMines(): SimMine[] {
+    if (!this.removedMines.length) return [];
+    const out = this.removedMines.filter((r) => r.bodied).map((r) => r.mine);
+    this.removedMines = [];
+    return out;
+  }
+
   drainDepletedMines(): SimMine[] {
     if (!this.depleted.length) return this.depleted;
     const out = this.depleted;
