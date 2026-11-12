@@ -79,7 +79,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
 - **Build / check:** `pnpm dev` (localhost:5173), `pnpm build` (typecheck + build), `pnpm typecheck`. Run `pnpm typecheck`
   before considering a change done. `pnpm data:verify` re-checks `src/data/gameplayConstants.ts` against the unpacked
   data — run it after touching that file (needs `pnpm data:extract` first). `pnpm casc:test` checks the CASC mount
-  itself against the local install.
+  itself against the local install. `docs/abilities-audit.md` is GENERATED and kept current by the husky
+  **pre-commit hook** (`.husky/pre-commit` → `pnpm data:audit`, only when a commit touches a file the audit scans and
+  the unpacked data exists) — never hand-edit it; if a new dispatch shape reads as `todo`, teach
+  `tools/audit-abilities.mjs` to see it.
 - **Show your work with screenshots — often.** Anything visual (rendering, HUD, camera, effects, terrain, shadows, fog,
   UI) must be previewed in the REAL running game and the screenshots **sent to the developer** so they can see how it
   looks as you go — don't just describe it or keep the shots to yourself. Drive the app live per the `live-browser-testing`

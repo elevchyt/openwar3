@@ -50,6 +50,9 @@ importers:
       gl-matrix:
         specifier: ^3.4.3
         version: 3.4.4
+      husky:
+        specifier: ^9.1.7
+        version: 9.1.7
       mdx-m3-viewer:
         specifier: ^5.12.0
         version: 5.12.0(patch_hash=4e971affaf220a2718132299cdff5d1548aa0852b0127e5d3553970ad97a27e2)
@@ -1297,6 +1300,11 @@ packages:
   https-proxy-agent@7.0.6:
     resolution: {integrity: sha512-vK9P5/iUfdl95AI+JVyUuIcVtd4ofvtrOr3HNtM2yxC9bnMbEdp3x01OhQNnjb8IJYi38VlTE3mBXwcfvywuSw==}
     engines: {node: '>= 14'}
+
+  husky@9.1.7:
+    resolution: {integrity: sha512-5gs5ytaNjBrh5Ow3zrvdUUY+0VxIuWVL4i9irt6friV+BqdCfmV11CQTWMiBYWHbXhco+J1kHfTOUkePhCDvMA==}
+    engines: {node: '>=18'}
+    hasBin: true
 
   inflight@1.0.6:
     resolution: {integrity: sha512-k92I/b08q4wvFscXCLvqfsHCrjrF7yiXsQuIVvVE7N82W3+aqpzuUdBbfhWcy/FZR3/4IgflMgKLOsvPDrGCJA==}
@@ -3110,6 +3118,8 @@ snapshots:
       debug: 4.4.3
     transitivePeerDependencies:
       - supports-color
+
+  husky@9.1.7: {}
 
   inflight@1.0.6:
     dependencies:

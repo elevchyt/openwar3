@@ -1,0 +1,22 @@
+# docs/abilities-audit.md is GENERATED (tools/audit-abilities.mjs): the install's own ability
+# tables cross-referenced against what the sim dispatches. Left to be re-run by hand it fell
+# behind the code (issue #252), so a commit that touches anything the audit scans regenerates
+# it and the table lands in the SAME commit as the change that moved it.
+#
+# It needs the unpacked game data (`pnpm data:extract`). Without it — a contributor with no
+# install, a worktree with no `Warcraft III/` — this does nothing, and the next commit made
+# where the data is catches the table up. The scan reads the WORKING TREE, so unstaged edits to
+# a scanned file are counted too. A broken audit WARNS rather than blocking the commit.
+data="Warcraft III/ExtractedData/merged/Units/AbilityData.csv"
+[ -f "$data" ] || exit 0
+
+# Exactly the files tools/audit-abilities.mjs reads on the implementation side.
+git diff --cached --name-only --diff-filter=ACMRD \
+  | grep -qE '^(src/sim/[^/]+\.ts|src/data/(abilities|items)\.ts|src/game/rts\.ts|src/render/mapViewer\.ts|tools/audit-abilities\.mjs)$' \
+  || exit 0
+
+if node tools/audit-abilities.mjs >/dev/null; then
+  git add docs/abilities-audit.md
+else
+  echo "pre-commit: tools/audit-abilities.mjs failed — docs/abilities-audit.md NOT regenerated" >&2
+fi

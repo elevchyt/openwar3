@@ -72,6 +72,12 @@ pnpm jass:test   # the JASS / Lua trigger runtime
 Run whichever suite covers what you changed; if you touched `src/data/gameplayConstants.ts`, also
 run `pnpm data:verify`.
 
+`pnpm install` also installs a **pre-commit hook** (husky, `.husky/pre-commit`). When a commit
+touches a file the ability audit scans (`src/sim/`, `src/data/abilities.ts`/`items.ts`,
+`rts.ts`, `mapViewer.ts`) and you have the unpacked data, it regenerates
+`docs/abilities-audit.md` and adds it to the same commit. Without the install it does nothing —
+a maintainer's next commit catches the table up. `HUSKY=0 git commit …` skips it.
+
 ### Which checks need a Warcraft III install
 
 | Check | Needs the install? |

@@ -6,6 +6,7 @@
   "type": "module",
   "packageManager": "pnpm@10.33.1",
   "scripts": {
+    "prepare": "husky",
     "dev": "vite",
     "dev:log": "node tools/dev-log.mjs",
     "build": "node tools/import-cycle-test.mjs && tsc --noEmit && vite build",
@@ -60,6 +61,7 @@
     "events": "^3.3.0",
     "fengari": "0.1.5",
     "gl-matrix": "^3.4.3",
+    "husky": "^9.1.7",
     "mdx-m3-viewer": "^5.12.0",
     "pako": "^3.0.1",
     "railway": "3.11.0",
