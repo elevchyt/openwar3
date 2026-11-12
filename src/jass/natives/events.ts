@@ -318,7 +318,12 @@ export function registerEventNatives(rt: Runtime): void {
     l.handleId = c.rt.handles.alloc(l);
     return jHandle(l.handleId, "location");
   });
-  def(rt, "GetOrderTarget", (c) => resp(c, "OrderTargetUnit")); // widget = the ordered unit target
+  // widget = whatever the order was aimed at: the unit, else the item.
+  def(rt, "GetOrderTarget", (c) => {
+    const u = resp(c, "OrderTargetUnit");
+    return u.k === "handle" ? u : resp(c, "OrderTargetItem");
+  });
+  def(rt, "GetOrderTargetItem", (c) => resp(c, "OrderTargetItem"));
   def(rt, "GetOrderTargetUnit", (c) => resp(c, "OrderTargetUnit"));
   def(rt, "GetOrderedUnit", (c) => resp(c, "OrderedUnit"));
 

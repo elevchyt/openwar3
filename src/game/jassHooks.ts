@@ -370,6 +370,7 @@ export function authorityHooks(authority: {
     y: number,
     targetId: number,
   ): boolean;
+  issueNeutralOrder(player: number, shopId: number, orderId: number, kind: "immediate" | "point" | "target"): boolean;
   /** `entangleinstant` — see the interception in `issueUnitOrder` below. `mineHandle` is a
    *  script-side unit handle (so it goes through MINE_ID_BASE), 0 for the no-target form. */
   entangleInstant(unitId: number, mineHandle: number): boolean;
@@ -397,6 +398,7 @@ export function authorityHooks(authority: {
       order === "entangleinstant" || order === "autoentangleinstant"
         ? authority.entangleInstant(id, targetId)
         : authority.issueUnitOrder(id, orderId, order, kind, x, y, targetId),
+    issueNeutralOrder: (player, shopId, orderId, kind) => authority.issueNeutralOrder(player, shopId, orderId, kind),
     getUnitCurrentOrder: (id) => authority.currentOrderId(id),
     // CreateUnit — the sim unit exists the instant this returns, because the native is
     // SYNCHRONOUS and the next JASS statement may order or configure it. Its BODY is queued for

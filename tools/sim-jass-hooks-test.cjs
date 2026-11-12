@@ -253,11 +253,12 @@ const ah = authorityHooks({
   foodCapCeilingOf: (p) => authority.foodCapCeilingOf(p),
   currentOrderId: (id) => authority.currentOrderId(id),
   issueUnitOrder: (...a) => authority.issueUnitOrder(...a),
+  issueNeutralOrder: (...a) => authority.issueNeutralOrder(...a),
   createScriptUnit: (...a) => { created.push(a); return 909; },
   restoreScriptUnit: (...a) => { restored.push(a); return 910; },
 });
 check("authorityHooks holds the resource, order and create natives", Object.keys(ah).sort(),
-  ["createUnit", "getPlayerState", "getUnitCurrentOrder", "issueUnitOrder", "restoreUnit", "setPlayerState"]);
+  ["createUnit", "getPlayerState", "getUnitCurrentOrder", "issueNeutralOrder", "issueUnitOrder", "restoreUnit", "setPlayerState"]);
 
 // RestoreUnit is a CREATE — the game cache only says what to make (docs/campaigns.md) — so it
 // is here beside CreateUnit rather than in the pure-world half, and it is synchronous for the

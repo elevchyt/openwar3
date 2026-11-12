@@ -3995,7 +3995,7 @@ export class SimWorld {
   private heroKillSeq = 0;
   private damageEvents: Array<{ target: EventUnitInfo; source: EventUnitInfo | null; amount: number }> = [];
   private attackEvents: Array<{ attacked: EventUnitInfo; attacker: EventUnitInfo }> = [];
-  private orderEvents: Array<{ unit: EventUnitInfo; orderId: number; kind: "immediate" | "point" | "target"; x: number; y: number; target: EventUnitInfo | null }> = [];
+  private orderEvents: Array<{ unit: EventUnitInfo; orderId: number; kind: "immediate" | "point" | "target"; x: number; y: number; target: EventUnitInfo | null; item: { id: number; typeId: string; charges: number; x: number; y: number } | null }> = [];
   private spellEvents: SpellEvent[] = [];
   private constructEvents: ConstructEvent[] = [];
   private trainEvents: TrainEvent[] = [];
@@ -10556,16 +10556,21 @@ export class SimWorld {
    *  (trigger IssueXOrder + the player command router), never the internal-AI issue* calls,
    *  so auto-acquisition retargeting stays silent, matching WC3. `kind` picks the event
    *  family; `target` is the ordered unit (target orders) else null. */
-  noteOrder(unitId: number, orderId: number, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number): void {
+  noteOrder(unitId: number, orderId: number, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number, itemId = 0): void {
     if (!this.captureOrders) return;
     const u = this.units.get(unitId);
     if (!u) return;
     const t = targetId ? this.units.get(targetId) : undefined;
-    this.orderEvents.push({ unit: eventInfo(u), orderId, kind, x, y, target: t ? eventInfo(t) : null });
+    // An order aimed at an ITEM on the ground (a right-click to pick it up, an attack on it):
+    // `GetOrderTargetItem()`. Snapshotted now — the item may be in a pack by the time the event
+    // is pumped.
+    const it = itemId ? this.items.get(itemId) : undefined;
+    const item = it ? { id: it.id, typeId: it.itemId, charges: it.charges, x: it.x, y: it.y } : null;
+    this.orderEvents.push({ unit: eventInfo(u), orderId, kind, x, y, target: t ? eventInfo(t) : null, item });
   }
   /** Issued-order events since the last drain — only when a script registered one
    *  (`captureOrders`). Same shape/lifecycle as the death/damage/attack drains. */
-  drainOrderEvents(): Array<{ unit: EventUnitInfo; orderId: number; kind: "immediate" | "point" | "target"; x: number; y: number; target: EventUnitInfo | null }> {
+  drainOrderEvents(): Array<{ unit: EventUnitInfo; orderId: number; kind: "immediate" | "point" | "target"; x: number; y: number; target: EventUnitInfo | null; item: { id: number; typeId: string; charges: number; x: number; y: number } | null }> {
     if (!this.orderEvents.length) return this.orderEvents;
     const out = this.orderEvents;
     this.orderEvents = [];

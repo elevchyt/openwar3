@@ -691,6 +691,9 @@ export interface EngineHooks {
    *  by name (the engine's numeric ids for those aren't in any data file), so the bridge
    *  matches it against the unit's abilities' own order strings. */
   issueUnitOrder?(unitId: number, orderId: number, order: string, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number): boolean;
+  /** IssueNeutral*OrderById — an order to a neutral building on `player`'s behalf (a purchase:
+   *  `orderId` is the ware's rawcode). True when the sale went through. */
+  issueNeutralOrder?(player: number, shopId: number, orderId: number, kind: "immediate" | "point" | "target"): boolean;
   /** GetUnitCurrentOrder — the unit's active sim order as a generic order id (0 = none). */
   getUnitCurrentOrder?(unitId: number): number;
   // --- unit groups (7.16): enumeration + the classification a group filter asks about ---

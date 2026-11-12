@@ -339,6 +339,21 @@ export function registerWorldNatives(rt: Runtime): void {
   def(rt, "IssueTargetOrder", (c, a) => byName(c, a[0], a[1], "target", 0, 0, a[2]));
   def(rt, "IssueTargetOrderById", (c, a) => byId(c, a[0], a[1], "target", 0, 0, a[2]));
 
+  // IssueNeutral*Order(forWhichPlayer, neutralStructure, order, …): an order to a building that
+  // is not the player's, on the player's behalf — a purchase (Authority.issueNeutralOrder).
+  // The by-NAME form takes a unit's or item's name-as-order, which is `UnitId`'s vocabulary
+  // rather than `OrderId`'s; nothing in the corpus uses it and it answers false.
+  const neutral = (c: NativeCtx, a: JassValue[], kind: "immediate" | "point" | "target"): JassValue => {
+    const p = c.rt.data<JassPlayer>(a[0]);
+    const shop = unit(c, a[1]);
+    if (!p || !shop || shop.simId < 0) return jBool(false);
+    return jBool(c.rt.hooks?.issueNeutralOrder?.(p.index, shop.simId, asInt(a[2]), kind) ?? false);
+  };
+  def(rt, "IssueNeutralImmediateOrderById", (c, a) => neutral(c, a, "immediate"));
+  def(rt, "IssueNeutralPointOrderById", (c, a) => neutral(c, a, "point"));
+  def(rt, "IssueNeutralTargetOrderById", (c, a) => neutral(c, a, "target"));
+  for (const name of ["IssueNeutralImmediateOrder", "IssueNeutralPointOrder", "IssueNeutralTargetOrder"]) def(rt, name, () => jBool(false));
+
   // Order id ↔ string vocabulary (OrderId/String2OrderId → int, OrderId2String → string).
   def(rt, "OrderId", (_c, a) => jInt(orderIdOf(orderStr(a[0]))));
   def(rt, "String2OrderId", (_c, a) => jInt(orderIdOf(orderStr(a[0]))));

@@ -2,7 +2,8 @@ import { isOffField, type SimWorld, type SimUnit, type BuildJob, type QueuedOrde
 import type { UnitRegistry } from "../data/units";
 import type { AbilityRegistry } from "../data/abilities";
 import { isHarvestCode } from "../data/races";
-import { ORDER_IDS, orderIdToString } from "../jass/orders";
+import { itemUseSlot, ORDER_IDS, orderIdToString, orderStringToId, SPECIAL_ORDERS } from "../jass/orders";
+import { intToRawcode } from "../jass/lexer";
 import type { TechRegistry } from "../data/techtree";
 import type { UpgradeRegistry } from "../data/upgrades";
 import type { Command } from "./commands";
@@ -30,6 +31,10 @@ import { engineFoodCeiling, gameNum, heroReviveCost, type ReviveMode } from "../
  *  its Footman still keeps `buildTime` 20, yet clicking it in the real game produces a Footman
  *  on the spot. */
 const SHOP_HIRE_TIME = 0;
+
+/** The smallest integer that can be a four-character rawcode ('0000'); every engine order id
+ *  (0xD0000-odd) is far below it, so the two ranges cannot be confused. */
+const RAWCODE_MIN = 0x30303030;
 
 export class Authority {
   /**
@@ -239,6 +244,23 @@ export class Authority {
    *  re-derives it (seeded PRNG in jass/runtime.ts, game-time timers in interpreter.ts). */
   issueUnitOrder(unitId: number, orderId: number, order: string, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number): boolean {
     const s = order || orderIdToString(orderId);
+    // An order with no string at all is one of two things. 852008–852013 USE the item in
+    // inventory slot 0–5 (jass/orders.ts SPECIAL_ORDERS) — the only spelling a script has for
+    // "use whatever is in that slot". And an id up in rawcode range IS an object id: ordering a
+    // Barracks to 'hfoo' trains a Footman, a hall to 'Rhme' researches, a shop to an item sells
+    // it (blizzard.j's own String2OrderIdBJ falls back on `UnitId` for this reason).
+    if (!s) {
+      const slot = itemUseSlot(orderId);
+      if (slot >= 0) {
+        const ok = this.sim.useItem(unitId, slot, kind === "target" ? targetId : 0, x, y);
+        if (ok) this.sim.noteOrder(unitId, orderId, kind, x, y, targetId);
+        return ok;
+      }
+      if (kind === "immediate" && orderId >= RAWCODE_MIN) {
+        const u = this.sim.units.get(unitId);
+        return !!u && this.objectOrder(u.owner, unitId, intToRawcode(orderId));
+      }
+    }
     // A cargo order first, BEFORE castOrder: the carrier's own Load/Unload are abilities with
     // exactly these order strings (Slo3/Sdro), so a ship told to "load" would otherwise be
     // asked to cast a spell it has no handler for and the order would die there.
@@ -261,10 +283,17 @@ export class Authority {
       // artillery slot does not have it: the call fails, as IssuePointOrder does in the game.
       else if (s === "attackground") ok = this.sim.issueAttackGround(unitId, x, y);
       else if (s === "patrol") ok = this.sim.issuePatrol(unitId, x, y);
+      // An ABILITY's order the unit has no ability for is REFUSED, as the game refuses it —
+      // `IssuePointOrderById(u, 852089, x, y)` answers false for a unit with no Blizzard. It
+      // used to fall through to a move, which is how a script that drives its heroes by spell
+      // order (DotA's AI: "cast, and if that fails do the next thing") got heroes that walked
+      // at whatever they meant to cast on and never did anything else.
+      else if (this.isForeignAbilityOrder(s, orderId)) ok = false;
       else ok = this.sim.issueMove(unitId, x, y); // move / smart / unknown-point → move
     } else if (kind === "target") {
       const u = this.sim.units.get(unitId);
       const t = this.sim.units.get(targetId);
+      if (s !== "attack" && this.isForeignAbilityOrder(s, orderId)) return false; // see above
       // `ordered`: a trigger order is as deliberate as a player's click — the unit commits to
       // this target and won't wander off onto whatever it passes (issue #83). And `solo`: a
       // trigger names ONE unit (`IssueTargetOrder(u, "attack", t)`), so it is the same "you,
@@ -288,6 +317,54 @@ export class Authority {
     }
     if (ok) this.sim.noteOrder(unitId, orderId, kind, x, y, targetId);
     return ok;
+  }
+
+  /**
+   * `IssueNeutralImmediateOrderById(player, shop, id)` and its point/target siblings: an order
+   * given to a NEUTRAL building on a player's behalf — which is to say a purchase, since buying
+   * is the only thing a player can ask of a unit that is not theirs. It is how a script shops
+   * for a computer player (DotA's AI buys every item this way: the id is the ware's rawcode),
+   * and it answers whether the sale went through, which such a script loops on.
+   *
+   * Through `execute`, as the buyer: the shelf, the price, the patron at the door and "does
+   * this shop serve you at all" are the same judgement a click gets. The other kinds answer
+   * false — a shop's point and target orders are the Goblin Laboratory's spells, which no
+   * script in the corpus reaches for.
+   */
+  issueNeutralOrder(player: number, shopId: number, orderId: number, kind: "immediate" | "point" | "target"): boolean {
+    if (kind !== "immediate" || orderId < RAWCODE_MIN) return false;
+    return this.objectOrder(player, shopId, intToRawcode(orderId));
+  }
+
+  /** An order whose id is an OBJECT's rawcode, given to `unitId` for `player`: train or hire
+   *  the unit type, research the upgrade, else sell the item. */
+  private objectOrder(player: number, unitId: number, code: string): boolean {
+    // `dispatch`, not `execute`: the gates are wanted, the bookkeeping is not — a script's
+    // purchase is an effect of the authoritative sim, not a command anybody sent (see
+    // issueUnitOrder), so it is neither an action for the APM meter nor an applied input.
+    if (this.registry.get(code)) return this.dispatch(player, { c: "train", buildingId: unitId, unitId: code });
+    if (this.upgrades.get(code)) return this.dispatch(player, { c: "research", buildingId: unitId, upgradeId: code });
+    return this.dispatch(player, { c: "buyitem", shopId: unitId, itemId: code });
+  }
+
+  /** Every ability's order string (`Order`/`Orderon`/`Orderoff`) in the running data — what
+   *  makes an order "an ability's" rather than one of the engine's own. Built on first use;
+   *  a map's object data is in the registry before any script runs. */
+  private abilityOrders: Set<string> | null = null;
+  /** Is `order` some ability's order — one this unit was evidently not found to have (the
+   *  caller asks only after `castOrder` declined)? The gathering orders are left out: a
+   *  resource is not a cast target and "harvest" has always gone to the generic handling. */
+  private isForeignAbilityOrder(order: string, orderId: number): boolean {
+    if (!order) return orderId !== 0 && orderId < RAWCODE_MIN; // a number that names no order
+    if (ORDER_IDS[order] !== undefined) return false;
+    if (!this.abilityOrders) {
+      this.abilityOrders = new Set();
+      for (const def of this.abilities.all()) {
+        if (isHarvestCode(def.code)) continue;
+        for (const o of [def.order, def.orderOn, def.orderOff]) if (o) this.abilityOrders.add(o);
+      }
+    }
+    return this.abilityOrders.has(order);
   }
 
   /** How many of `typeId` a player owns or has in production. This picks the REQUIREMENT
@@ -617,10 +694,22 @@ export class Authority {
     return null; // no such ability on this unit — not an ability order we can serve
   }
 
+  /** A player's CAST is an issued order like any other — the ability's own (`OrderId("blizzard")`),
+   *  of the kind its targeting says. Scripts that veto or react to a cast before it happens
+   *  listen for exactly this (`GetIssuedOrderId() == OrderId("defend")`). */
+  private noteCastOrder(unitId: number, abilityId: string, targetId: number, x: number, y: number): void {
+    const def = this.abilities.get(abilityId);
+    if (!def?.order) return;
+    const kind = def.target === "unit" && targetId ? "target" : def.target === "point" || (def.target === "unit" && !targetId) ? "point" : "immediate";
+    this.sim.noteOrder(unitId, orderStringToId(def.order), kind, x, y, kind === "target" ? targetId : 0);
+  }
+
   /** GetUnitCurrentOrder — the unit's active sim order as a generic order id (0 = none). */
   currentOrderId(unitId: number): number {
     const u = this.sim.units.get(unitId);
     if (!u) return 0;
+    // A stunned or paused unit reports 851973, whatever it was doing (SPECIAL_ORDERS.stunned).
+    if (u.stunned || u.paused) return SPECIAL_ORDERS.stunned;
     switch (u.order) {
       case "move":
       case "follow":
@@ -634,8 +723,15 @@ export class Authority {
         return ORDER_IDS.attackground;
       case "hold":
         return ORDER_IDS.holdposition;
+      case "cast": {
+        // A cast in progress reports the ABILITY's order — what `GetUnitCurrentOrder(u) ==
+        // OrderId("blizzard")` and its literal twin (== 852089) ask, the standing test for "is
+        // it still channelling".
+        const def = u.pendingCast ? this.abilities.get(u.pendingCast.abilityId) : undefined;
+        return def?.order ? orderStringToId(def.order) : 0;
+      }
       default:
-        return 0; // idle / harvest / cast / repair / getitem / return → no generic id
+        return 0; // idle / harvest / repair / getitem / return → no generic id
     }
   }
 
@@ -692,6 +788,7 @@ export class Authority {
         if (cmd.queued) return this.applyOrder(player, cmd.unitId, { kind: "cast", code: cmd.code, targetId: cmd.targetId, x: cmd.x, y: cmd.y }, true);
         else {
           const ok = this.sim.issueCast(cmd.unitId, cmd.code, cmd.targetId, cmd.x, cmd.y);
+          if (ok) this.noteCastOrder(cmd.unitId, cmd.code, cmd.targetId, cmd.x, cmd.y);
           // An unqueued cast REPLACES what the unit was told to do next, exactly as an unqueued
           // move does — but only when it actually became the unit's order. That test is what
           // keeps an immediate ability out of it: Avatar and Uproot never touch `order`, and a
@@ -712,10 +809,22 @@ export class Authority {
         // the battery, the alliance and the ability's own `targs1` (which says `organic`, so a
         // Mortar Team gets nothing from one).
         return this.ownedBy(player, cmd.unitId) && this.sim.issueDrink(cmd.unitId, cmd.wellId);
-      case "getitem":
-        return this.ownedBy(player, cmd.unitId) && this.sim.issueGetItem(cmd.unitId, cmd.itemId);
-      case "useitem":
-        return this.ownedBy(player, cmd.unitId) && this.sim.useItem(cmd.unitId, cmd.slot, cmd.targetId, cmd.x, cmd.y);
+      case "getitem": {
+        // A right-click on an item is `smart` aimed at it (GetOrderTargetItem).
+        const ok = this.ownedBy(player, cmd.unitId) && this.sim.issueGetItem(cmd.unitId, cmd.itemId);
+        if (ok) this.sim.noteOrder(cmd.unitId, ORDER_IDS.smart, "target", 0, 0, 0, cmd.itemId);
+        return ok;
+      }
+      case "useitem": {
+        const ok = this.ownedBy(player, cmd.unitId) && this.sim.useItem(cmd.unitId, cmd.slot, cmd.targetId, cmd.x, cmd.y);
+        // Using an item is an ORDER, and it is the slot's: 852008–852013 (SPECIAL_ORDERS). A map
+        // that wants to know an item is being used before its effect lands has only this to go
+        // on — DotA compares GetIssuedOrderId against all six.
+        if (ok && cmd.slot >= 0 && cmd.slot < 6) {
+          this.sim.noteOrder(cmd.unitId, SPECIAL_ORDERS.itemUse0 + cmd.slot, cmd.targetId ? "target" : cmd.x || cmd.y ? "point" : "immediate", cmd.x, cmd.y, cmd.targetId);
+        }
+        return ok;
+      }
       case "dropitem":
         if (!this.ownedBy(player, cmd.unitId)) return false;
         this.sim.dropItem(cmd.unitId, cmd.slot, cmd.x, cmd.y);

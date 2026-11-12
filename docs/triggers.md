@@ -527,8 +527,14 @@ Built:
 - **`src/jass/orders.ts`** — the order string↔id vocabulary (`ORDER_IDS`): the generic movement/attack orders keyed to
   the real engine constants (the 0x000D0000 block — `move` 851986, `attack` 851983, `smart` 851971, `stop` 851972,
   `patrol` 851990, `holdposition` 851993), so a GUI comparison (`GetIssuedOrderId() == OrderId("attack")`) *and* a
-  hand-coded literal both match. Ability-based orders (a spell's "Order String") aren't in the table — `OrderId` returns
-  0 for anything unknown, exactly like the engine.
+  hand-coded literal both match. **Ability orders carry the engine's ids too** (`src/jass/orderIds.ts`, generated from
+  WurstStdlib2's `Orders.wurst`): `OrderId("blizzard")` is 852089 everywhere, and a hand-written or optimised script
+  writes the NUMBER — DotA v6.77b AI issues orders by raw id over a thousand times and gates its AI on comparisons like
+  `GetUnitCurrentOrder(u) < 852000`. Only a string the engine never numbered is minted one (above the engine's block).
+  The inventory's orders have NO string (`SPECIAL_ORDERS`: 852008–852013 use slot 0–5, 852002–852007 drag to it), an
+  id in rawcode range is an OBJECT (`IssueImmediateOrderById(barracks, 'hfoo')` trains; `IssueNeutralImmediateOrderById(
+  player, shop, 'h06N')` buys on that player's behalf — `Authority.issueNeutralOrder`), and an ability order the unit
+  has no ability for is REFUSED rather than degraded to a move. `OrderId` returns 0 for a string that is no order.
 - **`src/jass/natives/world.ts`** — `Issue{Immediate,Point,Target}Order` (+ `ById` / `PointLoc` variants), routed through
   the bridge; `OrderId`/`String2OrderId`/`OrderId2String`/`GetUnitCurrentOrder`.
 - **`src/game/rts.ts` `issueUnitOrder`** — maps a generic order id + target kind to the sim's existing `issue*` commands
@@ -695,9 +701,9 @@ spell → order it cast → react when it goes off*. Built:
   **not** in AbilityData.slk), so `AbilityDef` now carries it and the bridge passes the order
   **string** alongside the id: `RtsController.castOrder` matches it against the unit's own
   abilities and calls `SimWorld.issueCast` (an autocast toggle flips autocast instead). The engine's
-  numeric ids for ability orders exist in no data file, so `OrderId` **mints** a stable id per
-  order string (0x000E0000 block) — self-consistent, which is all GUI code needs
-  (`GetIssuedOrderId() == OrderId("holybolt")`), and the cast itself never depends on the number.
+  numeric ids for ability orders exist in no data file; they are `src/jass/orderIds.ts` (see 7.14
+  above), and a string that table does not know is minted a stable id in the 0x000E0000 block. The
+  cast itself never depends on the number — but a script that writes the number does.
 - **The events** — the sim records each one only when the script listens (`captureSpells` /
   `captureConstruct` / `captureTrain` / `captureHeroEvents`, derived in `syncEventCaptures`), and
   `pumpMapScript` drains them into the matching `Interpreter.pump*`:

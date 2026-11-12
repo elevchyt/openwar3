@@ -52,6 +52,8 @@ export interface OrderEvent {
   x: number;
   y: number;
   target: UnitSnapshot | null;
+  /** The ITEM the order was aimed at (`GetOrderTargetItem`), when it was aimed at one. */
+  item?: { id: number; typeId: string; charges: number; x: number; y: number } | null;
 }
 /** One spell event (7.17): the caster, the ability rawcode, which phase of the cast,
  *  and what it was aimed at. Mirrors SimWorld's SpellEvent (the sim raises it). */
@@ -1527,6 +1529,7 @@ export class Interpreter {
         ["OrderPointX", jReal(e.x)],
         ["OrderPointY", jReal(e.y)],
         ["OrderTargetUnit", target],
+        ["OrderTargetItem", e.item ? this.rt.itemForSim(e.item) : JNULL],
       ]);
       const playerEvt = e.kind === "immediate" ? EVENT_PLAYER_UNIT_ISSUED_ORDER : e.kind === "point" ? EVENT_PLAYER_UNIT_ISSUED_POINT_ORDER : EVENT_PLAYER_UNIT_ISSUED_TARGET_ORDER;
       const unitEvt = e.kind === "immediate" ? EVENT_UNIT_ISSUED_ORDER : e.kind === "point" ? EVENT_UNIT_ISSUED_POINT_ORDER : EVENT_UNIT_ISSUED_TARGET_ORDER;
