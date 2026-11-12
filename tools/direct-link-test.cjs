@@ -154,17 +154,31 @@ async function room(peersOf = { 1: [2, 3], 2: [1, 3], 3: [1, 2] }) {
   {
     const { relay, ch, got } = await room();
     // A client firing commands from the first instant, through the whole handshake and past it.
-    for (let i = 0; i < 120; i++) {
-      ch[2].send({ k: "cmd", n: i }, 1);
+    let n = 0;
+    for (; n < 120; n++) {
+      ch[2].send({ k: "cmd", n }, 1);
+      await sleep(1);
+    }
+    // …and on past the switch by as much again. The 120 above race the handshake across the fake
+    // relay's 30 ms hops on the wall clock, and on a busy machine the cutover can land on the
+    // 60th of them exactly — which is what made "most of the traffic took it" (`> 60`) fail one
+    // run in three. Waiting for the link and then sending as many again makes "most" a fact
+    // about the link rather than about the scheduler.
+    for (let spin = 0; spin < 200 && !ch[2].isDirect(1); spin++) {
+      ch[2].send({ k: "cmd", n: n++ }, 1);
+      await sleep(1);
+    }
+    for (const end = n + 120; n < end; n++) {
+      ch[2].send({ k: "cmd", n }, 1);
       await sleep(1);
     }
     await sleep(RELAY_MS * 3);
     const seq = got[1].filter((m) => m.from === 2 && m.data.k === "cmd").map((m) => m.data.n);
-    check("every command a client sent reaches the host exactly once", seq.length === 120, seq.length);
+    check("every command a client sent reaches the host exactly once", seq.length === n, [seq.length, n]);
     check("…in the order it was sent, across the switch from relay to direct", seq.every((n, i) => n === i), seq.slice(0, 40));
     check("the client's link to the host is direct once it opens", ch[2].isDirect(1));
     check("…and so is the host's to it", ch[1].isDirect(2));
-    check("…and most of the traffic took it", ch[2].counts.directOut > 60, ch[2].counts);
+    check("…and most of the traffic took it", ch[2].counts.directOut > ch[2].counts.relayOut, ch[2].counts);
     check("no client opens a link to another client — the star stays a star", !ch[2].isDirect(3) && !ch[3].isDirect(2));
     check("the rtc signaling never reaches the match", !got[1].some((m) => m.data.k === "rtc") && !got[2].some((m) => m.data.k === "rtc"));
 

@@ -393,7 +393,10 @@ export class VisionMap {
    *  `radius <= 0` degrades to the single cell at (wx, wy). */
   bestStateAt(wx: number, wy: number, radius: number): FogState {
     if (this.revealAll) return FogState.Visible;
-    if (radius <= 0) return this.stateAt(wx, wy);
+    // A missing or NaN radius is a POINT, not a cue to answer Unexplored: `undefined <= 0` is
+    // false, every span below then comes out NaN, the loops never run, and a building standing
+    // beside the scout read as never seen (what tools/sim-minimap-test.cjs tripped on).
+    if (!(radius > 0)) return this.stateAt(wx, wy);
     // Spans computed inline rather than through `cellSpan`, which hands back a tuple. This is
     // the hottest call in the renderer's fog pass — asked for every doodad on the map, and
     // nine in ten of them are trees, which is what carries a radius (mapViewer.fogWidgets) —

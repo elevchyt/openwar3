@@ -30,7 +30,9 @@ function check(what, got, want) {
 const noAlliances = { sharesVisionWith: () => false, coAllied: () => false };
 /** A unit with every flag hiddenFor() reads, defaulted to "plainly visible". */
 const unit = (o) => ({
-  id: 0, owner: 0, team: 0, x: 0, y: 0, hp: 100, sight: 1400,
+  // `radius` is SimUnit's collision radius (0 = none). Every real unit carries one, and a
+  // building's fog test reads it (`Viewpoint.fogHides` → `VisionMap.bestStateAt`).
+  id: 0, owner: 0, team: 0, x: 0, y: 0, hp: 100, sight: 1400, radius: 0,
   inMine: false, insideBuild: false, inBurrow: false, devouredBy: 0, vanished: false, hidden: false,
   neutralPassive: false, invisible: false, cloaked: false, isCreep: false, level: 0,
   guardX: 0, guardY: 0, flying: false, building: null, ...o,
