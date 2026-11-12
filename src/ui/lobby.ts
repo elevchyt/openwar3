@@ -217,4 +217,13 @@ export interface MeleeConfig {
    * campaign-only too, but reading THAT as "this is a campaign" is reading a coincidence.
    */
   campaign?: boolean;
+  /**
+   * This match is a REPLAY being watched (issue #158, game/replay.ts): the config is the one the
+   * recorded match was set up with, and every input comes out of this file instead of from a
+   * person or a computer. The machine watches as an observer whatever seat the recorder held.
+   */
+  replay?: import("../game/replay").Replay;
+  /** A replay played again to go BACK in time: the step to race to, and what the watcher had
+   *  set (MapViewerScene.onReplayRewind). */
+  replayResume?: { at: number } & import("../game/replay").ReplayView;
 }

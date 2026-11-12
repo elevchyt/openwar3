@@ -296,7 +296,20 @@ interface JassThread {
   result: JassValue; // its return value, if it ran to completion
 }
 
+/** One script input, as `Interpreter.inputTap` reports it. */
+export type ScriptInput =
+  | { k: "dlg"; p: number; button: number; dialog: number }
+  | { k: "frame"; p: number; frame: number; ev: number }
+  | { k: "pev"; p: number; ev: number };
+
 export class Interpreter {
+  /**
+   * What the map's script hears from a PLAYER rather than from the match — a dialog button, a
+   * frame event, a player event (leaving, ESC through a cinematic). The replay recorder's tap
+   * (game/replay.ts): these are inputs, and a replay hands them back through the same methods.
+   */
+  inputTap: ((e: ScriptInput) => void) | null = null;
+
   private depth = 0;
   /** This VM runs a computer player's `.ai` script (src/ai/scriptAi.ts) rather than a map: it
    *  owns `common.ai`'s `Sleep` and `StartThread` as thread natives (AI_THREAD_NATIVES). */
@@ -1863,6 +1876,7 @@ export class Interpreter {
    *  the script's: MeleeVictoryDialogBJ registers a trigger on its quit button and never adds
    *  an action to it. */
   fireDialogClick(buttonHandleId: number, dialogHandleId: number, player: number): void {
+    this.inputTap?.({ k: "dlg", p: player, button: buttonHandleId, dialog: dialogHandleId });
     const responses = new Map<string, JassValue>([
       ["ClickedButton", jHandle(buttonHandleId, "button")],
       ["ClickedDialog", jHandle(dialogHandleId, "dialog")],
@@ -1879,6 +1893,7 @@ export class Interpreter {
    *  `GetTriggerPlayer` in scope. Raised by the drawing, which owns the mouse — as a dialog
    *  button's click is (`fireDialogClick`). */
   fireFrameEvent(frameHandleId: number, eventIndex: number, player: number): void {
+    this.inputTap?.({ k: "frame", p: player, frame: frameHandleId, ev: eventIndex });
     const responses = new Map<string, JassValue>([
       ["TriggerFrame", jHandle(frameHandleId, "framehandle")],
       ["TriggerFrameEvent", this.rt.enumHandle("FrameEventType", eventIndex)],
@@ -1910,6 +1925,7 @@ export class Interpreter {
    * has to know about the BJ — matching the registration's player and event enum is enough.
    */
   firePlayerEvent(player: number, eventIndex: number): void {
+    this.inputTap?.({ k: "pev", p: player, ev: eventIndex });
     const responses = new Map<string, JassValue>([["TriggerPlayer", this.rt.playerHandle(player)]]);
     this.dispatchToRegs(responses, (reg) => this.matchesPlayerEvent(reg, player, eventIndex));
   }

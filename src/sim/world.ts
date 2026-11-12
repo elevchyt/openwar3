@@ -4259,7 +4259,7 @@ export class SimWorld {
     private upgradeReg?: UpgradeRegistry,
   ) {
     this.seed = seed;
-    this.rng = lcg(seed);
+    this.rng = this.countedRng(seed);
     this.tech =
       techReg && upgradeReg
         ? new TechState(techReg, upgradeReg, () =>
@@ -20601,7 +20601,22 @@ export class SimWorld {
    */
   reseed(seed: number): void {
     this.seed = seed;
-    this.rng = lcg(seed);
+    this.rng = this.countedRng(seed);
+  }
+
+  /** How many numbers the match's stream has handed out. Part of a replay's state check
+   *  (game/replayHash.ts): the stream's own position is hidden inside its closure, and two
+   *  worlds that drew a different number of rolls have already parted, whatever their units
+   *  look like yet. */
+  rngDraws = 0;
+
+  private countedRng(seed: number): () => number {
+    const next = lcg(seed);
+    this.rngDraws = 0;
+    return () => {
+      this.rngDraws++;
+      return next();
+    };
   }
 
   /** Draw from the match's seeded stream. For the few rolls that live just OUTSIDE the sim

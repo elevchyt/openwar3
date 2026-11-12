@@ -1,4 +1,6 @@
 import { loadProfile } from "../vfs/loader";
+import { decodeReplay, type Replay } from "../game/replay";
+import { replaySink } from "../game/replaySink";
 import { toGameSpeed } from "../data/gameSpeed";
 import { DEFAULT_PROFILE } from "../vfs/profiles";
 import type { InstallFiles } from "../assets/opfs";
@@ -73,6 +75,8 @@ export interface DevBootHooks {
   /** Show the main menu over its 3D scene — skipped when a map was asked for. */
   showMenu(load: GateLoad): void;
   startGame(file: File, info: MapInfo, config: MeleeConfig, link?: MatchLinkSetup): Promise<void>;
+  /** Watch a replay (`?replay=`, issue #158). */
+  watchReplay(replay: Replay): Promise<void>;
   /** Start a CAMPAIGN chapter by the name in its map path (`?chapter=`, see devBoot).
    *  Separate from `startGame` because a chapter is a different start: its map comes out of
    *  the ARCHIVES rather than the install's Maps\ folder, and it runs on the campaign's own
@@ -266,6 +270,22 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
         .slice(0, MAX_DEV_MAPS)
     : pool.slice(0, Math.max(0, Math.min(MAX_DEV_MAPS, asCount || 0)));
 
+  // `?replay=LastReplay.o3r` (or `?replay` for the last one) — WATCH a replay out of the replay
+  // folder (issue #158). Read BEFORE the mount, because the map it was recorded on has to be one
+  // of the maps mounted, and the dev boot mounts only the maps it is asked for.
+  const wantReplay = params.get("replay");
+  const replayName = wantReplay === null ? null : wantReplay === "" || wantReplay === "1" ? "LastReplay.o3r" : wantReplay;
+  let replay: Replay | null = null;
+  if (replayName) {
+    const bytes = await replaySink()?.read(replayName);
+    if (!bytes) throw new Error(`no replay named ${replayName} in .replays/`);
+    replay = await decodeReplay(bytes);
+    const leaf = (p: string): string => p.split(/[\\/]/).pop()!.toLowerCase();
+    const want = replay.header.map.path;
+    const hit = manifest.maps.find((m) => m === want) ?? manifest.maps.find((m) => leaf(m) === leaf(want));
+    if (hit && hit !== mapPath && !listed.includes(hit)) listed.push(hit);
+  }
+
   const extra = listed.length ? ` + ${listed.length} map(s) for the lobby list` : "";
   const store = manifest.casc ? "the CASC content store" : `${archives.length} archives`;
   log(`fetching ${store}${mapPath ? ` + ${mapPath}` : ""}${extra}…`);
@@ -316,6 +336,12 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
     const info = parseMapInfo(new Uint8Array(await mapFile.arrayBuffer()), path!);
     await hooks.startGame(mapFile, info, devConfig(info));
   };
+
+  if (replay) {
+    log(`watching replay ${replayName}`);
+    await hooks.watchReplay(replay);
+    return;
+  }
 
   // A campaign chapter comes out of the archives we just mounted, so it needs no map file and
   // no manifest entry — only the name of one.

@@ -28,6 +28,7 @@ import { HERO_LEVEL_FX_OVERHANG, HeroLevelFx } from "./heroLevelFx";
 import { MODAL_FX_OVERHANG, ModalButtonFx } from "./modalButtonFx";
 import { anyModalOpen } from "./modal";
 import { ObserverHud, OBS, clock as matchClockText, type ObserverSeat } from "./observerHud";
+import { REPLAY_SPEEDS } from "./replayPanel";
 import { gridCommandKey, gridCommandSlot, gridHotkeys, gridInventoryKey, gridInventorySlot, hotkeyMode, hotkeysOnButtons } from "../data/hotkeys";
 
 /** Which upkeep band a food count falls in: 0 none, 1 low, 2 high — at the bands of this match
@@ -342,6 +343,9 @@ export interface HudDriver {
   isObserver(): boolean;
   /** The observer's Auto Camera (game/autoCamera.ts): whether it is on, and the switch. */
   autoCamera(): boolean;
+  /** WATCHING A REPLAY: the replay panel's controls (issue #158, ui/replayPanel.ts). Null in a
+   *  live match. */
+  replayControls(): import("./replayPanel").ReplayControls | null;
   setAutoCamera(on: boolean): void;
   /** The observer HUD (issue #168, ui/observerHud.ts): every watched seat — its bank, food,
    *  APM, heroes, production, army and upgrades — in seat order. Empty for a player. */
@@ -1996,6 +2000,20 @@ export class GameHud {
       e.preventDefault();
       this.driver.cycleIdleWorker();
       this.refreshSelectionNow();
+      return;
+    }
+    // WATCHING A REPLAY: the game's own replay keys, as `REPLAY_TOOLTIP_*` name them — Pause
+    // pauses, "+" and "-" step the speed (ui/replayPanel.ts). A watcher has no army for "-".
+    const replay = this.driver.replayControls();
+    if (replay && (e.key === "Pause" || e.key === "+" || e.key === "=" || e.key === "-")) {
+      e.preventDefault();
+      const st = replay.state();
+      if (e.key === "Pause") replay.setPaused(!st.paused);
+      else {
+        const i = Math.max(0, REPLAY_SPEEDS.indexOf(st.speed as (typeof REPLAY_SPEEDS)[number]));
+        const next = REPLAY_SPEEDS[Math.max(0, Math.min(REPLAY_SPEEDS.length - 1, i + (e.key === "-" ? -1 : 1)))];
+        replay.setSpeed(next);
+      }
       return;
     }
     // "-" selects the whole army (issue #131). Read off `e.key` rather than `e.code`, so the

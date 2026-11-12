@@ -1836,8 +1836,63 @@ body.hud-widget-skinned .obs-sel-bar .obs-bar-fill.progress { background: var(--
 .obs-sel-job-icon[hidden] { display: none; }
 .obs-sel-job-queue { display: flex; flex-wrap: wrap; gap: 1px; }
 .obs-sel-job-q { width: var(--obs-item); height: var(--obs-item); }
-/* Auto Camera: above the selection, on no panel — the replay panel it belongs to is for
-   replays, which there are none of yet. */
+/* ── The REPLAY PANEL (issue #158, ui/replayPanel.ts) ─────────────────────────────────────
+   A replay's controls, in the observer HUD where Auto Camera stood: one panel above the
+   selection, its width. Sizes in the 0.6-tall UI space, handed in by the HUD (--rp-btn, --rp-gap). */
+.rp {
+  position: absolute;
+  right: var(--obs-e);
+  bottom: calc(var(--obs-e) + var(--obs-sel-h) + var(--obs-gap) * 2 + var(--tt-bg-inset, 3px) * 2);
+  font-family: var(--game-font);
+  font-size: var(--obs-sel-font);
+  color: #fff;
+  z-index: 5;
+  width: var(--obs-sel-w);
+  box-sizing: border-box;
+  padding: var(--obs-bottom-pad) calc(var(--obs-bottom-pad) * 1.5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-gap);
+  pointer-events: auto;
+}
+.rp-row { display: flex; align-items: center; gap: var(--rp-gap); pointer-events: auto; }
+.rp-btn {
+  width: var(--rp-btn);
+  height: var(--rp-btn);
+  flex: none;
+  padding: 0;
+  border: none;
+  background: #000 center / 100% 100% no-repeat;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.8);
+  cursor: inherit;
+}
+.rp-btn:active, .rp-btn.on { filter: brightness(0.75); transform: translate(1px, 1px); }
+/* The seek buttons are the speed icons laid on their side: ◀◀ and ▶▶. */
+.rp-back { transform: rotate(-90deg); }
+.rp-fwd { transform: rotate(90deg); }
+.rp-back:active { transform: rotate(-90deg) translate(-1px, 1px); }
+.rp-fwd:active { transform: rotate(90deg) translate(1px, -1px); }
+.rp-speed { white-space: nowrap; color: rgb(252, 211, 18); text-shadow: 1px 1px 0 #000; }
+.rp-track { position: relative; margin: 0; height: 1.4em; cursor: inherit; pointer-events: auto; }
+.rp-track .obs-bar-fill.progress { transition: none; }
+.rp-track-text { pointer-events: none; }
+.rp-seek-mark {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  margin-left: -1px;
+  background: #fff;
+  box-shadow: 0 0 3px #fff;
+  pointer-events: none;
+}
+.rp-seek-mark[hidden] { display: none; }
+.rp-checks { display: flex; gap: calc(var(--rp-gap) * 3); align-items: center; pointer-events: auto; }
+.rp .hud-autocam.rp-autocam, .rp .hud-autocam.rp-check { position: static; left: auto; top: auto; }
+.rp.diverged .rp-track { box-shadow: 0 0 0 1px #c33; }
+
+/* Auto Camera in a LIVE match: above the selection, on no panel — in a replay it goes into the
+   replay panel instead (.rp-autocam). */
 .hud-autocam.obs-autocam {
   left: auto;
   top: auto;

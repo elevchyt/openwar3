@@ -28,6 +28,7 @@ import type { HudDriver, HudSelection } from "./hud";
 import type { ObserverHero, ObserverIcon, ObserverPlayerView } from "../game/observerView";
 import { OBSERVER_MAX_HEROES } from "../game/observerView";
 import { setGameTip } from "./gameTip";
+import { ReplayPanel } from "./replayPanel";
 import { wc3ToHtml, escapeHtml } from "./wc3Text";
 import { UI_HEIGHT } from "./fdf/layout";
 
@@ -553,11 +554,23 @@ export class ObserverHud {
       icon, lines, belt, beltPool, job, jobIcon, jobFill, jobText, jobQueue, jobPool: new Map(),
       status, statusIcons, statusPool: [],
     };
-    // Auto Camera stands ABOVE the selection, on no panel of its own (the replay panel it
-    // belongs to is for replays, which OpenWar3 does not have yet).
-    this.root.appendChild(adopt.autoCamera);
-    adopt.autoCamera.classList.add("obs-autocam");
+    // A REPLAY gets the replay panel above the selection (issue #158, ui/replayPanel.ts), and
+    // Auto Camera goes into it beside its Fog of War twin, which is where the game's own panel
+    // keeps the pair. A live match has no replay panel, and Auto Camera stands there alone.
+    const replay = driver.replayControls();
+    if (replay) {
+      const s2 = this.root.style;
+      s2.setProperty("--rp-btn", uiPx(0.022));
+      s2.setProperty("--rp-gap", uiPx(0.003));
+      this.replayPanel = new ReplayPanel(this.root, driver, replay, adopt.autoCamera);
+    } else {
+      this.root.appendChild(adopt.autoCamera);
+      adopt.autoCamera.classList.add("obs-autocam");
+    }
   }
+
+  /** The replay panel, when the match being watched is a replay (issue #158). */
+  private replayPanel: ReplayPanel | null = null;
 
   private readonly prodViews: Array<[ProdView, string]>;
   private readonly buttons: HTMLDivElement;
@@ -588,6 +601,7 @@ export class ObserverHud {
 
   /** At the info panel's rate: every reading here moves at the speed of a number, not a frame. */
   frame(dtMs: number): void {
+    this.replayPanel?.refresh();
     this.t += dtMs;
     const time = clock(this.driver.matchSeconds());
     if (this.time.textContent !== time) this.time.textContent = time;

@@ -15,7 +15,12 @@ import { mountSinglePlayerMenu, singlePlayerSides } from "./ui/fdfSinglePlayerMe
 import { mountSkirmish } from "./ui/fdfSkirmish";
 import { mountCampaignScreen, type CampaignScreenState } from "./ui/fdfCampaign";
 import { mountCustomCampaignScreen } from "./ui/fdfCustomCampaign";
-import { mountViewReplayScreen } from "./ui/fdfViewReplay";
+import { mountViewReplayScreen, replayMapPath } from "./ui/fdfViewReplay";
+import { decodeReplay, fnv64, type Replay, type ReplayView } from "./game/replay";
+import { replaySink } from "./game/replaySink";
+
+/** OpenWar3's version, from package.json (vite.config.ts `define`). */
+declare const __OW3_VERSION__: string;
 import { creditsMap, loadCampaigns, type Campaign, type CampaignEntry } from "./data/campaigns";
 import { isRoc, setEdition, setMapDataSet } from "./data/edition";
 import {
@@ -66,7 +71,7 @@ import { readMapBytes } from "./vfs/mapArchive";
 import { LayeredDataSource } from "./vfs/layered";
 import { MpqDataSource } from "./vfs/mpq";
 import { ModelViewerScene, type SequenceInfo } from "./render/modelViewer";
-import { MapViewerScene } from "./render/mapViewer";
+import { MapViewerScene, lastRecordedReplay } from "./render/mapViewer";
 import { matchLinkFrom, type MatchLinkSetup } from "./game/matchLink";
 import { LoadGate } from "./game/loadGate";
 import { MenuScene } from "./render/menuScene";
@@ -575,8 +580,9 @@ function customCampaignScreen(vfs: DataSource): GlueScreenDef {
 function viewReplayScreen(vfs: DataSource): GlueScreenDef {
   return {
     chrome: "BattlenetCustomCreate",
-    mount: () => mountViewReplayScreen(ui, vfs, {
+    mount: () => mountViewReplayScreen(ui, vfs, installMaps, replaySink(), {
       onCancel: () => void glue.goTo(singlePlayerScreen(vfs)),
+      onView: (name) => void watchReplayFile(name),
     }),
   };
 }
@@ -769,6 +775,18 @@ async function restartMatch(difficulty: number): Promise<void> {
   });
 }
 
+/**
+ * Go BACK in a replay (issue #158): play it again from its start and race to step `at`, with
+ * what the watcher had set carried over (MapViewerScene.onReplayRewind). A match only runs
+ * forward, so this is the only way back until the world can be snapshotted mid-match.
+ */
+async function rewindReplay(at: number, view: ReplayView): Promise<void> {
+  const m = lastMatch;
+  if (!m?.config.replay) return;
+  endMatch();
+  await startGame(m.bytes, m.info, { ...m.config, replayResume: { at, ...view } });
+}
+
 /** The match on screen, kept so `RestartGame` can play it again. */
 let lastMatch: { bytes: Uint8Array; info: MapInfo; config: MeleeConfig } | null = null;
 
@@ -899,6 +917,35 @@ function skirmishScreen(vfs: DataSource): { chrome: "SinglePlayerSkirmish"; moun
   };
 }
 
+/**
+ * WATCH a replay (issue #158, game/replay.ts): the match it recorded, on the same map out of
+ * this install, played by its file. The map is found by the install path it was recorded on and,
+ * failing that (an install laid out differently), by its file name; its bytes' hash says whether
+ * it is the SAME map, and a different one is played anyway with a warning — the state checks will
+ * say how far it got.
+ */
+/** View Replay's button: read the file, then watch it (ui/fdfViewReplay.ts). A replay from
+ *  another OpenWar3 asks first, with the game's own "Incompatible Replay!" question. */
+async function watchReplayFile(name: string): Promise<void> {
+  const bytes = await replaySink()?.read(name);
+  if (!bytes) return;
+  const replay = await decodeReplay(bytes);
+  await watchReplay(replay);
+}
+
+async function watchReplay(replay: Replay): Promise<void> {
+  const h = replay.header;
+  const path = replayMapPath(installMaps, h.map.path);
+  const file = path ? installMaps.get(path) : undefined;
+  if (!path || !file) throw new Error(`The map "${h.map.name}" is not in this install.`);
+  const info = await readMapInfo(installMaps, path);
+  if (!info) throw new Error(`The map "${h.map.name}" could not be read.`);
+  const hash = fnv64(new Uint8Array(await file.arrayBuffer()));
+  if (hash !== h.map.hash) console.warn(`[replay] ${path} is not the map this replay was recorded on (hash ${hash}, recorded ${h.map.hash})`);
+  if (h.version !== __OW3_VERSION__) console.warn(`[replay] recorded on OpenWar3 ${h.version}; this is ${__OW3_VERSION__}`);
+  await startGame(file, info, { ...h.config, observer: true, replay });
+}
+
 /** Leave the menus and play: load the map, then melee or custom setup as the map asks.
  *
  *  The map arrives either as a FILE the player browsed to (the install's `Maps\` folder, which
@@ -979,6 +1026,14 @@ async function startGame(
     loading?.setMinimapPreview(previewOf(bytes));
     await step(0.15, () => enterMap(bytes, info.name));
     mapScene?.setLoadingScreen(true); // the first match's scene exists only from here
+    // What a REPLAY of this match names its map by (issue #158): the install's own path for it
+    // when it came off a list, the bytes' hash so the same name is not taken for the same map.
+    mapScene?.setReplayMap({
+      path: (map instanceof File ? [...installMaps].find(([, f]) => f === map)?.[0] : undefined) ?? config.mapName ?? info.name,
+      name: info.name,
+      hash: fnv64(bytes),
+      size: bytes.length,
+    });
     // Melee maps get the standard setup (town hall + workers, melee rules);
     // custom/scenario maps run their own triggers instead (see mapKind.ts).
     //
@@ -997,6 +1052,8 @@ async function startGame(
     // seconds before the player is looking at the map, and the creeps, the melee clock and the
     // music used to spend those seconds running behind the loading screen.
     mapScene?.holdAtStart(true);
+    // A replay goes back in time by being played again (`rewindReplay`).
+    if (config.replay && mapScene) mapScene.onReplayRewind = (at, view) => void rewindReplay(at, view);
     // A LAN match hands over the match's end of the wire (docs/multiplayer.md item 10b-note); a
     // skirmish passes none, and the controller runs exactly as it always has. Attach it AFTER
     // setup so the world it snapshots exists.
@@ -1055,7 +1112,9 @@ async function startGame(
     // `link` is the whole test, and it is the right one: a match with a wire has other machines
     // on the far end of it, and none of them can be held on one player's keyboard. Multiplayer
     // keeps the gate above and the timed beat below.
-    if (!link && loading) await loading.waitForKey();
+    // …except a REPLAY, which is watched rather than played, and is played again from its start
+    // every time the watcher goes back in time.
+    if (!link && loading && !config.replay) await loading.waitForKey();
     else await wait(Math.max(MIN_FULL_BAR_MS, START_HOLD_MS - (performance.now() - tailStart)));
     // Taken away only once the match has actually DRAWN a frame behind it, so the first thing the
     // player sees is the map and never the black canvas it was on a moment ago.
@@ -1317,9 +1376,13 @@ async function showScoreScreen(vfs: DataSource, table: ScoreTable): Promise<void
   try {
     let done: () => void = () => {};
     const ok = new Promise<void>((resolve) => { done = resolve; });
+    // The match just played, when it was recorded: Save Replay keeps it under a name. The name
+    // offered is the map's, as a starting point.
+    const rec = lastRecordedReplay();
     const screen = await mountScoreScreen({
       container: loadingLayer, canvas: loadingCanvas, vfs, table,
       localPlayer: table.viewer, onOk: () => done(),
+      replay: rec ? { sink: rec.sink, written: rec.written, suggested: rec.mapName } : undefined,
     });
     loadingCanvas.hidden = false;
     // The featured race's VictoryMusic / DefeatMusic (war3skins) under it, as the reference plays.
@@ -1455,6 +1518,7 @@ if (import.meta.env.DEV && new URLSearchParams(location.search).has("dev")) {
         mountInstall,
         showMenu,
         startGame,
+        watchReplay,
         startChapter,
         startCredits: () => startCredits(resolver.installSource!),
       }),
@@ -1490,6 +1554,12 @@ if (import.meta.env.DEV && new URLSearchParams(location.search).has("dev")) {
     return vfs && t ? showScoreScreen(vfs, t).then(() => glue.uncover()) : Promise.resolve();
   },
   lastScores: () => lastScores,
+  // Watch a replay out of the replay folder by its file name (issue #158).
+  watchReplay: async (name = "LastReplay.o3r") => {
+    const bytes = await replaySink()?.read(name);
+    if (!bytes) throw new Error(`no replay named ${name}`);
+    await watchReplay(await decodeReplay(bytes));
+  },
   // Voice Control's mapping without a microphone (src/voice/control.ts).
   voiceSay,
   voicePreroll: voicePrerollState,

@@ -174,6 +174,10 @@ export class Viewpoint {
    *  exactly the test the unit itself passed a moment earlier. */
   revealsForOwner(owner: number, team: number): boolean {
     if (this.player < 0) return team === this.team;
+    // A WATCHER sees through every player's eyes. Its fog is normally lifted outright
+    // (`setRevealAll`), and this is what it sees when it is not — a replay's Fog of War box
+    // (issue #158, the game's own `ReplayFogCheckBox`): the match as all of its players saw it.
+    if (this.watcher) return owner >= 0;
     if (owner === this.player) return true;
     return owner >= 0 && this.alliances.sharesVisionWith(owner, this.player);
   }

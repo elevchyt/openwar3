@@ -89,6 +89,18 @@ contextBridge.exposeInMainWorld("ow3native", {
     append: (id, text) => ipcRenderer.send("ow3:log-append", String(id), String(text ?? "")),
     end: (id) => ipcRenderer.invoke("ow3:log-end", String(id)),
   },
+  /**
+   * REPLAYS (src/game/replay.ts, issue #158): `replays/` in the data folder. `saveLast` writes the match
+   * that just ended as LastReplay, `keepLast(name)` copies it under a name, `list()` and
+   * `read(name)` are the View Replay screen's, `remove(name)` the Save Replay panel's Delete. Names only — the shell picks the folder.
+   */
+  replays: {
+    saveLast: (bytes, keep) => ipcRenderer.invoke("ow3:replay-save-last", bytes, keep ? String(keep) : undefined),
+    keepLast: (name) => ipcRenderer.invoke("ow3:replay-keep", String(name ?? "")),
+    list: () => ipcRenderer.invoke("ow3:replay-list"),
+    read: (name) => ipcRenderer.invoke("ow3:replay-read", String(name ?? "")),
+    remove: (name) => ipcRenderer.invoke("ow3:replay-delete", String(name ?? "")),
+  },
   /** Keep a map a LAN game handed us, in the install's Maps\Download\ (src/assets/downloadedMaps.ts).
    *  The page names a FILE, never a folder: the shell puts it in that one folder or nowhere. */
   saveMap: (name, bytes) => ipcRenderer.invoke("ow3:map-save", String(name), bytes),

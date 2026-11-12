@@ -144,7 +144,10 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   // Issue #142 also REORDERS what is left: the two rows that are about the match itself sit
   // above the three that are about the screen, so the health bars and the keyboard read as one
   // block at the bottom.
-  { key: "autosaveReplay", frame: "AutosaveReplayCheckBox", kind: "bool", panel: "gameplay", def: true, applied: false },
+  // Live since issue #158: every match's replay is also kept under its own name in the replay
+  // folder's `Autosaved\` — the game's own AUTOSAVE_REPLAY_INFO, "This option will automatically
+  // save replays to the replay/autosaved folder." (`autosaveReplay()`, MapViewerScene.closeReplay).
+  { key: "autosaveReplay", frame: "AutosaveReplayCheckBox", kind: "bool", panel: "gameplay", def: true },
   // Issue #124. The first gameplay option with a live backend: it is the DEFAULT value of the
   // Custom Game screen's "Computer+ (Improved AI)" switch (ui/fdfSkirmish.ts), so ticking it
   // here decides which AI a match starts with. Its frame is not the game's — no 2003 UI file
@@ -367,4 +370,23 @@ export function applyAudioOptions(sounds: SoundBoard, opts: Options): void {
   sounds.setVolumeGroup(SOUND_GROUP.AMBIENT, sfx * (bool(opts.ambientSounds) ? 1 : 0));
   sounds.setVolumeGroup(SOUND_GROUP.UNITMOVEMENT, sfx * (bool(opts.movementSounds) ? 1 : 0));
   sounds.setMusicVolume(Math.round(musicScale * 127));
+}
+
+/** Options → Gameplay → "Automatically Save Replays" (issue #158): keep every match's replay,
+ *  not just the last one. */
+export function autosaveReplay(): boolean {
+  return loadOptions().autosaveReplay !== false;
+}
+
+/**
+ * Send this machine's replays to OpenWar3's own collection (issue #158, game/replayUpload.ts).
+ * OURS — the game has no such switch — and ON unless the player has turned it off; it is read
+ * here rather than off an options row because the row it will sit on is not built yet.
+ */
+export function shareReplays(): boolean {
+  try {
+    return localStorage.getItem("ow3.shareReplays") !== "0";
+  } catch {
+    return true;
+  }
 }

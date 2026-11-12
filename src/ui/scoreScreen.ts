@@ -1,3 +1,4 @@
+import { showSaveReplayPanel, type SaveReplayPanelOptions } from "./saveReplayDialog";
 import { blpToCanvas } from "../render/blputil";
 import { ScoreScreenScene, type ScoreBar } from "../render/scoreScreenScene";
 import { ALLY_FILTER_COLOR } from "../game/allyColor";
@@ -155,6 +156,11 @@ export interface ScoreScreenOptions {
    *  for a watcher. */
   localPlayer: number | null;
   onOk: () => void;
+  /** The match was RECORDED (game/replay.ts): Save Replay keeps it under a name
+   *  (ui/saveReplayDialog.ts). Absent — a replay being watched, a LAN client, a campaign chapter,
+   *  a web build with no disk — the button is not shown, as the reference shows OK alone when
+   *  there is nothing to save. */
+  replay?: Omit<SaveReplayPanelOptions, "container" | "vfs" | "onSaved">;
 }
 
 export interface ScoreScreen {
@@ -230,6 +236,9 @@ export async function mountScoreScreen(opts: ScoreScreenOptions): Promise<ScoreS
     return v && v !== key ? v : fallback;
   };
 
+  /** Saved under a name this visit: the button becomes "Replay Saved". */
+  let replaySaved = false;
+
   const refresh = (): void => {
     const columns = TABS[tab];
     const width: 4 | 5 = columns.length === 4 ? 4 : 5;
@@ -241,9 +250,12 @@ export async function mountScoreScreen(opts: ScoreScreenOptions): Promise<ScoreS
     hidden.length = 0;
     hidden.push(width === 4 ? "ScoreScreen5ColumnFrame" : "ScoreScreen4ColumnFrame");
     hidden.push(`ScoreScreenTabText${tab}`); // its gold twin (TabTextSelected) stands in its place
-    // No replay is recorded (see ui/fdfViewReplay.ts), so there is nothing to save — the
-    // reference shows OK alone in that case too. The scroll bar has nothing to scroll.
-    hidden.push("ScoreScreenSaveReplayButton", "ScoreScreenReplaySavedButton", "ScoreScreenScrollBar");
+    // Save Replay while there is a recorded match to save, "Replay Saved" (the FDF's twin in the
+    // same place, which presses nothing) once it is; neither when nothing was recorded. The
+    // scroll bar has nothing to scroll.
+    hidden.push("ScoreScreenScrollBar");
+    if (!opts.replay || replaySaved) hidden.push("ScoreScreenSaveReplayButton");
+    if (!replaySaved) hidden.push("ScoreScreenReplaySavedButton");
     for (const k of Object.keys(overrides)) delete overrides[k];
     overrides.ScoreScreenTabTextSelected = text(TAB_KEYS[tab], "");
     overrides.ScoreScreenElapsedTimeValue = elapsed(table.elapsed);
@@ -295,6 +307,18 @@ export async function mountScoreScreen(opts: ScoreScreenOptions): Promise<ScoreS
       ScoreScreenTabButton2: () => { tab = 2; refresh(); },
       ScoreScreenTabButton3: () => { tab = 3; refresh(); },
       ScoreScreenTeamColorButton: () => { allyColors = !allyColors; refresh(); },
+      ScoreScreenSaveReplayButton: () => {
+        if (!opts.replay || replaySaved) return;
+        void showSaveReplayPanel({
+          ...opts.replay,
+          container: opts.container,
+          vfs,
+          onSaved: () => {
+            replaySaved = true;
+            refresh();
+          },
+        });
+      },
     },
     onBuild: (s) => paint(s),
   });
@@ -320,6 +344,8 @@ export async function mountScoreScreen(opts: ScoreScreenOptions): Promise<ScoreS
   /** Everything a build needs that is not text: the plates, the marks, the hero icons, and which
    *  header box is ticked. */
   function paint(s: FdfScreen): void {
+    // "Replay Saved" says so and presses nothing.
+    s.setEnabled("ScoreScreenReplaySavedButton", false);
     const rows = sorted();
     const columns = TABS[tab];
     const width = columns.length === 4 ? 4 : 5;

@@ -747,6 +747,10 @@ export class Authority {
    * Returns whether the command took.
    */
   execute(player: number, cmd: Command): boolean {
+    // The REPLAY recorder's tap (issue #158, game/replay.ts) — every command offered, judged or
+    // not, BEFORE dispatch, which may write to the order it is handed. A refused command is an
+    // input like any other: replayed, it is refused again, by the same rule, at the same step.
+    this.onCommand?.(player, cmd);
     const took = this.dispatch(player, cmd);
     if (took) {
       this.appliedCount++;
@@ -756,6 +760,10 @@ export class Authority {
     }
     return took;
   }
+
+  /** Every command offered to `execute` — the replay recorder (game/replay.ts). Null when
+   *  nothing records. */
+  onCommand: ((player: number, cmd: Command) => void) | null = null;
 
   /** Every seat's accepted actions, for the observer HUD's APM column (game/apm.ts). */
   readonly actions = new ApmMeter();

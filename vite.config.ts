@@ -6,6 +6,7 @@ import { mapSiteProxy } from "./tools/vite-plugin-mapsite-proxy";
 import { matchLog } from "./tools/vite-plugin-match-log";
 import { perfLog, perfLogDefines } from "./tools/vite-plugin-perf-log";
 import { relay } from "./tools/vite-plugin-relay";
+import { replays } from "./tools/vite-plugin-replays";
 
 // Static build, engine code only — no assets are ever bundled or hosted (see plan §0, §8).
 //
@@ -41,7 +42,7 @@ import { relay } from "./tools/vite-plugin-relay";
 const version = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version as string;
 
 export default defineConfig({
-  plugins: [devInstall(), driveProxy(), mapSiteProxy(), perfLog(), matchLog(), relay()],
+  plugins: [devInstall(), driveProxy(), mapSiteProxy(), perfLog(), matchLog(), replays(), relay()],
   define: { ...perfLogDefines(), __OW3_VERSION__: JSON.stringify(version) },
   server: {
     port: 5173,

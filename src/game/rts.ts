@@ -1429,6 +1429,27 @@ export class RtsController {
    */
   onPlayerLeft: ((player: number) => void) | null = null;
 
+  /** A cheat was used — the replay recorder's tap (game/replay.ts). */
+  onCheat: ((player: number, kind: CheatKind) => void) | null = null;
+  /** …and a selection cheat, with the units it acted on. */
+  onCheatSelected: ((kind: "hp" | "mp" | "cooldown" | "kill", ids: readonly number[]) => void) | null = null;
+
+  /**
+   * Inside the AI block of a step (`tick`) — what a replay stamps an input's PHASE with, since a
+   * computer decides after the inputs that arrived between frames and before the world steps.
+   */
+  inAiPhase = false;
+
+  /**
+   * PLAYBACK of a replay (issue #158): the computers are seated as usual — seating may itself
+   * set things on the world — but never THINK. Their decisions are in the file, handed back
+   * at exactly the point of the step they were made (`replayAiInputs`).
+   */
+  replayAiInputs: (() => void) | null = null;
+
+  /** Inside a map AI script's tick — see the AI block in `tick`. */
+  inScriptAi = false;
+
   /**
    * Has this seat been REMOVED from the match — `RemovePlayer`, defeated or left? Answered by
    * the presentation side, which is where the script's `playerGameOver` hook lands. A leaver
@@ -1987,6 +2008,17 @@ export class RtsController {
    *  in the game as well (see VisionSet.setStartFog). */
   setLocalRevealAll(on: boolean): void {
     this.local.setRevealAll(on);
+  }
+
+  /** Rebuild every viewpoint's sight NOW rather than at its next 10 Hz turn — for a change a
+   *  watcher makes while the world is stopped (a paused replay's Fog of War box). */
+  rebuildVision(): void {
+    const rebuilt = this.viewpoints.rebuildAll();
+    for (const vp of rebuilt) this.ghosts.forgetSeen(vp.player, vp);
+    if (rebuilt.includes(this.local)) this.pruneFogged();
+    // …and every entry's own `hidden`, which the bars and the picker read — refreshed by the
+    // entry sync, which a stopped world does not run (the held start's `settleHeld` does the same).
+    this.syncEntries(0, 1);
   }
 
   /** Install the fog's line-of-sight height field + tree blockers, so vision is
@@ -5090,11 +5122,27 @@ export class RtsController {
       // Sub-phases of `sim`, for the session log (src/dev/perfLog.ts). Dotted, so they are a
       // breakdown of the span they sit inside rather than siblings of it.
       perfLog.begin("sim.ai");
-      if (this.meleeAi?.active && this.seeded) this.meleeAi.tick(dt);
-      if (this.scriptAi?.active && this.seeded) this.scriptAi.tick(dt);
-      if (this.computerPlus?.active && this.seeded) this.computerPlus.tick(dt);
-      if (this.candyWar?.active && this.seeded) this.candyWar.tick(dt);
-      if (this.warChasers?.active && this.seeded) this.warChasers.tick(dt);
+      this.inAiPhase = true;
+      if (this.replayAiInputs) this.replayAiInputs();
+      else {
+        if (this.meleeAi?.active && this.seeded) this.meleeAi.tick(dt);
+        if (this.computerPlus?.active && this.seeded) this.computerPlus.tick(dt);
+        if (this.candyWar?.active && this.seeded) this.candyWar.tick(dt);
+        if (this.warChasers?.active && this.seeded) this.warChasers.tick(dt);
+      }
+      // A map's OWN AI script (a campaign's `o03_blue.ai`, Monolith's creep players) is part of
+      // the MAP, like its triggers: it orders through the same engine hooks they do rather than
+      // through `execute`, so a replay could not carry its decisions — it runs on playback as it
+      // ran in the match, and what it does pass through `execute` is not recorded (`inScriptAi`).
+      if (this.scriptAi?.active && this.seeded) {
+        this.inScriptAi = true;
+        try {
+          this.scriptAi.tick(dt);
+        } finally {
+          this.inScriptAi = false;
+        }
+      }
+      this.inAiPhase = false;
       // …and the map's own creeps think here too (src/ai/creeps.ts): Neutral Hostile is a
       // player with no seat, and its casting is the same authority-only pass as a computer's.
       if (this.seeded) (this.creepCaster ??= new CreepCaster(this.sim, this.abilities)).tick(dt);
@@ -6252,16 +6300,20 @@ export class RtsController {
 
   /** A summoned/raised unit materializes: play its birth clip and lock it out of
    *  acting (sim `spawning`) until the clip finishes. No birth clip → acts at once. */
-  beginSummonBirth(simId: number): void {
+  beginSummonBirth(simId: number, lock = true): number | null {
     const e = this.byId.get(simId);
     const u = this.sim.units.get(simId);
-    if (!e || !u || e.birthSeq < 0) return;
+    if (!e || !u || e.birthSeq < 0) return null;
     const durMs = e.birthEnd - e.birthStart;
-    u.spawning = durMs > 0 ? durMs / 1000 : 1;
+    // The SPAWN LOCK — sim state read off the model. Not written while a replay is watched
+    // (`lock` false): the file says when it landed and how long it was (game/replay.ts).
+    const secs = durMs > 0 ? durMs / 1000 : 1;
+    if (lock) u.spawning = secs;
     e.unit.instance.setSequence(e.birthSeq);
     e.unit.instance.setSequenceLoopMode(SequenceLoopMode.ModelDefined);
     e.unit.state = WidgetState.WALK; // keep the picker from auto-standing over the birth clip
     e.curSeq = e.birthSeq;
+    return secs;
   }
 
   /** Left-click a unit selects it. Clicking empty ground does NOT deselect (WC3
@@ -9769,6 +9821,21 @@ export class RtsController {
    * command reaches the same `Authority.execute` without passing through this object at all,
    * which is the point of having moved it.
    */
+  /** Tap every command offered to the authority — the replay recorder (game/replay.ts). */
+  setCommandTap(tap: ((player: number, cmd: Command) => void) | null): void {
+    this.authority.onCommand = tap;
+  }
+
+  /**
+   * Hand a REPLAY's recorded command back to the authority (issue #158). Straight to
+   * `Authority.execute`, as a LAN peer's is: what was recorded is what reached that door, after
+   * this controller's own adjustments (`channelSpared`) had already been made, and nothing here
+   * may forward it anywhere.
+   */
+  executeReplay(player: number, cmd: Command): boolean {
+    return this.authority.execute(player, cmd);
+  }
+
   execute(player: number, cmd: Command): boolean {
     // A channeller given an order AS PART OF A GROUP keeps channelling (developer request): an
     // Archmage raining Blizzard among five Footmen the player moves does not drop the storm to
@@ -9928,14 +9995,17 @@ export class RtsController {
    *
    *  SINGLE PLAYER ONLY: a networked match refuses every cheat here, whoever asks — the
    *  panel and the chat both gate on it too, and this is the last door. */
-  cheat(kind: CheatKind): boolean {
+  cheat(kind: CheatKind, player = this.localPlayer): boolean {
     if (this.networked) return false;
+    // A cheat changes the match, so a replay carries it (game/replay.ts) — for the player who
+    // typed it, which on playback is not the machine's own seat.
+    this.onCheat?.(player, kind);
     if (kind === "godmode") {
       // `whosyourdaddy` — invulnerable, one-hit kills (SimWorld.godPlayers).
       const gods = this.sim.godPlayers;
-      if (gods.has(this.localPlayer)) gods.delete(this.localPlayer);
-      else gods.add(this.localPlayer);
-      return gods.has(this.localPlayer);
+      if (gods.has(player)) gods.delete(player);
+      else gods.add(player);
+      return gods.has(player);
     }
     if (kind === "day" || kind === "night") {
       // `riseandshine` / `lightsout`: wind the clock to the morning or the evening — the
@@ -9950,13 +10020,13 @@ export class RtsController {
     }
     if (kind === "upgrades") {
       // `sharpandshiny`: every upgrade in the game, at its last level (SimWorld.researchAll).
-      this.sim.researchAll(this.localPlayer);
+      this.sim.researchAll(player);
       return false;
     }
     if (kind === "food") {
-      this.authority.addFoodBonus(this.localPlayer, 100);
+      this.authority.addFoodBonus(player, 100);
     } else {
-      const stash = this.sim.stashOf(this.localPlayer);
+      const stash = this.sim.stashOf(player);
       if (kind === "gold") stash.gold += 5000;
       else stash.lumber += 5000;
     }
@@ -9967,10 +10037,11 @@ export class RtsController {
    *  ability (and item) cooldown, or KILL it, on each selected living unit. A kill is the
    *  sim's own `killUnit` (JASS KillUnit: the Death clip, a corpse, drops, a building's
    *  collapse), whoever owns it — an enemy or a creep selected by a click is fair game. */
-  cheatSelected(kind: "hp" | "mp" | "cooldown" | "kill"): void {
+  cheatSelected(kind: "hp" | "mp" | "cooldown" | "kill", ids: readonly number[] = [...this.selected]): void {
     if (this.networked) return;
+    this.onCheatSelected?.(kind, ids);
     // A copy: a death takes the body out of the selection while we walk it.
-    for (const id of [...this.selected]) {
+    for (const id of ids) {
       const u = this.sim.units.get(id);
       if (!u || u.hp <= 0) continue;
       if (kind === "kill") this.sim.killUnit(id);

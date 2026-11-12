@@ -102,6 +102,26 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   per call — ~24% of a 287-unit frame, more than the whole renderer cost by then. `targetFlagSet`
   (data/abilities.ts) normalises once per array and keeps it in a WeakMap: **−23% in Low
   Performance Mode and −26% at full quality**, exact, with `TargetFlagCache.enabled` to re-measure.
+- **Replays:** read [`docs/replays.md`](docs/replays.md) before touching
+  [`src/game/replay.ts`](src/game/replay.ts), `Authority.onCommand`, `Interpreter.inputTap`, a
+  `spawnUnit` call site or anything that makes the sim wait on the renderer. A replay (`.o3r`) is
+  the match's INPUTS — every command at `Authority.execute` (the AIs' included, which is why the
+  race AIs and Computer+ never think on playback), chat, pings, what the script hears from a
+  player, cheats — stamped with the step AND the phase of the step, and re-simulated; a state hash
+  every ten game seconds says whether it is still the same match (`?dev&replaycheck=10` and the
+  dev build's `DUMP` section name the unit that parted). Two rules keep it exact and both were
+  found by it: the world does not STEP until the loading screen lifts (`beginMatch` holds it), and
+  NOTHING in the sim may come into existence when a MODEL arrives — a foundation, a summon, a mine
+  is made on its step (`spawnUnitNow`) and its body streams in behind; a fact the sim still takes
+  from a model (a summon's spawn lock) is carried in the file as an input. A map's own `.ai` script
+  is part of the map and RUNS on playback.
+- **Data folder:** read [`electron/dataDir.mjs`](electron/dataDir.mjs) before adding a file the
+  desktop app keeps. OpenWar3's data folder (`%APPDATA%\openwar3`, `~/.config/openwar3`) holds
+  OUR files at the top — `settings.json`, `.logs/`, `replays/` — and the browser engine's in
+  `Chromium/` under it: Electron's `userData` is pointed there before `ready`, so a new file of
+  ours goes in `DATA_DIR` (main.mjs), never `app.getPath("userData")`, and a new top-level name
+  joins `OURS` there, or the first launch after an update moves it into `Chromium/`. An install
+  made before this layout is moved on its first launch, all or nothing.
 - **Match logs:** read [`docs/match-log.md`](docs/match-log.md) before touching
   [`src/game/matchLog.ts`](src/game/matchLog.ts), [`electron/logStore.mjs`](electron/logStore.mjs)
   or the Sim Speed cheat. EVERY match — release build included — writes a readable

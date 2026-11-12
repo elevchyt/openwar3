@@ -10,7 +10,7 @@ itself into a `.logs/` folder:
 
 | | where the file goes |
 |---|---|
-| the desktop app (release) | `<userData>/.logs/` — OpenWar3's own data folder, beside its `settings.json` (`~/.config/OpenWar3/.logs/` on Linux, `%APPDATA%\OpenWar3\.logs\` on Windows) |
+| the desktop app (release) | `.logs/` in OpenWar3's own data folder, beside its `settings.json` (`~/.config/openwar3/.logs/` on Linux, `%APPDATA%\openwar3\.logs\` on Windows; the browser engine's files are in `Chromium/` under it, electron/dataDir.mjs) |
 | `pnpm dev` | the repo's own `.logs/` (gitignored), beside the opt-in perf recorder's sessions ([perf-logging.md](perf-logging.md)) |
 | a plain web build | nowhere — a page has no disk |
 

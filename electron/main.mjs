@@ -28,10 +28,17 @@ import { startUpdates } from "./updates.mjs";
 import { PROTOCOL_VERSION } from "../server/rooms.mjs";
 import { readSettings, useSettingsDir, writeSettings } from "./settings.mjs";
 import { createLogStore } from "./logStore.mjs";
+import { createReplayStore } from "./replayStore.mjs";
+import { arrangeDataDir } from "./dataDir.mjs";
 import { readMapSite } from "./mapSites.mjs";
 import { wireMapSiteViews } from "./mapSitesView.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
+
+/** OpenWar3's data folder: our settings, match logs and replays at the top, the browser engine's
+ *  own files in `Chromium/` under it (electron/dataDir.mjs). Arranged before ANYTHING asks for a
+ *  path, because the engine's half only moves before `ready`. */
+const DATA_DIR = arrangeDataDir(app, { warn: (msg) => console.warn(`[data] ${msg}`) });
 const DIST = join(here, "..", "dist");
 
 /** The icon the WINDOW wears, for the places Linux asks the running process for one rather than
@@ -91,7 +98,7 @@ app.commandLine.appendSwitch("js-flags", `--max-old-space-size=${HEAP_MIB}`);
 // is kept HERE, in the shell's own settings file, rather than only in the page's localStorage:
 // this has to be read before there is a page at all. A change is applied by relaunching the app,
 // which the Options screen offers the moment it is saved (`ow3:relaunch` below).
-// `getPath("userData")` is answerable before `ready`, so the store is pointed at it now.
+// The data folder is known before `ready`, so the store is pointed at it now.
 //
 // OFF means Chromium's own frame-rate limit goes with it. A vsynced page shows each frame at the
 // display's next refresh, and everything the page draws to follow the mouse sits that much behind
@@ -99,18 +106,25 @@ app.commandLine.appendSwitch("js-flags", `--max-old-space-size=${HEAP_MIB}`);
 // WebGL page on the dev box), so the page caps itself at MAX_FPS instead — Chromium has no switch
 // for "uncapped, but no faster than N" (src/render/frameCap.ts). The price is tearing, which is
 // the usual price of vsync off. OURS, not the game's: 1.30.4 has no frame-rate or vsync setting.
-useSettingsDir(app.getPath("userData"));
+useSettingsDir(DATA_DIR);
 const VSYNC = readSettings().vsync !== false;
 
 // THE MATCH LOGS (src/game/matchLog.ts, docs/match-log.md): every match the player plays writes a
-// plain-text record of itself into `<userData>/.logs/` — OpenWar3's own data folder, beside the
+// plain-text record of itself into `.logs/` in the data folder — OpenWar3's own data folder, beside the
 // settings file — so a match can be read back afterwards, a release build's included. The size
 // and age limits are the store's (electron/logStore.mjs); opening it sweeps out anything older
 // than three days, so the folder is cleaned on every launch whether or not a match is played.
-const matchLogs = createLogStore(join(app.getPath("userData"), ".logs"), {
+const matchLogs = createLogStore(join(DATA_DIR, ".logs"), {
   warn: (msg) => console.warn(`[match-log] ${msg}`),
 });
 matchLogs.sweep();
+// THE REPLAYS (issue #158, src/game/replay.ts): `replays/` in the data folder — OpenWar3's own data
+// folder, beside the settings file and the match logs, never Warcraft III's (the developer's
+// call). Every match that recorded leaves `LastReplay.o3r` there and the player keeps the ones
+// they name. Never swept.
+const replayFiles = createReplayStore(join(DATA_DIR, "replays"), {
+  warn: (msg) => console.warn(`[replays] ${msg}`),
+});
 if (!VSYNC) {
   app.commandLine.appendSwitch("disable-gpu-vsync");
   app.commandLine.appendSwitch("disable-frame-rate-limit");
@@ -331,6 +345,13 @@ app.whenReady().then(async () => {
   ipcMain.handle("ow3:log-begin", (_event, name) => matchLogs.begin(String(name ?? ""))?.id ?? null);
   ipcMain.on("ow3:log-append", (_event, id, text) => { matchLogs.append(String(id), String(text ?? "")); });
   ipcMain.handle("ow3:log-end", (_event, id) => matchLogs.end(String(id)));
+  // Replays (see `replayFiles` above). The page names a FILE, never a path: the store reduces it
+  // to a name in its one folder.
+  ipcMain.handle("ow3:replay-save-last", (_event, bytes, keep) => replayFiles.saveLast(Buffer.from(bytes), keep ? String(keep) : undefined));
+  ipcMain.handle("ow3:replay-keep", (_event, name) => replayFiles.keepLast(String(name ?? "")));
+  ipcMain.handle("ow3:replay-list", () => replayFiles.list());
+  ipcMain.handle("ow3:replay-read", (_event, name) => replayFiles.read(String(name ?? "")));
+  ipcMain.handle("ow3:replay-delete", (_event, name) => replayFiles.remove(String(name ?? "")));
   ipcMain.handle("ow3:vsync-get", () => readSettings().vsync !== false);
   ipcMain.handle("ow3:vsync-set", (_event, on) => { writeSettings({ vsync: on === true }); });
   // …and the restart that applies it. Vsync is a launch switch (see VSYNC above), so the Options
