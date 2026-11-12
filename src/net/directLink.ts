@@ -188,9 +188,37 @@ export class DirectChannel implements MatchChannel {
     for (const peer of this.setup.peers) this.sendTo(peer, data);
   }
 
+  /**
+   * Hang up — but only once the direct lanes have DELIVERED what was already sent on them.
+   * `RTCPeerConnection.close()` discards whatever its data channels still hold queued, and the
+   * last messages of a match are exactly the ones sent the moment before it hangs up: the host's
+   * replay (issue #158) went out and was thrown away with the connection, while the relay's
+   * socket, which flushes before it closes, would have carried it. So the lanes drain first
+   * (`bufferedAmount` back to 0), for at most `DRAIN_MS`, and then stay up `CLOSE_GRACE_MS`
+   * longer — an empty buffer means the bytes LEFT, not that they arrived, and a lost packet is
+   * resent by the connection being closed — and the relay goes with them.
+   */
   close(): void {
-    this.shutDown();
-    this.inner.close?.();
+    const open = [...this.links.values()].filter((l) => l.dc?.readyState === "open");
+    if (this.closed || !open.length) {
+      this.shutDown();
+      this.inner.close?.();
+      return;
+    }
+    this.closed = true; // no new offers or retries while it drains
+    const until = Date.now() + DRAIN_MS;
+    const draining = (): boolean => open.some((l) => l.dc?.readyState === "open" && l.dc.bufferedAmount > 0);
+    const poll = (): void => {
+      if (draining() && Date.now() < until) {
+        setTimeout(poll, 50);
+        return;
+      }
+      setTimeout(() => {
+        this.shutDown();
+        this.inner.close?.();
+      }, CLOSE_GRACE_MS);
+    };
+    poll();
   }
 
   dropPeer(peer: number): void {
@@ -387,6 +415,11 @@ export class DirectChannel implements MatchChannel {
     for (const peer of [...this.links.keys()]) this.drop(peer);
   }
 }
+
+/** The longest a closing link waits for its lanes to deliver what is queued (`close`). Ours. */
+const DRAIN_MS = 5000;
+/** …and how long it stays up once they have drained, for the last packets to be acknowledged. Ours. */
+const CLOSE_GRACE_MS = 500;
 
 /** Send one payload, in pieces when it is large. */
 function write(dc: RTCDataChannel, text: string): void {

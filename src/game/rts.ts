@@ -9059,6 +9059,8 @@ export class RtsController {
     // by the renderer, which owns the seat facts the table is built with.
     link.onScoresAsked = (player) => this.onScoresAsked?.(player);
     link.onScores = (scores) => this.onScores?.(scores);
+    // The match's replay, sent by the host when the game ends (issue #158).
+    link.onReplay = (bytes) => this.onReplay?.(bytes);
     if (setup.isHost) {
       // The host is the only party that judges an arriving command. `CommandRouter` resolves
       // the relay's `from` stamp — which no client can forge — to a slot, and a command whose
@@ -9145,6 +9147,21 @@ export class RtsController {
   /** HOST: answer a client's ask. */
   sendScores(player: number, scores: ScoreTable): void {
     if (this.matchLink && this.matchLinkIsHost) this.matchLink.sendScores(player, scores);
+  }
+
+  /** CLIENT: the replay the host sent at the end of the game (MatchLink `replaypart`). */
+  onReplay: ((bytes: Uint8Array) => void) | null = null;
+
+  /** HOST of a LAN match with its wire still up — the one machine that hands out the replay. */
+  get hostsLanMatch(): boolean {
+    return !!this.matchLink && this.matchLinkIsHost;
+  }
+
+  /** HOST: hand every peer the replay. False when there is nobody to hand it to. */
+  sendReplay(bytes: Uint8Array): boolean {
+    if (!this.matchLink || !this.matchLinkIsHost) return false;
+    this.matchLink.sendReplay(bytes);
+    return true;
   }
 
   /** Is a LAN match's wire attached? The renderer's background pump keys on this: a

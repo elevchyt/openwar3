@@ -88,7 +88,7 @@ import { MELEE_NORMAL as MELEE_AI_NORMAL } from "../ai/ids";
 import { DEFAULT_GAME_SPEED, gameSpeedLabel, gameSpeedRate, type GameSpeed } from "../data/gameSpeed";
 import { MatchLog, type LogSeat } from "../game/matchLog";
 import { matchLogSink } from "../game/matchLogSink";
-import { CHECK_EVERY, Phase, ReplayPlayer, ReplayRecorder, type ReplayEvent, type ReplayHeader, type ReplayView } from "../game/replay";
+import { CHECK_EVERY, Phase, ReplayPlayer, ReplayRecorder, encodeReplay, readReplayHeader, type ReplayEnding, type ReplayEvent, type ReplayHeader, type ReplayView } from "../game/replay";
 import type { ReplayControls } from "../ui/replayPanel";
 import { diffDumps, stateDump, stateHash } from "../game/replayHash";
 import { STATE_EVERY, StateTracker } from "../game/replayState";
@@ -103,6 +103,13 @@ const replayUploader = new ReplayUploader(shareReplays);
 /** The match that just closed, if it was recorded: where its `LastReplay` went and when it is
  *  on disk — what the score screen's Save Replay keeps a copy of (ui/saveReplayDialog.ts). */
 let lastReplay: { sink: ReplaySink; written: Promise<boolean>; mapName: string } | null = null;
+
+/** An autosaved replay's name: the date, the time and the map, so a folder of them reads in order. */
+function autosaveName(mapName: string): string {
+  const d = new Date();
+  const two = (n: number): string => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}-${two(d.getMinutes())}-${two(d.getSeconds())} ${mapName}`;
+}
 export function lastRecordedReplay(): typeof lastReplay {
   return lastReplay;
 }
@@ -3110,6 +3117,9 @@ export class MapViewerScene {
    * before the recorder is listening.
    */
   private beginReplay(config: MeleeConfig, seed: number, races: Map<number, PlayableRace>, melee: boolean): void {
+    // The last match's replay is not this one's: the score screen offers nothing until this
+    // match has one of its own (recorded here, or handed over by the host at the end).
+    lastReplay = null;
     const rts = this.rts;
     if (!rts) return;
     if (this.replayPlayback) {
@@ -3382,25 +3392,16 @@ export class MapViewerScene {
     this.replayRecorder = null;
     this.replayStates = null;
     this.rts?.setCommandTap(null);
-    lastReplay = null;
     if (!rec) return;
     const ticks = this.simTick - this.replayTick0;
     // A match that never began (left at the loading screen) is nothing to watch.
     if (ticks <= 0) return;
-    const table = this.scoreTable();
-    rec.end({
-      ticks,
-      results: (table?.rows ?? []).map((r) => ({ player: r.player, result: r.won ? "won" : this.playersOut.has(r.player) ? "lost" : "none" })),
-    });
+    rec.end(this.replayEnding(ticks));
     const sink = replaySink();
     if (!sink) return;
     // Kept under its own name too when the player asked for it — the date, the time and the map,
     // so a folder of them reads in order.
-    const d = new Date();
-    const two = (n: number): string => String(n).padStart(2, "0");
-    const keep = autosaveReplay()
-      ? `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}-${two(d.getMinutes())}-${two(d.getSeconds())} ${rec.header.map.name}`
-      : undefined;
+    const keep = autosaveReplay() ? autosaveName(rec.header.map.name) : undefined;
     const written = rec.finish().then(async (bytes) => {
       await sink.saveLast(bytes, keep);
       console.info(`[replay] recorded ${rec.eventCount} inputs over ${(ticks / SIM_HZ).toFixed(0)} s (${bytes.length} bytes)`);
@@ -3414,6 +3415,77 @@ export class MapViewerScene {
     });
     lastReplay = { sink, written, mapName: rec.header.map.name };
   }
+
+  /** How the match stands, as a replay's ending: the steps played and each seat's result. */
+  private replayEnding(ticks: number): ReplayEnding {
+    const table = this.scoreTable();
+    return {
+      ticks,
+      results: (table?.rows ?? []).map((r) => ({ player: r.player, result: r.won ? "won" : this.playersOut.has(r.player) ? "lost" : "none" })),
+    };
+  }
+
+  /**
+   * HOST of a LAN match: the game is over, so every peer gets the replay (issue #158) — the
+   * host is the one machine that recorded it. Sent ONCE, at the end only (the developer's call):
+   * when the match is decided, or when the host leaves, which ends it for everybody. The file
+   * the peers get is the match as it stands at that moment, ended there.
+   */
+  private async shareReplay(): Promise<void> {
+    const rec = this.replayRecorder;
+    const rts = this.rts;
+    if (this.replayShared || !rec || !rts?.hostsLanMatch) return;
+    this.replayShared = true;
+    const ticks = this.simTick - this.replayTick0;
+    if (ticks <= 0) return;
+    try {
+      const bytes = await encodeReplay({ ...rec.snapshot(), ending: this.replayEnding(ticks) });
+      if (rts.sendReplay(bytes)) console.info(`[replay] handed to the other players (${bytes.length} bytes)`);
+    } catch (err) {
+      console.warn("[replay] could not be handed to the other players:", err);
+    }
+  }
+  private replayShared = false;
+
+  /**
+   * CLIENT: the host's replay of the game that just ended. Kept as this machine's own
+   * `LastReplay` (and in `Autosaved/` under this player's own option), and what this player's
+   * score screen saves. Not offered to the uploader: the host's copy is the match's.
+   */
+  private takePeerReplay(bytes: Uint8Array): void {
+    const sink = replaySink();
+    const written = (async (): Promise<boolean> => {
+      if (!sink) return false;
+      try {
+        const { header } = await readReplayHeader(bytes);
+        await sink.saveLast(bytes, autosaveReplay() ? autosaveName(header.map.name) : undefined);
+        lastReplay = { sink, written: Promise.resolve(true), mapName: header.map.name };
+        console.info(`[replay] the host's replay is kept (${bytes.length} bytes)`);
+        return true;
+      } catch (err) {
+        console.warn("[replay] the host's replay could not be kept:", err);
+        return false;
+      }
+    })();
+    this.peerReplayArrived?.(written);
+  }
+  /** Resolved by `takePeerReplay` — what a client waits on before it hangs up (`awaitPeerReplay`). */
+  private peerReplayArrived: ((written: Promise<boolean>) => void) | null = null;
+  private peerReplay: Promise<boolean> | null = null;
+
+  /** CLIENT: the host said its replay follows the ending — wait for it (and for it to be kept),
+   *  but never longer than `PEER_REPLAY_MS`: a quit must not hang on a dead wire. */
+  private awaitPeerReplay(): Promise<boolean> {
+    return (this.peerReplay ??= new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), MapViewerScene.PEER_REPLAY_MS);
+      this.peerReplayArrived = (written) => {
+        clearTimeout(timer);
+        void written.then(resolve);
+      };
+    }));
+  }
+  /** How long a client waits for the host's replay after the game ends. Ours. */
+  private static readonly PEER_REPLAY_MS = 30_000;
 
   /** Recorded selections waiting for this step's pump (WATCHING a replay). */
   private replaySelections: Array<Extract<ReplayEvent, { k: "sel" }>> = [];
@@ -3466,13 +3538,20 @@ export class MapViewerScene {
     // would have built, so `GameDialog` renders the real screen off the game's own FDF and the
     // two engine button behaviours (any click closes; a quit button leaves) work unchanged.
     if (this.rts) {
+      // The host's replay, whenever it comes — at the end, or as the host leaves (issue #158).
+      this.rts.onReplay = (bytes) => {
+        void this.awaitPeerReplay();
+        this.takePeerReplay(bytes);
+      };
       this.rts.onRemoteDialog = (msg) => {
         // A CLIENT never sees `RemovePlayer` for itself — its own script never runs the defeat
         // check (that is the whole of item F7) — so the authority's stamp is the only way it can
         // know its game is over, and it is what hangs up this end of the wire.
         if (msg.over && !this.matchEnded) {
           this.matchEnded = true;
-          this.rts?.endMatchWire();
+          // The host's replay follows the ending (issue #158): hang up once it is here.
+          if (msg.replay) void this.awaitPeerReplay().finally(() => this.rts?.endMatchWire());
+          else this.rts?.endMatchWire();
         }
         if (msg.scores) this.remoteScores = msg.scores; // the host's count (see `leave`)
         this.remoteDialog = {
@@ -5195,6 +5274,8 @@ export class MapViewerScene {
           // drop that player off the wire mid-match, and neither must their own defeat while
           // somebody else is still playing.
           ...(this.matchDecided ? { over: true } : {}),
+          // …and the host's replay follows it, so the recipient keeps its wire up for it.
+          ...(this.matchDecided && this.replayRecorder && this.rts?.hostsLanMatch ? { replay: true } : {}),
         });
         // Remembered only when it actually went somewhere, so a player who has not been
         // seated yet is retried rather than silently written off.
@@ -5217,6 +5298,7 @@ export class MapViewerScene {
           k: "dlg", message: over.message, over: true,
           buttons: over.buttons.map((b) => ({ text: b.text, quit: b.quit, hotkey: b.hotkey, ...(b.doScoreScreen ? { score: true } : {}) })),
           ...(scores ? { scores } : {}),
+          ...(this.replayRecorder && this.rts?.hostsLanMatch ? { replay: true } : {}),
         });
       }
       if (this.observer && !rt.dialogs.some((d) => d.visibleFor.has(this.localPlayer))) {
@@ -5236,7 +5318,8 @@ export class MapViewerScene {
     // screen explaining why. Relay first, then hang up.
     if (this.matchDecided && !this.matchEnded) {
       this.matchEnded = true;
-      this.rts?.endMatchWire();
+      // …and the replay goes to every peer before it does (issue #158; they wait for it).
+      void this.shareReplay().finally(() => this.rts?.endMatchWire());
     }
   }
 
@@ -11651,6 +11734,11 @@ export class MapViewerScene {
    * room may already be gone, and a quit must never hang on a dead wire).
    */
   private async leave(scores: boolean): Promise<void> {
+    // A HOST leaving ends the game for everybody, so the peers get the replay now (issue #158);
+    // a CLIENT whose game ended waits for the one the host is sending, so its score screen can
+    // save it.
+    if (this.rts?.hostsLanMatch) await this.shareReplay();
+    else if (this.peerReplay) await this.peerReplay;
     if (!scores) return this.onExit?.(null);
     let table = this.remoteScores ?? this.scoreTable();
     if (!table && this.rts && !this.matchEnded && this.rts.askForScores()) {

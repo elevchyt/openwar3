@@ -123,8 +123,29 @@ developer's call). That folder holds only OpenWar3's own files; the browser engi
 the Local Storage the options and profiles live in — are in `Chromium/` under it
 (electron/dataDir.mjs, which moves an older install's files there on its first launch). Every
 match that recorded leaves `LastReplay.o3r` (WC3's `LastReplay.w3g`), overwritten by the
-next. A LAN client records nothing — the host's replay is the match's. A campaign chapter is not
-recorded. Under `pnpm dev` the folder is the repo's `.replays/` (gitignored); `?dev&replay` (or
+next. A campaign chapter is not recorded.
+
+**A LAN game** is recorded by the HOST alone — the one machine that simulates the match whole —
+and every other player gets the host's file when the game ENDS, and only then (the developer's
+call; nobody can ask for it mid-match). When the match is decided, the host stamps the "over"
+dialog it relays with `replay` and then sends the file (MatchLink `replaypart`, 48 KiB pieces,
+addressed so it rides each peer's direct lane); the client keeps its wire up until it has
+arrived (`awaitPeerReplay`, at most 30 s) and keeps it as its OWN `LastReplay` — and in
+`Autosaved/` under its own option — so its score screen's Save Replay saves it. A host that
+leaves mid-match ends the game for everybody, so it sends the file then, as it stands. A client
+that quits mid-match gets none. Only the host's copy is offered to the uploader.
+
+Getting it there found a bug in the direct links: `RTCPeerConnection.close()` throws away what
+its data channels still have queued, so the last messages before a hang-up were lost whenever the
+lane was direct. `DirectLinks.close` now waits for the lanes to drain (`DRAIN_MS`, then
+`CLOSE_GRACE_MS`) before it tears them down.
+
+Verified live with two headless clients on Echo Isles: three decided matches out of three handed
+the replay over (it failed two in three before the drain fix), and a host quitting at 2:31 left
+both machines the same 8 537-byte file, which played back with 15 of 15 checks passing. The
+recordings hold both seats' commands and chat. Custom maps: six minutes of DotA v6.77b AI (its
+computer heroes are the map's own triggers, so one recorded input) passed 36 of 36 checks, and
+six minutes of WarChasers with a Computer+ party passed 37 of 37. Under `pnpm dev` the folder is the repo's `.replays/` (gitignored); `?dev&replay` (or
 `&replay=<name>`) watches one, mounting its map.
 
 Two of the game's own screens keep and find them:

@@ -130,6 +130,9 @@ export interface DialogMessage {
    *  the authority counts (sim/matchStats.ts), so this is the only way a client has one; `score`
    *  on a quit button is its `DialogAddQuitButton` doScoreScreen flag. */
   scores?: ScoreTable;
+  /** On an `over` dialog: the host recorded the match and its REPLAY follows (`ReplayPartMessage`),
+   *  so the recipient keeps its wire up until it has arrived (issue #158). */
+  replay?: boolean;
 }
 
 export function isDialogMessage(data: unknown): data is DialogMessage {
@@ -380,6 +383,43 @@ export function isScoresMessage(data: unknown): data is ScoresMessage {
   return typeof d === "object" && d !== null && d.k === "scores" && Array.isArray(d.scores?.rows);
 }
 
+/**
+ * THE REPLAY, to every peer when the game ENDS (issue #158, game/replay.ts). Only the host
+ * records — it is the one machine that simulates the match whole — so the host hands everyone
+ * else the file, in pieces the size the map transfer uses (net/mapTransfer.ts `MAP_CHUNK`).
+ * Only ever sent at the end (the developer's call): there is no asking for it mid-match.
+ * Accepted from the HOST alone.
+ */
+export interface ReplayPartMessage {
+  k: "replaypart";
+  /** This piece, from 0, of `of`. */
+  n: number;
+  of: number;
+  /** Base64. */
+  data: string;
+}
+export function isReplayPartMessage(data: unknown): data is ReplayPartMessage {
+  const d = data as Partial<ReplayPartMessage> | null;
+  return typeof d === "object" && d !== null && d.k === "replaypart" && Number.isInteger(d.n) && Number.isInteger(d.of)
+    && (d.of as number) > 0 && (d.of as number) <= REPLAY_MAX_PARTS && (d.n as number) >= 0 && (d.n as number) < (d.of as number) && typeof d.data === "string";
+}
+/** A replay piece: 48 KiB, the map transfer's. */
+const REPLAY_PART = 48 * 1024;
+/** The largest replay a peer will assemble: 32 MiB, far past any match. */
+const REPLAY_MAX_PARTS = Math.ceil((32 * 1024 * 1024) / REPLAY_PART);
+
+function toBase64(bytes: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x2000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x2000));
+  return btoa(bin);
+}
+function fromBase64(text: string): Uint8Array {
+  const bin = atob(text);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
 export interface PingMessage {
   k: "ping";
   at: number;
@@ -590,6 +630,12 @@ export class MatchLink {
   /** Client side: the host's table, answering our `scorereq`. */
   onScores: (scores: ScoreTable) => void = () => {};
 
+  /** Client side: the match's replay, whole, as the host sent it at the end (`ReplayPartMessage`). */
+  onReplay: (bytes: Uint8Array) => void = () => {};
+  /** The pieces of the replay arriving, by index. */
+  private replayParts: Array<Uint8Array | undefined> = [];
+  private replayOf = 0;
+
   /** Host side: commands received per peer, stamped into that peer's payloads as
    *  `WorldSnapshot.ack`. Per PEER, not per player — it counts what came down that wire. */
   private readonly heard = new Map<number, number>();
@@ -701,6 +747,10 @@ export class MatchLink {
       }
       // Client side: the table we asked for.
       else if (isScoresMessage(data)) this.onScores(data.scores);
+      // Client side: a piece of the match's replay, from the HOST only.
+      else if (isReplayPartMessage(data)) {
+        if (from === this.hostPeer) this.takeReplayPart(data);
+      }
       // A probe: echo the sender's clock straight back to the sender. Theirs, not ours.
       else if (isPingMessage(data)) this.channel.send({ k: "pong", at: data.at } satisfies PongMessage, from);
       // Our probe come home: the clock it carries is the one we stamped.
@@ -758,6 +808,39 @@ export class MatchLink {
   /** Client side: ask the host for the score table before hanging up (`ScoreRequestMessage`). */
   askForScores(): void {
     this.channel.send({ k: "scorereq" } satisfies ScoreRequestMessage, this.hostPeer);
+  }
+
+  /** Host side: the game is over — hand every peer the replay (`ReplayPartMessage`). Broadcast:
+   *  the file is the same for everybody. */
+  sendReplay(bytes: Uint8Array): void {
+    const of = Math.max(1, Math.ceil(bytes.length / REPLAY_PART));
+    if (of > REPLAY_MAX_PARTS) return;
+    for (let n = 0; n < of; n++) {
+      this.channel.send({ k: "replaypart", n, of, data: toBase64(bytes.subarray(n * REPLAY_PART, (n + 1) * REPLAY_PART)) } satisfies ReplayPartMessage);
+    }
+  }
+
+  private takeReplayPart(part: ReplayPartMessage): void {
+    if (part.of !== this.replayOf) {
+      this.replayOf = part.of;
+      this.replayParts = new Array(part.of);
+    }
+    try {
+      this.replayParts[part.n] = fromBase64(part.data);
+    } catch {
+      return;
+    }
+    if (this.replayParts.some((p) => !p) || this.replayParts.length !== this.replayOf) return;
+    const all = this.replayParts as Uint8Array[];
+    const out = new Uint8Array(all.reduce((n, p) => n + p.length, 0));
+    let at = 0;
+    for (const p of all) {
+      out.set(p, at);
+      at += p.length;
+    }
+    this.replayParts = [];
+    this.replayOf = 0;
+    this.onReplay(out);
   }
 
   /** Host side: answer one player's `scorereq`. */

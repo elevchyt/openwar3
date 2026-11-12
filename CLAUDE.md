@@ -114,7 +114,9 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   NOTHING in the sim may come into existence when a MODEL arrives — a foundation, a summon, a mine
   is made on its step (`spawnUnitNow`) and its body streams in behind; a fact the sim still takes
   from a model (a summon's spawn lock) is carried in the file as an input. A map's own `.ai` script
-  is part of the map and RUNS on playback.
+  is part of the map and RUNS on playback. In a LAN game only the HOST records, and it hands every
+  peer the file when the game ends (`replaypart`, docs/replays.md) — which is why a closing
+  direct link DRAINS before it tears down (`DirectLinks.close`).
 - **Data folder:** read [`electron/dataDir.mjs`](electron/dataDir.mjs) before adding a file the
   desktop app keeps. OpenWar3's data folder (`%APPDATA%\openwar3`, `~/.config/openwar3`) holds
   OUR files at the top — `settings.json`, `.logs/`, `replays/` — and the browser engine's in
