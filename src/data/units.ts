@@ -1021,7 +1021,12 @@ function list(v: string): string[] {
  * flagged twin the install does not ship falls back to the plain file.
  */
 function unitModelPath(vfs: DataSource, file: string, verFlags: number): string {
-  const base = file.replace(/\//g, "\\");
+  // The stock table writes the column bare (`units\human\Footman\Footman`), but nothing makes a
+  // map's own `Units\UnitUI.slk` do so: a hand-edited one carries the extension the author
+  // typed — `units\orc\WolfRider\WolfRider.mdl`, `cloud7777.mdx` (DotA v6.77b AI Fun, eleven
+  // rows) — and the game takes either. Appended to blindly that asked for `WolfRider.mdl.mdx`,
+  // which is in no archive, so those heroes had no body. Same rule as objectData's `normModel`.
+  const base = file.trim().replace(/\//g, "\\").replace(/\.(mdl|mdx)$/i, "");
   const v = versionIndex();
   const twin = `${base}_V${v}.mdx`;
   return verFlags & (1 << v) && vfs.exists(twin) ? twin : `${base}.mdx`;
