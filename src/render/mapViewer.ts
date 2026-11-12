@@ -10829,13 +10829,11 @@ export class MapViewerScene {
   }
 
   /**
-   * "Upkeep level %d." — the line the game keeps for crossing an upkeep bracket, raised on
-   * the change rather than every frame.
-   *
-   * MINIMAL, and the honest reason is that the data stops short: `Upkeeplevel` is one of the
-   * few [Errors] rows with no war3skins sound beside it and nothing anywhere says what its
-   * `%d` counts, so the band index (0 none / 1 low / 2 high — hud.ts upkeepBand) is our
-   * reading and not the file's. Printed to the message log with the other reports.
+   * Crossing an upkeep bracket, raised on the change rather than every frame. The real client
+   * does NOT print `Upkeeplevel` ("Upkeep level %d.", CommandStrings [Errors]) for it — that row
+   * is never seen in play. What it shows is the band's own label ("Low Upkeep", in its colour)
+   * as the large `WorldFrameTopMessage` under the clock (GameHud.showUpkeep), with UISounds.slk
+   * `UpkeepLevel` (Sound\Interface\UpkeepRing.wav) — a row nothing else in the game names.
    */
   private noteUpkeep(foodUsed: number): void {
     const band = upkeepBand(foodUsed);
@@ -10843,7 +10841,7 @@ export class MapViewerScene {
     const first = this.upkeepBandNow < 0;
     this.upkeepBandNow = band;
     if (first) return; // the opening reading is the state, not a change
-    this.announce(fillSlots(this.strings.forRace("Upkeeplevel", this.localRace), [band]));
+    if (this.hud?.showUpkeep(band)) this.sounds?.playUi("UpkeepLevel");
   }
   /** The band the local player was last seen in; -1 until the first reading. */
   private upkeepBandNow = -1;

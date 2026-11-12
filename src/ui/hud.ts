@@ -1017,6 +1017,8 @@ const CHAT_AREA = {
 const FONT_HEIGHTS = {
   /** "single line of error text that appears above the console" — the gold refusal line. */
   WorldFrameMessage: 0.015,
+  /** "large upkeep text that appears below the time of day indicator" (`showUpkeep`). */
+  WorldFrameTopMessage: 0.024,
   /** "small text that is used for in-game trigger based dialog" — the message area. */
   WorldFrameUnitMessage: 0.015,
   /** "in-game chat text" — what a received chat line is drawn at, in that same area. */
@@ -1149,6 +1151,15 @@ const MSG_DEFAULT_SECS = 12; // how long an untimed DisplayTextToPlayer line lin
 // is no FDF for CChatDisplay — see CHAT_AREA). Kept in step with `.hud-chatline.fading`.
 const CHAT_FADE_SECS = 1;
 const ERROR_SECS = 2.5; // how long the gold command-error line above the console holds
+/**
+ * The big upkeep line under the clock (`showUpkeep`) — MiscUI.txt [FontHeights]
+ * `WorldFrameTopMessage`, "large upkeep text that appears below the time of day indicator".
+ * Like the tooltip, it is a programmatic frame: the type size is the file's, the rest is not.
+ * `top` is MEASURED off a shot of the real 1.30.4 client at 4:3 (the "Low Upkeep" line's centre
+ * sits 0.062 of the 0.6-tall UI space down from the top, so a 0.024 line box starts at 0.050);
+ * `secs` — how long it holds before fading — is OURS, nothing states it.
+ */
+const TOP_MESSAGE = { top: 0.05, secs: 3 } as const;
 
 /** Escape HTML, then translate WC3 text colour codes to spans: `|cAARRGGBB…|r`
  *  wraps a coloured run (alpha ignored), `|n`/`|N` is a line break, `||` a literal
@@ -1564,6 +1575,8 @@ export class GameHud {
   // The gold error line just above the console (WC3's SimpleMessage frame).
   private errLine!: HTMLDivElement;
   private errTimer = 0;
+  private topLine!: HTMLDivElement;
+  private topTimer = 0;
 
   constructor(parent: HTMLElement, private driver: HudDriver) {
     this.root = document.createElement("div");
@@ -1613,6 +1626,7 @@ export class GameHud {
       this.buildChatBar(),
       this.buildVoice(),
       this.buildErrorLine(),
+      this.buildTopMessage(),
     );
     parent.appendChild(this.root);
     this.applyWidgetSkin();
@@ -2585,6 +2599,32 @@ export class GameHud {
     void this.errLine.offsetWidth; // restart the fade-in animation on a repeat error
     this.errLine.classList.add("hud-error-on");
     this.errTimer = window.setTimeout(() => this.errLine.classList.remove("hud-error-on"), ERROR_SECS * 1000);
+  }
+
+  /** The engine's `WorldFrameTopMessage`: one large centred line under the time-of-day
+   *  indicator, replaced — never stacked — by the next. Its one tenant is the upkeep band. */
+  private buildTopMessage(): HTMLDivElement {
+    this.topLine = document.createElement("div");
+    this.topLine.className = "hud-top-message";
+    return this.topLine;
+  }
+
+  /** Crossing an upkeep bracket: the real client prints the band's OWN label — the same
+   *  `UPKEEP_NONE`/`_LOW`/`_HIGH` string the resource bar shows, colour code and all, so a
+   *  map's war3mapSkin.txt rename reaches it too — large, under the clock (TOP_MESSAGE). */
+  showUpkeep(band: 0 | 1 | 2): boolean {
+    if (this.driver.isObserver()) return false; // a watcher has no food and no upkeep
+    clearTimeout(this.topTimer);
+    // Our match clock (not the 1.30.4 console's) sits under the medallion too, right where the
+    // real line starts; with it up, the line drops just clear of it rather than over it.
+    const clock = this.matchClock && !this.matchClock.hidden ? OBS.time + OBS.score.font * 1.3 : 0;
+    this.topLine.style.top = uiPx(Math.max(TOP_MESSAGE.top, clock));
+    this.topLine.innerHTML = wc3ToHtml(this.driver.uiString(UPKEEP_KEY[band], UPKEEP_FALLBACK[band]));
+    this.topLine.classList.remove("hud-top-message-on");
+    void this.topLine.offsetWidth; // restart the fade on a quick second crossing
+    this.topLine.classList.add("hud-top-message-on");
+    this.topTimer = window.setTimeout(() => this.topLine.classList.remove("hud-top-message-on"), TOP_MESSAGE.secs * 1000);
+    return true;
   }
 
   /** Clear every on-screen message (the ClearTextMessages action). The chat display is left

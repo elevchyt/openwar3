@@ -849,6 +849,29 @@ body.hud-tooltip-skinned .hud-chatbar::after {
   transition: none;
 }
 
+/* The large upkeep line under the clock — the engine's WorldFrameTopMessage. Its colour is in
+   the string (UPKEEP_NONE/_LOW/_HIGH carry |cff…); `top` is set from hud.ts TOP_MESSAGE. */
+.hud-top-message {
+  position: absolute;
+  left: 0;
+  right: 0;
+  text-align: center;
+  line-height: 1;
+  font-family: var(--game-font);
+  font-size: var(--font-WorldFrameTopMessage); /* MiscUI.txt [FontHeights] WorldFrameTopMessage=0.024 */
+  color: #fff;
+  text-shadow: 0 1px 2px #000, 0 0 4px #000;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 4;
+  opacity: 0;
+  transition: opacity 600ms ease-out;
+}
+.hud-top-message.hud-top-message-on {
+  opacity: 1;
+  transition: none;
+}
+
 /* "Show Regions" debug overlay: floating name labels centred in each region. */
 .region-labels {
   position: fixed;
