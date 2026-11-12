@@ -3028,15 +3028,25 @@ body.hud-widget-skinned .hud-status-builder {
   width: 16.41%;
   height: 32.81%;
 }
-/* The status label sits where SimpleBuildingActionLabel does — CENTER of the info panel's
-   TOPLEFT + (0.11375, −0.029875), which inside this backdrop is 56.4% across. */
+/* The status label ("Training (12s)", "Researching (30s)", "Constructing (40s)") is
+   SimpleBuildingActionLabel: a CENTER anchor at the info panel's TOPLEFT + (0.11375, −0.029875),
+   in SimpleInfoPanelDescriptionTextTemplate — InfoPanelTextFont at 0.01 against the name's
+   0.013, FontColor 0.99 0.827 0.0705 (#fcd312), a 0.001 black shadow. Measured off a 1.30.4
+   screenshot the label is centred OVER THE BAR with its baseline a few texels above the bar's
+   top, and its caps stand as tall as the name's — which is what this box reproduces: it is
+   anchored by its CENTRE (the FDF's own point), on the bar's centre line, just over it. The old
+   12px box spanning the panel's top edge read as a stray caption far above the bar. */
 body.hud-widget-skinned .hud-status-label {
   position: absolute;
-  left: 26.6%;
-  right: 2%;
-  top: 4%;
+  left: 62.2%; /* the bar's centre: (30.4% + (100% − 6%)) / 2 */
+  top: 21.5%;
+  transform: translate(-50%, -50%);
+  line-height: 1;
+  white-space: nowrap;
   text-align: center;
-  font-size: 12px;
+  font-size: 16px;
+  color: #fcd312;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.9);
 }
 /* The build/train bar, at SimpleBuildTimeIndicator's TOPLEFT + (0.06125, −0.038125) — 30.4%
    across the panel, just clear of the big slot. Its own art, which ships gold. The FDF gives
