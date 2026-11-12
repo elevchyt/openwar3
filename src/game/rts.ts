@@ -11082,7 +11082,7 @@ export class RtsController {
       // type's own `Avul` (what `SimUnit.baseInvulnerable` is seeded from), so a player's
       // building a SCRIPT has made invulnerable keeps its bar.
       if (u.building && ((u.neutralPassive && u.invulnerable) || this.registry.get(e.typeId)?.abilities.includes("Avul"))) continue;
-      const row = this.allyAbilityRow(u);
+      const row = this.allyAbilityRow(u, e.typeId);
       specs.push({
         x: u.x,
         y: u.y,
@@ -11191,7 +11191,12 @@ export class RtsController {
    *  • **Learned spells only.** A hero carries every one of its four rows from birth at rank 0
    *    (`buildAbilitiesFor` — `heroAbilities` come in unlearned), and rank 0 is "not picked".
    *    Its INNATE abilities are not spells at all — a hero's `abilList` is Inventory and kin —
-   *    so the row is `AbilityDef.isHero`, which is the same `hero=1` column the learn page is.
+   *    so the row is what the LEARN PAGE is: the type's own `heroAbilList` (`SimWorld.learnable`).
+   *    The `hero=1` column of AbilityData.slk says the same thing in the stock table and is
+   *    still honoured (a hero spell a script ADDED is in no type's list), but it cannot be the
+   *    only test — it is an editor column the game never needs, so a map optimizer drops it
+   *    whole: DotA 6.77b ships 5606 ability rows and not one `hero` cell, and no hero on that
+   *    map wore a row at all.
    *  • **Why it can't be cast is drawn as the CARD draws it.** The two facts are the two the
    *    command card already shows, so the row shows them the same way and the player learns
    *    one language: a cooldown is the clockwise wedge with its seconds printed in it, and
@@ -11199,17 +11204,18 @@ export class RtsController {
    *    DIS* twin — that art means "unavailable", which is a different word, and it can say
    *    neither how long is left nor which of the two is the matter.
    */
-  private allyAbilityRow(u: RenderUnit): { list: BarAbility[]; sig: string } | null {
+  private allyAbilityRow(u: RenderUnit, typeId: string): { list: BarAbility[]; sig: string } | null {
     const icon = this.iconUrl;
     if (!icon || !u.isHero) return null;
     // Neutral heroes (a Tavern's, a creep camp's) are nobody's ally; your own is on your card.
     if (u.owner < 0 || u.owner === this.localPlayer || !this.localAlly(u.owner)) return null;
+    const learnable = this.registry.get(typeId)?.heroAbilities;
     let list: BarAbility[] | null = null;
     let sig = "";
     for (const ab of u.abilities) {
       if (ab.level < 1) continue; // never picked — the row shows nothing at all for it
       const def = this.abilities.get(ab.id);
-      if (!def || !def.isHero || !def.icon) continue;
+      if (!def || !def.icon || !(def.isHero || learnable?.includes(ab.id))) continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
       // The two things that stop a press, and the only two the row draws: the clock, and the
       // mana this RANK costs (a rank 3 Blizzard is not a rank 1 one). Read exactly as the
