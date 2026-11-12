@@ -11522,6 +11522,7 @@ export class MapViewerScene {
    *    rather than floating over the film (see syncHudVisible). Keyed on the letterbox alone,
    *    like the cursor and like ESC-skips-the-cinematic: `EnableUserUI(false)` is the momentary
    *    blackout blizzard.j flicks around each cinematic FADE, and a panel must not blink for it.
+   *  • **Not before the match has started** — the loading screen is still up (`startHeld`).
    *  • **Whatever is in front of you is what answers.** A panel's own key CLOSES it — one that
    *    is up must never become unclosable — and every other key does NOTHING while it is up.
    *    Not "close that one and open this one": these are modal screens, and WC3 does not swap
@@ -11535,6 +11536,12 @@ export class MapViewerScene {
    */
   private togglePanel(panel: ConsolePanel): boolean {
     if (!this.interfaceShown) return false;
+    // Nor behind the LOADING SCREEN. The match and its key handler exist from the moment the
+    // map is built, several seconds before the screen comes down (see holdAtStart), and a
+    // panel opened then is opened onto nothing: an F11 pressed at "L O A D I N G" started the
+    // game with the Allies dialog already up. Refused here rather than in the F-key handler so
+    // that it holds for all four panels and for every door to them.
+    if (this.startHeld || this.loadingScreenUp) return false;
     // The one thing that is always allowed. Ahead of `deadPanels`, which lists the OPEN panel
     // among the dead ones (its button is behind the panel's own scrim and cannot be clicked;
     // the key is what is left).
@@ -11636,6 +11643,15 @@ export class MapViewerScene {
    * and the two must not clobber each other — a chapter that pauses itself in init (they do,
    * for their opening scenes) would otherwise be un-paused by our release.
    */
+  /** Is the loading screen over the canvas? Wider than `startHeld`, which begins only once
+   *  setup has returned: this scene outlives a match and its key handler is bound for good, so
+   *  the whole of the load — the panels are mounted part-way through it — has to be deaf to
+   *  the console's F-keys, not just its last stretch (see togglePanel). */
+  private loadingScreenUp = false;
+  setLoadingScreen(on: boolean): void {
+    this.loadingScreenUp = on;
+  }
+
   holdAtStart(on: boolean): void {
     this.startHeld = on;
     // The clock is not owed the held time: `advanceSim` re-stamps `simLast` every pass while

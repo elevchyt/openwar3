@@ -957,6 +957,9 @@ async function startGame(
   // screen — the world is held with it (`holdAtStart`, below), so what the player hears and
   // what the player sees begin on the same frame (src/audio/sounds.ts setLoadingGate).
   sounds?.setLoadingGate(true);
+  // …and nothing behind it may be OPENED: F11 at the loading screen started the match with
+  // the Allies dialog up (MapViewerScene.togglePanel).
+  mapScene?.setLoadingScreen(true);
   try {
     const step = async <T>(at: number, body: () => T | Promise<T>): Promise<T> => {
       loading?.setProgress(at);
@@ -975,6 +978,7 @@ async function startGame(
     // whose unit list we cannot read still starts, with a bare picture.
     loading?.setMinimapPreview(previewOf(bytes));
     await step(0.15, () => enterMap(bytes, info.name));
+    mapScene?.setLoadingScreen(true); // the first match's scene exists only from here
     // Melee maps get the standard setup (town hall + workers, melee rules);
     // custom/scenario maps run their own triggers instead (see mapKind.ts).
     //
@@ -1063,6 +1067,7 @@ async function startGame(
     loading?.dispose();
     loadingCanvas.hidden = true;
     mapScene?.holdAtStart(false);
+    mapScene?.setLoadingScreen(false);
     sounds?.setLoadingGate(false);
   }
 }
