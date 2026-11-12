@@ -749,7 +749,13 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       speed: b ? num(b, "spd", 0) : 0,
       // "-" is NOT a missing value here, it is "no turn rate" — so it must not fall back to
       // the 0.5 default the way `num` would. See UnitDef.turnRate: 0 = this thing never rotates.
-      turnRate: d && d.string("turnrate") === "-" ? 0 : d ? num(d, "turnrate", 0.5) : 0.5,
+      // Neither is an EMPTY cell in a row that exists: a map optimizer (the "widgetizer" that
+      // bakes a map's object data into SLKs of its own) drops every "-" cell on the way out —
+      // DotA 6.77b's UnitData.slk has 838 rows with no turnRate at all and not one "-", the
+      // stock table 216 dashes and no blank — so reading a blank as 0.5 swivelled every
+      // Ziggurat-based tower on the map toward what it shot at. Only a unit with NO UnitData
+      // row at all takes the default.
+      turnRate: d ? num(d, "turnrate", 0) : 0.5,
       moveHeight: d ? num(d, "moveheight", 0) : 0,
       // Layering quirk: collision lives in UnitBalance.slk in the
       // expansion/patch MPQs but in UnitData.slk in the RoC base.

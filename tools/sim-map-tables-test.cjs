@@ -129,6 +129,13 @@ if (!fs.existsSync(DOTA) || !fs.existsSync(join(EXTRACT, "Units", "UnitData.slk"
   check("a `file` written .mdx is not doubled", units.get("H704")?.model, "cloud7777.mdx");
   check("no unit asks for a doubled extension", units.all().filter((d) => /\.(mdl|mdx)\.mdx$/i.test(d.model)).map((d) => d.id), []);
 
+  // A map optimizer drops every "-" cell, so this map's UnitData.slk has rows with NO turnRate
+  // where the stock table writes "-". A blank in a row that exists is "cannot turn" all the
+  // same: the Scourge's Ziggurat towers must not swivel, the Sentinel's Ancient Protectors
+  // (turnRate 0.4, written out) still do, and so does the stock Tree of Life.
+  check("a tower row with no turnRate cell cannot turn", ["u00M", "u00D", "u00N", "u00T"].map((id) => units.get(id)?.turnRate), [0, 0, 0, 0]);
+  check("…a row that states one keeps it", [units.get("e00R")?.turnRate, stockUnits.get("etol")?.turnRate, stockUnits.get("uzg1")?.turnRate], [0.4, 0.4, 0]);
+
   // Every hero skill DotA defines is built on a base code the engine knows — Channel, Magic
   // Leash, the Spellbook, Phase Shift, Permanent Invisibility/Immolation and the item codes a
   // map hands a hero (Spell Shield's AIdd, Darkness' AIct…); an unknown code is dropped from the
