@@ -4047,7 +4047,10 @@ export class GameHud {
     this.driver.setResources({
       gold: String(Math.floor(r.gold)),
       lumber: String(Math.floor(r.lumber)),
-      supply: `${r.foodUsed}/${r.foodMax}`,
+      // Over the cap (a Farm burned down under a 25-food army: 25/20) the game prints the
+      // whole figure RED, as it does the High Upkeep label — the same `|cffff0000` code
+      // (UPKEEP_HIGH), so the bar's own markup path colours it.
+      supply: r.foodUsed > r.foodMax ? `|cffff0000${r.foodUsed}/${r.foodMax}|r` : `${r.foodUsed}/${r.foodMax}`,
       upkeep: this.driver.uiString(UPKEEP_KEY[band], UPKEEP_FALLBACK[band]),
     });
 
