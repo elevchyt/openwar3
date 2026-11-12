@@ -135,6 +135,15 @@ export function registerPredicateNatives(rt: Runtime): void {
   pointVision("IsLocationVisibleToPlayer", (h, p, x, y) => h.isPointVisibleTo?.(p, x, y));
   pointVision("IsLocationFoggedToPlayer", (h, p, x, y) => h.isPointFoggedTo?.(p, x, y));
   pointVision("IsLocationMaskedToPlayer", (h, p, x, y) => h.isPointMaskedTo?.(p, x, y));
+  // The same three questions spelled with bare coordinates (common.j: `IsVisibleToPlayer takes
+  // real x, real y, player whichPlayer`) — the form a hand-written script reaches for, since it
+  // costs no location. DotA's AI asks it before chasing a hero it has lost sight of.
+  const xyVision = (name: string, ask: (h: NonNullable<Runtime["hooks"]>, p: number, x: number, y: number) => boolean | undefined): void => {
+    def(rt, name, (c, a) => jBool((c.rt.hooks && ask(c.rt.hooks, playerIndex(c, a[2]), asNum(a[0]), asNum(a[1]))) ?? false));
+  };
+  xyVision("IsVisibleToPlayer", (h, p, x, y) => h.isPointVisibleTo?.(p, x, y));
+  xyVision("IsFoggedToPlayer", (h, p, x, y) => h.isPointFoggedTo?.(p, x, y));
+  xyVision("IsMaskedToPlayer", (h, p, x, y) => h.isPointMaskedTo?.(p, x, y));
 
   // --- regions ---
   // Pure geometry against the rects a region is made of, so there is no hook: a region is a
