@@ -1,6 +1,6 @@
 // Ability implementation audit (docs/abilities-audit.md).
 //
-// Cross-references the REAL ability tables from the MPQs against what the
+// Cross-references the REAL ability tables from the install against what the
 // sim actually dispatches, so we can see at a glance which rows in
 // Units\AbilityData.slk we handle, which ride an implemented base `code`, and
 // which are still unimplemented.
@@ -73,7 +73,7 @@ for (const race of FUNC) {
 
 const abilities = parseCsv(fs.readFileSync(path.join(units, "AbilityData.csv"), "latin1"));
 
-// --- every file the four archives actually ship ------------------------------
+// --- every file the install actually ships -----------------------------------
 // So an icon or effect-art path can be CHECKED, not assumed: a `Targetart` naming a
 // model the install doesn't have is a silently missing effect at runtime.
 const listfile = path.join(root, "Warcraft III", "ExtractedData", "_index", "all-files.tsv");
@@ -119,12 +119,19 @@ function handled(id) {
   if (ROW_IDS.has(id)) HANDLED.add(id);
 }
 
-// SPELLS handlers and AURA_BUFFS entries are both `Code: (…)` at one indent level.
-const spellsBody = spellsTs.slice(spellsTs.indexOf("const SPELL_HANDLERS"));
-for (const m of spellsBody.matchAll(/^  ([A-Za-z0-9]{4}):\s*\(/gm)) handled(m[1]);
-for (const m of spellsTs.slice(spellsTs.indexOf("const AURA_BUFFS")).matchAll(/^  ([A-Za-z0-9]{4}):\s*\(/gm)) {
-  handled(m[1]);
+// SPELL_HANDLERS and AURA_BUFFS entries are `Code: …` at one indent level, and the value is
+// EITHER an inline arrow (`AHhb: (api, …) => …`) OR a named function shared between rows
+// (`AHtb: stormBolt,` / `ACtb: stormBolt,`). Matching only the `(` missed the second shape,
+// which left Storm Bolt, Thunder Clap and Slow reading as "nothing casts it yet". Each table
+// is cut at its own closing `};` so a later table at the same indent cannot leak in.
+function tableKeys(src, decl) {
+  const start = src.indexOf(decl);
+  if (start < 0) return [];
+  const end = src.indexOf("\n};", start);
+  return [...src.slice(start, end < 0 ? undefined : end).matchAll(/^  ([A-Za-z0-9]{4}):\s*[\w(]/gm)].map((m) => m[1]);
 }
+for (const id of tableKeys(spellsTs, "const SPELL_HANDLERS")) handled(id);
+for (const id of tableKeys(spellsTs, "const AURA_BUFFS")) handled(id);
 // ORB_ABILITIES is the orb family's registry (src/sim/orbs.ts). Every entry is an
 // implemented attack modifier: `runOrbPart` in world.ts handles the on-hit effect, and
 // `itemBonuses` grants the carried damage/air-attack half. That is where `AIlb` (Orb of
@@ -154,14 +161,19 @@ for (const p of implFiles) {
   for (const m of src.matchAll(/\b(?:abilityId|abilId|alias|code|id)\s*[!=]==\s*"([A-Za-z0-9]{4})"/g)) handled(m[1]);
   // `case "AIat":` inside a switch on an ability code.
   for (const m of src.matchAll(/\bcase\s+"([A-Za-z0-9]{4})":/g)) handled(m[1]);
-  // The code passed to an ability-lookup helper, in any argument position.
+  // The code passed to an ability-lookup helper, in any argument position. `holdDef` is
+  // mapViewer's burrow/transport card (`holdDef("Astd")`, the Orc Burrow's Stand Down).
   for (const m of src.matchAll(
-    /\b(?:itemAbility|itemAbilityLevel|unitPassiveLevel|passiveLevelData|itemAbilityDefOf|findAbility|gatedPassive|channelling|abilityByCode|abilityDefByCode|abilityOf)\s*\(([^()]*)\)/g,
+    /\b(?:itemAbility|itemAbilityLevel|unitPassiveLevel|passiveLevelData|itemAbilityDefOf|findAbility|gatedPassive|channelling|abilityByCode|abilityDefByCode|abilityOf|holdDef)\s*\(([^()]*)\)/g,
   )) {
     for (const lit of m[1].matchAll(/"([A-Za-z0-9]{4})"/g)) handled(lit[1]);
   }
-  // A lookup by id in the ability registry or on a unit's own ability list.
-  for (const m of src.matchAll(/\babilities\??\.get\(\s*"([A-Za-z0-9]{4})"\s*\)/g)) handled(m[1]);
+  // A lookup by id in the ability registry or on a unit's own ability list — every literal
+  // in the argument, so a choice between two rows counts both (the altar's
+  // `abilities.get(mode === "tavern" ? "Aawa" : "Arev")`).
+  for (const m of src.matchAll(/\babilities\??\.get\(([^()]*)\)/g)) {
+    for (const lit of m[1].matchAll(/"([A-Za-z0-9]{4})"/g)) handled(lit[1]);
+  }
   for (const m of src.matchAll(/\.abilities\??\.includes\(\s*"([A-Za-z0-9]{4})"\s*\)/g)) handled(m[1]);
 }
 
@@ -187,10 +199,12 @@ const ENGINE = {
   Aloa: "world.ts SimOrder \"garrison\" (transport load)",
   Adro: "world.ts transport unload",
   Acar: "world.ts transport cargo", Amtc: "world.ts transport cargo",
-  // `Amil`/`Amic` Call to Arms are NOT in this list: they are real implementations now,
-  // found by the scan below in world.ts (`callToArms`/`tickMilitiaCall`, and the
-  // `a.code === "Amil"` / `"Amic"` lookups). They used to be excluded here on the stale
-  // belief that nothing in src/ implemented the militia.
+  // A transport's passengers die with it: `kill()` kills the hold's roster when
+  // `isTransport(u)` (a burrow unloads instead). Keyed on the hold, not on the row.
+  Achd: "world.ts kill() — a transport's cargo dies with it",
+  // The Way Gate: `tickWaygates()` teleports whatever ENTERS the gate's 400×400 box, keyed
+  // on the gate unit — `Awrp` is the row that box's size is read off by hand.
+  Awrp: "world.ts tickWaygates()",
 };
 for (const id of Object.keys(ENGINE)) handled(id);
 
