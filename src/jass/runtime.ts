@@ -690,6 +690,9 @@ export interface EngineHooks {
    *  took. `order` is the order STRING ("attack", "holybolt"): an ABILITY order is cast
    *  by name (the engine's numeric ids for those aren't in any data file), so the bridge
    *  matches it against the unit's abilities' own order strings. */
+  /** The sim's pending hero level/skill events, drained — for `NativeCtx.flushHeroEvents`.
+   *  (The interpreter's HeroEvent; typed loosely because the runtime does not import it.) */
+  drainHeroEvents?(): ReadonlyArray<unknown>;
   issueUnitOrder?(unitId: number, orderId: number, order: string, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number): boolean;
   /** IssueNeutral*OrderById — an order to a neutral building on `player`'s behalf (a purchase:
    *  `orderId` is the ware's rawcode). True when the sale went through. */
@@ -2198,4 +2201,22 @@ export interface NativeCtx {
    *  the moment the owner changes. Provided by the interpreter; absent when a native
    *  runs with no interpreter attached (safe no-op). */
   fireEvent?(kind: string, responses: Map<string, JassValue>, matches?: (params: JassValue[]) => boolean): void;
+  /**
+   * Raise, NOW, the hero level/skill events the native just caused.
+   *
+   * `SelectHeroSkill`, `SetHeroLevel` and `AddHeroXP` fire EVENT_(PLAYER_)HERO_SKILL / _LEVEL
+   * from INSIDE the call in the game, and scripts are written around that: the standard guard
+   * against re-entry is
+   *
+   *     call DisableTrigger(GetTriggeringTrigger())
+   *     call SelectHeroSkill(otherHero, GetLearnedSkill())
+   *     call EnableTrigger(GetTriggeringTrigger())
+   *
+   * which only works if the event arrives while the trigger is off. Left to the frame's own
+   * pump it arrived after the trigger was back on, and the guard guarded nothing — DotA's
+   * Geomancer makes a clone when it learns its ultimate and teaches every clone the same
+   * skill this way, so each clone's lesson made another clone: a thousand of them in ten
+   * seconds. Absent with no interpreter attached (safe no-op).
+   */
+  flushHeroEvents?(): void;
 }

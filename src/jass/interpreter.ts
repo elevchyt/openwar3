@@ -318,6 +318,10 @@ export class Interpreter {
       rt,
       call: (name, args) => this.callFunction(name, args),
       fireEvent: (kind, responses, matches) => this.fireEvent(kind, responses, matches),
+      flushHeroEvents: () => {
+        const events = this.rt.hooks?.drainHeroEvents?.();
+        if (events?.length) this.pumpHeroEvents(events as HeroEvent[]);
+      },
     };
     rt.onWatchedGlobal = (name, before, after) => this.fireVariableEvent(name, before, after);
   }

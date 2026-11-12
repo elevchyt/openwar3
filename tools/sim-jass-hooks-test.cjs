@@ -48,7 +48,7 @@ const EXPECTED = [
   "getHeroAttribute", "setHeroAttribute", "suspendHeroXp",
   // …and `UnitDamageTarget`, which is how a custom map's spells deal damage at all
   // (pass 2; sim-trigger-damage-test.cjs).
-  "damageTarget",
+  "damageTarget", "drainHeroEvents",
   // …and the natives the rebalance maps reach only through blizzard.j: the area blast, the
   // way DOWN a hero's levels, the experience rate, a paused clock, the twelve classifications a
   // script may change, the buff filters, a laid corpse and the cliff layer

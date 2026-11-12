@@ -84,6 +84,7 @@ export function registerAbilityNatives(rt: Runtime): void {
   def(rt, "SetHeroLevel", (c, a) => {
     const id = simOf(c, a[0]);
     if (id !== undefined) c.rt.hooks?.setHeroLevel?.(id, asInt(a[1]), truthy(a[2]));
+    c.flushHeroEvents?.();
     return JNULL;
   });
   // UnitStripHeroLevel — the way DOWN (blizzard.j's SetHeroLevelBJ for a lower level;
@@ -100,11 +101,13 @@ export function registerAbilityNatives(rt: Runtime): void {
   def(rt, "SetHeroXP", (c, a) => {
     const id = simOf(c, a[0]);
     if (id !== undefined) c.rt.hooks?.setHeroXp?.(id, asInt(a[1]), truthy(a[2]));
+    c.flushHeroEvents?.();
     return JNULL;
   });
   def(rt, "AddHeroXP", (c, a) => {
     const id = simOf(c, a[0]);
     if (id !== undefined) c.rt.hooks?.addHeroXp?.(id, asInt(a[1]), truthy(a[2]));
+    c.flushHeroEvents?.();
     return JNULL;
   });
   def(rt, "GetHeroSkillPoints", (c, a) => {
@@ -120,6 +123,7 @@ export function registerAbilityNatives(rt: Runtime): void {
   def(rt, "SelectHeroSkill", (c, a) => {
     const id = simOf(c, a[0]);
     if (id !== undefined) c.rt.hooks?.selectHeroSkill?.(id, intToRawcode(asInt(a[1])));
+    c.flushHeroEvents?.(); // EVENT_HERO_SKILL fires from inside the call (NativeCtx.flushHeroEvents)
     return JNULL;
   });
 
