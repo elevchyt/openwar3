@@ -592,7 +592,9 @@ export class Interpreter {
         const before = this.rt.localViewerReads;
         let taken = -1;
         for (let i = 0; i < s.branches.length; i++) {
-          if (truthy(this.eval(s.branches[i].cond, frame))) { taken = i; break; }
+          // evalG: a condition that calls a script function may WAIT, and the thread waits
+          // with it (`if not Buy(hero, item) then` — see evalG).
+          if (truthy(yield* this.evalG(s.branches[i].cond, frame))) { taken = i; break; }
         }
         // Did the branch we chose depend on WHO IS WATCHING? The probe answers that without
         // the parser having to recognise a shape: any route to `GetLocalPlayer` counts, direct
@@ -872,20 +874,34 @@ export class Interpreter {
   }
 
   /**
-   * `eval` for a THREAD in an AI VM, where an expression may suspend.
+   * `eval` for a THREAD, where an expression may suspend.
    *
    * The real JASS VM is a bytecode machine: a function called from inside an expression can
-   * `Sleep`, and the whole thread waits there. common.ai is written against that — its wave
-   * loop is `if not PrepSuicideOnPlayer(seconds) then`, `exitwhen SuicidePlayer(p, …)` and
-   * `set have = WaitForSignal()`, each of which sleeps for minutes. `eval` cannot suspend (it
-   * is plain JS), so a map's VM adopts the rest of such a call as a separate thread and hands
-   * the caller a null (see runSync); in an AI script that made every campaign wave "fail" at
-   * once and the next wave start in the same instant, until the loop cap. So in an AI VM an
-   * expression that reaches a SCRIPT function is evaluated here instead, as a generator, and
-   * the thread really does wait. Anything else — and every map VM — takes `eval` unchanged.
+   * wait, and the whole thread waits there with it. `eval` cannot suspend (it is plain JS), so
+   * an expression that reaches a SCRIPT function is evaluated here instead, as a generator,
+   * and the wait travels up to whatever is driving the thread. Anything that calls no script
+   * function takes `eval` unchanged, which is nearly every expression there is.
+   *
+   * Two scripts are why, one per VM:
+   *
+   *  • common.ai's wave loop is `if not PrepSuicideOnPlayer(seconds) then`, `exitwhen
+   *    SuicidePlayer(p, …)` and `set have = WaitForSignal()`, each of which sleeps for minutes.
+   *    Handed a null at once, every campaign wave "failed" and the next began in the same
+   *    instant, until the loop cap.
+   *  • a MAP's own AI does the same thing. DotA AI buys an item with `return RGE(…)` /
+   *    `set ok = RGE(…)`, and `RGE` creates the item, hands it to the hero and then polls a
+   *    per-player flag its own pickup trigger sets (`TriggerSleepAction(0.1)` in a loop). This
+   *    used to be an AI-VM-only path: a map's VM adopted the rest of such a call as a thread of
+   *    its own and told the caller "false" (runSync). So the shopping list ran on at once
+   *    with the first purchase still in flight, every later one reset the flag the earlier
+   *    ones were waiting on, the gold was spent and the buyers never woke — heroes kept the
+   *    six items they started with for the rest of the match.
+   *
+   * Where the thread CANNOT wait — a condition, a filter, an enum callback, all driven by
+   * `runSync` — the wait still ends the callback there, as it does in the game.
    */
   private *evalG(e: Expr, frame: Frame): ThreadGen {
-    if (!this.aiScript || !this.mayWait(e)) return this.eval(e, frame);
+    if (!this.mayWait(e)) return this.eval(e, frame);
     switch (e.kind) {
       case "index": {
         const idx = asInt(yield* this.evalG(e.index, frame));
@@ -899,8 +915,11 @@ export class Interpreter {
       case "unary":
         return this.evalUnary(e.op, yield* this.evalG(e.expr, frame));
       case "binary": {
-        // Both sides, left first — JASS does not short-circuit (evalBinary).
+        // Left first, and `and`/`or` stop where `evalBinary` stops — the two evaluators must
+        // not disagree about whether the right-hand side of `u != null and Ready(u)` runs.
         const l = yield* this.evalG(e.left, frame);
+        if (e.op === "and" && !truthy(l)) return jBool(false);
+        if (e.op === "or" && truthy(l)) return jBool(true);
         const r = yield* this.evalG(e.right, frame);
         return this.binaryOf(e.op, l, r);
       }
@@ -933,7 +952,7 @@ export class Interpreter {
   }
 
   private evalBinary(e: Extract<Expr, { kind: "binary" }>, frame: Frame | null): JassValue {
-    // and/or: JASS evaluates BOTH sides (no short-circuit) — do the same.
+    // and/or stop at the side that decides them (JS `&&`/`||` below), as JASS does.
     if (e.op === "and") return jBool(truthy(this.eval(e.left, frame)) && truthy(this.eval(e.right, frame)));
     if (e.op === "or") return jBool(truthy(this.eval(e.left, frame)) || truthy(this.eval(e.right, frame)));
 
