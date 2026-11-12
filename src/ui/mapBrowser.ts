@@ -734,8 +734,11 @@ function centreNameRow(s: FdfScreen): void {
   const left = Math.round((pane.clientWidth - (badge.offsetWidth + gap + width)) / 2);
   badge.style.left = `${left}px`;
   name.style.left = `${left + badge.offsetWidth + gap}px`;
-  // The badge sits on the middle of the name, however many lines it runs to.
-  const middle = baseTop + baseH - height / 2;
+  // The badge sits on the middle of the name's TEXT, however many lines it runs to — not of
+  // its frame: the frame keeps a little slack under the line for the descenders, so its middle
+  // is below the text's and a badge centred on it read low beside the name.
+  const top = baseTop + baseH - height;
+  const middle = top + span.offsetTop + span.offsetHeight / 2;
   badge.style.top = `${middle - badge.offsetHeight / 2}px`;
 }
 
@@ -1031,7 +1034,8 @@ export function layoutInfoPane(pane: FdfFrame, box: PaneBox): FdfFrame {
   // The name row: the player-count badge, then the map's name, then the author badge (hidden,
   // AUTHOR_BADGE) — the FDF chains all three to each other, so only the badge needs placing,
   // and the row is re-centred on the name's real width once it is in (centreNameRow).
-  setProp(findFrame(pane, "MaxPlayersIcon"), "SetPoint", [arg("TOPLEFT"), str("MapInfoPane"), arg("TOPLEFT"), num(0.03), num(-0.004)]);
+  // NAME_ROW_TOP sits it high enough that a descender clears the minimap's border.
+  setProp(findFrame(pane, "MaxPlayersIcon"), "SetPoint", [arg("TOPLEFT"), str("MapInfoPane"), arg("TOPLEFT"), num(0.03), num(-NAME_ROW_TOP)]);
   size(findFrame(pane, "MapNameValue"), 0.14, 0.019);
   // The count sits INSIDE its badge: the engine sizes the TEXT frame to its digit and then
   // centres it on the icon, which for a frame we size to the icon is the same as centring
@@ -1134,6 +1138,10 @@ export const BLURB_SCROLLBAR_FDF = "UI\\FrameDef\\UI\\EscMenuTemplates.fdf";
 /** The minimap, and the stat rows under it — both a little higher than the FDF's own
  *  geometry puts them, to leave the blurb the room a Blizzard-length one needs. */
 const MINIMAP_TOP = 0.026;
+/** The name row's top, from the pane's. It was 0.004, which sat the name's baseline so low
+ *  that the tail of a "g" or "y" ran into the minimap's top border (Footmen Frenzy's "y" lost
+ *  its bottom to it); 0.005 higher clears it. Ours, measured on screen — not the FDF's. */
+const NAME_ROW_TOP = -0.001;
 const ROWS_TOP = 0.162; // where "Suggested Players:" starts, below the minimap
 /** The stat block is all but the last hair of the pane's width, centred in it. */
 const ROW_MARGIN = 0.0009375;
