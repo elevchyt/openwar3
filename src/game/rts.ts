@@ -59,7 +59,8 @@ import { observePlayer, type ObserverPlayerView } from "./observerView";
 import { researchableFor, scoreRow, type ScoreRow, type ScoreSeat, type ScoreTable } from "./scoreTable";
 import { type ItemRegistry } from "../data/items";
 import { workerProfileFor, harvestAbilityOf, depotRoleFor, isHarvestCode, type PlayableRace } from "../data/races";
-import { MeleeAi, AI_SCRIPT_RACES } from "../ai";
+import { MeleeAi } from "../ai";
+import { armAiSeats, pickAi } from "./aiSeating";
 import { ScriptAi, type ScriptAiSources } from "../ai/scriptAi";
 import { CreepCaster } from "../ai/creeps";
 import { ComputerPlusAi, type ConcedeReading, type PlusHost, type PlusLogReading } from "../ai/plus";
@@ -1119,12 +1120,10 @@ export class RtsController {
     campaign = false,
   ): void {
     // A CAMPAIGN chapter's computers are always Blizzard's — the chapter's own `.ai` script, or a
-    // race port if a chapter ever asks for one — and never Computer+, whatever the slot carries.
-    // A chapter's config sets no `aiPlus` today (main.ts campaignConfig); this makes it a rule of
-    // the seat rather than an accident of the config, so no later path (a preference, a LAN
-    // lobby, a dev boot) can put Computer+ behind a mission.
+    // race port if a chapter ever asks for one — and never Computer+, whatever the slot carries
+    // (game/aiSeating.ts, pinned by tools/ai-seating-test.cjs).
     this.campaignMatch = campaign;
-    if (campaign) slots = slots.map((s) => (s.plus ? { ...s, plus: false } : s));
+    slots = armAiSeats(slots, campaign);
     this.meleeSeats = new Map(slots.map((s) => [s.player, s]));
     // Is this a MELEE map? The lobby knows and the script does not, and it is the one thing
     // `startMeleeAIFor` needs that it cannot read off the seat — see there. A new match says
@@ -1271,10 +1270,10 @@ export class RtsController {
     // `human.ai` are the same AI). Any other name is the MAP's own script, and it is RUN, never
     // replaced by a race AI: a Murloc player on elf.ai builds nothing a Murloc can build and
     // stands still for the match, which is what (4)Monolith's creep players used to do.
-    const file = script.toLowerCase().split(/[\\/]/).pop() ?? "";
-    const raceFile = AI_SCRIPT_RACES[file];
-    if (!raceFile) return this.startScriptAI(player, script, seat);
-    const race = raceFile;
+    // (game/aiSeating.ts `pickAi` — the whole decision, pinned headlessly.)
+    const pick = pickAi(script, seat, { melee: this.meleeMap, campaign: this.campaignMatch });
+    if (pick.ai === "script") return this.startScriptAI(player, script, seat);
+    const race = pick.race;
     // WHERE the computer's town is comes from its own buildings, never the lobby. common.ai
     // does not read a start location at all — its towns are the engine's (`TownHasHall`,
     // `TownHasMine`, `TownWithMine`), clusters around the player's halls — and by the time a
@@ -1303,12 +1302,11 @@ export class RtsController {
     // `startWarChasersAI`, each with its own AI object and its own rules for that one map
     // (docs/candy-war-ai.md, docs/warchasers-ai.md). Neither goes through `StartMeleeAI`,
     // because a scenario runs none of the melee library.
-    // …and in a CAMPAIGN chapter, never at all (prepareMeleeAI already clears the flag there;
-    // this is the seat's own guard, so the rule does not live in one caller).
-    const plus = seat.plus === true && !this.campaignMatch;
-    if (plus && !this.meleeMap) {
+    // …and in a CAMPAIGN chapter, never at all (`pickAi` answers "melee" with
+    // `plusRefused: "campaign"`, silently — a chapter offers no switch to have ticked).
+    if (pick.ai === "melee" && pick.plusRefused === "custom") {
       this.warnOncePlusOnCustom();
-    } else if (plus) {
+    } else if (pick.ai === "plus") {
       this.computerPlus?.add(player, race, seat.difficulty, startX, startY, this.meleeSeed);
       // Insane Computer+ plays like a skilled player, and a skilled player ANIMATION-CANCELS:
       // it moves out of a blow's backswing and gives its next order the tick a spell goes off

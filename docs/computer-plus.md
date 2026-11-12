@@ -32,8 +32,12 @@ port if a chapter ever asked for one. `prepareMeleeAI` is told the match is a ca
 (`MeleeConfig.campaign`), clears `plus` off every seat, and `startMeleeAIFor` checks
 `campaignMatch` again at the seat. A chapter's config sets no `aiPlus` today
 (main.ts `campaignConfig`), so this is a rule rather than an accident of the config: no
-preference, lobby or dev boot can put Computer+ behind a mission. Checked live on Orc03 by
-forcing `plus` onto a seat and asking `startMeleeAIFor` for `human.ai`: Blizzard's AI took it.
+preference, lobby or dev boot can put Computer+ behind a mission. The decision itself is two
+pure functions in [`src/game/aiSeating.ts`](../src/game/aiSeating.ts) — `armAiSeats` (the flag
+cleared when the match is armed) and `pickAi` (refused again at the seat, even on a chapter whose
+w3i sets the melee flag) — and `tools/ai-seating-test.cjs` pins each guard ON ITS OWN, so neither
+can quietly become the only one. Checked live on Orc03 too, by forcing `plus` onto a seat and
+asking `startMeleeAIFor` for `human.ai`: Blizzard's AI took it.
 
 The two custom maps that DO have Computer+ are seated somewhere else entirely and are untouched
 by this — **Extreme Candy War** through `startCandyWarAI` and **WarChasers** through
