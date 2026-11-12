@@ -1,7 +1,7 @@
 // Ability implementation audit (docs/abilities-audit.md).
 //
-// Cross-references the REAL ability tables from the MPQs against what the
-// sim actually dispatches, so we can see at a glance which of the 799 rows in
+// Cross-references the REAL ability tables from the install against what the
+// sim actually dispatches, so we can see at a glance which rows in
 // Units\AbilityData.slk we handle, which ride an implemented base `code`, and
 // which are still unimplemented.
 //
@@ -11,7 +11,10 @@
 //   Units\*AbilityStrings.txt    — Name
 // Implementation side:
 //   src/data/abilities.ts        — KNOWN_ABILITIES (target type + autocast)
-//   src/sim/spells.ts            — SPELLS handlers + AURA_BUFFS
+//   src/sim/spells.ts            — SPELL_HANDLERS + AURA_BUFFS
+//   src/sim/orbs.ts              — ORB_ABILITIES (the orb family's registry)
+//   the rest of src/sim + rts.ts, mapViewer.ts, items.ts, abilities.ts
+//                                — code/id dispatch, ability-lookup calls and lookups
 //
 // Usage: node tools/audit-abilities.mjs
 import fs from "node:fs";
@@ -70,7 +73,7 @@ for (const race of FUNC) {
 
 const abilities = parseCsv(fs.readFileSync(path.join(units, "AbilityData.csv"), "latin1"));
 
-// --- every file the four archives actually ship ------------------------------
+// --- every file the install actually ships -----------------------------------
 // So an icon or effect-art path can be CHECKED, not assumed: a `Targetart` naming a
 // model the install doesn't have is a silently missing effect at runtime.
 const listfile = path.join(root, "Warcraft III", "ExtractedData", "_index", "all-files.tsv");
@@ -95,6 +98,7 @@ function hasArt(v) {
 // --- what the sim implements -------------------------------------------------
 const abilitiesTs = fs.readFileSync(path.join(root, "src", "data", "abilities.ts"), "utf8");
 const spellsTs = fs.readFileSync(path.join(root, "src", "sim", "spells.ts"), "utf8");
+const orbsTs = fs.readFileSync(path.join(root, "src", "sim", "orbs.ts"), "utf8");
 
 const knownBlock = abilitiesTs.slice(abilitiesTs.indexOf("KNOWN_ABILITIES"), abilitiesTs.indexOf("interface Row"));
 const KNOWN = new Map();
@@ -102,26 +106,75 @@ for (const m of knownBlock.matchAll(/^\s*([A-Za-z0-9]{4}):\s*\{\s*target:\s*"(\w
   KNOWN.set(m[1], { target: m[2], autocast: !!m[3] });
 }
 
-// SPELLS handlers and AURA_BUFFS entries are both `Code: (…)` at one indent level.
-const HANDLED = new Set();
-const spellsBody = spellsTs.slice(spellsTs.indexOf("const SPELL_HANDLERS"));
-for (const m of spellsBody.matchAll(/^  ([A-Za-z0-9]{4}):\s*\(/gm)) HANDLED.add(m[1]);
-for (const m of spellsTs.slice(spellsTs.indexOf("const AURA_BUFFS")).matchAll(/^  ([A-Za-z0-9]{4}):\s*\(/gm)) {
-  HANDLED.add(m[1]);
+// Every alias/base code the audit knows. A 4-char literal in the source only counts as
+// an implementation when it names one of these rows — that is the guard which keeps the
+// scan from turning an unrelated `case "Name":` or `id === "peon"` into a false `done`.
+const ROW_IDS = new Set();
+for (const a of abilities) {
+  for (const id of [a.alias, a.code]) if (id && id.length === 4) ROW_IDS.add(id);
 }
-// Not every ability casts through SPELL_HANDLERS. The on-attack "orb" abilities
-// (Searing/Cold/Black Arrows, Incinerate) and the Defend stance are resolved in the
-// attack/order path in world.ts as `ab.code === "AHfa"`, and the passive item bonuses
-// (Claws of Attack, Ring of Protection, …) as a `switch (def.code) { case "AIat": }`
-// in itemBonuses/applyPowerup. Count both shapes.
-for (const file of ["sim/world.ts", "game/rts.ts", "render/mapViewer.ts", "data/items.ts"]) {
+
+const HANDLED = new Set();
+function handled(id) {
+  if (ROW_IDS.has(id)) HANDLED.add(id);
+}
+
+// SPELL_HANDLERS and AURA_BUFFS entries are `Code: …` at one indent level, and the value is
+// EITHER an inline arrow (`AHhb: (api, …) => …`) OR a named function shared between rows
+// (`AHtb: stormBolt,` / `ACtb: stormBolt,`). Matching only the `(` missed the second shape,
+// which left Storm Bolt, Thunder Clap and Slow reading as "nothing casts it yet". Each table
+// is cut at its own closing `};` so a later table at the same indent cannot leak in.
+function tableKeys(src, decl) {
+  const start = src.indexOf(decl);
+  if (start < 0) return [];
+  const end = src.indexOf("\n};", start);
+  return [...src.slice(start, end < 0 ? undefined : end).matchAll(/^  ([A-Za-z0-9]{4}):\s*[\w(]/gm)].map((m) => m[1]);
+}
+for (const id of tableKeys(spellsTs, "const SPELL_HANDLERS")) handled(id);
+for (const id of tableKeys(spellsTs, "const AURA_BUFFS")) handled(id);
+// ORB_ABILITIES is the orb family's registry (src/sim/orbs.ts). Every entry is an
+// implemented attack modifier: `runOrbPart` in world.ts handles the on-hit effect, and
+// `itemBonuses` grants the carried damage/air-attack half. That is where `AIlb` (Orb of
+// Lightning, old) and `AIpb` (Orb of Venom) live — they have no `case` of their own
+// because their effect IS the flat bonus the generic orb path gives them.
+const orbBlock = orbsTs.slice(orbsTs.indexOf("export const ORB_ABILITIES"), orbsTs.indexOf("/** Priority tiers"));
+for (const m of orbBlock.matchAll(/^  ([A-Za-z0-9]{4}):\s*"(?:arrow|passive|item)"/gm)) handled(m[1]);
+
+// Not every ability casts through SPELL_HANDLERS. Some are resolved in the attack/order
+// path as `ab.code === "AHfa"`, some in a `switch (def.code) { case "AIat": }`, some via
+// the alias (`a.id === "Aawa"`, blight's `id !== "Abgs"`), and many by handing the code
+// to a lookup helper (`itemAbility(u, "AIcf")`, `passiveLevelData(u, "AUts")`,
+// `findAbility(u, "Atdg")`, `abilityByCode("ANse")`). The ability registry and a unit's
+// own ability list are also read by id (`abilities.get("Aegm")`, `.abilities.includes
+// ("Avul")`). Scan the whole sim plus the game/UI files that dispatch too, and keep only
+// literals that name a real row (ROW_IDS).
+const implFiles = fs.readdirSync(path.join(root, "src", "sim"))
+  .filter((name) => name.endsWith(".ts"))
+  .map((name) => path.join(root, "src", "sim", name));
+for (const file of ["game/rts.ts", "render/mapViewer.ts", "data/items.ts", "data/abilities.ts"]) {
   const p = path.join(root, "src", file);
-  if (!fs.existsSync(p)) continue;
+  if (fs.existsSync(p)) implFiles.push(p);
+}
+for (const p of implFiles) {
   const src = fs.readFileSync(p, "utf8");
-  for (const m of src.matchAll(/\bcode\s*[!=]==\s*"([A-Za-z0-9]{4})"/g)) HANDLED.add(m[1]);
-  // `case "AIat":` — only inside a switch on an ability code, which is the only place
-  // this file switches on a 4-char string literal.
-  for (const m of src.matchAll(/\bcase\s+"([A-Za-z0-9]{4})":/g)) HANDLED.add(m[1]);
+  // A dispatch on an ability code or row id.
+  for (const m of src.matchAll(/\b(?:abilityId|abilId|alias|code|id)\s*[!=]==\s*"([A-Za-z0-9]{4})"/g)) handled(m[1]);
+  // `case "AIat":` inside a switch on an ability code.
+  for (const m of src.matchAll(/\bcase\s+"([A-Za-z0-9]{4})":/g)) handled(m[1]);
+  // The code passed to an ability-lookup helper, in any argument position. `holdDef` is
+  // mapViewer's burrow/transport card (`holdDef("Astd")`, the Orc Burrow's Stand Down).
+  for (const m of src.matchAll(
+    /\b(?:itemAbility|itemAbilityLevel|unitPassiveLevel|passiveLevelData|itemAbilityDefOf|findAbility|gatedPassive|channelling|abilityByCode|abilityDefByCode|abilityOf|holdDef)\s*\(([^()]*)\)/g,
+  )) {
+    for (const lit of m[1].matchAll(/"([A-Za-z0-9]{4})"/g)) handled(lit[1]);
+  }
+  // A lookup by id in the ability registry or on a unit's own ability list — every literal
+  // in the argument, so a choice between two rows counts both (the altar's
+  // `abilities.get(mode === "tavern" ? "Aawa" : "Arev")`).
+  for (const m of src.matchAll(/\babilities\??\.get\(([^()]*)\)/g)) {
+    for (const lit of m[1].matchAll(/"([A-Za-z0-9]{4})"/g)) handled(lit[1]);
+  }
+  for (const m of src.matchAll(/\.abilities\??\.includes\(\s*"([A-Za-z0-9]{4})"\s*\)/g)) handled(m[1]);
 }
 
 // Some abilities are not "spells" at all — the ENGINE is their implementation. A worker's
@@ -146,11 +199,14 @@ const ENGINE = {
   Aloa: "world.ts SimOrder \"garrison\" (transport load)",
   Adro: "world.ts transport unload",
   Acar: "world.ts transport cargo", Amtc: "world.ts transport cargo",
-  // NOT here: `Amil`/`Amic` Call to Arms. That is the HUMAN militia — the Town Hall turns
-  // its Peasants into Militia units and back — and nothing in src/ implements it (the only
-  // mention of "militia" in the tree is an upgrade tooltip). It stays `todo`.
+  // A transport's passengers die with it: `kill()` kills the hold's roster when
+  // `isTransport(u)` (a burrow unloads instead). Keyed on the hold, not on the row.
+  Achd: "world.ts kill() — a transport's cargo dies with it",
+  // The Way Gate: `tickWaygates()` teleports whatever ENTERS the gate's 400×400 box, keyed
+  // on the gate unit — `Awrp` is the row that box's size is read off by hand.
+  Awrp: "world.ts tickWaygates()",
 };
-for (const id of Object.keys(ENGINE)) HANDLED.add(id);
+for (const id of Object.keys(ENGINE)) handled(id);
 
 function status(a) {
   const code = a.code || a.alias;
@@ -201,12 +257,14 @@ const lines = [];
 lines.push("# Ability implementation audit");
 lines.push("");
 lines.push("Generated by `node tools/audit-abilities.mjs` — do not hand-edit the table; edit the");
-lines.push("sources (`src/data/abilities.ts` KNOWN_ABILITIES, `src/sim/spells.ts` SPELLS/AURA_BUFFS)");
-lines.push("and re-run. Ground truth is the user's own install via `ExtractedData`.");
+lines.push("sources (`src/data/abilities.ts` KNOWN_ABILITIES, `src/sim/spells.ts` SPELL_HANDLERS/");
+lines.push("AURA_BUFFS, `src/sim/orbs.ts` ORB_ABILITIES, and the dispatch/lookup sites in the rest");
+lines.push("of `src/sim` plus rts/mapViewer) and re-run. Ground truth is the user's own install via");
+lines.push("`ExtractedData`.");
 lines.push("");
 lines.push("Status:");
 lines.push("");
-lines.push("- `x` **done** — a handler in `spells.ts` (or a passive resolved elsewhere) dispatches this id.");
+lines.push("- `x` **done** — a handler, an orb-registry entry, or a passive resolved elsewhere dispatches this id.");
 lines.push("- `~` **alias** — no handler of its own, but its base `code` is implemented, so it inherits the behaviour.");
 lines.push("- `/` **partial** — listed in `KNOWN_ABILITIES` (the UI can aim it) but nothing casts it yet.");
 lines.push("- ` ` **todo** — not implemented.");
@@ -239,8 +297,8 @@ if (!broken.length) {
 lines.push("");
 lines.push("## Where this stands, and how to carry it on");
 lines.push("");
-lines.push("The **scan** is complete: all 799 rows are classified below and every art path they name");
-lines.push("is checked against the archives. What remains is implementation.");
+lines.push(`The **scan** is complete: all ${rows.length} rows are classified below and every art path they`);
+lines.push("name is checked against the archives. What remains is implementation.");
 lines.push("");
 lines.push("How to add one, end to end:");
 lines.push("");
@@ -297,7 +355,7 @@ lines.push("");
 
 // --- what to implement next --------------------------------------------------
 // Implementing a base `code` clears every alias riding it, so the todo list is worth
-// working in fanout order: Abolish Magic once retires four rows.
+// working in fanout order.
 const fanout = new Map();
 for (const r of rows) {
   if (r.status !== "todo") continue;
