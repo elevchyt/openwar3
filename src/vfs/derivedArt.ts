@@ -32,7 +32,7 @@ import { encodeBlp } from "../assets/blpEncode";
 // with the middle notch painted out and stamped again at the thirds (`fourStepTrack`).
 //
 // What this layer does NOT do is the last resort. An icon that can be neither found nor derived
-// is drawn as the engine's own placeholder, `BTNTemp.blp` — but that is a fact about DRAWING
+// is drawn as a flat fuchsia square (`MISSING_ICON_URL`) — but that is a fact about DRAWING
 // (render/mapViewer.ts `blpIcon`), not about the install, so `exists()` here stays truthful for
 // every other reader.
 

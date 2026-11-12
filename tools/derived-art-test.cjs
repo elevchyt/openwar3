@@ -7,7 +7,7 @@
 //   • A file the install HAS is never replaced.
 //   • `prepare()` over the patched tables derives the 1.32 upgrade badges' icons, and every one
 //     of them decodes.
-//   • `placeholderIcon`: a live button icon nothing can supply falls back to BTNTemp; a texture
+//   • `isButtonIcon`: a live button icon nothing can supply is drawn as a fuchsia square; a texture
 //     and a greyed twin do not.
 //
 // Run: pnpm sim:test   (skips without the install in `Warcraft III/`)
@@ -20,7 +20,7 @@ globalThis.ImageData ??= class { constructor(w, h) { this.width = w; this.height
 const { DerivedArtDataSource, passiveFromCommand } = require(join(BUILD, "src", "vfs", "derivedArt.js"));
 const { PatchDataSource } = require(join(BUILD, "src", "vfs", "patch.js"));
 const { EditionDataSource } = require(join(BUILD, "src", "vfs", "edition.js"));
-const { placeholderIcon } = require(join(BUILD, "src", "data", "commandStrings.js"));
+const { isButtonIcon, MISSING_ICON_URL } = require(join(BUILD, "src", "data", "commandStrings.js"));
 const { BlpImage } = require(join(REPO, "node_modules", "mdx-m3-viewer", "dist", "cjs", "parsers", "blp", "image.js"));
 const { openInstall } = require("./install.cjs");
 
@@ -42,13 +42,24 @@ const mae = (a, b) => {
   return sum / (a.data.length / 4 * 3);
 };
 
-console.log("\nplaceholderIcon — the last resort is BTNTemp, and only for a live button icon");
-check("a missing command icon", placeholderIcon("ReplaceableTextures\\CommandButtons\\BTNNoSuchThing.blp"), "ReplaceableTextures\\CommandButtons\\BTNTemp.blp");
-check("a missing passive icon", placeholderIcon("ReplaceableTextures\\PassiveButtons\\PASBTNNoSuchThing.blp"), "ReplaceableTextures\\CommandButtons\\BTNTemp.blp");
-check("a map's imported icon by name", placeholderIcon("war3mapImported\\BTNCustom.blp"), "ReplaceableTextures\\CommandButtons\\BTNTemp.blp");
-check("not a greyed twin (its fallback is the live art)", placeholderIcon("ReplaceableTextures\\CommandButtonsDisabled\\DISBTNNoSuchThing.blp"), null);
-check("not a model's texture", placeholderIcon("Units\\Human\\Footman\\Footman.blp"), null);
-check("not BTNTemp itself", placeholderIcon("ReplaceableTextures\\CommandButtons\\BTNTemp.blp"), null);
+console.log("\nthe last resort is a fuchsia square, and only for a live button icon");
+check("a missing command icon", isButtonIcon("ReplaceableTextures\\CommandButtons\\BTNNoSuchThing.blp"), true);
+check("a missing passive icon", isButtonIcon("ReplaceableTextures\\PassiveButtons\\PASBTNNoSuchThing.blp"), true);
+check("a map's imported icon by name", isButtonIcon("war3mapImported\\BTNCustom.blp"), true);
+check("not a greyed twin (its fallback is the live art)", isButtonIcon("ReplaceableTextures\\CommandButtonsDisabled\\DISBTNNoSuchThing.blp"), false);
+check("not a model's texture", isButtonIcon("Units\\Human\\Footman\\Footman.blp"), false);
+{
+  // Decode the PNG and look at the pixels: every one is (255, 0, 255).
+  const png = Buffer.from(MISSING_ICON_URL.split(",")[1], "base64");
+  const idat = png.subarray(png.indexOf("IDAT") + 4, png.indexOf("IEND") - 8);
+  const raw = require("node:zlib").inflateSync(idat);
+  let ok = raw.length === 4 * (1 + 4 * 3);
+  for (let y = 0; y < 4 && ok; y++) for (let x = 0; x < 4; x++) {
+    const i = y * 13 + 1 + x * 3;
+    if (raw[i] !== 255 || raw[i + 1] !== 0 || raw[i + 2] !== 255) ok = false;
+  }
+  check("the placeholder is a solid (255, 0, 255) square", ok, true);
+}
 
 if (!fs.existsSync(join(REPO, "Warcraft III", ".build.info"))) {
   console.log("skip  the rest: no install in Warcraft III/");

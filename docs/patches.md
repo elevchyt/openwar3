@@ -491,4 +491,4 @@ readable with the CASC reader, and nothing of theirs is committed.
 
 Nothing is left to draw. A PASBTN is derived from its BTN and a DISPASBTN IS its DISBTN, so a
 later patch's passive badge never needs art of ours as long as its command icon ships — and an
-icon that can be neither found nor derived is drawn as `BTNTemp.blp`.
+icon that can be neither found nor derived is drawn as a flat fuchsia square (docs/icons.md).

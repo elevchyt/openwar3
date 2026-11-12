@@ -169,7 +169,7 @@ export function disabledIconPath(path: string): string | null {
  * `.tga` — the editor emits whichever extension the author typed — and a path written with no
  * extension at all. DotA v6.77b AI names its Drow Ranger `BTNBansheeRanger.tga` and 31 of its
  * ability icons with no extension, and every one is a `.blp` in the store; taken literally they
- * all fell through to BTNTemp. The multiboard's own icon lookup has always made the first swap.
+ * all fell through to the placeholder. The multiboard's own icon lookup has always made the first swap.
  */
 export function iconFileCandidates(path: string): string[] {
   const out = [path];
@@ -178,14 +178,24 @@ export function iconFileCandidates(path: string): string[] {
   return out;
 }
 
-/** The placeholder a missing BUTTON icon is drawn as (MapViewerScene.blpIcon, docs/icons.md): `BTNTemp.blp`,
- *  or null when the path is not a live button icon at all — a model's texture, a loading screen,
- *  or a greyed DIS* twin, whose own fallback (`disabledArt`'s caller) is the live art. */
-export function placeholderIcon(path: string): string | null {
+/**
+ * What a missing icon is drawn as: a flat square of fuchsia, (255, 0, 255) — the
+ * square Warcraft III itself shows where art cannot be found (the developer's call, 2026-11),
+ * and the one a mapmaker recognises on sight as "this art is not there". It replaced `BTNTemp.blp`, which is a real icon and so
+ * read as a real (if odd) button rather than as a hole in the map's art.
+ *
+ * A 4×4 PNG of that one colour, as a data URL: it is OURS (zero Blizzard bytes), needs no
+ * install to draw, and scales to any button.
+ */
+export const MISSING_ICON_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAEUlEQVR4nGP4z/AfjhiI4wAAPSEf4dghpuIAAAAASUVORK5CYII=";
+
+/** Is this path a live BUTTON icon — the kind that is drawn as `MISSING_ICON_URL` when nothing
+ *  can supply it (MapViewerScene.blpIcon, docs/icons.md)? Not a model's texture or a loading
+ *  screen, and not a greyed DIS* twin, whose own fallback (`disabledArt`'s caller) is the
+ *  live art. */
+export function isButtonIcon(path: string): boolean {
   const p = path.replace(/\//g, "\\");
   const name = p.split("\\").pop() ?? "";
-  if (/^DIS/i.test(name) || /\\CommandButtonsDisabled\\/i.test(p)) return null;
-  const button = /\\(CommandButtons|PassiveButtons)\\/i.test(p) || /^(PAS)?BTN/i.test(name);
-  if (!button || /^BTNTemp\.blp$/i.test(name)) return null;
-  return "ReplaceableTextures\\CommandButtons\\BTNTemp.blp";
+  if (/^DIS/i.test(name) || /\\CommandButtonsDisabled\\/i.test(p)) return false;
+  return /\\(CommandButtons|PassiveButtons)\\/i.test(p) || /^(PAS)?BTN/i.test(name);
 }

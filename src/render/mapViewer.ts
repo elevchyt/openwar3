@@ -68,7 +68,7 @@ import { specialFxPhaseAt, type SpecialFxClips } from "./specialFxClock";
 import { pickEffectSequence, yawPitchRollQuat } from "./effectAnim";
 import { loadAbilityRegistry, mdlPath, type AbilityRegistry, type AbilityDef, type BuffFx, isRepairCode, KNOWN_ABILITIES, TREE_UPGRADE_ABILITY, requiredHeroLevel, morphFlags, MORPH_FLAG_PERMANENT, MORPH_FLAG_REQUIRES_PAYMENT, type AbilityLevel, iconAt, isStance } from "../data/abilities";
 import { isDesktopApp } from "../assets/nativeInstall";
-import { loadCommandStrings, disabledIconPath, placeholderIcon, iconFileCandidates, type CommandStrings } from "../data/commandStrings";
+import { loadCommandStrings, disabledIconPath, isButtonIcon, MISSING_ICON_URL, iconFileCandidates, type CommandStrings } from "../data/commandStrings";
 import { resolveTipRefs } from "../data/tipRefs";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
 import { CAMERA, FOG_OF_WAR, PLACEMENT, MELEE, MINIMAP, MISC_DATA, TEXT_TAG, heroReviveCost, mapMiscEpoch, miscKeyIsRead, setMapMiscOverlay, type ReviveMode } from "../data/gameplayConstants";
@@ -14608,13 +14608,14 @@ export class MapViewerScene {
       const bytes = read();
       url = bytes ? blpToDataUrl(bytes) : null;
       // The LAST RESORT (docs/icons.md): a button icon that is neither in the install nor
-      // derivable from it (vfs/derivedArt.ts) is drawn as the engine's own placeholder,
-      // `BTNTemp.blp`, rather than as an empty square, so the ability or item behind it is still
-      // there to see and press. Its greyed twin then comes the ordinary way (DISBTNTemp).
-      const temp = url ? null : placeholderIcon(path);
-      if (temp) url = this.blpIcon(temp);
+      // derivable from it (vfs/derivedArt.ts) is drawn as a flat fuchsia square — "this art is
+      // missing", said the way the game says it — rather than as an empty slot, so the ability
+      // or item behind it is still there to see and press. Its greyed twin falls back on the
+      // live art as every missing DIS* does, and so is the same square.
+      const missing = !url && isButtonIcon(path);
+      if (missing) url = MISSING_ICON_URL;
       this.iconCache.set(key, url);
-      if (url && !temp) this.iconSource.set(url, path);
+      if (url && !missing) this.iconSource.set(url, path);
     }
     return url;
   }

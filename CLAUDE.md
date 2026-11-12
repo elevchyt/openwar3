@@ -312,7 +312,7 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   the install's, then our own drawn art (`src/patches/art/`), then DERIVED at mount — a missing
   `PASBTN<X>` is `BTN<X>` with its 4-pixel bevel blacked and the next eight rings shaded (a
   measured curve; 3/255 from the real ones), a missing `DISPASBTN<X>` IS `DISBTN<X>` — and last
-  `BTNTemp.blp`, drawn rather than an empty square. An `Art` may list one icon per LEVEL
+  a flat fuchsia square, (255, 0, 255), drawn rather than an empty slot. An `Art` may list one icon per LEVEL
   (`iconAt`), which `rlev` upgrade effects advance.
 - **Camera:** read [`docs/camera.md`](docs/camera.md) before touching `GAME_FOV`, the zoom constants, or a map's
   camera. The FOV *field* the data carries (70) is **not** the angle the game renders with (**45°**, measured off

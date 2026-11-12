@@ -8,9 +8,9 @@ A command-button icon comes from one of four places, in this order:
    Blades, Gargoyle Prioritize), PNGs in `src/patches/art/` baked to BLP by
    `node tools/patch-art.mjs` and served at the path the later game uses (docs/patches.md).
 3. **DERIVED from the install** — `src/vfs/derivedArt.ts`, computed once after the mount.
-4. **The placeholder** — `BTNTemp.blp`, the engine's own, for an icon nothing above can supply.
+4. **The placeholder** — a flat fuchsia square, (255, 0, 255), for an icon nothing above can supply.
 
-Read this before touching `src/vfs/derivedArt.ts`, `src/assets/blpEncode.ts`, `placeholderIcon`
+Read this before touching `src/vfs/derivedArt.ts`, `src/assets/blpEncode.ts`, `isButtonIcon`
 (src/data/commandStrings.ts) or `iconAt` (src/data/abilities.ts).
 
 At every step the PATH an `Art` names is a texture, not a file (`iconFileCandidates`): the game
@@ -72,11 +72,13 @@ SimWorld.sumUpgradeBonuses): Improved Lumber Harvesting shows the first icon, Ad
 
 ## The last resort
 
-An icon that can be neither found nor derived is drawn as **`BTNTemp.blp`** — the engine's own
-placeholder — rather than as an empty square, so the ability or item behind it is still there to
-see and press (MapViewerScene.blpIcon, `placeholderIcon`). Its greyed twin then comes the ordinary
-way, `DISBTNTemp.blp`. Two things are deliberately NOT given the placeholder: a greyed `DIS*` icon
-(its fallback is the live art) and a path that is not a button icon at all (a model's texture).
+An icon that can be neither found nor derived is drawn as a **flat fuchsia square**, (255, 0,
+255) — the "this art is missing" square of the original game — rather than as an empty slot, so
+the ability or item behind it is still there to see and press (MapViewerScene.blpIcon,
+`MISSING_ICON_URL`). It used to be `BTNTemp.blp`, which is a real icon and read as one. Two
+things are deliberately NOT given the placeholder: a greyed `DIS*` icon (its fallback is the
+live art, so a missing pair is the same square twice) and a path that is not a button icon at
+all (a model's texture, `isButtonIcon`).
 And a row whose `Art` is EMPTY is not "missing art": the game draws no button for it (Frost
 Attack's `[Afrb]`), and so do we.
 
