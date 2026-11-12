@@ -108,13 +108,19 @@ export function registerTextNatives(rt: Runtime): void {
 
   // --- on-screen messages (DisplayTextToPlayer family + ClearTextMessages) ---
   // DisplayTextToPlayer(player, x, y, message): untimed (duration < 0 = host default).
+  // A line addressed to a second seat in the same instant is a broadcast written as a loop,
+  // and the watchers are shown it once (Runtime.watcherEcho).
+  const tell = (c: NativeCtx, to: number, msg: string, duration: number): void => {
+    c.rt.hooks?.displayText?.(to, msg, duration);
+    for (const w of c.rt.watcherEcho(to, msg)) c.rt.hooks?.displayText?.(w, msg, duration);
+  };
   def(rt, "DisplayTextToPlayer", (c, a) => {
-    c.rt.hooks?.displayText?.(c.rt.data<JassPlayer>(a[0])?.index ?? 0, asStr(a[3]), -1);
+    tell(c, c.rt.data<JassPlayer>(a[0])?.index ?? 0, asStr(a[3]), -1);
     return JNULL;
   });
   // DisplayTimedTextToPlayer(player, x, y, duration, message).
   def(rt, "DisplayTimedTextToPlayer", (c, a) => {
-    c.rt.hooks?.displayText?.(c.rt.data<JassPlayer>(a[0])?.index ?? 0, asStr(a[4]), asNum(a[3]));
+    tell(c, c.rt.data<JassPlayer>(a[0])?.index ?? 0, asStr(a[4]), asNum(a[3]));
     return JNULL;
   });
   // DisplayTimedTextFromPlayer(player, x, y, duration, message) — despite common.j naming

@@ -1717,6 +1717,49 @@ export class Runtime {
    */
   audience: number | null = null;
 
+  /**
+   * The WATCHERS: player numbers that hold no seat and only observe the match — this machine
+   * when it got up to watch, and a LAN game's Observers bench (`LobbyInfo.watchers`).
+   *
+   * In WC3 an observer IS a slot (`PLAYER_STATE_OBSERVER`), so a map's own audience code
+   * reaches it for free: it is in `bj_FORCE_ALL_PLAYERS`, and a `for i = 0 to 11` loop over
+   * `DisplayTimedTextToPlayer(Player(i), …)` prints to it with everybody else. Ours sits one
+   * past the last slot, in no force and in no such loop, so a map that announces through
+   * either — DotA prints every kill through `IsPlayerInForce(GetLocalPlayer(), force)` and
+   * its "team is OWNING" line seat by seat — told a watcher nothing at all.
+   *
+   * One rule stands in for the slot it does not have: **a watcher is in the audience of
+   * anything addressed to MORE THAN ONE player.** A force that has EVER held two counts it as a member
+   * (`IsPlayerInForce`, natives/forces.ts), and a line handed to a second seat in the same
+   * instant is handed to it once (`watcherEcho`). What is said to ONE player — an error, a
+   * reply to their own command, `GetForceOfPlayer(p)` — stays theirs.
+   */
+  watchers = new Set<number>();
+  /** The lines `DisplayTextToPlayer` handed out this instant, and to whom (see `watchers`). */
+  private echoAt = -1;
+  private readonly echoSeen = new Map<string, { first: number; told: boolean }>();
+
+  /**
+   * A line was just addressed to `player`. Answers the watchers who should be shown it too:
+   * all of them, the first time the SAME line reaches a SECOND seat in one game instant, and
+   * nobody otherwise — so a ten-seat loop is read once and a private line not at all.
+   */
+  watcherEcho(player: number, msg: string): Iterable<number> {
+    if (this.watchers.size === 0 || this.watchers.has(player)) return [];
+    if (this.gameTime !== this.echoAt) {
+      this.echoAt = this.gameTime;
+      this.echoSeen.clear();
+    }
+    const seen = this.echoSeen.get(msg);
+    if (!seen) {
+      this.echoSeen.set(msg, { first: player, told: false });
+      return [];
+    }
+    if (seen.told || seen.first === player) return [];
+    seen.told = true;
+    return this.watchers;
+  }
+
   /** What `GetLocalPlayer` resolves to right now. */
   get localViewer(): number {
     return this.audience ?? this.localPlayer;
@@ -1926,8 +1969,9 @@ export class Runtime {
    *  melee library reads exactly that through GetPlayerSlotState / GetPlayerRace /
    *  GetPlayerStartLocation. Slots the lobby didn't fill are marked EMPTY, so they get
    *  no starting units, no resources, and keep the creep camp on their start location. */
-  applyLobby(slots: ReadonlyArray<LobbySlot>, localPlayer: number): void {
+  applyLobby(slots: ReadonlyArray<LobbySlot>, localPlayer: number, watchers: Iterable<number> = []): void {
     this.localPlayer = localPlayer;
+    this.watchers = new Set(watchers);
     // PLAYER_SLOT_STATE_EMPTY for every PLAYER the table has — 24 on a 1.31+ map (enums.ts).
     for (let i = 0, n = widePlayerTable() ? 24 : 12; i < n; i++) this.ensurePlayer(i).slotState = 0;
     for (const s of slots) {

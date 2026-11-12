@@ -4306,6 +4306,8 @@ export class MapViewerScene {
           ...(this.playerNames.get(s.id) ? { name: this.playerNames.get(s.id) } : {}),
         })),
         localPlayer: this.localPlayer,
+        // Who is only WATCHING — this machine, and the Observers bench (Runtime.watchers).
+        watchers: [...(this.observer ? [this.localPlayer] : []), ...this.observers.map((o) => o.id)],
       };
       // Which strings are ORDERS, for `OrderId` (jass/orders.ts): the map's own abilities are
       // loaded by now, so its custom order strings are in the list with the stock ones.

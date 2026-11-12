@@ -22,6 +22,15 @@ const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.s
 interface ForceObj {
   handleId: number;
   players: Set<number>;
+  /** Has this force EVER held two players? Then it is a GROUP — an audience — and not one
+   *  person (`GetForceOfPlayer`), whoever has left it since. See `IsPlayerInForce`. */
+  group?: boolean;
+}
+
+/** Put a player in a force, noting the moment it becomes a group. */
+function join(f: ForceObj, idx: number): void {
+  f.players.add(idx);
+  if (f.players.size >= 2) f.group = true;
 }
 
 const force = (c: NativeCtx, v: JassValue): ForceObj | undefined => c.rt.data<ForceObj>(v);
@@ -61,9 +70,27 @@ export function registerForceNatives(rt: Runtime): void {
     return JNULL;
   });
   def(rt, "ForceClear", (c, a) => (force(c, a[0])?.players.clear(), JNULL));
-  def(rt, "ForceAddPlayer", (c, a) => (force(c, a[0])?.players.add(playerIndex(c, a[1])), JNULL));
+  def(rt, "ForceAddPlayer", (c, a) => {
+    const f = force(c, a[0]);
+    if (f) join(f, playerIndex(c, a[1]));
+    return JNULL;
+  });
   def(rt, "ForceRemovePlayer", (c, a) => (force(c, a[0])?.players.delete(playerIndex(c, a[1])), JNULL));
-  def(rt, "IsPlayerInForce", (c, a) => jBool(force(c, a[1])?.players.has(playerIndex(c, a[0])) ?? false));
+  // A WATCHER holds no slot, so no force a map builds can contain it — and it is a member of
+  // every GROUP force all the same (Runtime.watchers): this is the gate blizzard.j's
+  // DisplayTextToForce and every map's own copy of it ask, and in WC3 an observer's slot is in
+  // those forces. Only the QUESTION answers for it; ForForce still walks the real members.
+  //
+  // "Group" is "has ever held two", not "holds two now", because a map prunes its audience of
+  // the seats that have no screen: DotA's AI setup takes each COMPUTER out of the force its
+  // kill lines are printed to, so in a match of ten computers that force is empty — and the
+  // one machine with somebody in front of it, the watcher's, was the one never told.
+  def(rt, "IsPlayerInForce", (c, a) => {
+    const f = force(c, a[1]);
+    const p = playerIndex(c, a[0]);
+    if (!f) return jBool(false);
+    return jBool(f.players.has(p) || (f.group === true && c.rt.watchers.has(p)));
+  });
 
   // ForceEnumPlayers(force, filter): add every (matching) slot to the force.
   const enumInto = (c: NativeCtx, f: ForceObj | undefined, filter: JassValue | undefined, limit = Infinity): void => {
@@ -72,7 +99,7 @@ export function registerForceNatives(rt: Runtime): void {
     for (const idx of enumSlots(c.rt)) {
       if (n >= limit) break;
       if (filterPasses(c, filter, idx)) {
-        f.players.add(idx);
+        join(f, idx);
         n++;
       }
     }
@@ -84,13 +111,13 @@ export function registerForceNatives(rt: Runtime): void {
   def(rt, "ForceEnumAllies", (c, a) => {
     const f = force(c, a[0]);
     const team = c.rt.data<JassPlayer>(a[1])?.team;
-    if (f) for (const idx of enumSlots(c.rt)) if (c.rt.setup.players.get(idx)?.team === team && filterPasses(c, a[2], idx)) f.players.add(idx);
+    if (f) for (const idx of enumSlots(c.rt)) if (c.rt.setup.players.get(idx)?.team === team && filterPasses(c, a[2], idx)) join(f, idx);
     return JNULL;
   });
   def(rt, "ForceEnumEnemies", (c, a) => {
     const f = force(c, a[0]);
     const team = c.rt.data<JassPlayer>(a[1])?.team;
-    if (f) for (const idx of enumSlots(c.rt)) if (c.rt.setup.players.get(idx)?.team !== team && filterPasses(c, a[2], idx)) f.players.add(idx);
+    if (f) for (const idx of enumSlots(c.rt)) if (c.rt.setup.players.get(idx)?.team !== team && filterPasses(c, a[2], idx)) join(f, idx);
     return JNULL;
   });
 
