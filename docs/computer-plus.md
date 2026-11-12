@@ -26,6 +26,15 @@ written against and what the real client would put there. The Advanced Options s
 setting, and that is where it stops being one. It is said once per match in the log, so a player
 who ticked the box and then watched the classic AI play is not left guessing.
 
+A CAMPAIGN chapter refuses it outright, melee flag or not: a chapter's computers are always
+Blizzard's — the chapter's own `.ai` script (docs/melee-ai.md "Campaign chapters"), or a race
+port if a chapter ever asked for one. `prepareMeleeAI` is told the match is a campaign
+(`MeleeConfig.campaign`), clears `plus` off every seat, and `startMeleeAIFor` checks
+`campaignMatch` again at the seat. A chapter's config sets no `aiPlus` today
+(main.ts `campaignConfig`), so this is a rule rather than an accident of the config: no
+preference, lobby or dev boot can put Computer+ behind a mission. Checked live on Orc03 by
+forcing `plus` onto a seat and asking `startMeleeAIFor` for `human.ai`: Blizzard's AI took it.
+
 The two custom maps that DO have Computer+ are seated somewhere else entirely and are untouched
 by this — **Extreme Candy War** through `startCandyWarAI` and **WarChasers** through
 `startWarChasersAI`, each with its own AI object and its own rules for that one map

@@ -482,7 +482,19 @@ needed), `AddDefenders` (150), `IgnoredUnits` (128), `SetReplacementCount` (120)
 `tools/ai-campaign-script-test.cjs` runs the real `h02_red.ai` (defenders, guards, Ignore,
 two suicide waves) and `o03_blue.ai` (held by `WaitForSignal` until `CommandAI`). Live, on
 Human02 at Normal with nobody playing the human side, Blackrock's waves of Grunts and Head
-Hunters walked to Uther's camp from 3:13 on and razed it by 28:23.
+Hunters walked to Uther's camp from 3:13 on and razed it by 28:23. On Orc03 the four Alliance
+bases sat in `WaitForSignal` until the player killed one of Blue's Footmen, and the map's
+`PlayerAggrosBlue` → `CommandAI(Player(1), 0, 0)` sent Blue's first wave (Footmen, Riflemen, the
+Archmage) across the map to Thrall; Thrall walking into Blue's base alone was killed by its
+guards and defenders, and each guard Footman it lost was retrained (`SetReplacements(1,1,3)`). On
+HumanX02 (seated through `StartMeleeAI`) the outposts built their own Haunted Gold Mine and
+Necropolis off `h02x03.ai`/`h02x05.ai`'s rows, and once the map released `h02x04.ai` its
+Gargoyle and Frost Wyrm waves hit Kael's camp. A campaign never gets Computer+
+(docs/computer-plus.md).
+
+A chapter may hand a computer its TOWN later than its AI starts: HumanX02's P5 begins with one
+Acolyte far from its w3i start location and receives a base there at 3:41 (`took … from P11`).
+The start location is right; the AI waits for the town rather than founding one elsewhere.
 
 ## Where it runs, and why it cannot cheat
 

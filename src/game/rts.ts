@@ -1116,7 +1116,15 @@ export class RtsController {
     starts: ReadonlyArray<{ player: number; x: number; y: number }> = slots.map((s) => ({ player: s.player, x: s.startX, y: s.startY })),
     races: ReadonlyMap<number, PlayableRace> = new Map(slots.map((s) => [s.player, s.race])),
     melee = false,
+    campaign = false,
   ): void {
+    // A CAMPAIGN chapter's computers are always Blizzard's — the chapter's own `.ai` script, or a
+    // race port if a chapter ever asks for one — and never Computer+, whatever the slot carries.
+    // A chapter's config sets no `aiPlus` today (main.ts campaignConfig); this makes it a rule of
+    // the seat rather than an accident of the config, so no later path (a preference, a LAN
+    // lobby, a dev boot) can put Computer+ behind a mission.
+    this.campaignMatch = campaign;
+    if (campaign) slots = slots.map((s) => (s.plus ? { ...s, plus: false } : s));
     this.meleeSeats = new Map(slots.map((s) => [s.player, s]));
     // Is this a MELEE map? The lobby knows and the script does not, and it is the one thing
     // `startMeleeAIFor` needs that it cannot read off the seat — see there. A new match says
@@ -1295,9 +1303,12 @@ export class RtsController {
     // `startWarChasersAI`, each with its own AI object and its own rules for that one map
     // (docs/candy-war-ai.md, docs/warchasers-ai.md). Neither goes through `StartMeleeAI`,
     // because a scenario runs none of the melee library.
-    if (seat.plus && !this.meleeMap) {
+    // …and in a CAMPAIGN chapter, never at all (prepareMeleeAI already clears the flag there;
+    // this is the seat's own guard, so the rule does not live in one caller).
+    const plus = seat.plus === true && !this.campaignMatch;
+    if (plus && !this.meleeMap) {
       this.warnOncePlusOnCustom();
-    } else if (seat.plus) {
+    } else if (plus) {
       this.computerPlus?.add(player, race, seat.difficulty, startX, startY, this.meleeSeed);
       // Insane Computer+ plays like a skilled player, and a skilled player ANIMATION-CANCELS:
       // it moves out of a blow's backswing and gives its next order the tick a spell goes off
@@ -1325,6 +1336,8 @@ export class RtsController {
     if (seat.difficulty === MELEE_INSANE) this.sim.setHarvestBonus(player, INSANE_HARVEST_FACTOR);
   }
 
+  /** Is this match a campaign chapter? Set by `prepareMeleeAI`; Computer+ is never seated in one. */
+  private campaignMatch = false;
   /** Was this match started on a MELEE map? Set by `prepareMeleeAI`; read by
    *  `startMeleeAIFor`, which refuses Computer+ anywhere else. */
   private meleeMap = false;

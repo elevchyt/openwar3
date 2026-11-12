@@ -547,7 +547,9 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   refills them, the map's Ignore/Recycle Guard Position reach them). Two traps that each silenced
   every wave: in an AI VM a function called from an EXPRESSION may sleep (`Interpreter.evalG` —
   `if not PrepSuicideOnPlayer(…)`), and the native `OneBuildLoop` must still write `total_gold`,
-  which the wave's own `BuildAttackers` thread prices itself against. **SPELLS are the exception to "a number here is the game's"**: the race scripts say
+  which the wave's own `BuildAttackers` thread prices itself against. A campaign NEVER gets
+  Computer+ (`prepareMeleeAI`'s `campaign` flag clears it off every seat; `startMeleeAIFor`
+  checks `campaignMatch` again). **SPELLS are the exception to "a number here is the game's"**: the race scripts say
   what a hero LEARNS and nothing about using it, so [`casting.ts`](src/ai/casting.ts) is built on
   Boris_Spider's observation thread (hiveworkshop 193280) instead — every rule quotes its line,
   and it is keyed on the BASE ability code, which is the thread's own point. A WAVE's reach and

@@ -3012,6 +3012,9 @@ export class MapViewerScene {
       // means anything at all: Computer+ is a melee player and is refused on a custom map
       // (RtsController.startMeleeAIFor). The lobby is the only place that knows.
       melee,
+      // …and whether this is a CAMPAIGN chapter, where Computer+ is refused outright whatever a
+      // slot or a preference says: a chapter's computers are always Blizzard's.
+      config.campaign === true,
     );
     for (const slot of config.slots) this.rts!.simWorld.initStash(slot.id, startGold, startLumber);
     // …and the supply CEILING this map asks for, before a line of its script runs — a chapter
