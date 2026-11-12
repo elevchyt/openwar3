@@ -247,6 +247,7 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     // What those natives just caused, for the interpreter to raise before the native returns
     // (NativeCtx.flushHeroEvents). The frame's own drain then finds the list already empty.
     drainHeroEvents: () => sim.drainHeroEvents(),
+    drainItemEvents: () => sim.drainItemEvents(), // NativeCtx.flushItemEvents, the same way
     resetUnitCooldown: (id) => sim.resetCooldowns(id),
     getUnitLevel: (id) => sim.units.get(id)?.level ?? 0,
     setHeroLevel: (id, level, eyeCandy) => sim.setHeroLevel(id, level, eyeCandy),

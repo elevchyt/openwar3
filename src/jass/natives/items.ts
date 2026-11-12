@@ -188,7 +188,9 @@ export function registerItemNatives(rt: Runtime): void {
     const u = unitSim(c, a[0]);
     const it = item(c, a[1]);
     if (u === undefined || !it || it.simId < 0) return jBool(false);
-    return jBool(c.rt.hooks?.unitAddItem?.(u, it.simId, -1) ?? false);
+    const ok = c.rt.hooks?.unitAddItem?.(u, it.simId, -1) ?? false;
+    c.flushItemEvents?.(); // EVENT_UNIT_PICKUP_ITEM fires from inside the call (NativeCtx.flushItemEvents)
+    return jBool(ok);
   });
   // UnitAddItemById — create the item AT THE UNIT and hand it over. If the inventory is
   // full it simply stays on the ground at the hero's feet, which is exactly the behaviour
@@ -203,6 +205,7 @@ export function registerItemNatives(rt: Runtime): void {
     const handle = createItem(c, asInt(a[1]), x, y);
     const it = item(c, handle);
     if (simId !== undefined && it && it.simId >= 0) c.rt.hooks?.unitAddItem?.(simId, it.simId, -1);
+    c.flushItemEvents?.();
     return handle;
   });
   // UnitAddItemToSlotById — into ONE slot, or not at all: an occupied slot fails, and the
@@ -217,18 +220,22 @@ export function registerItemNatives(rt: Runtime): void {
     if (!it || it.simId < 0) return jBool(false);
     const ok = c.rt.hooks?.unitAddItem?.(simId, it.simId, asInt(a[2])) ?? false;
     if (!ok) c.rt.hooks?.removeItem?.(it.simId);
+    c.flushItemEvents?.();
     return jBool(ok);
   });
   def(rt, "UnitRemoveItem", (c, a) => {
     const u = unitSim(c, a[0]);
     const it = item(c, a[1]);
     if (u !== undefined && it && it.simId >= 0) c.rt.hooks?.unitRemoveItem?.(u, it.simId);
+    c.flushItemEvents?.(); // …and so does EVENT_UNIT_DROP_ITEM
     return JNULL;
   });
   def(rt, "UnitRemoveItemFromSlot", (c, a) => {
     const u = unitSim(c, a[0]);
     if (u === undefined) return JNULL;
-    return itemHandle(c, c.rt.hooks?.unitRemoveItemFromSlot?.(u, asInt(a[1])) ?? 0);
+    const dropped = c.rt.hooks?.unitRemoveItemFromSlot?.(u, asInt(a[1])) ?? 0;
+    c.flushItemEvents?.();
+    return itemHandle(c, dropped);
   });
   def(rt, "UnitHasItem", (c, a) => {
     const u = unitSim(c, a[0]);
@@ -253,18 +260,24 @@ export function registerItemNatives(rt: Runtime): void {
     const it = item(c, iv);
     return jBool(u !== undefined && !!it && it.simId >= 0 && fn(u, it.simId));
   };
-  def(rt, "UnitDropItemPoint", (c, a) =>
-    withUnitItem(c, a[0], a[1], (u, i) => c.rt.hooks?.unitDropItemPoint?.(u, i, asNum(a[2]), asNum(a[3])) ?? false));
+  def(rt, "UnitDropItemPoint", (c, a) => {
+    const r = withUnitItem(c, a[0], a[1], (u, i) => c.rt.hooks?.unitDropItemPoint?.(u, i, asNum(a[2]), asNum(a[3])) ?? false);
+    c.flushItemEvents?.();
+    return r;
+  });
   // UnitDropItemSlot MOVES the item within the unit's own inventory (the GUI's "Give item
   // to slot") — despite the name, nothing is dropped.
   def(rt, "UnitDropItemSlot", (c, a) =>
     withUnitItem(c, a[0], a[1], (u, i) => c.rt.hooks?.unitDropItemSlot?.(u, i, asInt(a[2])) ?? false));
   // UnitDropItemTarget hands the item to another unit (the GUI's "Give item to hero").
-  def(rt, "UnitDropItemTarget", (c, a) =>
-    withUnitItem(c, a[0], a[1], (u, i) => {
+  def(rt, "UnitDropItemTarget", (c, a) => {
+    const r = withUnitItem(c, a[0], a[1], (u, i) => {
       const t = unitSim(c, a[2]);
       return t === undefined ? false : c.rt.hooks?.unitDropItemTarget?.(u, i, t) ?? false;
-    }));
+    });
+    c.flushItemEvents?.();
+    return r;
+  });
   const useItem = (c: NativeCtx, uv: JassValue, iv: JassValue, targetV: JassValue | undefined, x: number, y: number): JassValue =>
     withUnitItem(c, uv, iv, (u, i) => c.rt.hooks?.unitUseItem?.(u, i, (targetV && unitSim(c, targetV)) || 0, x, y) ?? false);
   def(rt, "UnitUseItem", (c, a) => useItem(c, a[0], a[1], undefined, 0, 0));

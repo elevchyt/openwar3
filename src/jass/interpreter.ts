@@ -324,6 +324,10 @@ export class Interpreter {
         const events = this.rt.hooks?.drainHeroEvents?.();
         if (events?.length) this.pumpHeroEvents(events as HeroEvent[]);
       },
+      flushItemEvents: () => {
+        const events = this.rt.hooks?.drainItemEvents?.();
+        if (events?.length) this.pumpItemEvents(events as ItemEvent[]);
+      },
     };
     rt.onWatchedGlobal = (name, before, after) => this.fireVariableEvent(name, before, after);
   }

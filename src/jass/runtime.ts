@@ -693,6 +693,8 @@ export interface EngineHooks {
   /** The sim's pending hero level/skill events, drained — for `NativeCtx.flushHeroEvents`.
    *  (The interpreter's HeroEvent; typed loosely because the runtime does not import it.) */
   drainHeroEvents?(): ReadonlyArray<unknown>;
+  /** …and its pending item pickup/drop/use/sell events, for `NativeCtx.flushItemEvents`. */
+  drainItemEvents?(): ReadonlyArray<unknown>;
   issueUnitOrder?(unitId: number, orderId: number, order: string, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number): boolean;
   /** IssueNeutral*OrderById — an order to a neutral building on `player`'s behalf (a purchase:
    *  `orderId` is the ware's rawcode). True when the sale went through. */
@@ -2263,4 +2265,21 @@ export interface NativeCtx {
    * seconds. Absent with no interpreter attached (safe no-op).
    */
   flushHeroEvents?(): void;
+  /**
+   * The same promise for an INVENTORY native: `UnitAddItem`, `UnitAddItemById`,
+   * `UnitRemoveItem` and the trigger's instant drops raise EVENT_(PLAYER_)UNIT_PICKUP_ITEM /
+   * _DROP_ITEM before they return, and an item system is written around it. DotA sells a
+   * dummy powerup, and its pickup trigger swaps the dummy for the real item behind exactly the
+   * hero-skill guard —
+   *
+   *     call DisableTrigger(pickupTrigger)
+   *     set it = UnitAddItemById(hero, realItem)
+   *     call EnableTrigger(pickupTrigger)
+   *
+   * — while its AI buys with `UnitAddItem(hero, dummy)` and then waits on a flag that trigger
+   * sets. With the events left to the frame's pump the real item's pickup arrived after the
+   * trigger was back on and was taken for a second purchase, and a `RemoveItem` on the line
+   * after `UnitAddItem` ran before the pickup it was written to follow.
+   */
+  flushItemEvents?(): void;
 }
