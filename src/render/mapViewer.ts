@@ -5616,8 +5616,13 @@ export class MapViewerScene {
     return out;
   }
 
+  /** A slot's team: the lobby's seating, and for a player the lobby never seats — a custom
+   *  map's army or creep computer, MAP_CONTROL_NEUTRAL or simply absent from a truncated w3i —
+   *  the team the map's own config() gave it (`SetPlayerTeam`, whose index IS the force index
+   *  the lobby numbers its teams by). Such a player used to be a team of one, numbered after
+   *  its own slot, whatever the script had said. */
   private teamOf(owner: number): number {
-    return this.meleeTeams.get(owner) ?? owner;
+    return this.meleeTeams.get(owner) ?? (owner >= 0 ? this.mapScript?.interp.rt.ensurePlayer(owner).team : undefined) ?? owner;
   }
 
   /** Send a freshly-produced unit to its building's rally target: harvest a

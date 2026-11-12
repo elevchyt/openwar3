@@ -707,12 +707,21 @@ export function rosterHooks(
      *  UNIT_TYPE_HERO)`, and with the native missing that answered false for every hero, so no
      *  kill, death or streak was ever counted. */
     isUnitIdType: (typeId, t) => t !== 1 && deadTypeIs(t, typeId),
-    // IsUnitAlly/IsUnitEnemy: TEAM-based, so neutral hostile (team -1) is nobody's ally. This is
-    // a team question rather than an alliance one, which is why it is here and not in
-    // `visionHooks` beside `isPlayerAlly` — see 1e-note.
+    // IsUnitAlly/IsUnitEnemy: is the unit's OWNER allied with that player — the alliance
+    // matrix's answer (SimWorld.alliedPlayers), which is what the script itself wrote with
+    // SetPlayerAlliance. It was a comparison of TEAM numbers, and a team is only the lobby's
+    // seating: a player the lobby never seats has none. DotA's two army computers are such
+    // players (MAP_CONTROL_NEUTRAL, allied to their five heroes by script alone), and its AI
+    // asks `IsUnitAlly(hero, <the army player>)` to tell the sides apart — which answered false
+    // for a whole side, so "an allied hero reached the fountain" never fired there and every
+    // retreating hero stood at the fountain for the rest of the game. With no matrix installed
+    // (a headless sim) the team rule still decides. Neutral hostile and neutral passive
+    // (team < 0) stay nobody's ally, as before.
     isUnitAlly: (id, player) => {
       const u = sim.units.get(id);
-      return !!u && u.team >= 0 && u.team === teamOf(player);
+      if (!u || u.team < 0) return false;
+      if (u.owner === player) return true;
+      return sim.alliedPlayers(u.owner, player) ?? u.team === teamOf(player);
     },
     /** Bind a PRE-PLACED `CreateUnit` row to the unit already standing there (7.22).
      *

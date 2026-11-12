@@ -428,13 +428,26 @@ check("a mine is a STRUCTURE", roster.isUnitType(MINE_ID_BASE + 3, 2), true);
 check("…and GROUND", roster.isUnitType(MINE_ID_BASE + 3, 4), true);
 check("…and not DEAD", roster.isUnitType(MINE_ID_BASE + 3, 1), false);
 
-// isUnitAlly is a TEAM question and must use the injected seating, not the slot number.
+// isUnitAlly asks the ALLIANCE MATRIX about the unit's owner, and falls back on the injected
+// seating (never the slot number) only where no matrix is installed — this world has none.
 // Players 0 and 1 are both on team 7 in TEAMS above; player 2 is on 9.
 world.units.set(77, { id: 77, owner: 0, team: 7, hp: 100 });
 check("a unit on my team is an ally", roster.isUnitAlly(77, 1), true);
 check("…and one on another team is not", roster.isUnitAlly(77, 2), false);
 world.units.set(78, { id: 78, owner: 12, team: -1, hp: 100 }); // neutral hostile
 check("neutral hostile (team -1) is nobody's ally", roster.isUnitAlly(78, 0), false);
+// …and WITH a matrix the matrix decides, whatever the team numbers say. This is DotA's army
+// computer: a player the lobby never seats (so its "team" is its own slot) that the script
+// allied to its heroes with SetPlayerAlliance alone.
+{
+  const before = world.alliedPlayers;
+  world.alliedPlayers = (a, b) => (a === 0 && b === 2) || (a === 2 && b === 0);
+  check("the matrix makes an ally of another team's player", roster.isUnitAlly(77, 2), true);
+  check("…and an enemy of a team-mate it does not list", roster.isUnitAlly(77, 1), false);
+  check("…a unit is always its own owner's ally", roster.isUnitAlly(77, 0), true);
+  check("…and neutral hostile is still nobody's", roster.isUnitAlly(78, 0), false);
+  world.alliedPlayers = before;
+}
 
 console.log("\nthe count natives are what MeleeInitVictoryDefeat reads");
 world.units.set(80, { id: 80, owner: 5, team: 0, hp: 100, building: { constructionLeft: 0 }, typeId: "hkee" });
