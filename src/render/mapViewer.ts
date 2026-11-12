@@ -13899,6 +13899,7 @@ export class MapViewerScene {
    * ally side is also the QUIET one: only their BUILDINGS are news (see the attack case).
    */
   private showAlert(a: Alert): void {
+    if (this.observer) return this.showWatchedAlert(a);
     const own = a.player === this.localPlayer;
     const ally = !own && (this.rts?.playersAreCoAllied(a.player, this.localPlayer) ?? false);
     if (!own && !ally) return; // an enemy's troubles are their own
@@ -13967,6 +13968,65 @@ export class MapViewerScene {
     // are indexed by it and the rest come back whole, exactly as `refuse` relies on.
     if (key) this.hud?.showError(fillSlots(this.strings.forRace(key, this.localRace), args));
     this.sounds?.playUi(`${sound}${UI_SOUND_RACE[this.localRace]}`);
+  }
+
+  /**
+   * The same news for somebody only WATCHING (issue #167's observer), in the announcer's voice.
+   *
+   * A watcher has no race, so none of the four race voices is theirs — and UISounds.slk has a
+   * fifth set for exactly that, the `…Generic` rows under `Sound\Dialogue\GenericWarnings\`
+   * (`TownAttackGeneric` → GenericWarningTownAttack1.mp3, `HeroDiesGeneric`,
+   * `GoldMineLowGeneric`). It is the map-agnostic announcer: the same voice whatever the
+   * tileset, the map kind or the races on the field. Which events it speaks is OURS:
+   *
+   *  • a TOWN under attack, a HERO fallen, a gold mine running LOW or COLLAPSED — anybody's,
+   *    since everybody on the field is what a watcher watches;
+   *  • NOT a unit under attack. That line is "a fight you cannot see has started", per player,
+   *    and a watcher of ten players would hear it without pause.
+   *
+   * The collapsed mine's row is spelled `NoGoldGeneric` in the table and its file is
+   * GenericWarningGoldCollapsed1.mp3 — there is no `GoldMineCollapseGeneric` — so the FILE is
+   * what is trusted. The lines are the third-person [Errors] rows the data already has
+   * ("%s's city is under siege!", "%s has fallen in battle.") and the human copy of the two
+   * mine rows, which is the one worded for nobody in particular ("A gold mine has collapsed.").
+   */
+  private showWatchedAlert(a: Alert): void {
+    if (a.player < 0) return; // a creep camp's troubles are nobody's news
+    const name = (typeId: string | undefined, proper: string | undefined): string =>
+      proper || this.registry.get(typeId ?? "")?.name || "";
+    let key = "";
+    let sound = "";
+    const args: Array<string | number> = [];
+    switch (a.kind) {
+      case "attack":
+        return;
+      case "townattack":
+        key = "Allytownattack";
+        sound = "TownAttackGeneric";
+        args.push(this.playerNames.get(a.player) ?? `Player ${a.player + 1}`);
+        this.hud?.ping({ x: a.x, y: a.y, duration: 0, r: 255, g: 0, b: 0, extraEffects: false });
+        break;
+      case "herodeath":
+        sound = "HeroDiesGeneric";
+        if (a.killer) {
+          key = "Herokilledhero";
+          args.push(name(a.hero?.typeId, a.hero?.properName), name(a.killer.typeId, a.killer.properName));
+        } else {
+          key = "Herodies";
+          args.push(name(a.hero?.typeId, a.hero?.properName));
+        }
+        break;
+      case "minelow":
+        key = "Goldminelow";
+        sound = "GoldMineLowGeneric";
+        break;
+      case "minedestroyed":
+        key = "Goldminedestroyed";
+        sound = "NoGoldGeneric"; // GenericWarningGoldCollapsed1.mp3 — see above
+        break;
+    }
+    if (key) this.hud?.showError(fillSlots(this.strings.forRace(key, "human"), args));
+    if (sound) this.sounds?.playUi(sound);
   }
 
   /** Can the local player afford this? Refuses (naming the resource they're short of)
