@@ -561,6 +561,8 @@ export interface JassItem {
   invulnerable?: boolean;
   droppable?: boolean;
   pawnable?: boolean;
+  /** SetItemPlayer — the item's own player (absent = Neutral Passive). See GetItemPlayer. */
+  player?: number;
 }
 
 /** Where an item is right now — the bridge's answer for a JASS `item` handle. Mirrors
@@ -573,7 +575,7 @@ export interface ItemSnapshot {
   y: number;
   holder: number; // sim id of the unit carrying it (0 = lying on the ground)
   slot: number; // inventory slot when carried, else -1
-  owner: number; // GetItemPlayer — the holder's slot, or 15 (Neutral Passive) on the ground
+  owner: number; // the HOLDER's slot, or 15 (Neutral Passive) on the ground — not GetItemPlayer
   life: number; // GetWidgetLife — hit points left on the ground, the type's whole HP when carried
 }
 

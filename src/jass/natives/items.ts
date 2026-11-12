@@ -21,7 +21,7 @@
 
 import { neutralSlot, PlayerSlot } from "../../data/enums";
 import { intToRawcode, rawcodeToInt } from "../lexer";
-import type { BoolExpr, ItemSnapshot, JassItem, JassUnit, NativeCtx, RectObj, Runtime } from "../runtime";
+import type { BoolExpr, ItemSnapshot, JassItem, JassPlayer, JassUnit, NativeCtx, RectObj, Runtime } from "../runtime";
 import { asInt, asNum, jBool, jHandle, jInt, JNULL, jReal, jStr, truthy, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
@@ -111,7 +111,14 @@ export function registerItemNatives(rt: Runtime): void {
   });
   // GetItemPlayer: the holder's slot; an item lying on the ground belongs to Neutral
   // Passive (player 15), which is what the sim's snapshot reports.
-  def(rt, "GetItemPlayer", (c, a) => c.rt.playerHandle(info(c, item(c, a[0]))?.owner ?? neutralSlot(PlayerSlot.NeutralPassive)));
+  // An item's PLAYER is the item's own: Neutral Passive from birth, changed by SetItemPlayer
+  // and by nothing else — not by who picks it up. An item system reads it as "who BOUGHT
+  // this": DotA stamps every purchase (`SetItemPlayer(it, buyer, true)`), tests
+  // `GetItemPlayer(it) != Player(15)` to tell a bought item from a dropped one, and its AI
+  // counts only items whose player is its own toward a recipe. Answered with the HOLDER's
+  // owner (and SetItemPlayer a no-op), a stamp never read back, an item handed to the stash
+  // changed owners, and no computer ever recognised a component it had already paid for.
+  def(rt, "GetItemPlayer", (c, a) => c.rt.playerHandle(item(c, a[0])?.player ?? neutralSlot(PlayerSlot.NeutralPassive)));
   def(rt, "IsItemOwned", (c, a) => jBool((info(c, item(c, a[0]))?.holder ?? 0) > 0));
 
   // --- item TYPE data (the ItemRegistry, not the instance) ---
@@ -177,11 +184,17 @@ export function registerItemNatives(rt: Runtime): void {
     if (it) it.userData = asInt(a[1]);
     return JNULL;
   });
-  // Drop-on-death / drop-id (which unit an item is bound to drop from) and item ownership
-  // colour have no counterpart in our engine yet — accept them rather than log a miss.
+  // Drop-on-death / drop-id (which unit an item is bound to drop from) have no counterpart
+  // in our engine yet — accept them rather than log a miss.
   def(rt, "SetItemDropOnDeath", () => JNULL);
   def(rt, "SetItemDropID", () => JNULL);
-  def(rt, "SetItemPlayer", () => JNULL);
+  // SetItemPlayer(item, player, changeColor) — see GetItemPlayer. The colour half is art.
+  def(rt, "SetItemPlayer", (c, a) => {
+    const it = item(c, a[0]);
+    const p = c.rt.data<JassPlayer>(a[1]);
+    if (it && p) it.player = p.index;
+    return JNULL;
+  });
 
   // --- a unit's inventory ---------------------------------------------------
   def(rt, "UnitAddItem", (c, a) => {
