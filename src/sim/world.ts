@@ -1536,6 +1536,7 @@ export interface TrainEvent {
 export interface SellUnitEvent {
   shop: EventUnitInfo; // GetSellingUnit (and GetTriggerUnit)
   sold: EventUnitInfo; // GetSoldUnit
+  buyer: EventUnitInfo | null; // GetBuyingUnit — whoever stood at the counter (unitSalePatron)
 }
 
 /** A unit spawned a summoned unit — EVENT_(PLAYER_)UNIT_SUMMON. The SUMMONER is the event's
@@ -4788,8 +4789,8 @@ export class SimWorld {
    *  Aall is its own code `Aall` (verified in the SLK — the two neutral ones being siblings
    *  makes it tempting to assume all three are, and then every race shop silently falls
    *  back to the default radius with no button and no arrow). */
-  private shopInteract(typeId: string): { abilityId: string; radius: number; showButton: boolean; showArrow: boolean } {
-    const fallback = { abilityId: "", radius: DEFAULT_SHOP_RADIUS, showButton: false, showArrow: false };
+  private shopInteract(typeId: string): { abilityId: string; radius: number; needsInventory: boolean; showButton: boolean; showArrow: boolean } {
+    const fallback = { abilityId: "", radius: DEFAULT_SHOP_RADIUS, needsInventory: false, showButton: false, showArrow: false };
     const def = this.unitReg?.get(typeId);
     if (!def || !this.abilities) return fallback;
     for (const abilId of def.abilities) {
@@ -4801,6 +4802,10 @@ export class SimWorld {
       return {
         abilityId: abilId,
         radius: r && !Number.isNaN(r) ? r : DEFAULT_SHOP_RADIUS,
+        // DataB, "Interaction Type" (`Neu2`; UI\UnitEditorData.txt [interactionFlags]: bit 0
+        // is "inventory"). Aneu and Aall carry 1 — whoever stands at the counter must be able
+        // to CARRY — and Ane2 carries 16, which sets no bit the list names: anybody will do.
+        needsInventory: ((lvl.data[1] || 0) & 1) === 1,
         showButton: lvl.data[2] === 1,
         showArrow: lvl.data[3] === 1,
       };
@@ -4981,6 +4986,52 @@ export class SimWorld {
     }
     return out;
   }
+
+  /**
+   * Who stands at the counter for a UNIT sale — a Tavern's hero, a Mercenary Camp's ogre, or
+   * the wares of a map that sells its items as units.
+   *
+   * A shop is used through its interact ability and that ability has a REACH (`shopInteract`:
+   * 450 on the stock rows), whatever is on the shelf: "you need a unit near the Tavern" is
+   * this, and so is the Mercenary Camp nobody can hire from across the map. We enforced it for
+   * items and not for units, so a unit shelf sold to anyone, anywhere. A map leans on the rule
+   * as hard as melee does — DotA sells every item as a dummy unit and sizes each shop by this
+   * one number: 1300 for the base shops, 625 for the side shops, 700 for the secret shop.
+   *
+   * WHO counts is the ability's own Interaction Type. `Aneu`/`Aall` ask for an inventory, so
+   * the patron is the nominated buyer (Select Hero) or failing that the nearest unit that can
+   * carry. `Ane2` asks for nothing: any living unit of the player's will do — a worker, and a
+   * building too, which is what a map's hero-pick circle parked among its taverns is.
+   *
+   * `undefined` when the rule does not apply: the shop is the buyer's own (a building you own
+   * is commanded, not visited) or carries no interact ability at all. `null` when it applies
+   * and nobody is there — [Errors] `Neednearbypatron`.
+   */
+  unitSalePatron(shopId: number, player: number): SimUnit | null | undefined {
+    const shop = this.units.get(shopId);
+    if (!shop || shop.owner === player) return undefined;
+    const rule = this.shopInteract(shop.typeId);
+    if (!rule.abilityId) return undefined;
+    if (rule.needsInventory) {
+      const nominated = this.shopBuyer(shopId, player);
+      if (nominated) return nominated;
+    }
+    let best: SimUnit | null = null;
+    let bestD = Infinity;
+    for (const u of this.units.values()) {
+      if (u.owner !== player || u.hp <= 0 || u.isIllusion || isOffField(u)) continue;
+      if (rule.needsInventory && !this.isPatron(u)) continue;
+      if (!this.inShopRange(shop, u)) continue;
+      const d = Math.hypot(u.x - shop.x, u.y - shop.y);
+      if (d < bestD) (bestD = d), (best = u);
+    }
+    return best;
+  }
+
+  /** The patron of each unit sale still on its way out of the shop: `shop:buyer` → unit id.
+   *  A hire is instant but its body is not (it arrives through the trained drain), so the
+   *  patron is remembered from the purchase to the sale's event — GetBuyingUnit. */
+  private salePatrons = new Map<string, number>();
 
   /** Has `player` ANY unit of its own standing in `shop`'s reach — a building, a ward, a dead
    *  body and an illusion excepted? The question a Tavern's hire asks, which unlike an item
@@ -5287,8 +5338,9 @@ export class SimWorld {
     return "ok";
   }
 
-  /** Buy a UNIT from a shop (a Tavern's heroes, a Mercenary Camp's creeps). No patron is
-   *  needed — the unit is produced by the shop itself and walks out — but the stock still
+  /** Buy a UNIT from a shop (a Tavern's heroes, a Mercenary Camp's creeps). Nobody takes
+   *  delivery — the unit is produced by the shop itself and walks out — but one of the buyer's
+   *  units must be standing in the shop's reach (`unitSalePatron`), the stock still
    *  depletes, and on a melee map hiring is loud: creeps hear it (`UnitSaleAggroRange` 600 —
    *  and **0** on a custom map, where the transaction is silent; read through `miscGame` so the
    *  data set answers, docs/editions.md). The caller has already charged the cost and queues
@@ -5301,7 +5353,12 @@ export class SimWorld {
     if (this.shopStock(shopId, unitId) === 0) return "nostock"; // -1 = not stock-limited
     // Only a sold HERO is requirement-gated — see soldUnitNeedsTech.
     if (this.tech && this.soldUnitNeedsTech(unitId) && !this.tech.meets(player, unitId)) return "req";
+    // …and somebody has to be standing there (unitSalePatron).
+    const patron = this.unitSalePatron(shopId, player);
+    if (patron === null) return "nopatron";
     if (!this.takeStock(shop, unitId)) return "nostock";
+    if (patron) this.salePatrons.set(`${shopId}:${player}`, patron.id);
+    else this.salePatrons.delete(`${shopId}:${player}`);
     // Whoever of the buyer's units is nearest the shop takes the blame for the noise. NOT
     // shopPatrons(), which only returns inventory-holders — you don't need a hero to hire a
     // mercenary, so an army of Footmen parked outside the camp must still draw the aggro.
@@ -10646,7 +10703,10 @@ export class SimWorld {
         this.stats.hired(t.owner);
         t.mercenary = true; // …and its abilities are its own, whatever the buyer has researched
       }
-      if (this.captureSellUnits) this.sellUnitEvents.push({ shop: eventInfo(b), sold: eventInfo(t) });
+      const key = `${buildingId}:${t.owner}`;
+      const patron = this.units.get(this.salePatrons.get(key) ?? -1);
+      this.salePatrons.delete(key);
+      if (this.captureSellUnits) this.sellUnitEvents.push({ shop: eventInfo(b), sold: eventInfo(t), buyer: patron ? eventInfo(patron) : null });
       return;
     }
     if (!this.captureTrain) return;

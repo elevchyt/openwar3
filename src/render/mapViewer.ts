@@ -12150,6 +12150,10 @@ export class MapViewerScene {
       for (let ry = 0; ry < 3; ry++) for (let rx = 0; rx < 4; rx++) if (!used.has(`${rx},${ry}`)) return [rx, ry];
       return [bx, by];
     };
+    // Nobody of ours standing at this shop: its sold units say so in advance, as its item
+    // wares do (patronLine). `undefined` — our own building, or a shop that asks for nobody —
+    // is not a refusal.
+    const soldPatron = sold.size ? world.unitSalePatron(sel.id, this.localPlayer) !== null : true;
     for (const uid of list) {
       const d = this.registry.get(uid);
       if (!d) continue;
@@ -12200,7 +12204,7 @@ export class MapViewerScene {
       out.push(this.cmd({
         id: `train:${uid}`, icon: this.blpIcon(d.icon), name: d.name, hotkey: d.hotkey || (d.name[0]?.toUpperCase() ?? ""),
         tip: d.tip, // "Train |cffffcc00P|reasant" — the game's own tooltip title
-        desc: this.tipText(d.description || `Trains a ${d.name}.`) + this.stockLine(st)
+        desc: this.tipText(d.description || `Trains a ${d.name}.`) + (sold.has(uid) ? this.patronLine(soldPatron) : "") + this.stockLine(st)
           + this.requirementLine(uid, owned, gated ? undefined : []),
         gold, lumber, food: d.foodUsed,
         count: badge, // the shop's stock badge
@@ -13988,6 +13992,9 @@ export class MapViewerScene {
     // A sold-out shelf has its own line ("That unit is not available") — worth keeping,
     // since a Tavern with no stock looks identical to one that just refused silently.
     if (this.rts.simView.shopStock(buildingId, unitId) === 0) return SHOP_ERROR.nostock;
+    // …and a shop's unit shelf wants somebody standing at it, as its item shelf does
+    // (SimWorld.unitSalePatron): "A valid patron must be nearby."
+    if (world.shopWaresOf(buildingId).units.includes(unitId) && world.unitSalePatron(buildingId, this.localPlayer) === null) return SHOP_ERROR.nopatron;
     return "";
   }
 

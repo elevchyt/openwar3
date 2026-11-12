@@ -50,6 +50,7 @@ const ABILITIES = new Map([
     buffSpecialArt: "", lightning: [], animNames: [], order: "", orderOn: "", orderOff: "",
     levelData: [lvl({ data: D(450, 1, 1, 1) })],
   }],
+  // `[Ane2]` "Select Unit": DataA 450, DataB 16 (no "inventory" bit), no button, no arrow.
   // `[Aall]` "Shop Sharing, Allied Bldg." — DataA 600 radius, and the same three flags. This
   // is the ability the four RACE shops carry, and the reason an ally may use one.
   ["Aall", {
@@ -104,8 +105,13 @@ const ITEMS = new Map([
   }],
 ]);
 
+ABILITIES.set("Ane2", { ...ABILITIES.get("Aneu"), id: "Ane2", name: "Select Unit", levelData: [lvl({ data: D(450, 16, 0, 0) })] });
+
 const SHOP = "ngme"; // Goblin Merchant — Neutral Passive, serves everybody
 const VAULT = "hvlt"; // Arcane Vault — a PLAYER's shop, and it carries Aall (shop sharing)
+const TAVERN = "ntav"; // sells UNITS behind `Ane2` "Select Unit": anybody of yours at the door
+const UNIT_STALL = "nstl"; // a map's shop that sells units behind `Aneu`: a carrier at the door
+const BARE_STALL = "nbar"; // …and one with no interact ability at all: it asks for nobody
 const UNIT_DEF = { priority: 0, buffType: "", abilities: [], upgradesUsed: [], moveHeight: 0, defUp: 2 };
 const N = 256;
 // No upgradeReg on purpose: `this.tech` stays null, so `missingForShop` answers "nothing
@@ -115,9 +121,12 @@ const newWorld = () =>
     { get: (id) => ABILITIES.get(id), has: (id) => ABILITIES.has(id), buffFx: () => [] },
     { get: (id) => ITEMS.get(id), has: (id) => ITEMS.has(id) },
     { get: (id) => (id === SHOP ? { ...UNIT_DEF, abilities: ["Aneu", "Apit"] }
-      : id === VAULT ? { ...UNIT_DEF, abilities: ["Aall", "Apit"] } : UNIT_DEF), has: () => false },
-    { get: (id) => (id === SHOP || id === VAULT ? { makeitems: [], sellitems: ["phea", "lmbr"], sellunits: [] } : undefined),
-      has: (id) => id === SHOP || id === VAULT });
+      : id === VAULT ? { ...UNIT_DEF, abilities: ["Aall", "Apit"] }
+      : id === TAVERN ? { ...UNIT_DEF, abilities: ["Ane2", "Asud"] }
+      : id === UNIT_STALL ? { ...UNIT_DEF, abilities: ["Aneu", "Asud"] } : UNIT_DEF), has: () => false },
+    { get: (id) => (id === SHOP || id === VAULT ? { makeitems: [], sellitems: ["phea", "lmbr"], sellunits: [] }
+      : id === TAVERN || id === UNIT_STALL || id === BARE_STALL ? { makeitems: [], sellitems: [], sellunits: ["Hamg"] } : undefined),
+      has: (id) => [SHOP, VAULT, TAVERN, UNIT_STALL, BARE_STALL].includes(id) });
 
 let world = newWorld();
 let nextId = 1;
@@ -311,6 +320,43 @@ console.log("\nA POWERUP bought is used on the spot, never stored");
   check("a FULL belt still buys a powerup", world.purchaseItem(s.id, full.id, "lmbr", 0), "ok");
   check("…and uses it", world.stashOf(0).lumber, 150);
   check("…while an ordinary item is refused for the full belt", world.purchaseItem(s.id, full.id, "phea", 0), "full");
+}
+
+console.log("\nA UNIT shelf wants somebody standing at it too (SimWorld.unitSalePatron)");
+// The reach is the shop's interact ability's, whatever is on the shelf. Unenforced, a unit
+// shelf sold to anyone anywhere — which a map that sells its ITEMS as units (DotA: 1300 at the
+// base shops, 625 at the side shops) depends on being false.
+{
+  world = newWorld();
+  const stall = (typeId) => unit({ typeId, owner: -1, team: -1, neutralPassive: true, x: 2000, y: 2000, prevX: 2000, prevY: 2000, radius: 72, building: { constructionLeft: 0, queue: [] } });
+  const tavern = stall(TAVERN);
+  check("nobody at the Tavern: no hire", world.purchaseUnit(tavern.id, "Hamg", 0), "nopatron");
+  const far = unit({ x: 2000 + 450 + 72 + 40, y: 2000 });
+  check("a unit just past its reach is nobody", world.purchaseUnit(tavern.id, "Hamg", 0), "nopatron");
+  far.x = 2000 + 450 + 72 - 10;
+  check("a FOOTMAN inside it will do — Select Unit asks for no inventory", world.purchaseUnit(tavern.id, "Hamg", 0), "ok");
+  check("…and he is the patron", world.unitSalePatron(tavern.id, 0)?.id, far.id);
+  far.x = 9000;
+  const post = unit({ x: 2100, y: 2000, building: { constructionLeft: 0, queue: [] } });
+  check("a BUILDING of ours at the door counts as well (a map's pick circle)", world.unitSalePatron(tavern.id, 0)?.id, post.id);
+  check("an image of a unit does not", (unit({ x: 2100, y: 2000, owner: 3, team: 3, isIllusion: true }), world.unitSalePatron(tavern.id, 3)), null);
+  check("…nor does somebody else's unit", world.unitSalePatron(tavern.id, 2), null);
+
+  world = newWorld();
+  const side = stall(UNIT_STALL);
+  const footman = unit({ x: 2100, y: 2000 });
+  check("a shop behind Select HERO turns a Footman away", world.purchaseUnit(side.id, "Hamg", 0), "nopatron");
+  const h = hero({ x: 2200, y: 2000 });
+  check("…and serves a unit that can carry", world.purchaseUnit(side.id, "Hamg", 0), "ok");
+  check("…who is the patron, though the Footman stands nearer", world.unitSalePatron(side.id, 0)?.id, h.id);
+  void footman;
+
+  world = newWorld();
+  const bare = stall(BARE_STALL);
+  check("a shelf with no interact ability asks for nobody", world.unitSalePatron(bare.id, 0), undefined);
+  check("…and sells", world.purchaseUnit(bare.id, "Hamg", 0), "ok");
+  const mine = unit({ typeId: TAVERN, owner: 0, team: 0, x: 2000, y: 2000, radius: 72, building: { constructionLeft: 0, queue: [] } });
+  check("our OWN building is commanded, not visited", world.unitSalePatron(mine.id, 0), undefined);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

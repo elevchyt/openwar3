@@ -83,6 +83,8 @@ export interface TrainEvent {
 export interface SellUnitEvent {
   shop: UnitSnapshot;
   sold: UnitSnapshot;
+  /** GetBuyingUnit: the buyer's unit that stood at the shop, when the shop asks for one. */
+  buyer?: UnitSnapshot | null;
 }
 /** A unit spawned a summoned unit (EVENT_(PLAYER_)UNIT_SUMMON). */
 export interface SummonEvent {
@@ -1717,8 +1719,10 @@ export class Interpreter {
         ["TriggerUnit", shop],
         ["SellingUnit", shop],
         ["SoldUnit", sold],
-        // GetBuyingUnit — for a UNIT sale WC3 has no patron standing at the counter (you hire
-        // a Tavern hero with the shop selected, not with a unit), so the buyer reads null.
+        // GetBuyingUnit — the buyer's unit standing in the shop's reach, which a shop with an
+        // interact ability requires of a unit sale as of an item's (SimWorld.unitSalePatron).
+        // Null for a shop that asks for nobody.
+        ["BuyingUnit", e.buyer ? this.rt.unitForSim(e.buyer) : JNULL],
       ]);
       this.dispatchToRegs(responses, (reg) =>
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, EVENT_PLAYER_UNIT_SELL, e.shop.owner, shop, sold)) ||

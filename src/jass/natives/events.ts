@@ -374,7 +374,11 @@ export function registerEventNatives(rt: Runtime): void {
   def(rt, "GetManipulatingUnit", (c) => resp(c, "ManipulatingUnit"));
   def(rt, "GetSoldItem", (c) => resp(c, "ManipulatedItem"));
   def(rt, "GetSellingUnit", (c) => resp(c, "SellingUnit"));
-  def(rt, "GetBuyingUnit", (c) => resp(c, "ManipulatingUnit"));
+  // …and for a UNIT sale it is the patron at the counter (Interpreter.pumpSellUnitEvents).
+  def(rt, "GetBuyingUnit", (c) => {
+    const patron = resp(c, "BuyingUnit");
+    return patron.k === "handle" ? patron : resp(c, "ManipulatingUnit");
+  });
   def(rt, "GetSoldUnit", (c) => resp(c, "SoldUnit"));
   // Set while an EnumItemsInRect filter / action callback runs (natives/items.ts).
   def(rt, "GetEnumItem", (c) => resp(c, "EnumItem"));
