@@ -163,9 +163,10 @@ console.log("\n-- the five seconds ---------------------------------------------
   check("the scroll is accepted", world.useItem(h.id, 0, 0, h.x, h.y), true);
   at("…and it does NOT teleport on the press", h, 6000, 6000);
   check("…it starts a five-second channel", h.portalLeft, 5);
-  // The charge is spent up front: there is no state in which it is half-used and refundable,
-  // because "under no circumstances can the town portal be aborted once started".
-  check("…and the scroll is gone at once", h.inventory[0], null);
+  // The charge waits for the ARRIVAL: the portal cannot be aborted, but it can fail (its hall
+  // knocked down inside the five seconds), and a scroll that took nobody anywhere is not used
+  // up. The press starts the cooldown and nothing more (SimUnit.portalItem).
+  check("…and the scroll is still in hand while it channels", h.inventory[0]?.itemId, "stwp");
 
   step(1);
   at("a second in, it is still standing there", h, 6000, 6000);
@@ -178,6 +179,7 @@ console.log("\n-- the five seconds ---------------------------------------------
 
   step(4.2);
   at("after five seconds it is at the hall", h, 1000, 1000);
+  check("…and THEN the scroll is used up", h.inventory[0], null);
   check("…no longer channelling", h.portalLeft, 0);
   check("…and mortal again", h.invulnerable, false);
   check("…and able to move again", h.speed > 0, true);
@@ -275,6 +277,27 @@ console.log("\n-- where it goes ------------------------------------------------
   step(4.2);
   at("the hall died mid-channel: the hero stays put", h, 6000, 6000);
   check("…and is mortal again", h.invulnerable, false);
+  check("…and KEEPS the scroll — it took nobody anywhere", h.inventory[0]?.charges, 1);
+}
+{
+  // …and a scroll with charges to spare keeps every one of them, then spends exactly one when
+  // a second press does arrive.
+  world = newWorld();
+  const h = give(heroAt(6000, 6000), "stwp");
+  h.inventory[0].charges = 2;
+  const home = hall(1000, 1000);
+  world.useItem(h.id, 0, 0, h.x, h.y);
+  step(1);
+  home.hp = 0;
+  step(4.2);
+  check("a failed portal spends no charge", h.inventory[0]?.charges, 2);
+  hall(1500, 1500);
+  h.inventory[0].cooldownLeft = 0;
+  if (h.itemCooldowns) h.itemCooldowns.clear();
+  world.useItem(h.id, 0, 0, h.x, h.y);
+  step(5.2);
+  at("a portal that arrives…", h, 1500, 1500);
+  check("…spends one", h.inventory[0]?.charges, 1);
 }
 
 console.log("\n-- a gatherer on the job is left on the job ---------------------------------");
@@ -476,6 +499,7 @@ console.log("\n-- a map that edits the cast away -------------------------------
   world.useItem(h.id, 0, 0, h.x, h.y);
   at("with Cast1 = 0 it teleports on the press", h, 1000, 1000);
   check("…with no channel", h.portalLeft, 0);
+  check("…and the scroll is spent by the arrival", h.inventory[0], null);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

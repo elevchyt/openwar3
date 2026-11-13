@@ -2279,6 +2279,12 @@ export interface SimUnit {
    *  hall when the clock runs out: the scroll's destination may have been knocked down
    *  inside the five seconds, and the two questions cannot share one answer. */
   portalDestId: number;
+  /** The SCROLL being channelled — the held item's entity id (HeldItem.id), or 0. Its charge is
+   *  spent when the party ARRIVES (resolveTeleport) and not on the press: a scroll whose
+   *  destination hall is knocked down inside the five seconds teleports nobody and is not used
+   *  up — "the scroll is consumed only if the teleportation succeeds" (the developer's account
+   *  of the original). The press still starts the item's cooldown. */
+  portalItem: number;
   /** The facing a building was RAISED with, in radians — what an Ancient turns back to when it
    *  plants itself again.
    *
@@ -9816,6 +9822,7 @@ export class SimWorld {
       | "portalY"
       | "portalAbil"
       | "portalDestId"
+      | "portalItem"
       | "builtFacing"
       | "restFaceT"
       | "rootPending"
@@ -10117,6 +10124,7 @@ export class SimWorld {
       portalY: 0,
       portalAbil: "",
       portalDestId: 0,
+      portalItem: 0,
       builtFacing: unit.facing,
       restFaceT: 0,
       rootPending: null,
@@ -26761,7 +26769,10 @@ export class SimWorld {
       const fired = this.applyItemAbility(u, ad, held, targetId, x, y);
       if (fired === "unhandled") continue; // ability we don't handle — try the next one
       if (!fired) return false; // handled code but nothing to do (already full) — no charge spent
-      this.consumeItemUse(u, slot, def, ad.levelData[0]?.cooldown || 0);
+      // …and a Town Portal's charge waits for the arrival (SimUnit.portalItem): the press
+      // starts its cooldown and nothing more. An instant one (a map that edited the wait away)
+      // has already arrived, and spent it, by now.
+      this.consumeItemUse(u, slot, def, ad.levelData[0]?.cooldown || 0, ad.code !== "AItp");
       // …and a pressed item BREAKS A CHANNEL, the user's own. Using an item is an order, and a
       // channel is held only for as long as the caster is given no other: "If you use potions it
       // will interrupt the Starfall" (Liquipedia, Starfall) — the Keeper who drinks mid-
@@ -27071,7 +27082,7 @@ export class SimWorld {
           break;
         }
         case "AIct": fired = this.itemArtificialNight(ad); break; // Moonstone
-        case "AItp": fired = this.itemTownPortal(u, ad, x, y); break; // Scroll of Town Portal
+        case "AItp": fired = this.itemTownPortal(u, ad, x, y, held); break; // Scroll of Town Portal
         case "AIrt": // Amulet of Recall …
         case "AUds": fired = this.itemRecall(u, ad, x, y); break; // …and the Diamond of Summoning
         case "Ablp": fired = this.itemBlight(u, ad, x, y); break; // Sacrificial Skull
@@ -27292,13 +27303,10 @@ export class SimWorld {
    * stops three different healing potions being drunk back to back, and what stops a fourth
    * bought mid-cooldown being a way round it.
    */
-  private consumeItemUse(u: SimUnit, slot: number, def: ItemDef, cooldown: number): void {
+  private consumeItemUse(u: SimUnit, slot: number, def: ItemDef, cooldown: number, charge = true): void {
     const held = u.inventory[slot];
     if (!held) return;
-    if (def.charges > 0) {
-      held.charges -= 1;
-      if (held.charges <= 0 && def.perishable) { u.inventory[slot] = null; this.itemAbilityDefs.delete(held.id); this.recomputeStats(u); }
-    }
+    if (charge) this.spendItemCharge(u, slot, def);
     // "Even though the ability has a cooldown, it will be set to 0 when this is True"
     // (ItemDef.ignoreCooldown) — so such an item neither waits nor makes its group wait.
     if (def.ignoreCooldown) return;
@@ -27314,6 +27322,14 @@ export class SimWorld {
       const od = this.itemReg.get(other.itemId);
       if (od && !od.ignoreCooldown && od.cooldownGroup === group) other.cooldownLeft = Math.max(other.cooldownLeft, cooldown);
     }
+  }
+
+  /** Spend one charge of the item in `slot`, and let a perishable one go with its last. */
+  private spendItemCharge(u: SimUnit, slot: number, def: ItemDef): void {
+    const held = u.inventory[slot];
+    if (!held || def.charges <= 0) return;
+    held.charges -= 1;
+    if (held.charges <= 0 && def.perishable) { u.inventory[slot] = null; this.itemAbilityDefs.delete(held.id); this.recomputeStats(u); }
   }
 
   /** The cooldown an item ARRIVING in `u`'s inventory starts on: whatever is left of its
@@ -27422,12 +27438,15 @@ export class SimWorld {
    *
    *  `Cast1` = 5. The scroll is the one item in the game that is not instant, and those five
    *  seconds are the whole character of it — see SimUnit.portalLeft for Blizzard's own
-   *  description of what happens during them. The charge is spent HERE, on the press, because
-   *  "under no circumstances can the town portal be aborted once started": there is no state
-   *  in which the scroll is half-used and could be got back. */
-  private itemTownPortal(u: SimUnit, ad: AbilityDef, x: number, y: number): boolean {
+   *  description of what happens during them. "Under no circumstances can the town portal be
+   *  aborted once started" — but it can FAIL: a hall knocked down inside the five seconds
+   *  (with no other hall near the point to take its place) teleports nobody, and the scroll is
+   *  then not used up. So the press starts the cooldown and the CHARGE waits for the arrival
+   *  (SimUnit.portalItem, spent in resolveTeleport); useItem is told not to spend it. */
+  private itemTownPortal(u: SimUnit, ad: AbilityDef, x: number, y: number, held: HeldItem | null): boolean {
     if (!this.nearestHall(u.owner, x, y)) return false;
     const lvl = ad.levelData[0] ?? emptyAbilityLevel();
+    u.portalItem = held?.id ?? 0;
     this.beginTeleport(u, ad, lvl.castTime, 0, x, y);
     return true;
   }
@@ -27585,7 +27604,18 @@ export class SimWorld {
    *  played on the unit the Archmage aimed at beyond the shared `To`. */
   private resolveTeleport(u: SimUnit, ad: AbilityDef): void {
     const dest = u.portalDestId ? this.units.get(u.portalDestId) : this.nearestHall(u.owner, u.portalX, u.portalY);
-    if (!dest || dest.hp <= 0) return; // the destination died during the channel — everyone stays put
+    // The scroll this channel may spend (SimUnit.portalItem) — read and let go whatever happens.
+    const scroll = u.portalItem;
+    u.portalItem = 0;
+    if (!dest || dest.hp <= 0) return; // the destination died during the channel — everyone stays put, the scroll too
+    // …it arrives, so the scroll is used up NOW (itemTownPortal). Looked up by the item's
+    // entity id rather than a slot: the slot it was pressed from is not promised to it.
+    if (scroll) {
+      const slot = u.inventory.findIndex((h) => h?.id === scroll);
+      const held = slot >= 0 ? u.inventory[slot] : null;
+      const def = held ? this.itemReg?.get(held.itemId) : undefined;
+      if (def) this.spendItemCharge(u, slot, def);
+    }
     const lvl = ad.levelData[0] ?? emptyAbilityLevel();
     // `Area1` / `DataA "Maximum Number of Units"`: 1100 and 90 on the scroll, 800 and 24 on
     // the Archmage's ultimate. The fallbacks are each row's own shipped value, for a map that
