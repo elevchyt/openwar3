@@ -9100,7 +9100,7 @@ export class RtsController {
     // The match's replay, sent by the host when the game ends (issue #158).
     link.onReplay = (bytes) => this.onReplay?.(bytes);
     // …and each client's input track on its way to the host's recording (game/inputTrack.ts).
-    link.onInputs = (player, scheme, samples) => this.onInputs?.(player, scheme, samples);
+    link.onInputs = (player, scheme, samples, id) => this.onInputs?.(player, scheme, samples, id);
     if (setup.isHost) {
       // The host is the only party that judges an arriving command. `CommandRouter` resolves
       // the relay's `from` stamp — which no client can forge — to a slot, and a command whose
@@ -9198,12 +9198,13 @@ export class RtsController {
   }
 
   /** HOST: a batch of a client's input track arrived (MatchLink `inputs`). */
-  onInputs: ((player: number, scheme: string, samples: unknown[]) => void) | null = null;
+  onInputs: ((player: number, scheme: string, samples: unknown[], id?: string) => void) | null = null;
 
-  /** CLIENT: send the host a batch of our own input track. False when there is no host. */
-  sendInputs(scheme: string, samples: unknown[]): boolean {
+  /** CLIENT: send the host a batch of our own input track, with our anonymous install id. False
+   *  when there is no host. */
+  sendInputs(scheme: string, samples: unknown[], id?: string): boolean {
     if (!this.matchLink || this.matchLinkIsHost) return false;
-    this.matchLink.sendInputs(scheme, samples);
+    this.matchLink.sendInputs(scheme, samples, id);
     return true;
   }
 

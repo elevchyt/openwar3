@@ -99,6 +99,10 @@ import { replaySink, type ReplaySink } from "../game/replaySink";
 import { ReplayUploader, installId } from "../game/replayUpload";
 import { autosaveReplay } from "../data/options";
 
+/** What an anonymous install id looks like (game/replayUpload.ts `installId`: a random UUID, or
+ *  "unknown" without localStorage — which says nothing and is not written onto a seat). */
+const INSTALL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** The one uploader for the page (issue #158) — replays waiting from an earlier session are sent
  *  on the first match's close as well as this one's. Only a MULTIPLAYER match's replay is ever
  *  offered to it, by the host (MapViewerScene.closeReplay). */
@@ -3227,7 +3231,7 @@ export class MapViewerScene {
     });
     rts.onCheat = (player, kind) => this.replayRecorder?.push({ k: "cheat", p: player, kind });
     rts.onCheatSelected = (kind, ids) => this.replayRecorder?.push({ k: "cheatsel", kind, ids: [...ids] });
-    rts.onInputs = (player, scheme, samples) => this.takeInputs(player, scheme, samples);
+    rts.onInputs = (player, scheme, samples, id) => this.takeInputs(player, scheme, samples, id);
     // The recorder's own input track starts in `attachMatchLink`, if this is a multiplayer match.
     this.replayNetworked = false;
   }
@@ -3465,14 +3469,22 @@ export class MapViewerScene {
     const samples = tracker.drain();
     if (!samples.length) return;
     if (this.replayRecorder) this.replayRecorder.inputs(this.localPlayer, hotkeyMode(), samples);
-    else if (rts.frozenClient) rts.sendInputs(hotkeyMode(), samples);
+    // A client's batch carries its anonymous install id, for the host to put on its seat.
+    else if (rts.frozenClient) rts.sendInputs(hotkeyMode(), samples, installId());
   }
 
   /** HOST: a batch of a client's input track. Checked sample by sample — it is another machine's
-   *  word going into our file — and a step later than now is pulled back to now. */
-  private takeInputs(player: number, scheme: string, samples: unknown[]): void {
+   *  word going into our file — and a step later than now is pulled back to now. Its anonymous
+   *  install id, when it carries one in the right shape, goes onto that player's seat: the host
+   *  writes its own in `attachMatchLink`, and this is how every other person's seat gets theirs,
+   *  so one player's matches can be told from another's in the collection. */
+  private takeInputs(player: number, scheme: string, samples: unknown[], id?: string): void {
     const rec = this.replayRecorder;
     if (!rec) return;
+    if (id && INSTALL_ID.test(id)) {
+      const seat = rec.header.seats.find((x) => x.player === player && x.kind === "human");
+      if (seat) seat.id = id.toLowerCase();
+    }
     const now = this.simTick - this.replayTick0;
     const good: InputSample[] = [];
     for (const s of samples) {

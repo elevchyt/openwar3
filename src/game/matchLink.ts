@@ -408,18 +408,25 @@ export function isReplayPartMessage(data: unknown): data is ReplayPartMessage {
  * camera was, what they selected and how, their control groups, where each command came from.
  * Nobody but the player's own machine knows these, and only the host records, so they are sent.
  * Stamped like chat — the host files a batch under the seat the relay says it came from — and
- * checked sample by sample there (`isInputSample`). Sent only with that player's consent.
+ * checked sample by sample there (`isInputSample`). Sent in every multiplayer match, whose replay
+ * goes to OpenWar3's collection (game/replayUpload.ts).
  */
 export interface InputsMessage {
   k: "inputs";
   /** The sender's keyboard scheme (legacy / grid / custom). */
   scheme: string;
   samples: unknown[];
+  /** The sender's ANONYMOUS install id (game/replayUpload.ts `installId`), which the host writes
+   *  onto the sender's seat in the replay — the one thing about a client only the client knows.
+   *  Optional, so a build without it is still a valid sender; it rides every batch, so one that
+   *  arrives is enough. */
+  id?: string;
 }
 export function isInputsMessage(data: unknown): data is InputsMessage {
   const d = data as Partial<InputsMessage> | null;
   return typeof d === "object" && d !== null && d.k === "inputs" && typeof d.scheme === "string" && d.scheme.length <= 16
-    && Array.isArray(d.samples) && d.samples.length <= INPUTS_MAX_BATCH;
+    && Array.isArray(d.samples) && d.samples.length <= INPUTS_MAX_BATCH
+    && (d.id === undefined || (typeof d.id === "string" && d.id.length <= 64));
 }
 /** The most samples one batch may carry: far more than five seconds of play makes. */
 const INPUTS_MAX_BATCH = 4000;
@@ -652,7 +659,7 @@ export class MatchLink {
   onScores: (scores: ScoreTable) => void = () => {};
 
   /** Host side: a batch of one player's input track (`InputsMessage`), not yet checked. */
-  onInputs: (player: number, scheme: string, samples: unknown[]) => void = () => {};
+  onInputs: (player: number, scheme: string, samples: unknown[], id?: string) => void = () => {};
 
   /** Client side: the match's replay, whole, as the host sent it at the end (`ReplayPartMessage`). */
   onReplay: (bytes: Uint8Array) => void = () => {};
@@ -774,7 +781,7 @@ export class MatchLink {
       // Host side: a batch of a player's input track. Stamped, like chat.
       else if (isInputsMessage(data)) {
         const player = this.seats.find((s) => s.peer === from)?.id;
-        if (player !== undefined) this.onInputs(player, data.scheme, data.samples);
+        if (player !== undefined) this.onInputs(player, data.scheme, data.samples, data.id);
       }
       // Client side: a piece of the match's replay, from the HOST only.
       else if (isReplayPartMessage(data)) {
@@ -840,9 +847,9 @@ export class MatchLink {
   }
 
   /** Client side: send the host a batch of our own input track (`InputsMessage`). */
-  sendInputs(scheme: string, samples: unknown[]): void {
+  sendInputs(scheme: string, samples: unknown[], id?: string): void {
     for (let at = 0; at < samples.length; at += INPUTS_MAX_BATCH) {
-      this.channel.send({ k: "inputs", scheme, samples: samples.slice(at, at + INPUTS_MAX_BATCH) } satisfies InputsMessage, this.hostPeer);
+      this.channel.send({ k: "inputs", scheme, samples: samples.slice(at, at + INPUTS_MAX_BATCH), ...(id ? { id } : {}) } satisfies InputsMessage, this.hostPeer);
     }
   }
 

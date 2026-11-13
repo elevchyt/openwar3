@@ -120,7 +120,10 @@ its own to the host in batches (MatchLink `inputs`), checked sample by sample th
 MULTIPLAYER matches only, and always there (the developer's call — it retired the "Share Replays"
 option that used to gate it): the track starts when the match link attaches
 (`MapViewerScene.attachMatchLink` → `beginInputTrack`), which is also when the host writes its
-anonymous install id onto its own seat. A single-player match records no input track.
+anonymous install id onto its own seat. Every other person's id rides their input-track batches
+(MatchLink `inputs`, an optional `id` — no protocol bump) and the host writes it onto the seat the
+batch came from (`takeInputs`), so every PERSON in an uploaded replay carries one. A
+single-player match records no input track and no id.
 
 ## The collection
 

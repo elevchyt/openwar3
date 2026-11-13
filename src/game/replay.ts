@@ -131,8 +131,11 @@ export interface ReplaySeat {
   /** The seat's colour index (`playercolor`), as the match began. */
   color?: number;
   /** An ANONYMOUS id for the person in the seat (a random one per install,
-   *  game/replayUpload.ts) — present only for a player who agreed to share their replays, so
-   *  one player's matches can be told from another's without knowing who anybody is. */
+   *  game/replayUpload.ts), so one player's matches can be told from another's without knowing
+   *  who anybody is. Written in a MULTIPLAYER match only: the host's own when its match link
+   *  attaches, every other person's off the input-track batches they send it (MatchLink
+   *  `inputs`). Absent on a computer's seat, a single-player match, and a player who never sent
+   *  a batch. */
   id?: string;
 }
 

@@ -26,8 +26,8 @@
 // write allowance) with debug runs.
 //
 // What a replay HOLDS: the names the players typed, every chat line they sent (game/replay.ts) and
-// each player's own camera, selections and cursor (game/inputTrack.ts) — and the host's anonymous
-// install id on its seat. Nothing that names a person outside the game.
+// each player's own camera, selections and cursor (game/inputTrack.ts) — and every person's
+// anonymous install id on their seat. Nothing that names a person outside the game.
 
 import { REPLAY_FORMAT } from "./replay";
 
