@@ -11,7 +11,7 @@ import { LayeredDataSource } from "../vfs/layered";
 import { tilesetOverlay } from "../vfs/tileset";
 import { createAssetSolver, type MapFileLayer, type Solver } from "./assetSolver";
 import { SkyDome, skyModelPath, type SkyViewer } from "./sky";
-import { CAMERA_MARGIN, CELL, cameraBoundsOf, parseW3E, type TerrainData, type WorldRect } from "../world/terrain";
+import { CAMERA_MARGIN, CELL, cameraBoundsOf, parseW3E, playableRect, type TerrainData, type WorldRect } from "../world/terrain";
 import { brushPoints, parseCellRarity, pickCell } from "./terrainBrush";
 import { parseDoo } from "../world/doodads";
 import { collectMapDestructibles, findDestructibleAt, type MapDestructible } from "../world/mapDestructibles";
@@ -2768,6 +2768,7 @@ export class MapViewerScene {
     const creeps: CreepSeed[] = []; // Neutral Hostile (player 12+) guard + drop data
     const players: Array<{ x: number; y: number; owner: number }> = []; // pre-placed player units (custom maps)
     let buildVersion = 0;
+    this.w3iPlayable = null; // …until this map's w3i says otherwise (see minimapRect)
     const w3iBytes = archive.rawBytes("war3map.w3i");
     if (w3iBytes) {
       // TOLERANT (src/compat/w3i.ts). This is the THIRD reader of the same file and the one
@@ -2778,6 +2779,13 @@ export class MapViewerScene {
       // mid-structure, and every field read below sits BEFORE the truncation.
       const { info } = readW3i(w3iBytes);
       buildVersion = info.getBuildVersion();
+      // The playable area as the EDITOR declared it — the tiles of black border on the left
+      // and bottom, and the playable size — which is the rect it rendered war3mapMap.blp of.
+      const pi = info as unknown as { cameraBoundsComplements?: Int32Array; playableSize?: Int32Array };
+      const comp = pi.cameraBoundsComplements, size = pi.playableSize;
+      if (comp && size && size[0] > 0 && size[1] > 0) {
+        this.w3iPlayable = { left: comp[0], bottom: comp[2], cols: size[0], rows: size[1] };
+      }
       // The map's environment fog (w3i): useTerrainFog 0 = off; fogHeight is [z-start,
       // z-end] camera distance, fogColor is RGBA bytes. Applied to the world scene so the
       // terrain + units fade to the fog colour with distance, as in the real game.
@@ -10594,11 +10602,49 @@ export class MapViewerScene {
       for (let col = 0; col < columns; col++) corners[row * columns + col] = line[col]?.blight ? 1 : 0;
     }
     const color = same ? prev.color : this.blightMinimapColor();
-    const blight = color ? { version: ++this.minimapBlightSerial, columns, rows, corners, color } : null;
+    // The tiles the minimap's picture covers (minimapRect), so the layer lines up with it.
+    const r = this.minimapRect();
+    const [gx, gy] = map.centerOffset;
+    const tiles = r
+      ? { tileX: Math.round((r.minX - gx) / CELL), tileY: Math.round((r.minY - gy) / CELL), tileCols: Math.round((r.maxX - r.minX) / CELL), tileRows: Math.round((r.maxY - r.minY) / CELL) }
+      : { tileX: 0, tileY: 0, tileCols: columns - 1, tileRows: rows - 1 };
+    const blight = color ? { version: ++this.minimapBlightSerial, columns, rows, corners, color, ...tiles } : null;
     this.minimapBlightView = { map, corners, color, blight };
     this.minimapBlightStale = false;
     return blight;
   }
+  /** war3map.w3i's playable area in TILES: the border's depth on the left and bottom
+   *  (`cameraBoundsComplements[0]`/`[2]`) and the playable size. Null until a w3i is read. */
+  private w3iPlayable: { left: number; bottom: number; cols: number; rows: number } | null = null;
+
+  /**
+   * The world rect the minimap shows — the PLAYABLE AREA (docs/unplayable-area.md's middle
+   * rect), not the whole terrain grid. war3mapMap.blp is rendered of exactly that: its
+   * transparent letterbox follows the PLAYABLE aspect, never the grid's, across every stock
+   * map that tells the two apart — (2)BootyBay's grid is 192×96 (2:1) and its playable area
+   * 160×72, and the picture goes opaque at y = 70, which is (256 − 256·72/160)/2 and not the
+   * grid's 64; (2)EchoIsles (128×96 against 116×84) at y = 35, not 32. On (2)HillsOfGlory —
+   * 96×96 with 19 tiles of border along the bottom and 20 down the right, against 4 and 5 on
+   * the other sides — spreading the playable picture over the whole grid left a strip below
+   * the bottom gold mine the camera box could point at and the camera could never reach.
+   *
+   * The w3i's own numbers first, as the editor's; a w3i that never got that far (a protected
+   * map's truncated one) falls back on the terrain's boundary flags, which state the same
+   * rect (`playableRect`), and a map with neither on the whole grid.
+   */
+  private minimapRect(): WorldRect | null {
+    const map = this.viewer.map;
+    if (!map) return null;
+    const [cols, rows] = map.mapSize;
+    const [ox, oy] = map.centerOffset;
+    const p = this.w3iPlayable;
+    if (p && p.left >= 0 && p.bottom >= 0 && p.left + p.cols <= cols - 1 && p.bottom + p.rows <= rows - 1) {
+      return { minX: ox + p.left * CELL, minY: oy + p.bottom * CELL, maxX: ox + (p.left + p.cols) * CELL, maxY: oy + (p.bottom + p.rows) * CELL };
+    }
+    if (this.terrainData) return playableRect(this.terrainData);
+    return { minX: ox, minY: oy, maxX: ox + (cols - 1) * CELL, maxY: oy + (rows - 1) * CELL };
+  }
+
   private minimapBlightView: {
     map: W3xMap;
     corners: Uint8Array;
@@ -10797,11 +10843,8 @@ export class MapViewerScene {
       creepCamps: () => this.rts?.creepCamps() ?? [],
       minimapIcons: () => this.rts?.minimapIcons() ?? [],
       mapBounds: () => {
-        const map = this.viewer.map;
-        if (!map) return [0, 0, 1, 1];
-        const [cols, rows] = map.mapSize;
-        const [ox, oy] = map.centerOffset;
-        return [ox, oy, (cols - 1) * 128, (rows - 1) * 128];
+        const r = this.minimapRect();
+        return r ? [r.minX, r.minY, r.maxX - r.minX, r.maxY - r.minY] : [0, 0, 1, 1];
       },
       fogAt: (wx, wy) => this.rts?.getVision().stateAt(wx, wy) ?? 2, // 2 = visible (no fog before a match)
       fogStates: (xs, ys, out) => {
