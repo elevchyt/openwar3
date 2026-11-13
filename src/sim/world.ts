@@ -11512,12 +11512,24 @@ export class SimWorld {
     // the spoken half of issueAttack's own `t.invulnerable` refusal (issue #26) — the order was
     // already being turned down there, silently, and a click that vanishes reads as a bug.
     if (commanded && t.invulnerable) return "Notinvulnerable";
+    // "Ethereal units can only be hit by spells and Magic damage." — [Errors] `Notethereal`:
+    // a weapon that WOULD admit the target but for its being ethereal (weaponVs refuses
+    // every attack type MiscGame's EtherealDamageBonus zeroes). Only the named attack hears it,
+    // for the same reason as `Notinvulnerable` above — a right-click is a smart order.
+    if (commanded && t.ethereal && u.weapon && !this.canAttack(u, t) && this.etherealOnlyBar(u, t)) return "Notethereal";
     if (!u.weapon || this.canPursue(u)) return null;
     // Nothing in the loadout may strike it at all (a ground tower pointed at a Gryphon):
     // that is a different refusal and not one this method has the line for — issueAttack
     // turns the order down on `canAttack` and the cursor never went red in the first place.
     if (!this.canAttack(u, t)) return null;
     return this.inWeaponRange(u, t) ? null : "Notinrange";
+  }
+
+  /** Would one of `u`'s enabled weapons admit `t` (by its Targets Allowed) if `t` were not
+   *  ethereal? Tells the `Notethereal` refusal apart from a plain "cannot hit that kind". */
+  private etherealOnlyBar(u: SimUnit, t: SimUnit): boolean {
+    const key = targetKeyOf(t);
+    return u.weapons.some((w) => w.enabled && (!w.targets.length || w.targets.includes(key)));
   }
 
   /** Can this unit walk to a fight at all? A structure (and anything else the data gives no
@@ -13616,6 +13628,15 @@ export class SimWorld {
       // all take the same answer, and a unit with a second weapon of another type falls
       // through to it. `applyDamage` is the other half, for a blow already in the air.
       if (w.attackType === AttackType.Magic && t.magicImmune && gameNum("MagicImmunesResistDamage")) continue;
+      // …and the mirror image: an ETHEREAL unit (Banish, the Spirit Walker's Ethereal Form) is
+      // out of reach of every weapon whose attack type its `EtherealDamageBonus` column zeroes
+      // (MiscGame: 0 for Normal/Pierce/Siege/Chaos/Hero, 1.66 for Magic/Spells). The game does
+      // not aim such a weapon at it at all — [Errors] `Notethereal`, "Ethereal units can only be
+      // hit by spells and Magic damage." — so a Gargoyle's missile (pierce) never picks a
+      // Spirit Walker. Asked here for the same reason as the magic-immune rule above: the idle
+      // scan, an ordered attack, the cursor and a target that turns ethereal mid-fight all take
+      // this one answer. `applyDamage`'s multiplier stays as the half for a blow already flying.
+      if (t.ethereal && etherealDamageMultiplier(w.attackType) === 0) continue;
       // No Targets Allowed data at all (a summon or custom unit with no weapons row) → treat
       // the weapon as unrestricted rather than silently disarming the unit.
       if (!w.targets.length) return w;

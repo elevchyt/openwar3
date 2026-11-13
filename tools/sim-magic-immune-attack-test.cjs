@@ -97,5 +97,51 @@ console.log("immunity that lands mid-fight stops the fight");
   check("…and is not once it is immune", target.hp, hit);
 }
 
+// ETHEREAL is the mirror image (MiscGame `EtherealDamageBonus=0,0,0,1.66,0,1.66,0`): no weapon
+// whose type that list zeroes may aim at an ethereal unit — a Gargoyle's pierce missile never
+// picks a Spirit Walker in Ethereal Form, and the ordered attack is told [Errors] `Notethereal`.
+const ethereal = (u) => {
+  u.buffs.push({ kind: "ethereal", group: "banish", timeLeft: 999, total: 999, sourceId: 0, value: 0, value2: 0, art: "", fx: [], buffId: "", delay: 0 });
+};
+console.log("a physical weapon and an ethereal target");
+for (const type of ["normal", "pierce", "siege", "chaos", "hero"]) {
+  const w = new SimWorld(grid(), 1);
+  const garg = addUnit(w, 1, 0, 1000, 1000, [weapon(type, { ranged: true, range: 300 })]);
+  const walker = addUnit(w, 2, 1, 1100, 1000, []);
+  ethereal(walker);
+  run(w, 0.1);
+  check(`${type}: the walker is ethereal`, walker.ethereal, true);
+  check(`${type}: an ordered attack is refused`, w.issueAttack(garg.id, walker.id, false, true), false);
+  check(`${type}: …with the game's own line`, w.attackRefusal(garg.id, walker.id, true), "Notethereal");
+  run(w, 3);
+  check(`${type}: it never auto-acquires him`, garg.targetId === walker.id, false);
+  check(`${type}: …and he takes nothing`, walker.hp, 1000);
+}
+console.log("a MAGIC weapon still hits an ethereal target, ×1.66");
+{
+  const w = new SimWorld(grid(), 1);
+  const sorc = addUnit(w, 1, 0, 1000, 1000, [weapon("magic")]);
+  const walker = addUnit(w, 2, 1, 1100, 1000, []);
+  ethereal(walker);
+  run(w, 0.1);
+  check("the attack is taken", w.issueAttack(sorc.id, walker.id, false, true), true);
+  run(w, 3);
+  check("…and lands", walker.hp < 1000, true);
+}
+console.log("turning ethereal mid-fight stops a physical attacker");
+{
+  const w = new SimWorld(grid(), 1);
+  const foot = addUnit(w, 1, 0, 1000, 1000, [weapon("normal")]);
+  const target = addUnit(w, 2, 1, 1100, 1000, []);
+  w.issueAttack(foot.id, target.id, false, true);
+  run(w, 2);
+  const hit = target.hp;
+  check("it was being hit", hit < 1000, true);
+  ethereal(target);
+  run(w, 3);
+  check("…and is not once it is ethereal", target.hp, hit);
+  check("…and the attacker let go of it", foot.targetId === target.id, false);
+}
+
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");
 process.exit(failed ? 1 : 0);
