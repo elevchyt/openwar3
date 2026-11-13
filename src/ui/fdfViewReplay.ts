@@ -144,11 +144,28 @@ export function mountViewReplayScreen(
     return header.version === __OW3_VERSION__ || (!!header.fingerprint && header.fingerprint === __OW3_SIM_FINGERPRINT__);
   }
 
-  /** Why this replay cannot be watched on this machine as it stands, or null. */
+  /** A string out of the screen's FDF library, or its English when the install lacks it. */
+  function str(key: string, fallback: string): string {
+    const v = strings?.string(key);
+    return v && v !== key ? v : fallback;
+  }
+
+  /** Why this replay cannot be watched on this machine as it stands, or null. Said when View
+   *  Replay is PRESSED, as the game does — the button stays live and the answer is a message box,
+   *  never a line squeezed into the map's name row. */
   function blocked(header: ReplayHeader): string | null {
-    if (!mapPathOf(header)) return `${header.map.name} — not installed`;
+    // The game's own words, naming the file it looked for (GlobalStrings.fdf) — by its file name
+    // alone, and without the blank line between its two sentences: DialogWar3's box is a fixed
+    // 0.35 × 0.2 and the folder or the gap takes the message down into its OK button. The file
+    // is looked for under any folder anyway (`replayMapPath`).
+    if (!mapPathOf(header)) {
+      return str(
+        "NETERROR_CANTFINDREPLAYMAP",
+        "The map file associated with the replay could not be found.|n|nPlease make sure the map file '%s' used by the recorded game exists and try again.",
+      ).replace("|n|n", "|n").replace("%s", header.map.path.split(/[\\/]/).pop() ?? header.map.path);
+    }
     // The two games read different object tables (data/edition.ts); a replay is a match on one.
-    if ((header.edition === "roc") !== isRoc()) return `Recorded on ${header.edition === "roc" ? "Reign of Chaos" : "The Frozen Throne"} — switch editions to watch`;
+    if ((header.edition === "roc") !== isRoc()) return `This replay was recorded on ${header.edition === "roc" ? "Reign of Chaos" : "The Frozen Throne"}.|n|nSwitch editions on the main menu to watch it.`;
     return null;
   }
 
@@ -175,7 +192,12 @@ export function mountViewReplayScreen(
   function watch(): void {
     const name = picked;
     const header = name && !name.startsWith(FOLDER) ? headers.get(name) : null;
-    if (!name || !header || busy || blocked(header)) return;
+    if (!name || !header || busy) return;
+    const why = blocked(header);
+    if (why) {
+      void showGlueDialog({ container, vfs, text: why, buttons: "ok" });
+      return;
+    }
     if (sameSim(header)) return h.onView(name);
     void watchOther(name, header);
   }
@@ -189,10 +211,6 @@ export function mountViewReplayScreen(
    * on this build, "ignoring recorded checksums", and let the state checks say how far it held.
    */
   async function watchOther(name: string, header: ReplayHeader): Promise<void> {
-    const str = (key: string, fallback: string): string => {
-      const v = strings?.string(key);
-      return v && v !== key ? v : fallback;
-    };
     const info = await bundleOf(header.version);
     if (picked !== name) return;
     if (info && !info.usable) {
@@ -318,16 +336,16 @@ export function mountViewReplayScreen(
     if (picked !== name) return;
     const header = headers.get(name) ?? null;
     const path = mapPathOf(header);
-    const why = header ? blocked(header) : null;
     // The players who PLAYED it — the seats, never the watchers.
     s.setText("NumPlayersValue", header ? String(header.seats.length) : "");
-    s.setEnabled("OKButton", !!header && !why && !busy);
+    s.setEnabled("OKButton", !!header && !busy);
     const info = path ? await readMapInfo(maps, path).catch(() => null) : null;
     if (picked !== name) return;
-    if (!info || !path || why) {
+    if (!info || !path) {
       clearMapInfo(s);
-      // Not watchable here, and why — said in the name row, where the map's name would be.
-      if (why) note(why);
+      // The map this machine does not have: its name, as the replay recorded it, and nothing
+      // else — View Replay says why when pressed (`blocked`).
+      if (header) note(header.map.name, "ffffff");
       return;
     }
     fillMapInfo(s, info, null, minimapIcons);
@@ -357,7 +375,13 @@ export function mountViewReplayScreen(
 export function replayMapPath(maps: ReadonlyMap<string, File>, recorded: string): string | null {
   if (maps.has(recorded)) return recorded;
   const leaf = (p: string): string => p.split(/[\\/]/).pop()!.toLowerCase();
-  return [...maps.keys()].find((p) => leaf(p) === leaf(recorded)) ?? null;
+  const found = [...maps.keys()].find((p) => leaf(p) === leaf(recorded));
+  if (found) return found;
+  // 0.3.84 named a skirmish map by its DISPLAY name ("Bandit Ridge" for `(2)BanditRidge.w3x`):
+  // the words alone, without the player count, the extension, spaces or case.
+  const words = (p: string): string => leaf(p).replace(/^\(\d+\)/, "").replace(/\.w3[mx]$/, "").replace(/[^a-z0-9]/g, "");
+  const want = words(recorded);
+  return want ? [...maps.keys()].find((p) => words(p) === want) ?? null : null;
 }
 
 /** ViewReplayScreen + the list box and the summary pane dropped into its two containers —

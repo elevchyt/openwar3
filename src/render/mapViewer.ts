@@ -105,14 +105,25 @@ const replayUploader = new ReplayUploader(shareReplays);
 
 /** The match that just closed, if it was recorded: where its `LastReplay` went and when it is
  *  on disk — what the score screen's Save Replay keeps a copy of (ui/saveReplayDialog.ts). */
-let lastReplay: { sink: ReplaySink; written: Promise<boolean>; mapName: string } | null = null;
+let lastReplay: { sink: ReplaySink; written: Promise<boolean>; suggested: string } | null = null;
 
-/** An autosaved replay's name: the date, the time and the map, so a folder of them reads in order. */
-function autosaveName(mapName: string): string {
-  const d = new Date();
+/** When a replay was made, as a file name may carry it: `2026-11-13 03-26-53` (no colons —
+ *  Windows refuses them in a name). */
+function replayStamp(d = new Date()): string {
   const two = (n: number): string => String(n).padStart(2, "0");
-  // A map may colour its own name (`|c00ff0033DotA|r`): the file is named by the words alone.
-  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}-${two(d.getMinutes())}-${two(d.getSeconds())} ${wc3StripMarkup(mapName).trim()}`;
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}-${two(d.getMinutes())}-${two(d.getSeconds())}`;
+}
+
+/** An autosaved replay's name: the date, the time and the map, so a folder of them reads in order.
+ *  A map may colour its own name (`|c00ff0033DotA|r`): the file is named by the words alone. */
+function autosaveName(mapName: string): string {
+  return `${replayStamp()} ${wc3StripMarkup(mapName).trim()}`;
+}
+
+/** The name Save Replay offers: the map and when it was played, so saving twice off the same map
+ *  does not land on the name already there. */
+function suggestedName(mapName: string): string {
+  return `${wc3StripMarkup(mapName).trim()} ${replayStamp()}`;
 }
 export function lastRecordedReplay(): typeof lastReplay {
   return lastReplay;
@@ -3516,7 +3527,7 @@ export class MapViewerScene {
       console.warn("[replay] could not be saved:", err);
       return false;
     });
-    lastReplay = { sink, written, mapName: wc3StripMarkup(rec.header.map.name).trim() };
+    lastReplay = { sink, written, suggested: suggestedName(rec.header.map.name) };
   }
 
   /** How the match stands, as a replay's ending: the steps played and each seat's result. */
@@ -3563,7 +3574,7 @@ export class MapViewerScene {
       try {
         const { header } = await readReplayHeader(bytes);
         await sink.saveLast(bytes, autosaveReplay() ? autosaveName(header.map.name) : undefined);
-        lastReplay = { sink, written: Promise.resolve(true), mapName: wc3StripMarkup(header.map.name).trim() };
+        lastReplay = { sink, written: Promise.resolve(true), suggested: suggestedName(header.map.name) };
         console.info(`[replay] the host's replay is kept (${bytes.length} bytes)`);
         return true;
       } catch (err) {

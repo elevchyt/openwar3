@@ -173,10 +173,16 @@ Two of the game's own screens keep and find them:
   replays already saved, a name box, Save / Delete / Cancel, asking before it overwrites or
   deletes (`OVERWRITE_REPLAY_MESSAGE`, `DELETE_REPLAY_MESSAGE`). It copies the match's
   `LastReplay` under the name, after waiting for that file to be written; the button then reads
-  "Replay Saved". It is shown only when the match was recorded.
+  "Replay Saved". It is shown only when the match was recorded. The name offered is the map's
+  and when it was played (`Bandit Ridge 2026-11-13 03-37-19`), so a second save off the same map
+  does not land on the first.
 - **View Replay** (Single Player) lists the folder — `LastReplay`, the saved ones, and the
   game's `Autosaved` folder as a folder row — and shows the highlighted replay's map and player
-  count in the summary pane. A replay whose map is not installed says so and cannot be watched.
+  count in the summary pane. A map is named by its PATH in the install (`startGame`'s `mapPath`)
+  and found again under any folder by its file name; 0.3.84 recorded a skirmish map's DISPLAY
+  name instead ("Bandit Ridge"), which `replayMapPath` still matches by its words. A replay whose
+  map is not installed shows the recorded name and, as the game does, keeps View Replay live and
+  answers it with `NETERROR_CANTFINDREPLAYMAP` naming the file.
   One recorded by another OpenWar3 asks first, in the game's own words (`REPLAY_CONFIRM_DESC`,
   the recorded and the running build).
 

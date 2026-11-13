@@ -350,7 +350,7 @@ async function offerReconnect(vfs: DataSource): Promise<void> {
     }
     lobby.handOff();
     const link = matchLinkFrom(lobby, false, start.slots, peer, hostPeer, observerSeats(start));
-    void startGame(mapFileFor(path!), info, toConfig(start, peer, startsExplored(info.classification.flags)), link, lobby);
+    void startGame(mapFileFor(path!), info, toConfig(start, peer, startsExplored(info.classification.flags)), link, lobby, path!);
   } finally {
     reconnectAsking = false;
   }
@@ -535,7 +535,7 @@ function lanLobbyScreen(
     chrome: "MultiplayerPreGameChat",
     mount: () => mountLanLobbyScreen(ui, vfs, editionMaps(), lanSession().lobby, map, {
       onCancel: () => void glue.goTo(lanScreen(vfs)),
-      onStart: (path, info, config, link) => void startGame(mapFileFor(path), info, config, link),
+      onStart: (path, info, config, link) => void startGame(mapFileFor(path), info, config, link, undefined, path),
       onCountdownTick: () => glueAudio?.countdownTick(),
     }, advanced),
   };
@@ -698,7 +698,7 @@ async function startCampaignMission(vfs: DataSource, c: Campaign, index: number,
   // The mission is finished the moment its own script declares victory — that is what opens
   // the next chapter (data/campaignProgress.ts).
   pendingCampaign = { key: c.key, index };
-  await startGame(bytes, info, campaignConfig(info, difficulty, mission.name));
+  await startGame(bytes, info, campaignConfig(info, difficulty, mission.name), undefined, undefined, mission.file);
 }
 
 /**
@@ -741,7 +741,7 @@ async function changeLevel(mapPath: string): Promise<void> {
   }
   const title = found?.entry.name ?? mapPath.replace(/^.*[\\/]/, "").replace(/\.w3[mx]$/i, "");
   const info = parseMapInfo(bytes, title);
-  await startGame(bytes, info, campaignConfig(info, difficulty, title));
+  await startGame(bytes, info, campaignConfig(info, difficulty, title), undefined, undefined, mapPath);
 }
 
 /**
@@ -777,7 +777,7 @@ async function restartMatch(difficulty: number): Promise<void> {
     difficulty,
     defaultDifficulty: m.config.defaultDifficulty ?? m.config.difficulty,
     seed: 1 + Math.floor(Math.random() * 2147483645),
-  });
+  }, undefined, undefined, m.path);
 }
 
 /**
@@ -789,11 +789,11 @@ async function rewindReplay(at: number, view: ReplayView): Promise<void> {
   const m = lastMatch;
   if (!m?.config.replay) return;
   endMatch();
-  await startGame(m.bytes, m.info, { ...m.config, replayResume: { at, ...view } });
+  await startGame(m.bytes, m.info, { ...m.config, replayResume: { at, ...view } }, undefined, undefined, m.path);
 }
 
 /** The match on screen, kept so `RestartGame` can play it again. */
-let lastMatch: { bytes: Uint8Array; info: MapInfo; config: MeleeConfig } | null = null;
+let lastMatch: { bytes: Uint8Array; info: MapInfo; config: MeleeConfig; path?: string } | null = null;
 
 /** Which campaign row a `Maps\…\Foo.w3x` path is, if the index names it. Compared on the
  *  path the index itself carries — case- and separator-insensitively, because a script types
@@ -831,7 +831,7 @@ async function startCredits(vfs: DataSource): Promise<void> {
   applyMenuCursor(vfs); // no glue screen arrives after this one — the match does
   const info = parseMapInfo(bytes, "Credits");
   pendingCampaign = null;
-  await startGame(bytes, info, campaignConfig(info, "normal", info.name || "Credits"));
+  await startGame(bytes, info, campaignConfig(info, "normal", info.name || "Credits"), undefined, undefined, path);
 }
 
 /** The chapter the player is IN, so a victory can be credited to it. */
@@ -917,7 +917,7 @@ function skirmishScreen(vfs: DataSource): { chrome: "SinglePlayerSkirmish"; moun
     chrome: "SinglePlayerSkirmish",
     mount: () => mountSkirmish(ui, vfs, editionMaps(), {
       onCancel: () => void glue.goTo(singlePlayerScreen(vfs)),
-      onStart: (file, info, config) => void startGame(file, info, config),
+      onStart: (file, info, config, path) => void startGame(file, info, config, undefined, undefined, path),
     }),
   };
 }
@@ -958,7 +958,7 @@ async function watchReplay(replay: Replay): Promise<void> {
       console.warn(`[replay] recorded on patch ${h.patch}, which this build does not have:`, err);
     }
   }
-  await startGame(file, info, { ...h.config, observer: true, replay });
+  await startGame(file, info, { ...h.config, observer: true, replay }, undefined, undefined, path);
 }
 
 /** Leave the menus and play: load the map, then melee or custom setup as the map asks.
@@ -974,6 +974,10 @@ async function startGame(
   /** Coming BACK into a match already under way, from the main menu's "Reconnect?" — the lobby
    *  whose seat is reclaimed once the map is loaded (`reconnectFromMenu`). */
   rejoin?: LanLobby,
+  /** Where the map is — its path in the install (or the store, for a campaign chapter). What a
+   *  REPLAY of the match names it by, so View Replay can find it again; a display name there is
+   *  a replay nobody can open. */
+  mapPath?: string,
 ): Promise<void> {
   meleeConfig = config;
   matchLink = link ?? null;
@@ -1033,7 +1037,7 @@ async function startGame(
     // …kept, so the match can be PLAYED AGAIN without going back to the menu: `RestartGame`,
     // the defeat dialog's first button (see restartMatch). The bytes rather than the `File`,
     // because a file handle a browser handed us once may not be readable a second time.
-    lastMatch = { bytes, info, config };
+    lastMatch = { bytes, info, config, path: mapPath };
     // The minimap's markers are read out of the map itself (its terrain header and its placed
     // units), so they can only be stamped once its bytes are in hand — which is why the loading
     // screen takes them afterwards rather than at mount. Never at the cost of the match: a map
@@ -1044,7 +1048,7 @@ async function startGame(
     // What a REPLAY of this match names its map by (issue #158): the install's own path for it
     // when it came off a list, the bytes' hash so the same name is not taken for the same map.
     mapScene?.setReplayMap({
-      path: (map instanceof File ? [...installMaps].find(([, f]) => f === map)?.[0] : undefined) ?? config.mapName ?? info.name,
+      path: mapPath ?? (map instanceof File ? [...installMaps].find(([, f]) => f === map)?.[0] : undefined) ?? config.mapName ?? info.name,
       name: info.name,
       hash: fnv64(bytes),
       size: bytes.length,
@@ -1399,12 +1403,12 @@ async function showScoreScreen(vfs: DataSource, table: ScoreTable): Promise<void
     let done: () => void = () => {};
     const ok = new Promise<void>((resolve) => { done = resolve; });
     // The match just played, when it was recorded: Save Replay keeps it under a name. The name
-    // offered is the map's, as a starting point.
+    // offered is the map's and when it was played (render/mapViewer.ts `suggestedName`).
     const rec = lastRecordedReplay();
     const screen = await mountScoreScreen({
       container: loadingLayer, canvas: loadingCanvas, vfs, table,
       localPlayer: table.viewer, onOk: () => done(),
-      replay: rec ? { sink: rec.sink, written: rec.written, suggested: rec.mapName } : undefined,
+      replay: rec ? { sink: rec.sink, written: rec.written, suggested: rec.suggested } : undefined,
     });
     loadingCanvas.hidden = false;
     // The featured race's VictoryMusic / DefeatMusic (war3skins) under it, as the reference plays.

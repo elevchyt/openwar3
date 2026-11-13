@@ -58,7 +58,7 @@ const PANEL_FACES = { info: "MapInfoPanel", advanced: "AdvancedOptionsPanel" } a
 // carries the same pane, and the two must read the FDF's `MenuItem`s the same way.
 
 export interface SkirmishHandlers {
-  onStart: (map: File, info: MapInfo, config: MeleeConfig) => void;
+  onStart: (map: File, info: MapInfo, config: MeleeConfig, path: string) => void;
   onCancel: () => void;
 }
 
@@ -276,7 +276,7 @@ export async function mountSkirmish(
       fog: visibilityFog(advanced.visibility, startsExplored(picked.info.classification.flags)),
       computerPlus: advanced.computerPlus,
       observer: advanced.observerMode,
-    }));
+    }), picked.path);
   }
 
   // Leaving the screen must stop the browser's background read — it walks the whole install.
