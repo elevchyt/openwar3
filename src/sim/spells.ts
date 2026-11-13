@@ -1727,17 +1727,23 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
       .slice(0, cap);
     if (group.length < 2) return;
     const ids = group.map((u) => u.id);
-    const linkTime = dur(lvl, group[0]) || 75;
     for (const u of group) {
-      api.linkSpirits(u, ids, dur(lvl, u) || 75, share);
+      const time = dur(lvl, u) || 75;
+      api.linkSpirits(u, ids, time, share);
       if (def.targetArt) api.emitEffect(def.targetArt, u.x, u.y, u.id);
+      // …and WEARS it for as long as it holds: `[Bspl] Targetart = SpiritLinkTarget.mdl`,
+      // `Targetattach = chest` (OrcAbilityFunc.txt) — the buff's own model, which fx() reads
+      // off the ability's buff row and the renderer plays Birth → Stand → Death on, the Death
+      // when the link runs out. A `mark`: the sharing itself is `linkSpirits`' state.
+      api.applyBuff(u, { kind: "mark", group: "spiritlink", timeLeft: time, sourceId: caster.id, ...fx(def) });
     }
-    // The link made visible: an SPLK bolt from each member to the next, closing the ring, and
-    // held for the whole link — the bolts follow the units as they walk, which is what tells
-    // the player at a glance which four are sharing the damage.
+    // The link made visible at the CAST: an SPLK bolt from each member to the next, closing the
+    // ring, played ONCE — `life` 0 is the LightningData row's own fade (SPLK `Duration` 2) —
+    // and gone. The original does not hold the chains for the link's 75 seconds; what stays is
+    // each member's SpiritLinkTarget above.
     const links = group.length > 2 ? group.length : 1; // a pair needs one bolt, not two on top of each other
     for (let i = 0; i < links; i++) {
-      api.emitLightning(bolts(def)[0], group[i], group[(i + 1) % group.length], linkTime, undefined, undefined, true);
+      api.emitLightning(bolts(def)[0], group[i], group[(i + 1) % group.length], 0, undefined, undefined, true);
     }
   },
 
