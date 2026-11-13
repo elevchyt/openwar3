@@ -128,6 +128,42 @@ console.log("backswing: the AI stands out the follow-through, a person may cut i
   check(`a creep stands its backswing out too (moved at ${movedAt.toFixed(2)}s)`, movedAt >= 0.3 - SIM_DT && movedAt < 0.6);
 }
 
+// ── A NEW target is turned to once the blow is out, not once the weapon is ready ──────────
+// The footman swings at an enemy on its east; the instant the damage point passes it is
+// ordered onto a second enemy, also in reach, on its WEST. It must start turning right away
+// (its 1.2 s cooldown still running), so the turn is done by the time the weapon is ready.
+// The SAME target that walks round it is still not tracked through the recovery.
+console.log("re-targeting: turn after the damage point, before the cooldown");
+{
+  const w = new SimWorld(grid(), 1);
+  const a = addUnit(w, 1, 0, 1000, 1000);
+  addUnit(w, 2, 1, 1000 + 16 + 16 + 60, 1000);
+  addUnit(w, 3, 1, 1000 - 16 - 16 - 60, 1000);
+  w.issueAttack(1, 2);
+  let t = 0;
+  while (a.swingLeft < 0 && t < 3) { w.tick(SIM_DT); t += SIM_DT; }
+  while (a.swingLeft >= 0 && t < 3) { w.tick(SIM_DT); t += SIM_DT; }
+  const facing0 = a.facing;
+  w.issueAttack(1, 3);
+  run(w, 0.1);
+  check(`the cooldown is still running (${a.cooldownLeft.toFixed(2)}s left)`, a.cooldownLeft > 0.3);
+  check(`…and it is already turning to the new target (facing ${facing0.toFixed(2)} → ${a.facing.toFixed(2)})`, Math.abs(a.facing - facing0) > 0.2);
+}
+{
+  const w = new SimWorld(grid(), 1);
+  const a = addUnit(w, 1, 0, 1000, 1000);
+  const b = addUnit(w, 2, 1, 1000 + 16 + 16 + 60, 1000);
+  b.weapons = []; b.weapon = null;
+  w.issueAttack(1, 2);
+  let t = 0;
+  while (a.swingLeft < 0 && t < 3) { w.tick(SIM_DT); t += SIM_DT; }
+  while (a.swingLeft >= 0 && t < 3) { w.tick(SIM_DT); t += SIM_DT; }
+  const facing0 = a.facing;
+  b.x = 1000; b.y = 1000 + 16 + 16 + 60; // the same target steps round to its north
+  run(w, 0.1);
+  check(`the SAME target is not tracked through the recovery (facing ${facing0.toFixed(2)} → ${a.facing.toFixed(2)})`, Math.abs(a.facing - facing0) < 0.05);
+}
+
 if (failures) {
   console.log(`\n${failures} backswing check(s) FAILED`);
   process.exit(1);

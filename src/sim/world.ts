@@ -21932,9 +21932,17 @@ export class SimWorld {
     // the first step of the next attack (the swing gate below then waits for the turn to
     // finish). Re-aiming the moment the hit landed had the unit pivoting after a kiting
     // target through the whole recovery, which the game does not do.
+    //
+    // That rule is about the SAME target. A DIFFERENT one — the player pointed the group at
+    // somebody else, or the last victim died and the unit picked the next — is turned to the
+    // moment the blow in hand has gone out (`swingLeft < 0`: past the damage point), cooldown
+    // or not, so the turn is already done when the weapon is ready rather than started then.
+    // Waiting out the cooldown before even turning put a whole turn's delay on every re-target
+    // (the developer's report: units must "turn after their attack animation has been done but
+    // even before they can re-attack again").
     this.settleSpread(u, t);
     u.inCombat = true;
-    if (u.cooldownLeft <= 0) u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
+    if (u.cooldownLeft <= 0 || (u.swingLeft < 0 && u.swingTargetId !== t.id)) u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
     // Don't start a new swing while facing the wrong way, cooling down, or with a
     // swing already mid-flight toward its damage point.
     //
