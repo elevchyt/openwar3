@@ -90,6 +90,23 @@ ghoul.hp = ghoul.maxHp;
 world.dealDamage(ghoul, foe, weapon());
 check("a Ghoul already at full life drinks nothing and shows nothing", drain(), []);
 
+// --- a GARGOYLE stands in the same aura and gets nothing ----------------------------
+// Its primary slot is the anti-air claw (UnitWeapons [ugar] weapTp1 = normal, rangeN1 = 128),
+// but its ground weapon is a missile (weapTp2 = missile) — a unit with any ranged weapon is not
+// a melee unit, and the game leaves Gargoyles out of Vampiric Aura.
+const claw = { ...weapon(), enabled: true, range: 128 };
+const spit = { ...weapon(), enabled: true, ranged: true, range: 300, attackType: "pierce" };
+const gargoyle = unit({ x: 160, flying: true, typeId: "ugar", hp: 200, weapon: claw, weapons: [claw, spit] });
+world.applyAuras();
+world.recomputeStats(gargoyle);
+check("a Gargoyle in the aura steals no life", gargoyle.lifesteal, 0);
+// …and the Bombs-less Flying Machine rule's other face: a DISABLED ranged slot does not count.
+const offSpit = { ...spit, enabled: false };
+const brawler = soldier({ x: 170, weapon: claw, weapons: [claw, offSpit] });
+world.applyAuras();
+world.recomputeStats(brawler);
+check("a disabled ranged slot leaves a melee unit melee", brawler.lifesteal, 0.2);
+
 // --- the CREEP aura (`ACvp`), which has no handler of its own ------------------------
 // Its holder's SimAbility carries the base code, exactly as buildInitialAbilities writes it.
 const creep = soldier({ x: 3000, y: 3000, abilities: [{ id: "ACvp", code: "AUav", level: 1 }] });

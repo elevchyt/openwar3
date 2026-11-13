@@ -15262,7 +15262,11 @@ export class SimWorld {
           const ranged = !!t.weapon?.ranged;
           for (const e of effects) {
             if (e.rangedOnly && !ranged) continue; // Trueshot only helps ranged units
-            if (e.meleeOnly && (ranged || !t.weapon)) continue; // Vampiric only helps melee units
+            // Vampiric only helps MELEE units, and a unit with ANY ranged weapon is not one:
+            // the Gargoyle's anti-air claw is a `normal` slot (UnitWeapons [ugar] weapTp1 =
+            // normal, rangeN1 = 128) and is its PRIMARY, but its ground attack is a missile
+            // (weapTp2 = missile, rangeN2 = 300), and the game leaves Gargoyles out of the aura.
+            if (e.meleeOnly && !this.meleeAttacker(t)) continue;
             // A percentage aura's amount is the TARGET's — 1% of a Peasant's 220 life is not
             // 1% of a Mountain Giant's 1300 (see AuraEffect.pctOfMax).
             const value = e.pctOfMax ? e.value * (e.kind === "manaRegen" ? t.maxMana : t.maxHp) : e.value;
@@ -15274,6 +15278,14 @@ export class SimWorld {
         }
       }
     }
+  }
+
+  /** A MELEE attacker in the auras' sense: armed, and with no ENABLED weapon that is ranged.
+   *  The primary slot alone is not the answer — a Gargoyle's primary (its anti-air claw) is
+   *  melee while its ground weapon is a missile, and Vampiric Aura passes it by. */
+  meleeAttacker(u: SimUnit): boolean {
+    if (!u.weapon) return false;
+    return !u.weapons.some((w) => w.enabled && w.ranged);
   }
 
   /** Memo for lifestealArtOf, keyed by buff group: an ability's art cannot change mid-match. */
