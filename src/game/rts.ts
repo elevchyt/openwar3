@@ -74,7 +74,7 @@ import type { VoiceLabels } from "./voiceLabels";
 import { INSANE_HARVEST_FACTOR, MELEE_INSANE, MELEE_NORMAL } from "../ai/ids";
 
 /** What the single-player dev tools can do to the local player's side (RtsController.cheat). */
-export type CheatKind = "gold" | "lumber" | "food" | "fastbuild" | "godmode" | "day" | "night" | "upgrades";
+export type CheatKind = "gold" | "lumber" | "food" | "fastbuild" | "godmode" | "day" | "night" | "upgrades" | "victory" | "defeat";
 
 // Ties the headless SimWorld to the rendered map (plan §5 vertical slice):
 // seeds movable units from the loaded map, syncs sim state → model instances
@@ -1432,6 +1432,11 @@ export class RtsController {
    */
   onPlayerLeft: ((player: number) => void) | null = null;
 
+  /** `allyourbasearebelongtous` / `somebodysetupusthebomb` — end the match for `player`. The
+   *  SCENE's to answer (render/mapViewer.ts), because who has won is the map script's business:
+   *  it runs Blizzard.j's own CustomVictoryBJ / CustomDefeatBJ, which is what a campaign chapter
+   *  and a melee map both end through. */
+  onEndCheat: ((player: number, won: boolean) => void) | null = null;
   /** A cheat was used — the replay recorder's tap (game/replay.ts). */
   onCheat: ((player: number, kind: CheatKind) => void) | null = null;
   /** …and a selection cheat, with the units it acted on. */
@@ -10077,6 +10082,10 @@ export class RtsController {
       if (gods.has(player)) gods.delete(player);
       else gods.add(player);
       return gods.has(player);
+    }
+    if (kind === "victory" || kind === "defeat") {
+      this.onEndCheat?.(player, kind === "victory");
+      return false;
     }
     if (kind === "day" || kind === "night") {
       // `riseandshine` / `lightsout`: wind the clock to the morning or the evening — the

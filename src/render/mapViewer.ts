@@ -1,5 +1,5 @@
 import War3MapViewer from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/viewer";
-import { dataSetFolder, isRoc } from "../data/edition";
+import { dataSetFolder, isRoc, mapDataSet } from "../data/edition";
 import ModelViewer from "mdx-m3-viewer/dist/cjs/viewer/viewer";
 import { unpackPlanes } from "mdx-m3-viewer/dist/cjs/common/gl-matrix-addon";
 import { mat4 } from "gl-matrix";
@@ -5241,6 +5241,40 @@ export class MapViewerScene {
       // (AMAI has to destroy its own buildings to leave, because a JASS script's only way out
       // is the defeat condition; we are not constrained that way.)
       this.rts.onPlayerLeft = (player) => this.mapScript?.interp.firePlayerEvent(player, EVENT_PLAYER_LEAVE);
+      // The INSTANT VICTORY / DEFEAT cheats (`allyourbasearebelongtous`, `somebodysetupusthebomb`,
+      // and the dev drawer's two buttons): the match is ended the way the MAP ends it, through
+      // Blizzard.j — so the screen, the sound and the score screen are the ones a real ending
+      // gets. Which functions depends on the map's kind (the w3i melee flag, mapDataSet), because
+      // Blizzard.j has two endings and they look different:
+      //   · a MELEE map: what MeleeCheckForVictors / MeleeCheckForLosersAndVictors do to one
+      //     player — `MeleeDoVictoryEnum`'s body (CachePlayerHeroData, then
+      //     RemovePlayerPreserveUnitsBJ(p, PLAYER_GAME_RESULT_VICTORY, false), which raises
+      //     MeleeVictoryDialogBJ: "Victory!", Continue Game, Quit Game) and `MeleeDoDefeatEnum`'s
+      //     (CachePlayerHeroData, MakeUnitsPassiveForTeam, MeleeDoDefeat);
+      //   · anything else (a campaign chapter, a custom map): CustomVictoryBJ(p, true, true) and
+      //     CustomDefeatBJ(p, GAMEOVER_DEFEAT_MSG) — a chapter's Continue goes on to the next one.
+      // A cheat is a replay input (RtsController.cheat), so a replay ends the same way.
+      this.rts.onEndCheat = (player, won) => {
+        const interp = this.mapScript?.interp;
+        if (!interp) return;
+        const who = interp.callFunction("Player", [{ k: "int", n: player }]);
+        if (mapDataSet() === "melee") {
+          interp.callFunction("CachePlayerHeroData", [who]);
+          // common.j's own constant, not a bare 0: it is a `playergameresult` HANDLE, and
+          // RemovePlayerPreserveUnitsBJ compares it with `==` against the global — an int never
+          // matches, and the player got GameOverDialogBJ's "has left the game" instead.
+          if (won) {
+            const victory = interp.rt.globals.get("PLAYER_GAME_RESULT_VICTORY");
+            if (victory) interp.callFunction("RemovePlayerPreserveUnitsBJ", [who, victory, { k: "bool", b: false }]);
+          } else {
+            interp.callFunction("MakeUnitsPassiveForTeam", [who]);
+            interp.callFunction("MeleeDoDefeat", [who]);
+          }
+          return;
+        }
+        if (won) interp.callFunction("CustomVictoryBJ", [who, { k: "bool", b: true }, { k: "bool", b: true }]);
+        else interp.callFunction("CustomDefeatBJ", [who, interp.callFunction("GetLocalizedString", [{ k: "string", s: "GAMEOVER_DEFEAT_MSG" }])]);
+      };
       // …and who has gone out of that door (or been defeated) — `RemovePlayer`, recorded by
       // `playerGameOver` and by `peerLeft`. A leaver's units stay on the field shared with its
       // team, so this is the only way a Computer+ teammate can tell somebody has left.
@@ -11145,6 +11179,9 @@ export class MapViewerScene {
     else if (code === "riseandshine") this.rts.cheat("day");
     else if (code === "lightsout") this.rts.cheat("night");
     else if (code === "sharpandshiny") this.rts.cheat("upgrades");
+    // The original game's instant victory and defeat (RtsController.onEndCheat).
+    else if (code === "allyourbasearebelongtous") this.rts.cheat("victory");
+    else if (code === "somebodysetupusthebomb") this.rts.cheat("defeat");
     else return false;
     const key = on ? "CHEATENABLED" : "CHEATDISABLED";
     this.hud?.showMessage(this.globalStrings?.strings.get(key) ?? (on ? "Cheat enabled!" : "Cheat disabled!"), -1);

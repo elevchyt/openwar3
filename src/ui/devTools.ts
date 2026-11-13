@@ -466,13 +466,16 @@ export class DevToolsDrawer {
     setGameTip(kill, "Kill every selected unit, or destroy every selected building");
     page.append(
       this.section("Economy", [mk("+5000 Gold", "gold"), mk("+5000 Lumber", "lumber"), mk("+Food", "food")]),
-      // `whosyourdaddy`, `riseandshine`, `lightsout` and `sharpandshiny` — the original game's cheats.
-      this.section("Cheats", [mk("Fast Build", "fastbuild"), mk("God Mode", "godmode"), mk("Set Day", "day"), mk("Set Night", "night"), mk("All Upgrades", "upgrades")]),
+      // `whosyourdaddy`, `riseandshine`, `lightsout`, `sharpandshiny`, `allyourbasearebelongtous`
+      // and `somebodysetupusthebomb` — the original game's cheats.
+      this.section("Cheats", [mk("Fast Build", "fastbuild"), mk("God Mode", "godmode"), mk("Set Day", "day"), mk("Set Night", "night"), mk("All Upgrades", "upgrades"), mk("Instant Victory", "victory"), mk("Instant Defeat", "defeat")]),
       this.section("Selection", [sel("Full HP", "hp"), sel("Full MP", "mp"), sel("Reset Cooldown", "cooldown"), kill]),
       this.buildSpeed(),
     );
     setGameTip(this.cheatButtons.get("fastbuild")!, "Builds and training finish in about a second");
     setGameTip(this.cheatButtons.get("upgrades")!, "Research every upgrade in the game at its highest level");
+    setGameTip(this.cheatButtons.get("victory")!, "Win the match now, as the map's own victory does (allyourbasearebelongtous)");
+    setGameTip(this.cheatButtons.get("defeat")!, "Lose the match now, as the map's own defeat does (somebodysetupusthebomb)");
     return page;
   }
 
