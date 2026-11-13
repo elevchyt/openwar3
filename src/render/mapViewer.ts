@@ -10776,6 +10776,8 @@ export class MapViewerScene {
         chatPrompt(this.chatTargetFor(target), this.multiplayerMatch, (p) => this.playerLabel(p), (k) => this.globalStrings?.strings.get(k)),
       sendChat: (text, target) => this.sendChat(text, target),
       chatHasAllies: () => hasChatAllies(this.localPlayer, this.chatWorld()),
+      // A REPLAY has nobody to talk to: its players are recorded inputs (game/replay.ts).
+      chatAllowed: () => !this.replayPlayback,
       setResources: (next) => this.consoleUi?.update(next),
       dayNight: () => this.rts?.timeOfDay() ?? { hour: MELEE.MELEE_STARTING_TOD, isDay: true },
       mountClock: (slot) => this.mountClock(slot),
@@ -11176,13 +11178,10 @@ export class MapViewerScene {
    * chat: it is the only confirmation the message went anywhere).
    */
   private sendChat(text: string, target: ChatTarget): void {
-    // Watching a REPLAY, the match is the file's: a line typed now was never said in it, so it
-    // reaches no script and no player — it is shown to the watcher alone.
-    if (this.replayPlayback) {
-      if (text.trim().toLowerCase() === "/dev") this.hud?.toggleDevTools();
-      else this.showChat({ from: this.localPlayer, text, target: { scope: "observers" } });
-      return;
-    }
+    // Watching a REPLAY there is no chat at all (HudDriver.chatAllowed keeps the entry line
+    // shut): the match is the file's, and a line typed now was never said in it. This catches
+    // the one door that does not go through the entry line — a spoken "say …" (voiceActions).
+    if (this.replayPlayback) return;
     if (this.typedCheat(text)) return;
     target = this.chatTargetFor(target);
     const link = this.rts?.matchLinkHandle ?? null;

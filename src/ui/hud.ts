@@ -502,6 +502,9 @@ export interface HudDriver {
   /** Has the local player anyone to address as "Allies"? Decides whether the entry line has
    *  two modes to Tab between or only one (see `defaultChatTarget`). */
   chatHasAllies(): boolean;
+  /** May the chat entry line open at all? False while WATCHING A REPLAY: the match it shows is
+   *  over and its players are recorded inputs, so there is nobody for a line to reach. */
+  chatAllowed(): boolean;
 
   /** Push the resource readout to the FDF top bar (ui/consoleUi.ts), which owns that text now. */
   setResources(next: ConsoleResources): void;
@@ -2435,6 +2438,7 @@ export class GameHud {
 
   /** Open the chat entry line addressed at `target` (Enter → the default, Shift+Enter → all, Ctrl+Enter → allies). */
   openChat(target: ChatTarget): void {
+    if (!this.driver.chatAllowed()) return; // a replay (HudDriver.chatAllowed)
     this.chatTarget = this.clampChatTarget(target);
     this.chatPromptEl.textContent = this.driver.chatPrompt(this.chatTarget);
     this.chatBar.hidden = false;
@@ -2456,7 +2460,7 @@ export class GameHud {
       this.closeChat();
       return null;
     }
-    if (!this.acceptsInput()) return null;
+    if (!this.acceptsInput() || !this.driver.chatAllowed()) return null;
     this.openChat(this.defaultChatTarget());
     return this.chatInput;
   }
