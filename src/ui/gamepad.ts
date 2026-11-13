@@ -890,6 +890,13 @@ function hit(x: number, y: number): Element | null {
   return null;
 }
 
+/** Put the drawn cursor at (`x`, `y`) if the pad is driving it — the match's first frame, so
+ *  nothing pointed at during the loading screen carries into the game (mapViewer
+ *  `forgetLoadingInput`). A real mouse's cursor is the OS's and cannot be moved. */
+export function centreGamepadCursor(x: number, y: number): void {
+  if (cursorOn) moveCursor(x, y);
+}
+
 function moveCursor(x: number, y: number): void {
   cx = Math.min(Math.max(x, 0), window.innerWidth - 1);
   cy = Math.min(Math.max(y, 0), window.innerHeight - 1);

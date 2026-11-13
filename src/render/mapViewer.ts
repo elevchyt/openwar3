@@ -150,7 +150,7 @@ declare const __OW3_COMMIT__: string;
 declare const __OW3_SIM_FINGERPRINT__: string;
 import { animStride, renderSize, videoSettings } from "./videoQuality";
 import { edgeScrollScale, keyScrollScale } from "./scrollOptions";
-import { gamepadPan, setGamepadHost } from "../ui/gamepad";
+import { centreGamepadCursor, gamepadPan, setGamepadHost } from "../ui/gamepad";
 import { TerrainCull } from "./terrainCull";
 import type { PickVolume } from "./modelCollision";
 import { setSimProfiler } from "../sim/profile";
@@ -12462,7 +12462,34 @@ export class MapViewerScene {
    *  the console's F-keys, not just its last stretch (see togglePanel). */
   private loadingScreenUp = false;
   setLoadingScreen(on: boolean): void {
+    const lifting = this.loadingScreenUp && !on;
     this.loadingScreenUp = on;
+    if (lifting) this.forgetLoadingInput();
+  }
+
+  /**
+   * The match starts with a clean hand: nothing the player did while the loading screen was up
+   * carries into it. Keys held through the load are let go (a held arrow would otherwise pan
+   * from the first frame, and the key that dismissed the screen is not a command), a drag is
+   * dropped, and the cursor counts as being in the MIDDLE of the game frame until it really
+   * moves — a page cannot move the OS pointer, but it can refuse to act on where the pointer
+   * was left during the load, which is all edge-scrolling and hovering read. The gamepad's
+   * drawn cursor CAN be moved, and is put in the middle too.
+   */
+  private forgetLoadingInput(): void {
+    this.keys.clear();
+    if (this.rts) this.rts.subgroupOrders = false;
+    this.dragging = false;
+    this.midPanning = false;
+    this.moved = false;
+    this.syncFrame();
+    const f = this.frame;
+    this.lastCursor.x = (f.left + f.right) / 2;
+    this.lastCursor.y = (f.top + f.bottom) / 2;
+    this.lastMouse.x = this.canvas.clientWidth / 2;
+    this.lastMouse.y = this.canvas.clientHeight / 2;
+    this.showScrollArrow(0, 0);
+    centreGamepadCursor(this.lastCursor.x, this.lastCursor.y);
   }
 
   holdAtStart(on: boolean): void {
@@ -18133,7 +18160,13 @@ export class MapViewerScene {
     // …and a MIDDLE-DRAG is the one hand on the camera while it is held: the map is pinned
     // under the cursor, so an arrow key, the stick or the cursor brushing a screen edge would
     // each slide it out from under the hand that is holding it.
-    if (this.userControl && !this.hardPaused && !this.midPanning) {
+    // …and NOTHING moves it while the LOADING SCREEN is up: the match is built and drawn behind
+    // the screen for seconds before it lifts, and a cursor resting on an edge (the pointer is
+    // hidden there, so the player cannot even see it) or an arrow key held through the load
+    // panned that hidden camera, so the match opened somewhere other than the start location.
+    // What was pressed while it was up is thrown away as it lifts (`forgetLoadingInput`).
+    const loading = this.loadingScreenUp || this.startHeld;
+    if (this.userControl && !this.hardPaused && !this.midPanning && !loading) {
       // …and a DIALOG on screen owns the keyboard: the game-over box, the F10 menu, Allies, a
       // script's own dialog. The world underneath a modal takes no commands and its camera
       // does not move (ui/modal.ts) — the arrows that slid the map behind "Victory!" were the
