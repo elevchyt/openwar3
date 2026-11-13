@@ -3180,6 +3180,9 @@ const UNIT_MANA_REGEN = 0.67; // flat mana/sec for non-hero casters (approx WC3 
  *  the fall — the buff simply holds the unit on the ground — so this is only long enough to SEE
  *  it come down rather than blink there. */
 const NET_DROP_TIME = 0.4;
+/** The buff group Spirit Link's `[Bspl]` buff wears (spells.ts Aspl) — and so the link itself:
+ *  a member whose buff is gone is out of the link (see the tick's linkT clause). */
+export const SPIRIT_LINK_GROUP = "spiritlink";
 const AURA_REFRESH = 0.5; // aura buffs re-applied each tick with this TTL (fade on leave)
 /** Big Bad Voodoo's invulnerability is handed out on the same short leash an aura is, for
  *  the same reason: a broken CHANNEL has to strip it from everybody the same instant, and
@@ -20841,7 +20844,11 @@ export class SimWorld {
       if (u.drinkWellId) this.tickDrinkWalk(u); // …and a unit sent to a Moon Well stopping once it is in reach
       this.tickRenew(u); // an idle Wisp with Renew on, looking for something to mend
       if (u.cooldownLeft > 0) u.cooldownLeft -= dt;
-      if (u.linkT > 0 && (u.linkT -= dt) <= 0) u.linkGroup = []; // Spirit Link expired
+      // Spirit Link expired — or its BUFF is gone, which is the same thing: the link IS the
+      // `[Bspl]` buff the cast hangs on every member (spells.ts Aspl), so whatever took the buff
+      // off — Dispel Magic, Purge, Abolish or Devour Magic, a Wand of Negation, Mirror Image's
+      // wipe — ends that member's share of the damage (breakSpiritLink).
+      if (u.linkT > 0 && ((u.linkT -= dt) <= 0 || !u.buffs.some((b) => b.group === SPIRIT_LINK_GROUP))) this.breakSpiritLink(u);
       if (u.repathT > 0) u.repathT -= dt;
       if (u.chaseWaitT > 0) u.chaseWaitT -= dt;
       if (u.waitT > 0) u.waitT -= dt; // parked in a jam — counting down to the next try
@@ -25057,9 +25064,21 @@ export class SimWorld {
   /** Spirit Link (Aspl): `linkShare` of a post-armor hit is spread equally across the linked
    *  group (each living member, including the target, takes an equal share); the rest stays
    *  on the target. Returns the reduced amount the target itself should take. */
+  /** Take `u` out of its Spirit Link: it stops sharing, and the rest of the group stops sharing
+   *  with it. The others stay linked among themselves for as long as their own buffs last —
+   *  a dispel lands on ONE unit and takes that unit's buff, nobody else's. */
+  private breakSpiritLink(u: SimUnit): void {
+    for (const id of u.linkGroup) {
+      const m = id === u.id ? undefined : this.units.get(id);
+      if (m) m.linkGroup = m.linkGroup.filter((x) => x !== u.id);
+    }
+    u.linkT = 0;
+    u.linkGroup = [];
+  }
+
   private spiritLinkSplit(target: SimUnit, dmg: number): number {
     if (target.linkT <= 0 || target.linkGroup.length < 2 || dmg <= 0) return dmg;
-    const members = target.linkGroup.map((id) => this.units.get(id)).filter((u): u is SimUnit => !!u && u.hp > 0);
+    const members = target.linkGroup.map((id) => this.units.get(id)).filter((u): u is SimUnit => !!u && u.hp > 0 && u.linkT > 0);
     if (members.length < 2) return dmg;
     const share = target.linkShare;
     const per = (dmg * share) / members.length; // equal slice for every linked unit

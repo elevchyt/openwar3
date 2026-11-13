@@ -1735,6 +1735,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
       // `Targetattach = chest` (OrcAbilityFunc.txt) — the buff's own model, which fx() reads
       // off the ability's buff row and the renderer plays Birth → Stand → Death on, the Death
       // when the link runs out. A `mark`: the sharing itself is `linkSpirits`' state.
+      // The buff is ALSO the link: take it off (a dispel) and the member is out (SPIRIT_LINK_GROUP).
       api.applyBuff(u, { kind: "mark", group: "spiritlink", timeLeft: time, sourceId: caster.id, ...fx(def) });
     }
     // The link made visible at the CAST: an SPLK bolt from each member to the next, closing the
