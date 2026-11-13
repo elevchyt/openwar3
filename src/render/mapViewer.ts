@@ -3528,8 +3528,8 @@ export class MapViewerScene {
     const written = rec.finish().then(async (bytes) => {
       await sink.saveLast(bytes, keep);
       console.info(`[replay] recorded ${rec.eventCount} inputs over ${(ticks / SIM_HZ).toFixed(0)} s (${bytes.length} bytes)`);
-      // …and offered to the collection (game/replayUpload.ts; nothing is sent until it has
-      // somewhere to send to, and never with the player's switch off).
+      // …and offered to the collection (game/replayUpload.ts; never with the player's switch
+      // off, and not from a dev build unless VITE_REPLAY_UPLOAD_URL names a door).
       void replayUploader.offer(bytes);
       return true;
     }).catch((err) => {

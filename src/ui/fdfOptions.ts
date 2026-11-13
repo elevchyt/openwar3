@@ -227,6 +227,7 @@ export async function mountOptions(
     applyPanelState(s);
     for (const d of OPTION_DEFS) bindOne(s, d);
     syncEditorButton(s);
+    tipShareReplays(s);
     bindGamepadButton(s, {
       detect: lib?.string("DETECT_GAMEPAD") ?? "Detect Gamepad",
       unpair: lib?.string("UNPAIR_GAMEPAD") ?? "Unpair Gamepad",
@@ -273,6 +274,28 @@ export async function mountOptions(
     // An icon says nothing by itself, so it names what it opens in the game's own tooltip slab.
     const btn = s.frame("HotkeyEditorButton");
     if (btn) setGameTip(btn, "Hotkey Editor");
+  }
+
+  /**
+   * "Share Replays" is CONSENT, so the box says what the player is agreeing to before they tick
+   * it: what leaves the machine, where it goes and what it is for (src/game/replayUpload.ts,
+   * src/game/inputTrack.ts). Ours, like the row — the game has no such switch — and on the box
+   * AND its label, since either is what a player points at. `|n` breaks the line: the slab never
+   * wraps by itself.
+   */
+  function tipShareReplays(s: FdfScreen): void {
+    const tip =
+      "|cffffcc00Share Replays|r|n" +
+      "Sends your finished replays to OpenWar3 as telemetry, to study how the game|n" +
+      "is played and to improve it and its computer players.|n" +
+      "A replay holds the match's commands, chat and player names, and your own|n" +
+      "camera, selections and cursor. It is tagged with a random id made on this|n" +
+      "computer, never with your account or address.|n" +
+      "|cff808080Untick it and nothing is sent or recorded beyond the replay itself.|r";
+    for (const name of ["ShareReplaysCheckBox", "ShareReplaysLabel"]) {
+      const el = s.frame(name);
+      if (el) setGameTip(el, tip);
+    }
   }
 
   /**
