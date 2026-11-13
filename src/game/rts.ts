@@ -313,6 +313,9 @@ interface Entry {
    *  the ground through its Morph clip and climbs over the row's Altitude Adjustment Duration
    *  (SimWorld.shiftAltitude) instead of popping 240 units up the frame the type swaps. */
   liftFromSim?: boolean;
+  /** The flyer is held DOWN by a net (Web, or Ensnare on a flyer): the height it returns to,
+   *  while the model follows the sim's lowered `flyHeight` (syncEntries). Absent otherwise. */
+  netLift?: number;
   /**
    * The body is RIDING a carrier (docs/spell-fx.md § Carriers — Cyclone's funnel): its model
    * is drawn `off` from where the unit stands and turned by `turn` on top of its own facing,
@@ -5328,6 +5331,18 @@ export class RtsController {
       this.loc[0] = u.x;
       this.loc[1] = u.y;
       if (e.liftFromSim) e.moveHeight = lift(u.flyHeight); // the climb is the sim's — see Entry.liftFromSim
+      else if (u.flying && (e.netLift !== undefined || u.flyHeight < e.moveHeight - 0.5)) {
+        // A NET has this flyer (Web, or Ensnare on a flyer — SimWorld.netAltitude): the sim
+        // alone lowers its height, so the model follows the sim's down and back up, and lets go
+        // once it is home again. A script's SetUnitFlyHeight writes both halves at once, so it
+        // never reads as a net. `flyHeight` rides every snapshot, so a LAN client sees it too.
+        e.netLift ??= e.moveHeight;
+        e.moveHeight = lift(u.flyHeight);
+        if (u.flyHeight >= e.netLift - 0.5) {
+          e.moveHeight = e.netLift;
+          e.netLift = undefined;
+        }
+      }
       // Buildings seat on the tallest terrain their footprint spans (issue #15); mobile
       // units (footHalfW 0) ride the centre-sampled FLOOR + their fly height — the ground, or
       // the deck of a walkable destructible where one is over it, which is what puts a unit

@@ -111,6 +111,8 @@ export interface RenderUnit {
   /** Altitude above the ground the SIM holds the unit at. Read for a unit whose form moved it
    *  between the ground and the air (Entry.liftFromSim) — the climb is the sim's. */
   readonly flyHeight: number;
+  /** A flyer — read with `flyHeight` for one a NET holds on the ground (Entry.netLift). */
+  readonly flying: boolean;
   readonly radius: number;
   readonly owner: number;
   readonly team: number;

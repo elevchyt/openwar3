@@ -2068,10 +2068,11 @@ export interface SimUnit {
    *  on the tick the last `hex` buff goes, however it went (the clock, a dispel). */
   hexForm: string;
   ethereal: boolean; // derived from buffs (Banish): can't attack, immune to physical damage
-  /** Pulled out of the air and stuck to the ground — derived from a `web` root buff the way
-   *  `ethereal` is derived from Banish's. While it is set the unit answers to `ground` rather
-   *  than `air` (targetKeyOf) and is drawn on the floor (flyHeight 0), which is the whole of
-   *  what Web does that Ensnare does not. False for everything that never flew. */
+  /** Pulled out of the air and stuck to the ground — derived from a NET on a flyer (a `web` or
+   *  an `ensnare` root buff) the way `ethereal` is derived from Banish's. While it is set the
+   *  unit answers to `ground` rather than `air` (targetKeyOf) and lies on the floor (flyHeight
+   *  0, reached through netAltitude, which also drags it clear of unwalkable ground). False for
+   *  everything that never flew. */
   webbed: boolean;
   /** Magic Immunity (`Amim`, and the creep copies that share its code) — the unit cannot be
    *  the target of a spell at all, and takes no spell damage. Carried by the Dryad, the
@@ -2236,7 +2237,7 @@ export interface SimUnit {
    * until the shape change is over (`morphT`): the statue grows its wings standing on the ground
    * and only leaves it once it is a Destroyer. Null for everything else, which is almost always.
    */
-  altitudeShift: { to: number; rate: number; wait: boolean } | null;
+  altitudeShift: { to: number; rate: number; wait: boolean; drag?: { x: number; y: number; rate: number } } | null;
   /**
    * Seconds left on a Scroll of Town Portal's channel, or 0.
    *
@@ -3168,6 +3169,11 @@ const IAS_MAX = 4.0; // +400% — cannot swing faster than 5x its base attack ti
 const IAS_MIN = -0.8; // -80% — cannot be slowed below 1/5 of its base attack rate
 const DAMAGE_POINT_FLOOR = 0.02; // a swing always lands 0.02s before it may start the next
 const UNIT_MANA_REGEN = 0.67; // flat mana/sec for non-hero casters (approx WC3 base)
+/** How long a NET (Web, or Ensnare on a flyer) takes to bring its flyer down to the ground, and
+ *  to drag it clear of trees on the way (SimWorld.netAltitude). OURS: nothing in the data times
+ *  the fall — the buff simply holds the unit on the ground — so this is only long enough to SEE
+ *  it come down rather than blink there. */
+const NET_DROP_TIME = 0.4;
 const AURA_REFRESH = 0.5; // aura buffs re-applied each tick with this TTL (fade on leave)
 /** Big Bad Voodoo's invulnerability is handed out on the same short leash an aura is, for
  *  the same reason: a broken CHANNEL has to strip it from everybody the same instant, and
@@ -8741,6 +8747,59 @@ export class SimWorld {
     u.altitudeShift = { to: 0, rate, wait: false };
   }
 
+  /**
+   * A NET (Web, or Ensnare on a flyer) taking a flyer down to the ground, or letting it go.
+   *
+   * The way down is a FALL rather than a snap, over NET_DROP_TIME (ours — nothing in the data
+   * times it), booked as an `altitudeShift` so the same per-tick flight that lifts a Destroyer
+   * carries it. The way back up returns to the type's own `moveheight` (see recomputeStats).
+   *
+   * And where it lands has to be somewhere a GROUND body can be: a Gargoyle netted over a
+   * forest cannot lie in the trees, so it is DRAGGED along the line toward whoever threw the
+   * net until it reaches the first walkable block nobody is standing on (the developer's
+   * account of the original: "dragged towards the caster of Ensnare/Web until it finds an
+   * empty, walkable cell it can take up"). The drag flies on the same clock as the drop, so
+   * the body lands where it is pulled to. Where the line holds no such block (the caster is
+   * gone, or stands in the trees itself) the nearest free block round about is taken instead.
+   */
+  private netAltitude(u: SimUnit, down: boolean, sourceId: number): void {
+    const typeHeight = this.unitReg?.get(u.typeId)?.moveHeight ?? 0;
+    const to = down ? 0 : typeHeight;
+    const rate = Math.abs(to - u.flyHeight) / NET_DROP_TIME;
+    u.altitudeShift = { to, rate: rate > 0 ? rate : Infinity, wait: false };
+    if (!down) return;
+    const spot = this.netLandingSpot(u, sourceId);
+    if (spot) {
+      const d = Math.hypot(spot[0] - u.x, spot[1] - u.y);
+      if (d > 0.5) u.altitudeShift.drag = { x: spot[0], y: spot[1], rate: d / NET_DROP_TIME };
+    }
+  }
+
+  /** Where a netted flyer may lie on the ground — its own spot when that is free, else the
+   *  first free walkable block along the line to the net's thrower, else the nearest one
+   *  round about. Null when it is already somewhere it can lie (or there is no grid). */
+  private netLandingSpot(u: SimUnit, sourceId: number): [number, number] | null {
+    if (!this.grid) return null;
+    const n = Math.max(1, footprintCells(this.unitReg?.get(u.typeId)?.collision || u.radius));
+    const free = (x: number, y: number): boolean => {
+      const [cx0, cy0] = this.grid.footprintOrigin(x, y, n);
+      return this.blockFree(cx0, cy0, n) && this.grid.playable(...this.grid.worldToCell(x, y));
+    };
+    if (free(u.x, u.y)) return null;
+    const src = this.units.get(sourceId);
+    if (src) {
+      const dist = Math.hypot(src.x - u.x, src.y - u.y);
+      const steps = Math.ceil(dist / (PATHING_CELL * 0.5));
+      for (let i = 1; i <= steps; i++) {
+        const t = i / steps;
+        const x = u.x + (src.x - u.x) * t;
+        const y = u.y + (src.y - u.y) * t;
+        if (free(x, y)) return [x, y];
+      }
+    }
+    return this.nearestFreeBlock(u.x, u.y, n, 12, false, (x, y) => free(x, y));
+  }
+
   /** Fly the altitude change `shiftAltitude` booked, one tick at a time. */
   private tickAltitude(u: SimUnit, dt: number): void {
     const a = u.altitudeShift;
@@ -8756,8 +8815,25 @@ export class SimWorld {
       u.footprint = 0;
       u.radius = this.unitReg?.get(u.typeId)?.collision || u.radius;
     }
+    // A net's DRAG (netAltitude): the body is hauled along the ground toward the thrower on
+    // the same clock as the fall. The unit is pinned, so nothing else moves it meanwhile.
+    if (a.drag) {
+      const dx = a.drag.x - u.x;
+      const dy = a.drag.y - u.y;
+      const d = Math.hypot(dx, dy);
+      const go = a.drag.rate * dt;
+      if (!Number.isFinite(go) || d <= go) {
+        u.x = a.drag.x;
+        u.y = a.drag.y;
+        a.drag = undefined;
+      } else {
+        u.x += (dx / d) * go;
+        u.y += (dy / d) * go;
+      }
+    }
     const step = a.rate * dt;
     if (!Number.isFinite(step) || Math.abs(a.to - u.flyHeight) <= step) {
+      if (a.drag) { u.flyHeight = a.to; return; } // still being hauled: hold the clock open
       u.flyHeight = a.to;
       u.altitudeShift = null;
     } else {
@@ -13752,6 +13828,7 @@ export class SimWorld {
     let disarmed = false;
     let ethereal = false;
     let webbed = false;
+    let netSource = 0; // who threw the net that pulls this flyer down (the drag's direction)
     let invisible = false;
     let cloaked = false;
     let invuln = false;
@@ -13782,9 +13859,14 @@ export class SimWorld {
         slowMove = Math.max(slowMove, b.value); // pins movement
         // ENTANGLING ROOTS is the one net that also takes the weapon away (SimUnit.disarmed).
         if (b.group === "roots") disarmed = true;
-        // WEB is Ensnare with one extra clause, and the group is what tells them apart: the
-        // target is not merely held, it is pulled DOWN. See SimUnit.webbed.
-        if (b.group === "web") webbed = true;
+        // A NET ON A FLYER pulls it DOWN, and that is Web's whole point and Ensnare's second
+        // half: "Air units that are ensnared can be attacked as though they were land units"
+        // ([Aens] Ubertip, OrcAbilityStrings.txt). Entangling Roots never reaches a flyer.
+        // See SimUnit.webbed.
+        if ((b.group === "web" || b.group === "ensnare") && u.flying) {
+          if (!webbed) netSource = b.sourceId;
+          webbed = true;
+        }
       }
       else if (b.kind === "ethereal") {
         ethereal = true;
@@ -14054,7 +14136,7 @@ export class SimWorld {
     // both what the original shows and the only answer that survives the buff being dispelled,
     // expiring, or the caster dying. Touched only on the CHANGE, so a script's
     // SetUnitFlyHeight is left alone for every unit that is not being webbed right now.
-    if (webbed !== u.webbed) u.flyHeight = webbed ? 0 : (this.unitReg?.get(u.typeId)?.moveHeight ?? 0);
+    if (webbed !== u.webbed) this.netAltitude(u, webbed, netSource);
     u.webbed = webbed;
     // Magic Immunity is a plain property of the unit's ability list, not a buff — nothing
     // grants or removes it mid-life, so it is derived here alongside the rest. (`Amim` carries

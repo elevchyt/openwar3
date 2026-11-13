@@ -1647,6 +1647,9 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   /**
    * Ensnare (Raider) — bind an enemy to the ground: it cannot move (root pins movement
    * to 1.0) for the duration (hero units get the shorter herodur). It can still attack.
+   * A FLYER is pulled down as Web pulls it — "Air units that are ensnared can be attacked as
+   * though they were land units" ([Aens] Ubertip) — which recomputeStats reads off the
+   * `ensnare` group on a flying unit (SimUnit.webbed, SimWorld.netAltitude).
    *
    * THE NET IS THE ONE SPELL WHOSE ART IS PICKED PER TARGET, twice over, and both halves are
    * in the data rather than here:
