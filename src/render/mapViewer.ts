@@ -92,8 +92,11 @@ import { CHECK_EVERY, Phase, ReplayPlayer, ReplayRecorder, encodeReplay, readRep
 import type { ReplayControls } from "../ui/replayPanel";
 import { diffDumps, stateDump, stateHash } from "../game/replayHash";
 import { STATE_EVERY, StateTracker } from "../game/replayState";
+import { InputTracker, isInputSample, type InputSample } from "../game/inputTrack";
+import { commandSource, cursorPermille, selectionSource, watchInputSource } from "../ui/inputSource";
+import { hotkeyMode } from "../data/hotkeys";
 import { replaySink, type ReplaySink } from "../game/replaySink";
-import { ReplayUploader } from "../game/replayUpload";
+import { ReplayUploader, installId } from "../game/replayUpload";
 import { autosaveReplay, shareReplays } from "../data/options";
 
 /** The one uploader for the page (issue #158) — replays waiting from an earlier session are sent
@@ -108,7 +111,8 @@ let lastReplay: { sink: ReplaySink; written: Promise<boolean>; mapName: string }
 function autosaveName(mapName: string): string {
   const d = new Date();
   const two = (n: number): string => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}-${two(d.getMinutes())}-${two(d.getSeconds())} ${mapName}`;
+  // A map may colour its own name (`|c00ff0033DotA|r`): the file is named by the words alone.
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}-${two(d.getMinutes())}-${two(d.getSeconds())} ${wc3StripMarkup(mapName).trim()}`;
 }
 export function lastRecordedReplay(): typeof lastReplay {
   return lastReplay;
@@ -126,13 +130,15 @@ import { cursorImageValue, cursorPx, cursorValue } from "../ui/cursor";
 import { perfLog } from "../dev/perfLog";
 /** package.json's version, as the main menu prints it (vite.config.ts). */
 declare const __OW3_VERSION__: string;
+declare const __OW3_COMMIT__: string;
+declare const __OW3_SIM_FINGERPRINT__: string;
 import { animStride, renderSize, videoSettings } from "./videoQuality";
 import { edgeScrollScale, keyScrollScale } from "./scrollOptions";
 import { gamepadPan, setGamepadHost } from "../ui/gamepad";
 import { TerrainCull } from "./terrainCull";
 import type { PickVolume } from "./modelCollision";
 import { setSimProfiler } from "../sim/profile";
-import { wc3ToPlain } from "../ui/wc3Text";
+import { wc3StripMarkup, wc3ToPlain } from "../ui/wc3Text";
 import { GameHud, isTyping, upkeepBand, PLAYER_COLORS, type HudDriver, type MinimapBlight, type CommandButton, type SpawnEntry, type SpawnOwner, type SpawnRequest } from "../ui/hud";
 import { GAME_HEIGHT, disposeWorldLayer, worldLayer } from "../ui/stage";
 import { EscMenu } from "../ui/escMenu";
@@ -1573,6 +1579,8 @@ export class MapViewerScene {
   private replayRecorder: ReplayRecorder | null = null;
   /** …and its state track, once a game second (game/replayState.ts). */
   private replayStates: StateTracker | null = null;
+  /** The seats a recording's fog bits are taken for (the header's). */
+  private replaySeatIds: number[] = [];
   /** WATCHING a replay: the file's inputs, handed back step by step. */
   private replayPlayback: ReplayPlayer | null = null;
   /** The map this match is played on, as a replay names it — set by the start (main.ts). */
@@ -1596,7 +1604,6 @@ export class MapViewerScene {
    *  match that can only run forward (main.ts restarts it). `view` is what the watcher had set. */
   onReplayRewind: ((at: number, view: ReplayView) => void) | null = null;
   /** When the last simulated sample of the recording player's camera was taken. */
-  private replayCamAt = -1;
   /** When the sim last advanced (performance.now() ms). Owned by `advanceSim` and SHARED
    *  between the rAF frame and the background pump: whichever driver runs next advances
    *  only by the time the other has not already spent, so time is never counted twice. */
@@ -3150,6 +3157,9 @@ export class MapViewerScene {
     const header: ReplayHeader = {
       format: 1,
       version: __OW3_VERSION__,
+      commit: __OW3_COMMIT__,
+      fingerprint: __OW3_SIM_FINGERPRINT__,
+      install: this.replayInstall,
       recordedAt: new Date().toISOString(),
       map: this.replayMap,
       // RESOLVED: the seed it rolled with and every Random race already rolled. `random` stays
@@ -3171,6 +3181,10 @@ export class MapViewerScene {
             : {}),
           race: races.get(s.id) ?? String(s.race),
           team: s.team,
+          color: rts.playerColor(s.id),
+          // The recording player's own anonymous id (game/replayUpload.ts) — only theirs, and
+          // only with their consent to share (data/options.ts `shareReplays`).
+          ...(s.id === this.localPlayer && !this.observer && shareReplays() ? { id: installId() } : {}),
         })),
       localPlayer: this.localPlayer,
       observer: this.observer,
@@ -3178,14 +3192,22 @@ export class MapViewerScene {
       patch: patchLevel(),
     };
     const rec = new ReplayRecorder(header, () => ({ t: this.simTick - this.replayTick0, ph: this.replayPhase() }));
-    this.replayStates = new StateTracker();
+    const states = (this.replayStates = new StateTracker());
+    // Deaths as they happen, with the killer and the place (the state track's own sim hook).
+    rts.simWorld.deathTap = (victim, killer) => states.died(victim, killer);
+    this.replaySeatIds = header.seats.map((s) => s.player);
     this.replayRecorder = rec;
     rts.setCommandTap((player, cmd) => {
       // A map's own AI script runs again on playback, so what it orders is not an input.
-      if (!rts.inScriptAi) this.replayRecorder?.push({ k: "cmd", p: player, cmd });
+      if (rts.inScriptAi) return undefined;
+      const e = this.replayRecorder?.push({ k: "cmd", p: player, cmd });
+      // Marked when the authority REFUSED it (replayed, it is refused again by the same rule).
+      return e?.k === "cmd" ? (took) => { if (!took) e.no = 1; } : undefined;
     });
     rts.onCheat = (player, kind) => this.replayRecorder?.push({ k: "cheat", p: player, kind });
     rts.onCheatSelected = (kind, ids) => this.replayRecorder?.push({ k: "cheatsel", kind, ids: [...ids] });
+    rts.onInputs = (player, scheme, samples) => this.takeInputs(player, scheme, samples);
+    this.beginInputTrack();
   }
 
   /** The replay panel's controls (issue #158, ui/replayPanel.ts) — null in a live match. */
@@ -3193,6 +3215,7 @@ export class MapViewerScene {
     const play = this.replayPlayback;
     if (!play) return null;
     return {
+      version: play.replay.header.version,
       state: () => ({
         tick: this.simTick - this.replayTick0,
         total: play.lastTick,
@@ -3324,6 +3347,16 @@ export class MapViewerScene {
         if (u) u.spawning = e.secs;
         return;
       }
+      case "ally":
+        rts.setPlayerAlliance(e.p, e.other, e.type, e.on);
+        return;
+      case "give":
+        this.transferResources(e.p, e.other, e.gold, e.lumber);
+        return;
+      // Notes: the pace and the pause of a replay are the watcher's own.
+      case "pause":
+      case "speed":
+        return;
     }
   }
 
@@ -3355,11 +3388,76 @@ export class MapViewerScene {
         }
       }
     }
-    if (this.replayRecorder && this.replayStates && t % STATE_EVERY === 0) this.replayRecorder.state(this.replayStates.sample(rts.simWorld, t));
-    if (this.replayRecorder && !this.observer && t - this.replayCamAt >= 10) {
-      this.replayCamAt = t;
-      this.replayRecorder.cameraAt({ t, p: this.localPlayer, x: Math.round(this.target[0]), y: Math.round(this.target[1]), d: Math.round(this.distance) });
+    if (this.replayRecorder && this.replayStates && t % STATE_EVERY === 0) {
+      const seats = this.replaySeatIds;
+      this.replayRecorder.state(this.replayStates.sample(rts.simWorld, t, {
+        seenBy: (u) => rts.seenByMask(u.id, seats),
+        ai: () => rts.computerPlusLog(),
+      }));
     }
+  }
+
+  /**
+   * This player's INPUT TRACK (issue #158, game/inputTrack.ts) — started with the match on the
+   * machine of anybody who PLAYS in it and has agreed to share (data/options.ts `shareReplays`):
+   * the recording machine keeps its own straight in the replay, and a LAN client, which records
+   * nothing, sends its own to the host in batches.
+   */
+  private beginInputTrack(): void {
+    const rts = this.rts;
+    this.inputTracker = null;
+    if (!rts || this.observer || this.replayPlayback || !shareReplays()) return;
+    const client = rts.frozenClient;
+    if (!client && !this.replayRecorder) return; // nothing is recording this match
+    watchInputSource();
+    // A client has no step count of its own: the host's game clock, at 60 steps a second.
+    const clock = client ? (): number => Math.round(rts.matchSeconds() * SIM_HZ) : (): number => this.simTick - this.replayTick0;
+    const tracker = (this.inputTracker = new InputTracker(clock));
+    rts.onGroup = (op, key, ids) => tracker.group(op, key, ids);
+    rts.onLocalCommand = (cmd) => tracker.command(cmd.c === "order" ? `order:${cmd.order.kind}` : cmd.c, commandSource());
+    this.inputsSentAt = performance.now();
+  }
+  private inputTracker: InputTracker | null = null;
+  private inputsSentAt = 0;
+  /** How often a LAN client sends the host its input track, in ms. Ours. */
+  private static readonly INPUTS_EVERY_MS = 5000;
+
+  /** Once a frame: the camera, the cursor and the selection; and on its clock, a client's batch. */
+  private tickInputTrack(): void {
+    const tracker = this.inputTracker;
+    const rts = this.rts;
+    if (!tracker || !rts || this.startHeld) return;
+    tracker.tick({ x: this.target[0], y: this.target[1], distance: this.distance, yaw: this.yaw }, cursorPermille());
+    tracker.selection(rts.selectedUnitIds(), rts.activeSubgroupType(), selectionSource);
+    if (rts.frozenClient && performance.now() - this.inputsSentAt >= MapViewerScene.INPUTS_EVERY_MS) this.flushInputTrack();
+  }
+
+  /** Hand over what the tracker holds: into the recording on the machine that records, to the
+   *  host from a client. */
+  private flushInputTrack(): void {
+    const tracker = this.inputTracker;
+    const rts = this.rts;
+    if (!tracker || !rts) return;
+    this.inputsSentAt = performance.now();
+    const samples = tracker.drain();
+    if (!samples.length) return;
+    if (this.replayRecorder) this.replayRecorder.inputs(this.localPlayer, hotkeyMode(), samples);
+    else if (rts.frozenClient) rts.sendInputs(hotkeyMode(), samples);
+  }
+
+  /** HOST: a batch of a client's input track. Checked sample by sample — it is another machine's
+   *  word going into our file — and a step later than now is pulled back to now. */
+  private takeInputs(player: number, scheme: string, samples: unknown[]): void {
+    const rec = this.replayRecorder;
+    if (!rec) return;
+    const now = this.simTick - this.replayTick0;
+    const good: InputSample[] = [];
+    for (const s of samples) {
+      if (!isInputSample(s)) continue;
+      s[1] = Math.max(0, Math.min(now, Math.round(s[1])));
+      good.push(s);
+    }
+    rec.inputs(player, scheme, good);
   }
 
   /** How often a state check is taken — `CHECK_EVERY`, or under `?dev&replaycheck=N` every N
@@ -3370,9 +3468,11 @@ export class MapViewerScene {
   })();
 
   /** The map this match is played on, as a replay names it (main.ts, before setup). */
-  setReplayMap(map: ReplayHeader["map"]): void {
+  setReplayMap(map: ReplayHeader["map"], install = ""): void {
     this.replayMap = map;
+    this.replayInstall = install;
   }
+  private replayInstall = "";
 
   /** Is a replay being watched — and where is it? For the replay panel. */
   get replayState(): { tick: number; total: number; done: boolean } | null {
@@ -3388,9 +3488,12 @@ export class MapViewerScene {
    * Save Replay keeps a copy under a name.
    */
   private closeReplay(): void {
+    this.flushInputTrack(); // the last of this player's own input track, into the file or to the host
+    this.inputTracker = null;
     const rec = this.replayRecorder;
     this.replayRecorder = null;
     this.replayStates = null;
+    if (this.rts) this.rts.simWorld.deathTap = null;
     this.rts?.setCommandTap(null);
     if (!rec) return;
     const ticks = this.simTick - this.replayTick0;
@@ -3413,7 +3516,7 @@ export class MapViewerScene {
       console.warn("[replay] could not be saved:", err);
       return false;
     });
-    lastReplay = { sink, written, mapName: rec.header.map.name };
+    lastReplay = { sink, written, mapName: wc3StripMarkup(rec.header.map.name).trim() };
   }
 
   /** How the match stands, as a replay's ending: the steps played and each seat's result. */
@@ -3436,6 +3539,7 @@ export class MapViewerScene {
     const rts = this.rts;
     if (this.replayShared || !rec || !rts?.hostsLanMatch) return;
     this.replayShared = true;
+    this.flushInputTrack();
     const ticks = this.simTick - this.replayTick0;
     if (ticks <= 0) return;
     try {
@@ -3459,7 +3563,7 @@ export class MapViewerScene {
       try {
         const { header } = await readReplayHeader(bytes);
         await sink.saveLast(bytes, autosaveReplay() ? autosaveName(header.map.name) : undefined);
-        lastReplay = { sink, written: Promise.resolve(true), mapName: header.map.name };
+        lastReplay = { sink, written: Promise.resolve(true), mapName: wc3StripMarkup(header.map.name).trim() };
         console.info(`[replay] the host's replay is kept (${bytes.length} bytes)`);
         return true;
       } catch (err) {
@@ -3518,6 +3622,9 @@ export class MapViewerScene {
     if (this.rts?.frozenClient) {
       this.replayRecorder = null;
       this.rts.setCommandTap(null);
+      this.rts.onInputs = null;
+      // …but its player's own input track is still theirs to give: sent to the host in batches.
+      this.beginInputTrack();
     }
     void this.voiceChat.warm(); // open the microphone now, so the first press loses nothing
     // Arm the background pump HERE, not from the frame loop: rAF is stopped in a hidden
@@ -3549,6 +3656,7 @@ export class MapViewerScene {
         // know its game is over, and it is what hangs up this end of the wire.
         if (msg.over && !this.matchEnded) {
           this.matchEnded = true;
+          this.flushInputTrack(); // what is left of our input track, while the wire is still up
           // The host's replay follows the ending (issue #158): hang up once it is here.
           if (msg.replay) void this.awaitPeerReplay().finally(() => this.rts?.endMatchWire());
           else this.rts?.endMatchWire();
@@ -10888,7 +10996,11 @@ export class MapViewerScene {
         })),
       isAlly: (other) => this.rts?.playersAreCoAllied(this.localPlayer, other) ?? false,
       get: (other, type) => this.rts?.getPlayerAlliance(this.localPlayer, other, type) ?? false,
-      set: (other, type, value) => this.rts?.setPlayerAlliance(this.localPlayer, other, type, value),
+      set: (other, type, value) => {
+        // An input the command door never sees, so the replay takes it here (game/replay.ts).
+        this.replayRecorder?.push({ k: "ally", p: this.localPlayer, other, type, on: value });
+        this.rts?.setPlayerAlliance(this.localPlayer, other, type, value);
+      },
       stash: () => this.rts?.stashFor(this.localPlayer) ?? { gold: 0, lumber: 0 },
       trade: (other, gold, lumber) => this.giveResources(other, gold, lumber),
       resourceClick: () => this.sounds?.playUi("InterfaceClick"),
@@ -11258,6 +11370,7 @@ export class MapViewerScene {
    */
   private giveResources(other: number, gold: number, lumber: number): void {
     if (!this.rts?.playersAreCoAllied(this.localPlayer, other)) return;
+    this.replayRecorder?.push({ k: "give", p: this.localPlayer, other, gold, lumber }); // as `ally`
     this.transferResources(this.localPlayer, other, gold, lumber);
   }
 
@@ -11737,6 +11850,7 @@ export class MapViewerScene {
     // A HOST leaving ends the game for everybody, so the peers get the replay now (issue #158);
     // a CLIENT whose game ended waits for the one the host is sending, so its score screen can
     // save it.
+    this.flushInputTrack();
     if (this.rts?.hostsLanMatch) await this.shareReplay();
     else if (this.peerReplay) await this.peerReplay;
     if (!scores) return this.onExit?.(null);
@@ -12318,6 +12432,7 @@ export class MapViewerScene {
       this.pauseTimeouts.set(player, left - 1);
     }
     this.playerPaused = on;
+    this.replayRecorder?.push({ k: "pause", p: player, on });
     this.pausedBy = on ? player : -1;
     this.rts?.matchLinkHandle?.rulePause({ k: "pause", on, by: player, left: this.timeoutsFor(player) });
     this.notePause(player, on, this.timeoutsFor(player));
@@ -15858,6 +15973,12 @@ export class MapViewerScene {
       this.simAccum -= SIM_DT;
       steps++;
       this.stepCost = this.stepCost * 0.9 + (performance.now() - stepAt) * 0.1;
+      // A REPLAY that has just reached the end of its recording stops ON that step: the steps
+      // this frame still owed are past the last input anybody gave (a raced replay owes dozens).
+      if (this.replayPlayback && this.replayPaused && !seeking) {
+        this.simAccum = 0;
+        break;
+      }
       // Out of budget (a boosted sim only): the owed steps are dropped like a clamped frame's.
       if (lastStep && budgetEnd !== Infinity && performance.now() + 2 * this.stepCost >= budgetEnd) {
         this.simAccum = 0;
@@ -16059,7 +16180,10 @@ export class MapViewerScene {
     const was = this.speed;
     this.speed = speed;
     this.speedRate = gameSpeedRate(speed) * this.speedBoost * this.replaySpeed;
-    if (was !== speed) this.matchLog?.event(`game speed ${gameSpeedLabel(speed, null)}`);
+    if (was !== speed) {
+      this.matchLog?.event(`game speed ${gameSpeedLabel(speed, null)}`);
+      this.replayRecorder?.push({ k: "speed", speed, boost: this.speedBoost });
+    }
   }
 
   /**
@@ -16078,6 +16202,7 @@ export class MapViewerScene {
     this.speedBoost = next;
     this.speedRate = gameSpeedRate(this.speed) * this.speedBoost * this.replaySpeed;
     this.matchLog?.event(`sim speed ${Math.round(next * 100)}% (cheat)`);
+    this.replayRecorder?.push({ k: "speed", speed: this.speed, boost: next });
     return this.speedBoost;
   }
 
@@ -16200,6 +16325,7 @@ export class MapViewerScene {
       // to DRAW come from the same instant of game time.
       this.advanceSim(t);
       this.tickMatchLog(); // the match's record (src/game/matchLog.ts) — once a game-second
+      this.tickInputTrack(); // this player's camera, cursor and selection (game/inputTrack.ts)
       // **How much time the WORLD is worth this frame — zero while it is stopped.**
       //
       // A pause used to stop the SIM and nothing else: units held their ground while their

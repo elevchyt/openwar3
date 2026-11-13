@@ -15,7 +15,7 @@
 //   • the port a peer connects to is the SAME port, so a second machine can join this game from
 //     a plain browser. That falls out for free and is worth keeping.
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, session, shell } from "electron";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
@@ -30,6 +30,7 @@ import { readSettings, useSettingsDir, writeSettings } from "./settings.mjs";
 import { createLogStore } from "./logStore.mjs";
 import { createReplayStore } from "./replayStore.mjs";
 import { arrangeDataDir } from "./dataDir.mjs";
+import { SHELL_CONTRACT, createSandbox, downloadBundle, fetchBundleManifest, removeSandbox, sweepSandboxes } from "./replayBundles.mjs";
 import { readMapSite } from "./mapSites.mjs";
 import { wireMapSiteViews } from "./mapSitesView.mjs";
 
@@ -125,6 +126,15 @@ matchLogs.sweep();
 const replayFiles = createReplayStore(join(DATA_DIR, "replays"), {
   warn: (msg) => console.warn(`[replays] ${msg}`),
 });
+// …and the SANDBOXES an earlier run left in the temp folder (electron/replayBundles.mjs): another
+// version's replay files, unpacked to watch one replay and deleted when its window closed —
+// unless the app crashed first. Swept on every launch, before anything else is drawn.
+{
+  const swept = sweepSandboxes(app.getPath("temp"), { warn: (msg) => console.warn(`[replays] ${msg}`) });
+  if (swept.removed.length || swept.failed.length) {
+    console.log(`[replays] swept ${swept.removed.length} leftover replay sandbox(es)${swept.failed.length ? `, ${swept.failed.length} could not be deleted yet` : ""}`);
+  }
+}
 if (!VSYNC) {
   app.commandLine.appendSwitch("disable-gpu-vsync");
   app.commandLine.appendSwitch("disable-frame-rate-limit");
@@ -143,6 +153,97 @@ const DEV_URL = process.env.OPENWAR3_DEV_URL || (process.env.OPENWAR3_DEV ? "htt
  *
  *  It opens FULLSCREEN — the whole display, not a maximized window with the taskbar and title
  *  bar still around it — as a game does. The 1600×900 is only what Alt+Enter drops it back to. */
+/** The replay windows that are open, by `webContents.id`: the one replay each was opened for,
+ *  and the options it was handed (electron/replayPreload.cjs). */
+const replayWindows = new Map();
+
+/**
+ * Watch one replay IN THE VERSION THAT RECORDED IT (issue #158, electron/replayBundles.mjs):
+ * fetch that version's bundle, check it, unpack it into a sandbox, and open it in a window of
+ * its own — an in-memory session, the replay bridge and nothing else — with the main window
+ * put away until it closes. The sandbox goes when the window does.
+ */
+async function watchInVersion(mainWin, request) {
+  const name = String(request?.name ?? "");
+  const version = String(request?.version ?? "");
+  const options = request?.options && typeof request.options === "object" ? request.options : {};
+  if (typeof fetch !== "function") throw new Error("This version of the app cannot download replay files.");
+  const bytes = replayFiles.read(name);
+  if (!bytes) throw new Error("That replay could not be read.");
+  const manifest = await fetchBundleManifest(version);
+  if (!manifest) throw new Error(`OpenWar3 ${version} has no replay files to download.`);
+  if (manifest.contract > SHELL_CONTRACT) throw new Error(`Update OpenWar3 to watch a replay from version ${version}.`);
+  const zip = await downloadBundle(manifest, {
+    onProgress: (received, total) => mainWin?.webContents.send("ow3:replay-bundle-progress", { received, total }),
+  });
+  const warn = (msg) => console.warn(`[replays] ${msg}`);
+  const dir = await createSandbox(zip, version, { tmp: app.getPath("temp") });
+  let srv = null;
+  try {
+    // Its own port, on this machine only: the page is another version's, and nothing on the
+    // network has any business with it.
+    srv = await startServer({ root: dir, port: 0, host: "127.0.0.1" });
+    // An in-memory session (no `persist:`): nothing the page stores outlives the window, and
+    // nothing of the player's own storage is in it.
+    const partition = `ow3replay-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const ses = session.fromPartition(partition);
+    // The player's install, read-only, by the scheme every OpenWar3 page reads it by.
+    ses.protocol.handle(INSTALL_SCHEME, (req) => serveInstall(currentInstall().path, req));
+    const win = new BrowserWindow({
+      width: 1280,
+      height: 720,
+      fullscreen: mainWin ? mainWin.isFullScreen() : true,
+      backgroundColor: "#000000",
+      title: `OpenWar3 ${version} — Replay`,
+      ...(existsSync(WINDOW_ICON) ? { icon: WINDOW_ICON } : {}),
+      show: false,
+      webPreferences: {
+        partition,
+        preload: join(here, "replayPreload.cjs"),
+        nodeIntegration: false,
+        contextIsolation: true,
+      },
+    });
+    const origin = new URL(srv.url).origin;
+    replayWindows.set(win.webContents.id, { bytes, options, version });
+    const id = win.webContents.id;
+    // It stays on its own page: no link out, no second window, no navigating away.
+    win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    win.webContents.on("will-navigate", (e, target) => {
+      if (new URL(target).origin !== origin) e.preventDefault();
+    });
+    const server = srv;
+    win.on("closed", () => {
+      replayWindows.delete(id);
+      void server.stop().catch(() => {});
+      void ses.clearStorageData().catch(() => {});
+      // UNCONDITIONAL: however the window went, its files go with it. A delete that fails (a
+      // file still held open) is the next launch's sweep to finish.
+      removeSandbox(dir, { warn });
+      if (mainWin && !mainWin.isDestroyed()) {
+        mainWin.webContents.setAudioMuted(false);
+        mainWin.show();
+        mainWin.focus();
+      }
+    });
+    win.once("ready-to-show", () => {
+      win.show();
+      // The main window is put away, and silenced, while the replay has the screen.
+      if (mainWin && !mainWin.isDestroyed()) {
+        mainWin.webContents.setAudioMuted(true);
+        mainWin.hide();
+      }
+    });
+    mainWin?.once("closed", () => { if (!win.isDestroyed()) win.close(); });
+    await win.loadURL(srv.url);
+    return { version };
+  } catch (err) {
+    if (srv) void srv.stop().catch(() => {});
+    removeSandbox(dir, { warn });
+    throw err;
+  }
+}
+
 function createWindow(url) {
   const win = new BrowserWindow({
     width: 1600,
@@ -352,6 +453,23 @@ app.whenReady().then(async () => {
   ipcMain.handle("ow3:replay-list", () => replayFiles.list());
   ipcMain.handle("ow3:replay-read", (_event, name) => replayFiles.read(String(name ?? "")));
   ipcMain.handle("ow3:replay-delete", (_event, name) => replayFiles.remove(String(name ?? "")));
+  // Another version's replay (electron/replayBundles.mjs): is there a bundle for it, and how big —
+  // what the View Replay list says before the player commits to a download…
+  ipcMain.handle("ow3:replay-bundle-info", async (_event, version) => {
+    if (typeof fetch !== "function") return null; // the 32-bit Linux shell's Node has none
+    const m = await fetchBundleManifest(String(version ?? ""));
+    return m ? { size: m.size, fingerprint: m.fingerprint, usable: m.contract <= SHELL_CONTRACT } : null;
+  });
+  // …and the watching itself. Resolves once the replay window is up.
+  ipcMain.handle("ow3:replay-watch-version", (event, request) => watchInVersion(BrowserWindow.fromWebContents(event.sender), request));
+  ipcMain.on("ow3replay:boot", (event) => {
+    const s = replayWindows.get(event.sender.id);
+    event.returnValue = s ? { options: s.options, version: s.version, contract: SHELL_CONTRACT, maxFps: MAX_FPS } : null;
+  });
+  ipcMain.handle("ow3replay:replay", (event) => replayWindows.get(event.sender.id)?.bytes ?? null);
+  ipcMain.on("ow3replay:exit", (event) => {
+    if (replayWindows.has(event.sender.id)) BrowserWindow.fromWebContents(event.sender)?.close();
+  });
   ipcMain.handle("ow3:vsync-get", () => readSettings().vsync !== false);
   ipcMain.handle("ow3:vsync-set", (_event, on) => { writeSettings({ vsync: on === true }); });
   // …and the restart that applies it. Vsync is a launch switch (see VSYNC above), so the Options

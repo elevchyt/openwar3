@@ -100,6 +100,21 @@ contextBridge.exposeInMainWorld("ow3native", {
     list: () => ipcRenderer.invoke("ow3:replay-list"),
     read: (name) => ipcRenderer.invoke("ow3:replay-read", String(name ?? "")),
     remove: (name) => ipcRenderer.invoke("ow3:replay-delete", String(name ?? "")),
+    /** Another version's replay (electron/replayBundles.mjs): `{ size, usable }` when that
+     *  version published replay files, or null. */
+    bundleInfo: (version) => ipcRenderer.invoke("ow3:replay-bundle-info", String(version ?? "")),
+    /** Watch a replay in the version that recorded it: downloads that version's replay files
+     *  (`onProgress({ received, total })`), and opens them in a window of their own with the
+     *  options handed here. Resolves when that window is up. */
+    watchVersion: async (request, onProgress) => {
+      const handler = (_event, progress) => onProgress?.(progress);
+      ipcRenderer.on("ow3:replay-bundle-progress", handler);
+      try {
+        return await ipcRenderer.invoke("ow3:replay-watch-version", request);
+      } finally {
+        ipcRenderer.off("ow3:replay-bundle-progress", handler);
+      }
+    },
   },
   /** Keep a map a LAN game handed us, in the install's Maps\Download\ (src/assets/downloadedMaps.ts).
    *  The page names a FILE, never a folder: the shell puts it in that one folder or nowhere. */

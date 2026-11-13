@@ -403,6 +403,27 @@ export function isReplayPartMessage(data: unknown): data is ReplayPartMessage {
   return typeof d === "object" && d !== null && d.k === "replaypart" && Number.isInteger(d.n) && Number.isInteger(d.of)
     && (d.of as number) > 0 && (d.of as number) <= REPLAY_MAX_PARTS && (d.n as number) >= 0 && (d.n as number) < (d.of as number) && typeof d.data === "string";
 }
+/**
+ * A CLIENT's input track, a batch at a time (issue #158, game/inputTrack.ts): where that player's
+ * camera was, what they selected and how, their control groups, where each command came from.
+ * Nobody but the player's own machine knows these, and only the host records, so they are sent.
+ * Stamped like chat — the host files a batch under the seat the relay says it came from — and
+ * checked sample by sample there (`isInputSample`). Sent only with that player's consent.
+ */
+export interface InputsMessage {
+  k: "inputs";
+  /** The sender's keyboard scheme (legacy / grid / custom). */
+  scheme: string;
+  samples: unknown[];
+}
+export function isInputsMessage(data: unknown): data is InputsMessage {
+  const d = data as Partial<InputsMessage> | null;
+  return typeof d === "object" && d !== null && d.k === "inputs" && typeof d.scheme === "string" && d.scheme.length <= 16
+    && Array.isArray(d.samples) && d.samples.length <= INPUTS_MAX_BATCH;
+}
+/** The most samples one batch may carry: far more than five seconds of play makes. */
+const INPUTS_MAX_BATCH = 4000;
+
 /** A replay piece: 48 KiB, the map transfer's. */
 const REPLAY_PART = 48 * 1024;
 /** The largest replay a peer will assemble: 32 MiB, far past any match. */
@@ -630,6 +651,9 @@ export class MatchLink {
   /** Client side: the host's table, answering our `scorereq`. */
   onScores: (scores: ScoreTable) => void = () => {};
 
+  /** Host side: a batch of one player's input track (`InputsMessage`), not yet checked. */
+  onInputs: (player: number, scheme: string, samples: unknown[]) => void = () => {};
+
   /** Client side: the match's replay, whole, as the host sent it at the end (`ReplayPartMessage`). */
   onReplay: (bytes: Uint8Array) => void = () => {};
   /** The pieces of the replay arriving, by index. */
@@ -747,6 +771,11 @@ export class MatchLink {
       }
       // Client side: the table we asked for.
       else if (isScoresMessage(data)) this.onScores(data.scores);
+      // Host side: a batch of a player's input track. Stamped, like chat.
+      else if (isInputsMessage(data)) {
+        const player = this.seats.find((s) => s.peer === from)?.id;
+        if (player !== undefined) this.onInputs(player, data.scheme, data.samples);
+      }
       // Client side: a piece of the match's replay, from the HOST only.
       else if (isReplayPartMessage(data)) {
         if (from === this.hostPeer) this.takeReplayPart(data);
@@ -808,6 +837,13 @@ export class MatchLink {
   /** Client side: ask the host for the score table before hanging up (`ScoreRequestMessage`). */
   askForScores(): void {
     this.channel.send({ k: "scorereq" } satisfies ScoreRequestMessage, this.hostPeer);
+  }
+
+  /** Client side: send the host a batch of our own input track (`InputsMessage`). */
+  sendInputs(scheme: string, samples: unknown[]): void {
+    for (let at = 0; at < samples.length; at += INPUTS_MAX_BATCH) {
+      this.channel.send({ k: "inputs", scheme, samples: samples.slice(at, at + INPUTS_MAX_BATCH) } satisfies InputsMessage, this.hostPeer);
+    }
   }
 
   /** Host side: the game is over — hand every peer the replay (`ReplayPartMessage`). Broadcast:

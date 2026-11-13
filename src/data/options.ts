@@ -148,6 +148,13 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   // folder's `Autosaved\` — the game's own AUTOSAVE_REPLAY_INFO, "This option will automatically
   // save replays to the replay/autosaved folder." (`autosaveReplay()`, MapViewerScene.closeReplay).
   { key: "autosaveReplay", frame: "AutosaveReplayCheckBox", kind: "bool", panel: "gameplay", def: true },
+  // "Share Replays" (issue #158) — OURS, on the same row (src/overrides/ui/OptionsMenu.fdf). The
+  // player's consent to two things: their finished replays going to OpenWar3's own collection
+  // (game/replayUpload.ts), and their own camera, selections and cursor being recorded into the
+  // replays of the matches they play (game/inputTrack.ts). ON unless turned off — the developer's
+  // call, so that the matches people actually play can be studied — and read through
+  // `shareReplays()`.
+  { key: "shareReplays", frame: "ShareReplaysCheckBox", kind: "bool", panel: "gameplay", def: true },
   // Issue #124. The first gameplay option with a live backend: it is the DEFAULT value of the
   // Custom Game screen's "Computer+ (Improved AI)" switch (ui/fdfSkirmish.ts), so ticking it
   // here decides which AI a match starts with. Its frame is not the game's — no 2003 UI file
@@ -379,14 +386,31 @@ export function autosaveReplay(): boolean {
 }
 
 /**
- * Send this machine's replays to OpenWar3's own collection (issue #158, game/replayUpload.ts).
- * OURS — the game has no such switch — and ON unless the player has turned it off; it is read
- * here rather than off an options row because the row it will sit on is not built yet.
+ * The player's options, as a REPLAY WINDOW is handed them (issue #158, src/replayBoot.ts,
+ * electron/replayPreload.cjs): another version's page, in a throwaway session, told how THIS
+ * player has the game set — the video rungs, the volumes, the hotkey scheme — by the storage keys
+ * it would have read them from itself. A key that version does not know it ignores; one it has
+ * that we do not, it defaults. Voice Control is handed over OFF: a replay bundle is built without
+ * the recogniser (tools/replay-bundle.mjs), and a watcher has nothing to say to it.
+ */
+export function replayWindowOptions(): Record<string, string> {
+  const out: Record<string, string> = {};
+  try {
+    out[STORAGE_KEY] = JSON.stringify({ ...loadOptions(), voiceControl: false });
+    const edition = localStorage.getItem("openwar3.edition");
+    if (edition) out["openwar3.edition"] = edition;
+  } catch {
+    /* no storage: the window runs on that version's defaults */
+  }
+  return out;
+}
+
+/**
+ * Options → Gameplay → "Share Replays" (issue #158): the player's consent to their replays being
+ * sent to OpenWar3's own collection (game/replayUpload.ts) and to their own input track being
+ * recorded into them (game/inputTrack.ts). OURS — the game has no such switch — and ON unless
+ * the player has turned it off.
  */
 export function shareReplays(): boolean {
-  try {
-    return localStorage.getItem("ow3.shareReplays") !== "0";
-  } catch {
-    return true;
-  }
+  return loadOptions().shareReplays !== false;
 }

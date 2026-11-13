@@ -36,6 +36,7 @@ import type { Command } from "./commands";
 import type { MeleeConfig } from "../ui/lobby";
 import type { ChatTarget } from "./chat";
 import type { StateSample } from "./replayState";
+import { MAX_TRACK_SAMPLES, type InputSample, type InputTrack } from "./inputTrack";
 
 /** The format of the FILE, not of OpenWar3 — bumped when a reader of the old one could not read
  *  the new one. A new SECTION is not a bump; that is what the tags are for. */
@@ -63,6 +64,19 @@ export interface ReplayHeader {
   /** OpenWar3's own version (`package.json`), so a replay from another build can be told apart
    *  and opened in the build that made it (issue #158, "Versions"). */
   version: string;
+  /** The commit that build was cut from ("" when it had no repository around it). */
+  commit?: string;
+  /**
+   * The SIM FINGERPRINT of the build that recorded it (tools/sim-fingerprint.mjs): a hash of
+   * every source file that can change how a match plays out. Two builds with the same one play
+   * each other's replays exactly, whatever their version numbers; a different one is what sends
+   * a viewer to the recording version's own bundle. Absent on the first replays ever recorded.
+   */
+  fingerprint?: string;
+  /** Which game files the match read: `casc-1.30.4.11274`, `casc-1.31.1.12164-downgraded` (a
+   *  1.31 store put back to 1.30.4's values, src/vfs/downgrade.ts), or `mpq` for an MPQ-era
+   *  folder. The same map on different data is a different match. */
+  install?: string;
   /** When it was recorded (ISO). */
   recordedAt: string;
   /** The map: where it was found, what it is called, and a hash of its bytes — the same NAME is
@@ -114,11 +128,18 @@ export interface ReplaySeat {
   difficulty?: number;
   race: string;
   team: number;
+  /** The seat's colour index (`playercolor`), as the match began. */
+  color?: number;
+  /** An ANONYMOUS id for the person in the seat (a random one per install,
+   *  game/replayUpload.ts) — present only for a player who agreed to share their replays, so
+   *  one player's matches can be told from another's without knowing who anybody is. */
+  id?: string;
 }
 
 /** One input, stamped with the step and phase it landed in. */
 export type ReplayEvent =
-  | { k: "cmd"; t: number; ph: Phase; p: number; cmd: Command }
+  /** `no`: the authority REFUSED it (recorded all the same — replayed, it is refused again). */
+  | { k: "cmd"; t: number; ph: Phase; p: number; cmd: Command; no?: 1 }
   | { k: "chat"; t: number; ph: Phase; from: number; text: string; target: ChatTarget }
   | { k: "ping"; t: number; ph: Phase; p: number; x: number; y: number }
   | { k: "sel"; t: number; ph: Phase; p: number; unit: number; on: boolean }
@@ -130,24 +151,23 @@ export type ReplayEvent =
   | { k: "cheatsel"; t: number; ph: Phase; kind: string; ids: number[] }
   /** A summon's SPAWN LOCK, which the sim reads off its model when the body arrives — a fact
    *  from outside the sim, so an input (MapViewerScene.summonBirth). */
-  | { k: "lock"; t: number; ph: Phase; unit: number; secs: number };
+  | { k: "lock"; t: number; ph: Phase; unit: number; secs: number }
+  /** The F11 Allies menu: one alliance setting a player changed, and a gift of resources. Both
+   *  are written straight onto the match by the menu (never through `Authority.execute`), so
+   *  both are inputs of their own. */
+  | { k: "ally"; t: number; ph: Phase; p: number; other: number; type: number; on: boolean }
+  | { k: "give"; t: number; ph: Phase; p: number; other: number; gold: number; lumber: number }
+  /** NOTES, not inputs — nothing is done with them on playback, where the pace and the pause are
+   *  the watcher's: a player paused or resumed the match, and the Game Speed (or the dev tools'
+   *  Sim Speed `boost`) changed. Kept because how a match was PLAYED includes when it stood still. */
+  | { k: "pause"; t: number; ph: Phase; p: number; on: boolean }
+  | { k: "speed"; t: number; ph: Phase; speed: number; boost: number };
 
 /** A STATE HASH at the end of step `t` — what playback compares against to know it is still
  *  the same match (a mismatch is a determinism bug, or a build that cannot play this file). */
 export interface ReplayCheck {
   t: number;
   h: string;
-}
-
-/** The recording player's camera, sampled — not an input (replaying it changes nothing), but
- *  the person's own view of the match and what an AI that plays like a person learns from. */
-export interface CameraSample {
-  t: number;
-  p: number;
-  x: number;
-  y: number;
-  /** Camera distance (zoom). */
-  d: number;
 }
 
 /** How the match ended, as the score screen tells it. Optional: a crash writes no ending. */
@@ -162,7 +182,9 @@ export interface Replay {
   header: ReplayHeader;
   events: ReplayEvent[];
   checks: ReplayCheck[];
-  camera: CameraSample[];
+  /** One input track per PERSON who agreed to it — camera, selection, control groups, where
+   *  each command came from, the cursor (game/inputTrack.ts). Not an input to the match. */
+  inputs: InputTrack[];
   ending: ReplayEnding | null;
   /** The state track — once a game second, what the match looked like (game/replayState.ts).
    *  Not needed to WATCH: kept for reading a match without re-simulating it. */
@@ -203,7 +225,7 @@ export async function encodeReplay(r: Replay): Promise<Uint8Array> {
     ["HEAD", r.header],
     ["EVTS", r.events],
     ["CHKS", r.checks],
-    ["CAMS", r.camera],
+    ["INPT", r.inputs],
     ["STAT", r.states],
   ];
   if (r.ending) sections.push(["ENDS", r.ending]);
@@ -226,8 +248,9 @@ export async function encodeReplay(r: Replay): Promise<Uint8Array> {
   return out;
 }
 
-/** Read a replay file. Throws on something that is not one, or a format this build cannot read. */
-export async function decodeReplay(bytes: Uint8Array): Promise<Replay> {
+/** The sections of a file, by tag, inflated — all of them, or only those `want` names. A
+ *  section this reader does not know is skipped, not refused: that is the point of tags. */
+async function readSections(bytes: Uint8Array, want?: readonly string[]): Promise<Map<string, unknown>> {
   if (bytes.length < 6 || MAGIC.some((b, i) => bytes[i] !== b)) throw new Error("not an OpenWar3 replay");
   const format = bytes[4] | (bytes[5] << 8);
   if (format > REPLAY_FORMAT) throw new Error(`replay format ${format} is newer than this build reads (${REPLAY_FORMAT})`);
@@ -240,27 +263,36 @@ export async function decodeReplay(bytes: Uint8Array): Promise<Replay> {
     const len = view.getUint32(at + 4, true);
     const body = bytes.subarray(at + 8, at + 8 + len);
     at += 8 + len;
-    // A section this reader does not know is skipped, not refused: that is the point of tags.
-    if (!["HEAD", "EVTS", "CHKS", "CAMS", "STAT", "ENDS", "DUMP"].includes(tag)) continue;
+    if (!(want ?? SECTIONS).includes(tag)) continue;
     found.set(tag, fromJson(dec.decode(await gunzip(body))));
   }
+  return found;
+}
+const SECTIONS = ["HEAD", "EVTS", "CHKS", "INPT", "STAT", "ENDS", "DUMP"];
+
+/** Read a replay file. Throws on something that is not one, or a format this build cannot read. */
+export async function decodeReplay(bytes: Uint8Array): Promise<Replay> {
+  const found = await readSections(bytes);
   const header = found.get("HEAD") as ReplayHeader | undefined;
   if (!header) throw new Error("replay has no header");
   return {
     header,
     events: (found.get("EVTS") as ReplayEvent[] | undefined) ?? [],
     checks: (found.get("CHKS") as ReplayCheck[] | undefined) ?? [],
-    camera: (found.get("CAMS") as CameraSample[] | undefined) ?? [],
+    inputs: (found.get("INPT") as InputTrack[] | undefined) ?? [],
     states: (found.get("STAT") as StateSample[] | undefined) ?? [],
     ending: (found.get("ENDS") as ReplayEnding | undefined) ?? null,
     dumps: found.get("DUMP") as Record<number, unknown> | undefined,
   };
 }
 
-/** Read only the header — what the View Replay list shows — without inflating the rest. */
+/** Read only the header and the ending — what the View Replay list shows — without inflating
+ *  the tracks, which are nearly all of a file. */
 export async function readReplayHeader(bytes: Uint8Array): Promise<{ header: ReplayHeader; ending: ReplayEnding | null }> {
-  const r = await decodeReplay(bytes);
-  return { header: r.header, ending: r.ending };
+  const found = await readSections(bytes, ["HEAD", "ENDS"]);
+  const header = found.get("HEAD") as ReplayHeader | undefined;
+  if (!header) throw new Error("replay has no header");
+  return { header, ending: (found.get("ENDS") as ReplayEnding | undefined) ?? null };
 }
 
 /** A short content hash (FNV-1a, 64-bit as two 32-bit halves) — for a map's bytes and for the
@@ -291,7 +323,7 @@ type Unstamped<E> = E extends unknown ? Omit<E, "t" | "ph"> : never;
 export class ReplayRecorder {
   private readonly events: ReplayEvent[] = [];
   private readonly checks: ReplayCheck[] = [];
-  private readonly camera: CameraSample[] = [];
+  private readonly tracks: InputTrack[] = [];
   private readonly states: StateSample[] = [];
   private ending: ReplayEnding | null = null;
   private dumps: Record<number, unknown> | undefined;
@@ -300,12 +332,13 @@ export class ReplayRecorder {
 
   /** Record one input, stamped now. The command is COPIED: dispatch may write to the order it
    *  was handed, and the file must hold what was asked, not what it became. */
-  push(e: Unstamped<ReplayEvent>): void {
+  push(e: Unstamped<ReplayEvent>): ReplayEvent {
     const { t, ph } = this.clock();
     const copy = structuredClone(e) as ReplayEvent;
     copy.t = t;
     copy.ph = ph;
     this.events.push(copy);
+    return copy;
   }
 
   check(t: number, h: string, dump?: unknown): void {
@@ -313,11 +346,17 @@ export class ReplayRecorder {
     if (dump !== undefined) (this.dumps ??= {})[t] = dump;
   }
 
-  cameraAt(sample: CameraSample): void {
-    const last = this.camera[this.camera.length - 1];
-    // A camera that has not moved says so once.
-    if (last && last.p === sample.p && Math.abs(last.x - sample.x) < 1 && Math.abs(last.y - sample.y) < 1 && Math.abs(last.d - sample.d) < 1) return;
-    this.camera.push(sample);
+  /**
+   * A player's input track (game/inputTrack.ts) — samples appended to that seat's track, made on
+   * first use. The recording player's own come straight from their tracker; a LAN client's
+   * arrive in batches the host has already checked. Capped per player.
+   */
+  inputs(player: number, scheme: string, samples: readonly InputSample[]): void {
+    let track = this.tracks.find((t) => t.player === player);
+    if (!track) this.tracks.push((track = { player, scheme, samples: [] }));
+    if (scheme) track.scheme = scheme;
+    const room = MAX_TRACK_SAMPLES - track.samples.length;
+    for (let i = 0; i < samples.length && i < room; i++) track.samples.push(samples[i]);
   }
 
   state(sample: StateSample): void {
@@ -337,7 +376,7 @@ export class ReplayRecorder {
   }
 
   snapshot(): Replay {
-    return { header: this.header, events: this.events, checks: this.checks, camera: this.camera, states: this.states, ending: this.ending, dumps: this.dumps };
+    return { header: this.header, events: this.events, checks: this.checks, inputs: this.tracks, states: this.states, ending: this.ending, dumps: this.dumps };
   }
 
   finish(): Promise<Uint8Array> {
@@ -395,14 +434,4 @@ export class ReplayPlayer {
     return this.next >= this.replay.events.length;
   }
 
-  /** The recorded camera position closest at or before step `t`, for a player. */
-  cameraFor(player: number, t: number): CameraSample | null {
-    let best: CameraSample | null = null;
-    for (const s of this.replay.camera) {
-      if (s.p !== player) continue;
-      if (s.t > t) break;
-      best = s;
-    }
-    return best;
-  }
 }

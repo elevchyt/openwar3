@@ -22,7 +22,9 @@
 /** Arm the cap if the desktop shell asked for one. Run as a side-effect import at the very top
  *  of main.ts, so it is in place before any module schedules a frame. */
 function installFrameCap(): void {
-  const maxFps = (window as unknown as { ow3native?: { maxFps?: number } }).ow3native?.maxFps;
+  // …or the replay window's bridge, which carries the same number (src/replayBoot.ts).
+  const w = window as unknown as { ow3native?: { maxFps?: number }; ow3replay?: { maxFps?: number } };
+  const maxFps = w.ow3native?.maxFps ?? w.ow3replay?.maxFps;
   if (!maxFps || !(maxFps > 0)) return;
 
   const interval = 1000 / maxFps;

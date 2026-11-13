@@ -28,6 +28,8 @@ function clock(seconds: number): string {
 
 /** What the panel reads and drives — the scene's (render/mapViewer.ts). */
 export interface ReplayControls {
+  /** The OpenWar3 version the replay was recorded on — the panel's badge. */
+  version: string;
   /** Where the replay is: steps played, steps in all, paused, the speed multiplier, a seek under
    *  way (its target step), and the first step that failed its state check. */
   state(): { tick: number; total: number; paused: boolean; speed: number; seeking: number | null; diverged: number | null };
@@ -159,7 +161,12 @@ export class ReplayPanel {
     const row = el("div", "rp-row", this.root);
     row.append(restart, back, this.pauseBtn, fwd, this.slowerBtn, this.fasterBtn);
     this.speedText = el("span", "rp-speed", row);
-    this.root.append(this.track, checks);
+    // THE BADGE (issue #158): which OpenWar3 this replay is, for as long as it plays — the
+    // recording version, which in a replay window is also the version running. A line of its
+    // own under the checkboxes, in the grey a caption wears.
+    const badge = el("div", "rp-version");
+    badge.textContent = `Replay — OpenWar3 ${controls.version}`;
+    this.root.append(this.track, checks, badge);
     this.refresh();
   }
 

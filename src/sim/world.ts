@@ -3964,6 +3964,9 @@ export class SimWorld {
   /** Told of every death as it happens, with the killer if it is still a unit — the match log's
    *  (src/game/matchLog.ts). Null, and never called, in a world nobody is recording. */
   deathObserver: ((victim: SimUnit, killer: SimUnit | undefined) => void) | null = null;
+  /** The same news for the REPLAY's state track (src/game/replayState.ts) — a slot of its own,
+   *  because the match log opens and closes the one above on its own clock. */
+  deathTap: ((victim: SimUnit, killer: SimUnit | undefined) => void) | null = null;
   captureDamage = false;
   /**
    * The map's damage events, SYNCHRONOUSLY — set by the host only for a script that can change a
@@ -25976,6 +25979,7 @@ export class SimWorld {
     // …and the MATCH LOG's (src/game/matchLog.ts), which only wants to hear it — a call, not a
     // queue, so it can never fall behind the trigger engine's drain or compete with it.
     this.deathObserver?.(u, killerId ? this.units.get(killerId) : undefined);
+    this.deathTap?.(u, killerId ? this.units.get(killerId) : undefined);
     this.unitDrops.delete(u.id);
   }
 

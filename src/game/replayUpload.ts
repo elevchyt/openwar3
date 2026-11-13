@@ -37,7 +37,7 @@ const INSTALL_ID_KEY = "ow3.installId";
 declare const __OW3_VERSION__: string;
 
 /** A random id for this install, made once. Not the player: nothing ties it to a person. */
-function installId(): string {
+export function installId(): string {
   try {
     let id = localStorage.getItem(INSTALL_ID_KEY);
     if (!id) {

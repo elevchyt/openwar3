@@ -37,6 +37,11 @@ An INPUT is anything that changes the match and does not come out of the match:
 | `dlg` / `frame` / `pev` | `Interpreter.inputTap` — a dialog button, a frame event, a player event | the interpreter's own `fire*` |
 | `cheat` / `cheatsel` | `RtsController.onCheat` / `onCheatSelected` | `cheat(kind, player)` / `cheatSelected(kind, ids)` |
 | `lock` | `summonBirth` — a summon's spawn lock, read off its MODEL | written straight onto the unit |
+| `ally` / `give` | the F11 Allies menu — it writes onto the match directly, never through `execute` | `setPlayerAlliance` / `transferResources` |
+
+A `cmd` the authority REFUSED is recorded too, marked `no` (replayed, it is refused again). Two
+kinds are NOTES rather than inputs and do nothing on playback, where the pace is the watcher's:
+`pause` (who paused or resumed) and `speed` (Game Speed, and the dev tools' Sim Speed).
 
 What is NOT an input replays itself: the map's triggers, timers and orders (they go through the
 authority's own methods, never `execute`), the creeps, and a map's own AI SCRIPT (a campaign's
@@ -91,17 +96,28 @@ ten steps (565 checks) at 40×.
 
 `.o3r`. A magic (`OW3R`), a format number (`REPLAY_FORMAT`, bumped only when an old reader could
 not read the new file), then tagged sections `[tag:4][length:u32][gzip'd JSON]`: `HEAD`, `EVTS`,
-`CHKS`, `CAMS` (the recording player's camera, six times a second — not an input, but the
-person's own view and training material), `STAT` (the state track, below), `ENDS` (the result),
+`CHKS`, `INPT` (the input tracks, below), `STAT` (the state track, below), `ENDS` (the result),
 and in a dev build `DUMP`. A reader skips a tag it does not know, so a new section is not a new
 format. Measured, two Insane Computer+ players on Echo Isles for ten minutes: 186 KB in a dev
 build — `STAT` 138 KB, `EVTS` 21 KB (2 065 inputs), `DUMP` 25 KB, the rest under 2 KB.
 
-The header holds the OpenWar3 version, the map (its install path, name and a hash of its bytes —
+The header holds the OpenWar3 version, its commit and its SIM FINGERPRINT (below), which game
+files were mounted (`casc-1.30.4…`, `…-downgraded`, `mpq`), the map (its install path, name and a hash of its bytes —
 the same name is not the same map), the lobby's config RESOLVED (the seed it rolled with, every
 Random race already rolled), every seat as `human` or `computer` (and which AI, at what
 difficulty), whom the recorder was (`GetLocalPlayer` answers with it on playback), the edition and
 the patch level.
+
+## The input track
+
+What a person did with their hands and eyes, which the commands do not say (`game/inputTrack.ts`,
+`ui/inputSource.ts`): the camera (target, zoom, rotation, six times a second), the cursor (ten),
+every selection change and HOW it was made (click, box, double-click, group, Tab…), control
+groups, and where each command came from (hotkey, card, smart click, minimap, voice, gamepad),
+with the keyboard scheme. One track per person, taken on their own machine; a LAN client sends
+its own to the host in batches (MatchLink `inputs`), checked sample by sample there. Taken only
+with consent: Options → Gameplay → **Share Replays** (ours, on by default — the developer's
+call), which is also the uploader's switch and what puts the player's anonymous id on their seat.
 
 ## The state track
 
@@ -109,11 +125,14 @@ A replay is exact without it, but reading a thousand matches by re-simulating ea
 where the army was is the slow way round, and a much later OpenWar3 may not re-simulate an old
 replay exactly. So once a game second (`STATE_EVERY`, ours) the recorder also writes what the
 match LOOKED like (`StateTracker`): per unit `[id, type, owner, x, y, facing°, hp, mana, order,
-target, hero level, items]`, per player `[gold, lumber, food used, {upgrade: level}]`. It is a
+target, hero level, seenBy, items]`, per player `[gold, lumber, food used, {upgrade: level}]`,
+every death `[victim, type, owner, x, y, killer, killer type, killer owner]` and each Computer+
+player's `[build, mode, target, squad food, creeping, final]`. `seenBy` is one bit per player —
+who had eyes on the unit — so a reader can learn from what a player KNEW rather than what was
+true. It is a
 DELTA track — a sample holds the rows that CHANGED since the last one and the ids that are gone,
 rounded to whole numbers so a unit drifting a hair is not news — and `expandStates` turns it back
 into full pictures. It is the bulk of the file (above): about 14 KB a game minute in a one-on-one.
-Not in it: what each player could SEE (re-simulate with the fog for that).
 
 ## Where it goes
 
@@ -178,10 +197,41 @@ carrying the camera, speed, fog, pause and Auto Camera across (`MeleeConfig.repl
 6:00 → 3:00 took 11.6 s on the dev machine. A PAUSED replay keeps running the entry sync
 (`settleHeld`) so the bars, the hover and the fog follow the camera as the watcher pans.
 
+## Versions
+
+A replay plays back exactly only on a build that simulates the same way. `tools/sim-fingerprint.mjs`
+hashes every source file that can change a match (deliberately wide: sim, data, jass, patches, ai,
+game, compat, world, vfs, the scene) into the header; View Replay plays a replay natively when
+the version OR the fingerprint matches, so a release that only touched menus needs nothing.
+
+Otherwise the desktop app watches it IN the recording version (`electron/replayBundles.mjs`):
+
+- every release publishes `replay-bundle-<version>.zip` (the built page without the voice
+  runtime, ~9 MB) and a manifest with its SHA-512 (`tools/replay-bundle.mjs`, run by `pnpm release`);
+- the shell downloads it from OpenWar3's own releases, refuses a hash mismatch, and unpacks it
+  into `<tmp>/openwar3-replay-<version>-<random>` with a marker file;
+- it is served on its own localhost port and opened in a window with an in-memory session and
+  the `ow3replay` bridge alone (`electron/replayPreload.cjs`: the replay's bytes, exit, nothing
+  else); the player's options are written into that window's throwaway storage before its first
+  script runs; the page boots straight into the replay (`src/replayBoot.ts`), no menus;
+- closing the window deletes the sandbox, and every launch sweeps leftovers (only folders with
+  our prefix AND marker, never one whose owner process is alive);
+- the bridge has a contract number; a bundle needing a newer one answers "update OpenWar3".
+
+With no bundle to be had (the web build, a version that published none, offline) it is the
+game's own "Incompatible Replay" question and the replay plays on this build. A replay from the
+other edition says so and is not played.
+
+Verified in the real shell against a local mirror: found, downloaded with progress, checked,
+sandboxed, played with 10 of 10 checks, window closed, sandbox gone, main window back.
+`pnpm app:test` covers the bundle, the name checks and the sweep; `pnpm sim:test` has the
+record → file → replay round trip (`tools/replay-roundtrip-test.cjs`).
+
 ## Not done yet
 
 - Rewinding re-plays the match from its start, so a seek far back takes as long as re-simulating
-  that much; keyframes need the JASS VM's sleeping threads (generators) to be serialisable.
-- Watching a replay recorded by another OpenWar3 in THAT version (issue #158, "Versions": a
-  per-release replay bundle, fetched into a temporary sandbox). Today the player is asked and it
-  plays on this build, and the checks say how far it got.
+  that much. Keyframes need the whole sim and the JASS VM's sleeping threads (JS generators) to
+  be serialisable, which means rewriting the interpreter as an explicit-stack machine.
+- A refused command records that it was refused, not why: the authority answers a boolean.
+- The web build records nothing (no disk), so it has no versioned paths either.
+- The uploader has nowhere to send to yet (`REPLAY_UPLOAD_URL`).

@@ -3581,7 +3581,21 @@ export class RtsController {
    *  empty selection leaves the existing group untouched (WC3). */
   assignGroup(key: string): void {
     const { ids } = this.ownSelectionByKind();
-    if (ids.length) this.groups.set(key, ids);
+    if (ids.length) {
+      this.groups.set(key, ids);
+      this.onGroup?.("set", key, ids);
+    }
+  }
+
+  /** A control group was set, added to or recalled — the replay's input track
+   *  (game/inputTrack.ts). Null when nobody is taking one. */
+  onGroup: ((op: "set" | "add" | "recall", key: string, ids: readonly number[]) => void) | null = null;
+  /** The local player issued a command — the same track, for where it came from. */
+  onLocalCommand: ((cmd: Command) => void) | null = null;
+
+  /** The unit type of the selection's ACTIVE subgroup ("" with nothing selected). */
+  activeSubgroupType(): string {
+    return this.primary !== null ? (this.sim.units.get(this.primary)?.typeId ?? "") : "";
   }
 
   /** Shift+N: append the current selection to group N, keeping the group's kind
@@ -3600,13 +3614,17 @@ export class RtsController {
       merged.push(id);
       seen.add(id);
     }
-    if (merged.length) this.groups.set(key, merged);
+    if (merged.length) {
+      this.groups.set(key, merged);
+      this.onGroup?.("add", key, merged);
+    }
   }
 
   /** N (tap): recall group N as the active selection. Returns false if empty. */
   recallGroup(key: string): boolean {
     const ids = this.livingGroup(key);
     if (!ids.length) return false;
+    this.onGroup?.("recall", key, ids);
     this.selected.clear();
     for (const id of ids) this.selected.add(id);
     this.selectedMine = null;
@@ -9061,6 +9079,8 @@ export class RtsController {
     link.onScores = (scores) => this.onScores?.(scores);
     // The match's replay, sent by the host when the game ends (issue #158).
     link.onReplay = (bytes) => this.onReplay?.(bytes);
+    // …and each client's input track on its way to the host's recording (game/inputTrack.ts).
+    link.onInputs = (player, scheme, samples) => this.onInputs?.(player, scheme, samples);
     if (setup.isHost) {
       // The host is the only party that judges an arriving command. `CommandRouter` resolves
       // the relay's `from` stamp — which no client can forge — to a slot, and a command whose
@@ -9147,6 +9167,24 @@ export class RtsController {
   /** HOST: answer a client's ask. */
   sendScores(player: number, scores: ScoreTable): void {
     if (this.matchLink && this.matchLinkIsHost) this.matchLink.sendScores(player, scores);
+  }
+
+  /** Which of `players` have eyes on this unit right now, one bit per player slot — the replay
+   *  state track's fog bits (game/replayState.ts): what each player KNEW, not what was true. */
+  seenByMask(unitId: number, players: readonly number[]): number {
+    let mask = 0;
+    for (const p of players) if (this.viewpoints.unitVisibleTo(p, unitId)) mask |= 1 << p;
+    return mask;
+  }
+
+  /** HOST: a batch of a client's input track arrived (MatchLink `inputs`). */
+  onInputs: ((player: number, scheme: string, samples: unknown[]) => void) | null = null;
+
+  /** CLIENT: send the host a batch of our own input track. False when there is no host. */
+  sendInputs(scheme: string, samples: unknown[]): boolean {
+    if (!this.matchLink || this.matchLinkIsHost) return false;
+    this.matchLink.sendInputs(scheme, samples);
+    return true;
   }
 
   /** CLIENT: the replay the host sent at the end of the game (MatchLink `replaypart`). */
@@ -9839,7 +9877,7 @@ export class RtsController {
    * which is the point of having moved it.
    */
   /** Tap every command offered to the authority — the replay recorder (game/replay.ts). */
-  setCommandTap(tap: ((player: number, cmd: Command) => void) | null): void {
+  setCommandTap(tap: ((player: number, cmd: Command) => ((took: boolean) => void) | undefined) | null): void {
     this.authority.onCommand = tap;
   }
 
@@ -9864,6 +9902,7 @@ export class RtsController {
       // that well) have no queued form to wait in, so the channeller simply sits them out.
       else return false;
     }
+    if (player === this.localPlayer) this.onLocalCommand?.(cmd);
     const applied = this.authority.execute(player, cmd);
     // On a CLIENT, forward the local player's accepted commands to the host's authoritative
     // sim (item 9b). We still applied it locally just above — sequencing B keeps the client

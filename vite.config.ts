@@ -1,4 +1,6 @@
+import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import { devInstall } from "./tools/vite-plugin-dev-install";
 import { driveProxy } from "./tools/vite-plugin-drive-proxy";
@@ -7,6 +9,7 @@ import { matchLog } from "./tools/vite-plugin-match-log";
 import { perfLog, perfLogDefines } from "./tools/vite-plugin-perf-log";
 import { relay } from "./tools/vite-plugin-relay";
 import { replays } from "./tools/vite-plugin-replays";
+import { simFingerprint } from "./tools/sim-fingerprint.mjs";
 
 // Static build, engine code only — no assets are ever bundled or hosted (see plan §0, §8).
 //
@@ -41,9 +44,28 @@ import { replays } from "./tools/vite-plugin-replays";
 // the day they differ the one on screen is the one nobody trusts.
 const version = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version as string;
 
+// What a REPLAY is stamped with beside the version (issue #158, src/game/replay.ts): the commit
+// the build was cut from, and the sim fingerprint that says whether two builds play each other's
+// replays (tools/sim-fingerprint.mjs). Both are read once, when the config is: a dev server's
+// fingerprint is the tree's as it stood at start-up.
+const root = fileURLToPath(new URL(".", import.meta.url));
+const commit = (() => {
+  try {
+    return execSync("git rev-parse --short HEAD", { cwd: root, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+  } catch {
+    return ""; // a source archive with no repository around it
+  }
+})();
+const fingerprint = simFingerprint(root);
+
 export default defineConfig({
   plugins: [devInstall(), driveProxy(), mapSiteProxy(), perfLog(), matchLog(), replays(), relay()],
-  define: { ...perfLogDefines(), __OW3_VERSION__: JSON.stringify(version) },
+  define: {
+    ...perfLogDefines(),
+    __OW3_VERSION__: JSON.stringify(version),
+    __OW3_COMMIT__: JSON.stringify(commit),
+    __OW3_SIM_FINGERPRINT__: JSON.stringify(fingerprint),
+  },
   server: {
     port: 5173,
     // Cross-origin ISOLATION, so Voice Control's recogniser may use threads (SharedArrayBuffer):

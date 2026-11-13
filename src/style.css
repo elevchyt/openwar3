@@ -1890,6 +1890,24 @@ body.hud-widget-skinned .obs-sel-bar .obs-bar-fill.progress { background: var(--
 .rp-checks { display: flex; gap: calc(var(--rp-gap) * 3); align-items: center; pointer-events: auto; }
 .rp .hud-autocam.rp-autocam, .rp .hud-autocam.rp-check { position: static; left: auto; top: auto; }
 .rp.diverged .rp-track { box-shadow: 0 0 0 1px #c33; }
+/* The badge: which OpenWar3 the replay is — the panel's last line. */
+.rp-version { white-space: nowrap; font-size: 0.85em; color: #9a9a9a; text-shadow: 1px 1px 0 #000; pointer-events: none; }
+/* The REPLAY WINDOW's own loading line (src/replayBoot.ts) — it has no load gate and no menu. */
+.replay-boot {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: #000;
+  color: #fcd312;
+  font: 20px/1.4 var(--game-font, serif);
+  pointer-events: auto;
+}
+.replay-boot-close { font: inherit; padding: 6px 28px; color: #fcd312; background: #111; border: 1px solid #fcd312; cursor: inherit; }
 
 /* Auto Camera in a LIVE match: above the selection, on no panel — in a replay it goes into the
    replay panel instead (.rp-autocam). */

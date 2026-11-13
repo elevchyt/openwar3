@@ -32,6 +32,8 @@ export interface GateLoad {
   fileCount: number;
   /** The install's `Maps\` folder — what the Custom Game screen lists (issue #61). */
   maps: Map<string, File>;
+  /** Which game files this is, as a replay's header names it (vfs/loader.ts). */
+  flavour: string;
 }
 
 /** What the bar says while the install mounts. */

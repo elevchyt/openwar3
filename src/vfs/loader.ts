@@ -32,6 +32,8 @@ export interface LoadResult {
   /** The install's own `Maps\` folder, path → File — what the Custom Game screen lists.
    *  These are files on disk beside the archives, not entries inside them. */
   maps: Map<string, File>;
+  /** Which game files this is, as a replay's header names it (game/replay.ts `install`). */
+  flavour: string;
 }
 
 export async function loadProfile(
@@ -84,7 +86,8 @@ export async function loadProfile(
     for (const [key, file] of casc.storeMaps()) {
       if (![...maps.keys()].some((k) => k.toLowerCase() === key.toLowerCase())) maps.set(key, file);
     }
-    return { vfs, mounted: casc.mounted, missing: [], fileCount: casc.list().length, maps };
+    const flavour = `casc-${version ?? "unknown"}${downgrade ? "-downgraded" : ""}`;
+    return { vfs, mounted: casc.mounted, missing: [], fileCount: casc.list().length, maps, flavour };
   }
 
   const sources: DataSource[] = [];
@@ -114,5 +117,5 @@ export async function loadProfile(
   // An MPQ-era install gets the derived icons too — the passive rule is the game's, not a patch's.
   const vfs = new DerivedArtDataSource(new EditionDataSource(new LayeredDataSource(sources.slice().reverse())));
   vfs.prepare();
-  return { vfs, mounted, missing, fileCount: vfs.list().length, maps };
+  return { vfs, mounted, missing, fileCount: vfs.list().length, maps, flavour: "mpq" };
 }

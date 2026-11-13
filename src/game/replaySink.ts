@@ -22,6 +22,14 @@ export interface ReplaySink {
   read(name: string): Promise<Uint8Array | null>;
   /** Delete one replay; true when it is gone. */
   remove(name: string): Promise<boolean>;
+  /**
+   * ANOTHER VERSION's replay (docs/replays.md "Versions", electron/replayBundles.mjs) — the
+   * desktop app only. `bundleInfo`: did that version publish replay files, and how big are they
+   * (`usable` false: this app is too old to open them). `watchVersion`: download them and watch
+   * the replay in that version, in a window of its own, with `options` handed to it.
+   */
+  bundleInfo?(version: string): Promise<{ size: number; usable: boolean } | null>;
+  watchVersion?(request: { name: string; version: string; options: Record<string, string> }, onProgress: (p: { received: number; total: number }) => void): Promise<void>;
 }
 
 interface NativeReplays {
@@ -30,6 +38,8 @@ interface NativeReplays {
   list(): Promise<ReplayFileInfo[]>;
   read(name: string): Promise<Uint8Array | null>;
   remove(name: string): Promise<boolean>;
+  bundleInfo?(version: string): Promise<{ size: number; usable: boolean } | null>;
+  watchVersion?(request: { name: string; version: string; options: Record<string, string> }, onProgress: (p: { received: number; total: number }) => void): Promise<unknown>;
 }
 
 /** The sink this build has: the desktop shell's, the dev server's, or none. */
@@ -45,6 +55,10 @@ export function replaySink(): ReplaySink | null {
         return b ? new Uint8Array(b) : null;
       },
       remove: (name) => native.remove(name),
+      ...(native.bundleInfo && native.watchVersion ? {
+        bundleInfo: (version: string) => native.bundleInfo!(version),
+        watchVersion: async (request, onProgress) => void (await native.watchVersion!(request, onProgress)),
+      } : {}),
     };
   }
   if (import.meta.env.DEV) {

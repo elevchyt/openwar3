@@ -1,7 +1,11 @@
 // The STATE TRACK of a replay (issue #158) — once a game second, what the match LOOKED like:
-// every unit's type, owner, position, life, mana, order, target, hero level and inventory, and
-// every player's bank, food and research. Material for an AI that plays like a person, read
-// without re-simulating.
+// every unit's type, owner, position, life, mana, order, target, hero level, inventory and WHO
+// COULD SEE IT, every player's bank, food and research, what each Computer+ player was doing,
+// and who died where and to whom. Material for an AI that plays like a person, read without
+// re-simulating.
+//
+// The FOG BITS are the part that matters most for that: a player cannot react to an army in the
+// fog, so learning from what was TRUE rather than from what a player KNEW teaches the wrong game.
 //
 // A replay is exact without it (game/replay.ts: the inputs, re-simulated), so this is a COPY of
 // what a playback would compute anyway, kept for two reasons. A training run reads a thousand
@@ -16,16 +20,28 @@
 // everything. `expandStates` turns the track back into a full picture per sample.
 
 import type { SimWorld, SimUnit } from "../sim/world";
+import type { AiReading } from "./matchLog";
 import { MELEE } from "../data/gameplayConstants";
 
 /** Steps between two samples: one game second (60 steps at 60 Hz). Ours. */
 export const STATE_EVERY = 60;
 
 /**
- * One unit: `[id, typeId, owner, x, y, facing°, hp, mana, order, targetId, heroLevel, items]`.
- * `items` is the inventory's item rawcodes ("" for an empty slot), absent for a unit with none.
+ * One unit: `[id, typeId, owner, x, y, facing°, hp, mana, order, targetId, heroLevel, seenBy, items]`.
+ * `seenBy` is one bit per player slot — bit `p` set while player `p` has eyes on it (its own
+ * side's included). `items` is the inventory's item rawcodes ("" for an empty slot), absent for
+ * a unit with none.
  */
-export type UnitRow = [number, string, number, number, number, number, number, number, string, number, number, string[]?];
+export type UnitRow = [number, string, number, number, number, number, number, number, string, number, number, number, string[]?];
+
+/** One death: `[victimId, typeId, owner, x, y, killerId, killerTypeId, killerOwner]` — the killer
+ *  fields 0, "" and -1 when nothing still standing did it. */
+export type DeathRow = [number, string, number, number, number, number, string, number];
+
+/** One Computer+ player: `[player, build, mode, target, squadFood, creeping, final]` — the rolled
+ *  build, what its army is doing, and at whom (game/matchLog.ts `AiReading`). Recording only: on
+ *  playback the computers do not think. */
+export type AiRow = [number, string, string, string, number, 0 | 1, 0 | 1];
 
 /** One player: `[player, gold, lumber, foodUsed, research]`, research as `{upgradeId: level}`. */
 export type PlayerRow = [number, number, number, number, Record<string, number>];
@@ -39,16 +55,28 @@ export interface StateSample {
   gone: number[];
   /** Players whose row changed since the previous sample. */
   players: PlayerRow[];
+  /** Everything that died since the previous sample. */
+  deaths?: DeathRow[];
+  /** Computer+ players whose row changed since the previous sample. */
+  ai?: AiRow[];
 }
 
-function unitRow(u: SimUnit): UnitRow {
+/** What the tracker reads beside the sim — the scene's, so this file needs no controller. */
+export interface StateSources {
+  /** The fog bits for one unit (RtsController.seenByMask). */
+  seenBy?: (unit: SimUnit) => number;
+  /** What each Computer+ player is doing (RtsController.computerPlusLog). */
+  ai?: () => readonly AiReading[];
+}
+
+function unitRow(u: SimUnit, seenBy: number): UnitRow {
   const r = Math.round;
   const row: UnitRow = [
     u.id, u.typeId, u.owner, r(u.x), r(u.y),
     ((r((u.facing * 180) / Math.PI) % 360) + 360) % 360,
     Number.isFinite(u.hp) ? r(u.hp) : -1,
     Number.isFinite(u.mana) ? r(u.mana) : -1,
-    u.order, u.targetId ?? 0, u.isHero ? u.level : 0,
+    u.order, u.targetId ?? 0, u.isHero ? u.level : 0, seenBy,
   ];
   if (u.inventory.length) row.push(u.inventory.map((it) => it?.itemId ?? ""));
   return row;
@@ -58,13 +86,34 @@ function unitRow(u: SimUnit): UnitRow {
 export class StateTracker {
   private units = new Map<number, string>();
   private players = new Map<number, string>();
+  private ai = new Map<number, string>();
+  private deaths: DeathRow[] = [];
 
-  sample(sim: SimWorld, t: number): StateSample {
+  /** A death, as it happens (SimWorld.deathTap) — it rides the next sample. */
+  died(victim: SimUnit, killer: SimUnit | undefined): void {
+    this.deaths.push([
+      victim.id, victim.typeId, victim.owner, Math.round(victim.x), Math.round(victim.y),
+      killer?.id ?? 0, killer?.typeId ?? "", killer?.owner ?? -1,
+    ]);
+  }
+
+  sample(sim: SimWorld, t: number, src: StateSources = {}): StateSample {
     const out: StateSample = { t, units: [], gone: [], players: [] };
+    if (this.deaths.length) {
+      out.deaths = this.deaths;
+      this.deaths = [];
+    }
+    for (const r of src.ai?.() ?? []) {
+      const row: AiRow = [r.player, r.build, r.mode, r.target, r.squadFood, r.creeping ? 1 : 0, r.final ? 1 : 0];
+      const key = JSON.stringify(row);
+      if (this.ai.get(r.player) === key) continue;
+      this.ai.set(r.player, key);
+      (out.ai ??= []).push(row);
+    }
     const seen = new Set<number>();
     for (const u of sim.units.values()) {
       seen.add(u.id);
-      const row = unitRow(u);
+      const row = unitRow(u, src.seenBy?.(u) ?? 0);
       const key = JSON.stringify(row);
       if (this.units.get(u.id) === key) continue;
       this.units.set(u.id, key);

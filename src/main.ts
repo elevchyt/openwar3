@@ -16,6 +16,8 @@ import { mountSkirmish } from "./ui/fdfSkirmish";
 import { mountCampaignScreen, type CampaignScreenState } from "./ui/fdfCampaign";
 import { mountCustomCampaignScreen } from "./ui/fdfCustomCampaign";
 import { mountViewReplayScreen, replayMapPath } from "./ui/fdfViewReplay";
+import { replayBoot, replayBridge } from "./replayBoot";
+import { patchLevel, setPatchLevel } from "./patches";
 import { decodeReplay, fnv64, type Replay, type ReplayView } from "./game/replay";
 import { replaySink } from "./game/replaySink";
 
@@ -155,6 +157,7 @@ let meleeConfig: MeleeConfig | null = null; // consumed by the melee initializer
 // assembled it and something has to close it when the match ends (docs/multiplayer.md F4).
 let matchLink: MatchLinkSetup | null = null;
 let installMaps: Map<string, File> = new Map(); // the install's Maps\ folder (Custom Game)
+let installFlavour = ""; // which game files are mounted (vfs/loader.ts `flavour`)
 
 // The glue-screen stack (issue #61): main menu → Single Player → Custom Game, each
 // leaving and arriving the way the reference does.
@@ -207,7 +210,9 @@ async function enterMap(bytes: Uint8Array, name: string): Promise<string> {
     show("map");
     if (!mapScene) mapScene = await MapViewerScene.create(mapCanvas, vfs, sounds);
     // F10 → End Game, or a Quit button — with the score table when the game it leaves is OVER.
-    mapScene.onExit = (scores) => exitToMenu(scores);
+    // …except in a REPLAY WINDOW (src/replayBoot.ts), which has no menu to go back to: leaving
+    // the replay closes the window.
+    mapScene.onExit = (scores) => (replayBridge() ? replayBridge()!.exit() : exitToMenu(scores));
     // A campaign chapter is completed when its script declares the local player the winner —
     // that, and only that, opens the next one.
     mapScene.onLocalVictory = () => {
@@ -943,6 +948,16 @@ async function watchReplay(replay: Replay): Promise<void> {
   const hash = fnv64(new Uint8Array(await file.arrayBuffer()));
   if (hash !== h.map.hash) console.warn(`[replay] ${path} is not the map this replay was recorded on (hash ${hash}, recorded ${h.map.hash})`);
   if (h.version !== __OW3_VERSION__) console.warn(`[replay] recorded on OpenWar3 ${h.version}; this is ${__OW3_VERSION__}`);
+  // The BALANCE PATCH the match was played on (src/patches/): a replay is a match on those
+  // tables. Put back when the replay is left (`exitToMenu`), never remembered.
+  if (h.patch && h.patch !== patchLevel()) {
+    replayPatchWas ??= patchLevel();
+    try {
+      setPatchLevel(h.patch);
+    } catch (err) {
+      console.warn(`[replay] recorded on patch ${h.patch}, which this build does not have:`, err);
+    }
+  }
   await startGame(file, info, { ...h.config, observer: true, replay });
 }
 
@@ -1033,7 +1048,7 @@ async function startGame(
       name: info.name,
       hash: fnv64(bytes),
       size: bytes.length,
-    });
+    }, installFlavour);
     // Melee maps get the standard setup (town hall + workers, melee rules);
     // custom/scenario maps run their own triggers instead (see mapKind.ts).
     //
@@ -1337,8 +1352,15 @@ function endMatch(): void {
  *
  *  `scores` puts the SCORE SCREEN between the two (issue #199) — handed over by every quit that
  *  asks for one (MapViewerScene.leave), and dismissed by its OK. */
+/** The patch level a replay changed, to put back when it is left (`watchReplay`). */
+let replayPatchWas: string | null = null;
+
 function exitToMenu(scores: ScoreTable | null = null): void {
   endMatch();
+  if (replayPatchWas !== null) {
+    setPatchLevel(replayPatchWas);
+    replayPatchWas = null;
+  }
   // …and back onto the MELEE tables. The menus read object data too — the Custom Game screen's
   // map previews, the hotkey editor's cards, every tooltip — and the set a chapter left behind
   // is not the one the shell should be describing. The next match sets it again from its own
@@ -1447,6 +1469,7 @@ async function showMainMenu(vfs: DataSource): Promise<void> {
 function mountInstall(load: GateLoad): void {
   resolver.setInstall(load.vfs);
   installMaps = load.maps; // the Custom Game screen's map list
+  installFlavour = load.flavour; // …and which game files a replay says it was played on
   ((window as unknown as { openwar3: Record<string, unknown> }).openwar3 ??= {}).vfs = load.vfs;
   gate?.dispose();
   gate = null;
@@ -1511,7 +1534,11 @@ startGamepad();
 // that Vite folds to `false` for `pnpm build`, so this branch and the dynamic import inside it
 // are dropped from the bundle entirely; there is no path from a shipped artifact to an asset
 // route. See src/dev/devBoot.ts and tools/vite-plugin-dev-install.ts.
-if (import.meta.env.DEV && new URLSearchParams(location.search).has("dev")) {
+if (replayBridge()) {
+  // A REPLAY WINDOW: another version's replay, opened by a later desktop app in this version's
+  // own page (src/replayBoot.ts). It watches the one replay it is handed and nothing else.
+  void replayBoot(ui, replayBridge()!, { mountInstall, watchReplay });
+} else if (import.meta.env.DEV && new URLSearchParams(location.search).has("dev")) {
   void import("./dev/devBoot")
     .then((m) =>
       m.devBoot({

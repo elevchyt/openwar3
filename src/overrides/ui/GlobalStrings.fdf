@@ -28,6 +28,10 @@ StringList {
     // Options → Gameplay, directly under AUTOSAVE_REPLAY ("Automatically Save Replays").
     COMPUTER_PLUS_DEFAULT       "Use Computer+ as default AI",
 
+    // Options → Gameplay, beside AUTOSAVE_REPLAY: the player's consent to their replays being
+    // sent to OpenWar3's collection, with their own camera and selections in them (issue #158).
+    SHARE_REPLAYS               "Share Replays",
+
     // The LAN game lobby's TEAM menu, under Full Observers: the entry that moves a player onto
     // the Observers bench, and what a watcher's row reads in that column. The game names the
     // force with a colon (COLON_OBSERVERS "Observers:") and the mode by its full phrase

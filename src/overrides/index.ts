@@ -135,6 +135,9 @@ export const OPTIONS_MENU_OVERRIDE: FdfOverride = {
   add: [
     { frame: "ComputerPlusDefaultCheckBox", into: "GameplayPanel" },
     { frame: "ComputerPlusDefaultLabel", into: "GameplayPanel" },
+    // "Share Replays" (issue #158), on the Automatically Save Replays row.
+    { frame: "ShareReplaysCheckBox", into: "GameplayPanel" },
+    { frame: "ShareReplaysLabel", into: "GameplayPanel" },
     { frame: "HealthBarStyleLabel", into: "GameplayPanel" },
     { frame: "HealthBarStyleBackdrop", into: "GameplayPanel" },
     { frame: "HotkeysLabel", into: "GameplayPanel" },
