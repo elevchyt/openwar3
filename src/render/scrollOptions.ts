@@ -11,7 +11,8 @@ import type { Options } from "../data/options";
 // MEANS is engine-internal — it is in no .slk, .txt or .fdf in the install, and MiscData/
 // MiscGame say nothing about scrolling at all. So the CURVE below is OURS and says so, and it
 // is anchored on the one number we do know: the middle of the slider is the speed OpenWar3 has
-// always panned at, so a player who never touches the row is where they were.
+// always panned at, so a player who never touches the row is where they were — except at the
+// screen EDGES, which pan `EDGE_PAN_BASE` faster than that to match the original.
 
 /** The pan multiplier a 0–100 slider notch means. Ours (see above): a doubling either side of
  *  the middle, so 0 is half today's speed, 50 is exactly it, and 100 is twice it. Exponential
@@ -20,6 +21,13 @@ import type { Options } from "../data/options";
 function scaleOf(notch: number): number {
   return 2 ** ((Math.max(0, Math.min(100, notch)) - 50) / 50);
 }
+
+/** Edge-panning's speed at the slider's middle, as a multiple of the shared pan rate
+ *  (mapViewer's `distance × 0.9` per second). OURS, set by the developer's side-by-side with
+ *  the real 1.30.4 client: at the middle notch the original's screen edges pan a bit faster
+ *  than that rate did. Only the EDGE takes it — "Keyboard Scroll:" is unchanged — and the
+ *  slider still halves/doubles around it. */
+const EDGE_PAN_BASE = 1.3;
 
 let keyScale = 1;
 let mouseScale = 1;
@@ -42,5 +50,5 @@ export function keyScrollScale(): number {
  *  Scroll" is ticked. One number rather than a scale plus a flag, because the caller's
  *  question is the same either way: how far does the edge move the camera this frame. */
 export function edgeScrollScale(): number {
-  return mouseOn ? mouseScale : 0;
+  return mouseOn ? mouseScale * EDGE_PAN_BASE : 0;
 }
