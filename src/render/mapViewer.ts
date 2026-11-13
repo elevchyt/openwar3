@@ -5286,7 +5286,19 @@ export class MapViewerScene {
       // script's own dialog-button triggers run first (they can still read GetClickedButton),
       // and the quit is what tears the match down.
       onClick: (button) => {
-        if (this.replayPlayback) return; // a replay's dialogs were answered in the match
+        // A replay's dialogs were answered in the match, so nothing here is the watcher's to
+        // press — except LEAVING. The end-of-match screen's Quit Game takes them out of the
+        // replay to the main menu (or closes a replay window — main.ts onExit), with no score
+        // screen between: the figures were the recorded players'. Its Continue Game is drawn
+        // greyed (showDialog), since there is no game to continue.
+        if (this.replayPlayback) {
+          if (button.quit && !button.disabled) {
+            this.remoteDialog = null;
+            this.showDialog(null);
+            void this.leave(false);
+          }
+          return;
+        }
         const engine = this.mapScript;
         const dialog = engine?.interp.rt.dialogs.find((d) => d.handleId === button.dialogId);
         if (dialog) {
@@ -12585,6 +12597,10 @@ export class MapViewerScene {
    *  The rule is body-wide, as the cursor itself is — once the engine draws it, it is drawn
    *  over the whole screen, not clipped to the panel. */
   private showDialog(d: DialogObj | null): void {
+    // Watching a REPLAY, every button but a quit is the recorded match's to press, not the
+    // watcher's — the end screen's Continue Game above all, which has no game to continue. They
+    // are still SHOWN, greyed, so the screen is the one the match showed.
+    if (d && this.replayPlayback) d = { ...d, buttons: d.buttons.map((b) => (b.quit ? b : { ...b, disabled: true })) };
     this.dialog?.update(d);
     this.dialogUp = !!d;
     document.body.classList.toggle("dialog-on", !!d);

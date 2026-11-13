@@ -136,6 +136,11 @@ export class GameDialogOverlay {
       });
       prev?.dispose();
       this.screen = screen;
+      // A greyed button (DialogButtonObj.disabled) wears the template's own disabled face and
+      // eats its click and its key — the screen's per-control gate.
+      d.buttons.forEach((b, i) => {
+        if (b.disabled) screen.setEnabled(buttonName(i), false);
+      });
     } catch (err) {
       console.warn("[dialog] could not mount the FDF panel:", err);
       this.screen = null;

@@ -95,6 +95,10 @@ export interface DialogButtonObj {
   hotkey: number; // GetLocalizedHotkey's char code (0 = none)
   quit: boolean;
   doScoreScreen: boolean;
+  /** Drawn greyed and not pressable. No native sets it: it is the ENGINE's, for a replay, where
+   *  the match's own answers are recorded and only leaving is the watcher's (mapViewer
+   *  `showDialog`). */
+  disabled?: boolean;
 }
 
 /** A JASS `dialog` (DialogCreate) — a modal message + buttons. This is what the melee
