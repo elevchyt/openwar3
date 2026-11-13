@@ -10,8 +10,8 @@ and go **back** in time — which the original never could.
 | [`src/game/replayHash.ts`](../src/game/replayHash.ts) | the state check, and (dev) the state dump behind it |
 | [`src/game/replaySink.ts`](../src/game/replaySink.ts) | where the files go — the desktop shell or the dev server |
 | [`electron/replayStore.mjs`](../electron/replayStore.mjs) | the one writer: `replays/` in the data folder, or the repo's `.replays/` under `pnpm dev` |
-| [`src/game/replayUpload.ts`](../src/game/replayUpload.ts) | the uploader (to the landing page's collection route) |
-| [`web/app/api/replays/route.ts`](../web/app/api/replays/route.ts) | the collection's door: checks the file, files it in Vercel Blob |
+| [`src/game/replayUpload.ts`](../src/game/replayUpload.ts) | the uploader (to the collection service) |
+| [`replays-server/server.mjs`](../replays-server/server.mjs) | the collection's door: checks the file, files it in the Railway bucket |
 | [`src/game/replayState.ts`](../src/game/replayState.ts) | the state track: the match once a game second |
 | [`src/ui/replayPanel.ts`](../src/ui/replayPanel.ts) | the replay panel in the observer HUD |
 | [`src/ui/fdfViewReplay.ts`](../src/ui/fdfViewReplay.ts) | the View Replay screen |
@@ -122,18 +122,22 @@ call), which is also the uploader's switch and what puts the player's anonymous 
 
 ## The collection
 
-A finished replay is POSTed to `https://openwar3.vercel.app/api/replays` — a route of the landing
-page (`web/`), which files it in that Vercel project's PRIVATE Blob store `openwar3-replays` as
-`replays/<day it arrived>/<install id>_<version>-<random>.o3r`. The route is anonymous (there is
-no account to sign), so it checks the FILE instead: the `OW3R` magic, a format number that
-matches the `x-ow3-replay-format` header, gzip'd sections that tile the file exactly with `HEAD`
-first, a UUID install id, and at most 4 MB (a Vercel Function stops reading at 4.5). Its status
+A finished replay is POSTed to `https://openwar3-replays-production.up.railway.app/replays` — the
+`openwar3-replays` service in the same Railway project as the three relays, deployed from
+`/replays-server` (its own watch path, so a change to it never redeploys a relay and drops a
+lobby). It files the replay in that project's PRIVATE bucket `replays` (Amsterdam) as
+`replays/<day it arrived>/<install id>_<version>_<random>.o3r`, reaching it over the S3 API with
+the bucket's own variables referenced onto the service. The door is anonymous (there is no
+account to sign), so it checks the FILE instead: the `OW3R` magic, a format number that matches
+the `x-ow3-replay-format` header, gzip'd sections that tile the file exactly with `HEAD` first,
+a UUID install id, at most 8 MB — and at most 60 stored replays per address an hour. Its status
 tells the uploader what to do with the file: a 4xx other than 408/429 is FINAL and the file is
-dropped — the queue drains in order, so a file refused for ever would otherwise jam it — and
+dropped (the queue drains in order, so a file refused for ever would otherwise jam it), and
 anything else keeps it queued for the next launch. A dev build (`pnpm dev`) sends nothing unless
-`VITE_REPLAY_UPLOAD_URL` names a door, so test matches stay out of the collection. Read the store
-with `vercel blob list --prefix replays/` from `web/`. On Vercel's Hobby plan the store's monthly
-allowance is 1 GB and 2 000 writes, one per replay.
+`VITE_REPLAY_UPLOAD_URL` names a door, so test matches stay out of the collection; run the door
+locally with `node replays-server/server.mjs` (without the bucket variables it answers 503 after
+the checks). Railway bills the bucket by storage alone ($0.015/GB-month; S3 calls and bucket
+egress are free); the service's upload traffic to the bucket is ordinary service egress.
 
 ## The state track
 
@@ -260,5 +264,3 @@ record → file → replay round trip (`tools/replay-roundtrip-test.cjs`).
   be serialisable, which means rewriting the interpreter as an explicit-stack machine.
 - A refused command records that it was refused, not why: the authority answers a boolean.
 - The web build records nothing (no disk), so it has no versioned paths either.
-- The collection has no rate limit beyond what the file check refuses; a Vercel Firewall rule on
-  `/api/replays` is the place for one.

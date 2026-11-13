@@ -1,0 +1,15 @@
+{
+  "//": "The replay collection's door as its OWN deployable (Railway service openwar3-replays, Root Directory = /replays-server). Plain .mjs with one dependency and no build step, like server/ — kept apart from the relay so a change here never redeploys a relay and drops its lobbies. See docs/replays.md \"The collection\".",
+  "name": "openwar3-replays",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "aws4fetch": "^1.0.20"
+  }
+}

@@ -2,8 +2,9 @@
 // so the matches people actually play can be studied and, in time, an AI that plays like a
 // person can be trained on them.
 //
-// Where they go: the landing page's own route, `web/app/api/replays/route.ts`, which files them
-// in the `web` Vercel project's PRIVATE Blob store (`REPLAY_UPLOAD_URL`). How they get there:
+// Where they go: the `openwar3-replays` service in the Railway project the relays live in
+// (`replays-server/server.mjs`), which files them in that project's PRIVATE bucket
+// (`REPLAY_UPLOAD_URL`). How they get there:
 //
 //   · a replay is offered the moment its match ends (MapViewerScene.closeReplay), in memory;
 //   · a send that fails for a reason that may pass (offline, a 5xx, a 429) is kept in a small
@@ -28,11 +29,11 @@
 
 import { REPLAY_FORMAT } from "./replay";
 
-/** Where replays are sent: the landing page's collection route (web/app/api/replays). A build may
+/** Where replays are sent: the collection service (replays-server/, Railway). A build may
  *  name another with `VITE_REPLAY_UPLOAD_URL`; a dev build sends nowhere unless it does. Ours. */
 export const REPLAY_UPLOAD_URL: string =
   (import.meta.env as Record<string, string | undefined>).VITE_REPLAY_UPLOAD_URL ??
-  (import.meta.env.DEV ? "" : "https://openwar3.vercel.app/api/replays");
+  (import.meta.env.DEV ? "" : "https://openwar3-replays-production.up.railway.app/replays");
 
 /** The most replays kept waiting for a connection. Ours. */
 const MAX_QUEUED = 50;
