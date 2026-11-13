@@ -220,6 +220,10 @@ Otherwise the desktop app watches it IN the recording version (`electron/replayB
   the `ow3replay` bridge alone (`electron/replayPreload.cjs`: the replay's bytes, exit, nothing
   else); the player's options are written into that window's throwaway storage before its first
   script runs; the page boots straight into the replay (`src/replayBoot.ts`), no menus;
+- the replay is handed over with the MAP PATH the running build found written into its header
+  (`withMapPath`, electron/replayBundles.mjs): the window's page is the recording version's and
+  finds a map only the way that version did, so a 0.3.84 replay — which named a skirmish map by
+  its display name — was a black window in 0.3.84's own page until the shell did the finding;
 - closing the window deletes the sandbox, and every launch sweeps leftovers (only folders with
   our prefix AND marker, never one whose owner process is alive);
 - the bridge has a contract number; a bundle needing a newer one answers "update OpenWar3".

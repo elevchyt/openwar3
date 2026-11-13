@@ -11,6 +11,9 @@
 // compact and sits above that instead — and it does one thing the original never could, which is
 // go BACK in time (game/replay.ts; a seek backward re-plays the match up to the moment asked for).
 //
+// While paused, the Pause button wears `BTNReplay-Play.blp`: the install ships it beside the four,
+// though no war3skins key names it (only its disabled twin, under `ReplayRestartIconDisabled`).
+//
 // The layout is the developer's pick of three (issue #158): ONE panel above the selection, its
 // width — the transport row, the timeline with the time on it, and the two checkboxes.
 
@@ -25,6 +28,10 @@ function clock(seconds: number): string {
   const two = (n: number): string => String(n).padStart(2, "0");
   return h ? `${h}:${two(m)}:${two(r)}` : `${two(m)}:${two(r)}`;
 }
+
+/** The Pause button's face while paused: in the install beside `BTNReplay-Pause.blp`, named by
+ *  no war3skins key (see the header). */
+const PLAY_ICON = "ReplaceableTextures\\CommandButtons\\BTNReplay-Play.blp";
 
 /** What the panel reads and drives — the scene's (render/mapViewer.ts). */
 export interface ReplayControls {
@@ -68,6 +75,8 @@ function speedLabel(mult: number): string {
 export class ReplayPanel {
   readonly root: HTMLDivElement;
   private readonly pauseBtn: HTMLButtonElement;
+  /** The art the Pause button wears now — Pause, or Play while the replay is paused. */
+  private pauseFace: string | null = null;
   private readonly slowerBtn: HTMLButtonElement;
   private readonly fasterBtn: HTMLButtonElement;
   private readonly track: HTMLDivElement;
@@ -209,7 +218,12 @@ export class ReplayPanel {
     const seeking = s.seeking !== null ? (s.seeking < s.tick ? "Rewinding…" : "Skipping…") : null;
     this.root.classList.toggle("paused", s.paused);
     this.root.classList.toggle("diverged", s.diverged !== null);
-    this.pauseBtn.classList.toggle("on", s.paused);
+    // Paused, the button shows what pressing it DOES: play.
+    const face = this.driver.blpUrl(s.paused ? PLAY_ICON : this.driver.skinPath("ReplayPauseIcon"));
+    if (face && face !== this.pauseFace) {
+      this.pauseFace = face;
+      this.pauseBtn.style.backgroundImage = `url(${face})`;
+    }
     this.slowerBtn.disabled = s.speed <= REPLAY_SPEEDS[0];
     this.fasterBtn.disabled = s.speed >= REPLAY_SPEEDS[REPLAY_SPEEDS.length - 1];
     this.fogBox.check.hidden = !this.controls.fog();

@@ -235,7 +235,7 @@ export function mountViewReplayScreen(
             const el = b.frame("DialogText");
             if (el) el.innerText = text(line).replace(/\|n/g, "\n");
           });
-          run({ name, version: header.version, options: replayWindowOptions() }, ({ received, total }) => {
+          run({ name, version: header.version, options: replayWindowOptions(), mapPath: mapPathOf(header) ?? undefined }, ({ received, total }) => {
             say(`${Math.round((received / Math.max(1, total)) * 100)}% of ${megabytes(total)}`);
           }).then(
             () => {

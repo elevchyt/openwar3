@@ -71,6 +71,9 @@ export async function replayBoot(root: HTMLElement, bridge: ReplayBridge, hooks:
     await hooks.watchReplay(replay);
   } catch (err) {
     console.error("[replay-boot]", err);
+    // The note is taken down as the replay is handed over, so a replay that fails to START
+    // (its map missing, say) used to fail onto a black window with nothing on it.
+    if (!note.isConnected) root.appendChild(note);
     line.textContent = `This replay could not be played: ${(err as Error).message ?? err}`;
     const close = document.createElement("button");
     close.className = "replay-boot-close";

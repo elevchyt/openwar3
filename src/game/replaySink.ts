@@ -29,7 +29,18 @@ export interface ReplaySink {
    * the replay in that version, in a window of its own, with `options` handed to it.
    */
   bundleInfo?(version: string): Promise<{ size: number; usable: boolean } | null>;
-  watchVersion?(request: { name: string; version: string; options: Record<string, string> }, onProgress: (p: { received: number; total: number }) => void): Promise<void>;
+  watchVersion?(request: WatchVersionRequest, onProgress: (p: { received: number; total: number }) => void): Promise<void>;
+}
+
+/** What the replay window is opened with. `mapPath` is the map's path in THIS install, as the
+ *  running build resolved it: the window's page is the RECORDING version's and resolves a map
+ *  only the way that version did, so the shell writes this into the header it is handed — a
+ *  0.3.84 replay names its map by its display name, which 0.3.84 itself could not find. */
+export interface WatchVersionRequest {
+  name: string;
+  version: string;
+  options: Record<string, string>;
+  mapPath?: string;
 }
 
 interface NativeReplays {
@@ -39,7 +50,7 @@ interface NativeReplays {
   read(name: string): Promise<Uint8Array | null>;
   remove(name: string): Promise<boolean>;
   bundleInfo?(version: string): Promise<{ size: number; usable: boolean } | null>;
-  watchVersion?(request: { name: string; version: string; options: Record<string, string> }, onProgress: (p: { received: number; total: number }) => void): Promise<unknown>;
+  watchVersion?(request: WatchVersionRequest, onProgress: (p: { received: number; total: number }) => void): Promise<unknown>;
 }
 
 /** The sink this build has: the desktop shell's, the dev server's, or none. */

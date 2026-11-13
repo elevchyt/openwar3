@@ -6,10 +6,11 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { buildReplayBundle, writeZip } from "./replay-bundle.mjs";
 import {
   SANDBOX_MARKER, SANDBOX_PREFIX, bundleUrls, createSandbox, downloadBundle, fetchBundleManifest,
-  removeSandbox, sweepSandboxes, verifyBundle,
+  removeSandbox, sweepSandboxes, verifyBundle, withMapPath,
 } from "../electron/replayBundles.mjs";
 
 let failures = 0;
@@ -100,6 +101,36 @@ try {
   check("sweeping a folder that does not exist does nothing", sweepSandboxes(join(work, "nope")).removed.length === 0);
 } finally {
   rmSync(work, { recursive: true, force: true });
+}
+
+// ---- the map path handed to a replay window --------------------------------------------
+{
+  // A file as src/game/replay.ts writes one: "OW3R", format 1, tagged gzip'd JSON sections.
+  const section = (tag, value) => {
+    const body = gzipSync(Buffer.from(JSON.stringify(value)));
+    const top = Buffer.alloc(8);
+    top.write(tag, 0, "latin1");
+    top.writeUInt32LE(body.length, 4);
+    return Buffer.concat([top, body]);
+  };
+  const read = (buf) => {
+    const out = {};
+    for (let at = 6; at + 8 <= buf.length;) {
+      const len = buf.readUInt32LE(at + 4);
+      out[buf.toString("latin1", at, at + 4)] = gunzipSync(buf.subarray(at + 8, at + 8 + len)).toString("utf8");
+      at += 8 + len;
+    }
+    return out;
+  };
+  const head = { format: 1, version: "0.3.84", map: { path: "Bandit Ridge", name: "Bandit Ridge", hash: "x" }, config: { seed: 7 } };
+  const file = Buffer.concat([Buffer.from([0x4f, 0x57, 0x33, 0x52, 1, 0]), section("HEAD", head), section("EVTS", [[1, "cmd", { $n: "Infinity" }]]), section("ENDS", { ticks: 9 })]);
+  const fixed = read(withMapPath(file, "Maps\\FrozenThrone\\(2)BanditRidge.w3x"));
+  const was = read(file);
+  check("the window is handed the map path the running build found", JSON.parse(fixed.HEAD).map.path === "Maps\\FrozenThrone\\(2)BanditRidge.w3x");
+  check("…and nothing else in the header moves", JSON.stringify({ ...JSON.parse(fixed.HEAD), map: null }) === JSON.stringify({ ...head, map: null }) && JSON.parse(fixed.HEAD).map.name === "Bandit Ridge");
+  check("…nor in any other section", fixed.EVTS === was.EVTS && fixed.ENDS === was.ENDS);
+  check("a file that is not a replay is handed over as it is", withMapPath(Buffer.from("nope"), "x").toString() === "nope");
+  check("the same path leaves the file byte for byte", withMapPath(file, "Bandit Ridge").equals(file));
 }
 
 console.log(failures ? `\nreplay bundle: ${failures} check(s) FAILED` : "\nreplay bundle: all checks passed");

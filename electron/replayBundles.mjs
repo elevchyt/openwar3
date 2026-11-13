@@ -26,7 +26,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
-import { inflateRawSync } from "node:zlib";
+import { gunzipSync, gzipSync, inflateRawSync } from "node:zlib";
 import { readZipIndex } from "./zip.mjs";
 
 /** The `ow3replay` bridge versions THIS shell can serve (electron/replayPreload.cjs). A bundle
@@ -206,4 +206,44 @@ export function sweepSandboxes(tmp, { alive = processAlive, warn = () => {}, sel
     (removeSandbox(dir, { warn }) ? out.removed : out.failed).push(name);
   }
   return out;
+}
+
+/**
+ * A replay file with its header's map PATH replaced (src/game/replay.ts: "OW3R", a u16 format,
+ * then tagged sections — four ASCII bytes, a u32 length, gzip'd JSON). The replay window plays
+ * a replay in the RECORDING version's page, which can only look a map up the way that version
+ * did; the running build has already found it, so the window is handed the answer. Every other
+ * section is copied byte for byte, and a file this does not understand is handed over as it is.
+ */
+export function withMapPath(bytes, mapPath) {
+  const buf = Buffer.from(bytes);
+  if (!mapPath || buf.length < 6 || buf.toString("latin1", 0, 4) !== "OW3R") return buf;
+  const parts = [buf.subarray(0, 6)];
+  let at = 6;
+  let changed = false;
+  while (at + 8 <= buf.length) {
+    const tag = buf.toString("latin1", at, at + 4);
+    const len = buf.readUInt32LE(at + 4);
+    const body = buf.subarray(at + 8, at + 8 + len);
+    let out = buf.subarray(at, at + 8 + len);
+    if (tag === "HEAD" && !changed) {
+      try {
+        const head = JSON.parse(gunzipSync(body).toString("utf8"));
+        if (head?.map && head.map.path !== mapPath) {
+          head.map.path = mapPath;
+          const packed = gzipSync(Buffer.from(JSON.stringify(head), "utf8"));
+          const top = Buffer.alloc(8);
+          top.write("HEAD", 0, "latin1");
+          top.writeUInt32LE(packed.length, 4);
+          out = Buffer.concat([top, packed]);
+          changed = true;
+        }
+      } catch {
+        return buf;
+      }
+    }
+    parts.push(out);
+    at += 8 + len;
+  }
+  return changed ? Buffer.concat(parts) : buf;
 }
