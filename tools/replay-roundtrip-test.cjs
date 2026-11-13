@@ -143,9 +143,19 @@ const HEADER = {
   const rnd = stream(1234);
   const startAt = new Map([...a.w.units.values()].map((u) => [u.id, [u.x, u.y]]));
   let accepted = 0, refused = 0;
+  // Distance WALKED by every unit over the match, the dead included — a sum of each step's
+  // move rather than the survivors' net displacement, which a bloodier match (fewer survivors)
+  // starves without anything having stood still.
+  const lastAt = new Map(startAt);
+  let travelled = 0;
   for (t = 1; t <= STEPS; t++) {
     for (const [player, cmd] of orders(rnd, a.w)) a.auth.execute(player, cmd) ? accepted++ : refused++;
     a.w.tick(SIM_DT);
+    for (const u of a.w.units.values()) {
+      const p = lastAt.get(u.id);
+      if (p) travelled += Math.hypot(u.x - p[0], u.y - p[1]);
+      lastAt.set(u.id, [u.x, u.y]);
+    }
     if (t % CHECK_EVERY === 0) rec.check(t, stateHash(a.w), stateDump(a.w));
     if (t % STATE_EVERY === 0) rec.state(tracker.sample(a.w, t, { seenBy: (u) => (u.owner === 0 ? 1 : 2) }));
   }
@@ -154,7 +164,6 @@ const HEADER = {
   const finalA = stateDump(a.w);
 
   // The run has to have been a match, not a still life.
-  const travelled = [...a.w.units.values()].reduce((n, u) => n + Math.hypot(u.x - startAt.get(u.id)[0], u.y - startAt.get(u.id)[1]), 0);
   const hurt = [...a.w.units.values()].filter((u) => u.hp < 420).length + (12 - a.w.units.size);
   check(`the recorded match was played: ${accepted} orders taken, ${refused} refused`, accepted > 50 && refused > 3);
   check(`…its units moved (${Math.round(travelled)} world units in all)`, travelled > 3000);
