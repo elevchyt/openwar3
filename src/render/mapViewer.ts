@@ -1563,8 +1563,17 @@ export class MapViewerScene {
    *  paused match changes one and not the other. */
   private pauseUiOn = false;
   private pauseUiHard = false;
+  /** Whether the veil was last laid down (`veiled`), for the same reason. */
+  private pauseUiVeil = false;
   /** The dim over the battlefield while the world is stopped (`.pause-veil`). */
   private pauseVeil: HTMLElement | null = null;
+  /** Stopped for a reason the battlefield should be DIMMED for: everything but a replay's own
+   *  Pause button. A paused replay is a viewer holding the picture still to look at it — the
+   *  replay panel's Pause, or the stop at its last step — so the picture stays as bright as it
+   *  plays; open F10 over it and the panel's pause dims it as anywhere else. */
+  private get veiled(): boolean {
+    return this.panelPaused || this.scriptPaused || this.playerPaused || this.waitPaused;
+  }
   /** A script's own dialog (`DialogDisplay`) is on screen. Modal, like the four console
    *  panels — see `deadPanels` — and in single-player it stops the world with them
    *  (`syncPanelPause`). */
@@ -12502,13 +12511,17 @@ export class MapViewerScene {
       // A stopped world skews every average in the log — mark both edges so the report's
       // timeline says which flat stretch was a pause and which was a stall.
       perfLog.note(on ? "paused" : "resumed");
-      this.pauseVeil?.classList.toggle("on", on);
       // The portrait bust runs a rAF loop of its OWN (render/modelViewer.ts), on its own canvas
       // and its own viewer, so zeroing the world's step does not reach it — the head went on
       // breathing over a stopped battlefield. `stop` is already a pause there rather than a
       // teardown ("fresh dt on resume"), so the clip picks up mid-breath when the match does.
       if (on) this.portraitViewer?.stop();
       else if (this.portraitFor !== null || this.portraitTalkKey) this.portraitViewer?.start();
+    }
+    const veil = this.veiled;
+    if (veil !== this.pauseUiVeil) {
+      this.pauseUiVeil = veil;
+      this.pauseVeil?.classList.toggle("on", veil);
     }
     const hard = this.hardPaused;
     if (hard !== this.pauseUiHard) {
@@ -17164,7 +17177,7 @@ export class MapViewerScene {
     document.body.style.removeProperty("--ow3-reticle-cursor");
     this.canvas.style.removeProperty("--ow3-hand-cursor");
     this.reticleCursorRule = this.handCursorRule = "";
-    this.pauseUiOn = this.pauseUiHard = false;
+    this.pauseUiOn = this.pauseUiHard = this.pauseUiVeil = false;
     this.dialogUp = false;
     this.deadPanelKey = "";
     document.body.style.cursor = ""; // restore the default cursor off the map
