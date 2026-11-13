@@ -1367,11 +1367,19 @@ function bakeStatBarFill(fill: HTMLCanvasElement, tint: readonly number[], rows 
   return out.toDataURL();
 }
 
+/** How opaque the tooltip slate is drawn. OURS, and deliberately above the texture's own
+ *  195/255 (0.765): the developer's call (2026-11-13) — with our brighter, not-yet-fixed-function
+ *  map behind it (docs/lighting.md) the BLP's alpha let too much terrain through every slab, hint
+ *  and observer panel. The COLOUR stays the texture's. See docs/tooltips.md. */
+const TOOLTIP_FILL_ALPHA = 0.9;
+
 /** The tooltip fill is a flat colour stored as a 64×64 texture — read its one pixel
- *  rather than hardcoding it. (Measured: rgba(24, 34, 49, 195).) */
+ *  rather than hardcoding it. (Measured: rgba(24, 34, 49, 195).) Its alpha is replaced
+ *  by TOOLTIP_FILL_ALPHA, never lowered below the texture's own. */
 function tooltipFill(bg: HTMLCanvasElement): string | null {
   const p = bg.getContext("2d")!.getImageData(0, 0, 1, 1).data;
-  return `rgba(${p[0]}, ${p[1]}, ${p[2]}, ${(p[3] / 255).toFixed(3)})`;
+  const alpha = Math.max(p[3] / 255, TOOLTIP_FILL_ALPHA);
+  return `rgba(${p[0]}, ${p[1]}, ${p[2]}, ${alpha.toFixed(3)})`;
 }
 
 /** Crop war3mapMap.blp down to the map itself.

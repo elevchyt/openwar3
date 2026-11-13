@@ -136,12 +136,15 @@ drawer, the gamepad keyboard and the CHAT ENTRY box. The chat box used to carry 
 band laid flush on the fill, which drew its rule at barely a quarter of the original's. It is the
 same programmatic backdrop, so it now takes the same band and inset.
 
-**The fill's opacity is the texture's, and it is right.** `human-tooltip-background.blp` is 195/255,
-and ours composites at 0.767 measured: snap the slab, hide it, snap again, solve per pixel. The
-real shot measures 0.77–0.80 from how much of the map's texture leaks through the slate, which is
-the same value within what a lossy screenshot can tell. If ours *looks* more see-through, the map
-behind it is brighter than the original's (a match is not on the fixed-function lighting path
-yet, docs/lighting.md). Do not raise the alpha to compensate.
+**The fill's COLOUR is the texture's; its opacity is ours.** `human-tooltip-background.blp` is
+195/255, and drawn at that alpha ours composites at 0.767 measured (snap the slab, hide it, snap
+again, solve per pixel) — the real shot reads 0.77–0.80, so the texture's alpha matches the
+original. It still read too see-through over our map, which is brighter than the original's (a
+match is not on the fixed-function lighting path yet, docs/lighting.md), so the developer raised
+it: `TOOLTIP_FILL_ALPHA` (ui/hud.ts) = **0.9**, a floor over the texture's own value. Every surface
+that wears this fill follows it. The OBSERVER panels also draw the band **1.6×** heavier
+(`--obs-band`): they frame large areas for a whole match, and the tooltip's rule read as a hairline
+round them.
 
 `Glue/BattleNetChatActionMenu.fdf` dresses the identical bnet strip with `BackdropCornerSize
 0.016` / `BackdropBackgroundInsets 0.005` / a first label anchored 0.0095 in, and 0.016 is

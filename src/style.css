@@ -1452,19 +1452,28 @@ body:not(.hud-tooltip-skinned) .dev-concede { outline: 1px solid rgba(200, 160, 
 /* The PANEL: the tooltip frame, exactly as the command card's slab wears it — the fill is the
    element, and the gold stroke rides on a pseudo-element pulled `--tt-bg-inset` OUTSIDE it, so
    the slate sits BEHIND the stroke with no ring of map showing between them. */
+/* The band is the tooltip's, drawn heavier (OURS, the developer's call): a watcher's panels sit
+   on screen for the whole match and frame large areas, so the tooltip's 1.6-px rule read as a
+   hairline round them. */
+.obs-hud { --obs-band: calc(var(--tt-band, 10px) * 1.6); }
 .obs-panel {
   position: absolute;
   box-sizing: border-box;
-  background: var(--hud-tooltip-fill, rgba(24, 34, 49, 0.76));
-  border-radius: calc(var(--tt-band, 10px) * 0.4);
+  background: var(--hud-tooltip-fill, rgba(24, 34, 49, 0.9));
+  border-radius: calc(var(--obs-band) * 0.4);
   pointer-events: auto;
 }
 .obs-panel::after {
   content: "";
   position: absolute;
   inset: calc(var(--tt-bg-inset, 3px) * -1);
-  border: var(--tt-band, 10px) solid transparent;
-  border-image: var(--hud-tooltip-border) 16 / var(--tt-band, 10px) round;
+  /* The BOX keeps a 1-px border and `border-image-width` alone carries the band. The band can
+     be taller than half the one-row scoreboard; as a real `border` it then forced the box past
+     its `inset` and the frame grew downward, leaving a gap under the row. A border image whose
+     widths overlap is scaled down to fit (CSS Backgrounds 3, border-image-width), so it stays
+     inside the box. */
+  border: 1px solid transparent;
+  border-image: var(--hud-tooltip-border) 16 / var(--obs-band) round;
   pointer-events: none;
 }
 body:not(.hud-tooltip-skinned) .obs-panel { outline: 1px solid rgba(200, 160, 50, 0.7); }
