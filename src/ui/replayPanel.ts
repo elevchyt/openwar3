@@ -82,6 +82,8 @@ export class ReplayPanel {
   private readonly track: HTMLDivElement;
   private readonly fill: HTMLDivElement;
   private readonly seekMark: HTMLDivElement;
+  /** The thin line under the pointer while it is over the timeline: where a click would go. */
+  private readonly hoverMark: HTMLDivElement;
   private readonly trackText: HTMLSpanElement;
   private readonly speedText: HTMLSpanElement;
   private readonly fogBox: { check: HTMLElement };
@@ -134,6 +136,11 @@ export class ReplayPanel {
     this.track = el("div", "rp-track obs-sel-bar");
     this.fill = el("div", "obs-bar-fill progress", this.track);
     this.seekMark = el("div", "rp-seek-mark", this.track);
+    // …and where a click WOULD go: a thinner line that follows the pointer over the timeline,
+    // so it reads as somewhere you can seek to before you press. Driven by pointer events rather
+    // than `:hover`, so the gamepad's drawn cursor (ui/gamepad.ts) moves it as well.
+    this.hoverMark = el("div", "rp-hover-mark", this.track);
+    this.hoverMark.hidden = true;
     this.trackText = el("span", "obs-sel-bar-text rp-track-text", this.track);
     const at = (e: PointerEvent): number => {
       const r = this.track.getBoundingClientRect();
@@ -150,7 +157,13 @@ export class ReplayPanel {
     this.track.addEventListener("pointermove", (e) => {
       const t = at(e);
       setGameTip(this.track, clock(t / HZ));
-      if (this.dragging) this.seekMark.style.left = `${(t / Math.max(1, state().total)) * 100}%`;
+      const left = `${(t / Math.max(1, state().total)) * 100}%`;
+      this.hoverMark.style.left = left;
+      this.hoverMark.hidden = false;
+      if (this.dragging) this.seekMark.style.left = left;
+    });
+    this.track.addEventListener("pointerleave", () => {
+      this.hoverMark.hidden = true;
     });
     this.track.addEventListener("pointerup", (e) => {
       if (!this.dragging) return;

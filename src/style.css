@@ -1896,6 +1896,16 @@ body.hud-widget-skinned .obs-sel-bar .obs-bar-fill.progress { background: var(--
   pointer-events: none;
 }
 .rp-seek-mark[hidden] { display: none; }
+/* Where a click would seek to: a thinner, dimmer twin of the seek mark under the pointer. */
+.rp-hover-mark {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.75);
+  pointer-events: none;
+}
+.rp-hover-mark[hidden] { display: none; }
 .rp-checks { display: flex; gap: calc(var(--rp-gap) * 3); align-items: center; pointer-events: auto; }
 .rp .hud-autocam.rp-autocam, .rp .hud-autocam.rp-check { position: static; left: auto; top: auto; }
 .rp.diverged .rp-track { box-shadow: 0 0 0 1px #c33; }
