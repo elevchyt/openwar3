@@ -4297,6 +4297,40 @@ body.in-game .fdf-screen.fdf-ingame {
 .fdf-list-row:hover .fdf-list-action,
 .fdf-list-row.pad-hover .fdf-list-action { color: rgba(255, 255, 255, 0.75); }
 .fdf-list-action:hover { color: #ff8080; }
+/* An ICON as the row action (ListItem.action.svg) — the View Replay list's trash can, one line
+   of text tall. On the HIGHLIGHTED row it is the only one there is, so it is not left quiet. */
+.fdf-list-action .ow3-row-trash { display: block; width: 1em; height: 1em; }
+.fdf-list-row.selected .fdf-list-action { color: rgba(255, 255, 255, 0.8); }
+.fdf-list-row.selected .fdf-list-action:hover { color: #ff8080; }
+
+/* View Replay: the highlighted replay's players under "Number of Players" (ui/fdfViewReplay.ts
+   `paintPlayers`, in the box src/overrides/ui/ViewReplayScreen.fdf adds). The box SCROLLS when a
+   replay has more players than fit, under the game's own StandardScrollBarTemplate (the FRAME's
+   SCROLLBAR child, ui/fdf/widgets.ts `buildScrollFrame`); the type is set from the row above it
+   at paint time. */
+.ow3-replay-players { color: #fff; }
+.ow3-replay-team {
+  color: var(--fdf-menu-highlight, #fcd312);
+  margin-top: 0.35em;
+  line-height: 1.4;
+}
+.ow3-replay-team:first-child { margin-top: 0; }
+.ow3-replay-player {
+  display: flex;
+  align-items: center;
+  gap: 0.45em;
+  line-height: 1.55;
+  padding-left: 0.3em;
+}
+.ow3-replay-swatch {
+  flex: none;
+  width: 0.75em;
+  height: 0.75em;
+  border: 1px solid rgba(0, 0, 0, 0.7);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+.ow3-replay-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ow3-replay-race { flex: none; height: 1.45em; aspect-ratio: 1; object-fit: contain; }
 
 /* The map list's search box (ui/mapFind.ts) — ours, as no 2003 screen has one. Always on show
    across the top of the list, inside its border; the rows and the scrollbar move down to make

@@ -35,7 +35,14 @@ export interface ListItem {
    * row — the click stops there, or removing the third row would first make it the highlighted
    * one and then delete it.
    */
-  action?: { label: string; title?: string; onClick: () => void };
+  action?: {
+    label: string;
+    title?: string;
+    /** An ICON in place of the label text: our own trusted SVG markup (the replay list's trash
+     *  can), never anything read from a file. The label is then the button's accessible name. */
+    svg?: string;
+    onClick: () => void;
+  };
   /**
    * A row that is THERE and cannot be picked — greyed, and taking neither click. WC3's own
    * lists have no such row, but WC3's own list also has nothing to say about a map it cannot
@@ -612,7 +619,10 @@ export function buildList(el: HTMLElement, f: FdfFrame, scale: number, bar?: Scr
         const action = document.createElement("button");
         action.type = "button";
         action.className = "fdf-list-action";
-        action.textContent = it.action.label;
+        if (it.action.svg) {
+          action.innerHTML = it.action.svg;
+          action.setAttribute("aria-label", it.action.label);
+        } else action.textContent = it.action.label;
         if (it.action.title) setGameTip(action, it.action.title);
         action.addEventListener("click", (e) => {
           e.stopPropagation(); // the row is not being PICKED, its control is being pressed

@@ -116,13 +116,21 @@ What a person did with their hands and eyes, which the commands do not say (`gam
 every selection change and HOW it was made (click, box, double-click, group, Tab…), control
 groups, and where each command came from (hotkey, card, smart click, minimap, voice, gamepad),
 with the keyboard scheme. One track per person, taken on their own machine; a LAN client sends
-its own to the host in batches (MatchLink `inputs`), checked sample by sample there. Taken only
-with consent: Options → Gameplay → **Share Replays** (ours, on by default — the developer's
-call), which is also the uploader's switch and what puts the player's anonymous id on their seat.
+its own to the host in batches (MatchLink `inputs`), checked sample by sample there. Taken in
+MULTIPLAYER matches only, and always there (the developer's call — it retired the "Share Replays"
+option that used to gate it): the track starts when the match link attaches
+(`MapViewerScene.attachMatchLink` → `beginInputTrack`), which is also when the host writes its
+anonymous install id onto its own seat. A single-player match records no input track.
 
 ## The collection
 
-A finished replay is POSTed to `https://openwar3-replays-production.up.railway.app/replays` — the
+Every MULTIPLAYER match's replay goes to the collection, and no single-player one does: the host,
+the one machine that records the match, offers it to the uploader as the match closes
+(`replayNetworked`, set when the host's match link attaches) — the same file it hands every peer.
+There is no switch; the "Share Replays" option that once asked is gone. A client never uploads:
+the host's copy is the match's.
+
+The replay is POSTed to `https://openwar3-replays-production.up.railway.app/replays` — the
 `openwar3-replays` service in the same Railway project as the three relays, deployed from
 `/replays-server` (its own watch path, so a change to it never redeploys a relay and drops a
 lobby). It files the replay in that project's PRIVATE bucket `replays` (Amsterdam) as
@@ -205,6 +213,14 @@ Two of the game's own screens keep and find them:
   answers it with `NETERROR_CANTFINDREPLAYMAP` naming the file.
   One recorded by another OpenWar3 asks first, in the game's own words (`REPLAY_CONFIRM_DESC`,
   the recorded and the running build).
+  Under "Number of Players" the replay's PLAYERS are listed out of its header (ours — the 2003
+  screen has no frame for it; `src/overrides/ui/ViewReplayScreen.fdf` adds the box): grouped by
+  team as the loading screen groups them (`TEAM_FORMAT`, no heading on a one-team match), each
+  with its colour and the race symbol the Allies dialog wears, then the watchers under
+  "Observers". More than fit scroll under the glue's own `StandardScrollBarTemplate` (the FRAME is
+  handed a SCROLLBAR, `buildScrollFrame`). The HIGHLIGHTED row carries a trash can at its far
+  right (Lucide's `trash`, the list's row action) that deletes the file from this machine after
+  the game's own `DELETE_REPLAY_MESSAGE` — the question the score screen's Save Replay asks.
 
 ## Watching one
 

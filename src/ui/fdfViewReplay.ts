@@ -14,6 +14,9 @@ import { replayWindowOptions } from "../data/options";
 import { blpToCanvas } from "../render/blputil";
 import { readReplayHeader, REPLAY_EXT, type ReplayHeader } from "../game/replay";
 import type { ReplayFileInfo, ReplaySink } from "../game/replaySink";
+import { OW3_STRINGS, VIEW_REPLAY_OVERRIDE } from "../overrides";
+import { PLAYER_COLORS } from "./hud";
+import { setGameTip } from "./gameTip";
 
 // The View Replay screen, built from the game's own UI\FrameDef\Glue\ViewReplayScreen.fdf:
 // the replay list down the left, the map of the highlighted replay top-right, and
@@ -44,6 +47,13 @@ import type { ReplayFileInfo, ReplaySink } from "../game/replaySink";
 // its map in the summary pane, with the replay's own player count under it; View Replay (or a
 // double-click) watches it. A replay whose map is not in this install stays listed and says
 // so — its name is in the header — but cannot be watched.
+//
+// Two things are OURS, neither having a frame in the 2003 file. Under "Number of Players" the
+// highlighted replay's PLAYERS are listed out of its header (`paintPlayers`, in the box
+// src/overrides/ui/ViewReplayScreen.fdf adds), grouped by team the way the loading screen does.
+// And the highlighted row carries a TRASH button at its far right (the list's row action) that
+// deletes the file from this machine after the game's own question, DELETE_REPLAY_MESSAGE — the
+// one the score screen's Save Replay panel asks before its Delete.
 
 const LIST_FDF = "UI\\FrameDef\\Glue\\ListBoxWar3.fdf";
 const MAP_INFO_FDF = "UI\\FrameDef\\Glue\\MapInfoPane.fdf";
@@ -69,6 +79,24 @@ const ICON_FOLDER_UP = "UI\\Widgets\\Glues\\icon-folder-up.blp";
 const AUTOSAVED = "Autosaved";
 const FOLDER = "folder:";
 
+/** The race stamps the Allies dialog and the voice plates wear beside a name (mapViewer.ts
+ *  `raceSymbol`): the campaign screens' `<X>Symbol.blp`. A race the header names that is not one
+ *  of the four (a custom map's own) has none. */
+const RACE_SYMBOL: Record<string, string> = { human: "Human", orc: "Orc", undead: "Undead", nightelf: "NightElf" };
+/** …and its name in GlobalStrings.fdf, the symbol's hover hint (the Allies dialog's too). */
+const RACE_STRING: Record<string, [string, string]> = {
+  human: ["HUMAN", "Human"], orc: ["ORC", "Orc"], undead: ["UNDEAD", "Undead"], nightelf: ["NIGHT_ELF", "Night Elf"],
+};
+
+/** Lucide's `trash` icon (lucide.dev, ISC licence) — the delete button on the highlighted row.
+ *  Stroked in `currentColor`, so the row action's own colours (quiet, brighter on hover, red
+ *  under the pointer) apply to it unchanged. */
+const TRASH_SVG =
+  '<svg class="ow3-row-trash" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor"' +
+  ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M3 6h18"/>' +
+  '<path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
+
 export interface ViewReplayHandlers {
   onCancel: () => void;
   /** Watch the named replay (a name `ReplaySink.read` takes). */
@@ -89,6 +117,16 @@ export function mountViewReplayScreen(
   };
   const folderIcon = icon(ICON_FOLDER);
   const upIcon = icon(ICON_FOLDER_UP);
+  /** Race symbols as data URLs, decoded once per visit. */
+  const symbols = new Map<string, string>();
+  const symbolOf = (race: string): string => {
+    let url = symbols.get(race);
+    if (url === undefined) {
+      const c = RACE_SYMBOL[race] ? icon(`UI\\Glues\\Loading\\Backgrounds\\Campaigns\\${RACE_SYMBOL[race]}Symbol.blp`) : null;
+      symbols.set(race, (url = c ? c.toDataURL() : ""));
+    }
+    return url;
+  };
   let strings: FdfLibrary | null = null;
   let files: ReplayFileInfo[] = [];
   /** The folder shown: "" (the top) or `Autosaved`. */
@@ -113,16 +151,17 @@ export function mountViewReplayScreen(
     rootFrame: "ViewReplayScreen",
     includeFdf: [LIST_FDF, MAP_INFO_FDF],
     buildRoot: (lib) => { strings = lib; return buildViewReplayRoot(lib); },
+    overrides: [OW3_STRINGS, VIEW_REPLAY_OVERRIDE],
     buttonWidthScale: 1.35,
     hidden: paneRowsToHide(SUMMARY_ROWS),
     // The screen's panels, one per piece of chrome that carries them: the list under its
     // title on the left, the summary column on the right, and the two buttons at the bottom.
-    panels: ["GameSettingsPanel", "MapInfoPaneContainer", "NumPlayersLabel", "NumPlayersValue", "OKBackdrop", "CancelBackdrop"],
+    panels: ["GameSettingsPanel", "MapInfoPaneContainer", "NumPlayersLabel", "NumPlayersValue", "ReplayPlayersBox", "OKBackdrop", "CancelBackdrop"],
     // The list and the summary are what the screen is FOR rather than furniture it arrives
     // with, so they fade up a beat after the chrome has landed (ui/fdf/anim.ts). The
     // "Number of Players" row is part of the summary — it hangs off the pane's own bottom —
     // and has to travel with it, or it appears on an empty panel a beat early.
-    latePanels: ["GameSettingsPanel", "MapInfoPaneContainer", "NumPlayersLabel", "NumPlayersValue"],
+    latePanels: ["GameSettingsPanel", "MapInfoPaneContainer", "NumPlayersLabel", "NumPlayersValue", "ReplayPlayersBox"],
     handlers: {
       CancelButton: h.onCancel,
       OKButton: () => watch(),
@@ -298,12 +337,21 @@ export function mountViewReplayScreen(
       // name: it is the one that needs that version's files to be watched exactly.
       const header = headers.get(f.name);
       const other = header && !sameSim(header) ? `  |cff808080OpenWar3 ${header.version}|r` : "";
-      rows.push({ value: f.name, label: `${leafName(f.name)}${other}` });
+      rows.push({
+        value: f.name,
+        label: `${leafName(f.name)}${other}`,
+        // Only the HIGHLIGHTED row carries the trash can: a column of them down a whole folder
+        // would invite a delete by a stray click on a row nobody meant to pick.
+        action: f.name === picked && !busy
+          ? { label: str("DELETE", "Delete"), title: str("DELETE", "Delete"), svg: TRASH_SVG, onClick: () => askDelete(f.name) }
+          : undefined,
+      });
     }
     if (list) {
       list.setItems(rows);
       list.onChange = (value) => {
         picked = value;
+        paintRows(); // the trash can moves to the new pick
         void show(value);
       };
       list.onActivate = (value) => {
@@ -324,6 +372,7 @@ export function mountViewReplayScreen(
     if (!s) return;
     if (!name || name.startsWith(FOLDER)) {
       clearMapInfo(s);
+      paintPlayers(null);
       s.setText("NumPlayersValue", "");
       s.setEnabled("OKButton", false);
       return;
@@ -338,6 +387,7 @@ export function mountViewReplayScreen(
     const path = mapPathOf(header);
     // The players who PLAYED it — the seats, never the watchers.
     s.setText("NumPlayersValue", header ? String(header.seats.length) : "");
+    paintPlayers(header);
     s.setEnabled("OKButton", !!header && !busy);
     const info = path ? await readMapInfo(maps, path).catch(() => null) : null;
     if (picked !== name) return;
@@ -351,6 +401,104 @@ export function mountViewReplayScreen(
     fillMapInfo(s, info, null, minimapIcons);
     const preview = await readMapPreviewFor(vfs, maps, path).catch(() => null);
     if (picked === name && preview) fillMapInfo(s, info, preview, minimapIcons);
+  }
+
+  /**
+   * The replay's players, under "Number of Players" (ReplayPlayersBox): grouped by TEAM the way
+   * the loading screen groups its roster — "Team %d" (GlobalStrings TEAM_FORMAT) over each, and
+   * no heading at all when everybody is on one team, which is not a team game — then the
+   * replay's WATCHERS under "Observers". A row is the seat's colour, its name as the match named
+   * it, and the race symbol the Allies dialog puts right after a name, with the race's name as its
+   * hover. The race is the one the match ROLLED: a replay is a match already played.
+   *
+   * The box is a fixed height ending above the panel's border; more rows than fit scroll, under
+   * the game's own scrollbar (the override gives the FRAME a SCROLLBAR, so the renderer builds it
+   * a viewport — `.fdf-scroll-view` — and the bar; the rows go in the viewport).
+   */
+  function paintPlayers(header: ReplayHeader | null): void {
+    const frame = screen?.frame("ReplayPlayersBox");
+    const box = frame?.querySelector<HTMLElement>(":scope > .fdf-scroll-view") ?? frame;
+    if (!frame || !box) return;
+    frame.classList.add("ow3-replay-players");
+    box.textContent = "";
+    box.scrollTop = 0;
+    // The bar shows only while the rows overrun the box, and it measures on a scroll.
+    const resync = (): void => void box.dispatchEvent(new Event("scroll"));
+    if (!header) return resync();
+    // The type of the row above it, so the list reads as part of the same summary.
+    const ref = screen?.frame("NumPlayersValue");
+    if (ref) {
+      const cs = getComputedStyle(ref);
+      frame.style.fontFamily = cs.fontFamily;
+      frame.style.fontSize = `${parseFloat(cs.fontSize) * 0.85}px`;
+    }
+    const teams = [...new Set(header.seats.map((x) => x.team))].sort((a, b) => a - b);
+    const watchers = header.config.observers ?? [];
+    const headed = teams.length > 1 || watchers.length > 0;
+    const heading = (text: string): void => {
+      const h = document.createElement("div");
+      h.className = "ow3-replay-team";
+      h.textContent = text;
+      box.append(h);
+    };
+    const row = (name: string, color: number | undefined, race: string | null): void => {
+      const r = document.createElement("div");
+      r.className = "ow3-replay-player";
+      const swatch = document.createElement("span");
+      swatch.className = "ow3-replay-swatch";
+      const hex = color !== undefined ? PLAYER_COLORS[color] : undefined;
+      if (hex) swatch.style.background = hex;
+      else swatch.style.visibility = "hidden";
+      const label = document.createElement("span");
+      label.className = "ow3-replay-name";
+      label.textContent = name;
+      r.append(swatch, label);
+      const url = race ? symbolOf(race) : "";
+      if (race && url) {
+        const img = document.createElement("img");
+        img.className = "ow3-replay-race";
+        img.src = url;
+        img.alt = "";
+        const [key, english] = RACE_STRING[race] ?? [race, race];
+        setGameTip(img, str(key, english));
+        r.append(img);
+      }
+      box.append(r);
+    };
+    for (const team of teams) {
+      if (headed) heading(str("TEAM_FORMAT", "Team %d").replace("%d", String(team + 1)));
+      for (const seat of header.seats.filter((x) => x.team === team)) row(seat.name, seat.color ?? seat.player, seat.race);
+    }
+    if (watchers.length) {
+      heading(str("OBSERVERS_TEAM", "Observers"));
+      for (const w of watchers) row(w.name, undefined, null);
+    }
+    resync();
+  }
+
+  /** The trash can on the highlighted row: the game's own question first (DELETE_REPLAY_MESSAGE,
+   *  on the menus' message box), then the file goes from this machine's replay folder. */
+  function askDelete(name: string): void {
+    if (busy || !sink) return;
+    void showGlueDialog({
+      container,
+      vfs,
+      buttons: "yesno",
+      text: str("DELETE_REPLAY_MESSAGE", "Are you sure you want to delete the replay '%s'?").replace("%s", leafName(name)),
+      onConfirm: () => void deleteReplay(name),
+    });
+  }
+
+  async function deleteReplay(name: string): Promise<void> {
+    const gone = await sink?.remove(name).catch(() => false);
+    if (!gone) {
+      void showGlueDialog({ container, vfs, buttons: "ok", text: `The replay '${leafName(name)}' could not be deleted.` });
+      return;
+    }
+    files = files.filter((f) => f.name !== name);
+    headers.delete(name);
+    if (picked === name) picked = null;
+    paint();
   }
 
   /** Read the headers of the folder on show, a few at a time, so the rows can say which replays

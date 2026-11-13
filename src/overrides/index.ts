@@ -13,6 +13,7 @@ import localMultiplayerJoinFdf from "./ui/LocalMultiplayerJoin.fdf?raw";
 import optionsMenuFdf from "./ui/OptionsMenu.fdf?raw";
 import escMenuOptionsPanelFdf from "./ui/EscMenuOptionsPanel.fdf?raw";
 import escMenuTemplatesFdf from "./ui/EscMenuTemplates.fdf?raw";
+import viewReplayScreenFdf from "./ui/ViewReplayScreen.fdf?raw";
 
 // OpenWar3's own layer on top of the game's UI files (issue #124). Read `README.md` first.
 //
@@ -135,9 +136,6 @@ export const OPTIONS_MENU_OVERRIDE: FdfOverride = {
   add: [
     { frame: "ComputerPlusDefaultCheckBox", into: "GameplayPanel" },
     { frame: "ComputerPlusDefaultLabel", into: "GameplayPanel" },
-    // "Share Replays" (issue #158), on the Automatically Save Replays row.
-    { frame: "ShareReplaysCheckBox", into: "GameplayPanel" },
-    { frame: "ShareReplaysLabel", into: "GameplayPanel" },
     { frame: "HealthBarStyleLabel", into: "GameplayPanel" },
     { frame: "HealthBarStyleBackdrop", into: "GameplayPanel" },
     { frame: "HotkeysLabel", into: "GameplayPanel" },
@@ -354,6 +352,17 @@ export const MAP_SITES_DIALOG_OVERRIDE: FdfOverride = {
 export const HOTKEY_EDITOR_OVERRIDE: FdfOverride = {
   id: "ow3-hotkey-editor",
   source: hotkeyEditorFdf,
+};
+
+/**
+ * View Replay: the players of the highlighted replay, under "Number of Players:" — an empty box
+ * `ui/fdfViewReplay.ts` fills from the replay's header (see `ui/ViewReplayScreen.fdf` for why).
+ * Adopted into the screen's root, beside the row it hangs off.
+ */
+export const VIEW_REPLAY_OVERRIDE: FdfOverride = {
+  id: "ow3-view-replay",
+  source: viewReplayScreenFdf,
+  add: [{ frame: "ReplayPlayersBox", into: "ViewReplayScreen" }],
 };
 
 /**

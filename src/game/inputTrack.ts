@@ -8,8 +8,8 @@
 // One track per PERSON, taken on that person's own machine — nobody else knows where their
 // camera is. In a LAN game each client sends its track to the host in small batches (MatchLink
 // `inputs`), and the host, which is the one recording, files it under the seat the relay says
-// the batch came from. Taken only with the player's consent (data/options.ts `shareReplays`):
-// a replay goes to everybody who played, and with sharing on, to the collection.
+// the batch came from. Taken in MULTIPLAYER matches only (MapViewerScene.beginInputTrack), whose
+// replay goes to everybody who played and, from the host, to OpenWar3's collection.
 //
 // Samples are small arrays, the first element saying which:
 //

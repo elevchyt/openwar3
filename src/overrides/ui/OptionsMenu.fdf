@@ -149,21 +149,6 @@ Frame "TEXT" "ShowHotkeysLabel" INHERITS "StandardInfoTextTemplate" {
     Text "SHOW_HOTKEYS_ON_BUTTONS",
 }
 
-// "Share Replays" (issue #158) — on the "Automatically Save Replays" row, to the right of its
-// label, the way "4:3 Menus" shares the Vertical Sync row: the panel has no height left for a
-// row of its own. It is the player's CONSENT, and both halves of what it covers are ours, not
-// the game's: sending finished replays to OpenWar3's own collection (src/game/replayUpload.ts),
-// and recording the player's own camera, selections and cursor into the replays of the matches
-// they play (src/game/inputTrack.ts). Off, neither happens.
-Frame "GLUECHECKBOX" "ShareReplaysCheckBox" INHERITS WITHCHILDREN "StandardCheckBoxTemplate" {
-    SetPoint LEFT, "AutosaveReplayLabel", RIGHT, 0.02, 0.0,
-}
-
-Frame "TEXT" "ShareReplaysLabel" INHERITS "StandardInfoTextTemplate" {
-    SetPoint LEFT, "ShareReplaysCheckBox", RIGHT, 0.01, 0.0,
-    Text "SHARE_REPLAYS",
-}
-
 Frame "GLUECHECKBOX" "ComputerPlusDefaultCheckBox" INHERITS WITHCHILDREN "StandardCheckBoxTemplate" {
     SetPoint TOPLEFT, "AutosaveReplayCheckBox", BOTTOMLEFT, 0.0, -0.005,
 }

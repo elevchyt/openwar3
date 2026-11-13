@@ -97,11 +97,12 @@ import { commandSource, cursorPermille, selectionSource, watchInputSource } from
 import { hotkeyMode } from "../data/hotkeys";
 import { replaySink, type ReplaySink } from "../game/replaySink";
 import { ReplayUploader, installId } from "../game/replayUpload";
-import { autosaveReplay, shareReplays } from "../data/options";
+import { autosaveReplay } from "../data/options";
 
 /** The one uploader for the page (issue #158) — replays waiting from an earlier session are sent
- *  on the first match's close as well as this one's. */
-const replayUploader = new ReplayUploader(shareReplays);
+ *  on the first match's close as well as this one's. Only a MULTIPLAYER match's replay is ever
+ *  offered to it, by the host (MapViewerScene.closeReplay). */
+const replayUploader = new ReplayUploader();
 
 /** The match that just closed, if it was recorded: where its `LastReplay` went and when it is
  *  on disk — what the score screen's Save Replay keeps a copy of (ui/saveReplayDialog.ts). */
@@ -3202,9 +3203,9 @@ export class MapViewerScene {
           race: races.get(s.id) ?? String(s.race),
           team: s.team,
           color: rts.playerColor(s.id),
-          // The recording player's own anonymous id (game/replayUpload.ts) — only theirs, and
-          // only with their consent to share (data/options.ts `shareReplays`).
-          ...(s.id === this.localPlayer && !this.observer && shareReplays() ? { id: installId() } : {}),
+          // The recording player's anonymous id (game/replayUpload.ts) is written onto their seat
+          // when the match turns out to be MULTIPLAYER — the wire attaches after this header is
+          // made (`attachMatchLink`) — since only a multiplayer replay goes to the collection.
         })),
       localPlayer: this.localPlayer,
       observer: this.observer,
@@ -3227,7 +3228,8 @@ export class MapViewerScene {
     rts.onCheat = (player, kind) => this.replayRecorder?.push({ k: "cheat", p: player, kind });
     rts.onCheatSelected = (kind, ids) => this.replayRecorder?.push({ k: "cheatsel", kind, ids: [...ids] });
     rts.onInputs = (player, scheme, samples) => this.takeInputs(player, scheme, samples);
-    this.beginInputTrack();
+    // The recorder's own input track starts in `attachMatchLink`, if this is a multiplayer match.
+    this.replayNetworked = false;
   }
 
   /** The replay panel's controls (issue #158, ui/replayPanel.ts) — null in a live match. */
@@ -3418,15 +3420,16 @@ export class MapViewerScene {
   }
 
   /**
-   * This player's INPUT TRACK (issue #158, game/inputTrack.ts) — started with the match on the
-   * machine of anybody who PLAYS in it and has agreed to share (data/options.ts `shareReplays`):
-   * the recording machine keeps its own straight in the replay, and a LAN client, which records
-   * nothing, sends its own to the host in batches.
+   * This player's INPUT TRACK (issue #158, game/inputTrack.ts) — taken in a MULTIPLAYER match
+   * only (the developer's call: a multiplayer replay is the one that goes to the collection, and
+   * it always does), on the machine of everybody who PLAYS in it: the host keeps its own straight
+   * in the replay, and a LAN client, which records nothing, sends its own to the host in batches.
+   * Started from `attachMatchLink`, the moment the match is known to be one.
    */
   private beginInputTrack(): void {
     const rts = this.rts;
     this.inputTracker = null;
-    if (!rts || this.observer || this.replayPlayback || !shareReplays()) return;
+    if (!rts || !rts.networked || this.observer || this.replayPlayback) return;
     const client = rts.frozenClient;
     if (!client && !this.replayRecorder) return; // nothing is recording this match
     watchInputSource();
@@ -3516,6 +3519,8 @@ export class MapViewerScene {
     if (this.rts) this.rts.simWorld.deathTap = null;
     this.rts?.setCommandTap(null);
     if (!rec) return;
+    const networked = this.replayNetworked;
+    this.replayNetworked = false;
     const ticks = this.simTick - this.replayTick0;
     // A match that never began (left at the loading screen) is nothing to watch.
     if (ticks <= 0) return;
@@ -3528,9 +3533,11 @@ export class MapViewerScene {
     const written = rec.finish().then(async (bytes) => {
       await sink.saveLast(bytes, keep);
       console.info(`[replay] recorded ${rec.eventCount} inputs over ${(ticks / SIM_HZ).toFixed(0)} s (${bytes.length} bytes)`);
-      // …and offered to the collection (game/replayUpload.ts; never with the player's switch
-      // off, and not from a dev build unless VITE_REPLAY_UPLOAD_URL names a door).
-      void replayUploader.offer(bytes);
+      // …and, for a MULTIPLAYER match, offered to the collection (game/replayUpload.ts) — by
+      // the host, which is the one machine that recorded it. A single-player match's replay
+      // stays on this machine. (A dev build sends nothing unless VITE_REPLAY_UPLOAD_URL names a
+      // door.)
+      if (networked) void replayUploader.offer(bytes);
       return true;
     }).catch((err) => {
       console.warn("[replay] could not be saved:", err);
@@ -3570,6 +3577,9 @@ export class MapViewerScene {
     }
   }
   private replayShared = false;
+  /** The recording is a MULTIPLAYER match's — this machine is its host (`attachMatchLink`) — and
+   *  so goes to the collection when it closes. */
+  private replayNetworked = false;
 
   /**
    * CLIENT: the host's replay of the game that just ended. Kept as this machine's own
@@ -3643,9 +3653,17 @@ export class MapViewerScene {
       this.replayRecorder = null;
       this.rts.setCommandTap(null);
       this.rts.onInputs = null;
-      // …but its player's own input track is still theirs to give: sent to the host in batches.
-      this.beginInputTrack();
+    } else if (this.replayRecorder && setup.isHost) {
+      // The HOST of a multiplayer match: its recording is the match's, and goes to the
+      // collection when the match closes (`closeReplay`) — under the host's anonymous id, the one
+      // seat whose id this machine knows.
+      this.replayNetworked = true;
+      const seat = this.replayRecorder.header.seats.find((x) => x.player === this.localPlayer);
+      if (seat && !this.observer) seat.id = installId();
     }
+    // Everybody who PLAYS a multiplayer match gives their own input track — the host straight into
+    // the replay, a client to the host in batches.
+    this.beginInputTrack();
     void this.voiceChat.warm(); // open the microphone now, so the first press loses nothing
     // Arm the background pump HERE, not from the frame loop: rAF is stopped in a hidden
     // window, so a host whose tab is already covered when the match starts would otherwise

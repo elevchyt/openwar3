@@ -1,0 +1,30 @@
+// OpenWar3 override — `UI\FrameDef\Glue\ViewReplayScreen.fdf`.
+//
+// One box the 2003 screen has no frame for: WHO played the highlighted replay.
+//
+// The game's summary stops at "Number of Players:" — its replay list has nothing else to say
+// about a file until it is opened. Ours reads each replay's header anyway (ui/fdfViewReplay.ts,
+// for the version note on a row), and the header names every seat with its race and team, so the
+// screen lists them: the players under their teams as the loading screen groups them ("Team %d",
+// no heading when everybody is on one team), each with the race symbol the Allies dialog wears
+// beside a name, and the replay's watchers last.
+//
+// An empty container the code fills, hung straight under the "Number of Players" row — which is
+// anchored to the summary pane's own BOTTOMLEFT, so the box travels with the pane's widescreen
+// nudge — and exactly as wide as that row. It ends above the panel's bottom border; a replay with
+// more players than fit SCROLLS inside it rather than running over the chrome.
+//
+// The scroll is the game's own: a FRAME handed a SCROLLBAR scrolls its children
+// (ui/fdf/widgets.ts `buildScrollFrame`, as the LAN lobby's team rows do), and the bar is the
+// glue's `StandardScrollBarTemplate` — the one ListBoxWar3.fdf hangs off the replay list beside
+// it, arrows and all — drawn only while the rows overrun the box.
+Frame "FRAME" "ReplayPlayersBox" {
+    SetPoint TOPLEFT, "NumPlayersLabel", BOTTOMLEFT, 0.0, -0.008,
+    Width 0.271875,
+    Height 0.135,
+
+    Frame "SCROLLBAR" "ReplayPlayersScrollBar" INHERITS WITHCHILDREN "StandardScrollBarTemplate" {
+        SetPoint TOPRIGHT, "ReplayPlayersBox", TOPRIGHT, 0.0, 0.0,
+        UseActiveContext,
+    }
+}

@@ -148,13 +148,6 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   // folder's `Autosaved\` — the game's own AUTOSAVE_REPLAY_INFO, "This option will automatically
   // save replays to the replay/autosaved folder." (`autosaveReplay()`, MapViewerScene.closeReplay).
   { key: "autosaveReplay", frame: "AutosaveReplayCheckBox", kind: "bool", panel: "gameplay", def: true },
-  // "Share Replays" (issue #158) — OURS, on the same row (src/overrides/ui/OptionsMenu.fdf). The
-  // player's consent to two things: their finished replays going to OpenWar3's own collection
-  // (game/replayUpload.ts), and their own camera, selections and cursor being recorded into the
-  // replays of the matches they play (game/inputTrack.ts). ON unless turned off — the developer's
-  // call, so that the matches people actually play can be studied — and read through
-  // `shareReplays()`.
-  { key: "shareReplays", frame: "ShareReplaysCheckBox", kind: "bool", panel: "gameplay", def: true },
   // Issue #124. The first gameplay option with a live backend: it is the DEFAULT value of the
   // Custom Game screen's "Computer+ (Improved AI)" switch (ui/fdfSkirmish.ts), so ticking it
   // here decides which AI a match starts with. Its frame is not the game's — no 2003 UI file
@@ -403,14 +396,4 @@ export function replayWindowOptions(): Record<string, string> {
     /* no storage: the window runs on that version's defaults */
   }
   return out;
-}
-
-/**
- * Options → Gameplay → "Share Replays" (issue #158): the player's consent to their replays being
- * sent to OpenWar3's own collection (game/replayUpload.ts) and to their own input track being
- * recorded into them (game/inputTrack.ts). OURS — the game has no such switch — and ON unless
- * the player has turned it off.
- */
-export function shareReplays(): boolean {
-  return loadOptions().shareReplays !== false;
 }

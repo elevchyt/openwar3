@@ -1,6 +1,8 @@
-// The REPLAY UPLOADER (issue #158) — every finished replay is sent to OpenWar3's own collection,
-// so the matches people actually play can be studied and, in time, an AI that plays like a
-// person can be trained on them.
+// The REPLAY UPLOADER (issue #158) — every finished MULTIPLAYER replay is sent to OpenWar3's own
+// collection, so the matches people actually play can be studied and, in time, an AI that plays
+// like a person can be trained on them. It is not optional (the developer's call, which retired
+// the "Share Replays" option): the HOST of a multiplayer match, the one machine that records it,
+// uploads it as it hands it to the other players. A single-player match is never uploaded.
 //
 // Where they go: the `openwar3-replays` service in the Railway project the relays live in
 // (`replays-server/server.mjs`), which files them in that project's PRIVATE bucket
@@ -23,9 +25,9 @@
 // developer's own test matches would otherwise fill the collection (and the store's monthly
 // write allowance) with debug runs.
 //
-// What a replay HOLDS is the thing to be careful about: the names the players typed and every
-// chat line they sent are in it (game/replay.ts). The player's own switch is `shareReplays`
-// (data/options.ts), and the uploader asks it before every send.
+// What a replay HOLDS: the names the players typed, every chat line they sent (game/replay.ts) and
+// each player's own camera, selections and cursor (game/inputTrack.ts) — and the host's anonymous
+// install id on its seat. Nothing that names a person outside the game.
 
 import { REPLAY_FORMAT } from "./replay";
 
@@ -109,18 +111,14 @@ async function send(bytes: Uint8Array): Promise<Sent> {
   }
 }
 
-/**
- * The uploader. `enabled` is the player's switch, asked before every send — turning it off
- * stops the queue too, and nothing waiting is sent.
- */
+/** The uploader. What it is OFFERED is the caller's decision — a multiplayer match's replay, by
+ *  its host (MapViewerScene.closeReplay). */
 export class ReplayUploader {
   private draining = false;
 
-  constructor(private readonly enabled: () => boolean) {}
-
   /** A match has ended: send its replay, and keep it for later if that fails. */
   async offer(bytes: Uint8Array): Promise<void> {
-    if (!REPLAY_UPLOAD_URL || !this.enabled()) return;
+    if (!REPLAY_UPLOAD_URL) return;
     const sent = await send(bytes);
     if (sent !== "again") {
       void this.drain();
@@ -134,12 +132,11 @@ export class ReplayUploader {
   /** Send whatever is waiting, oldest first, stopping at the first send worth trying again — a
    *  refused one is dropped and the drain goes on past it. */
   async drain(): Promise<void> {
-    if (this.draining || !REPLAY_UPLOAD_URL || !this.enabled()) return;
+    if (this.draining || !REPLAY_UPLOAD_URL) return;
     this.draining = true;
     try {
       const keys = (await withStore("readonly", (s) => s.getAllKeys())) ?? [];
       for (const k of keys) {
-        if (!this.enabled()) return;
         const bytes = await withStore<Uint8Array>("readonly", (s) => s.get(k) as IDBRequest<Uint8Array>);
         if (bytes && (await send(bytes)) === "again") return;
         await withStore("readwrite", (s) => s.delete(k));
