@@ -434,8 +434,15 @@ const GOLD_MINE_COLLAPSE_ART = "Objects\\Spawnmodels\\Other\\NeutralBuildingExpl
  * chain's guess found those same events off the rows' `EfctID1` art (`Xbdt` → Andt.mdl carries
  * RevealMap too) and played them a second time at the SHOOTER — a Flare Gun pressed in your base
  * whistled there, 0.8 s before the flare came down on the other side of the map.
+ *
+ * Healing Spray (`ANhs`) is the same mistake made with a HEAL: the chain found `[XNhs]
+ * Specialart = HealTarget.mdl` and played its `SNDXAHEA` (HealTarget.wav, the Priest's Heal)
+ * once at the Alchemist as he raised his arm. Nothing in the game sounds there —
+ * HeroGoblinAlchemist.mdx keys no `ANHS` event, his spell clip is silent — and the press is
+ * heard through its bottles' own throw (`SNDxSHSL`, Sounds.playMissile). The heal chime
+ * belongs to the flash, on each unit a wave mends (SimWorld.healWave).
  */
-const SOUNDED_BY_EFFECT = new Set(["AIta", "AOfs", "Andt", "AItb", "AIfa", "Afla"]);
+const SOUNDED_BY_EFFECT = new Set(["AIta", "AOfs", "Andt", "AItb", "AIfa", "Afla", "ANhs"]);
 /**
  * Abilities whose whole sound is their MISSILE's — so the cast-fire chain guesses nothing for
  * them either. Storm Bolt names no art of its own, and the chain's last rung, the BUFF's worn

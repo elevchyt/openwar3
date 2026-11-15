@@ -19615,7 +19615,11 @@ export class SimWorld {
     for (const t of reached) {
       const share = t.building && (f.buildingReduction ?? 0) > 0 ? f.buildingReduction! : 1;
       t.hp = Math.min(t.maxHp, t.hp + each * share);
-      if (f.healArt) this.spellEffects.push({ art: f.healArt, x: t.x, y: t.y, targetId: t.id, z: 0 });
+      // …and HEARD on that unit: the flash carries its own sound, `SNDXAHEA` on frame 0 of
+      // HealTarget.mdx's Birth (AnimLookups AHEA → "Heal" → HealTarget.wav), so every unit a wave
+      // mends chimes as its flash is born — the sound the engine plays off the model, rather than
+      // the one chime the press used to be given for it (mapViewer SOUNDED_BY_EFFECT).
+      if (f.healArt) this.spellEffects.push({ art: f.healArt, x: t.x, y: t.y, targetId: t.id, z: 0, events: true });
       // The worn model, kept alive a beat past the next wave so it does not blink between two.
       if (f.healBuff) this.applyBuffInternal(t, { kind: "mark", group: f.healBuff.group, timeLeft: f.interval + 0.25, sourceId: caster.id, art: f.healBuff.art, fx: f.healBuff.fx, buffId: f.healBuff.buffId });
     }
