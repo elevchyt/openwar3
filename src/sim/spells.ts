@@ -680,6 +680,10 @@ function revealPlace(api: SpellApi, owner: number, team: number, x: number, y: n
 
 /** `FlareTarget.mdl` — what `[Xfla] Effectart` names, for a row whose effect object is missing. */
 const FLARE_TARGET_ART = "Abilities\\Spells\\Human\\Flare\\FlareTarget.mdx";
+/** One pass of the Drain models' Stand, in seconds — `ManaDrainCaster.mdx` and
+ *  `ManaDrainTarget.mdx` both carry `Stand [0, 1000]` (read off the install's models). How
+ *  long an instant press holds them before their Death (the Wand of Mana Stealing, `Aste`). */
+const MANA_DRAIN_STAND = 1;
 
 /**
  * A FLARE — the Mortar Team's `Afla` ("Launches a Dwarven flare above a target point, which
@@ -3983,6 +3987,22 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // Ubertip is what the reading follows, and DataA is taken as a flat 50 mana rather than as
   // a percentage of the target's pool. Flagged rather than guessed at silently: settling it
   // wants a measurement against the real client.
+  //
+  // It is SEEN at both ends and HEARD at the user's (ItemAbilityFunc [Aste]):
+  // `Casterart = …\Other\Drain\ManaDrainCaster.mdl` on the user's chest and
+  // `Targetart = …\Other\Drain\ManaDrainTarget.mdl` on the victim's — the Drain's own pair,
+  // the mana streaming out of one body and into the other. The SOUND rides the caster model:
+  // ManaDrainCaster.mdx parks one event, `SNDXAHDR`, on the first frame of its Birth (1133),
+  // and AnimLookups turns AHDR into the AnimSounds row `SiphonManaCaster` →
+  // `Abilities\Spells\Other\Drain\SiphonMana.wav`. The press's cast sound reaches it off the
+  // art (castFires → playSpellSound walks the row's arts' Birth events), so nothing is cued
+  // here — emitting `events` as well would play it twice.
+  //
+  // Both models are authored for a CHANNEL: a 134 ms Birth, a looping Stand [0, 1000] that is
+  // the only clip whose emitters are switched on (every KP2V track drops to 0 at 1500, the
+  // first frame of Death), and a Death [1500, 2500] in which what was thrown settles. A
+  // plain one-shot plays only the Birth — one particle — so they are HELD for one pass of
+  // their own Stand (1 s, read off the model) and then let die: Birth, Stand, Death.
   Aste: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
@@ -3990,7 +4010,8 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const stolen = api.burnMana(t, d(lvl, 0, 50));
     caster.mana = Math.min(caster.maxMana, caster.mana + stolen);
     api.emitLightning(def.lightning[0] ?? "", t, caster, undefined, undefined, undefined, true);
-    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
+    if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, caster.id, MANA_DRAIN_STAND, def.casterAttach, { anim: "hold" });
+    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id, MANA_DRAIN_STAND, def.targetAttach, { anim: "hold" });
   },
 
   // Wand of Shadowsight (`Ashs`) — "Gives the player vision of a target unit until that unit
