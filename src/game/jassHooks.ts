@@ -668,7 +668,7 @@ export function rosterHooks(
     },
     /** IsUnitType (7.16) — answer a unittype classification from the sim unit's flags. `t` is the
      *  common.j ConvertUnitType index. The classifications we hold no data for (ATTACKS_FLYING,
-     *  GIANT, SAPPER, RESISTANT, …) read false rather than guess. Melee/ranged come from the
+     *  ATTACKS_GROUND, PLAGUED, SNARED, POISONED) read false rather than guess. Melee/ranged come from the
      *  weapon's `ranged` flag (UnitWeapons weapType: a missile weapon = a ranged attacker). */
     isUnitType: (id, t, typeId) => {
       // A gold mine is a live Neutral Passive STRUCTURE, and it matters: MeleeClearExcessUnit
@@ -701,7 +701,15 @@ export function rosterHooks(
         case 18: return !!cls?.includes("townhall");
         case 19: return u.ancient;
         case 20: return !!cls?.includes("tauren");
+        // The four the sim derives for itself (common.j 22, 24–26): Hex/Polymorph's `hex` buff,
+        // Resistant Skin (`Arsk`/`ACrk`), Banish or the Spirit Walker's ethereal form, and Magic
+        // Immunity (`Amim`) or the Anti-magic Potion. Map spell filters ask these constantly —
+        // `not IsUnitType(t, UNIT_TYPE_MAGIC_IMMUNE)` is the standard "may this spell touch it".
+        case 22: return u.hexed;
         case 23: return u.asleep;
+        case 24: return u.resistant;
+        case 25: return u.ethereal;
+        case 26: return u.magicImmune;
         default: return false;
       }
     },

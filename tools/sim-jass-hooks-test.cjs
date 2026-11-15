@@ -428,6 +428,22 @@ check("a mine is a STRUCTURE", roster.isUnitType(MINE_ID_BASE + 3, 2), true);
 check("…and GROUND", roster.isUnitType(MINE_ID_BASE + 3, 4), true);
 check("…and not DEAD", roster.isUnitType(MINE_ID_BASE + 3, 1), false);
 
+// POLYMORPHED / RESISTANT / ETHEREAL / MAGIC_IMMUNE (common.j 22, 24, 25, 26) answer the flags the
+// sim derives for itself (issue #227). They fell through to `default: false`, so a map's spell
+// filter — `not IsUnitType(t, UNIT_TYPE_MAGIC_IMMUNE)` — let every spell touch a Spell Breaker.
+const STATES = { 22: "hexed", 24: "resistant", 25: "ethereal", 26: "magicImmune" };
+for (const [t, flag] of Object.entries(STATES)) {
+  const id = 90 + Number(t);
+  const base = { id, owner: 0, team: 7, hp: 100, typeId: "hfoo", hexed: false, resistant: false, ethereal: false, magicImmune: false };
+  world.units.set(id, { ...base, [flag]: true });
+  check(`IsUnitType ${t} reads u.${flag}`, roster.isUnitType(id, Number(t)), true);
+  const others = Object.keys(STATES).filter((o) => o !== t).map((o) => roster.isUnitType(id, Number(o)));
+  check(`…and only that one`, others, [false, false, false]);
+  world.units.set(id, base);
+  check(`…false once it is gone`, roster.isUnitType(id, Number(t)), false);
+  world.units.delete(id);
+}
+
 // isUnitAlly asks the ALLIANCE MATRIX about the unit's owner, and falls back on the injected
 // seating (never the slot number) only where no matrix is installed — this world has none.
 // Players 0 and 1 are both on team 7 in TEAMS above; player 2 is on 9.
