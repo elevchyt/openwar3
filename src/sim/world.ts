@@ -3257,15 +3257,17 @@ const PRECAST_WARNING = new Set(["AHfs"]);
  * wind-up, on the caster — rather than at the cast point with the effect. Not a warning like
  * PRECAST_WARNING (which paints the target's ground and charges the cast up front): this is
  * the caster's own flourish, which in WC3 begins with the gesture and not with what the
- * gesture throws. The Warden is both cases:
+ * gesture throws:
  *
  *   [AEbl] Specialart = …\Blink\BlinkCaster.mdl   the smoke she goes out in
- *   [AEfk] Effectart  = …\FanOfKnives\FanOfKnivesCaster.mdl   the burst she spins up
  *
- * Her Cast Point is 0.5s (UnitWeapons.slk Ewar castpt), so held to the effect both read as
- * half a second LATE — the blades are already out before the burst that threw them.
+ * Fan of Knives' burst (`[AEfk] Effectart = …\FanOfKnives\FanOfKnivesCaster.mdl`) USED to be
+ * here too and was taken back out: a wind-up can be INTERRUPTED (a stun, an order), and art
+ * dropped at the button press then played for a cast that never happened — no damage, no
+ * mana, no cooldown, just the knives. In the real game the burst comes with the blades, so it
+ * is emitted by the spell's own handler (spells.ts AEfk), which only a completed cast reaches.
  *
- * `follow` = ride the caster (the burst spins with her); false = stand where it was struck,
+ * `follow` = ride the caster (a flourish that moves with it); false = stand where it was struck,
  * which is what Blink's plume needs — it is "art to LEAVE BEHIND at old coordinate" and the
  * caster is about to be somewhere else.
  *
@@ -3309,7 +3311,6 @@ const ITEM_CORPSE_SPELL: Record<string, string> = {
 };
 const CAST_START_ART: Record<string, (d: AbilityDef) => { art: string; follow: boolean; sound: boolean }> = {
   AEbl: (d) => ({ art: d.specialArt, follow: false, sound: true }),
-  AEfk: (d) => ({ art: d.effectArt, follow: true, sound: false }),
 };
 /**
  * Abilities whose `Cast` column is NOT a casting time.
@@ -16497,8 +16498,8 @@ export class SimWorld {
       this.noteSpell(u, pc, "channel");
       this.noteSpell(u, pc, "cast");
       // The caster's own flourish, if this ability's art belongs to the GESTURE rather than
-      // to what the gesture throws (see CAST_START_ART): Blink's plume and Fan of Knives'
-      // burst play here, at the button press, not half a second later with the effect.
+      // to what the gesture throws (see CAST_START_ART): Blink's plume plays here, at the
+      // button press, not half a second later with the effect.
       const startFx = CAST_START_ART[pc.code]?.(def);
       if (startFx?.art) this.spellEffects.push({ art: startFx.art, x: u.x, y: u.y, targetId: startFx.follow ? u.id : 0, z: 0, sound: startFx.sound });
       // Delayed-strike "beware" warning (see PRECAST_WARNING): drop the ability's

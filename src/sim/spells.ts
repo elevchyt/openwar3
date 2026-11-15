@@ -2181,11 +2181,14 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // damage is instant and uncapped by travel), so each one is dropped as a one-shot on the
   // unit it is meant for, which is where WC3's land too.
   //
-  // The BURST is not emitted here: it is the Warden's own spin-up, so it plays at the start
-  // of the wind-up with the gesture (world.ts CAST_START_ART), a Cast Point ahead of the
-  // blades it throws. Only the blades belong to this instant.
+  // The BURST is emitted here too, riding the Warden, and NOT at the start of the wind-up
+  // where it once was (world.ts CAST_START_ART): the wind-up can be interrupted — a stun
+  // landing in her 0.5 s Cast Point — and the burst then played over a cast that never
+  // happened, with no damage dealt, no mana spent and no cooldown started. Only a cast that
+  // completes reaches this handler, so the knives are seen exactly when they are thrown.
   AEfk: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
+    if (def.effectArt) api.emitEffect(def.effectArt, caster.x, caster.y, caster.id);
     const hit = enemiesInArea(api, caster, def, caster.x, caster.y, lvl.area || 400);
     const per = d(lvl, 0, 75);
     const cap = d(lvl, 1, 0);
