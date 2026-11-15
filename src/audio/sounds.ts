@@ -254,6 +254,12 @@ interface ModelSounds {
    *  the ability's own, uppercased (`SNDXAEFK` on HeroWarden.mdx is `[AEfk]` Fan of Knives),
    *  and a model that carries several of them must be asked for the right one. */
   abilityByCode: Map<string, Clip>;
+  /** The S events, keyed by code — the SPELL sounds a model plays as a clip of its own passes
+   *  over them, which nothing else in this table can stand for. HealBottleMissile.mdx is why:
+   *  its throw is `SNDxSHSL` on Birth (→ "HealingSprayLaunch" → HealingSprayBirth1.wav) and its
+   *  burst `SNDXSHSI` on Death (→ "HealingSprayImpact" → HealingSprayDeath1.wav), and a bottle
+   *  thrown at the GROUND never makes the weapon HIT that voices a missile's `impact` list. */
+  spellByCode: Map<string, Clip>;
   /** WHEN each event fires, in model-global milliseconds, keyed by the same 4-char code.
    *  The MDX writes an event object's tracks on the one timeline its sequences are intervals
    *  on, so an event and the clip it belongs to can be paired by containment — which is how a
@@ -636,6 +642,12 @@ export class SoundBoard {
   playMissile(missileArt: string, kind: "launch" | "impact", at?: SoundPos): void {
     if (!missileArt) return;
     const ms = this.resolveModelSounds(missileArt);
+    // A LAUNCH is the missile's Birth starting, so the SPELL events parked in it play too, beside
+    // the M/A throw below: HealBottleMissile.mdx keys `SNDXANSM` (StrongDrinkMissile1.wav, the
+    // bottle's whoosh) AND `SNDxSHSL` (HealingSprayBirth1.wav) on the same frame, 2033. Its
+    // impact half is played where the burst is (mapViewer.impactProjectile), not here: this
+    // method's impact is a weapon HIT's, and a bottle thrown at the ground never makes one.
+    if (kind === "launch") this.playModelSpellEventsIn(missileArt, "birth", at);
     const clips = kind === "launch" ? ms.launch : ms.impact;
     if (clips.length) {
       this.playPool(clips[(Math.random() * clips.length) | 0], "impact", at);
@@ -789,6 +801,25 @@ export class SoundBoard {
     return played;
   }
 
+  /** Play every S (spell) event a model parks in one of its own clips — what the engine does
+   *  as that clip runs (see ModelSounds.spellByCode). Today the caller is a missile BURSTING:
+   *  its Death clip is played where it lands (mapViewer.impactProjectile), whether or not
+   *  it landed on anybody, and the bottle a Healing Spray wave throws carries the wave's
+   *  splash there. A model with no such event is silent here and nothing changes for it. */
+  playModelSpellEventsIn(modelArt: string, clip: "birth" | "death", at?: SoundPos): boolean {
+    if (!modelArt) return false;
+    const ms = this.resolveModelSounds(modelArt);
+    const w = clip === "birth" ? ms.birth : ms.deathWindow;
+    if (!w || !ms.spellByCode.size) return false;
+    let played = false;
+    for (const [code, c] of ms.spellByCode) {
+      if (!(ms.eventTimes.get(code) ?? []).some((t) => t >= w[0] && t <= w[1])) continue;
+      this.playPool(c, "spell", at);
+      played = true;
+    }
+    return played;
+  }
+
   playModelAbilityEvent(modelArt: string, code: string, at?: SoundPos): boolean {
     if (!modelArt || !code) return false;
     const clip = this.resolveModelSounds(modelArt).abilityByCode.get(code.toUpperCase());
@@ -900,7 +931,7 @@ export class SoundBoard {
     const key = modelArt.toLowerCase();
     const cached = this.modelSounds.get(key);
     if (cached) return cached;
-    const out: ModelSounds = { attack: [], launch: [], impact: [], ability: [], death: [], abilityByCode: new Map(), eventTimes: new Map(), birth: null, standWindow: null, deathWindow: null };
+    const out: ModelSounds = { attack: [], launch: [], impact: [], ability: [], death: [], abilityByCode: new Map(), spellByCode: new Map(), eventTimes: new Map(), birth: null, standWindow: null, deathWindow: null };
     this.modelSounds.set(key, out); // memoize up-front so a missing/broken model isn't re-parsed
     const bytes = this.vfs.rawBytes(modelArt);
     if (!bytes) return out;
@@ -924,8 +955,8 @@ export class SoundBoard {
       // "SNDXACYD ", and with the space kept the code missed its AnimLookups row and the
       // Cyclone's birth and death sounds were silent.
       const id = evt.name.substring(4).trim();
-      const cat = id[0]; // K = attack, M = missile, D = death, A = ability
-      if (cat !== "K" && cat !== "M" && cat !== "A" && cat !== "D") continue;
+      const cat = id[0]; // K = attack, M = missile, D = death, A = ability, S = spell
+      if (cat !== "K" && cat !== "M" && cat !== "A" && cat !== "D" && cat !== "S") continue;
       const label = this.animLabel(id);
       if (!label) continue;
       const clip = this.resolve("anim", label); // AnimSounds row → clip (vol/pitch/3D/dist)
@@ -933,6 +964,15 @@ export class SoundBoard {
       const code = id.toUpperCase();
       const times = out.eventTimes.get(code) ?? out.eventTimes.set(code, []).get(code)!;
       for (const t of evt.tracks) times.push(t); // one track per clip the event is parked in
+      // An S event is played ONLY by the clip it is parked in (playModelSpellEventsIn), and
+      // joins none of the lists below: those are answered by other paths (a weapon's hit, a
+      // cast), each of which already has its own sound, and an S event added to them would be
+      // a second voice on a moment that has one — or, on a missile's `launch`, a coin toss
+      // against the M/A events parked beside it.
+      if (cat === "S") {
+        out.spellByCode.set(code, clip);
+        continue;
+      }
       // A MISSILE's throw and hit are the events parked in its Birth and its Death, whatever
       // letter they carry: the clip is what says WHEN the engine plays them. ChimaeraLightning
       // Missile.mdx is why it must be the clip and not the letter — its throw is `SNDXKFAR` at

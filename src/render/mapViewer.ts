@@ -9884,6 +9884,13 @@ export class MapViewerScene {
       const w = this.sounds?.modelClipWindow(art, "death");
       if (w) this.sounds?.playModelEventsIn(art, w[0], w[1], { x, y, z: this.rts!.groundHeightAt(x, y) + z });
     }
+    // …and the SPELL sound a missile parks in its own Death, for every missile and under the
+    // same rule. Healing Spray's bottles are why: `SNDXSHSI` on HealBottleMissile.mdx's Death
+    // (AnimLookups SHSI → "HealingSprayImpact" → HealingSprayDeath1.wav) is the splash of each
+    // wave landing, and the bottles are thrown at a SPOT (SimWorld.spawnSpotMissile), so no
+    // HIT ever comes to voice them the way rts.playImpacts voices an arrow. Nothing else plays
+    // an S event, so this cannot double one (Sounds.playModelSpellEventsIn).
+    if (art && this.pointVisible(x, y)) this.sounds?.playModelSpellEventsIn(art, "death", { x, y, z: this.rts!.groundHeightAt(x, y) + z });
     const inst = this.projectileInsts.get(id);
     if (!inst) return;
     this.projectileInsts.delete(id);
