@@ -35,6 +35,13 @@
 //     Hotkeys:     [ Legacy  ]                   (ours)
 //     [x] Show hotkeys on command buttons        (ours)
 //
+// The SOUND panel loses one row and gains none: "Sound Provider:" and its pulldown GO. In the
+// game it picked the device the engine mixed through (DirectSound, Miles, EAX); a browser has
+// exactly one, Web Audio, so the pulldown could only ever stand empty and greyed. The manifest
+// retires both frames and hands their anchor to "Environmental Effects", which closes up to the
+// -0.005 checkbox-to-checkbox gap under Subtitles — with the pulldown gone, the last two boxes
+// are no longer a group of their own.
+//
 // The two re-anchorings are the manifest's `repoint`, because an FDF panel is a chain of rows
 // and those two rows are the game's own frames: only their SetPoints change, so their labels
 // come along without being restated here.

@@ -323,7 +323,7 @@ export async function mountOptions(
         c.value = str(working[d.key], String(d.def));
         c.onChange = (v) => commit(v);
       } else {
-        // A dropdown the game fills at runtime (resolution list, sound provider): nothing to
+        // A dropdown the game fills at runtime (the resolution list): nothing to
         // offer here, so it's shown empty and inert rather than pretending to choices.
         c.setEnabled(false);
       }

@@ -17,6 +17,8 @@
 //     an OpenWar3 LAN match has no such knob to offer (docs/multiplayer.md).
 //   · "Difficulty:" GOES. It was a readout of the campaign screen's own dropdown, printing back
 //     at the player the one thing about the chapter they chose themselves.
+//   · "Sound Provider:" GOES. It printed the device the engine mixed through, and a browser has
+//     only the one (Web Audio) — a readout with nothing it could ever say differently.
 //
 // …and adds the rows of ours that the glue panel grew with them: the "Healthbars:" pulldown
 // under "Always show Health Bars", "Show hotkeys on command buttons" under "Hotkeys:", and on the

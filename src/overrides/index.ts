@@ -104,6 +104,10 @@ export const OPTIONS_MENU_OVERRIDE: FdfOverride = {
     "SubgroupCheckBox", "SubgroupLabel",
     "FormationToggleCheckBox", "FormationToggleLabel",
     "CustomKeysCheckBox", "CustomKeysLabel",
+    // Options → Sound: "Sound Provider:" and its pulldown. It picked the DirectSound/Miles/EAX
+    // device the 2003 engine mixed through; a browser has exactly one (Web Audio), so the row
+    // could only ever stand empty and greyed. See `ui/OptionsMenu.fdf`.
+    "ProviderLabel", "ProviderBackdrop",
   ],
   // The panel is a CHAIN, and issue #142 cuts four links out of the middle of it and swaps the
   // order of two more. Both moved rows are the game's own frames, so they move by re-anchoring
@@ -132,6 +136,12 @@ export const OPTIONS_MENU_OVERRIDE: FdfOverride = {
     // being a row fuller than the 2003 one. See src/overrides/ui/OptionsMenu.fdf.
     { from: "ResolutionLabel", to: "ResolutionLabel", dy: -0.005, only: ["ModelDetailLabel"] },
     { from: "ResolutionBackdrop", to: "ResolutionBackdrop", dy: -0.005, only: ["ModelDetailBackdrop"] },
+    // The SOUND panel's: "Environmental Effects" hung off the retired "Sound Provider:" label,
+    // so it takes that label's own anchor — the Subtitles box — and closes up to the -0.005
+    // every other checkbox on the panel sits under the one above it (-0.03 + 0.025): with the
+    // pulldown gone there is no second group for a wider gap to set apart. "3D Positional
+    // Audio" follows it, as it always did.
+    { from: "ProviderLabel", to: "SubtitlesCheckBox", dy: 0.025, only: ["EnviroCheckBox"] },
   ],
   add: [
     { frame: "ComputerPlusDefaultCheckBox", into: "GameplayPanel" },
@@ -190,6 +200,9 @@ export const ESC_OPTIONS_OVERRIDE: FdfOverride = {
     // the Keyboard Scroll slider's label — wearing that row's own offsets off it (-0.005 back
     // out of the label column, -0.021 to clear the slider), because it is now that row.
     { from: "FormationToggleCheckBox", to: "KeyScrollLabel", dx: -0.005, dy: -0.021, only: ["HealthBarsCheckBox"] },
+    // "Environmental Effects" takes the retired "Sound Provider:" row's anchor, under Subtitles,
+    // flush as this panel's checkboxes stack (-0.005 + 0.005 = the 0.0 Positional uses).
+    { from: "ProviderLabel", to: "SubtitlesCheckBox", dy: 0.005, only: ["EnviroCheckBox"] },
   ],
   remove: [
     // Three rows whose only honest value is ON (issue #142's reasons, panel for panel), each a
@@ -205,6 +218,9 @@ export const ESC_OPTIONS_OVERRIDE: FdfOverride = {
     // …and the Network category, whose panel sets a turn latency an OpenWar3 LAN match has not
     // got. The button is the only thing that reaches its panel, so the panel needs no entry.
     "NetworkButton",
+    // …and the Sound panel's "Sound Provider:" readout, for the glue panel's reason
+    // (OPTIONS_MENU_OVERRIDE): a browser has one audio device and nothing to choose.
+    "ProviderLabel", "ProviderValue",
   ],
   add: [
     { frame: "HealthBarStyleLabel", into: "GameplayPanel" },

@@ -50,10 +50,6 @@ import {
 // next match; in ANY multiplayer game it is the host's pick for every machine, so the slider is
 // greyed and only shows it.
 
-/** What the game prints where "FMOD" stood: the API this engine's SoundBoard is built on. A
- *  product name rather than a label, as the game's was, so it is not a GlobalStrings key. */
-const SOUND_PROVIDER = "Web Audio";
-
 export interface EscOptionsHost {
   /** The live SoundBoard, so the Sound panel is audible as you drag it. */
   sounds(): SoundBoard | null;
@@ -122,7 +118,8 @@ export class EscOptions {
     }
     if (panel === "gameplay") this.fillGameplay(screen, lib);
     else if (panel === "video") this.fillVideo(screen, lib);
-    else this.fillSound(screen);
+    // The Sound panel has nothing to fill: its one readout, "Sound Provider:", is retired by
+    // ESC_OPTIONS_OVERRIDE (a browser has one audio device).
   }
 
   /**
@@ -246,10 +243,6 @@ export class EscOptions {
     // file has the whole `SpellFilterMenu` block commented out — and nothing in this engine
     // thins a spell's art, so the readout is the game's own word for all of it.
     screen.setText("SpellFilterValue", lib?.string("HIGH_SPELLS") ?? "High");
-  }
-
-  private fillSound(screen: FdfScreen): void {
-    screen.setText("ProviderValue", SOUND_PROVIDER);
   }
 
   /** The label a `choice` option's current value wears, resolved through GlobalStrings — the

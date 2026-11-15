@@ -46,7 +46,7 @@ export interface OptionDef {
   def: boolean | number | string;
   /** `choice` options: the value/label pairs. Labels are GlobalStrings keys resolved by the
    *  screen (`LOW_MODELS`, `HIGH_PARTICLES`, `OFF`/`ON`, …). Empty for the dropdowns WC3 fills at
-   *  runtime (resolution, sound provider) — those stay empty and disabled, having nothing to
+   *  runtime (resolution) — those stay empty and disabled, having nothing to
    *  offer us. */
   choices?: Array<{ value: string; label: string }>;
   /** False when the option is remembered but nothing in the engine reads it yet. Documented so
