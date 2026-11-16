@@ -4080,6 +4080,17 @@ export class RtsController {
         this.clearExcessInstance(unit.instance);
         continue;
       }
+      // A START LOCATION is not a unit. war3mapUnits.doo lists each player's as an `sloc`
+      // record and the viewer draws it as the World Editor does (StartLocation.mdx, the flag
+      // in a ring of stones), with no row because no table has one. It is hidden by the scene
+      // and must never be seeded — and the branches below find a body by POSITION, so a
+      // marker standing exactly where the map put a neutral building was adopted as that
+      // building's twin: Prologue02 has a Circle of Power on a start location, and the
+      // editor's flag stood in it, selectable, with a life bar.
+      if (!unit.row) {
+        unit.instance.hide();
+        continue;
+      }
       const def = this.registry.get(unit.row?.string("unitid") ?? "");
       // Pre-placed PLAYER unit (custom map, owner 0–11): adopt it as an OWNED,
       // simulated unit (issue #33) — this is what gives the local player vision of
