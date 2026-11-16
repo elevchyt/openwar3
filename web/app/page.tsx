@@ -14,7 +14,7 @@ export const revalidate = 300;
 const FEATURES: ReadonlyArray<{ title: string; body: string; media: Media }> = [
   {
     title: "A faithful recreation",
-    body: "Every unit, ability, cost and timing is read straight out of your own Warcraft III: The Frozen Throne 1.30.4 install. OpenWar3 is original code and ships zero Blizzard assets.",
+    body: "Every unit, ability, cost and timing is read straight out of your own Warcraft III: The Frozen Throne install. OpenWar3 is original code and ships zero Blizzard assets.",
     media: { kind: "image", src: "/media/game1.avif", alt: "A human base in OpenWar3, training from the Barracks" },
   },
   {
