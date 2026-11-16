@@ -3043,7 +3043,9 @@ const RING_PUSH = 256;
 // AbilityMetaData.slk + UI\WorldEditStrings.txt: DataA "Max Gold" 12500, DataB "Mining
 // Duration" 1, DataC "Mining Capacity" 1. Capacity 1 is the `SimMine.busy` latch: a classic
 // gold mine holds exactly ONE worker at a time and the rest queue at the rim.
-const MINE_TIME = 1.0; // seconds a worker spends inside the mine (Agld DataB)
+// The duration is READ off that row (SimWorld.mineTime) — a map may edit `Agld` — and this is
+// only the answer for a bare sim with no ability registry, which is the shipped value.
+const MINE_TIME = 1.0; // seconds a worker spends inside the mine (Agld DataB) — fallback only
 /**
  * How near a gold mine a TOWN HALL may be founded — centre to centre, Euclidean — and the one
  * placement rule in the game that is about DISTANCE rather than about the ground. A hall
@@ -12888,6 +12890,15 @@ export class SimWorld {
     const depot = this.nearestGoldDepot(u);
     if (!depot) return this.mineStandSpot(u, mine, u.x - mine.x, u.y - mine.y);
     return this.mineStandSpot(u, mine, depot.x - mine.x, depot.y - mine.y);
+  }
+
+  /** Seconds a worker spends inside a gold mine per load: `[Agld]` Gold Mine's `DataB1`,
+   *  "Mining Duration" (AbilityMetaData.slk + UI\WorldEditStrings.txt), 1 in the shipped
+   *  table. Read off the registry rather than retyped, because a map's w3a may change it
+   *  (the same row `createScriptMine` in game/rts.ts reads its Max Gold from). */
+  private mineTime(): number {
+    const t = this.abilities?.get("Agld")?.levelData[0]?.data[1];
+    return t !== undefined && Number.isFinite(t) && t >= 0 ? t : MINE_TIME;
   }
 
   /** How far from a mine's CENTRE a worker has to stand for its own reservation block to
@@ -23922,7 +23933,7 @@ export class SimWorld {
       mine.busyBy = u.id;
       u.inMine = true;
       u.inMineId = mine.id;
-      u.workT = MINE_TIME;
+      u.workT = this.mineTime();
       u.atNode = false;
       this.unsettle(u); // don't block cells while invisible inside
       u.moving = false;

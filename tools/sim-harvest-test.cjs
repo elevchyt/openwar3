@@ -35,7 +35,7 @@ const MINE_TIME = 1.0; // Agld "Mining Duration" — the mine issues at most one
 
 /** A mine + town hall `angle` degrees apart, `n` peasants ordered onto the mine.
  *  `bonus` is `setHarvestBonus`'s factor — 2 is an insane computer (src/ai/ids.ts). */
-function harvestRun(angleDeg, n, seconds, bonus = 1, hook = null) {
+function harvestRun(angleDeg, n, seconds, bonus = 1, hook = null, abilities = undefined) {
   const W = 160, H = 160;
   const grid = new PathingGrid({ width: W, height: H, flags: new Uint8Array(W * H) }, [0, 0]);
   const a = (angleDeg * Math.PI) / 180;
@@ -47,7 +47,7 @@ function harvestRun(angleDeg, n, seconds, bonus = 1, hook = null) {
     for (let j = 0; j < cells; j++) for (let i = 0; i < cells; i++) grid.block(x0 + i, y0 + j);
   }
 
-  const world = new SimWorld(grid, 1);
+  const world = new SimWorld(grid, 1, abilities);
   const mine = world.addMine(MINE[0], MINE[1], 125000, MINE_R);
   world.add(
     {
@@ -158,6 +158,22 @@ for (const [n, angle] of [[8, 45], [12, 200]]) {
   const goers = new Set(trips.values());
   check("…and the line MOVES: every one of them gets its turn in the shaft", goers.size === n, `${goers.size} of ${n}`);
   check("…for no more than the mine's own rate", gold <= (seconds / MINE_TIME) * GOLD_PER_TRIP, `${gold}`);
+}
+
+console.log("\nthe Mining Duration is the Agld row's, not a literal (issue #233)");
+{
+  // A map's w3a may change `[Agld]` DataB "Mining Duration". A shaft that holds each load 4 s
+  // issues a quarter of the shipped rate — twelve workers cannot dig past that ceiling, and
+  // they bank well under what the same crew digs at the shipped 1 s.
+  const SLOW = 4;
+  const agld = { id: "Agld", code: "Agld", target: "none", levelData: [{ data: [12500, SLOW, 1] }] };
+  const reg = new Map([["Agld", agld]]);
+  const seconds = 120;
+  const slow = harvestRun(45, 12, seconds, 1, null, reg);
+  const fast = harvestRun(45, 12, seconds);
+  const ceiling = (seconds / SLOW) * GOLD_PER_TRIP;
+  check(`a ${SLOW} s shaft caps 12 workers at its own rate`, slow.gold <= ceiling && slow.gold > 0, `${slow.gold} <= ${ceiling}`);
+  check("…well under the shipped 1 s mine's take", slow.gold < fast.gold / 2, `${slow.gold} vs ${fast.gold}`);
 }
 
 console.log("\nan INSANE computer is paid double for the same digging (docs/melee-ai.md)");
