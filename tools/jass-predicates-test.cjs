@@ -50,11 +50,13 @@ const rangeCalls = [];
 const terrainCalls = [];
 const pointCalls = [];
 const hooks = {
-  createUnit: (player, typeId) => (typeId === 'hfoo' ? 1 : 2),
+  createUnit: (player, typeId) => ({ hfoo: 1, ogru: 2, ngol: 3, nmrl: 4 })[typeId] ?? 2,
   getUnitX: (id) => (id === 1 ? 100 : 5000),
   getUnitY: (id) => (id === 1 ? 200 : 5000),
   isUnitIllusion: (id) => id === 1,
-  unitRace: (id) => (id === 1 ? 'human' : 'orc'),
+  // 3 is an `other` (UnitData.slk's spelling for RACE_OTHER), 4 a creep — a race common.j
+  // names no constant for.
+  unitRace: (id) => ({ 1: 'human', 2: 'orc', 3: 'other', 4: 'creeps' })[id] ?? '',
   isUnitIdType: (typeId, type) => typeId === 'Hamg' && type === 0,
   selectedUnits: (player) => (player === 0 ? [1] : []),
   isUnitInRange: (id, other, d) => { rangeCalls.push(['unit', id, other, d]); return d >= 300; },
@@ -76,6 +78,8 @@ const SRC = `
 globals
     unit a = null
     unit b = null
+    unit o = null
+    unit k = null
     force f = null
     region r = null
     location p = null
@@ -83,6 +87,8 @@ endglobals
 function Make takes nothing returns nothing
     set a = CreateUnit(Player(0), 'hfoo', 0.0, 0.0, 0.0)
     set b = CreateUnit(Player(1), 'ogru', 0.0, 0.0, 0.0)
+    set o = CreateUnit(Player(12), 'ngol', 0.0, 0.0, 0.0)
+    set k = CreateUnit(Player(12), 'nmrl', 0.0, 0.0, 0.0)
     set f = CreateForce()
     call ForceAddPlayer(f, Player(0))
     set r = CreateRegion()
@@ -113,6 +119,33 @@ function IsHuman takes nothing returns boolean
 endfunction
 function IsOrc takes nothing returns boolean
     return IsUnitRace(a, RACE_ORC)
+endfunction
+function OtherIsOther takes nothing returns boolean
+    return IsUnitRace(o, RACE_OTHER)
+endfunction
+function HumanIsNotOther takes nothing returns boolean
+    return IsUnitRace(a, RACE_OTHER)
+endfunction
+function CreepIsNotOther takes nothing returns boolean
+    return IsUnitRace(k, RACE_OTHER)
+endfunction
+function GetRaceHuman takes nothing returns boolean
+    return GetUnitRace(a) == RACE_HUMAN
+endfunction
+function GetRaceOrc takes nothing returns boolean
+    return GetUnitRace(b) == RACE_ORC
+endfunction
+function GetRaceOther takes nothing returns boolean
+    return GetUnitRace(o) == RACE_OTHER
+endfunction
+function GetRaceHumanNotOrc takes nothing returns boolean
+    return GetUnitRace(a) == RACE_ORC
+endfunction
+function GetRaceCreepIsNone takes nothing returns boolean
+    return GetUnitRace(k) == RACE_OTHER or GetUnitRace(k) == RACE_HUMAN
+endfunction
+function GetRaceId takes nothing returns integer
+    return GetHandleId(GetUnitRace(o))
 endfunction
 function HeroId takes nothing returns boolean
     return IsHeroUnitId('Hamg')
@@ -243,6 +276,15 @@ check('…and a non-member is not', B('TheirsInOurForce'), false);
 console.log('\n--- classification ---');
 check('RACE_HUMAN matches a human', B('IsHuman'), true);
 check('…and RACE_ORC does not', B('IsOrc'), false);
+check('RACE_OTHER (ConvertRace(7)) matches an "other" unit', B('OtherIsOther'), true);
+check('…and not a human', B('HumanIsNotOther'), false);
+check('…and not a creep (unverified fold, so: nothing)', B('CreepIsNotOther'), false);
+check('GetUnitRace of a human is RACE_HUMAN', B('GetRaceHuman'), true);
+check('GetUnitRace of an orc is RACE_ORC', B('GetRaceOrc'), true);
+check('GetUnitRace of an "other" is RACE_OTHER', B('GetRaceOther'), true);
+check('…and its handle id is the constant\'s index', call('GetRaceId').n, 7);
+check('GetUnitRace of a human is not RACE_ORC', B('GetRaceHumanNotOrc'), false);
+check('GetUnitRace of a creep matches no constant', B('GetRaceCreepIsNone'), false);
 check('a hero type id is a hero', B('HeroId'), true);
 check('…and a Footman is not', B('FootmanId'), false);
 check('an illusion is one', B('Illusion'), true);
