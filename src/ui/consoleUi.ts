@@ -154,6 +154,9 @@ export interface ConsoleUiActions {
    * mid-match and a resize rebuilds every frame from the FDF.
    */
   disabledPanels?(): ReadonlySet<ConsolePanel>;
+  /** The "quest log has news" sparks (ui/questButtonFx.ts), to hang on the Quests button.
+   *  Asked on every build, because a resize rebuilds the button it hangs on. */
+  questGlow?(): HTMLElement | null;
   /** The mouse is over one of the resource bar's four readouts (null: it has left the bar) —
    *  the HUD raises that readout's slab (GameHud.showResourceTip). */
   resourceHover?(kind: ResourceKind | null): void;
@@ -260,6 +263,14 @@ export class ConsoleUi {
     if (!screen) return;
     const dead = this.actions.disabledPanels?.() ?? EMPTY_PANELS;
     for (const b of BUTTONS) screen.setEnabled(b.frame, !dead.has(b.panel));
+  }
+
+  /** Hang the quest glow on the Quests button (again — see `questGlow`). Public because the
+   *  HUD that owns the glow is built AFTER the strip, and says so when it is. */
+  mountQuestGlow(screen: FdfScreen | null = this.screen): void {
+    const glow = this.actions.questGlow?.();
+    const button = screen?.frame("UpperButtonBarQuestsButton");
+    if (glow && button && glow.parentElement !== button) button.appendChild(glow);
   }
 
   /** Push the current resource figures. Cheap to call every frame: it only writes the four
@@ -433,6 +444,7 @@ export class ConsoleUi {
           this.hoverZones(built);
           this.mountClock(built);
           this.applyEnabled(built);
+          this.mountQuestGlow(built);
           this.applyObserver(built);
         },
       });

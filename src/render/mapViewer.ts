@@ -11595,9 +11595,11 @@ export class MapViewerScene {
       mountClock: (slot) => this.mountClock(slot),
       resourceHover: (kind) => this.hud?.showResourceTip(kind),
       clockHover: (on) => this.hud?.showClockTip(on),
+      questGlow: () => this.hud?.questGlow() ?? null,
     });
     this.consoleUi.setObserver(this.observer);
     this.hud = new GameHud(ui, driver);
+    this.consoleUi.mountQuestGlow(); // the strip may have built before there was a HUD to ask
     this.installGamepad();
     this.installVoiceControl(ui, driver);
     this.mountScriptUi(ui);

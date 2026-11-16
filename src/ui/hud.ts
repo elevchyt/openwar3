@@ -26,6 +26,7 @@ import { gamepadPaired, isHovered } from "./gamepad";
 import { setGameTip } from "./gameTip";
 import { HERO_LEVEL_FX_OVERHANG, HeroLevelFx } from "./heroLevelFx";
 import { MODAL_FX_OVERHANG, ModalButtonFx } from "./modalButtonFx";
+import { QuestButtonFx } from "./questButtonFx";
 import { anyModalOpen } from "./modal";
 import { ObserverHud, OBS, clock as matchClockText, type ObserverSeat } from "./observerHud";
 import { REPLAY_SPEEDS } from "./replayPanel";
@@ -1584,7 +1585,9 @@ export class GameHud {
   private chatPromptEl!: HTMLSpanElement;
   private chatInput!: HTMLInputElement;
   private chatTarget: ChatTarget = { scope: "all" };
-  private questsBtn?: HTMLButtonElement; // glows on FlashQuestDialogButton until pressed
+  /** The sparks round the console's Quests button (ui/questButtonFx.ts). The canvas is ours;
+   *  the console strip parks it on its button (`questGlow`). */
+  private questFx!: QuestButtonFx;
   /** Who plain Enter talks to, once somebody has SAID so — the F12 dialog (ui/chatDialog.ts),
    *  whose whole job is choosing this, or a Tab in the entry line. Null until then, which is
    *  not the same as "all": with nothing chosen the audience follows the alliances, and a
@@ -1608,6 +1611,7 @@ export class GameHud {
     // skill point waiting. Built before the console and the hero bar because both hang their
     // overlays off it, and told once where its texture is.
     this.modalFx = new ModalButtonFx(driver.blpCanvas(MODAL_SPARK));
+    this.questFx = new QuestButtonFx(driver.blpCanvas(MODAL_SPARK)); // the same spark texture
     // …and how far past a button's edge that effect reaches, so the stylesheet can inset the
     // overlay by the model's own geometry instead of a number typed twice.
     this.root.style.setProperty("--modal-fx-overhang", `${(MODAL_FX_OVERHANG * 100).toFixed(3)}%`);
@@ -1882,6 +1886,7 @@ export class GameHud {
     // simulated once for all of them (see ModalButtonFx).
     this.modalFx.tick(dtMs);
     this.heroLevelFx.tick(dtMs);
+    this.questFx.tick(dtMs);
   }
 
   /** Redraw the selection-dependent panels right now rather than on the next
@@ -2476,7 +2481,12 @@ export class GameHud {
   /** The Quests button's flash (FlashQuestDialogButton): on when the script announced
    *  something, off the moment the log is opened — as in the game. */
   flashQuests(on: boolean): void {
-    this.questsBtn?.classList.toggle("hud-quests-flash", on);
+    this.questFx.set(on);
+  }
+
+  /** The glow's canvas, for the console strip to hang on its Quests button at every build. */
+  questGlow(): HTMLElement {
+    return this.questFx.element;
   }
 
   /** Point plain Enter at a different audience — what the F12 dialog's OK commits. */
