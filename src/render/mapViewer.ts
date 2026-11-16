@@ -14294,6 +14294,11 @@ export class MapViewerScene {
       for (const bid of this.tech.builds(sel.typeId)) {
         const d = this.registry.get(bid);
         if (!d) continue;
+        // …but a structure the MAP has capped at zero is not greyed, it is not there: the
+        // real client's Prologue02 build card is five buttons and a greyed Watch Tower, with
+        // no Spirit Lodge, Bestiary or Tauren Totem (`SetPlayerTechMaxAllowed(p, 'osld', 0)`
+        // in the map's own InitTechTree). Same rule as the train card.
+        if (world.tech?.maxAllowed(this.localPlayer, bid) === 0) continue;
         const afford = stash.gold >= d.goldCost && stash.lumber >= d.lumberCost;
         const metTech = world.canMake(this.localPlayer, bid, 0);
         out.push(this.cmd({
