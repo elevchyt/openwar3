@@ -322,54 +322,6 @@ a:hover {
   font-size: 0.95rem;
 }
 
-/* ─── Roadmap: the Quest Log ───────────────────────────────────────────── */
-
-.quests {
-  max-width: 900px;
-  margin: 0 auto;
-  padding: 34px 44px 38px;
-}
-.quests__heading {
-  margin: 0 0 12px;
-  color: var(--gold);
-  font-weight: normal;
-  font-size: 1.15rem;
-  text-shadow: 1.5px 1.5px 0 #000;
-}
-.quests__list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 14px 30px;
-}
-.quest {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-}
-.quest__marker {
-  flex: none;
-  width: 11px;
-  height: 11px;
-  margin-top: 7px;
-  transform: rotate(45deg);
-  background: linear-gradient(135deg, #ffcb2e, #6e580f);
-  box-shadow:
-    0 0 0 1px #000,
-    0 0 8px rgb(255 203 46 / 0.35);
-}
-.quest__title {
-  display: block;
-  color: #fff;
-}
-.quest__body {
-  display: block;
-  color: var(--text-dim);
-  font-size: 0.9rem;
-}
-
 /* ─── Call to arms ─────────────────────────────────────────────────────── */
 
 .cta {
@@ -457,8 +409,7 @@ a:hover {
     border-width: 20px;
     border-image-width: 20px;
   }
-  .cta,
-  .quests {
+  .cta {
     padding: 34px 26px 36px;
   }
 }

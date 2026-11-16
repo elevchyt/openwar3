@@ -55,9 +55,12 @@ export function Downloads({ release }: { release: LatestRelease | null }) {
                 body: asset ? (
                   <>
                     <span className="mono">{asset.name}</span>
-                    <br />
-                    Needs <span className="ow3-gold">Warcraft III: The Frozen Throne 1.30.4</span>.
-                    {p.id === "windows" ? <> 32- and 64-bit; installs into your Warcraft III folder.</> : null}
+                    {p.id === "windows" ? (
+                      <>
+                        <br />
+                        32- and 64-bit; installs into your Warcraft III folder.
+                      </>
+                    ) : null}
                   </>
                 ) : (
                   <>The newest release&apos;s {p.format}.</>

@@ -23,8 +23,8 @@ const FEATURES: ReadonlyArray<{ title: string; body: string; media: Media }> = [
     media: { kind: "image", src: "/media/computerplus.avif", alt: "Three Computer+ (Normal) opponents seated in a game lobby", fit: "inset" },
   },
   {
-    title: "LAN with zero setup",
-    body: "Run the desktop app on two machines and pick Local Area Network. Games show up in each other's list within seconds — no terminal, no accounts, no cloud.",
+    title: "Multiplayer with zero setup",
+    body: "Host or join a game over the internet or your Local Area Network straight from the desktop app. No port forwarding, no accounts, no extra software.",
     media: { kind: "image", src: "/media/lan.avif", alt: "An eight-player Local Area Network lobby on Twilight Ruins counting down to start" },
   },
   {
@@ -42,16 +42,38 @@ const FEATURES: ReadonlyArray<{ title: string; body: string; media: Media }> = [
     body: "The game checks for a new release at launch and offers it in its own message box. Say yes and it downloads, installs and restarts on its own.",
     media: { kind: "image", src: "/media/updater.avif", alt: "The OpenWar3 main menu downloading an update" },
   },
+  {
+    title: "Multiplayer reconnect",
+    body: "A dropped connection no longer costs you the game. In a team game your seat is held for two minutes, and the main menu offers to put you straight back in.",
+    media: { kind: "placeholder" },
+  },
+  {
+    title: "Push-to-talk voice chat",
+    body: "Hold the / key and talk to your team in multiplayer, DotA-style. Each speaker's name lights up in their player colour.",
+    media: { kind: "placeholder" },
+  },
+  {
+    title: "Huge control groups",
+    body: "No 12-unit limit. Bind your whole army to a single group key and move it as one.",
+    media: { kind: "placeholder" },
+  },
+  {
+    title: "Select army hotkey",
+    body: "Press the - key to select every combat unit you own, workers left out. Double-tap to jump the camera to them.",
+    media: { kind: "placeholder" },
+  },
+  {
+    title: "Voice control mode",
+    body: "An accessibility option so more people can play: hold the . key and speak your orders. Speech is recognised on your own machine.",
+    media: { kind: "placeholder" },
+  },
+  {
+    title: "Proper text encoding",
+    body: "Every alphabet displays out of the box, and side by side: Cyrillic, Chinese, Korean, Greek and more in the same chat, map or name. No more empty messages and names.",
+    media: { kind: "placeholder" },
+  },
 ];
 
-const ROADMAP: ReadonlyArray<{ title: string; body: string }> = [
-  { title: "macOS build", body: "The same desktop app on the Mac, beside Linux and Windows." },
-  { title: "Multiplayer reconnect", body: "A dropped connection no longer costs you the game." },
-  { title: "Huge control groups", body: "Dozens of units bound to a single group key." },
-  { title: "Select army hotkey", body: "Every combat unit you own on one key." },
-  { title: "Voice control mode", body: "An accessibility option so more people can play." },
-  { title: "Push-to-talk voice chat", body: "Talk to your team in multiplayer, DotA-style." },
-];
 
 export default async function Home() {
   const { release, stars } = await homeData();
@@ -66,7 +88,6 @@ export default async function Home() {
           </a>
           <nav className="topbar__nav">
             <a href="#features">Features</a>
-            <a href="#roadmap">Roadmap</a>
             <a href="#contribute">Contribute</a>
           </nav>
           <div className="topbar__resources">
@@ -115,8 +136,7 @@ export default async function Home() {
             />
             <p className="hero__tagline">Warcraft III: The Frozen Throne, rebuilt in the open.</p>
             <p className="hero__lede">
-              A modern, open-source reimplementation of the Warcraft III engine. Bring your own 1.30.4 install — we bring the
-              engine.
+              A modern, open-source reimplementation of the Warcraft III engine.
             </p>
             <Downloads release={release} />
           </div>
@@ -124,7 +144,7 @@ export default async function Home() {
 
         <section id="features" className="section">
           <h2 className="ow3-heading">Features</h2>
-          <p className="section__lede">Everything below runs in the current release. Footage is on its way.</p>
+          <p className="section__lede">Everything below runs in the current release.</p>
           <div className="features">
             {FEATURES.map((f) => (
               <FeatureCard key={f.title} title={f.title} media={f.media}>
@@ -134,24 +154,6 @@ export default async function Home() {
           </div>
         </section>
 
-        <section id="roadmap" className="section">
-          <h2 className="ow3-heading">Roadmap</h2>
-          <p className="section__lede">Where the engine goes past what the original ever did.</p>
-          <Panel className="quests">
-            <h3 className="quests__heading">Main Quests</h3>
-            <ul className="quests__list">
-              {ROADMAP.map((q) => (
-                <li key={q.title} className="quest">
-                  <span className="quest__marker" aria-hidden />
-                  <span>
-                    <span className="quest__title">{q.title}</span>
-                    <span className="quest__body">{q.body}</span>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </Panel>
-        </section>
 
         <section id="contribute" className="section">
           <Panel className="cta">
