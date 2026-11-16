@@ -138,7 +138,8 @@ export class LeaderboardOverlay {
     // would draw a stretch of empty backdrop. Honour whichever is larger, so a script
     // that reserved space gets it.
     const rows = Math.max(lb.items.length, lb.rows, 1);
-    const height = (lb.showLabel && lb.label ? TITLE_H : PAD) + rows * ROW_H + PAD;
+    const titled = lb.showLabel && !!lb.label;
+    const height = (titled ? TITLE_H : PAD) + rows * ROW_H + PAD;
     this.lastHeight = height;
 
     const props = board.props.filter((p) => p.key !== "Height" && p.key !== "SetPoint");
@@ -164,7 +165,21 @@ export class LeaderboardOverlay {
               { key: "Width", args: [num(Math.max(0.02, width - 2 * inset))] },
             ],
           }
-        : c,
+        : c.name === "LeaderboardListContainer" && !titled
+          // The file hangs the row list off the TITLE's bottom edge, which is right while
+          // there is a title. A board whose label the script hid (`LeaderboardSetStyleBJ(lb,
+          // false, …)` — Prologue02's "Grunts Trained") is sized WITHOUT the title band, so
+          // a list still hung 0.032 down started below where the board ended and printed its
+          // one row under the backdrop's bottom border. With no title the list starts where
+          // the height sum says it does: PAD under the top edge.
+          ? {
+              ...c,
+              props: [
+                ...c.props.filter((p) => !(p.key === "SetPoint" && p.args[0]?.s === "TOPLEFT")),
+                { key: "SetPoint", args: [word("TOPLEFT"), s("LeaderboardBackdrop"), word("TOPLEFT"), num(0), num(-PAD)] },
+              ],
+            }
+          : c,
     );
 
     return {
