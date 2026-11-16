@@ -1452,6 +1452,7 @@ export class GameHud {
   private agiLine!: HTMLDivElement;
   private intLine!: HTMLDivElement;
   private selStatus!: HTMLDivElement; // buff/aura/debuff status icons row
+  private selStatusLabel!: HTMLDivElement; // its "Status:" lead (COLON_STATUS)
   private selStatusSlots: HTMLDivElement[] = [];
   private selHpText!: HTMLDivElement;
   private selMpText!: HTMLDivElement;
@@ -3435,9 +3436,10 @@ export class GameHud {
     this.selStats = document.createElement("div");
     this.selStats.className = "hud-sel-stats";
     // Left column: Damage + Armor blocks (icon + "Label:" over the value). Right
-    // column: ONE primary-attribute icon beside the three attribute value lines.
-    this.attackStat = makeStatBlock("Damage");
-    this.armorStat = makeStatBlock("Armor");
+    // column: ONE primary-attribute icon beside the three attribute value lines. The labels
+    // are written per frame (refreshPanelLabels): the string table loads after the HUD.
+    this.attackStat = makeStatBlock();
+    this.armorStat = makeStatBlock();
     const leftCol = document.createElement("div");
     leftCol.className = "hud-stat-col";
     leftCol.append(this.attackStat.row, this.armorStat.row);
@@ -3469,7 +3471,7 @@ export class GameHud {
     this.selStatus.hidden = true;
     const statusLabel = document.createElement("div");
     statusLabel.className = "hud-buff-label";
-    statusLabel.textContent = "Status:";
+    this.selStatusLabel = statusLabel; // worded per frame (refreshPanelLabels)
     const statusIcons = document.createElement("div");
     statusIcons.className = "hud-buff-icons";
     for (let i = 0; i < 8; i++) {
@@ -4117,6 +4119,20 @@ export class GameHud {
 
   // --- per-frame updates ----------------------------------------------------
 
+  /** The info panel's fixed labels, read out of `UI\FrameDef\InfoPanelStrings.fdf` (each key
+   *  carries its own colon) rather than typed here, so a locale or a map's `war3mapSkin.txt`
+   *  rewords them. Asked every frame because the string table loads after the HUD is built;
+   *  the DOM is only touched when a word changed. */
+  private refreshPanelLabels(): void {
+    const put = (el: HTMLElement, key: string, fallback: string): void => {
+      const word = this.driver.uiString(key, fallback);
+      if (el.textContent !== word) el.textContent = word;
+    };
+    put(this.attackStat.label, "COLON_DAMAGE", "Damage:");
+    put(this.armorStat.label, "COLON_ARMOR", "Armor:");
+    put(this.selStatusLabel, "COLON_STATUS", "Status:");
+  }
+
   private updateTexts(): void {
     const r = this.driver.resources();
     // WC3 upkeep brackets: 0–50 none, 51–80 low, 81+ high (upkeepBand).
@@ -4130,6 +4146,7 @@ export class GameHud {
       supply: r.foodUsed > r.foodMax ? `|cffff0000${r.foodUsed}/${r.foodMax}|r` : `${r.foodUsed}/${r.foodMax}`,
       upkeep: this.driver.uiString(UPKEEP_KEY[band], UPKEEP_FALLBACK[band]),
     });
+    this.refreshPanelLabels();
 
     const sel = this.driver.selection();
     // …and so is a unit with no MODEL: there is no bust to draw (an invisible dummy).
@@ -4183,7 +4200,8 @@ export class GameHud {
         this.selStats.hidden = true;
         this.selSub.textContent = "";
         this.selCarry.hidden = false;
-        this.selCarry.textContent = `Gold: ${sel.goldRemaining}`;
+        // `InfoPanelStrings.fdf` COLON_GOLD "Gold:", then the figure.
+        this.selCarry.textContent = `${this.driver.uiString("COLON_GOLD", "Gold:")} ${sel.goldRemaining}`;
       } else if (sel.cargo.length > 0) {
         // A hold with somebody INSIDE: the cargo panel takes the place of the stat lines —
         // the name, then one gold pocket per seat with the passengers' icons and health in
@@ -4231,7 +4249,7 @@ export class GameHud {
         this.statusIcon.classList.toggle("clickable", cancellable);
         if (this.queueTipped !== cancellable) {
           this.queueTipped = cancellable;
-          setGameTip(this.statusIcon, cancellable ? "Cancel" : null);
+          setGameTip(this.statusIcon, cancellable ? this.driver.uiString("CANCEL", "Cancel") : null);
         }
         // The peon walled into the site (Orc only — nothing else builds from inside), as a
         // button that selects it. Its art is the icon's own, frame included, so there is no
@@ -4251,7 +4269,7 @@ export class GameHud {
             const tip = !!qUrl && cancellable;
             if (tip !== slot.classList.contains("clickable")) {
               slot.classList.toggle("clickable", tip);
-              setGameTip(slot, tip ? "Cancel" : null);
+              setGameTip(slot, tip ? this.driver.uiString("CANCEL", "Cancel") : null);
             }
             if (qUrl) {
               slot.style.backgroundImage = `url(${qUrl})`;
@@ -4303,9 +4321,11 @@ export class GameHud {
           this.selSub.textContent = ""; // level + XP live inside the bar; no extra label
           this.xpBar.hidden = false;
           this.xpBar.classList.remove("summon");
-          // The bar reads "Level 1 Demon Hunter", as the game writes it; the raw XP
-          // numbers are the bar's hover tooltip, not its label.
-          this.xpText.innerHTML = `Level ${sel.level} ${wc3ToHtml(sel.name)}`;
+          // The bar reads "Level 1 Demon Hunter", as the game writes it — `InfoPanelStrings.fdf`
+          // INFOPANEL_LEVEL_CLASS "Level %u %s"; the raw XP numbers are the bar's hover
+          // tooltip, not its label.
+          const levelFmt = this.driver.uiString("INFOPANEL_LEVEL_CLASS", "Level %u %s");
+          this.xpText.innerHTML = wc3ToHtml(levelFmt.replace("%u", String(sel.level)).replace("%s", sel.name));
           setGameTip(this.xpBar, span > 0 ? `Experience: ${into} / ${span}` : "Experience: (max level)");
           this.xpFill.style.width = `${span > 0 ? Math.max(0, Math.min(1, into / span)) * 100 : 100}%`;
         } else if (sel.isSummon) {
@@ -4358,7 +4378,7 @@ export class GameHud {
         // substituted with. A number is also the wrong thing to print: an immune unit's armour
         // does not reduce anything, because nothing is being reduced.
         this.armorStat.value.innerHTML = sel.invulnerable
-          ? `<span class="hud-stat-invuln">Invulnerable</span>`
+          ? `<span class="hud-stat-invuln">${wc3ToHtml(this.driver.uiString("INVULNERABLE", "|Cffff0000Invulnerable|R"))}</span>`
           : `${sel.armor}${bonusHtml(sel.armorBonus)}`;
         // Hero attributes: ONE primary-attribute icon beside the three value lines.
         if (sel.isHero) {
@@ -4366,9 +4386,11 @@ export class GameHud {
           this.attrLines.hidden = false;
           const prim = sel.primaryAttr === PrimaryAttribute.Agility ? "agi" : sel.primaryAttr === PrimaryAttribute.Intelligence ? "int" : "str";
           this.setIcon(this.attrIconEl, attrIcon(prim));
-          this.strLine.innerHTML = attrLineHtml("Strength", sel.strength, sel.strengthBonus);
-          this.agiLine.innerHTML = attrLineHtml("Agility", sel.agility, sel.agilityBonus);
-          this.intLine.innerHTML = attrLineHtml("Intelligence", sel.intelligence, sel.intelligenceBonus);
+          // `InfoPanelStrings.fdf` COLON_STRENGTH / COLON_AGILITY / COLON_INTELLECT.
+          const s = (key: string, fallback: string): string => this.driver.uiString(key, fallback);
+          this.strLine.innerHTML = attrLineHtml(s("COLON_STRENGTH", "Strength:"), sel.strength, sel.strengthBonus);
+          this.agiLine.innerHTML = attrLineHtml(s("COLON_AGILITY", "Agility:"), sel.agility, sel.agilityBonus);
+          this.intLine.innerHTML = attrLineHtml(s("COLON_INTELLECT", "Intelligence:"), sel.intelligence, sel.intelligenceBonus);
         } else {
           this.attrIconEl.hidden = true;
           this.attrLines.hidden = true;
@@ -5151,10 +5173,11 @@ export class GameHud {
   }
 }
 
-interface StatBlock { row: HTMLDivElement; icon: HTMLDivElement; level: HTMLDivElement; value: HTMLDivElement; }
+interface StatBlock { row: HTMLDivElement; icon: HTMLDivElement; level: HTMLDivElement; label: HTMLDivElement; value: HTMLDivElement; }
 
-/** A stat block: [icon] then "Label:" over the value line (WC3 info panel). */
-function makeStatBlock(label: string): StatBlock {
+/** A stat block: [icon] then "Label:" over the value line (WC3 info panel). The label is
+ *  worded by the HUD's refreshPanelLabels, off the game's own string table. */
+function makeStatBlock(): StatBlock {
   const row = document.createElement("div");
   row.className = "hud-stat-block";
   const icon = document.createElement("div");
@@ -5170,12 +5193,11 @@ function makeStatBlock(label: string): StatBlock {
   text.className = "hud-stat-text";
   const lab = document.createElement("div");
   lab.className = "hud-stat-label";
-  lab.textContent = `${label}:`;
   const value = document.createElement("div");
   value.className = "hud-stat-value";
   text.append(lab, value);
   row.append(icon, text);
-  return { row, icon, level, value };
+  return { row, icon, level, label: lab, value };
 }
 type StatTip = "attack" | "armor" | "attributes";
 
@@ -5221,8 +5243,9 @@ function bonusHtml(bonus: number): string {
 // same shape the Damage and Armor blocks use, so the panel's two columns read alike rather
 // than one running its label and value together on a line. All three are identical; the
 // primary attribute is named by the ICON beside them, not by the text.
+/** `label` is the game's own string, colon included (COLON_STRENGTH "Strength:"). */
 function attrLineHtml(label: string, value: number, bonus: number): string {
-  return `<span class="hud-attr-line"><span class="attr-name">${label}:</span><span class="attr-value">${value}${bonusHtml(bonus)}</span></span>`;
+  return `<span class="hud-attr-line"><span class="attr-name">${wc3ToHtml(label)}</span><span class="attr-value">${value}${bonusHtml(bonus)}</span></span>`;
 }
 
 // WC3 infocard type icons (real BLPs under UI\Widgets\Console\Human\). Attack/
