@@ -2014,7 +2014,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
  /**
   * An MDX model instance.
   */
-@@ -48,12 +566,35 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -48,12 +566,47 @@ class MdxModelInstance extends modelinstance_1.default {
          // Any later non-forced update can then use variancy to skip updating things.
          // It is set to true every time the sequence is set with setSequence().
          this.forced = true;
@@ -2034,6 +2034,18 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
 +        this.blendTime = DEFAULT_BLEND_TIME; // duration (ms), overridable per instance
 +        this.blendRemaining = 0; // ms left in the active cross-fade (0 = not blending)
 +        this.blendSnapshot = null; // Float32Array(nodeCount*10): [loc3, rot4, scale3] per node
++        // OpenWar3: has this instance's skeleton ever been posed — has `updateNodes` sampled a
++        // clip into the node locals even once? Until it has, those locals are the nodes' BIND
++        // pose (identity TRS), which nobody has ever been shown, so a cross-fade has nothing to
++        // fade FROM. A fresh instance whose first clip is replaced before its first update — the
++        // HUD portrait does exactly that: the bust loads on its "Portrait" rest clip and the
++        // selection voice switches it to "Portrait Talk" in the same tick — otherwise spent its
++        // first 150 ms unfolding out of the bind pose, which read as the bust popping into view.
++        this.ow3Posed = false;
++        // OpenWar3 (issue #161): the shared skeleton this instance wore on its last update, or
++        // null. Wearing one, it walks no nodes, so its locals still hold the frame its clip
++        // started on; `captureBlendSnapshot` reads the pose it was actually drawn in from here.
++        this.ow3WornPose = null;
          this.geosetColors = [];
          this.layerAlphas = [];
          this.layerTextures = [];
@@ -2050,7 +2062,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
          for (let i = 0, l = model.geosets.length; i < l; i++) {
              this.geosetColors[i] = new Float32Array(4);
          }
-@@ -216,45 +757,193 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -216,45 +769,193 @@ class MdxModelInstance extends modelinstance_1.default {
       * Updates all of this instance internal nodes and objects.
       * Nodes that are determined to not be visible will not be updated, nor will any of their children down the hierarchy.
       */
@@ -2257,7 +2269,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
                  // If the attachment/emitter is visible, update it.
                  if (visibilityHeap[0] > 0) {
                      node.object.update(dt);
-@@ -262,13 +951,48 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -262,13 +963,50 @@ class MdxModelInstance extends modelinstance_1.default {
              }
              // Recalculate and update child nodes.
              // Note that this only affects normal nodes such as instances, and not skeletal nodes.
@@ -2304,10 +2316,12 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
 +        }
 +        this.ow3PoseReset = false; // OpenWar3 (issue #161): the new clip's locals are written
 +        this.ow3BonesDirty = anyDirty; // OpenWar3
++        this.ow3Posed = true; // OpenWar3: there is now a drawn pose to cross-fade from
++        this.ow3WornPose = replaySkeleton ? skeleton : null; // OpenWar3: see captureBlendSnapshot
      }
      /**
       * If a model has no sequences or is running no sequence, it will only update once since it will never be forced to update.
-@@ -362,19 +1086,58 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -362,19 +1100,58 @@ class MdxModelInstance extends modelinstance_1.default {
              }
          }
      }
@@ -2368,7 +2382,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
          for (const group of model.translucentGroups) {
              group.render(this);
          }
-@@ -421,6 +1184,12 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -421,6 +1198,12 @@ class MdxModelInstance extends modelinstance_1.default {
       */
      setTeamColor(id) {
          this.teamColor = id;
@@ -2381,7 +2395,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
          return this;
      }
      /**
-@@ -436,6 +1205,7 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -436,6 +1219,7 @@ class MdxModelInstance extends modelinstance_1.default {
      setSequence(id) {
          const model = this.model;
          const sequences = model.sequences;
@@ -2389,15 +2403,17 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
          this.sequence = id;
          if (id < 0 || id > sequences.length - 1) {
              this.sequence = -1;
-@@ -445,11 +1215,65 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -445,11 +1229,84 @@ class MdxModelInstance extends modelinstance_1.default {
          else {
              this.frame = sequences[id].interval[0];
          }
 +        // OpenWar3: start an animation cross-fade from the pose we're leaving into
 +        // the new sequence. Only blend on a real change between two live sequences
 +        // (skip the initial -1 -> first-clip set, and same-clip restarts such as a
-+        // per-swing attack re-trigger, which must hard-cut to stay in phase).
-+        if (this.blendTime > 0 && previous !== -1 && this.sequence !== -1 && previous !== this.sequence) {
++        // per-swing attack re-trigger, which must hard-cut to stay in phase). A skeleton that
++        // was never posed has no pose to leave — its locals are the bind pose (see ow3Posed) —
++        // so the new clip hard-cuts in, exactly as the first clip of a fresh instance does.
++        if (this.blendTime > 0 && this.ow3Posed && previous !== -1 && this.sequence !== -1 && previous !== this.sequence) {
 +            this.captureBlendSnapshot();
 +            this.blendRemaining = this.blendTime;
 +        }
@@ -2450,6 +2466,23 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
 +            snapshot[s + 7] = sc[0];
 +            snapshot[s + 8] = sc[1];
 +            snapshot[s + 9] = sc[2];
++        }
++        // OpenWar3 (issue #161): an instance wearing a shared skeleton walked no nodes, so for
++        // every node its clip animates the locals above are stale — the frame the clip STARTED
++        // on, when the last forced pass wrote them. What it was drawn in is the bucket's pose,
++        // whose `trs` holds exactly the animated nodes (`dirty`), in this same layout and order.
++        const worn = this.ow3WornPose;
++        if (worn !== null && worn.filled) {
++            const trs = worn.trs;
++            const dirty = worn.dirty;
++            for (let i = 0; i < l; i++) {
++                if (dirty[i]) {
++                    const s = i * 10;
++                    for (let k = 0; k < 10; k++) {
++                        snapshot[s + k] = trs[s + k];
++                    }
++                }
++            }
 +        }
 +    }
      getBounds() {
