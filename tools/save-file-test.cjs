@@ -1,8 +1,8 @@
 // SAVED GAMES (issue #159, docs/save-games.md) — the `.o3s` FILE and the folder it lives in.
 //
 // Pins the container (sections, magic, format), that a header can be read without inflating the
-// state, the version check the issue asks for (the OpenWar3 build — by its sim fingerprint — and
-// the game files), and the one writer's rules (electron/saveStore.mjs): a name is a FILE in the
+// state, the version check (the game files only — a save from another OpenWar3 build loads as it
+// is), and the one writer's rules (electron/saveStore.mjs): a name is a FILE in the
 // folder and never a path, written beside and moved over, listed newest first.
 //
 // Run: pnpm sim:test
@@ -45,12 +45,10 @@ const HEADER = {
   check("a newer format is refused", await decodeSave(newer).then(() => false, () => true));
   check("a replay is not a saved game", await decodeSave(new Uint8Array([0x4f, 0x57, 0x33, 0x52, 1, 0])).then(() => false, () => true));
 
-  // The version check (issue #159): the build by its fingerprint, the game files always.
-  check("the same fingerprint loads", saveIncompatibility(HEADER, { version: "0.9.5", fingerprint: "fp-1" }) === null);
-  check("another fingerprint is refused, whatever the version says", saveIncompatibility(HEADER, { version: "0.9.0", fingerprint: "fp-2" }) === "build");
-  check("a save with no fingerprint falls back on the version", saveIncompatibility({ ...HEADER, fingerprint: undefined }, { version: "0.9.0", fingerprint: "x" }) === null
-    && saveIncompatibility({ ...HEADER, fingerprint: undefined }, { version: "0.9.1", fingerprint: "x" }) === "build");
-  check("another game version is refused", saveIncompatibility({ ...HEADER, gameVersion: "1.31.1" }, { version: "0.9.0", fingerprint: "fp-1" }) === "game");
+  // The version check: the game files only. Another OpenWar3 build's save loads as it is.
+  check("a save from another OpenWar3 build loads", saveIncompatibility({ ...HEADER, version: "0.1.0", fingerprint: "other" }) === null
+    && saveIncompatibility({ ...HEADER, fingerprint: undefined }) === null);
+  check("another game version is refused", saveIncompatibility({ ...HEADER, gameVersion: "1.31.1" }) === "game");
 
   // The store.
   const { createSaveStore, safeSaveName } = await import(join(REPO, "electron", "saveStore.mjs"));

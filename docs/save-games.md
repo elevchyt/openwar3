@@ -83,11 +83,13 @@ the Lua VM, so a Lua map cannot be saved (`saveRefusal`).
 
 ## Versions
 
-A save is a build's memory, and another build's memory may be another shape. The header carries
-the OpenWar3 version, its commit and its SIM FINGERPRINT (`tools/sim-fingerprint.mjs`, the hash a
-replay carries), the game files (1.30.4 — the only target, checked anyway) and the edition. A save
-loads when the fingerprint matches; otherwise it is refused with the reason
-(`saveIncompatibility`). A save also names its map by path and hash, its campaign chapter (so a
+The header carries the OpenWar3 version, its commit and its SIM FINGERPRINT
+(`tools/sim-fingerprint.mjs`, the hash a replay carries), the game files and the edition. Only the
+GAME FILES are checked (1.30.4 — the only target, checked anyway) and the edition (the two read
+different object tables). A save from another OpenWar3 build loads as it is, with no question
+and no warning (the developer's call): most releases change nothing a save holds, and one that
+did simply loads a match that is not quite right — the header still says which build wrote it.
+A save also names its map by path and hash, its campaign chapter (so a
 victory after the load is still credited, and Continue still leads on), and its balance patch.
 
 ## Not saveable

@@ -136,7 +136,9 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   listed is saved, which is the safe way round. A sleeping JASS thread is saved as its TRACE
   (`TraceRec`): every generator records where it is, and a load restarts the same generators on
   it. A Lua map cannot be saved (`saveRefusal`). The dev build's `devStateHash` compares two
-  matches field by field; `?dev&loadsave=<name>` loads one (`&anysave` past the version check).
+  matches field by field; `?dev&loadsave=<name>` loads one. A save from ANOTHER OpenWar3 build
+  loads with no check and no warning (the developer's call — "if it breaks it breaks"); only the
+  game files (1.30.4) and the edition are checked.
 - **Data folder:** read [`electron/dataDir.mjs`](electron/dataDir.mjs) before adding a file the
   desktop app keeps. OpenWar3's data folder (`%APPDATA%\openwar3`, `~/.config/openwar3`) holds
   OUR files at the top — `settings.json`, `.logs/`, `replays/`, `saves/` — and the browser engine's in

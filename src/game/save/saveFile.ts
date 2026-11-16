@@ -13,11 +13,11 @@
 //   SCEN  what the SCENE was showing that only the scene knows — the camera, the cinematic
 //         letterbox, the special effects a script placed — rebuilt on load (MapViewerScene).
 //
-// THE VERSION CHECK (the issue's own words): a save is the engine's memory, and another build's
-// memory is a different shape. So a save names the OpenWar3 build that wrote it and its SIM
-// FINGERPRINT (tools/sim-fingerprint.mjs — the same hash replays carry), and the game files it was
-// made on (1.30.4 is the only target, and checked anyway). Load Saved Game refuses a save from
-// another fingerprint in the game's own words rather than load a match that is quietly wrong.
+// VERSIONS: a save names the OpenWar3 build that wrote it (version, commit and SIM FINGERPRINT —
+// tools/sim-fingerprint.mjs, the hash replays carry) and the game files it was made on. Only the
+// game files are CHECKED (1.30.4 is the only target); a save from another OpenWar3 build loads as
+// it is, and if that build laid the match out differently, it simply loads wrong (the
+// developer's call — `saveIncompatibility`).
 //
 // Kept free of the DOM and the renderer: the headless save tests compile it for Node.
 
@@ -128,16 +128,14 @@ export async function readSaveHeader(bytes: Uint8Array): Promise<SaveHeader> {
 }
 
 /**
- * Why THIS build cannot load a save, or null when it can (the issue: "loading a saved game must
- * check that saved game's openwar3 version that it was saved in as well as the game version").
+ * Why THIS build cannot load a save, or null when it can: only the GAME FILES are checked (1.30.4
+ * is the only target, and the issue asks for the check anyway).
  *
- * The engine's memory only means the same thing to a build that lays it out the same way, which
- * is exactly what the sim fingerprint hashes — so a save loads when the fingerprint matches (a
- * release that only touched the menus changes nothing a save holds) or, for a save written by a
- * build with no fingerprint, when the version does.
+ * A save from another OpenWar3 build is loaded as it is, with no question asked (the developer's
+ * call): most releases change nothing a save holds, and one that did simply loads a match that
+ * is not quite right. The build's version, commit and sim fingerprint stay in the header, so a
+ * save that misbehaves can always say which build wrote it.
  */
-export function saveIncompatibility(h: SaveHeader, build: { version: string; fingerprint: string }): "game" | "build" | null {
-  if (h.gameVersion !== SAVE_GAME_VERSION) return "game";
-  if (h.fingerprint && build.fingerprint) return h.fingerprint === build.fingerprint ? null : "build";
-  return h.version === build.version ? null : "build";
+export function saveIncompatibility(h: SaveHeader): "game" | null {
+  return h.gameVersion !== SAVE_GAME_VERSION ? "game" : null;
 }

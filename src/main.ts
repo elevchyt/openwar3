@@ -811,9 +811,8 @@ async function saveCurrentGame(name: string): Promise<string> {
 
 /** Why a save cannot be loaded HERE — in words for the Load screen — or null when it can. */
 function saveLoadRefusal(h: SaveHeader): string | null {
-  const why = saveIncompatibility(h, { version: __OW3_VERSION__, fingerprint: __OW3_SIM_FINGERPRINT__ });
-  if (why === "game") return `This game was saved on Warcraft III ${h.gameVersion}; OpenWar3 plays ${SAVE_GAME_VERSION}.`;
-  if (why === "build") return `This game was saved by OpenWar3 ${h.version}${h.commit ? ` (${h.commit})` : ""}, which this version (${__OW3_VERSION__}) cannot load.`;
+  // Another OpenWar3 build's save loads as it is — only the game files are checked.
+  if (saveIncompatibility(h) === "game") return `This game was saved on Warcraft III ${h.gameVersion}; OpenWar3 plays ${SAVE_GAME_VERSION}.`;
   if (h.edition !== (isRoc() ? "roc" : "tft")) return h.edition === "roc" ? "This game was saved in Reign of Chaos." : "This game was saved in The Frozen Throne.";
   return null;
 }
@@ -828,16 +827,14 @@ async function loadSavedGame(name: string): Promise<void> {
   if (!raw) throw new Error(`there is no saved game named ${name}`);
   const save = await decodeSave(raw);
   const h = save.header;
-  // DEV: `?dev&anysave` loads a save from another build anyway, to probe one while the sim moves.
   const refusal = saveLoadRefusal(h);
-  if (refusal && !(import.meta.env.DEV && new URLSearchParams(location.search).has("anysave"))) throw new Error(refusal);
+  if (refusal) throw new Error(refusal);
   // The map: an install map off a list, else (a campaign chapter, the credits) out of the archives.
   const vfs = resolver.installSource;
   const listed = replayMapPath(installMaps, h.map.path);
   const file = listed ? installMaps.get(listed) : undefined;
   const bytes = file ? new Uint8Array(await file.arrayBuffer()) : vfs ? await readMapBytes(vfs, h.map.path) : null;
   if (!bytes) throw new Error(`The map "${h.map.name}" is not in this install.`);
-  if (fnv64(bytes) !== h.map.hash) console.warn(`[save] ${h.map.path} is not the map this game was saved on — loading it anyway`);
   if (h.patch && h.patch !== patchLevel()) {
     try {
       setPatchLevel(h.patch);
