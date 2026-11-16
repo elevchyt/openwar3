@@ -1,3 +1,5 @@
+import { saveSink } from "../game/save/saveSink";
+import { readSaveHeader } from "../game/save/saveFile";
 import { loadProfile } from "../vfs/loader";
 import { decodeReplay, type Replay } from "../game/replay";
 import { replaySink } from "../game/replaySink";
@@ -84,6 +86,8 @@ export interface DevBootHooks {
   startChapter(name: string, difficulty: string): Promise<void>;
   /** Play the main menu's Credits (`?credits`) — a map out of the archives, like a chapter. */
   startCredits(): Promise<void>;
+  /** Load a saved game out of the saves folder by its file name (`?loadsave=`, issue #159). */
+  loadSavedGame(name: string): Promise<void>;
 }
 
 const log = (msg: string): void => console.info(`[dev-boot] ${msg}`);
@@ -286,6 +290,18 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
     if (hit && hit !== mapPath && !listed.includes(hit)) listed.push(hit);
   }
 
+  // `?loadsave=<name>` — LOAD a saved game out of the saves folder (issue #159). Its map is
+  // mounted with the rest when it is an install map; a campaign chapter's comes out of the archives.
+  const loadSave = params.get("loadsave");
+  if (loadSave) {
+    const bytes = await saveSink().read(loadSave);
+    if (!bytes) throw new Error(`no saved game named ${loadSave} in .saves/`);
+    const want = (await readSaveHeader(bytes)).map.path;
+    const leaf = (p: string): string => p.split(/[\\/]/).pop()!.toLowerCase();
+    const hit = manifest.maps.find((m) => m === want) ?? manifest.maps.find((m) => leaf(m) === leaf(want));
+    if (hit && hit !== mapPath && !listed.includes(hit)) listed.push(hit);
+  }
+
   const extra = listed.length ? ` + ${listed.length} map(s) for the lobby list` : "";
   const store = manifest.casc ? "the CASC content store" : `${archives.length} archives`;
   log(`fetching ${store}${mapPath ? ` + ${mapPath}` : ""}${extra}…`);
@@ -336,6 +352,12 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
     const info = parseMapInfo(new Uint8Array(await mapFile.arrayBuffer()), path!);
     await hooks.startGame(mapFile, info, devConfig(info));
   };
+
+  if (loadSave) {
+    log(`loading saved game ${loadSave}`);
+    await hooks.loadSavedGame(loadSave);
+    return;
+  }
 
   if (replay) {
     log(`watching replay ${replayName}`);

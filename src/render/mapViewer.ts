@@ -22,6 +22,14 @@ import { summonsBuildings, castCostOf, isOffField, CARRIED_ONTO_SHEET, type Aler
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintBuildable, footprintCellsAt, footprintRadius, quarterTurns, rotateFootprint, type Footprint, type PlacedFootprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { frameModel, loadMapScript, type MapScriptEngine } from "../jass/index";
+import { decodeGraph, encodeGraph, newEncodeStats, type DecodeReport, type EncodeStats, type GraphDoc } from "../game/save/graph";
+import { registerSaveClasses } from "../game/save/classes";
+import { isRenderObject, registerGameSaveClasses } from "../game/save/gameClasses";
+import { externalResolver, externalsFor, type SaveRegistries } from "../game/save/matchSave";
+import type { SaveFile, SavedScene } from "../game/save/saveFile";
+import { saveFileName, saveSink } from "../game/save/saveSink";
+import { mintedOrders, restoreMintedOrders } from "../jass/orders";
+import { jStr, JNULL } from "../jass/values";
 import { learnOrderStrings } from "../jass/orders";
 import { localizedHotkey } from "../jass/natives/text";
 import { setWidePlayerTable } from "../data/enums";
@@ -88,7 +96,7 @@ import { MELEE_NORMAL as MELEE_AI_NORMAL } from "../ai/ids";
 import { DEFAULT_GAME_SPEED, gameSpeedLabel, gameSpeedRate, type GameSpeed } from "../data/gameSpeed";
 import { MatchLog, type LogSeat } from "../game/matchLog";
 import { matchLogSink } from "../game/matchLogSink";
-import { CHECK_EVERY, Phase, ReplayPlayer, ReplayRecorder, encodeReplay, readReplayHeader, type ReplayEnding, type ReplayEvent, type ReplayHeader, type ReplayView } from "../game/replay";
+import { CHECK_EVERY, Phase, ReplayPlayer, ReplayRecorder, encodeReplay, fnv64, readReplayHeader, type ReplayEnding, type ReplayEvent, type ReplayHeader, type ReplayView } from "../game/replay";
 import type { ReplayControls } from "../ui/replayPanel";
 import { diffDumps, stateDump, stateHash } from "../game/replayHash";
 import { STATE_EVERY, StateTracker } from "../game/replayState";
@@ -245,6 +253,20 @@ const BASE_FILES = [
  */
 const SIM_HZ = 60;
 const SIM_DT = 1 / SIM_HZ;
+
+/** common.j `EVENT_GAME_LOADED = ConvertGameEvent(256)`, `EVENT_GAME_SAVE = ConvertGameEvent(259)`. */
+const EVENT_GAME_LOADED = 256;
+
+/** The SimWorld queues the RENDERER drains once a frame (effects, sounds, flashes) — state for a
+ *  save, but not for comparing two matches step by step (`devStateHash`). */
+const SIM_RENDER_QUEUES = new Set([
+  "hits", "chops", "treeHits", "attackSwings", "spawnedProjectiles", "removedProjectiles", "projectileImpacts",
+  "spellEffects", "spellSplats", "spellLightnings", "spellLightningStops", "castStarts", "castFires", "combatTexts",
+  "refusals", "levelUps", "alerts", "powerupPickups", "itemSpawns", "itemRemovals", "deaths", "removals", "felled",
+  "depleted", "morphs", "attackReveals", "deathReveals", "itemReveals", "researchCompletions", "buildCompletions",
+  "foodStalls", "mirrorMissiles", "addedMines", "deadStructures",
+]);
+const EVENT_GAME_SAVE = 259;
 /** Catch-up steps allowed in one frame before the remainder is dropped. Without a cap, a
  *  long stall (tab-switch, GC) queues more work than the next frame can retire, which
  *  queues still more — the classic spiral of death. */
@@ -1045,6 +1067,8 @@ function lerp4(a: readonly number[], b: readonly number[], k: number): [number, 
 /** One live script `effect` (7.26 — issue #68): the model AddSpecialEffect* put in the
  *  world, held until the script's DestroyEffect. See MapViewerScene.specialFx. */
 interface SpecialFx {
+  /** The model, as the script named it (`.mdl` folded to `.mdx`) — what a saved game re-creates it from. */
+  path: string;
   /** null while the model is still loading — the handle exists before the art does. */
   inst: SpawnInstance | null;
   /** Seconds since the script created it. THE effect's clock: an mdx instance only
@@ -3167,8 +3191,24 @@ export class MapViewerScene {
     // The last match's replay is not this one's: the score screen offers nothing until this
     // match has one of its own (recorded here, or handed over by the host at the end).
     lastReplay = null;
+    this.refreshKnownSaves(); // what `SaveGameExists` answers from (issue #159)
+    // The config as it was RESOLVED — what a saved game writes in its header, so a load lays the
+    // same map out for the same seats with the same rolled races (docs/save-games.md).
+    this.resolvedConfig = {
+      ...config,
+      seed,
+      replay: undefined,
+      replayResume: undefined,
+      slots: config.slots.map((s) => ({ ...s, race: races.get(s.id) ?? s.race, random: s.random || s.race === "random" })),
+    };
     const rts = this.rts;
     if (!rts) return;
+    // A match LOADED from a saved game records nothing: a replay is the inputs from the START,
+    // and this one began in the middle (WC3 keeps no replay of a loaded game either).
+    if (this.pendingSave) {
+      rts.replayAiInputs = null;
+      return;
+    }
     if (this.replayPlayback) {
       // The computers are seated as usual but never think: their decisions are in the file.
       rts.replayAiInputs = () => this.replayInject(Phase.Ai);
@@ -3517,6 +3557,404 @@ export class MapViewerScene {
     return n > 0 ? Math.floor(n) : CHECK_EVERY;
   })();
 
+  // --- saved games (issue #159, docs/save-games.md) -----------------------------------------------
+  //
+  // A saved game is this match's MEMORY written down, not a replay: `captureSave` hands the codec
+  // (game/save/graph.ts) the authoritative objects — the world, the controller's books, the map's
+  // script with its sleeping threads — and gathers what only this scene knows (the camera, what a
+  // script put on the screen) beside them. Loading one is the map's own start with the script's
+  // `config`/`main` NOT run (`pendingSave`, read by startMelee/startCustom): the map is laid out,
+  // its placed units are adopted, its computers are seated, and then `applySave` writes the saved
+  // state over all of it and gives every unit the save has a body.
+
+  /** The saved game this match is to be loaded from (main.ts `loadSavedGame`), until it is. */
+  private pendingSave: SaveFile | null = null;
+  setPendingSave(save: SaveFile | null): void {
+    this.pendingSave = save;
+  }
+
+  /** Where the F10 menu's Save Game and Load Game go (main.ts `saveCurrentGame`/`loadSavedGame`). */
+  onSaveGame: ((name: string) => Promise<void>) | null = null;
+  onLoadGame: ((name: string) => void) | null = null;
+
+  /** The name the Save panel offers: the map's and the moment, as the Save Replay panel names a
+   *  replay — so a second save off the same map does not land on the first. */
+  private suggestedSaveName(): string {
+    const d = new Date();
+    const p = (n: number): string => String(n).padStart(2, "0");
+    const title = (this.mapDisplayName || "Saved Game").replace(/\|c[0-9a-f]{8}|\|r/gi, "").replace(/[<>:"/\\|?*]/g, "").trim();
+    return `${title} ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
+  }
+
+  /** A `SaveGame` / `LoadGame` the map's script asked for, carried out between steps. */
+  private pendingScriptSave: string | null = null;
+  private pendingScriptLoad: string | null = null;
+  /** The saves on disk, lowercased — what `SaveGameExists` answers from (it cannot wait on a
+   *  disk), refreshed at the start of the match and after every save. */
+  private knownSaves = new Set<string>();
+  private refreshKnownSaves(): void {
+    void saveSink().list().then((all) => (this.knownSaves = new Set(all.map((f) => f.name.toLowerCase())))).catch(() => undefined);
+  }
+
+  /** Carry out the script's save or load request: EVENT_GAME_SAVE first — the map's own
+   *  triggers get their say, `GetSaveBasicFilename` answering — then the save itself. */
+  private servePendingScriptSave(): void {
+    const save = this.pendingScriptSave;
+    const load = this.pendingScriptLoad;
+    this.pendingScriptSave = this.pendingScriptLoad = null;
+    if (save !== null && this.onSaveGame && !this.saveRefusal()) {
+      const rt = this.mapScript?.interp.rt;
+      if (rt) {
+        const responses = new Map([["SaveBasicFilename", jStr(saveFileName(save).replace(/\.o3s$/i, ""))]]);
+        this.mapScript?.interp.fireEvent("gameEvent", responses, (p) => rt.enumIndex(p[0] ?? JNULL) === EVENT_GAME_SAVE);
+      }
+      void this.onSaveGame(save).then(() => this.refreshKnownSaves(), (err) => console.warn("[save] the script's SaveGame failed:", err));
+    }
+    if (load !== null) this.onLoadGame?.(load);
+  }
+
+  /** The match was loaded from a saved game — for the tests, and for nothing that changes play. */
+  loadedFromSave = false;
+
+  /** DEV: called after every sim step — the save/load equivalence harness (docs/save-games.md
+   *  "Verified") reads the state at exact steps through it. */
+  devStepHook: ((tick: number) => void) | null = null;
+
+  /** DEV: a hash of the whole match state as a saved game would write it — every root, every
+   *  field — so two matches can be compared for being the SAME match, not merely alike. */
+  devStateHash(): string {
+    const json = this.devStateJson();
+    return `${fnv64(new TextEncoder().encode(json))}:${json.length}`;
+  }
+
+  /** DEV: the encoded state `devStateHash` hashes, for finding where two matches parted. Three
+   *  things are left out because they move with the FRAMES rather than the steps — the sim's
+   *  render queues, a viewpoint's `visible` layer (the fog pass resamples it on a real-time
+   *  throttle), and the APM meter's window (pruned when the observer HUD reads it) — and wiring
+   *  is folded to null, since whether a hook is installed (the match log opens on the first
+   *  unheld frame; a loaded match records no replay) is not the match. */
+  devStateJson(): string {
+    registerSaveClasses();
+    registerGameSaveClasses();
+    const ext = externalsFor(this.saveRegistries());
+    return JSON.stringify(encodeGraph(this.saveRoots(), {
+      externalKey: ext.keyOf, opaque: isRenderObject,
+      transient: (c, f) => (c === "sim.SimWorld" && SIM_RENDER_QUEUES.has(f)) || (c === "sim.VisionMap" && f === "visible") || c === "game.ApmMeter",
+    })).replace(/\{"f":1\}/g, "null");
+  }
+
+  /** This match's lobby config as it was RESOLVED (beginReplay) — a saved game's header. */
+  private resolvedConfig: MeleeConfig | null = null;
+  matchConfig(): MeleeConfig | null {
+    return this.resolvedConfig;
+  }
+
+  /** Why this match cannot be saved right now, as a GlobalStrings key where the game has one —
+   *  or null when it can. The game itself refuses in a multiplayer game it is not hosting and
+   *  while a cinematic's SAVE is locked out; we add the two things only we cannot carry. */
+  saveRefusal(): string | null {
+    if (!this.rts || !this.viewer.map) return "no match";
+    if (this.replayPlayback) return "a replay";
+    if (this.rts.frozenClient || this.hostSeat !== null) return "a multiplayer game";
+    if (this.matchEnded) return "a finished match";
+    if (this.startHeld) return "the loading screen";
+    if (this.mapScript?.lua) return "a Lua map";
+    const why = this.mapScript?.interp.unsaveable();
+    return why ?? null;
+  }
+
+  private saveRegistries(): SaveRegistries {
+    return { units: this.registry, abilities: this.abilities, items: this.items, upgrades: this.upgrades, tech: this.tech };
+  }
+
+  /** The roots of a saved game's state (game/save/matchSave.ts). The SAME shape on both ends:
+   *  `applySave` writes the saved roots over these, field by field. */
+  private saveRoots(): Record<string, unknown> {
+    const rts = this.rts!;
+    return {
+      sim: rts.simWorld,
+      rts,
+      script: this.mapScript?.interp ?? null,
+      minted: mintedOrders(),
+    };
+  }
+
+  /** Write this match down. Throws when it cannot be (`saveRefusal`). */
+  captureSave(): { state: GraphDoc; scene: SavedScene; gameTime: number; localPlayer: number; stats: EncodeStats } {
+    const why = this.saveRefusal();
+    if (why) throw new Error(`cannot save ${why}`);
+    registerSaveClasses();
+    registerGameSaveClasses();
+    // A path search half-way through cannot be written down: land it now (SimWorld.settleForSave).
+    this.rts!.simWorld.settleForSave();
+    const ext = externalsFor(this.saveRegistries());
+    const stats = newEncodeStats();
+    const state = encodeGraph(this.saveRoots(), { externalKey: ext.keyOf, opaque: isRenderObject }, stats);
+    if (stats.unregistered.size) console.warn(`[save] classes the save registry does not name (docs/save-games.md): ${[...stats.unregistered].join(" | ")}`);
+    return { state, scene: this.captureScene(), gameTime: this.rts!.simWorld.elapsed, localPlayer: this.localPlayer, stats };
+  }
+
+  /** What only the scene knows about the match, for a saved game. */
+  private captureScene(): SavedScene {
+    const rts = this.rts!;
+    return {
+      aiSeats: rts.aiSeatLog.map(([p, s]) => [p, s] as [number, string]),
+      camera: {
+        target: [this.target[0], this.target[1], this.target[2]],
+        distance: this.distance, yaw: this.yaw, pitch: this.pitch, fov: this.fov, roll: this.roll, farZ: this.farZ,
+        zOffset: this.zOffset, playerDistance: this.playerDistance, playerPitch: this.playerPitch,
+      },
+      gameSpeed: this.speed,
+      difficulty: this.gameDifficulty,
+      defaultDifficulty: this.defaultDifficulty,
+      interfaceShown: this.interfaceShown,
+      userUi: this.userUi,
+      userControl: this.userControl,
+      destructibles: this.destructibles.map((d) => [d.id, d.life] as [number, number]),
+      destSimIds: [...this.destSimIds],
+      matchDecided: this.matchDecided,
+      questFlashesSeen: this.questFlashesSeen,
+      looks: rts.captureLooks(),
+      // A script's special effects: re-created under the SAME ids its `effect` handles carry.
+      specialFx: [...this.specialFx].filter(([, fx]) => !fx.doomed && !fx.spent).map(([id, fx]) => [id, {
+        path: fx.path, age: fx.age, hostId: fx.hostId, attach: fx.attach, x: fx.x, y: fx.y, z: fx.z,
+        yaw: fx.yaw, pitch: fx.pitch, roll: fx.roll, scale: fx.scale, color: fx.color, teamColor: fx.teamColor,
+        tags: fx.tags, played: fx.played,
+      }]),
+      nextSpecialFxId: this.nextSpecialFxId,
+      // Where the camera may go, the map's own fog and the presentation switches a cinematic flips.
+      mapBounds: this.mapBounds,
+      terrainFog: this.terrainFog,
+      scriptPaused: this.scriptPaused,
+      terrainEdits: this.terrainEdits,
+      waterTint: this.waterTint,
+      sky: this.skyPath,
+      music: this.music,
+      // The script's LOOPING sounds that are playing (an ambient loop, a fire crackling): started
+      // again. A one-shot line in the middle of being spoken is not resumed.
+      loops: (this.mapScript?.interp.rt.sounds ?? []).filter((snd) => snd.looping && this.sounds?.isScriptPlaying(snd.handleId)).map((snd) => snd.handleId),
+      cineFilter: this.cinematic?.liveFilter() ?? null,
+      weather: this.weather?.snapshot() ?? null,
+      bolts: this.lightning?.scriptSnapshot() ?? [],
+      nextScriptBoltId: this.nextScriptBoltId,
+      splats: [...this.scriptSplats].map(([id, sp]) => [id, { ...sp, def: sp.def.id }]),
+      nextScriptSplatId: this.nextScriptSplatId,
+      images: [...this.scriptImages],
+      nextScriptImageId: this.nextScriptImageId,
+    };
+  }
+
+  /**
+   * Write a saved game over the match that has just been laid out for it (`pendingSave`).
+   *
+   * Everything the map's start made is still standing: its placed units adopted with their
+   * bodies, its trees and mines, its computers seated (`aiSeats`, replayed here in the order the
+   * script asked). The codec then writes the saved world, controller and script INTO those same
+   * objects; what is left is the PICTURE — the entries are reconciled with the world as it now is
+   * (`RtsController.reconcileAfterLoad`), and everything the save has that the map's start did not
+   * (a trained army, a raised mine, an item on the ground, a missile in flight) gets its model.
+   */
+  private async applySave(save: SaveFile): Promise<void> {
+    const rts = this.rts!;
+    const world = rts.simWorld;
+    const map = this.viewer.map!;
+    const scene = save.scene as SavedScene;
+    registerSaveClasses();
+    registerGameSaveClasses();
+    // The computers, on the scripts their seats were asked for — so each brain the save writes
+    // back has the wiring it would have had (its host, its own JASS VM).
+    for (const [player, script] of scene.aiSeats ?? []) rts.startMeleeAIFor(player, script);
+    rts.prepareForLoad();
+    // What the map's start laid out, to tell afterwards what the save has done to it.
+    const freshMines = new Map([...world.mines].map(([id, m]) => [id, { x: m.x, y: m.y }]));
+    const freshTrees = new Map([...world.trees].map(([id, t]) => [id, { x: t.x, y: t.y }]));
+    const freshDest = new Map(this.destructibles.map((d) => [d.id, d.life]));
+    const report: DecodeReport = { lost: [], missingExternals: [] };
+    const out = decodeGraph(save.state, this.saveRoots(), { resolveExternal: externalResolver(this.saveRegistries()) }, report) as { minted?: Array<[string, number]> };
+    restoreMintedOrders(out.minted ?? []);
+    if (report.lost.length || report.missingExternals.length) {
+      console.warn(`[save] the load could not restore ${report.lost.length + report.missingExternals.length} value(s): ${[...report.lost, ...report.missingExternals].slice(0, 40).join(" | ")}`);
+    }
+    this.loadedFromSave = true;
+
+    // --- the picture ------------------------------------------------------------------------------
+    const { needBody, retyped } = rts.reconcileAfterLoad();
+    for (const r of retyped) void this.remodelUnit(r.id, r.to);
+    for (const u of needBody) {
+      const def = this.registry.get(u.typeId) ?? this.destDefs.get(u.typeId);
+      if (!def) continue;
+      // The record, its stamp and its seat are the save's; only the BODY is new.
+      const fp = def.isBuilding && def.pathTex && this.grid ? this.footprintFor(def.pathTex) : null;
+      if (fp) {
+        const [seatW, seatH] = seatHalfExtents(def, fp);
+        rts.setBuildingFootprint(u.id, seatW, seatH);
+      }
+      if (def.isBuilding && def.uberSplat) {
+        this.simBuildingSplats.add(u.id);
+        this.addBuildingSplat(u.id, def, u.x, u.y);
+      }
+      if (def.model) void this.spawnUnit(def, u.x, u.y, u.owner, u.team, 0, u.facing, u.id, true);
+    }
+    // Mines: one the save no longer has ran dry or was removed; one it has that the map did not
+    // place was raised by a script.
+    for (const [id, m] of freshMines) {
+      if (world.mines.has(id)) continue;
+      this.removeNodeVisual(id, m.x, m.y, map.units as unknown as HideableWidget[]);
+      this.splats?.remove(`m${id}`);
+    }
+    for (const m of world.mines.values()) {
+      if (!freshMines.has(m.id)) void this.raiseScriptMine(m);
+      // …and a mine an Entangled or Haunted Gold Mine stands on keeps its own model hidden.
+      if (m.entangledBy > 0 && world.units.has(m.entangledBy)) this.claimMineWidget(m.entangledBy, m.id, this.mineWidget(m.id, m.x, m.y));
+    }
+    // Trees: a felled one is gone from the world — posed as its stump (the grid and the fog
+    // already have it down; both are the save's).
+    for (const [id, t] of freshTrees) {
+      if (world.trees.has(id)) continue;
+      this.nodeFootprints.delete(id);
+      const rec = this.destructibles.find((r) => r.isTree && r.life > 0 && r.x === t.x && r.y === t.y);
+      if (rec) rec.life = 0;
+      this.dropTreeModel(t.x, t.y, map.doodads, true);
+    }
+    // Destructibles the save has dead that the map placed alive (a gate opened, a crate broken)
+    // are posed as their wreckage, and the other way round stood up — the pathing grid is the
+    // save's already, so nothing is re-stamped and no death is announced to the script again.
+    const lifeById = new Map(scene.destructibles ?? []);
+    for (const d of this.destructibles) {
+      const life = lifeById.get(d.id);
+      if (life === undefined) continue;
+      const was = freshDest.get(d.id) ?? 0;
+      d.life = life;
+      if (d.isTree) continue;
+      if (life <= 0 && was > 0) this.poseDestructibleDead(d);
+      else if (life > 0 && was <= 0) this.playDestructibleClip(d, /^stand$/i, false);
+    }
+    // Ground items, corpses and missiles in flight: each wants its model.
+    for (const it of world.items.values()) void this.spawnItemModel(it.id, it.itemId, it.x, it.y);
+    for (const c of world.corpses.values()) if (!c.raised) void this.spawnCorpseBody(c.id, c.unitId, c.x, c.y, c.facing);
+    for (const p of world.projectiles.values()) {
+      if (this.projectileLoading.has(p.id) || !p.art) continue;
+      this.projectileLoading.add(p.id);
+      void this.loadProjectile(p.id, p.art);
+    }
+    // Blight and the minimap re-read the whole grid.
+    this.blightSweepDue = true;
+    this.minimapBlightStale = true;
+    this.applyScene(scene);
+    rts.restoreLooks((scene.looks as Parameters<RtsController["restoreLooks"]>[0]) ?? []);
+    // A script's special effects, under the ids its handles hold.
+    const fxs = (scene.specialFx as Array<[number, Partial<SpecialFx> & { path: string }]>) ?? [];
+    for (const [id, saved] of fxs) {
+      const fx: SpecialFx = {
+        path: saved.path, inst: null, age: saved.age ?? 0, spent: false, standing: false, standIdx: -1,
+        clips: { hasBirth: false, birthStart: 0, birthSecs: 0, hasStand: false },
+        hidden: true, hostId: saved.hostId ?? -1, attach: saved.attach ?? [], parented: false, x: saved.x ?? 0, y: saved.y ?? 0, doomed: false,
+        z: saved.z ?? null, yaw: saved.yaw ?? 0, pitch: saved.pitch ?? 0, roll: saved.roll ?? 0, scale: saved.scale ?? 1,
+        color: saved.color ?? [1, 1, 1, 1], teamColor: saved.teamColor ?? -1, tags: saved.tags ?? [], played: saved.played ?? null,
+      };
+      this.specialFx.set(id, fx);
+      void this.loadSpecialFx(id, fx.path, fx);
+    }
+    if (typeof scene.nextSpecialFxId === "number") this.nextSpecialFxId = Math.max(this.nextSpecialFxId, scene.nextSpecialFxId);
+    if (this.mapScript) {
+      this.syncEventCaptures(this.mapScript);
+      // EVENT_GAME_LOADED — what a campaign hangs "put the music back on" off.
+      const rt = this.mapScript.interp.rt;
+      this.mapScript.interp.fireEvent("gameEvent", new Map(), (p) => rt.enumIndex(p[0] ?? JNULL) === EVENT_GAME_LOADED);
+    }
+  }
+
+  /** A destructible that is dead in a loaded game: its death clip's last frame, at once. */
+  private poseDestructibleDead(d: MapDestructible): void {
+    const map = this.viewer.map;
+    const w = map ? this.nearestDoodadWidget(d.x, d.y, map.doodads as unknown as HideableWidget[]) : null;
+    if (!w) return;
+    const a = this.doodadActor(w);
+    if (!a) {
+      w.instance.hide();
+      this.removedWidgets.add(w);
+      return;
+    }
+    this.playActorDeath(a, true);
+  }
+
+  /** The scene's own half of a saved game, put back (captureScene). */
+  private applyScene(s: SavedScene): void {
+    // What a script did to the map's look: its terrain edits in order, its water, its sky, the
+    // camera's wall and the fog.
+    for (const e of (s.terrainEdits as Array<[number, number, string, number, number, number]>) ?? []) this.setTerrainType(...e);
+    if (s.waterTint) this.setWaterTint(s.waterTint as [number, number, number, number]);
+    if (typeof s.sky === "string" && s.sky) this.setSky(s.sky);
+    if (s.mapBounds) this.mapBounds = s.mapBounds as WorldRect;
+    const fog = s.terrainFog as [number, number, number, number, number] | null | undefined;
+    if (fog) {
+      this.mapFog = makeFog(...fog);
+      this.terrainFog = fog;
+    }
+    this.scriptPaused = s.scriptPaused === true;
+    // The soundtrack, the script's looping sounds, the fade, the weather, its bolts, splats and images.
+    const music = s.music as MapViewerScene["music"] | undefined;
+    if (music) {
+      this.music = music;
+      if (music.map) this.sounds?.setMapMusic(...music.map);
+      if (music.thematic) this.sounds?.playThematicMusic(music.thematic, 0);
+      else if (music.play && !music.stopped) this.sounds?.playMusic(music.play, 0, 0);
+    }
+    const rt = this.mapScript?.interp.rt;
+    for (const id of (s.loops as number[]) ?? []) {
+      const snd = rt?.sounds.find((x) => x.handleId === id);
+      if (snd) rt?.hooks?.playSound?.(snd);
+    }
+    const fade = s.cineFilter as ReturnType<CinematicPanelOverlay["liveFilter"]>;
+    if (fade) this.cinematic?.restoreFilter(fade.filter, fade.t);
+    if (s.weather && this.weather) {
+      this.weatherDefs ??= loadWeatherRegistry(this.vfs);
+      const defs = this.weatherDefs;
+      this.weather.restore(s.weather as ReturnType<WeatherOverlay["snapshot"]>, (id) => defs.get(id));
+    }
+    for (const [id, req] of (s.bolts as Array<[number, Parameters<LightningOverlay["addScript"]>[1]]>) ?? []) this.lightning?.addScript(id, req);
+    if (typeof s.nextScriptBoltId === "number") this.nextScriptBoltId = Math.max(this.nextScriptBoltId, s.nextScriptBoltId);
+    for (const [id, saved] of (s.splats as Array<[number, Omit<ScriptSplat, "def"> & { def: string }]>) ?? []) {
+      const def = this.uberSplatRegistry().get(saved.def);
+      if (!def || !this.splats) continue;
+      this.splats.add(saved.key, saved.x, saved.y, def.scale, def.texture, { alpha: 0 });
+      this.scriptSplats.set(id, { ...saved, def });
+    }
+    if (typeof s.nextScriptSplatId === "number") this.nextScriptSplatId = Math.max(this.nextScriptSplatId, s.nextScriptSplatId);
+    for (const [id, img] of (s.images as Array<[number, ScriptImage]>) ?? []) {
+      this.scriptImages.set(id, img);
+      this.placeScriptImage(img);
+    }
+    if (typeof s.nextScriptImageId === "number") this.nextScriptImageId = Math.max(this.nextScriptImageId, s.nextScriptImageId);
+    // The letterbox and the HUD follow the switches a cinematic flipped.
+    this.cinematic?.setLetterbox(s.interfaceShown === false, 0);
+    const c = s.camera;
+    if (c) {
+      this.target[0] = c.target[0];
+      this.target[1] = c.target[1];
+      this.target[2] = c.target[2];
+      this.distance = c.distance;
+      this.yaw = c.yaw;
+      this.pitch = c.pitch;
+      this.fov = c.fov;
+      this.roll = c.roll;
+      this.farZ = c.farZ;
+      this.zOffset = c.zOffset;
+      this.playerDistance = c.playerDistance;
+      this.playerPitch = c.playerPitch;
+      this.zoomT = 1;
+    }
+    if (s.gameSpeed !== undefined) this.setGameSpeed(s.gameSpeed);
+    this.gameDifficulty = s.difficulty ?? this.gameDifficulty;
+    this.defaultDifficulty = s.defaultDifficulty ?? this.defaultDifficulty;
+    this.interfaceShown = s.interfaceShown ?? true;
+    this.userUi = s.userUi ?? true;
+    this.userControl = s.userControl ?? true;
+    this.syncHudVisible();
+    this.matchDecided = s.matchDecided ?? false;
+    this.questFlashesSeen = s.questFlashesSeen ?? 0;
+  }
+
   /** The map this match is played on, as a replay names it (main.ts, before setup). */
   setReplayMap(map: ReplayHeader["map"], install = ""): void {
     this.replayMap = map;
@@ -3752,6 +4190,15 @@ export class MapViewerScene {
     await this.waitForMapUnits(onProgress);
     this.rts.seedModellessPlaced((path) => this.assetFiles().exists(path)); // …including the ones the renderer never delivers (dummy units)
     await this.preloadScriptHost();
+    // A SAVED GAME: the map is laid out as it was at the start, and the save is written over it
+    // (applySave) instead of the script's init running.
+    const save = this.pendingSave;
+    if (save) {
+      this.pendingSave = null;
+      this.runMapScript({ melee: true, races, slots: config.slots, restore: true });
+      await this.applySave(save);
+      return;
+    }
     const engine = this.runMapScript({ melee: true, races, slots: config.slots });
     // No script (or it created nothing for the local player — a script that leans on
     // natives we haven't written yet): fall back to our own roster so the match still
@@ -4158,12 +4605,16 @@ export class MapViewerScene {
     // messages appear in the HUD message log.
     await this.preloadScriptHost();
     const openedAt = [this.target[0], this.target[1]];
+    // A SAVED GAME (applySave): the script is parsed and its init is NOT run — the save's own
+    // runtime is written over it below, once the map's own computer seats are made.
+    const save = this.pendingSave;
+    this.pendingSave = null;
     // …with the races `beginMatch` already ROLLED. A "random" seat resolved a second time here
     // played one race in the script (GetPlayerRace → MeleeStartingUnitsForPlayer, the AI's
     // race file) while the roster, the console skin and the match log reported another — an
     // observed (4)Monolith listed its Night Elf as "human" and its Human as "orc".
-    this.runMapScript({ melee: false, races, slots: config.slots });
-    this.openOnScriptStart(openedAt);
+    this.runMapScript({ melee: false, races, slots: config.slots, restore: !!save });
+    if (!save) this.openOnScriptStart(openedAt);
     // COMPUTER+ ON EXTREME CANDY WAR (src/ai/plus/candy/, docs/candy-war-ai.md). A scenario runs none
     // of the melee library, so no script will ever call `StartMeleeAI` here — the lobby's computers
     // in the map's HERO seats are seated by us, once the script has shown it is this map. The two
@@ -4188,6 +4639,7 @@ export class MapViewerScene {
         .filter((s) => s.controller === "computer" && WARCHASERS_HERO_SEATS.has(s.id))
         .map((s) => ({ player: s.id, difficulty: s.aiDifficulty ?? MELEE_AI_NORMAL })));
     }
+    if (save) await this.applySave(save);
     this.rts.holdWorld(false); // the map has had its say — let the world run
     console.info(`[openwar3] Custom map: ${seeds.length} pre-placed player unit(s) seeded owned (issue #33)${dummies ? `, plus ${dummies} model-less dummy unit(s)` : ""}.`);
   }
@@ -4491,6 +4943,10 @@ export class MapViewerScene {
         if (result === PLAYER_GAME_RESULT_VICTORY && player === this.localPlayer) this.onLocalVictory?.();
       },
       pauseGame: (flag) => (this.scriptPaused = flag),
+      // SAVED GAMES from the script (natives/saves.ts): requests, carried out between steps.
+      saveGame: (name) => void (this.pendingScriptSave = name),
+      loadGame: (name) => void (this.pendingScriptLoad = name),
+      saveGameExists: (name) => this.knownSaves.has(saveFileName(name).toLowerCase()),
       // EnableUserUI hides EVERYTHING, interface and all — blizzard.j calls it before each
       // cinematic fade (the filter covers the world, not the UI, so the UI has to go). It is
       // a different switch from ShowInterface's letterbox, and the HUD needs both to be on.
@@ -4534,12 +4990,33 @@ export class MapViewerScene {
       soundIsPlaying: (id) => this.sounds?.isScriptPlaying(id) ?? false,
       moveSound: (id, x, y, z) => this.sounds?.moveScript(id, { x, y, z }),
       soundFileDuration: (file) => this.sounds?.fileDurationMs(file) ?? 0,
-      setMapMusic: (name, random, index) => this.sounds?.setMapMusic(name, random, index),
-      clearMapMusic: () => this.sounds?.clearMapMusic(),
-      playMusic: (name, fromMs, fadeInMs) => this.sounds?.playMusic(name, fromMs, fadeInMs),
-      stopMusic: (fadeOut) => this.sounds?.stopMusic(fadeOut),
-      resumeMusic: () => this.sounds?.resumeMusic(),
-      playThematicMusic: (name, fromMs) => this.sounds?.playThematicMusic(name, fromMs),
+      // The music calls are also written down (`music`), for a saved game to start the same
+      // soundtrack again (docs/save-games.md).
+      setMapMusic: (name, random, index) => {
+        this.music.map = [name, random, index];
+        this.sounds?.setMapMusic(name, random, index);
+      },
+      clearMapMusic: () => {
+        this.music.map = null;
+        this.sounds?.clearMapMusic();
+      },
+      playMusic: (name, fromMs, fadeInMs) => {
+        this.music.play = name;
+        this.music.stopped = false;
+        this.sounds?.playMusic(name, fromMs, fadeInMs);
+      },
+      stopMusic: (fadeOut) => {
+        this.music.stopped = true;
+        this.sounds?.stopMusic(fadeOut);
+      },
+      resumeMusic: () => {
+        this.music.stopped = false;
+        this.sounds?.resumeMusic();
+      },
+      playThematicMusic: (name, fromMs) => {
+        this.music.thematic = name;
+        this.sounds?.playThematicMusic(name, fromMs);
+      },
       endThematicMusic: () => this.sounds?.endThematicMusic(),
       setMusicVolume: (v) => this.sounds?.setMusicVolume(v),
       setVolumeGroup: (group, scale) => this.sounds?.setVolumeGroup(group, scale),
@@ -4591,9 +5068,11 @@ export class MapViewerScene {
       // FOGSTART 2000, FOGEND 4000, FOGCOLOR 0x808080, its w3i and its main() to the digit.
       setTerrainFog: (_style, zstart, zend, _density, r, g, b) => {
         this.mapFog = makeFog(zstart, zend, r, g, b);
+        this.terrainFog = [zstart, zend, r, g, b]; // …as asked, for a saved game
       },
       resetTerrainFog: () => {
         this.mapFog = this.w3iFog;
+        this.terrainFog = null;
       },
       // --- the boundary tint: the veil over the unplayable area (issue #117) ---
       // Purely this machine's picture, like the two fog switches it travels with in
@@ -4861,10 +5340,21 @@ export class MapViewerScene {
   /** The script's sky (`SetSkyModel` — render/sky.ts), made on the first call. */
   private sky: SkyDome | null = null;
 
+  /** The script's `SetTerrainFogEx` (start, end, r, g, b), or null for the map's own — a saved
+   *  game re-makes the fog from these, since the fog itself holds GPU-shaped arrays. */
+  private terrainFog: [number, number, number, number, number] | null = null;
+
+  /** What the script asked of the music, for a saved game. */
+  private music: { map: [string, boolean, number] | null; play: string | null; thematic: string | null; stopped: boolean } = { map: null, play: null, thematic: null, stopped: false };
+
+  /** The sky the script asked for last, for a saved game ("" = none). */
+  private skyPath = "";
+
   /** SetSkyModel: the named sky around the eye from now on; "" takes it away. */
   private setSky(path: string): void {
     const world = this.viewer.map?.worldScene;
     if (!world) return;
+    this.skyPath = path;
     if (!this.sky) {
       if (!skyModelPath(path)) return; // no sky asked for, and none up
       this.sky = new SkyDome(this.viewer as unknown as SkyViewer, this.solver, world);
@@ -4923,7 +5413,7 @@ export class MapViewerScene {
     }
   }
 
-  private runMapScript(opts: { melee: boolean; races?: Map<number, PlayableRace>; slots: SlotConfig[] }): MapScriptEngine | null {
+  private runMapScript(opts: { melee: boolean; races?: Map<number, PlayableRace>; slots: SlotConfig[]; restore?: boolean }): MapScriptEngine | null {
     if (!this.mapArchive) return null;
     try {
       const lobby = {
@@ -4965,6 +5455,8 @@ export class MapViewerScene {
       const engine = loadMapScript(this.vfs, this.mapArchive, {
         melee: opts.melee,
         runMain: true,
+        // A saved game is being loaded: parse and declare, run nothing (see applySave).
+        restore: opts.restore,
         hooks: this.textHooks(),
         worldWritingHooks: this.worldWritingHookNames(),
         localViewHooks: this.localViewHookNames(),
@@ -7010,7 +7502,12 @@ export class MapViewerScene {
 
   /** SetTerrainType. Changes land at once — nothing says a re-tiled patch waits for the
    *  player to look, as blight's spreading does. */
+  /** Every SetTerrainType the script made, in order — a saved game re-lays them on the map's own
+   *  tiles (docs/save-games.md); each one overwrites what it covers, so replaying in order is exact. */
+  private terrainEdits: Array<[number, number, string, number, number, number]> = [];
+
   private setTerrainType(x: number, y: number, tile: string, variation: number, area: number, shape: number): void {
+    this.terrainEdits.push([x, y, tile, variation, area, shape]);
     const t = this.terrainData;
     const at = this.terrainCorner(x, y);
     const map = this.viewer.map as unknown as W3xMap | null;
@@ -8323,7 +8820,7 @@ export class MapViewerScene {
     if (!model) return -1;
     const id = this.nextSpecialFxId++;
     const fx: SpecialFx = {
-      inst: null, age: 0, spent: false, standing: false, standIdx: -1,
+      path: model, inst: null, age: 0, spent: false, standing: false, standIdx: -1,
       clips: { hasBirth: false, birthStart: 0, birthSecs: 0, hasStand: false },
       hidden: true, hostId, attach, parented: false, x, y, doomed: false,
       z: null, yaw: 0, pitch: 0, roll: 0, scale: 1, color: [1, 1, 1, 1], teamColor: -1, tags: [], played: null,
@@ -11136,6 +11633,15 @@ export class MapViewerScene {
       // …and the Gameplay panel's Game Speed slider: live in single player, the host's in LAN.
       gameSpeed: () => this.gameSpeedState(),
       setGameSpeed: (speed) => { if (!this.gameSpeedState().locked) this.setGameSpeed(speed); },
+      // SAVED GAMES (issue #159): the panels are the menu's, the writing and the loading main.ts's.
+      saves: () => (this.onSaveGame ? saveSink() : null),
+      saveRefusal: () => this.saveRefusal(),
+      suggestedSaveName: () => this.suggestedSaveName(),
+      onSaveGame: (name) => this.onSaveGame?.(name) ?? Promise.reject(new Error("saving is not available")),
+      onLoadGame: (name) => {
+        this.gameMenu?.hide();
+        this.onLoadGame?.(name);
+      },
     });
     this.allies?.dispose();
     this.allies = new AllianceDialogOverlay(ui, this.vfs, SKIN_SECTION[this.localRace], {
@@ -16163,6 +16669,8 @@ export class MapViewerScene {
       this.simTick++;
       this.stepStage = null;
       this.replayStepDone();
+      if (this.pendingScriptSave !== null || this.pendingScriptLoad !== null) this.servePendingScriptSave();
+      if (import.meta.env.DEV) this.devStepHook?.(this.simTick);
       this.simAccum -= SIM_DT;
       steps++;
       this.stepCost = this.stepCost * 0.9 + (performance.now() - stepAt) * 0.1;

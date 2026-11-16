@@ -120,9 +120,26 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   is part of the map and RUNS on playback. In a LAN game only the HOST records, and it hands every
   peer the file when the game ends (`replaypart`, docs/replays.md) — which is why a closing
   direct link DRAINS before it tears down (`DirectLinks.close`).
+- **Saved games:** read [`docs/save-games.md`](docs/save-games.md) before touching
+  [`src/game/save/`](src/game/save/), the interpreter's `Trace`/`captureThreads`, a class that holds
+  match state, or `MapViewerScene.captureSave`/`applySave`. A save (`.o3s`, `saves/` beside
+  `replays/`) is the match's MEMORY, not its inputs: the object GRAPH under three roots (the
+  SimWorld, the RtsController, the map's JASS VM) written by identity, with the object tables'
+  rows written as KEYS and functions as markers. A load lays the map out as its own start does
+  (placed units adopted, script parsed, `config`/`main` NOT run, the computers re-seated from
+  `aiSeatLog`) and writes the save INTO those objects, so they keep their wiring. Three rules keep
+  it exact, and the round-trip tests enforce them: STATE MAY NOT LIVE IN A CLOSURE (the random
+  streams are fields — `SimWorld.rngState`, `Mulberry32`, `sim/streams.ts`; a stream behind
+  `() => number` comes back rewound), every class that can hold state is REGISTERED in
+  `game/save/classes.ts` / `gameClasses.ts` (a minified build renames `constructor.name`), and a
+  field that is a cache, a scratch buffer or the picture is listed TRANSIENT there — anything not
+  listed is saved, which is the safe way round. A sleeping JASS thread is saved as its TRACE
+  (`TraceRec`): every generator records where it is, and a load restarts the same generators on
+  it. A Lua map cannot be saved (`saveRefusal`). The dev build's `devStateHash` compares two
+  matches field by field; `?dev&loadsave=<name>` loads one (`&anysave` past the version check).
 - **Data folder:** read [`electron/dataDir.mjs`](electron/dataDir.mjs) before adding a file the
   desktop app keeps. OpenWar3's data folder (`%APPDATA%\openwar3`, `~/.config/openwar3`) holds
-  OUR files at the top — `settings.json`, `.logs/`, `replays/` — and the browser engine's in
+  OUR files at the top — `settings.json`, `.logs/`, `replays/`, `saves/` — and the browser engine's in
   `Chromium/` under it: Electron's `userData` is pointed there before `ready`, so a new file of
   ours goes in `DATA_DIR` (main.mjs), never `app.getPath("userData")`, and a new top-level name
   joins `OURS` there, or the first launch after an update moves it into `Chromium/`. An install

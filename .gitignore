@@ -29,6 +29,7 @@ Warcraft III/
 # Local recordings of local play — machine-specific, regenerated every match, never shared.
 .logs/
 .replays/
+.saves/
 release/
 build/
 .cdn-cache/

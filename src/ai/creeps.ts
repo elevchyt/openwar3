@@ -61,7 +61,7 @@ export class CreepCaster {
 }
 
 /** The neutral side, as `AiCaster` wants to see a player. */
-class CreepView implements CasterView {
+export class CreepView implements CasterView {
   /** Every map-placed creep is owner -1 (see jassOwnerOf), which is the "player" the caster
    *  groups its own units by. Neutral PASSIVE units share the slot and pass through `pass()`
    *  as "own" too, harmlessly: a shop is a building (`canAct` refuses it) and a critter has no

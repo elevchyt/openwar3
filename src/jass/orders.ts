@@ -57,6 +57,24 @@ const ABILITY_ORDER_BASE = 0x000e0000; // 917504 — clear of the 0xD block
 let nextAbilityOrderId = ABILITY_ORDER_BASE;
 const MINTED = new Map<string, number>();
 
+/** The minted ids, for a saved game (docs/save-games.md): they are handed out in the order a
+ *  match first SAW each string, so the match a save is loaded into — which has seen other
+ *  strings, or the same ones in another order — must take the saved match's numbering, or every
+ *  order id a script kept in a variable would name a different order. */
+export function mintedOrders(): Array<[string, number]> {
+  return [...MINTED];
+}
+export function restoreMintedOrders(list: ReadonlyArray<readonly [string, number]>): void {
+  for (const [name, id] of MINTED) if (ID_TO_STRING.get(id) === name) ID_TO_STRING.delete(id);
+  MINTED.clear();
+  nextAbilityOrderId = ABILITY_ORDER_BASE;
+  for (const [name, id] of list) {
+    MINTED.set(name, id);
+    ID_TO_STRING.set(id, name);
+    nextAbilityOrderId = Math.max(nextAbilityOrderId, id + 1);
+  }
+}
+
 /** Name → integer id: the engine's own where it has one (orderIds.ts), else a minted,
  *  stable one. */
 export function orderStringToId(s: string): number {

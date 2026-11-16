@@ -116,6 +116,18 @@ contextBridge.exposeInMainWorld("ow3native", {
       }
     },
   },
+  /**
+   * SAVED GAMES (src/game/save/saveFile.ts, issue #159): `saves/` in the data folder, beside
+   * `replays/`. The game's own Save Game panel writes and deletes, Load Saved Game lists and reads.
+   * Names only — the shell picks the folder.
+   */
+  saves: {
+    write: (name, bytes) => ipcRenderer.invoke("ow3:save-write", String(name ?? ""), bytes),
+    list: () => ipcRenderer.invoke("ow3:save-list"),
+    read: (name) => ipcRenderer.invoke("ow3:save-read", String(name ?? "")),
+    exists: (name) => ipcRenderer.invoke("ow3:save-exists", String(name ?? "")),
+    remove: (name) => ipcRenderer.invoke("ow3:save-delete", String(name ?? "")),
+  },
   /** Keep a map a LAN game handed us, in the install's Maps\Download\ (src/assets/downloadedMaps.ts).
    *  The page names a FILE, never a folder: the shell puts it in that one folder or nowhere. */
   saveMap: (name, bytes) => ipcRenderer.invoke("ow3:map-save", String(name), bytes),

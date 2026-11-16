@@ -1,3 +1,4 @@
+import { Mulberry32Stream } from "../../../sim/streams";
 import type { ChatLine } from "../../../game/chat";
 import { PrimaryAttribute } from "../../../data/enums";
 import { MELEE } from "../../../data/gameplayConstants";
@@ -67,6 +68,8 @@ interface Brain {
   profile: WarChasersProfile;
   plus: PlusProfile;
   rng: () => number;
+  /** The stream `rng` draws from, as STATE (sim/streams.ts) — what a saved game writes. */
+  stream: Mulberry32Stream;
   clock: number;
   thinkIn: number;
   castIn: number;
@@ -262,7 +265,8 @@ export class WarChasersAi {
 
   add(player: number, difficulty: number, seed: number): void {
     if (this.brains.some((b) => b.player === player)) return;
-    const rng = mulberry32((seed ^ Math.imul(player + 7, 0x9e3779b1)) >>> 0);
+    const stream = new Mulberry32Stream((seed ^ Math.imul(player + 7, 0x9e3779b1)) >>> 0);
+    const rng = (): number => stream.next();
     const plus = plusProfile(difficulty);
     const allied = (u: SimUnit): boolean => u.owner !== player && this.alliedSeat(player, u.owner);
     const hostile = (u: SimUnit): boolean => this.hostileTo(player, u);
@@ -272,7 +276,7 @@ export class WarChasersAi {
     const refuses = (_u: SimUnit, code: string, t: SimUnit): boolean => t.isHero && !hostile(t) && PARTY_HEALS[code] === "unit";
     const view = { world: this.host.world, player, def: (id: string) => this.host.abilities.get(id), hostile, allied, order, refuses };
     this.brains.push({
-      player, profile: warChasersProfile(difficulty), plus, rng,
+      player, profile: warChasersProfile(difficulty), plus, rng, stream,
       clock: 0, thinkIn: rng() * 0.5, castIn: rng() * plus.castPeriod,
       caster: new PlusCaster(view, plus, rng),
       // The belt is the melee Computer+'s: when to drink is the same question on every map. Its race
@@ -1538,15 +1542,3 @@ export class WarChasersAi {
 const PLAYER_NEUTRAL_HOSTILE = 12;
 
 const pct = (u: SimUnit): number => (u.maxHp > 0 ? u.hp / u.maxHp : 0);
-
-/** A small seeded stream, so every computer's decisions replay for the same match seed. */
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}

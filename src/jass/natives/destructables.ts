@@ -51,11 +51,8 @@ const info = (c: NativeCtx, d: JassDestructable | undefined): DestructableSnapsh
 /** One handle per map record, interned per runtime — so the `gg_dest_*` a map sets in main(),
  *  the handle `EnumDestructablesInRect` hands a filter, and the one a later `ModifyGateBJ`
  *  operates on are all the same object, and JASS `==` between them is true. */
-const interned = new WeakMap<Runtime, Map<number, JassDestructable>>();
-
 function handleFor(c: NativeCtx, mapId: number, fallback: Omit<JassDestructable, "handleId">): JassValue {
-  let byMapId = interned.get(c.rt);
-  if (!byMapId) interned.set(c.rt, (byMapId = new Map()));
+  const byMapId = c.rt.nativeTable<number, JassDestructable>("destructable");
   const existing = mapId > 0 ? byMapId.get(mapId) : undefined;
   if (existing) return jHandle(existing.handleId, "destructable");
   const d: JassDestructable = { handleId: 0, ...fallback, mapId };

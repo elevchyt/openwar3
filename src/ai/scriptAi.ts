@@ -99,7 +99,7 @@ type Holder = "attack" | "defense" | "guard" | "ignored" | null;
  * The DEFENSE captain is what a campaign's `CampaignDefender*` rows fill (`BuildDefenders` →
  * `AddDefenders`): units held at home that answer an enemy in the town and walk back after it.
  */
-class ScriptCaptain {
+export class ScriptCaptain {
   readonly members = new Set<number>();
   /** `InitAssault`/`AddAssault` — what the group wants, by type. */
   private desired = new Map<string, number>();
@@ -498,7 +498,7 @@ interface GuardPost {
  * no one to the post again; and units a TRIGGER creates for the computer get posts too, which is
  * why HumanX03 calls Ignore on `GetLastCreatedUnit()` a dozen times.
  */
-class GuardPosts {
+export class GuardPosts {
   readonly posts: GuardPost[] = [];
   /** Units whose post was IGNORED: never used, never replaced, never walked back. */
   readonly ignored = new Set<number>();
@@ -620,7 +620,7 @@ class GuardPosts {
 }
 
 /** One computer running a script of its own. */
-class ScriptSeat {
+export class ScriptSeat {
   readonly ai: AiPlayer;
   readonly interp: Interpreter;
   /** `ATTACK_CAPTAIN` and `DEFENSE_CAPTAIN` (common.ai). */

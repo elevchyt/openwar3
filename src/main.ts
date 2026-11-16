@@ -23,6 +23,11 @@ import { replaySink } from "./game/replaySink";
 
 /** OpenWar3's version, from package.json (vite.config.ts `define`). */
 declare const __OW3_VERSION__: string;
+declare const __OW3_COMMIT__: string;
+declare const __OW3_SIM_FINGERPRINT__: string;
+import { decodeSave, encodeSave, saveIncompatibility, SAVE_FORMAT, SAVE_GAME_VERSION, type SaveFile, type SaveHeader } from "./game/save/saveFile";
+import { saveSink } from "./game/save/saveSink";
+import { mountLoadSavedGameScreen } from "./ui/fdfLoadSavedGame";
 import { creditsMap, loadCampaigns, type Campaign, type CampaignEntry } from "./data/campaigns";
 import { isRoc, setEdition, setMapDataSet } from "./data/edition";
 import {
@@ -42,7 +47,7 @@ import { watchForUpdates } from "./ui/updatePrompt";
 import { startGamepad } from "./ui/gamepad";
 import { mountOptions } from "./ui/fdfOptions";
 import { applyAudioOptions, loadOptions } from "./data/options";
-import { profilePlayerName } from "./data/profiles";
+import { activeProfile, profilePlayerName } from "./data/profiles";
 import { applyVideoOptions } from "./render/videoQuality";
 import { applyHealthBarOptions } from "./render/worldOverlays";
 import { applyHotkeyOptions } from "./data/hotkeys";
@@ -223,6 +228,11 @@ async function enterMap(bytes: Uint8Array, name: string): Promise<string> {
     mapScene.onChangeLevel = (path) => void changeLevel(path);
     // …and the defeat dialog's Restart, which plays THIS map again.
     mapScene.onRestart = (difficulty) => void restartMatch(difficulty);
+    // The F10 menu's Save Game / Load Game (issue #159). A replay window has neither.
+    if (!replayBridge()) {
+      mapScene.onSaveGame = async (name) => void (await saveCurrentGame(name));
+      mapScene.onLoadGame = (name) => void loadSavedGame(name).catch((err) => console.warn("[save] could not load:", err));
+    }
     mapScene.loadMap(bytes);
     mapScene.start();
     return `${name} — authentic render (textures & models stream in)`;
@@ -562,6 +572,7 @@ function singlePlayerScreen(vfs: DataSource): GlueScreenDef {
       onCampaign: () => void openCampaignScreen(vfs),
       onCustomCampaign: () => void glue.goTo(customCampaignScreen(vfs)),
       onViewReplay: () => void glue.goTo(viewReplayScreen(vfs)),
+      onLoadSaved: () => void glue.goTo(loadSavedScreen(vfs)),
       onCustomGame: () => void glue.goTo(skirmishScreen(vfs)),
       onCancel: () => void glue.goTo(mainMenuScreen(vfs)),
       movePanel: (side, play, wearing) => menuScene?.sidePanel(side, play, wearing) ?? 0,
@@ -578,6 +589,19 @@ function customCampaignScreen(vfs: DataSource): GlueScreenDef {
     chrome: "BattlenetCustomCreate",
     mount: () => mountCustomCampaignScreen(ui, vfs, {
       onCancel: () => void glue.goTo(singlePlayerScreen(vfs)),
+    }),
+  };
+}
+
+/** Single Player → Load Saved Game (issue #159). The same chrome as View Replay — the two FDFs
+ *  are the same shape (ui/fdfLoadSavedGame.ts). */
+function loadSavedScreen(vfs: DataSource): GlueScreenDef {
+  return {
+    chrome: "BattlenetCustomCreate",
+    mount: () => mountLoadSavedGameScreen(ui, vfs, installMaps, saveSink(), {
+      onCancel: () => void glue.goTo(singlePlayerScreen(vfs)),
+      onLoad: (name) => void loadSavedGame(name).catch((err) => console.warn("[save] could not load:", err)),
+      refusal: saveLoadRefusal,
     }),
   };
 }
@@ -744,6 +768,97 @@ async function changeLevel(mapPath: string): Promise<void> {
   await startGame(bytes, info, campaignConfig(info, difficulty, title), undefined, undefined, mapPath);
 }
 
+// --- saved games (issue #159, docs/save-games.md) -------------------------------------------------
+
+/**
+ * Save the match on screen as `name` (the F10 menu's Save Game, or a script's `SaveGame`).
+ * Resolves to the file name it was written as; throws with the reason it could not be.
+ *
+ * The scene writes the match down (`MapViewerScene.captureSave`); this adds what only this module
+ * knows — which map file it was, which campaign chapter, which profile — and the version check's
+ * half of the header.
+ */
+async function saveCurrentGame(name: string): Promise<string> {
+  const scene = mapScene;
+  const m = lastMatch;
+  const config = scene?.matchConfig();
+  if (!scene || !m || !config) throw new Error("there is no match to save");
+  const cap = scene.captureSave();
+  const header: SaveHeader = {
+    format: SAVE_FORMAT,
+    version: __OW3_VERSION__,
+    commit: __OW3_COMMIT__,
+    fingerprint: __OW3_SIM_FINGERPRINT__,
+    gameVersion: SAVE_GAME_VERSION,
+    install: installFlavour,
+    savedAt: new Date().toISOString(),
+    gameTime: cap.gameTime,
+    name,
+    map: { path: m.mapFile ?? m.path ?? m.info.name, name: m.info.name, hash: fnv64(m.bytes), size: m.bytes.length, melee: m.info.isMelee },
+    config,
+    campaign: pendingCampaign ? { ...pendingCampaign, difficulty: campaignState?.difficulty ?? loadDifficulty() } : undefined,
+    profile: activeProfile() ?? undefined,
+    edition: isRoc() ? "roc" : "tft",
+    patch: patchLevel(),
+    localPlayer: cap.localPlayer,
+  };
+  const bytes = await encodeSave({ header, state: cap.state, scene: cap.scene });
+  const written = await saveSink().write(name, bytes);
+  if (!written) throw new Error("the file could not be written");
+  console.info(`[save] ${written}: ${(bytes.length / 1024).toFixed(0)} KB, ${cap.state.nodes.length.toLocaleString()} objects, at ${cap.gameTime.toFixed(1)} s`);
+  return written;
+}
+
+/** Why a save cannot be loaded HERE — in words for the Load screen — or null when it can. */
+function saveLoadRefusal(h: SaveHeader): string | null {
+  const why = saveIncompatibility(h, { version: __OW3_VERSION__, fingerprint: __OW3_SIM_FINGERPRINT__ });
+  if (why === "game") return `This game was saved on Warcraft III ${h.gameVersion}; OpenWar3 plays ${SAVE_GAME_VERSION}.`;
+  if (why === "build") return `This game was saved by OpenWar3 ${h.version}${h.commit ? ` (${h.commit})` : ""}, which this version (${__OW3_VERSION__}) cannot load.`;
+  if (h.edition !== (isRoc() ? "roc" : "tft")) return h.edition === "roc" ? "This game was saved in Reign of Chaos." : "This game was saved in The Frozen Throne.";
+  return null;
+}
+
+/**
+ * LOAD a saved game: put its map on the screen as its own start would — the same file, the same
+ * resolved config, the same campaign chapter and balance patch — and hand the scene the save to
+ * write over it (`startGame`'s `restore`). Throws with the reason it could not be loaded.
+ */
+async function loadSavedGame(name: string): Promise<void> {
+  const raw = await saveSink().read(name);
+  if (!raw) throw new Error(`there is no saved game named ${name}`);
+  const save = await decodeSave(raw);
+  const h = save.header;
+  // DEV: `?dev&anysave` loads a save from another build anyway, to probe one while the sim moves.
+  const refusal = saveLoadRefusal(h);
+  if (refusal && !(import.meta.env.DEV && new URLSearchParams(location.search).has("anysave"))) throw new Error(refusal);
+  // The map: an install map off a list, else (a campaign chapter, the credits) out of the archives.
+  const vfs = resolver.installSource;
+  const listed = replayMapPath(installMaps, h.map.path);
+  const file = listed ? installMaps.get(listed) : undefined;
+  const bytes = file ? new Uint8Array(await file.arrayBuffer()) : vfs ? await readMapBytes(vfs, h.map.path) : null;
+  if (!bytes) throw new Error(`The map "${h.map.name}" is not in this install.`);
+  if (fnv64(bytes) !== h.map.hash) console.warn(`[save] ${h.map.path} is not the map this game was saved on — loading it anyway`);
+  if (h.patch && h.patch !== patchLevel()) {
+    try {
+      setPatchLevel(h.patch);
+    } catch (err) {
+      console.warn(`[save] saved on patch ${h.patch}, which this build does not have:`, err);
+    }
+  }
+  const info = parseMapInfo(bytes, h.map.name);
+  // A chapter is still the chapter: its victory is credited to it, and Continue leads on.
+  if (h.campaign) {
+    if (!campaigns.length && vfs) campaigns = await loadCampaigns(vfs);
+    const c = campaigns.find((x) => x.key === h.campaign!.key);
+    pendingCampaign = { key: h.campaign.key, index: h.campaign.index };
+    if (c) campaignState = { campaign: c, chapters: true, difficulty: h.campaign.difficulty as Difficulty };
+  } else {
+    pendingCampaign = null;
+  }
+  if (mapScene) endMatch();
+  await startGame(bytes, info, h.config, undefined, undefined, h.map.path, save);
+}
+
 /**
  * `RestartGame` — the defeat dialog's **Restart**, and its **Reduce Difficulty**.
  *
@@ -793,7 +908,7 @@ async function rewindReplay(at: number, view: ReplayView): Promise<void> {
 }
 
 /** The match on screen, kept so `RestartGame` can play it again. */
-let lastMatch: { bytes: Uint8Array; info: MapInfo; config: MeleeConfig; path?: string } | null = null;
+let lastMatch: { bytes: Uint8Array; info: MapInfo; config: MeleeConfig; path?: string; mapFile?: string } | null = null;
 
 /** Which campaign row a `Maps\…\Foo.w3x` path is, if the index names it. Compared on the
  *  path the index itself carries — case- and separator-insensitively, because a script types
@@ -978,6 +1093,8 @@ async function startGame(
    *  REPLAY of the match names it by, so View Replay can find it again; a display name there is
    *  a replay nobody can open. */
   mapPath?: string,
+  /** A SAVED GAME to load into this match instead of starting it (issue #159, `loadSavedGame`). */
+  restore?: SaveFile,
 ): Promise<void> {
   meleeConfig = config;
   matchLink = link ?? null;
@@ -1045,10 +1162,14 @@ async function startGame(
     loading?.setMinimapPreview(previewOf(bytes));
     await step(0.15, () => enterMap(bytes, info.name));
     mapScene?.setLoadingScreen(true); // the first match's scene exists only from here
+    mapScene?.setPendingSave(restore ?? null);
     // What a REPLAY of this match names its map by (issue #158): the install's own path for it
     // when it came off a list, the bytes' hash so the same name is not taken for the same map.
+    // …and a SAVED GAME names it the same way (issue #159), so Load finds the same file again.
+    const resolvedPath = mapPath ?? (map instanceof File ? [...installMaps].find(([, f]) => f === map)?.[0] : undefined);
+    if (lastMatch && resolvedPath) lastMatch.mapFile = resolvedPath;
     mapScene?.setReplayMap({
-      path: mapPath ?? (map instanceof File ? [...installMaps].find(([, f]) => f === map)?.[0] : undefined) ?? config.mapName ?? info.name,
+      path: resolvedPath ?? config.mapName ?? info.name,
       name: info.name,
       hash: fnv64(bytes),
       size: bytes.length,
@@ -1552,6 +1673,7 @@ if (replayBridge()) {
         watchReplay,
         startChapter,
         startCredits: () => startCredits(resolver.installSource!),
+        loadSavedGame,
       }),
     )
     .catch((err) => {
@@ -1585,6 +1707,9 @@ if (replayBridge()) {
     return vfs && t ? showScoreScreen(vfs, t).then(() => glue.uncover()) : Promise.resolve();
   },
   lastScores: () => lastScores,
+  // SAVED GAMES (issue #159): save the match on screen under a name, and load one by its name.
+  saveGame: (name: string) => saveCurrentGame(name),
+  loadSavedGame: (name: string) => loadSavedGame(name),
   // Watch a replay out of the replay folder by its file name (issue #158).
   watchReplay: async (name = "LastReplay.o3r") => {
     const bytes = await replaySink()?.read(name);
