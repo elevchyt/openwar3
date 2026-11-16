@@ -193,6 +193,23 @@ export class WeatherOverlay {
     return this.effects.has(id);
   }
 
+  /** A saved game's view of the weather (docs/save-games.md): every effect by the id its JASS
+   *  handle holds, its type and its area. The particles are not kept — they are born again. */
+  snapshot(): { effects: Array<{ id: number; def: string; area: WeatherArea; enabled: boolean }>; nextId: number } {
+    return { effects: [...this.effects.values()].map((e) => ({ id: e.id, def: e.def.id, area: e.area, enabled: e.enabled })), nextId: this.nextId };
+  }
+
+  /** …and put back, under the same ids. */
+  restore(s: ReturnType<WeatherOverlay["snapshot"]>, defOf: (id: string) => WeatherDef | undefined): void {
+    for (const e of s.effects) {
+      const def = defOf(e.def);
+      if (!def) continue;
+      this.effects.set(e.id, { id: e.id, def, area: e.area, enabled: e.enabled, particles: [] });
+      if (!this.textures.has(def.texture)) this.textures.set(def.texture, { canvas: this.loader(def.texture), tex: null });
+    }
+    this.nextId = Math.max(this.nextId, s.nextId);
+  }
+
   /** For the live checks: how many particles are actually in flight. */
   get particleCount(): number {
     return this.live;

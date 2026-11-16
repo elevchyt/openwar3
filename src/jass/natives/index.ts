@@ -38,6 +38,7 @@ import { registerTextNatives } from "./text";
 import { registerTimerDialogNatives } from "./timerdialog";
 import { registerVisionNatives } from "./vision";
 import { registerWeatherNatives } from "./weather";
+import { registerSaveNatives } from "./saves";
 import { registerPredicateNatives } from "./predicates";
 import { registerUnitStatNatives } from "./unitStats";
 import { registerAbilityBlzNatives } from "./abilityBlz";
@@ -194,5 +195,6 @@ export function registerNatives(rt: Runtime): void {
   registerTimerDialogNatives(rt); // the countdown windows (7.21)
   registerVisionNatives(rt); // alliances/shared vision + BOTH fogs (7.22)
   registerWeatherNatives(rt); // the map's atmosphere — rain/snow/fog particles (7.23)
+  registerSaveNatives(rt); // SaveGame / LoadGame / SaveGameExists (issue #159)
   registerUtilNatives(rt);
 }

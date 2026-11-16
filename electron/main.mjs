@@ -29,6 +29,7 @@ import { PROTOCOL_VERSION } from "../server/rooms.mjs";
 import { readSettings, useSettingsDir, writeSettings } from "./settings.mjs";
 import { createLogStore } from "./logStore.mjs";
 import { createReplayStore } from "./replayStore.mjs";
+import { createSaveStore } from "./saveStore.mjs";
 import { arrangeDataDir } from "./dataDir.mjs";
 import { SHELL_CONTRACT, createSandbox, downloadBundle, fetchBundleManifest, removeSandbox, sweepSandboxes, withMapPath } from "./replayBundles.mjs";
 import { readMapSite } from "./mapSites.mjs";
@@ -125,6 +126,11 @@ matchLogs.sweep();
 // they name. Never swept.
 const replayFiles = createReplayStore(join(DATA_DIR, "replays"), {
   warn: (msg) => console.warn(`[replays] ${msg}`),
+});
+// THE SAVED GAMES (issue #159, docs/save-games.md): `saves/` in the data folder, beside `replays/`
+// (the developer's call). Every file in it is one the player named. Never swept.
+const saveFiles = createSaveStore(join(DATA_DIR, "saves"), {
+  warn: (msg) => console.warn(`[saves] ${msg}`),
 });
 // …and the SANDBOXES an earlier run left in the temp folder (electron/replayBundles.mjs): another
 // version's replay files, unpacked to watch one replay and deleted when its window closed —
@@ -456,6 +462,11 @@ app.whenReady().then(async () => {
   ipcMain.handle("ow3:replay-list", () => replayFiles.list());
   ipcMain.handle("ow3:replay-read", (_event, name) => replayFiles.read(String(name ?? "")));
   ipcMain.handle("ow3:replay-delete", (_event, name) => replayFiles.remove(String(name ?? "")));
+  ipcMain.handle("ow3:save-write", (_event, name, bytes) => saveFiles.write(String(name ?? ""), Buffer.from(bytes)));
+  ipcMain.handle("ow3:save-list", () => saveFiles.list());
+  ipcMain.handle("ow3:save-read", (_event, name) => saveFiles.read(String(name ?? "")));
+  ipcMain.handle("ow3:save-exists", (_event, name) => saveFiles.exists(String(name ?? "")));
+  ipcMain.handle("ow3:save-delete", (_event, name) => saveFiles.remove(String(name ?? "")));
   // Another version's replay (electron/replayBundles.mjs): is there a bundle for it, and how big —
   // what the View Replay list says before the player commits to a download…
   ipcMain.handle("ow3:replay-bundle-info", async (_event, version) => {

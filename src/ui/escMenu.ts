@@ -23,9 +23,13 @@
 // the hotkey letters come with them ("Pause Ga|Cffffffffm|Re" — the M is the accelerator,
 // and `ControlShortcutKey "M"` in the FDF is what binds it).
 //
-// Save / Load / Restart are DISABLED, not hidden: WC3 greys them when they can't be used and
-// the FDF ships the greyed face for exactly that (ControlDisabledBackdrop). We have no save
-// system.
+// Restart is DISABLED, not hidden: WC3 greys what can't be used and the FDF ships the greyed
+// face for exactly that (ControlDisabledBackdrop). Save Game and Load Game (issue #159,
+// docs/save-games.md) open FOUR more panels on the same stack, out of the game's own
+// `UI\FrameDef\UI\EscMenuSaveGamePanel.fdf`: one file that is the Save panel and the Load panel
+// at once (its `SaveOnly` / `LoadOnly` halves over a shared `SaveAndLoad` file list) plus the two
+// questions Save asks — `OverwriteOnly` and `DeleteOnly`. Save is greyed where the match cannot
+// be saved (`EscMenuActions.saveRefusal` — a multiplayer game, a replay).
 //
 // OPTIONS is four more panels on the same stack, and they are in another file — the game's own
 // `UI\FrameDef\UI\EscMenuOptionsPanel.fdf`, loaded into this screen's library beside the main
@@ -45,12 +49,29 @@ import { EscOptions } from "./escOptions";
 import { DEFAULT_GAME_SPEED, type GameSpeed } from "../data/gameSpeed";
 import { gamepadButtonPressed } from "./gamepad";
 import { voiceDownloadPressed } from "./voiceOptions";
+import { adopt, findFrame, setProp } from "./mapBrowser";
+import type { ListItem } from "./fdf/widgets";
+import { SAVE_EXT, type SaveSink } from "../game/save/saveSink";
 
 const ESC_MENU_FDF = "UI\\FrameDef\\UI\\EscMenuMainPanel.fdf";
 const ESC_OPTIONS_FDF = "UI\\FrameDef\\UI\\EscMenuOptionsPanel.fdf";
+const ESC_SAVE_FDF = "UI\\FrameDef\\UI\\EscMenuSaveGamePanel.fdf";
+const LIST_FDF = "UI\\FrameDef\\Glue\\ListBoxWar3.fdf";
 
 /** Which of the two files' nine panels is up. */
-type PanelId = "main" | "endgame" | "confirmquit" | "help" | "tips" | "options" | "optgameplay" | "optvideo" | "optsound";
+type PanelId = "main" | "endgame" | "confirmquit" | "help" | "tips" | "options" | "optgameplay" | "optvideo" | "optsound" | SavePanel;
+
+/** The four faces of `EscMenuSaveGamePanel.fdf` (see the header). */
+type SavePanel = "save" | "load" | "overwrite" | "delete";
+
+/** Each save face: the container that sizes it and the frames of the file it shows. */
+const SAVE_PANELS: Record<SavePanel, { container: string; parts: string[] }> = {
+  save: { container: "EscMenuSaveLoadContainer", parts: ["SaveAndLoad", "SaveOnly"] },
+  load: { container: "EscMenuSaveLoadContainer", parts: ["SaveAndLoad", "LoadOnly"] },
+  overwrite: { container: "EscMenuOverwriteContainer", parts: ["OverwriteOnly"] },
+  delete: { container: "EscMenuDeleteContainer", parts: ["DeleteOnly"] },
+};
+const isSavePanel = (p: PanelId): p is SavePanel => p in SAVE_PANELS;
 
 const PANEL_FRAME: Record<PanelId, string> = {
   main: "MainPanel",
@@ -62,6 +83,10 @@ const PANEL_FRAME: Record<PanelId, string> = {
   optgameplay: "GameplayPanel",
   optvideo: "VideoPanel",
   optsound: "SoundPanel",
+  save: "EscMenuSaveGamePanel",
+  load: "EscMenuSaveGamePanel",
+  overwrite: "EscMenuSaveGamePanel",
+  delete: "EscMenuSaveGamePanel",
 };
 
 /** The four panels that come out of `EscMenuOptionsPanel.fdf`, and which of the three settings
@@ -121,6 +146,16 @@ export interface EscMenuActions {
   gameSpeed?(): { speed: GameSpeed; locked: boolean };
   /** Change the speed of a single-player match, live (Gameplay panel's slider). */
   setGameSpeed?(speed: GameSpeed): void;
+  /** SAVED GAMES (issue #159): where they are kept. Absent greys Save Game and Load Game. */
+  saves?(): SaveSink | null;
+  /** Why this match cannot be saved right now, or null — Save Game is greyed while it says. */
+  saveRefusal?(): string | null;
+  /** The name the Save panel offers (the map's and the time — two saves never land on one). */
+  suggestedSaveName?(): string;
+  /** Save the match under a name. Resolves when it is on disk; rejects with why it is not. */
+  onSaveGame?(name: string): Promise<void>;
+  /** Load the named save — the match on screen ends and that one takes its place. */
+  onLoadGame?(name: string): void;
 }
 
 export class EscMenu {
@@ -135,6 +170,10 @@ export class EscMenu {
   private lib: FdfLibrary | null = null;
   private readonly options: EscOptions;
   private onEscape: (e: KeyboardEvent) => void;
+  /** The Save/Load panels' state: the saves on disk, the name in the box, a write under way. */
+  private saveFiles: string[] = [];
+  private saveName = "";
+  private saving = false;
 
   /** `skin` is the war3skins.txt section the chrome is decorated from — WC3 gives the
    *  in-game panels the LOCAL player's race, so an Orc player's menu is Orc-bordered. */
@@ -170,6 +209,7 @@ export class EscMenu {
    *  to from here. One level up the stack, every time. */
   private stepBack(): PanelId {
     if (this.panel === "confirmquit") return "endgame";
+    if (this.panel === "overwrite" || this.panel === "delete") return "save";
     if (this.panel in OPTIONS_PANELS) {
       // Escape on a settings panel is its CANCEL button, so it undoes the visit exactly as the
       // button does — anything applied live along the way included.
@@ -258,8 +298,9 @@ export class EscMenu {
         fdfPath: ESC_MENU_FDF,
         // The Options panels are four more faces of this same screen, and they are in the
         // game's other in-game FrameDef file — so it is loaded into the same library, which is
-        // also what puts `EscMenuTemplates.fdf` in scope for both.
-        includeFdf: [ESC_OPTIONS_FDF],
+        // also what puts `EscMenuTemplates.fdf` in scope for both. The Save/Load faces are a
+        // third file, with the glue's own list box laid into its empty `FileListFrame`.
+        includeFdf: [ESC_OPTIONS_FDF, ESC_SAVE_FDF, LIST_FDF],
         rootFrame: "EscMenuMainPanel",
         overlayClass: "fdf-ingame fdf-dialog",
         skin: this.skin,
@@ -300,6 +341,7 @@ export class EscMenu {
   private rootFrame(lib: FdfLibrary): FdfFrame {
     this.lib = lib; // captured so the Options panels' readouts resolve through GlobalStrings
     if (this.panel in OPTIONS_PANELS) return this.optionsRoot(lib);
+    if (isSavePanel(this.panel)) return this.saveRoot(lib, this.panel);
     const panel = lib.resolveRoot(PANEL_FRAME[this.panel]);
     const backdrop = lib.resolveRoot("EscMenuBackdrop");
     if (!panel) throw new Error(`FDF: frame "${PANEL_FRAME[this.panel]}" not found`);
@@ -376,6 +418,130 @@ export class EscMenu {
   }
 
   /**
+   * The root for a face of `EscMenuSaveGamePanel.fdf` — named `EscMenuSaveGamePanel`, which is
+   * what every control in that file anchors to, sized by the face's own container (0.432 × 0.288
+   * for Save and Load, 0.336 × 0.192 for the two questions) and wearing the shared stone frame.
+   * The file's `FileListFrame` is an EMPTY box the engine fills, so the game's own list box
+   * (`ListBoxWar3`) goes into it, as every file list in the glue does.
+   */
+  private saveRoot(lib: FdfLibrary, which: SavePanel): FdfFrame {
+    const file = lib.resolveRoot("EscMenuSaveGamePanel");
+    const backdrop = lib.resolveRoot("EscMenuBackdrop");
+    if (!file) throw new Error("FDF: frame \"EscMenuSaveGamePanel\" not found");
+    const spec = SAVE_PANELS[which];
+    const box = findFrame(file, spec.container);
+    const children: FdfFrame[] = [];
+    if (backdrop) {
+      children.push({ ...backdrop, props: [...backdrop.props.filter((p) => p.key !== "Width" && p.key !== "Height"), prop("SetAllPoints")] });
+    }
+    for (const part of spec.parts) {
+      const f = box ? findFrame(box, part) : undefined;
+      if (!f) continue;
+      const copy: FdfFrame = structuredClone(f);
+      if (part === "SaveAndLoad") {
+        const listBox = lib.resolveRoot("ListBoxWar3");
+        if (listBox) {
+          const list: FdfFrame = { ...structuredClone(listBox), name: "SaveGameList" };
+          setProp(list, "SetAllPoints", []);
+          adopt(copy, "FileListFrame", [list]);
+        }
+      }
+      children.push(copy);
+    }
+    return {
+      type: "FRAME",
+      name: "EscMenuSaveGamePanel",
+      inherits: null,
+      withChildren: false,
+      props: [
+        prop("Width", num((box && numProp(box, "Width")) ?? 0.432)),
+        prop("Height", num((box && numProp(box, "Height")) ?? 0.288)),
+      ],
+      children,
+    };
+  }
+
+  /** The Save/Load face's list and buttons, as they stand (the files are read on the way in). */
+  private paintSave(screen: FdfScreen): void {
+    const bare = (f: string): string => f.replace(/\.o3s$/i, "");
+    const fileOf = (name: string): string => (name.toLowerCase().endsWith(SAVE_EXT) ? name : name + SAVE_EXT);
+    const list = screen.list("SaveGameList");
+    if (list) {
+      list.setItems(this.saveFiles.map((n): ListItem => ({ value: n, label: bare(n) })));
+      const match = this.saveFiles.find((n) => n.toLowerCase() === fileOf(this.saveName).toLowerCase());
+      if (match) list.select(match);
+      list.onChange = (value) => {
+        this.saveName = bare(value);
+        const box = screen.editBox("SaveGameFileEditBox");
+        if (box) box.value = this.saveName;
+        this.paintSave(screen);
+      };
+      list.onActivate = (value) => {
+        this.saveName = bare(value);
+        if (this.panel === "load") this.loadPicked();
+        else this.savePicked();
+      };
+    }
+    const exists = this.saveFiles.some((n) => n.toLowerCase() === fileOf(this.saveName.trim()).toLowerCase());
+    screen.setEnabled("SaveGameSaveButton", !this.saving && this.saveName.trim() !== "");
+    screen.setEnabled("SaveGameDeleteButton", !this.saving && exists);
+    screen.setEnabled("LoadGameLoadButton", exists);
+  }
+
+  /** Save, or — when that name is taken — ask first (OVERWRITE_MESSAGE, the game's own face). */
+  private savePicked(): void {
+    const name = this.saveName.trim();
+    if (!name || this.saving) return;
+    const taken = this.saveFiles.some((n) => n.toLowerCase() === (name + SAVE_EXT).toLowerCase());
+    if (taken && this.panel !== "overwrite") return this.go("overwrite");
+    void this.writeSave(name);
+  }
+
+  private async writeSave(name: string): Promise<void> {
+    const save = this.actions.onSaveGame;
+    if (!save || this.saving) return;
+    this.saving = true;
+    try {
+      await save(name);
+      this.saving = false;
+      // Saved: back to the game, as the game does.
+      this.actions.onReturn();
+    } catch (err) {
+      this.saving = false;
+      console.warn("[save] could not save:", err);
+      this.go("save");
+    }
+  }
+
+  private loadPicked(): void {
+    const name = this.saveName.trim();
+    const file = this.saveFiles.find((n) => n.toLowerCase() === (name + SAVE_EXT).toLowerCase());
+    if (file) this.actions.onLoadGame?.(file);
+  }
+
+  private async deletePicked(): Promise<void> {
+    const file = this.saveFiles.find((n) => n.toLowerCase() === (this.saveName.trim() + SAVE_EXT).toLowerCase());
+    if (file) await this.actions.saves?.()?.remove(file).catch(() => false);
+    this.saveName = "";
+    this.go("save");
+  }
+
+  /** Read the saves folder, then repaint whichever save face is up. */
+  private async listSaves(): Promise<void> {
+    const sink = this.actions.saves?.();
+    const all = sink ? await sink.list().catch(() => []) : [];
+    this.saveFiles = all.map((f) => f.name);
+    if (this.screen && (this.panel === "save" || this.panel === "load")) this.paintSave(this.screen);
+  }
+
+  /** Open the Save (or Load) face, the name box primed with a fresh name / the newest save. */
+  private openSave(which: "save" | "load"): void {
+    this.saveName = which === "save" ? this.actions.suggestedSaveName?.() ?? "" : "";
+    this.go(which);
+    void this.listSaves();
+  }
+
+  /**
    * **One button, two captions.** `PauseButton` ships `Text "KEY_PAUSE_GAME"`, and
    * `GlobalStrings.fdf` ships its twin right beside it:
    *
@@ -438,15 +604,48 @@ export class EscMenu {
       TipsOKButton: () => this.go("main"),
       TipsBackButton: () => this.stepTip(-1),
       TipsNextButton: () => this.stepTip(1),
+      // --- Save Game / Load Game (EscMenuSaveGamePanel.fdf)
+      SaveGameButton: () => this.openSave("save"),
+      LoadGameButton: () => this.openSave("load"),
+      SaveGameSaveButton: () => this.savePicked(),
+      SaveGameDeleteButton: () => this.go("delete"),
+      SaveGameCancelButton: () => this.go("main"),
+      LoadGameLoadButton: () => this.loadPicked(),
+      LoadGameCancelButton: () => this.go("main"),
+      OverwriteOverwriteButton: () => void this.writeSave(this.saveName.trim()),
+      OverwriteCancelButton: () => this.go("save"),
+      DeleteDeleteButton: () => void this.deletePicked(),
+      DeleteCancelButton: () => this.go("save"),
     };
   }
 
   /** Fill the panel's contents and grey what we can't do yet. Runs on every build —
    *  including the rebuild a RESIZE triggers, which is why it can't be done inline. */
   private onBuild(screen: FdfScreen): void {
-    // No save system, and no way to restart a match from inside it.
-    for (const name of ["SaveGameButton", "LoadGameButton", "RestartButton"]) {
-      screen.setEnabled(name, false);
+    // No way to restart a match from inside it; Save and Load are live where they can be used.
+    screen.setEnabled("RestartButton", false);
+    const sink = this.actions.saves?.() ?? null;
+    screen.setEnabled("SaveGameButton", !!sink && !!this.actions.onSaveGame && !this.actions.saveRefusal?.());
+    screen.setEnabled("LoadGameButton", !!sink && !!this.actions.onLoadGame);
+    if (this.panel === "save" || this.panel === "load") {
+      const box = screen.editBox("SaveGameFileEditBox");
+      if (box) {
+        box.value = this.saveName;
+        box.onChange = (v) => {
+          this.saveName = v;
+          this.paintSave(screen);
+        };
+        box.onSubmit = () => this.savePicked();
+        box.focus();
+      }
+      this.paintSave(screen);
+    } else if (this.panel === "overwrite" || this.panel === "delete") {
+      const key = this.panel === "overwrite" ? "OVERWRITE_MESSAGE" : "DELETE_MESSAGE";
+      const fallback = this.panel === "overwrite"
+        ? "Are you sure you want to overwrite the existing save game file '%s'?"
+        : "Are you sure you want to delete the saved game '%s'?";
+      const text = this.lib?.string(key);
+      screen.setText(this.panel === "overwrite" ? "OverwriteMessageText" : "DeleteMessageText", (text && text !== key ? text : fallback).replace("%s", this.saveName.trim()));
     }
     const settings = OPTIONS_PANELS[this.panel];
     if (settings) this.options.bind(screen, settings, this.lib);

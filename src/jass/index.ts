@@ -130,6 +130,11 @@ export function loadMapScript(
      *  while the script is still initialising. Waiting for the return value is too late:
      *  main() has already run by then. */
     onBoot?: (engine: MapScriptEngine) => void;
+    /** A SAVED GAME is being loaded (docs/save-games.md): the script is parsed and its globals
+     *  declared, and NOTHING runs — not `config()`, not `main()`, not the lobby. The saved
+     *  runtime is written over this one, threads and all, and it was the saved match's
+     *  `config`/`main` that made it. */
+    restore?: boolean;
   } = {},
 ): MapScriptEngine | null {
   const mapJ = readScript(map, "war3map.j", "scripts\\war3map.j");
@@ -180,6 +185,7 @@ export function loadMapScript(
   // so let the script place them, exactly as the game does.
   if (placedUnitCount(map) === 0) interp.rt.recordOnlySpawnFns.delete("CreateAllUnits");
   opts.onBoot?.(engine);
+  if (opts.restore) return engine;
   interp.run("config", []);
   if (opts.lobby) interp.rt.applyLobby(opts.lobby.slots, opts.lobby.localPlayer, opts.lobby.watchers);
   if (opts.runMain) {

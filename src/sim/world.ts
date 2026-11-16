@@ -4177,7 +4177,16 @@ export class SimWorld {
   // Buildings that changed type this tick (Town Hall → Keep): the renderer swaps the model.
   private morphs: Array<{ unitId: number; from: string; to: string }> = [];
   private nextNodeId = 1;
-  private rng: () => number;
+  /** The match's stream, as plain STATE rather than a closure: a saved game (issue #159,
+   *  docs/save-games.md) writes the world down field by field, and a position hidden inside a
+   *  closure is a position no save can carry. The deterministic Park–Miller LCG the sim has always
+   *  drawn from (plan §1.4: the sim stays replayable). */
+  private rngState = 1;
+  private rng(): number {
+    this.rngDraws++;
+    this.rngState = (this.rngState * 16807) % 2147483647;
+    return (this.rngState - 1) / 2147483646;
+  }
   /** The seed this world's RNG was started from. Part of a match's identity: a replay or
    *  a joining client needs it to roll the same damage, crits, misses and item drops as
    *  the machine that owns the game (docs/multiplayer.md). */
@@ -4296,7 +4305,7 @@ export class SimWorld {
     private upgradeReg?: UpgradeRegistry,
   ) {
     this.seed = seed;
-    this.rng = this.countedRng(seed);
+    this.startRng(seed);
     this.tech =
       techReg && upgradeReg
         ? new TechState(techReg, upgradeReg, () =>
@@ -20803,7 +20812,7 @@ export class SimWorld {
    */
   reseed(seed: number): void {
     this.seed = seed;
-    this.rng = this.countedRng(seed);
+    this.startRng(seed);
   }
 
   /** How many numbers the match's stream has handed out. Part of a replay's state check
@@ -20812,13 +20821,13 @@ export class SimWorld {
    *  look like yet. */
   rngDraws = 0;
 
-  private countedRng(seed: number): () => number {
-    const next = lcg(seed);
+  /** Start the stream from `seed`, so a world reseeded with the same number draws the same
+   *  numbers it always did. */
+  private startRng(seed: number): void {
+    let st = seed % 2147483647;
+    if (st <= 0) st += 2147483646;
+    this.rngState = st;
     this.rngDraws = 0;
-    return () => {
-      this.rngDraws++;
-      return next();
-    };
   }
 
   /** Draw from the match's seeded stream. For the few rolls that live just OUTSIDE the sim
@@ -29812,13 +29821,24 @@ export class SimWorld {
    * in pathTo; one that died or arrived simply lets it go. A search that lands is billed to
    * the allowance exactly as the one-frame search was, for what it actually spent.
    */
-  private pumpPathJob(): void {
+  /**
+   * Land the escalated path search in flight, now, rather than across the steps it was going to
+   * take (pumpPathJob). A SAVED GAME (docs/save-games.md) is the world written down, and a search
+   * half-way through is not something it can write: its working set is a scratch buffer and its
+   * walkability test a closure. The unit takes its route a few steps sooner than it would have —
+   * in the match that was saved and in the one loaded from it alike, which is what matters.
+   */
+  settleForSave(): void {
+    if (this.pathJob) this.pumpPathJob(Infinity);
+  }
+
+  private pumpPathJob(budget = PathSlicing.sliceExpansions): void {
     if (!this.pathJob && this.longSearchIn <= 0 && this.detourQueue.size > 0) this.serveDetourQueue();
     const job = this.pathJob;
     if (!job) return;
     simProfile.begin("sim.world.move.job");
     const before = job.search.expansions;
-    const done = job.search.run(PathSlicing.sliceExpansions);
+    const done = job.search.run(budget);
     simProfile.tally("pathExpansions", job.search.expansions - before);
     simProfile.end("sim.world.move.job");
     if (!done) return;
@@ -31121,12 +31141,3 @@ function angleDiff(from: number, to: number): number {
   return diff;
 }
 
-// Deterministic RNG (plan §1.4: sim stays replayable) — Park–Miller LCG.
-function lcg(seed: number): () => number {
-  let s = seed % 2147483647;
-  if (s <= 0) s += 2147483646;
-  return () => {
-    s = (s * 16807) % 2147483647;
-    return (s - 1) / 2147483646;
-  };
-}

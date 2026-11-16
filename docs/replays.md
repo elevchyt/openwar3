@@ -279,7 +279,8 @@ record → file → replay round trip (`tools/replay-roundtrip-test.cjs`).
 ## Not done yet
 
 - Rewinding re-plays the match from its start, so a seek far back takes as long as re-simulating
-  that much. Keyframes need the whole sim and the JASS VM's sleeping threads (JS generators) to
-  be serialisable, which means rewriting the interpreter as an explicit-stack machine.
+  that much. The pieces keyframes need now exist — the whole match, the JASS VM's sleeping
+  threads included, can be written down and loaded back (docs/save-games.md) — but a seek does not
+  use them yet.
 - A refused command records that it was refused, not why: the authority answers a boolean.
 - The web build records nothing (no disk), so it has no versioned paths either.

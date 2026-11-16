@@ -4,6 +4,7 @@
 //   settings.json   the shell's own settings (electron/settings.mjs)
 //   .logs/          the match logs (electron/logStore.mjs, docs/match-log.md)
 //   replays/        the replays (electron/replayStore.mjs, docs/replays.md)
+//   saves/          the saved games (electron/saveStore.mjs, docs/save-games.md)
 //   Chromium/       everything the browser engine keeps — its caches, cookies, and the Local
 //                   Storage / IndexedDB the page's own options, profiles and campaign saves live in
 //
@@ -26,7 +27,7 @@ import { join } from "node:path";
 export const CHROMIUM_DIR = "Chromium";
 
 /** What is OURS at the top of the data folder — everything else there belongs to the engine. */
-const OURS = new Set(["settings.json", ".logs", "replays", CHROMIUM_DIR]);
+const OURS = new Set(["settings.json", ".logs", "replays", "saves", CHROMIUM_DIR]);
 
 /**
  * Point the engine at `<data>/Chromium` (moving an older install's files there first) and answer

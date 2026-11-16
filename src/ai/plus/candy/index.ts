@@ -1,3 +1,4 @@
+import { Mulberry32Stream } from "../../../sim/streams";
 import type { ChatLine } from "../../../game/chat";
 import { MELEE } from "../../../data/gameplayConstants";
 import type { HeroKill, SimUnit } from "../../../sim/world";
@@ -66,6 +67,8 @@ interface Brain {
   foe: Side;
   profile: CandyProfile;
   rng: () => number;
+  /** The stream `rng` draws from, as STATE (sim/streams.ts) — what a saved game writes. */
+  stream: Mulberry32Stream;
   clock: number;
   thinkIn: number;
   // --- the pick
@@ -165,11 +168,12 @@ export class CandyWarAi {
   add(player: number, difficulty: number, seed: number): void {
     const side = sideOf(player);
     if (!side || this.brains.some((b) => b.player === player)) return;
-    const rng = mulberry32((seed ^ Math.imul(player + 1, 0x9e3779b1)) >>> 0);
+    const stream = new Mulberry32Stream((seed ^ Math.imul(player + 1, 0x9e3779b1)) >>> 0);
+    const rng = (): number => stream.next();
     const kills = this.host.heroKills();
     const seatIndex = this.brains.filter((b) => b.side === side).length;
     this.brains.push({
-      player, side, foe: enemySide(side), profile: candyProfile(difficulty), rng,
+      player, side, foe: enemySide(side), profile: candyProfile(difficulty), rng, stream,
       clock: 0, thinkIn: rng() * 0.5,
       cls: null, pickAt: 6 + seatIndex * 2 + rng() * 3, pickModel: 0, pickStep: 0, pickStepAt: 0,
       heroId: 0, mode: "lane", lane: "mid", laneChosen: false, laneSaid: false, channelUntil: 0,
@@ -1168,16 +1172,4 @@ function strength(u: SimUnit): number {
   const w = u.weapon;
   const dps = w ? avgDamage(u) / Math.max(0.5, w.cooldown) : 0;
   return Math.max(1, u.hp) * (dps + (u.isHero ? 8 * u.level + 10 : 0) + 1);
-}
-
-/** A small seeded stream, so every computer's decisions replay for the same match seed. */
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
 }

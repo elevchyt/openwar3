@@ -9,7 +9,7 @@
 // is deliberate — the interpreter must stay engine-agnostic (bridge, not fork).
 
 import type { FunctionDecl } from "./ast";
-import { type JassValue, JNULL, jHandle } from "./values";
+import { type JassValue, JNULL, jHandle, defaultForType } from "./values";
 import { isNeutralSlot, PlayerSlot, widePlayerTable } from "../data/enums";
 import type { StoredUnitState } from "../sim/world";
 
@@ -984,6 +984,11 @@ export interface EngineHooks {
    *  is seconds for the timed native, or < 0 for the untimed one (host default). Only
    *  the local player's messages should reach the HUD (the BJ force helpers gate that). */
   displayText?(player: number, msg: string, duration: number): void;
+  /** `SaveGame` / `LoadGame` — REQUESTS, carried out once the script's pump is done (a save is
+   *  the match between steps); `SaveGameExists` asks the saves folder (natives/saves.ts). */
+  saveGame?(name: string): void;
+  loadGame?(name: string, doScoreScreen: boolean): void;
+  saveGameExists?(name: string): boolean;
   /** Clear the on-screen messages (ClearTextMessages / the BJ force variant). */
   clearText?(player: number): void;
   /** Resolve a unit's display name (GetUnitName / GetHeroProperName) from our data
@@ -1484,7 +1489,7 @@ export type JassFogArea =
 /** Opaque handle store: integer ids → backing JS objects, with interning so
  *  stable references (players, enum constants like PLAYER_COLOR_RED) return the
  *  same id every time — which makes JASS `==` on them work by id equality. */
-class HandleTable {
+export class HandleTable {
   private nextId = 1;
   private table = new Map<number, unknown>();
   private interned = new Map<string, number>();
@@ -1521,9 +1526,12 @@ export class ThreadAbort {}
  *  Sparse map + a per-type default so unset slots read as 0/0.0/false/null. */
 export class JassArray {
   private data = new Map<number, JassValue>();
-  constructor(public readonly elemType: string, private makeDefault: () => JassValue) {}
+  /** The default an unset slot reads as is the element TYPE's (`defaultForType`), worked out
+   *  from the type rather than kept as a closure — a saved game writes an array down as its
+   *  type and its slots (docs/save-games.md), and a closure is not something it can write. */
+  constructor(public readonly elemType: string) {}
   get(i: number): JassValue {
-    return this.data.get(i) ?? this.makeDefault();
+    return this.data.get(i) ?? defaultForType(this.elemType);
   }
   set(i: number, v: JassValue): void {
     this.data.set(i, v);
@@ -1532,16 +1540,22 @@ export class JassArray {
 
 /** mulberry32 — a tiny deterministic PRNG. JASS GetRandomInt/Real must be
  *  reproducible for replays / server-authoritative sync, so we never use
- *  Math.random(). Seed is fixed unless the host overrides it. */
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+ *  Math.random(). Seed is fixed unless the host overrides it.
+ *
+ *  Its position is a FIELD rather than a closure's hidden variable: a saved game writes the
+ *  runtime down field by field (docs/save-games.md), and a stream it could not see would come
+ *  back rewound to its seed. */
+export class Mulberry32 {
+  constructor(private a: number) {
+    this.a = a >>> 0;
+  }
+  next(): number {
+    this.a |= 0;
+    this.a = (this.a + 0x6d2b79f5) | 0;
+    let t = Math.imul(this.a ^ (this.a >>> 15), 1 | this.a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+  }
 }
 
 export class Runtime {
@@ -1868,14 +1882,29 @@ export class Runtime {
    *  -1 means "no limit", as in WC3. */
   readonly techMaxAllowed = new Map<string, number>();
 
+  /**
+   * Tables a native MODULE keeps for this runtime — the one handle each map destructable was
+   * given, the one handle each ability instance was given — so that a second ask returns the
+   * SAME handle and JASS `==` holds between them. They used to be module-level WeakMaps keyed on
+   * the runtime, which a saved game cannot see (docs/save-games.md): loaded, every destructable
+   * a map had already looked at would be handed a NEW handle, and `gg_dest_*` would stop being
+   * equal to what `EnumDestructablesInRect` hands a filter.
+   */
+  private readonly nativeTables = new Map<string, Map<string | number, unknown>>();
+  nativeTable<K extends string | number, V>(name: string): Map<K, V> {
+    let t = this.nativeTables.get(name);
+    if (!t) this.nativeTables.set(name, (t = new Map()));
+    return t as Map<K, V>;
+  }
+
   /** The seeded RNG behind GetRandomInt/Real. Indirected through `rng` so SetRandomSeed can
    *  really re-seed it: blizzard.j's CinematicModeExBJ fixes the seed to 0 for the duration
    *  of a cinematic ("so that cinematics play consistently") and restores the old stream
    *  afterwards — a no-op SetRandomSeed silently breaks that contract, and Monolith's own
    *  comment calls it out ("the random seed is fixed while cinematic mode is on, so it's
    *  important to [place the random shards] after we turn it off"). */
-  private rng: () => number;
-  readonly random = (): number => this.rng();
+  private rng: Mulberry32;
+  readonly random = (): number => this.rng.next();
   /**
    * How many times `GetLocalPlayer` has been answered. Not a statistic — a PROBE. The
    * interpreter snapshots it around an `if`'s conditions and compares; a change means that
@@ -1980,12 +2009,12 @@ export class Runtime {
   }
 
   constructor(seed = 0x9e3779b9) {
-    this.rng = mulberry32(seed);
+    this.rng = new Mulberry32(seed);
   }
 
   /** SetRandomSeed. */
   setRandomSeed(seed: number): void {
-    this.rng = mulberry32(seed);
+    this.rng = new Mulberry32(seed);
   }
 
   /** Hand the lobby's resolved slots to the script (7.3), between config() and main().

@@ -37,6 +37,7 @@ import type { MeleeConfig } from "../ui/lobby";
 import type { ChatTarget } from "./chat";
 import type { StateSample } from "./replayState";
 import { MAX_TRACK_SAMPLES, type InputSample, type InputTrack } from "./inputTrack";
+import { readSectionFile, writeSectionFile } from "./sectionFile";
 
 /** The format of the FILE, not of OpenWar3 — bumped when a reader of the old one could not read
  *  the new one. A new SECTION is not a bump; that is what the tags are for. */
@@ -202,26 +203,6 @@ export const CHECK_EVERY = 600;
 
 // --- the file -----------------------------------------------------------------------------
 
-/** gzip, through the platform's own stream (the page and Node 18+ both have it). */
-async function gzip(bytes: Uint8Array): Promise<Uint8Array> {
-  const stream = new Blob([bytes as BlobPart]).stream().pipeThrough(new CompressionStream("gzip"));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
-}
-
-async function gunzip(bytes: Uint8Array): Promise<Uint8Array> {
-  const stream = new Blob([bytes as BlobPart]).stream().pipeThrough(new DecompressionStream("gzip"));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
-}
-
-/** JSON that survives a non-finite number (an aura's `Infinity` would arrive as `null`). */
-function toJson(value: unknown): string {
-  return JSON.stringify(value, (_k, v) => (typeof v === "number" && !Number.isFinite(v) ? { $n: String(v) } : v));
-}
-
-function fromJson(text: string): unknown {
-  return JSON.parse(text, (_k, v) => (v && typeof v === "object" && typeof (v as { $n?: unknown }).$n === "string" && Object.keys(v).length === 1 ? Number((v as { $n: string }).$n) : v));
-}
-
 /** Write a replay file. */
 export async function encodeReplay(r: Replay): Promise<Uint8Array> {
   const sections: Array<[string, unknown]> = [
@@ -233,43 +214,13 @@ export async function encodeReplay(r: Replay): Promise<Uint8Array> {
   ];
   if (r.ending) sections.push(["ENDS", r.ending]);
   if (r.dumps) sections.push(["DUMP", r.dumps]);
-  const parts: Uint8Array[] = [new Uint8Array([...MAGIC, REPLAY_FORMAT & 0xff, REPLAY_FORMAT >> 8])];
-  const enc = new TextEncoder();
-  for (const [tag, value] of sections) {
-    const body = await gzip(enc.encode(toJson(value)));
-    const head = new Uint8Array(8);
-    for (let i = 0; i < 4; i++) head[i] = tag.charCodeAt(i);
-    new DataView(head.buffer).setUint32(4, body.length, true);
-    parts.push(head, body);
-  }
-  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-  let at = 0;
-  for (const p of parts) {
-    out.set(p, at);
-    at += p.length;
-  }
-  return out;
+  return writeSectionFile(MAGIC, REPLAY_FORMAT, sections);
 }
 
 /** The sections of a file, by tag, inflated — all of them, or only those `want` names. A
  *  section this reader does not know is skipped, not refused: that is the point of tags. */
-async function readSections(bytes: Uint8Array, want?: readonly string[]): Promise<Map<string, unknown>> {
-  if (bytes.length < 6 || MAGIC.some((b, i) => bytes[i] !== b)) throw new Error("not an OpenWar3 replay");
-  const format = bytes[4] | (bytes[5] << 8);
-  if (format > REPLAY_FORMAT) throw new Error(`replay format ${format} is newer than this build reads (${REPLAY_FORMAT})`);
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const dec = new TextDecoder();
-  const found = new Map<string, unknown>();
-  let at = 6;
-  while (at + 8 <= bytes.length) {
-    const tag = String.fromCharCode(bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]);
-    const len = view.getUint32(at + 4, true);
-    const body = bytes.subarray(at + 8, at + 8 + len);
-    at += 8 + len;
-    if (!(want ?? SECTIONS).includes(tag)) continue;
-    found.set(tag, fromJson(dec.decode(await gunzip(body))));
-  }
-  return found;
+function readSections(bytes: Uint8Array, want?: readonly string[]): Promise<Map<string, unknown>> {
+  return readSectionFile(bytes, MAGIC, REPLAY_FORMAT, want ?? SECTIONS, "replay");
 }
 const SECTIONS = ["HEAD", "EVTS", "CHKS", "INPT", "STAT", "ENDS", "DUMP"];
 

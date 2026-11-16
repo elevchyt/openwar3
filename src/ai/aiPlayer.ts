@@ -1,3 +1,4 @@
+import { ParkMillerStream } from "../sim/streams";
 import type { Command } from "../game/commands";
 import type { AbilityRegistry } from "../data/abilities";
 import type { ItemRegistry } from "../data/items";
@@ -300,7 +301,11 @@ export class AiPlayer {
     return id === this.tavernRunner && this.host.world.elapsed < this.tavernRunnerUntil;
   }
 
-  private readonly rng: () => number;
+  /** This computer's own stream, as STATE (sim/streams.ts) — a saved game writes its position. */
+  private readonly stream: ParkMillerStream;
+  private rng(): number {
+    return this.stream.next();
+  }
   private buildList: BuildRow[] = [];
   private assault: AssaultRow[] = [];
   private towns: Town[] = [];
@@ -341,7 +346,7 @@ export class AiPlayer {
     // rolled the FIRST build in its race's table — one build per race, every match. A lobby's seed
     // is drawn up to 2³¹ (fdfSkirmish.ts) and never showed it, but nothing about the stream should
     // depend on that. `mixSeed` spreads neighbouring seeds across the whole range.
-    this.rng = lcg(mixSeed(seed + player * 7919 + 1));
+    this.stream = new ParkMillerStream(mixSeed(seed + player * 7919 + 1));
     this.bypassFog = difficulty === MELEE_INSANE;
     const mine = host.world.nearestMine(startX, startY, 3000);
     this.towns.push({ x: startX, y: startY, mineId: mine?.id ?? 0 });
@@ -2811,16 +2816,6 @@ function mixSeed(seed: number): number {
   h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
   h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
   return (h ^ (h >>> 16)) >>> 0;
-}
-
-/** The AI's own Park–Miller stream (see the constructor for why it is not the sim's). */
-function lcg(seed: number): () => number {
-  let s = Math.abs(Math.floor(seed)) % 2147483647;
-  if (s <= 0) s += 2147483646;
-  return () => {
-    s = (s * 16807) % 2147483647;
-    return (s - 1) / 2147483646;
-  };
 }
 
 export { RETREAT_HP_FRACTION, REGROUP_HP_FRACTION, TOWN_RADIUS };

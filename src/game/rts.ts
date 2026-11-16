@@ -1267,6 +1267,10 @@ export class RtsController {
   }
 
   startMeleeAIFor(player: number, script: string): void {
+    // Every seat a script asks for is written down IN ORDER: a saved game (docs/save-games.md)
+    // seats the same computers on the same scripts before it writes their brains back over them,
+    // so each one gets the wiring it would have had (its host, its JASS VM's engine table).
+    this.aiSeatLog.push([player, script]);
     const seat = this.meleeSeats.get(player) ?? this.unseatedComputer(player);
     if (!this.meleeAi || !seat) return;
     // The file is named by its BASENAME for the four melee races (`Scripts\human.ai` and
@@ -1421,6 +1425,83 @@ export class RtsController {
   /** The creeps' spellcasting, made on the first authority tick of a seeded match and kept
    *  for the match — see src/ai/creeps.ts. */
   private creepCaster: CreepCaster | null = null;
+
+  // --- saved games (issue #159, docs/save-games.md) -----------------------------------------------
+
+  /** Every `StartMeleeAI`/`StartCampaignAI` the map's script made, in order (startMeleeAIFor). */
+  readonly aiSeatLog: Array<[number, string]> = [];
+  /** The ability rows a SCRIPT rewrote mid-match (`BlzSetAbilityTooltip`, `BlzSetAbilityIcon`) —
+   *  the per-map overlay the map's own object data does not put back on a load. */
+  private readonly abilityEdits = new Map<string, AbilityDef>();
+
+  /**
+   * The objects a match makes LAZILY, made now — before a saved game is written over this
+   * controller. The codec writes a saved object INTO the one already standing at its place, which
+   * is how it keeps that object's wiring; one that does not exist yet would come back without it.
+   */
+  prepareForLoad(): void {
+    this.creepCaster ??= new CreepCaster(this.sim, this.abilities);
+  }
+
+  /**
+   * A saved game has just been written over the world (docs/save-games.md). The ENTRIES — the
+   * models standing for units — are still the ones the map's own start adopted, so they are
+   * reconciled with the world as it now is: an entry whose unit the save does not have is
+   * retired, an entry whose unit is now another type is reported for a new model, and every unit
+   * that has no entry is reported for a body. The caller (the scene, which owns model loading)
+   * does the loading; nothing here touches the sim.
+   */
+  /**
+   * The LOOKS a script gave units (`SetUnitScale`, `SetUnitVertexColor`, `SetUnitTimeScale`,
+   * `SetUnitColor`): render state, kept on the entries rather than in the world, so a saved game
+   * takes them off the entries here and `restoreLooks` puts them back on the bodies of the load.
+   */
+  captureLooks(): Array<[number, { scale?: number; vertex?: [number, number, number, number]; timeScale?: number; color?: number }]> {
+    const out: Array<[number, { scale?: number; vertex?: [number, number, number, number]; timeScale?: number; color?: number }]> = [];
+    for (const e of this.entries) {
+      const look: { scale?: number; vertex?: [number, number, number, number]; timeScale?: number; color?: number } = {};
+      const def = this.registry.get(e.typeId);
+      if (e.baseScale !== (def?.modelScale || 1)) look.scale = e.baseScale;
+      if (e.baseColor) look.vertex = [e.baseColor[0], e.baseColor[1], e.baseColor[2], e.baseColor[3]];
+      if (e.timeScale !== 1) look.timeScale = e.timeScale;
+      if (e.colorOverride !== undefined) look.color = e.colorOverride;
+      if (Object.keys(look).length) out.push([e.simId, look]);
+    }
+    // …and a look still waiting for its body is the same thing a step earlier.
+    for (const [id, p] of this.pendingLook) if (!this.byId.has(id)) out.push([id, { ...p }]);
+    return out;
+  }
+
+  restoreLooks(looks: ReadonlyArray<[number, { scale?: number; vertex?: [number, number, number, number]; timeScale?: number; color?: number }]>): void {
+    for (const [id, look] of looks) {
+      if (!this.sim.units.has(id)) continue;
+      if (look.scale !== undefined) this.setUnitScale(id, look.scale);
+      if (look.vertex) this.setUnitVertexColor(id, ...look.vertex);
+      if (look.timeScale !== undefined) this.setUnitTimeScale(id, look.timeScale);
+      if (look.color !== undefined) this.setUnitTeamColor(id, look.color);
+    }
+  }
+
+  reconcileAfterLoad(): { needBody: SimUnit[]; retyped: Array<{ id: number; to: string }> } {
+    for (const [id, def] of this.abilityEdits) this.abilities.setCustom(id, def);
+    const retyped: Array<{ id: number; to: string }> = [];
+    for (const e of [...this.entries]) {
+      const u = this.sim.units.get(e.simId);
+      if (!u) {
+        this.dropEntry(e);
+        continue;
+      }
+      if (e.typeId !== u.typeId) retyped.push({ id: e.simId, to: u.typeId });
+    }
+    const needBody = [...this.sim.units.values()].filter((u) => !this.byId.has(u.id));
+    // Who is selected, grouped and hovered is the save's, and may name a unit that is gone.
+    for (const id of [...this.selected]) if (!this.sim.units.has(id)) this.selected.delete(id);
+    this.hovered = null;
+    this.creepCampView.reset();
+    this.lastSeenUnitCount = -1;
+    this.retintUnits();
+    return { needBody, retyped };
+  }
 
   /**
    * A player has LEFT the game — raised for a Computer+ seat that has conceded.
@@ -9871,6 +9952,7 @@ export class RtsController {
         const clone = { ...def, tips: [...def.tips], uberTips: [...def.uberTips] };
         (extended ? clone.uberTips : clone.tips)[rank] = text;
         this.abilities.setCustom(abilId, clone);
+        this.abilityEdits.set(abilId, clone); // …and kept for a saved game (abilityEdits)
       },
       // Any object with an Art field answers, not only an ability: Test of Balance fills its
       // scoreboard's hero column with `BlzGetAbilityIcon(GetUnitTypeId(u))` (AddHero), and a
@@ -9878,7 +9960,11 @@ export class RtsController {
       abilityIcon: (id) => this.abilities.get(id)?.icon || this.registry.get(id)?.icon || this.items.get(id)?.icon || "",
       setAbilityIcon: (abilId, path) => {
         const def = this.abilities.get(abilId);
-        if (def) this.abilities.setCustom(abilId, { ...def, icon: path });
+        if (def) {
+          const clone = { ...def, icon: path };
+          this.abilities.setCustom(abilId, clone);
+          this.abilityEdits.set(abilId, clone);
+        }
       },
       // …and ONE item's long description, which is not the type's: two Claws of Attack can say
       // different things. Keyed on the item's entity id, like `SetItemDroppable`'s override.

@@ -225,6 +225,11 @@ export class LightningOverlay {
     b.req.color = rgba;
     return true;
   }
+  /** A saved game's view of the script's bolts (docs/save-games.md): each by its id, as asked. */
+  scriptSnapshot(): Array<[number, BoltRequest]> {
+    return [...this.scriptBolts].map(([id, b]) => [id, { ...b.req }]);
+  }
+
   scriptColor(id: number): [number, number, number, number] | null {
     const b = this.scriptBolts.get(id);
     if (!b) return null;

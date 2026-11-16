@@ -260,7 +260,7 @@ class ReturnSignal {
 
 /** A function call frame: local variables + local arrays. Parameters live in the
  *  same var map (JASS has no separate parameter scope). */
-class Frame {
+export class Frame {
   readonly vars = new Map<string, JassValue>();
   readonly arrays = new Map<string, JassArray>();
 }
@@ -298,10 +298,92 @@ const AI_THREAD_NATIVES = new Set(["Sleep", "StartThread"]);
  *  `pumpThreads` (driven from the sim tick, alongside the timers) resumes it when its
  *  wake time arrives — at most **once per tick**, so a `TriggerSleepAction(0)` in a loop
  *  costs a frame instead of hanging one. */
+/**
+ * WHERE a thread is, as data (issue #159, docs/save-games.md).
+ *
+ * A thread is a chain of JS generators, and a generator cannot be written down: its position and
+ * its locals live inside the engine. So every generator on a thread's path keeps one of these
+ * records while it runs — the statement it is on, the arguments already evaluated, the branch it
+ * took, its local variables — on the thread's `Trace`. A suspended thread's trace therefore says
+ * exactly where each frame of it is waiting, in plain data, and a saved game writes that.
+ *
+ * To LOAD one, the same generators are started again with the saved trace as their `resume`:
+ * each one, on entry, takes its own record back instead of starting fresh and skips straight to
+ * where it was — the block to its statement, the call to the function it was inside, and the
+ * innermost record, the wait itself, simply returns as if the wait had run out. From there the
+ * thread runs on exactly as the one that was saved would have. (The real game's JASS VM is a
+ * bytecode machine with an explicit stack, which is why a `.w3z` can carry its threads; this is
+ * the same idea with the AST walker kept.)
+ *
+ * A level that has no state of its own (`return`, `exitwhen`, an array index) keeps no record:
+ * capture and resume walk the same tree, so they agree on which levels do.
+ */
+export type TraceRec =
+  /** `callFunctionG` — a thread's ROOT when it was started on a function by name. */
+  | { k: "cf"; name: string }
+  /** `callUserG`: the frame, and whether the locals are still being initialised (`li` the next). */
+  | { k: "user"; fn: string; frame: Frame; ph: 0 | 1; li: number }
+  | { k: "block"; i: number }
+  /** A `call` statement: the arguments evaluated so far (`ph` 0), then the call itself (1). */
+  | { k: "call"; args: JassValue[]; ph: 0 | 1 }
+  | { k: "set"; ph: 0 | 1; value: JassValue }
+  /** An `if`: conditions (0, `bi` the branch being asked), the taken body (1, `bi` = -1 for
+   *  else, -2 for none), and the audience fan-out (2) — see `exec`. */
+  | { k: "if"; ph: 0 | 1 | 2; bi: number; before: number; dep: boolean; ps: number[]; pi: number; pt: number; prevAudience: number | null; prevGuard: boolean }
+  | { k: "loop"; iters: number; j: number; mid: boolean }
+  | { k: "ecall"; args: JassValue[]; ph: 0 | 1 }
+  | { k: "bin"; ph: 0 | 1; l: JassValue }
+  /** `runActionsG`: the trigger's actions as they were when it started, and the one running. */
+  | { k: "acts"; trig: number; fns: string[]; i: number }
+  /** A thread native that WAITS (`execThreadNative`): `ph` 1 = the final wait, 0 = still
+   *  spinning on a sound that has not started (`spins` so far). */
+  | { k: "tn"; ph: 0 | 1; spins: number };
+
+/** A thread's trace — see `TraceRec`. */
+export class Trace {
+  readonly recs: TraceRec[] = [];
+  /** The saved trace being resumed, until its innermost record has been taken back. */
+  resume: TraceRec[] | null = null;
+  at = 0;
+  /** > 0 while the thread is inside code that is not JASS (a Lua map's coroutine), whose
+   *  position no trace can describe — a thread suspended there cannot be saved. */
+  opaque = 0;
+
+  /** The saved record for the generator entering now, if this is a resume — else undefined, and
+   *  the generator starts fresh. */
+  take<K extends TraceRec["k"]>(k: K): Extract<TraceRec, { k: K }> | undefined {
+    const r = this.resume;
+    if (!r) return undefined;
+    const rec = r[this.at++];
+    if (!rec || rec.k !== k) throw new Error(`save: a thread's saved trace does not fit its script (wanted ${k}, found ${rec?.k ?? "nothing"})`);
+    if (this.at >= r.length) this.resume = null;
+    return rec as Extract<TraceRec, { k: K }>;
+  }
+}
+
+/** A thread as a saved game writes it: everything but the generator, which `restoreThreads`
+ *  rebuilds from the trace. */
+export interface SavedThread {
+  id: number;
+  label: string;
+  recs: TraceRec[];
+  stack: Array<Map<string, JassValue>>;
+  wakeAt: number;
+  lastTick: number;
+}
+
+export interface SavedThreads {
+  threads: SavedThread[];
+  nextThreadId: number;
+  pumpTick: number;
+}
+
 interface JassThread {
   id: number;
   label: string; // for warnings, e.g. "trigger#12"
   gen: ThreadGen;
+  /** Where its generators are (see `Trace`). */
+  ts: Trace;
   stack: Array<Map<string, JassValue>>; // its event-response frames (thread-local in WC3)
   depth: number; // its call depth, saved across the suspension
   wakeAt: number; // rt.gameTime at which it may resume
@@ -373,7 +455,7 @@ export class Interpreter {
   initGlobals(): void {
     for (const g of this.globalDecls) {
       if (g.isArray) {
-        this.rt.globalArrays.set(g.name, new JassArray(g.type, () => defaultForType(g.type)));
+        this.rt.globalArrays.set(g.name, new JassArray(g.type));
       } else {
         this.rt.globalTypes.set(g.name, g.type);
         this.rt.globals.set(g.name, g.init ? this.eval(g.init, null) : defaultForType(g.type));
@@ -399,7 +481,10 @@ export class Interpreter {
     const host = this.rt.hostFunctions.get(name);
     if (host) return this.callHost(name, host, args);
     const fn = this.rt.functions.get(name);
-    if (fn) return this.runSync(this.callUserG(fn, args), name, adoptWaits);
+    if (fn) {
+      const ts = new Trace();
+      return this.runSync(this.callUserG(fn, args, ts), name, adoptWaits, ts);
+    }
     return this.missing(name);
   }
 
@@ -417,16 +502,31 @@ export class Interpreter {
 
   /** The same resolution, as a generator — used from a thread, where a user function
    *  (a trigger action, `PolledWait`, …) may suspend on a wait. */
-  private *callFunctionG(name: string, args: JassValue[]): ThreadGen {
+  private *callFunctionG(name: string, args: JassValue[], ts: Trace): ThreadGen {
     const nat = this.rt.natives.get(name);
     if (nat) return this.callNative(name, nat, args);
     // …and from a thread the host's generator form, so a Lua trigger action's wait parks the
     // thread instead of abandoning the callback. Same protocol: a yielded number is seconds.
+    // A Lua coroutine's position is not something a trace can describe, so the thread is
+    // marked unsaveable for as long as it is in there (`Trace.opaque`).
     const host = this.rt.hostFunctions.get(name);
-    if (host) return yield* host.run(args);
+    if (host) {
+      ts.opaque++;
+      try {
+        return yield* host.run(args);
+      } finally {
+        ts.opaque--;
+      }
+    }
     const fn = this.rt.functions.get(name);
-    if (fn) return yield* this.callUserG(fn, args);
-    return this.missing(name);
+    if (!fn) return this.missing(name);
+    const r = ts.take("cf") ?? { k: "cf" as const, name };
+    ts.recs.push(r);
+    try {
+      return yield* this.callUserG(fn, args, ts);
+    } finally {
+      ts.recs.pop();
+    }
   }
 
   /** Invoke a native. A throwing native is logged once and yields its typed default —
@@ -473,12 +573,12 @@ export class Interpreter {
    *     WC3 does not allow a wait there either, and resuming one would fire trigger actions out
    *     of a context that no longer exists.
    */
-  private runSync(gen: ThreadGen, label: string, adoptWaits = false): JassValue {
+  private runSync(gen: ThreadGen, label: string, adoptWaits: boolean, ts: Trace): JassValue {
     this.syncDepth++;
     try {
       const r = gen.next();
       if (r.done) return r.value;
-      if (adoptWaits) this.adoptSuspended(label, gen, typeof r.value === "number" ? r.value : 0);
+      if (adoptWaits) this.adoptSuspended(label, gen, typeof r.value === "number" ? r.value : 0, ts);
       else this.rt.warnOnce(label, "wait outside a trigger thread — callback abandoned");
       return JNULL;
     } catch (err) {
@@ -506,7 +606,7 @@ export class Interpreter {
    * trigger that had already finished. A copy rather than the frames themselves, so nothing
    * this thread writes later can reach back into the caller's context.
    */
-  private adoptSuspended(label: string, gen: ThreadGen, secs: number): void {
+  private adoptSuspended(label: string, gen: ThreadGen, secs: number, ts: Trace): void {
     if (this.threads.length >= MAX_THREADS) {
       this.rt.warnOnce("<threads>", `thread cap (${MAX_THREADS}) hit — trigger thread dropped`);
       return;
@@ -517,6 +617,7 @@ export class Interpreter {
       id: this.nextThreadId++,
       label,
       gen,
+      ts,
       stack: inherited.size ? [inherited] : [],
       depth: 0,
       wakeAt: this.rt.gameTime + Math.max(0, secs),
@@ -526,7 +627,11 @@ export class Interpreter {
     });
   }
 
-  private *callUserG(fn: FunctionDecl, args: JassValue[]): ThreadGen {
+  private *callUserG(fn: FunctionDecl, args: JassValue[], ts: Trace): ThreadGen {
+    // On a RESUME the frame comes back from the saved trace, so `args` are not looked at; the
+    // depth and the record-only scope are re-entered exactly as the first time (a restored
+    // thread's own depth starts at zero for that reason — see restoreThreads).
+    const resumed = ts.take("user");
     if (++this.depth > MAX_CALL_DEPTH) {
       this.depth--;
       this.rt.warnOnce(fn.name, "call depth exceeded");
@@ -538,147 +643,225 @@ export class Interpreter {
     // still spawns MeleeStartingUnits' town hall and workers for real.
     const recordOnly = this.rt.recordOnlySpawnFns.has(fn.name);
     if (recordOnly) this.rt.spawnDepth++;
-    const frame = new Frame();
-    for (let i = 0; i < fn.params.length; i++) {
-      frame.vars.set(fn.params[i].name, args[i] ?? defaultForType(fn.params[i].type));
-    }
-    for (const loc of fn.locals) {
-      if (loc.isArray) frame.arrays.set(loc.name, new JassArray(loc.type, () => defaultForType(loc.type)));
-      else frame.vars.set(loc.name, loc.init ? yield* this.evalG(loc.init, frame) : defaultForType(loc.type));
-    }
-    try {
-      yield* this.execBlockG(fn.body, frame);
-    } catch (e) {
-      if (e instanceof ReturnSignal) {
-        this.depth--;
-        if (recordOnly) this.rt.spawnDepth--;
-        return e.value;
+    let r = resumed;
+    if (!r) {
+      const frame = new Frame();
+      for (let i = 0; i < fn.params.length; i++) {
+        frame.vars.set(fn.params[i].name, args[i] ?? defaultForType(fn.params[i].type));
       }
+      r = { k: "user", fn: fn.name, frame, ph: 0, li: 0 };
+    }
+    ts.recs.push(r);
+    try {
+      const frame = r.frame;
+      if (r.ph === 0) {
+        for (; r.li < fn.locals.length; r.li++) {
+          const loc = fn.locals[r.li];
+          if (loc.isArray) frame.arrays.set(loc.name, new JassArray(loc.type));
+          else frame.vars.set(loc.name, loc.init ? yield* this.evalG(loc.init, frame, ts) : defaultForType(loc.type));
+        }
+        r.ph = 1;
+      }
+      yield* this.execBlockG(fn.body, frame, ts);
+    } catch (e) {
+      if (e instanceof ReturnSignal) return e.value;
+      throw e;
+    } finally {
+      ts.recs.pop();
       this.depth--;
       if (recordOnly) this.rt.spawnDepth--;
-      throw e;
     }
-    this.depth--;
-    if (recordOnly) this.rt.spawnDepth--;
     return defaultForType(fn.returns);
   }
 
-  private *execBlockG(stmts: Stmt[], frame: Frame): ThreadGen {
-    for (const s of stmts) yield* this.exec(s, frame);
+  private *execBlockG(stmts: Stmt[], frame: Frame, ts: Trace): ThreadGen {
+    const r = ts.take("block") ?? { k: "block" as const, i: 0 };
+    ts.recs.push(r);
+    try {
+      for (; r.i < stmts.length; r.i++) yield* this.exec(stmts[r.i], frame, ts);
+    } finally {
+      ts.recs.pop();
+    }
     return JNULL;
   }
 
-  private *exec(s: Stmt, frame: Frame): ThreadGen {
+  private *exec(s: Stmt, frame: Frame, ts: Trace): ThreadGen {
     switch (s.kind) {
       case "call": {
         // The thread-aware natives, intercepted here so a wait inside them can suspend
         // the *calling* thread (a native impl is a plain JS function — it cannot yield).
         // Same precedence as callFunction: the engine's meaning wins over a same-named
         // script function. Everything else can't suspend, so it goes through the sync path.
-        const args: JassValue[] = [];
-        for (const a of s.args) args.push(yield* this.evalG(a, frame));
-        if (THREAD_NATIVES.has(s.name) || (this.aiScript && AI_THREAD_NATIVES.has(s.name))) {
-          yield* this.execThreadNative(s.name, args);
+        const thread = THREAD_NATIVES.has(s.name) || (this.aiScript && AI_THREAD_NATIVES.has(s.name));
+        const nat = thread ? undefined : this.rt.natives.get(s.name);
+        // A plain native over arguments that cannot wait never suspends, so it keeps no record
+        // (nearly every statement there is — see TraceRec on which levels keep one).
+        if (nat && !s.args.some((a) => this.mayWait(a))) {
+          this.callNative(s.name, nat, s.args.map((a) => this.eval(a, frame)));
           return JNULL;
         }
-        const nat = this.rt.natives.get(s.name);
-        if (nat) {
-          this.callNative(s.name, nat, args);
+        const r = ts.take("call") ?? { k: "call" as const, args: [] as JassValue[], ph: 0 as 0 | 1 };
+        ts.recs.push(r);
+        try {
+          if (r.ph === 0) {
+            while (r.args.length < s.args.length) {
+              const v = yield* this.evalG(s.args[r.args.length], frame, ts);
+              r.args.push(v);
+            }
+            r.ph = 1;
+          }
+          const args = r.args;
+          if (thread) {
+            yield* this.execThreadNative(s.name, args, ts);
+            return JNULL;
+          }
+          if (nat) {
+            this.callNative(s.name, nat, args);
+            return JNULL;
+          }
+          const fn = this.rt.functions.get(s.name);
+          if (fn) {
+            yield* this.callUserG(fn, args, ts); // a user function may wait (PolledWait, a spawn loop, …)
+            return JNULL;
+          }
+          this.missing(s.name);
           return JNULL;
+        } finally {
+          ts.recs.pop();
         }
-        const fn = this.rt.functions.get(s.name);
-        if (fn) {
-          yield* this.callUserG(fn, args); // a user function may wait (PolledWait, a spawn loop, …)
-          return JNULL;
-        }
-        this.missing(s.name);
-        return JNULL;
       }
       case "set": {
-        const value = yield* this.evalG(s.value, frame);
-        if (s.index !== undefined) {
-          const idx = asInt(yield* this.evalG(s.index, frame));
-          this.arrayFor(s.name, frame).set(idx, value);
-        } else if (frame.vars.has(s.name)) {
-          frame.vars.set(s.name, value);
-        } else {
-          this.rt.assignGlobal(s.name, value); // may raise a variable event, synchronously
+        if (!this.mayWait(s.value) && !(s.index !== undefined && this.mayWait(s.index))) {
+          this.assign(s, this.eval(s.value, frame), s.index !== undefined ? asInt(this.eval(s.index, frame)) : 0, frame);
+          return JNULL;
+        }
+        const r = ts.take("set") ?? { k: "set" as const, ph: 0 as 0 | 1, value: JNULL as JassValue };
+        ts.recs.push(r);
+        try {
+          if (r.ph === 0) {
+            r.value = yield* this.evalG(s.value, frame, ts);
+            r.ph = 1;
+          }
+          const idx = s.index !== undefined ? asInt(yield* this.evalG(s.index, frame, ts)) : 0;
+          this.assign(s, r.value, idx, frame);
+        } finally {
+          ts.recs.pop();
         }
         return JNULL;
       }
       case "return":
-        throw new ReturnSignal(s.value ? yield* this.evalG(s.value, frame) : JNULL);
+        throw new ReturnSignal(s.value ? yield* this.evalG(s.value, frame, ts) : JNULL);
       case "if": {
-        // An AI VM has no audience (nothing in it is presentation) and its conditions may
-        // SLEEP — `if not PrepSuicideOnPlayer(seconds) then` is common.ai's own wave loop.
-        if (this.aiScript) {
-          for (const b of s.branches) {
-            if (truthy(yield* this.evalG(b.cond, frame))) return yield* this.execBlockG(b.body, frame);
-          }
-          if (s.elseBody) yield* this.execBlockG(s.elseBody, frame);
-          return JNULL;
-        }
-        // The HOST's own pass, unchanged and unmuzzled — this is the statement exactly as it
-        // has always run (docs/multiplayer.md Phase E item 7b).
-        const before = this.rt.localViewerReads;
-        let taken = -1;
-        for (let i = 0; i < s.branches.length; i++) {
-          // evalG: a condition that calls a script function may WAIT, and the thread waits
-          // with it (`if not Buy(hero, item) then` — see evalG).
-          if (truthy(yield* this.evalG(s.branches[i].cond, frame))) { taken = i; break; }
-        }
-        // Did the branch we chose depend on WHO IS WATCHING? The probe answers that without
-        // the parser having to recognise a shape: any route to `GetLocalPlayer` counts, direct
-        // or through a BJ wrapper. It sees only the CONDITIONS — reads inside the body are the
-        // body's business, and a later branch's condition that was never reached is genuinely
-        // unknown rather than assumed (stated because it is the honest limit of the probe).
-        const audienceDependent = this.rt.localViewerReads !== before;
-        if (taken >= 0) yield* this.execBlockG(s.branches[taken].body, frame);
-        else if (s.elseBody) yield* this.execBlockG(s.elseBody, frame);
-        // Only the OUTERMOST such statement fans out. Inside a `forAudience` the runtime has
-        // already resolved who is watching, so `GetLocalPlayer` is answering correctly and a
-        // second fan-out would be N² passes of the same block for the same person.
-        if (!audienceDependent || this.rt.audience !== null) return JNULL;
-        for (const p of this.rt.viewers()) {
-          if (p === this.rt.localPlayer) continue; // already ran, as itself, with writes allowed
-          const prevAudience: number | null = this.rt.audience;
-          const prevGuard = this.rt.presentationOnly;
-          this.rt.audience = p;
-          this.rt.presentationOnly = true; // world writes refused for the extra passes only
-          try {
-            let t = -1;
-            for (let i = 0; i < s.branches.length; i++) {
-              if (truthy(this.eval(s.branches[i].cond, frame))) { t = i; break; }
+        const resumed = ts.take("if");
+        const r = resumed ?? {
+          k: "if" as const, ph: 0 as 0 | 1 | 2, bi: 0, before: this.rt.localViewerReads, dep: false,
+          ps: [] as number[], pi: 0, pt: -2, prevAudience: null as number | null, prevGuard: false,
+        };
+        ts.recs.push(r);
+        try {
+          // An AI VM has no audience (nothing in it is presentation) and its conditions may
+          // SLEEP — `if not PrepSuicideOnPlayer(seconds) then` is common.ai's own wave loop.
+          // The map's own pass below is the same statement, plus the audience fan-out.
+          if (r.ph === 0) {
+            // evalG: a condition that calls a script function may WAIT, and the thread waits
+            // with it (`if not Buy(hero, item) then` — see evalG).
+            for (; r.bi < s.branches.length; r.bi++) {
+              if (truthy(yield* this.evalG(s.branches[r.bi].cond, frame, ts))) break;
             }
-            if (t >= 0) yield* this.execBlockG(s.branches[t].body, frame);
-            else if (s.elseBody) yield* this.execBlockG(s.elseBody, frame);
-          } finally {
-            // Restored even if the block throws, or the runtime answers `GetLocalPlayer` as
-            // somebody else for the rest of the match — the same care `forAudience` takes.
-            this.rt.audience = prevAudience;
-            this.rt.presentationOnly = prevGuard;
+            if (r.bi >= s.branches.length) r.bi = s.elseBody ? -1 : -2;
+            // Did the branch we chose depend on WHO IS WATCHING? The probe answers that without
+            // the parser having to recognise a shape: any route to `GetLocalPlayer` counts, direct
+            // or through a BJ wrapper. It sees only the CONDITIONS — reads inside the body are the
+            // body's business, and a later branch's condition that was never reached is genuinely
+            // unknown rather than assumed (stated because it is the honest limit of the probe).
+            r.dep = this.rt.localViewerReads !== r.before;
+            r.ph = 1;
           }
+          if (r.ph === 1) {
+            if (r.bi >= 0) yield* this.execBlockG(s.branches[r.bi].body, frame, ts);
+            else if (r.bi === -1) yield* this.execBlockG(s.elseBody!, frame, ts);
+            if (this.aiScript) return JNULL;
+            // (The HOST's own pass above is the statement exactly as it has always run —
+            // docs/multiplayer.md Phase E item 7b.)
+            // Only the OUTERMOST such statement fans out. Inside a `forAudience` the runtime has
+            // already resolved who is watching, so `GetLocalPlayer` is answering correctly and a
+            // second fan-out would be N² passes of the same block for the same person.
+            if (!r.dep || this.rt.audience !== null) return JNULL;
+            r.ps = [...this.rt.viewers()].filter((p) => p !== this.rt.localPlayer); // the local one already ran, as itself, with writes allowed
+            r.pi = 0;
+            r.pt = -2;
+            r.ph = 2;
+          }
+          for (; r.pi < r.ps.length; r.pi++) {
+            const p = r.ps[r.pi];
+            if (!(resumed && r.pt !== -2)) {
+              r.prevAudience = this.rt.audience;
+              r.prevGuard = this.rt.presentationOnly;
+            }
+            this.rt.audience = p;
+            this.rt.presentationOnly = true; // world writes refused for the extra passes only
+            try {
+              if (r.pt === -2) {
+                let t = -3;
+                for (let i = 0; i < s.branches.length; i++) {
+                  if (truthy(this.eval(s.branches[i].cond, frame))) { t = i; break; }
+                }
+                r.pt = t >= 0 ? t : s.elseBody ? -1 : -3;
+              }
+              if (r.pt >= 0) yield* this.execBlockG(s.branches[r.pt].body, frame, ts);
+              else if (r.pt === -1) yield* this.execBlockG(s.elseBody!, frame, ts);
+            } finally {
+              // Restored even if the block throws, or the runtime answers `GetLocalPlayer` as
+              // somebody else for the rest of the match — the same care `forAudience` takes.
+              this.rt.audience = r.prevAudience;
+              this.rt.presentationOnly = r.prevGuard;
+            }
+            r.pt = -2;
+          }
+          return JNULL;
+        } finally {
+          ts.recs.pop();
         }
-        return JNULL;
       }
       case "loop": {
-        let iters = 0;
-        while (true) {
-          if (++iters > MAX_LOOP_ITERS) {
-            this.rt.warnOnce("<loop>", "iteration cap hit");
-            return JNULL;
+        const r = ts.take("loop") ?? { k: "loop" as const, iters: 0, j: 0, mid: false };
+        ts.recs.push(r);
+        try {
+          while (true) {
+            if (!r.mid) {
+              if (++r.iters > MAX_LOOP_ITERS) {
+                this.rt.warnOnce("<loop>", "iteration cap hit");
+                return JNULL;
+              }
+              r.mid = true;
+            }
+            try {
+              for (; r.j < s.body.length; r.j++) yield* this.exec(s.body[r.j], frame, ts);
+            } catch (e) {
+              if (e instanceof ExitLoop) return JNULL;
+              throw e;
+            }
+            r.j = 0;
+            r.mid = false;
           }
-          try {
-            for (const st of s.body) yield* this.exec(st, frame);
-          } catch (e) {
-            if (e instanceof ExitLoop) return JNULL;
-            throw e;
-          }
+        } finally {
+          ts.recs.pop();
         }
       }
       case "exitwhen":
-        if (truthy(yield* this.evalG(s.cond, frame))) throw EXIT_LOOP;
+        if (truthy(yield* this.evalG(s.cond, frame, ts))) throw EXIT_LOOP;
         return JNULL;
+    }
+  }
+
+  /** The write of a `set` statement, once its value (and index) are known. */
+  private assign(s: Extract<Stmt, { kind: "set" }>, value: JassValue, idx: number, frame: Frame): void {
+    if (s.index !== undefined) {
+      this.arrayFor(s.name, frame).set(idx, value);
+    } else if (frame.vars.has(s.name)) {
+      frame.vars.set(s.name, value);
+    } else {
+      this.rt.assignGlobal(s.name, value); // may raise a variable event, synchronously
     }
   }
 
@@ -689,19 +872,29 @@ export class Interpreter {
    *
    *  They still have ordinary native impls in natives/events.ts for the synchronous
    *  path (a `ForGroup` callback that calls `TriggerExecute`, say). */
-  private *execThreadNative(name: string, args: JassValue[]): ThreadGen {
+  private *execThreadNative(name: string, args: JassValue[], ts: Trace): ThreadGen {
     // common.ai's two (AI_THREAD_NATIVES). `Sleep` is TriggerSleepAction under the AI's name —
     // game seconds, parked on the scheduler. `StartThread` starts the function as a thread of
     // its own, run at once up to its first `Sleep` exactly as a trigger thread is
     // (`startThread`); the caller carries on, which is how `main()` gets past
     // `StartThread(function WorkerAssignment)` — a function that never returns — to the next line.
     if (name === "Sleep") {
-      yield Math.max(0, asNum(args[0] ?? jReal(0)));
+      // A resumed thread's innermost record is the wait itself, and the wait has run out.
+      if (ts.take("tn")) return JNULL;
+      ts.recs.push({ k: "tn", ph: 1, spins: 0 });
+      try {
+        yield Math.max(0, asNum(args[0] ?? jReal(0)));
+      } finally {
+        ts.recs.pop();
+      }
       return JNULL;
     }
     if (name === "StartThread") {
       const code = args[0];
-      if (code?.k === "code") this.startThread(`StartThread:${code.fn}`, this.callFunctionG(code.fn, []));
+      if (code?.k === "code") {
+        const t = new Trace();
+        this.startThread(`StartThread:${code.fn}`, this.callFunctionG(code.fn, [], t), t);
+      }
       return JNULL;
     }
     if (name === "TriggerSleepAction") {
@@ -713,7 +906,13 @@ export class Interpreter {
       // which adopts the rest of the callback as a thread rather than dropping it on the
       // floor. See runSync — the campaign trigger queue is why.
       const secs = Math.max(0, asNum(args[0] ?? jReal(0)));
-      yield secs;
+      if (ts.take("tn")) return JNULL; // resumed: this is where it slept, and the time is up
+      ts.recs.push({ k: "tn", ph: 1, spins: 0 });
+      try {
+        yield secs;
+      } finally {
+        ts.recs.pop();
+      }
       return JNULL;
     }
     if (name === "TriggerWaitForSound") {
@@ -739,29 +938,46 @@ export class Interpreter {
       // started, or that carries no duration, waits not at all — there is nothing to wait for.
       const snd = this.rt.data<SoundObj>(args[0] ?? JNULL);
       const offset = asNum(args[1] ?? jReal(0));
-      // Never started (or no handle) → nothing is playing, so there is nothing to wait OUT.
-      // Deliberately not "wait the clip's length anyway": a map that forgot to start its
-      // sound would then hang its cinematic on a line nobody can hear.
-      if (!snd || snd.startedAt < 0) {
-        yield 0;
-        return JNULL;
+      const resumed = ts.take("tn");
+      if (resumed?.ph === 1) return JNULL; // resumed after its last wait: the line has played out
+      const r = resumed ?? { k: "tn" as const, ph: 0 as 0 | 1, spins: 0 };
+      ts.recs.push(r);
+      try {
+        // Never started (or no handle) → nothing is playing, so there is nothing to wait OUT.
+        // Deliberately not "wait the clip's length anyway": a map that forgot to start its
+        // sound would then hang its cinematic on a line nobody can hear.
+        if (!snd || snd.startedAt < 0) {
+          if (resumed) return JNULL;
+          r.ph = 1;
+          yield 0;
+          return JNULL;
+        }
+        // Wait for the line to actually BEGIN first. `StartSound` only asks; the engine still
+        // has to read the clip out of the archive and decode it, and every millisecond of that
+        // is a millisecond this wait would otherwise finish early — which lands on the NEXT
+        // line, and is what the player hears as two people talking over each other. One frame
+        // per poll, capped so a clip that never arrives costs a beat rather than the cinematic
+        // (`pending` is undefined when nothing is going to play at all).
+        while (snd.pending && r.spins < WAIT_FOR_SOUND_SPINS) {
+          r.spins++;
+          yield 0;
+        }
+        const left = snd.duration / 1000 - offset - (this.rt.gameTime - snd.startedAt);
+        r.ph = 1;
+        yield Math.max(0, left);
+      } finally {
+        ts.recs.pop();
       }
-      // Wait for the line to actually BEGIN first. `StartSound` only asks; the engine still
-      // has to read the clip out of the archive and decode it, and every millisecond of that
-      // is a millisecond this wait would otherwise finish early — which lands on the NEXT
-      // line, and is what the player hears as two people talking over each other. One frame
-      // per poll, capped so a clip that never arrives costs a beat rather than the cinematic
-      // (`pending` is undefined when nothing is going to play at all).
-      for (let spins = 0; snd.pending && spins < WAIT_FOR_SOUND_SPINS; spins++) yield 0;
-      const left = snd.duration / 1000 - offset - (this.rt.gameTime - snd.startedAt);
-      yield Math.max(0, left);
       return JNULL;
     }
     // ExecuteFunc takes a function NAME, not a trigger. WC3 starts a thread for it (that is
     // why `TriggerSleepAction` works inside one at all), so it runs INLINE until it waits and
     // then detaches — the same rule as TriggerExecute below, and for the same reason.
     if (name === "ExecuteFunc") {
-      if (args[0]?.k === "string") this.runSync(this.callFunctionG(args[0].s, []), `ExecuteFunc:${args[0].s}`, true);
+      if (args[0]?.k === "string") {
+        const t = new Trace();
+        this.runSync(this.callFunctionG(args[0].s, [], t), `ExecuteFunc:${args[0].s}`, true, t);
+      }
       return JNULL;
     }
 
@@ -817,7 +1033,8 @@ export class Interpreter {
       // sleeps. Note this makes the statement form behave exactly like the EXPRESSION form
       // (`if TriggerExecuteBJ(…)`), which has adopted since the campaign trigger queue needed
       // it — the two were never meant to differ.
-      this.runSync(this.runActionsG(t), `trigger#${t.handleId}`, true);
+      const tr = new Trace();
+      this.runSync(this.runActionsG(t, tr), `trigger#${t.handleId}`, true, tr);
     } finally {
       // Pop OUR frame specifically. A suspension inside the actions is resumed by
       // `resumeThread`, which restores the same frames in the same order, so the top of the
@@ -830,19 +1047,30 @@ export class Interpreter {
 
   /** Run a trigger's action functions in order, on the current thread. One throwing
    *  action is logged and skipped — the rest still run (one bad trigger ≠ dead map). */
-  private *runActionsG(trig: TriggerObj): ThreadGen {
-    // `GetTriggerExecCount` counts the times the actions actually RAN, which is here and not
-    // at the fire — a trigger whose conditions refused it was evaluated, not executed.
-    trig.execs++;
-    // Iterate a SNAPSHOT: an action may `TriggerRemoveAction` (its own, commonly) mid-run, and
-    // splicing the array a live `for…of` is walking makes it skip the next one.
-    for (const { fn } of [...trig.actions]) {
-      try {
-        yield* this.callFunctionG(fn, []);
-      } catch (err) {
-        if (err instanceof ThreadAbort) throw err;
-        if (!(err instanceof ReturnSignal)) this.rt.warnOnce(fn, `trigger action threw: ${(err as Error).message}`);
+  private *runActionsG(trig: TriggerObj | undefined, ts: Trace): ThreadGen {
+    let r = ts.take("acts");
+    if (!r) {
+      if (!trig) return JNULL;
+      // `GetTriggerExecCount` counts the times the actions actually RAN, which is here and not
+      // at the fire — a trigger whose conditions refused it was evaluated, not executed.
+      trig.execs++;
+      // Iterate a SNAPSHOT: an action may `TriggerRemoveAction` (its own, commonly) mid-run, and
+      // splicing the array a live `for…of` is walking makes it skip the next one.
+      r = { k: "acts", trig: trig.handleId, fns: trig.actions.map((a) => a.fn), i: 0 };
+    }
+    ts.recs.push(r);
+    try {
+      for (; r.i < r.fns.length; r.i++) {
+        const fn = r.fns[r.i];
+        try {
+          yield* this.callFunctionG(fn, [], ts);
+        } catch (err) {
+          if (err instanceof ThreadAbort) throw err;
+          if (!(err instanceof ReturnSignal)) this.rt.warnOnce(fn, `trigger action threw: ${(err as Error).message}`);
+        }
       }
+    } finally {
+      ts.recs.pop();
     }
     return JNULL;
   }
@@ -858,7 +1086,7 @@ export class Interpreter {
     if (local) return local;
     let g = this.rt.globalArrays.get(name);
     if (!g) {
-      g = new JassArray("integer", () => jInt(0)); // tolerate an undeclared array target
+      g = new JassArray("integer"); // tolerate an undeclared array target
       this.rt.globalArrays.set(name, g);
     }
     return g;
@@ -931,28 +1159,48 @@ export class Interpreter {
    * Where the thread CANNOT wait — a condition, a filter, an enum callback, all driven by
    * `runSync` — the wait still ends the callback there, as it does in the game.
    */
-  private *evalG(e: Expr, frame: Frame): ThreadGen {
+  private *evalG(e: Expr, frame: Frame, ts: Trace): ThreadGen {
     if (!this.mayWait(e)) return this.eval(e, frame);
     switch (e.kind) {
       case "index": {
-        const idx = asInt(yield* this.evalG(e.index, frame));
+        const idx = asInt(yield* this.evalG(e.index, frame, ts));
         return this.arrayFor(e.name, frame).get(idx);
       }
       case "call": {
-        const args: JassValue[] = [];
-        for (const a of e.args) args.push(yield* this.evalG(a, frame));
-        return yield* this.callFunctionG(e.name, args);
+        const r = ts.take("ecall") ?? { k: "ecall" as const, args: [] as JassValue[], ph: 0 as 0 | 1 };
+        ts.recs.push(r);
+        try {
+          if (r.ph === 0) {
+            while (r.args.length < e.args.length) {
+              const v = yield* this.evalG(e.args[r.args.length], frame, ts);
+              r.args.push(v);
+            }
+            r.ph = 1;
+          }
+          return yield* this.callFunctionG(e.name, r.args, ts);
+        } finally {
+          ts.recs.pop();
+        }
       }
       case "unary":
-        return this.evalUnary(e.op, yield* this.evalG(e.expr, frame));
+        return this.evalUnary(e.op, yield* this.evalG(e.expr, frame, ts));
       case "binary": {
         // Left first, and `and`/`or` stop where `evalBinary` stops — the two evaluators must
         // not disagree about whether the right-hand side of `u != null and Ready(u)` runs.
-        const l = yield* this.evalG(e.left, frame);
-        if (e.op === "and" && !truthy(l)) return jBool(false);
-        if (e.op === "or" && truthy(l)) return jBool(true);
-        const r = yield* this.evalG(e.right, frame);
-        return this.binaryOf(e.op, l, r);
+        const r = ts.take("bin") ?? { k: "bin" as const, ph: 0 as 0 | 1, l: JNULL as JassValue };
+        ts.recs.push(r);
+        try {
+          if (r.ph === 0) {
+            r.l = yield* this.evalG(e.left, frame, ts);
+            if (e.op === "and" && !truthy(r.l)) return jBool(false);
+            if (e.op === "or" && truthy(r.l)) return jBool(true);
+            r.ph = 1;
+          }
+          const rv = yield* this.evalG(e.right, frame, ts);
+          return this.binaryOf(e.op, r.l, rv);
+        } finally {
+          ts.recs.pop();
+        }
       }
       default:
         return this.eval(e, frame);
@@ -1040,7 +1288,8 @@ export class Interpreter {
    *  or null if it suspended on a wait (a map-init trigger with a `Wait`), in which case
    *  the pump resumes it. WC3 runs `main()` on a thread too, for exactly this reason. */
   run(fnName: string, args: JassValue[] = []): JassValue {
-    return this.startThread(fnName, this.callFunctionG(fnName, args)).result;
+    const ts = new Trace();
+    return this.startThread(fnName, this.callFunctionG(fnName, args, ts), ts).result;
   }
 
   // --- trigger threads (milestone 7.15) -------------------------------------
@@ -1048,11 +1297,12 @@ export class Interpreter {
   /** Start a thread and run it **immediately**, up to its first wait (WC3 runs trigger
    *  actions the moment the event fires — the wait is what defers the rest). It only
    *  joins the scheduler if it actually suspended. */
-  private startThread(label: string, gen: ThreadGen, responses?: Map<string, JassValue>): JassThread {
+  private startThread(label: string, gen: ThreadGen, ts: Trace, responses?: Map<string, JassValue>): JassThread {
     const t: JassThread = {
       id: this.nextThreadId++,
       label,
       gen,
+      ts,
       stack: responses ? [responses] : [],
       depth: 0,
       wakeAt: this.rt.gameTime,
@@ -1123,6 +1373,73 @@ export class Interpreter {
   }
 
   /** How many threads are parked on a wait (diagnostics / tests). */
+  /**
+   * Why this VM cannot be saved right now, or null when it can (docs/save-games.md). A save is
+   * taken BETWEEN steps, when every thread is parked on a wait — never in the middle of one —
+   * and a thread parked inside a Lua coroutine cannot be described (`Trace.opaque`).
+   */
+  unsaveable(): string | null {
+    if (this.currentThread || this.syncDepth > 0 || this.depth > 0) return "the script is running";
+    if (this.threads.some((t) => !t.done && t.ts.opaque > 0)) return "a Lua thread is waiting";
+    return null;
+  }
+
+  /** Every parked thread, as data — its trace, its event responses and its wake time. The
+   *  generator itself is not written: `restoreThreads` rebuilds it from the trace. */
+  captureThreads(): SavedThreads {
+    const why = this.unsaveable();
+    if (why) throw new Error(`save: ${why}`);
+    return {
+      threads: this.threads.filter((t) => !t.done).map((t) => ({
+        // A thread loaded from a save and not yet woken is still holding its saved trace in
+        // `resume` (the generators take it back only when they run) — that IS where it is, so a
+        // game saved straight after a load writes the same thread it read.
+        id: t.id, label: t.label, recs: t.ts.resume && t.ts.at === 0 ? t.ts.resume : t.ts.recs, stack: t.stack, wakeAt: t.wakeAt, lastTick: t.lastTick,
+      })),
+      nextThreadId: this.nextThreadId,
+      pumpTick: this.pumpTick,
+    };
+  }
+
+  /**
+   * Put a saved game's threads back on this VM — which must hold the SAME script, already
+   * restored to the saved runtime (the handles a trace's `acts` record names must exist).
+   *
+   * Each thread's generator chain is started again on its saved trace: nothing runs now; when
+   * the pump next resumes it, every generator takes its own record back and the innermost wait
+   * returns, and the thread carries on from where the saved one was parked.
+   */
+  restoreThreads(saved: SavedThreads): void {
+    this.threads = [];
+    let recordOnlyFrames = 0;
+    for (const st of saved.threads) {
+      const ts = new Trace();
+      ts.resume = st.recs.length ? st.recs : null;
+      const root = st.recs[0];
+      let gen: ThreadGen;
+      if (root?.k === "cf") gen = this.callFunctionG(root.name, [], ts);
+      else if (root?.k === "user") {
+        const fn = this.rt.functions.get(root.fn);
+        if (!fn) throw new Error(`save: a saved thread runs ${root.fn}, which this script does not have`);
+        gen = this.callUserG(fn, [], ts);
+      } else if (root?.k === "acts") gen = this.runActionsG(this.rt.handles.get(root.trig) as TriggerObj | undefined, ts);
+      else throw new Error(`save: a saved thread (${st.label}) starts on a ${root?.k ?? "nothing"} record`);
+      for (const r of st.recs) if (r.k === "user" && this.rt.recordOnlySpawnFns.has(r.fn)) recordOnlyFrames++;
+      this.threads.push({
+        id: st.id, label: st.label, gen, ts, stack: st.stack,
+        // Zero, not the saved depth: every frame on the trace counts itself back in as the chain
+        // re-enters it (callUserG), which is how the saved depth was reached in the first place.
+        depth: 0,
+        wakeAt: st.wakeAt, lastTick: st.lastTick, done: false, result: JNULL,
+      });
+    }
+    this.nextThreadId = saved.nextThreadId;
+    this.pumpTick = saved.pumpTick;
+    // …and the record-only scope likewise: the saved runtime's count includes the frames of
+    // parked threads, which re-enter it on resume.
+    this.rt.spawnDepth = Math.max(0, this.rt.spawnDepth - recordOnlyFrames);
+  }
+
   get sleepingThreads(): number {
     return this.threads.length;
   }
@@ -1143,7 +1460,10 @@ export class Interpreter {
     } finally {
       this.rt.eventStack.pop();
     }
-    if (pass) this.startThread(`trigger#${trig.handleId}`, this.runActionsG(trig), responses);
+    if (pass) {
+      const ts = new Trace();
+      this.startThread(`trigger#${trig.handleId}`, this.runActionsG(trig, ts), ts, responses);
+    }
   }
 
   /**
@@ -1238,7 +1558,10 @@ export class Interpreter {
     const responses = new Map<string, JassValue>([["ExpiredTimer", jHandle(t.handleId, "timer")]]);
     // A timer handler runs on its own thread — WC3 lets one TriggerSleepAction (and the
     // periodic re-arm keeps ticking while it sleeps).
-    if (t.handlerFn) this.startThread(`timer#${t.handleId}`, this.callFunctionG(t.handlerFn, []), responses);
+    if (t.handlerFn) {
+      const ts = new Trace();
+      this.startThread(`timer#${t.handleId}`, this.callFunctionG(t.handlerFn, [], ts), ts, responses);
+    }
     for (const reg of this.rt.triggerRegs) {
       if (reg.kind !== "timerExpire") continue;
       if (reg.params[0]?.k === "handle" && reg.params[0].h === t.handleId) {

@@ -33,12 +33,10 @@ interface JassAbility extends AbilityInstanceRef {
   handleId: number;
 }
 
-const interned = new WeakMap<Runtime, Map<string, number>>();
-
-/** The one handle for an instance (minted on first ask). */
+/** The one handle for an instance (minted on first ask) — kept on the runtime
+ *  (`nativeTable`), so a saved game carries it. */
 function abilityHandle(c: NativeCtx, ref: AbilityInstanceRef): JassValue {
-  let byKey = interned.get(c.rt);
-  if (!byKey) interned.set(c.rt, (byKey = new Map()));
+  const byKey = c.rt.nativeTable<string, number>("ability");
   const key = `${ref.kind}:${ref.owner}:${ref.abilId}`;
   let h = byKey.get(key);
   if (h === undefined) {

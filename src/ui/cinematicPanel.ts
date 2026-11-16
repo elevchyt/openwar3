@@ -156,6 +156,17 @@ export class CinematicPanelOverlay {
     if (!this.live) this.filterEl.hidden = true;
   }
 
+  /** The fade on screen and how far into it — a saved game's (docs/save-games.md). */
+  liveFilter(): { filter: CineFilter; t: number } | null {
+    return this.live ? { filter: this.live.filter, t: this.live.t } : null;
+  }
+
+  /** …and put back where it was. */
+  restoreFilter(filter: CineFilter, t: number): void {
+    this.setFilter(filter);
+    if (this.live) this.live.t = t;
+  }
+
   /** Whether the map's filter is still on its way DOWN to a darker picture — a fade-out in
    *  flight. The skip cover asks this before it lifts (`MapViewerScene.tickCinematicSkip`). */
   get filterDarkening(): boolean {
