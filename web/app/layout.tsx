@@ -21,7 +21,7 @@ export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? SITE),
   title: "OpenWar3 · Warcraft III, rebuilt in the open",
   description:
-    "A modern, open-source reimplementation of the Warcraft III: The Frozen Throne engine. Bring your own 1.30.4 install — OpenWar3 ships zero Blizzard assets.",
+    "A modern, open-source reimplementation of the Warcraft III: The Frozen Throne engine. OpenWar3 ships zero Blizzard assets.",
   openGraph: {
     title: "OpenWar3",
     description: "A modern, open-source reimplementation of the Warcraft III engine.",
