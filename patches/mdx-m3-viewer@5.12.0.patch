@@ -1486,10 +1486,31 @@ index 5f2c0c2ffbfae107c42070fe99e41669814924ef..3101fe8514c3933b217efeeaa2f1397b
              solverParams.hd = true;
              // mdxHandler.loadEnv(viewer);
 diff --git a/dist/cjs/viewer/handlers/mdx/modelinstance.js b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-index 020a99b949ec1634579d439261027e00b6da23ac..c8b9e2dfc9e430af9813f9a6ca4fa9e0101c3e74 100644
+index 020a99b949ec1634579d439261027e00b6da23ac..ed846d2d7f9ddbc66028760783d3a2031ee1eabb 100644
 --- a/dist/cjs/viewer/handlers/mdx/modelinstance.js
 +++ b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-@@ -21,6 +21,524 @@ const scaleHeap = gl_matrix_1.vec3.create();
+@@ -15,12 +15,545 @@ const eventobjectubremitter_1 = require("./eventobjectubremitter");
+ const eventobjectsndemitter_1 = require("./eventobjectsndemitter");
+ const geometryemitterfuncs_1 = require("./geometryemitterfuncs");
+ const visibilityHeap = new Float32Array(1);
++/** OpenWar3: scratch for an event object's on/off value (ow3TickHidden). */
++const ow3EventHeap = new Uint32Array(1);
++/**
++ * OpenWar3: does an event object of this type put anything into the world when it fires? A
++ * spawned model, a splat and an ubersplat do; a sound only where the viewer and the scene have
++ * audio (EventObjectSnd.bind), which the game's world viewer does not — its sounds are played
++ * off the same event data by src/audio. So an off-camera SND key needs no pose.
++ */
++function ow3EventProduces(type, instance) {
++    if (type === 'SPN' || type === 'SPL' || type === 'UBR') {
++        return true;
++    }
++    const scene = instance.scene;
++    return type === 'SND' && instance.model.viewer.audioEnabled === true && scene !== null && scene.audioEnabled === true;
++}
+ const translationHeap = gl_matrix_1.vec3.create();
+ const rotationHeap = gl_matrix_1.quat.create();
+ const scaleHeap = gl_matrix_1.vec3.create();
  const colorHeap = new Float32Array(3);
  const alphaHeap = new Float32Array(1);
  const textureIdHeap = new Uint32Array(1);
@@ -2014,7 +2035,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..c8b9e2dfc9e430af9813f9a6ca4fa9e0
  /**
   * An MDX model instance.
   */
-@@ -48,12 +566,56 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -48,12 +581,60 @@ class MdxModelInstance extends modelinstance_1.default {
          // Any later non-forced update can then use variancy to skip updating things.
          // It is set to true every time the sequence is set with setSequence().
          this.forced = true;
@@ -2051,6 +2072,10 @@ index 020a99b949ec1634579d439261027e00b6da23ac..c8b9e2dfc9e430af9813f9a6ca4fa9e0
 +        // `CreateDeadDestructableZ` puts on its Death clip at map init — held its whole 150 ms
 +        // fade until the player first panned over, and the bridge visibly sank in front of them.
 +        this.ow3SeenFrame = -2;
++        // OpenWar3: the event emitters an off-camera frame has to ask (ow3TickHidden), and how
++        // many emitters the list was made from — they are created when the model loads.
++        this.ow3Producers = null;
++        this.ow3ProducersOf = -1;
 +        // OpenWar3 (issue #161): the shared skeleton this instance wore on its last update, or
 +        // null. Wearing one, it walks no nodes, so its locals still hold the frame its clip
 +        // started on; `captureBlendSnapshot` reads the pose it was actually drawn in from here.
@@ -2071,7 +2096,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..c8b9e2dfc9e430af9813f9a6ca4fa9e0
          for (let i = 0, l = model.geosets.length; i < l; i++) {
              this.geosetColors[i] = new Float32Array(4);
          }
-@@ -216,45 +778,193 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -216,45 +797,193 @@ class MdxModelInstance extends modelinstance_1.default {
       * Updates all of this instance internal nodes and objects.
       * Nodes that are determined to not be visible will not be updated, nor will any of their children down the hierarchy.
       */
@@ -2278,7 +2303,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..c8b9e2dfc9e430af9813f9a6ca4fa9e0
                  // If the attachment/emitter is visible, update it.
                  if (visibilityHeap[0] > 0) {
                      node.object.update(dt);
-@@ -262,13 +972,50 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -262,13 +991,50 @@ class MdxModelInstance extends modelinstance_1.default {
              }
              // Recalculate and update child nodes.
              // Note that this only affects normal nodes such as instances, and not skeletal nodes.
@@ -2330,7 +2355,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..c8b9e2dfc9e430af9813f9a6ca4fa9e0
      }
      /**
       * If a model has no sequences or is running no sequence, it will only update once since it will never be forced to update.
-@@ -362,26 +1109,83 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -362,24 +1128,155 @@ class MdxModelInstance extends modelinstance_1.default {
              }
          }
      }
@@ -2393,6 +2418,69 @@ index 020a99b949ec1634579d439261027e00b6da23ac..c8b9e2dfc9e430af9813f9a6ca4fa9e0
          }
      }
 +    /**
++     * OpenWar3: one frame of an instance the camera cannot see (Scene.update's second pass, and
++     * the base ModelInstance.update for one in a visible cell but outside the frustum).
++     *
++     * Its clock runs exactly as a drawn instance's does, so a clip begun off screen is as far
++     * along when the camera arrives as it would have been if somebody had watched — a unit that
++     * died off camera is lying down, not starting to fall — and `sequenceEnded` comes on time.
++     * Its animation EVENTS keep time too: each event emitter is asked what `updateEmission`
++     * would ask, and when one that PRODUCES something (a spawned model, a splat, an ubersplat;
++     * a sound only where the viewer has audio, which the game's does not) reaches its key, the
++     * instance is posed for that one frame — the event lands where its node IS, which only a
++     * pose knows — and the ordinary pass fires it. Any other frame poses nothing: the event
++     * bookkeeping is just carried forward, so nothing is left over to fire on first sight.
++     * A cross-fade has nobody to show it to (see ow3SeenFrame) and is dropped.
++     */
++    ow3TickHidden(dt) {
++        this.blendRemaining = 0;
++        this.ow3AdvanceClock(dt);
++        const sequence = this.sequence;
++        if (sequence === -1 || !this.allowParticleSpawn) {
++            return;
++        }
++        // Only the emitters that can put something into the world are asked at all — a unit's
++        // FOOTPRINT events (FPT) and, without viewer audio, its SOUND events produce nothing,
++        // and every walking unit off screen would otherwise pay for them every frame. Listed
++        // once per instance, after its model has loaded (the emitters are made then).
++        const emitters = this.eventObjectEmitters;
++        let producers = this.ow3Producers;
++        if (producers === null || this.ow3ProducersOf !== emitters.length) {
++            producers = this.ow3Producers = emitters.filter((e) => ow3EventProduces(e.emitterObject.type, this));
++            this.ow3ProducersOf = emitters.length;
++        }
++        if (producers.length === 0) {
++            return;
++        }
++        const frame = this.frame;
++        const counter = this.counter;
++        let landing = false;
++        for (const emitter of producers) {
++            const object = emitter.emitterObject;
++            if (!object.ok) {
++                continue;
++            }
++            object.getVisibility(visibilityHeap, sequence, frame, counter);
++            if (visibilityHeap[0] <= 0) {
++                continue; // updateNodes would not have asked this one either
++            }
++            object.getValue(ow3EventHeap, this);
++            const value = ow3EventHeap[0];
++            if (value === 1 && value !== emitter.lastValue) {
++                landing = true;
++                break;
++            }
++            emitter.lastValue = value; // carried forward, so nothing is left to fire on first sight
++        }
++        if (landing) {
++            // A forced pass: the locals are as old as the last time anybody looked. It runs every
++            // visible node object's update, and so fires the event — and carries every other
++            // emitter's bookkeeping forward — through the very code a drawn frame uses.
++            this.forced = true;
++            this.ow3Pose(dt);
++        }
++    }
++    /**
 +     * OpenWar3: was this instance drawn on the viewer's latest frame (or the one before, for a
 +     * call that lands between the sim and the draw)? See ow3SeenFrame.
 +     */
@@ -2401,8 +2489,8 @@ index 020a99b949ec1634579d439261027e00b6da23ac..c8b9e2dfc9e430af9813f9a6ca4fa9e0
 +        return viewer !== undefined && this.ow3SeenFrame >= viewer.frame - 1;
 +    }
      updateAnimations(dt) {
-         const model = this.model;
-         const sequenceId = this.sequence;
++        const model = this.model;
++        const sequenceId = this.sequence;
 +        // OpenWar3: a cross-fade still running when the camera last left this instance ran its
 +        // course while it was off screen (see ow3SeenFrame). Its clock is the world's, not the
 +        // camera's — finishing it now would play the remainder late, in front of the player.
@@ -2413,10 +2501,30 @@ index 020a99b949ec1634579d439261027e00b6da23ac..c8b9e2dfc9e430af9813f9a6ca4fa9e0
 +            }
 +            this.ow3SeenFrame = viewer.frame;
 +        }
++        this.ow3AdvanceClock(dt);
++        this.ow3Pose(dt);
++    }
++    /**
++     * OpenWar3: the half of `updateAnimations` that is TIME — the frame, the global-sequence
++     * counter, the end of a clip — split from the half that is the PICTURE (`ow3Pose`), so an
++     * instance the camera cannot see keeps time without paying for a pose (`ow3TickHidden`).
++     */
++    ow3AdvanceClock(dt) {
+         const model = this.model;
+         const sequenceId = this.sequence;
          if (sequenceId !== -1) {
-             const sequence = model.sequences[sequenceId];
-             const interval = sequence.interval;
-@@ -421,6 +1225,12 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -405,6 +1302,10 @@ class MdxModelInstance extends modelinstance_1.default {
+                 this.sequenceEnded = false;
+             }
+         }
++    }
++    /** OpenWar3: the half of `updateAnimations` that is the PICTURE (see ow3AdvanceClock). */
++    ow3Pose(dt) {
++        const sequenceId = this.sequence;
+         const forced = this.forced;
+         if (sequenceId !== -1 || forced) {
+             // Update the nodes
+@@ -421,6 +1322,12 @@ class MdxModelInstance extends modelinstance_1.default {
       */
      setTeamColor(id) {
          this.teamColor = id;
@@ -2429,7 +2537,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..c8b9e2dfc9e430af9813f9a6ca4fa9e0
          return this;
      }
      /**
-@@ -436,6 +1246,7 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -436,6 +1343,7 @@ class MdxModelInstance extends modelinstance_1.default {
      setSequence(id) {
          const model = this.model;
          const sequences = model.sequences;
@@ -2437,7 +2545,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..c8b9e2dfc9e430af9813f9a6ca4fa9e0
          this.sequence = id;
          if (id < 0 || id > sequences.length - 1) {
              this.sequence = -1;
-@@ -445,11 +1256,86 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -445,11 +1353,86 @@ class MdxModelInstance extends modelinstance_1.default {
          else {
              this.frame = sequences[id].interval[0];
          }
@@ -4368,11 +4476,35 @@ index 3839c8af5d3f624640e87bec6d447483f9d706bf..5f1ae14a98b5bf0791333865a04bf302
  
      gl_Position = vec4(0.0);
    }
+diff --git a/dist/cjs/viewer/modelinstance.js b/dist/cjs/viewer/modelinstance.js
+index 95256d9c030a86e6254af29d858b2e848d6ef19a..084a089ba5304f7a0c90f0f6c472402601e4cfe7 100644
+--- a/dist/cjs/viewer/modelinstance.js
++++ b/dist/cjs/viewer/modelinstance.js
+@@ -108,6 +108,10 @@ class ModelInstance extends node_1.Node {
+             // Update child nodes if there are any, such as instances parented to instances.
+             super.update(dt);
+         }
++        else if (scene && this.rendered && this.ow3TickHidden) {
++            // OpenWar3: off camera, the clock still runs (see Scene.update's second pass).
++            this.ow3TickHidden(dt * this.timeScale);
++        }
+     }
+     updateAnimations(_dt) {
+     }
 diff --git a/dist/cjs/viewer/scene.js b/dist/cjs/viewer/scene.js
-index afd956b8a078be77190d840a7fe5cb4d2c76797a..66de9bb3445643603adc39e0cbec367ea8adfaa8 100644
+index afd956b8a078be77190d840a7fe5cb4d2c76797a..e5be08a165678cce92965ab9a0e08fa39c123db2 100644
 --- a/dist/cjs/viewer/scene.js
 +++ b/dist/cjs/viewer/scene.js
-@@ -52,6 +52,16 @@ class Scene {
+@@ -13,6 +13,8 @@ const emittedobjectupdater_1 = require("./emittedobjectupdater");
+  * If audio is enabled, the AudioContext's listener's location will be updated automatically.
+  * Note that due to browser policies, this may be done only after user interaction with the web page.
+  */
++/** OpenWar3: scratch list of the cells a frame's camera cannot see (Scene.update). */
++const ow3HiddenCells = [];
+ class Scene {
+     constructor(viewer) {
+         this.camera = new camera_1.default();
+@@ -52,6 +54,16 @@ class Scene {
           * Affects HD MDX and M3 models.
           */
          this.lightPosition = gl_matrix_1.vec3.fromValues(0, 0, 10000);
@@ -4389,6 +4521,50 @@ index afd956b8a078be77190d840a7fe5cb4d2c76797a..66de9bb3445643603adc39e0cbec367e
          this.viewer = viewer;
          const canvas = viewer.canvas;
          const width = canvas.width;
+@@ -169,9 +181,15 @@ class Scene {
+         const instances = this.instances;
+         this.visibleCells = 0;
+         this.visibleInstances = 0;
++        // OpenWar3: the cells the camera cannot see, kept for the second pass below.
++        const ow3Hidden = ow3HiddenCells;
++        ow3Hidden.length = 0;
+         // Update and collect all of the visible instances.
+         for (const cell of this.grid.cells) {
+-            if (cell.isVisible(camera)) {
++            if (!cell.isVisible(camera)) {
++                ow3Hidden.push(cell);
++            }
++            else {
+                 this.visibleCells += 1;
+                 for (const instance of cell.instances) {
+                     // If an instance is rendered, wasn't updated on this frame, and has no parent, update it.
+@@ -184,6 +202,26 @@ class Scene {
+                 }
+             }
+         }
++        // OpenWar3: …and everything the camera cannot see still KEEPS TIME. Stock, an instance
++        // outside the frustum was simply not updated: its clip stood still, `sequenceEnded`
++        // never came, and an animation EVENT (a spawned model, a splat, an ubersplat) keyed
++        // inside a clip that ran off screen fired the first time the player looked — a death
++        // splat laid late, in front of them. WC3 runs the world whether or not you watch it.
++        // `ow3TickHidden` advances the clock and the events and poses nothing unless an event
++        // has to land somewhere (handlers/mdx/modelinstance.js). A SECOND pass, so an instance
++        // that straddles a visible cell and a hidden one is drawn, never merely ticked: the
++        // first pass stamped `updateFrame` on everything it reached.
++        for (const cell of ow3Hidden) {
++            for (const instance of cell.instances) {
++                if (instance.rendered && instance.updateFrame < frame && !instance.parent) {
++                    instance.updateFrame = frame;
++                    if (instance.ow3TickHidden) {
++                        instance.ow3TickHidden(dt * instance.timeScale);
++                    }
++                }
++            }
++        }
++        ow3Hidden.length = 0;
+         // Sort the visible instances based on depth.
+         instances.length = this.visibleInstances;
+         instances.sort((a, b) => a.depth - b.depth);
 diff --git a/dist/cjs/viewer/skeletalnode.js b/dist/cjs/viewer/skeletalnode.js
 index 2ae99b7f8f6167035bd01cf13339de280c3f402c..64281c010591f82e43696323f024f66ed5bfa6e7 100644
 --- a/dist/cjs/viewer/skeletalnode.js
