@@ -18949,14 +18949,29 @@ export class MapViewerScene {
     };
   }
 
+  /** An angle in (−π, π] — the same direction, without the whole turns. */
+  private static principal(rad: number): number {
+    const t = rad % (2 * Math.PI);
+    return t > Math.PI ? t - 2 * Math.PI : t <= -Math.PI ? t + 2 * Math.PI : t;
+  }
+
   private writeCamera(c: CameraState): void {
     const RAD = Math.PI / 180;
     this.target[0] = c.targetX;
     this.target[1] = c.targetY;
     this.zOffset = c.zOffset; // followGround adds the terrain under the focus back on
     this.distance = c.distance;
-    this.yaw = c.rotationDeg * RAD;
-    this.pitch = -c.aoaDeg * RAD;
+    // Both angles are written in their PRINCIPAL range, because a script speaks in whichever
+    // turn it likes and the player's own controls then ease from what is stored. WC3's default
+    // angle of attack is 304 (bj_CAMERA_DEFAULT_AOA) and a cinematic's `ResetToGameCamera`
+    // ends on it, which as a pitch is −304°: the same view as +56°, one whole turn away. The
+    // wheel eases `pitch` to the zoom stop's 56° as plain numbers, so the first notch after
+    // any cutscene swung the camera through a full 360° loop on its way to where it already
+    // was (measured: −304 → −264 → … → 8.9 → 56 across the 0.44 s ease).
+    // (The rotation keeps to [0, 2π) rather than straddling zero: `GetCameraField` reads it
+    // back, and a script that set 270 should not be told −90.)
+    this.yaw = ((c.rotationDeg * RAD) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+    this.pitch = MapViewerScene.principal(-c.aoaDeg * RAD);
     // A camera setup with a 0 or absurd FOV would render nothing at all; keep it sane.
     this.fov = clamp(MapViewerScene.fovFromWc3(c.fovDeg), 0.1, Math.PI * 0.9);
     this.roll = c.rollDeg * RAD;
