@@ -327,6 +327,7 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     setItemCharges: (id, charges) => void sim.setItemCharges(id, charges),
     setItemDroppable: (id, flag) => void sim.setItemDroppable(id, flag),
     setItemPawnable: (id, flag) => void sim.setItemPawnable(id, flag),
+    setItemDropOnDeath: (id, flag) => void sim.setItemDropOnDeath(id, flag),
     setItemInvulnerable: (id, flag) => sim.setItemInvulnerable(id, flag),
     setItemLife: (id, life) => sim.setItemLife(id, life),
     // StoreUnit — what a chapter writes into the game cache for the next one (docs/campaigns.md).

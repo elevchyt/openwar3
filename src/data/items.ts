@@ -59,6 +59,11 @@ export interface ItemDef {
   perishable: boolean; // destroyed when its charges hit 0
   powerup: boolean; // consumed instantly on pickup (tomes, runes, gold) — never stored
   droppable: boolean; // can be dropped / dropped by a creep
+  /** `drop` — "Dropped When Carrier Dies" (`idrp` in the object editor). A HERO keeps its
+   *  whole inventory through death and revival EXCEPT these: in the stock tables exactly five
+   *  items set it — the four capture-the-flag flags (`flag`/`nflg`/`oflg`/`uflg`) and `btst`.
+   *  A non-hero carrier scatters everything anyway (SimWorld.dropInventory). */
+  dropOnDeath: boolean;
   sellable: boolean; // a shop may sell it (JASS IsItemSellable) — distinct from pawnable
   pawnable: boolean; // sellable back to a shop
   pickRandom: boolean; // eligible to fill a "random item of level N" drop slot
@@ -228,6 +233,7 @@ export function loadItemRegistry(vfs: DataSource): ItemRegistry {
       perishable: num(r, "perishable", 0) === 1,
       powerup: num(r, "powerup", 0) === 1,
       droppable: num(r, "droppable", 0) === 1,
+      dropOnDeath: num(r, "drop", 0) === 1,
       sellable: num(r, "sellable", 0) === 1,
       pawnable: num(r, "pawnable", 0) === 1,
       pickRandom: num(r, "pickRandom", 0) === 1,
@@ -254,7 +260,7 @@ export function blankItemDef(id: string): ItemDef {
     id, name: id, description: "", summary: "", icon: "", tip: "", hotkey: "", buttonX: 0, buttonY: 0,
     model: itemModel(""), scale: 1, gold: 0, lumber: 0, level: 0, classType: "Miscellaneous", abilities: [],
     charges: 0, cooldownGroup: "", ignoreCooldown: false, usable: false, perishable: false, powerup: false,
-    droppable: true, sellable: false, pawnable: false, pickRandom: false, maxHp: 75, stockMax: 0,
+    droppable: true, dropOnDeath: false, sellable: false, pawnable: false, pickRandom: false, maxHp: 75, stockMax: 0,
     stockRegen: 0, stockStart: 0,
   };
 }

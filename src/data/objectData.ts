@@ -1122,7 +1122,11 @@ const ITEM_SETTERS: Record<string, (d: ItemDef, v: Val) => void> = {
   iusa: (d, v) => { d.usable = bool(v); },
   iper: (d, v) => { d.perishable = bool(v); },
   ipow: (d, v) => { d.powerup = bool(v); },
-  idrp: (d, v) => { d.droppable = bool(v); },
+  // Two codes, two columns (Units\UnitMetaData.slk): `idrp` is `drop` — "Dropped When Carrier
+  // Dies" — and `idro` is `droppable`. `idrp` used to be routed onto `droppable`, so a map that
+  // ticked "drop on death" made the item undroppable instead and never touched `idro` at all.
+  idrp: (d, v) => { d.dropOnDeath = bool(v); },
+  idro: (d, v) => { d.droppable = bool(v); },
   isel: (d, v) => { d.sellable = bool(v); }, // "can be sold by a shop" (JASS IsItemSellable)
   ipaw: (d, v) => { d.pawnable = bool(v); },
   iprn: (d, v) => { d.pickRandom = bool(v); },

@@ -518,6 +518,18 @@ that "only the script observes" (`SetItemVisible`, `SetItemInvulnerable`) — ho
 because a ground item here is neither hideable nor destructible, and wrong for this one, because
 this one is a rule the player runs into.
 
+## Dropped When Carrier Dies: what a dead hero lets go of
+
+A dying NON-hero carrier scatters everything it holds. A HERO keeps its whole inventory through
+death and revival, except the items whose `ItemData.slk` **`drop`** column is 1 ("Dropped When
+Carrier Dies", object-editor code **`idrp`** — not to be confused with **`idro`**, which is
+`droppable`). Exactly five stock items set it: the capture-the-flag flags `flag`, `nflg`, `oflg`,
+`uflg`, and `btst`. `SetItemDropOnDeath(item, flag)` overrides it per ITEM, the same way
+`SetItemDroppable` does (`SimWorld.setItemDropOnDeath`, keyed on the entity id). Two things
+still keep an item in the body (`SimWorld.dropInventory`, issue #231): an undroppable item stays,
+by the hint above, and an ILLUSION drops nothing, because its inventory is a picture of the
+original's items by id.
+
 ## An item on the ground can be broken
 
 An item is a WIDGET (common.j: `item extends widget`, beside `unit` and `destructable`), and

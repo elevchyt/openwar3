@@ -919,6 +919,8 @@ export interface EngineHooks {
   setItemDroppable?(itemId: number, flag: boolean): void;
   /** SetItemPawnable — whether a shop will buy this one item back (SimWorld.setItemPawnable). */
   setItemPawnable?(itemId: number, flag: boolean): void;
+  /** SetItemDropOnDeath — whether this one item falls out of a dying hero (SimWorld.setItemDropOnDeath). */
+  setItemDropOnDeath?(itemId: number, flag: boolean): void;
   /** SetItemInvulnerable — an item no attack may break (SimWorld.issueAttackItem). */
   setItemInvulnerable?(itemId: number, flag: boolean): void;
   /** SetWidgetLife on an item — its hit points on the ground; 0 breaks it. */

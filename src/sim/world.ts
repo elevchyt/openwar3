@@ -26122,7 +26122,7 @@ export class SimWorld {
       this.recentDeaths.push({ id: u.id, typeId: u.typeId, owner: u.owner, x: u.x, y: u.y, facing: u.facing, at: this.elapsed });
     }
     this.rollCreepDrops(u); // creeps scatter their dropped-item table on death
-    this.dropInventory(u); // a dying non-hero inventory-unit drops its held items
+    this.dropInventory(u); // a dying non-hero drops its held items; a hero only its drop-on-death ones
     // A carrier that dies SPILLS: the bodies it was hauling land where the wreck does. They
     // were never consumed — a Meat Wagon borrows corpses, it does not use them up — so
     // deleting them with it would destroy something that still belongs to the field. (The
@@ -26254,13 +26254,22 @@ export class SimWorld {
    *  A HERO is the exception, and it is the important one: a dead hero in WC3 keeps its
    *  whole inventory and walks back out of the altar still carrying it. Dropping a hero's
    *  items would hand the killer six free artifacts and is not how the game plays. Only
-   *  non-hero inventory units (the `AInv` ability on a normal unit) drop what they carry. */
+   *  non-hero inventory units (the `AInv` ability on a normal unit) drop what they carry —
+   *  and, from a hero, the items marked "Dropped When Carrier Dies" (ItemData `drop`, or a
+   *  script's `SetItemDropOnDeath`): the capture-the-flag flags, which is what lets the
+   *  enemy who killed the flag-bearer pick the flag up (issue #231).
+   *
+   *  An UNDROPPABLE item stays with the body either way (`mayLeaveInventory`, the rule
+   *  `SetItemDroppableBJHint` states for every door out of an inventory). */
   private dropInventory(u: SimUnit): void {
-    if (u.isHero) return; // items ride with the hero through death and revival
+    // An illusion's inventory is a PICTURE of the original's (docs/illusions.md) — the same
+    // items, by id. A copy that dies must not hand the real flag to its killer.
+    if (u.isIllusion) return;
     let n = 0;
     for (let i = 0; i < u.inventory.length; i++) {
       const held = u.inventory[i];
       if (!held) continue;
+      if (u.isHero && !this.itemDropsOnDeath(held)) continue; // rides with the hero through death and revival
       if (!this.mayLeaveInventory(held)) continue; // it goes down with the body, not onto the grass
       u.inventory[i] = null;
       const ang = (n * 2.399963) % (Math.PI * 2);
@@ -28325,6 +28334,31 @@ export class SimWorld {
   }
 
   /**
+   * `SetItemDropOnDeath(item, flag)` — whether THIS item falls out of a dying hero's inventory
+   * (issue #231). Per-ITEM like `SetItemDroppable`, because common.j takes an `item`; only the
+   * override lives here, and an item nobody has called this on answers with its type's own
+   * `drop` column ("Dropped When Carrier Dies"). Read by `dropInventory` for heroes only — a
+   * non-hero carrier scatters what it holds regardless.
+   */
+  setItemDropOnDeath(id: number, flag: boolean): boolean {
+    if (!this.items.has(id) && !this.itemSnapshot(id)) return false;
+    this.itemDropOnDeathSet.set(id, flag);
+    return true;
+  }
+
+  /** The per-item `SetItemDropOnDeath` overrides — see there. Sparse, and dropped with the
+   *  item itself (`forgetItem`). */
+  private readonly itemDropOnDeathSet = new Map<number, boolean>();
+
+  /** Does this held item fall out of a dying HERO? The script's override, else the type's
+   *  own `drop` column. */
+  private itemDropsOnDeath(held: HeldItem): boolean {
+    const set = this.itemDropOnDeathSet.get(held.id);
+    if (set !== undefined) return set;
+    return this.itemReg?.get(held.itemId)?.dropOnDeath ?? false;
+  }
+
+  /**
    * `SetItemPawnable(item, flag)` — whether a shop will BUY THIS ONE ITEM back (issue #230).
    *
    * Per-ITEM, like `SetItemDroppable` and for the same reason: common.j takes an `item`, not
@@ -28360,6 +28394,7 @@ export class SimWorld {
   private forgetItem(id: number): void {
     this.itemDroppable.delete(id);
     this.itemPawnableSet.delete(id);
+    this.itemDropOnDeathSet.delete(id);
   }
 
   /** SetItemCharges. */

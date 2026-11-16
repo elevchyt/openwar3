@@ -190,9 +190,14 @@ export function registerItemNatives(rt: Runtime): void {
     if (it) it.userData = asInt(a[1]);
     return JNULL;
   });
-  // Drop-on-death / drop-id (which unit an item is bound to drop from) have no counterpart
-  // in our engine yet — accept them rather than log a miss.
-  def(rt, "SetItemDropOnDeath", () => JNULL);
+  // Drop-on-death is the DEATH's rule — whether a dying hero lets go of this item — so the sim
+  // has to hear it (issue #231; see SimWorld.setItemDropOnDeath). Drop-id (which unit an item is
+  // bound to drop from) has no counterpart in our engine yet — accepted rather than logged.
+  def(rt, "SetItemDropOnDeath", (c, a) => {
+    const it = item(c, a[0]);
+    if (it && it.simId >= 0) c.rt.hooks?.setItemDropOnDeath?.(it.simId, a[1].k === "bool" && a[1].b);
+    return JNULL;
+  });
   def(rt, "SetItemDropID", () => JNULL);
   // SetItemPlayer(item, player, changeColor) — see GetItemPlayer. The colour half is art.
   def(rt, "SetItemPlayer", (c, a) => {

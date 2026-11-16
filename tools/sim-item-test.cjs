@@ -114,6 +114,9 @@ const ITEMS = new Map([
   // TABLE ships as perfectly droppable and Human01's own trigger makes undroppable per item.
   ["soul", item("soul", [], { charges: 0, usable: false, perishable: false, classType: "Miscellaneous", droppable: false, pawnable: false, sellable: false })],
   ["ledg", passive("ledg", [])],
+  // One of the five stock items with ItemData `drop` = 1, "Dropped When Carrier Dies" — the
+  // human capture-the-flag flag (`flag`, `nflg`, `oflg`, `uflg`, `btst` are the whole list).
+  ["flag", item("flag", [], { charges: 0, usable: false, perishable: false, classType: "Miscellaneous", dropOnDeath: true })],
   ["dust", item("dust", ["AItb"], { charges: 2 })],
   ["gobm", item("gobm", ["AIpm"], { charges: 3 })],
   ["tsct", item("tsct", ["AIbt"])],
@@ -536,6 +539,54 @@ console.log("\nan undroppable item cannot leave the inventory");
   world.dropInventory(cart);
   check("a dead carrier does not scatter it either", world.items.has(ledger), false);
   check("…it goes down with the body", cart.inventory[0] && cart.inventory[0].id, ledger);
+}
+
+console.log("\na dying hero drops only what is marked Dropped When Carrier Dies (issue #231)");
+{
+  world = newWorld();
+  const hero = give(give(unit({ isHero: true }), "ledg"), "flag", 1);
+  const ledger = hero.inventory[0].id, flag = hero.inventory[1].id;
+  world.dropInventory(hero);
+  check("the flag falls out of the dead hero", world.items.has(flag), true);
+  check("…its slot is empty", hero.inventory[1], null);
+  check("an ordinary item rides with him", hero.inventory[0] && hero.inventory[0].id, ledger);
+  check("…and is not on the ground", world.items.has(ledger), false);
+}
+{
+  // SetItemDropOnDeath is per ITEM and beats the type's column both ways.
+  world = newWorld();
+  const hero = give(give(unit({ isHero: true }), "ledg"), "flag", 1);
+  const ledger = hero.inventory[0].id, flag = hero.inventory[1].id;
+  check("SetItemDropOnDeath finds a HELD item", world.setItemDropOnDeath(ledger, true), true);
+  world.setItemDropOnDeath(flag, false);
+  world.dropInventory(hero);
+  check("…a ledger made to drop falls", world.items.has(ledger), true);
+  check("…a flag told not to stays", hero.inventory[1] && hero.inventory[1].id, flag);
+}
+{
+  // An undroppable item still goes down with the body (SetItemDroppableBJHint).
+  world = newWorld();
+  const hero = give(unit({ isHero: true }), "flag");
+  const flag = hero.inventory[0].id;
+  world.setItemDroppable(flag, false);
+  world.dropInventory(hero);
+  check("an undroppable flag stays in the dead hero's inventory", hero.inventory[0] && hero.inventory[0].id, flag);
+}
+{
+  // An illusion's inventory is a picture of the original's — a dying copy drops nothing.
+  world = newWorld();
+  const copy = give(unit({ isHero: true, isIllusion: true }), "flag");
+  const flag = copy.inventory[0].id;
+  world.dropInventory(copy);
+  check("a dying illusion drops no flag", world.items.has(flag), false);
+}
+{
+  // A non-hero carrier still scatters everything, marked or not.
+  world = newWorld();
+  const cart = give(give(unit({ isHero: false }), "ledg"), "flag", 1);
+  const ids = cart.inventory.filter(Boolean).map((h) => h.id);
+  world.dropInventory(cart);
+  check("a non-hero drops both", ids.every((id) => world.items.has(id)), true);
 }
 
 console.log("\nan inventory is an ABILITY, sized by its Item Capacity");
