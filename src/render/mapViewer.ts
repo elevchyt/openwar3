@@ -1691,6 +1691,10 @@ export class MapViewerScene {
    *  named map (src/main.ts `changeLevel`). See Runtime.changeLevel for why this is a
    *  different exit from `onExit`. */
   onChangeLevel: ((mapName: string) => void) | null = null;
+  /** `ForceCampaignSelectScreen` — the chapter's script wants the player returned to the list
+   *  of CAMPAIGNS when it ends (the last chapter of one opening the next). Only whoever owns
+   *  the campaign screen can act on it (src/main.ts). */
+  onCampaignSelect: (() => void) | null = null;
   /** `RestartGame` — the defeat dialog's Restart. The same map again, from the top, at the
    *  difficulty the match is on NOW: "Reduce Difficulty" is that button with one
    *  `SetGameDifficulty` in front of it, so the rung has to travel with the restart
@@ -4924,6 +4928,7 @@ export class MapViewerScene {
       // …and its campaign twin: Continue on a chapter that named a next level. The match is
       // over either way — the difference is only what the player is handed next, so both
       // clear the same dialog and the same script pause on the way out.
+      forceCampaignSelect: () => this.onCampaignSelect?.(),
       changeLevel: (mapName) => {
         this.showDialog(null);
         this.scriptPaused = false;

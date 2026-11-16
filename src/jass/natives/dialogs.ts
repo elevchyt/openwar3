@@ -136,6 +136,36 @@ export function registerDialogNatives(rt: Runtime): void {
     return JNULL;
   });
 
+  // --- the campaign SCREEN, as a chapter leaves it ------------------------------------------
+  //
+  // A chapter's `NextLevelPrep` trigger tells the menu what the player has earned before the
+  // victory is declared — Prologue02's is two lines:
+  //
+  //     call SetCampaignAvailableBJ( true, bj_CAMPAIGN_INDEX_H )
+  //     call SetMissionAvailableBJ( true, bj_MISSION_INDEX_H00 )
+  //
+  // and `SetCampaignAvailableBJ` (Scripts\Blizzard.j) is four natives in a row:
+  // `SetTutorialCleared`, `SetCampaignAvailable`, `SetCampaignMenuRace` and
+  // `ForceCampaignSelectScreen`.
+  //
+  // WHAT is available is not ours to take from the script: a profile's campaigns and chapters
+  // open by PROGRESS (data/campaignProgress.ts — the chapter just won opens the next, the last
+  // one of a campaign opens the next campaign), which is the same answer for every stock
+  // chapter and cannot be put out of step by a map calling these with something else. So the
+  // four "available" natives are accepted and change nothing.
+  //
+  // `ForceCampaignSelectScreen` is the one that is NOT derivable: it says where the player
+  // LANDS. Without it a chapter returns to its own campaign's chapter list; with it, to the
+  // list of CAMPAIGNS — which is how finishing the Prologue shows you The Scourge of
+  // Lordaeron instead of dropping you back among two chapters you have already played.
+  for (const name of ["SetMissionAvailable", "SetCampaignAvailable", "SetOpCinematicAvailable", "SetEdCinematicAvailable", "SetTutorialCleared", "SetCampaignMenuRace", "SetCampaignMenuRaceEx"]) {
+    def(rt, name, () => JNULL);
+  }
+  def(rt, "ForceCampaignSelectScreen", (c) => {
+    c.rt.hooks?.forceCampaignSelect?.();
+    return JNULL;
+  });
+
   // The victory/defeat STING (bj_victoryDialogSound = CreateSoundFromLabel("QuestCompleted",
   // …) — blizzard.j InitBlizzardGlobals) is a plain `sound` handle like any other: 7.19 wired
   // a UISounds-label-only version of it here, and 7.20 generalised that into the whole sound

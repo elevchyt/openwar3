@@ -226,6 +226,8 @@ async function enterMap(bytes: Uint8Array, name: string): Promise<string> {
     // …and the chapter's own "and now play THIS": `ChangeLevel`, which the victory dialog's
     // Continue button reaches whenever the map named a next level (see changeLevel below).
     mapScene.onChangeLevel = (path) => void changeLevel(path);
+    // …and `ForceCampaignSelectScreen`: this chapter ends on the list of campaigns (exitToMenu).
+    mapScene.onCampaignSelect = () => { campaignSelectForced = true; };
     // …and the defeat dialog's Restart, which plays THIS map again.
     mapScene.onRestart = (difficulty) => void restartMatch(difficulty);
     // The F10 menu's Save Game / Load Game (issue #159). A replay window has neither.
@@ -722,6 +724,7 @@ async function startCampaignMission(vfs: DataSource, c: Campaign, index: number,
   // The mission is finished the moment its own script declares victory — that is what opens
   // the next chapter (data/campaignProgress.ts).
   pendingCampaign = { key: c.key, index };
+  campaignSelectForced = false;
   await startGame(bytes, info, campaignConfig(info, difficulty, mission.name), undefined, undefined, mission.file);
 }
 
@@ -755,6 +758,7 @@ async function changeLevel(mapPath: string): Promise<void> {
   const found = findChapter(mapPath);
   const difficulty = campaignState?.difficulty ?? loadDifficulty();
   endMatch();
+  campaignSelectForced = false; // the next chapter says for itself where it ends
   if (found) {
     // The campaign screen follows the player: quitting out of chapter two must land on
     // chapter two's list, not on the one the session happened to start from.
@@ -878,6 +882,7 @@ async function loadSavedGame(name: string): Promise<void> {
  * anyway cannot be allowed to restart a match other machines are in, so it leaves instead.
  */
 async function restartMatch(difficulty: number): Promise<void> {
+  campaignSelectForced = false; // the chapter starts over, and says so again if it means it
   const m = lastMatch;
   if (!m || matchLink) return exitToMenu();
   endMatch();
@@ -948,6 +953,9 @@ async function startCredits(vfs: DataSource): Promise<void> {
 
 /** The chapter the player is IN, so a victory can be credited to it. */
 let pendingCampaign: { key: string; index: number } | null = null;
+/** The chapter in play called `ForceCampaignSelectScreen` (jass/natives/dialogs.ts): when it is
+ *  left, the menu opens on the CAMPAIGN list. Cleared wherever a chapter starts. */
+let campaignSelectForced = false;
 
 /** The `?dev&chapter=` boot (src/dev/devBoot.ts): start the campaign chapter whose map path
  *  contains `name`, straight out of the mounted archives and on the campaign's own config.
@@ -1494,6 +1502,17 @@ function exitToMenu(scores: ScoreTable | null = null): void {
   // you back on the campaign screen, with the chapter you just finished now behind you.
   const campaign = pendingCampaign;
   pendingCampaign = null;
+  // …unless the chapter asked for the list of CAMPAIGNS (`ForceCampaignSelectScreen`, which
+  // `SetCampaignAvailableBJ` ends on): the last chapter of the Prologue hands the player The
+  // Scourge of Lordaeron, not its own two chapters again. The campaign it lands ON is the one
+  // after the campaign just played, when finishing this chapter has opened it — the script's
+  // own `SetCampaignMenuRace` picks by race, and four of the five races name two campaigns.
+  if (campaign && campaignState && campaignSelectForced) {
+    const next = campaigns.findIndex((c) => c.key === campaign.key) + 1;
+    campaignState.chapters = false;
+    if (next > 0 && next < campaigns.length && isCampaignOpen(campaigns, next)) campaignState.campaign = campaigns[next];
+  }
+  campaignSelectForced = false;
   const toMenu = (): void => void showMenuBackground(vfs).then(() => {
     if (!vfs) return;
     // glue.show() plays the chrome's Birth itself, so the DOM and the panel arrive together.

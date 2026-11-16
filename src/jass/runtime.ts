@@ -1165,6 +1165,9 @@ export interface EngineHooks {
    * `mapName` is an archive path, exactly as the campaign index spells it.
    */
   changeLevel?(mapName: string, doScoreScreen: boolean): void;
+  /** ForceCampaignSelectScreen — when this chapter is left, the menu opens on the list of
+   *  CAMPAIGNS rather than on this campaign's chapters (natives/dialogs.ts has the why). */
+  forceCampaignSelect?(): void;
   /** PauseGame — CustomVictoryDialogBJ freezes a single-player game under its dialog. */
   pauseGame?(flag: boolean): void;
   /** EnableUserUI(false) — hide the HUD (the victory dialog does this in campaigns). */
