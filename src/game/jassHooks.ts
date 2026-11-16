@@ -655,7 +655,19 @@ export function rosterHooks(
         case "flyHeight": return def.moveHeight;
         case "acquireRange": return def.acquireRange;
         case "pointValue": return def.points;
+        case "foodUsed": return def.foodUsed; // UnitBalance `fused`
+        case "foodMade": return def.foodMade; // UnitBalance `fmade`
       }
+    },
+    // SetUnitUseFood — the unit's own `foodFree`, which `Authority.foodFor` and
+    // `AiPlayer.foodOf` read (and the snapshot carries to a LAN client's food bar).
+    setUnitUseFood: (id, useFood) => {
+      const u = sim.units.get(id);
+      if (u) u.foodFree = !useFood;
+    },
+    getUnitUsesFood: (id) => {
+      const u = sim.units.get(id);
+      return u ? !u.foodFree : undefined;
     },
     // THIS unit's value where it has one of its own (a script's BlzSetUnit…Field, or the per-unit
     // state the engine already keeps — its damage class, its level), else its type's row.

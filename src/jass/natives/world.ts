@@ -405,6 +405,30 @@ export function registerWorldNatives(rt: Runtime): void {
   });
   def(rt, "GetUnitPointValueByType", (c, a) =>
     jInt(c.rt.hooks?.unitTypeDefault?.(intToRawcode(asInt(a[0])), "pointValue") ?? 0));
+  // Food (common.j 1649–1653). The TYPE's UnitBalance `fused`/`fmade`, by type id or off the
+  // handle's type — so, like the defaults above, a unit that has died still answers. Per unit,
+  // the one thing a unit can change about it is whether it EATS ("Enable/Disable Supply Usage",
+  // UI\TriggerStrings.txt — SetUnitUseFood), so a unit turned off (or charmed, possessed,
+  // reborn: SimUnit.foodFree) uses 0 and still makes what its type makes.
+  const typeFood = (c: NativeCtx, typeId: string, field: "foodUsed" | "foodMade"): number =>
+    c.rt.hooks?.unitTypeDefault?.(typeId, field) ?? 0;
+  def(rt, "GetUnitFoodUsed", (c, a) => {
+    const u = unit(c, a[0]);
+    if (!u) return jInt(0);
+    if (u.simId >= 0 && c.rt.hooks?.getUnitUsesFood?.(u.simId) === false) return jInt(0);
+    return jInt(typeFood(c, u.typeId, "foodUsed"));
+  });
+  def(rt, "GetUnitFoodMade", (c, a) => {
+    const u = unit(c, a[0]);
+    return jInt(u ? typeFood(c, u.typeId, "foodMade") : 0);
+  });
+  def(rt, "GetFoodUsed", (c, a) => jInt(typeFood(c, intToRawcode(asInt(a[0])), "foodUsed")));
+  def(rt, "GetFoodMade", (c, a) => jInt(typeFood(c, intToRawcode(asInt(a[0])), "foodMade")));
+  def(rt, "SetUnitUseFood", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.setUnitUseFood?.(u.simId, a[1]?.k === "bool" && a[1].b);
+    return JNULL;
+  });
   def(rt, "GetUnitTypeId", (c, a) => jInt(unit(c, a[0]) ? rawcodeToInt(unit(c, a[0])!.typeId) : 0));
   def(rt, "GetOwningPlayer", (c, a) => c.rt.playerHandle(unit(c, a[0])?.player ?? neutralSlot(PlayerSlot.NeutralPassive)));
   // Position/facing prefer the live sim value (a script-created unit's handle keeps its

@@ -498,7 +498,7 @@ export interface GameCacheObj {
  *  cross-checked against war3mapUnits.doo (the 7.2 oracle) even with no engine
  *  attached, and so bridge lookups can map a unit handle back to our sim id. */
 /** The columns the GetUnitDefault… natives read (natives/world.ts). */
-export type UnitTypeDefault = "moveSpeed" | "turnRate" | "flyHeight" | "acquireRange" | "pointValue";
+export type UnitTypeDefault = "moveSpeed" | "turnRate" | "flyHeight" | "acquireRange" | "pointValue" | "foodUsed" | "foodMade";
 
 /** The filter UnitRemoveBuffsEx / UnitCountBuffsEx take, argument for argument (jassbot). */
 export interface BuffFilter {
@@ -651,6 +651,12 @@ export interface EngineHooks {
    *  by TYPE, never by unit: Test of Faith asks it of `GetDyingUnit()`, which has already left
    *  the world. undefined for a type the registry does not have. */
   unitTypeDefault?(typeId: string, field: UnitTypeDefault): number | undefined;
+  /** `SetUnitUseFood` — "Enable/Disable Supply Usage" (UI\TriggerStrings.txt): whether the unit
+   *  EATS its type's food. Only the using half — a Farm that has it turned off still makes six.
+   *  The sim's `SimUnit.foodFree`, which the food bar and both AIs already honour. */
+  setUnitUseFood?(unitId: number, useFood: boolean): void;
+  /** Whether the unit eats food (`!SimUnit.foodFree`); undefined when it is gone. */
+  getUnitUsesFood?(unitId: number): boolean | undefined;
   setUnitState?(unitId: number, whichState: number, value: number): void;
   getUnitState?(unitId: number, whichState: number): number; // GetUnitState (life/mana/…)
   setUnitColor?(unitId: number, color: number): void; // SetUnitColor — team-colour tint
