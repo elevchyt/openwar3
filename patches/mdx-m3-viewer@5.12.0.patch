@@ -79,7 +79,7 @@ index 819b5459014ef60441683f396f391ec82df03281..401e55a45dd6111fec9d5a4576f4b0ea
      let ChannelIndex;
      is.readUint8();
 diff --git a/dist/cjs/parsers/mpq/archive.js b/dist/cjs/parsers/mpq/archive.js
-index 47e2551cb38ccd86a82f2f2f36c7cfe63a7eae4d..9bc7102fdbaa5770dfa53fca2f0c72f8af55715f 100644
+index 47e2551cb38ccd86a82f2f2f36c7cfe63a7eae4d..d9110b29d13e39cee47ecaedf9ddcf86ea9afac9 100644
 --- a/dist/cjs/parsers/mpq/archive.js
 +++ b/dist/cjs/parsers/mpq/archive.js
 @@ -12,6 +12,8 @@ const isarchive_1 = require("./isarchive");
@@ -224,7 +224,7 @@ index 47e2551cb38ccd86a82f2f2f36c7cfe63a7eae4d..9bc7102fdbaa5770dfa53fca2f0c72f8
          return null;
      }
 diff --git a/dist/cjs/parsers/mpq/blocktable.js b/dist/cjs/parsers/mpq/blocktable.js
-index fd8e89f88646430da7048051bd81af9a7f0fb8df..aaafdc6de607cdfa638823e0523edc6278b13b46 100644
+index fd8e89f88646430da7048051bd81af9a7f0fb8df..e5cf03fbc90a17c182344d0bb1754c8a803aef78 100644
 --- a/dist/cjs/parsers/mpq/blocktable.js
 +++ b/dist/cjs/parsers/mpq/blocktable.js
 @@ -24,15 +24,17 @@ class BlockTable {
@@ -252,7 +252,7 @@ index fd8e89f88646430da7048051bd81af9a7f0fb8df..aaafdc6de607cdfa638823e0523edc62
          }
      }
 diff --git a/dist/cjs/parsers/mpq/file.js b/dist/cjs/parsers/mpq/file.js
-index 89dd7786a851dba1409a5fd9e893843cddbf7745..3c5a416591e24741476904f9e349e272316b809a 100644
+index 89dd7786a851dba1409a5fd9e893843cddbf7745..bf900399a3fc6ba7924f04f345452e1bd6afd486 100644
 --- a/dist/cjs/parsers/mpq/file.js
 +++ b/dist/cjs/parsers/mpq/file.js
 @@ -3,8 +3,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
@@ -347,7 +347,7 @@ index 89dd7786a851dba1409a5fd9e893843cddbf7745..3c5a416591e24741476904f9e349e272
      }
      /**
 diff --git a/dist/cjs/parsers/mpq/hashtable.js b/dist/cjs/parsers/mpq/hashtable.js
-index d5ae4d3bde11c67796628bdf5aa59283e09fbe8b..7e16294b32f22fe6055e48905f674a8a22c8e3bb 100644
+index d5ae4d3bde11c67796628bdf5aa59283e09fbe8b..adaf24f6955c1ba57d971b7e2201634b46826415 100644
 --- a/dist/cjs/parsers/mpq/hashtable.js
 +++ b/dist/cjs/parsers/mpq/hashtable.js
 @@ -45,18 +45,41 @@ class MpqHashTable {
@@ -1098,7 +1098,7 @@ index 26347d6d988194c95415c2a40597123e80bd61a2..3d28cc4165be8474ed4005abfe3ce726
      }
  }
 diff --git a/dist/cjs/viewer/handlers/mdx/attachmentinstance.js b/dist/cjs/viewer/handlers/mdx/attachmentinstance.js
-index f888fee..674005e 100644
+index f888feec49e1eeb845ddc557ddd593e3e64d5293..674005e0797359a53659cd5ca377e3b7c2882e6b 100644
 --- a/dist/cjs/viewer/handlers/mdx/attachmentinstance.js
 +++ b/dist/cjs/viewer/handlers/mdx/attachmentinstance.js
 @@ -16,6 +16,9 @@ class AttachmentInstance {
@@ -1486,7 +1486,7 @@ index 5f2c0c2ffbfae107c42070fe99e41669814924ef..3101fe8514c3933b217efeeaa2f1397b
              solverParams.hd = true;
              // mdxHandler.loadEnv(viewer);
 diff --git a/dist/cjs/viewer/handlers/mdx/modelinstance.js b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb67b0ae18d 100644
+index 020a99b949ec1634579d439261027e00b6da23ac..c8b9e2dfc9e430af9813f9a6ca4fa9e0101c3e74 100644
 --- a/dist/cjs/viewer/handlers/mdx/modelinstance.js
 +++ b/dist/cjs/viewer/handlers/mdx/modelinstance.js
 @@ -21,6 +21,524 @@ const scaleHeap = gl_matrix_1.vec3.create();
@@ -2014,7 +2014,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
  /**
   * An MDX model instance.
   */
-@@ -48,12 +566,47 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -48,12 +566,56 @@ class MdxModelInstance extends modelinstance_1.default {
          // Any later non-forced update can then use variancy to skip updating things.
          // It is set to true every time the sequence is set with setSequence().
          this.forced = true;
@@ -2042,6 +2042,15 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
 +        // selection voice switches it to "Portrait Talk" in the same tick — otherwise spent its
 +        // first 150 ms unfolding out of the bind pose, which read as the bust popping into view.
 +        this.ow3Posed = false;
++        // OpenWar3: the viewer frame this instance was last UPDATED on, which is to say drawn on —
++        // the viewer only animates what is inside the camera frustum (Scene.update → isVisible).
++        // A cross-fade is a thing to WATCH, and this is how it knows whether anybody is: it is
++        // started only out of a pose that is on screen now, and one the camera left mid-way is
++        // spent while nobody looked rather than kept for later. Without it the fade's clock ran
++        // only on camera, so a clip changed off screen — Exodus of the Horde's bridge, which
++        // `CreateDeadDestructableZ` puts on its Death clip at map init — held its whole 150 ms
++        // fade until the player first panned over, and the bridge visibly sank in front of them.
++        this.ow3SeenFrame = -2;
 +        // OpenWar3 (issue #161): the shared skeleton this instance wore on its last update, or
 +        // null. Wearing one, it walks no nodes, so its locals still hold the frame its clip
 +        // started on; `captureBlendSnapshot` reads the pose it was actually drawn in from here.
@@ -2062,7 +2071,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
          for (let i = 0, l = model.geosets.length; i < l; i++) {
              this.geosetColors[i] = new Float32Array(4);
          }
-@@ -216,45 +769,193 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -216,45 +778,193 @@ class MdxModelInstance extends modelinstance_1.default {
       * Updates all of this instance internal nodes and objects.
       * Nodes that are determined to not be visible will not be updated, nor will any of their children down the hierarchy.
       */
@@ -2269,7 +2278,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
                  // If the attachment/emitter is visible, update it.
                  if (visibilityHeap[0] > 0) {
                      node.object.update(dt);
-@@ -262,13 +963,50 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -262,13 +972,50 @@ class MdxModelInstance extends modelinstance_1.default {
              }
              // Recalculate and update child nodes.
              // Note that this only affects normal nodes such as instances, and not skeletal nodes.
@@ -2321,7 +2330,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
      }
      /**
       * If a model has no sequences or is running no sequence, it will only update once since it will never be forced to update.
-@@ -362,19 +1100,58 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -362,26 +1109,83 @@ class MdxModelInstance extends modelinstance_1.default {
              }
          }
      }
@@ -2347,22 +2356,22 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
 +        // to send — the texture was filled once, by whoever composed it (`ow3CaptureSkeleton`).
 +        if (this.ow3SharedTexture) {
 +            return;
-+        }
+         }
 +        if (this.boneTexture && (this.ow3BonesDirty || !this.ow3BonesUploaded)) {
 +            // …or from `ow3LocalBones` when this instance wears a shared pose with billboarded
 +            // subtrees of its own in it (ow3FixBillboards).
 +            this.boneTexture.bindAndUpdate(this.ow3LocalBones && this.ow3LocalPose ? this.ow3LocalBones : this.worldMatrices);
 +            this.ow3BonesUploaded = true;
 +            this.ow3BonesDirty = false;
-         }
-     }
++        }
++    }
 +    // OpenWar3 (issue #66): a faded instance (vertex-colour alpha < 1 — Wind Walk,
 +    // Banish, SetUnitVertexColor) has no opaque geometry left. Its "opaque" groups
 +    // move to the translucent pass so they blend over a finished depth buffer instead
 +    // of over whatever the opaque pass happened to have drawn so far.
 +    isFaded() {
 +        return this.vertexColor[3] < 1;
-+    }
+     }
      renderOpaque() {
          const model = this.model;
 +        if (this.isFaded()) {
@@ -2382,7 +2391,32 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
          for (const group of model.translucentGroups) {
              group.render(this);
          }
-@@ -421,6 +1198,12 @@ class MdxModelInstance extends modelinstance_1.default {
+     }
++    /**
++     * OpenWar3: was this instance drawn on the viewer's latest frame (or the one before, for a
++     * call that lands between the sim and the draw)? See ow3SeenFrame.
++     */
++    ow3OnScreen() {
++        const viewer = this.model.viewer;
++        return viewer !== undefined && this.ow3SeenFrame >= viewer.frame - 1;
++    }
+     updateAnimations(dt) {
+         const model = this.model;
+         const sequenceId = this.sequence;
++        // OpenWar3: a cross-fade still running when the camera last left this instance ran its
++        // course while it was off screen (see ow3SeenFrame). Its clock is the world's, not the
++        // camera's — finishing it now would play the remainder late, in front of the player.
++        const viewer = model.viewer;
++        if (viewer !== undefined) {
++            if (this.blendRemaining > 0 && this.ow3SeenFrame < viewer.frame - 1) {
++                this.blendRemaining = 0;
++            }
++            this.ow3SeenFrame = viewer.frame;
++        }
+         if (sequenceId !== -1) {
+             const sequence = model.sequences[sequenceId];
+             const interval = sequence.interval;
+@@ -421,6 +1225,12 @@ class MdxModelInstance extends modelinstance_1.default {
       */
      setTeamColor(id) {
          this.teamColor = id;
@@ -2395,7 +2429,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
          return this;
      }
      /**
-@@ -436,6 +1219,7 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -436,6 +1246,7 @@ class MdxModelInstance extends modelinstance_1.default {
      setSequence(id) {
          const model = this.model;
          const sequences = model.sequences;
@@ -2403,7 +2437,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
          this.sequence = id;
          if (id < 0 || id > sequences.length - 1) {
              this.sequence = -1;
-@@ -445,11 +1229,84 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -445,11 +1256,86 @@ class MdxModelInstance extends modelinstance_1.default {
          else {
              this.frame = sequences[id].interval[0];
          }
@@ -2413,7 +2447,9 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
 +        // per-swing attack re-trigger, which must hard-cut to stay in phase). A skeleton that
 +        // was never posed has no pose to leave — its locals are the bind pose (see ow3Posed) —
 +        // so the new clip hard-cuts in, exactly as the first clip of a fresh instance does.
-+        if (this.blendTime > 0 && this.ow3Posed && previous !== -1 && this.sequence !== -1 && previous !== this.sequence) {
++        // …and a pose nobody is looking at needs no fade OUT of it either (see ow3SeenFrame): a
++        // clip changed off camera is simply in place by the time the camera arrives.
++        if (this.blendTime > 0 && this.ow3Posed && this.ow3OnScreen() && previous !== -1 && this.sequence !== -1 && previous !== this.sequence) {
 +            this.captureBlendSnapshot();
 +            this.blendRemaining = this.blendTime;
 +        }
@@ -2424,8 +2460,8 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
          this.resetAttachments();
          this.forced = true;
 +        this.ow3PoseReset = true; // OpenWar3 (issue #161): a new clip rewrites every local
-+        return this;
-+    }
+         return this;
+     }
 +    /**
 +     * OpenWar3: set this instance's animation cross-fade duration, in seconds.
 +     * Fed from each unit's UnitUI.slk `blend` value (0.15s for most WC3 units).
@@ -2436,8 +2472,8 @@ index 020a99b949ec1634579d439261027e00b6da23ac..a5409733e85fbe966cd17d5157b05cb6
 +        if (this.blendTime === 0) {
 +            this.blendRemaining = 0;
 +        }
-         return this;
-     }
++        return this;
++    }
 +    /**
 +     * OpenWar3: snapshot every node's current local TRS into the flat blend
 +     * buffer, laid out as [loc.x,loc.y,loc.z, rot.x,rot.y,rot.z,rot.w, sc.x,sc.y,sc.z]
