@@ -39,6 +39,7 @@ import { type FdfLibrary } from "./fdf/library";
 import { UI_HEIGHT, UI_WIDTH } from "./fdf/layout";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { fitLine } from "./fdf/widgets";
+import { wc3ToHtml } from "./wc3Text";
 import type { ResourceKind } from "./hud";
 
 const CONSOLE_FDF = "UI\\FrameDef\\UI\\ConsoleUI.fdf";
@@ -154,6 +155,10 @@ export interface ConsoleUiActions {
    * mid-match and a resize rebuilds every frame from the FDF.
    */
   disabledPanels?(): ReadonlySet<ConsolePanel>;
+  /** A caption for the fourth button other than the file's own "Chat (F12)" — `live` for its
+   *  normal and moused-over faces, `dead` for the greyed one (the FDF keeps the same pair:
+   *  `KEY_CHAT` / `CHAT`). Null: leave the file's. A campaign chapter answers with the Log's. */
+  chatCaption?(): { live: string; dead: string } | null;
   /** The "quest log has news" sparks (ui/questButtonFx.ts), to hang on the Quests button.
    *  Asked on every build, because a resize rebuilds the button it hangs on. */
   questGlow?(): HTMLElement | null;
@@ -263,6 +268,24 @@ export class ConsoleUi {
     if (!screen) return;
     const dead = this.actions.disabledPanels?.() ?? EMPTY_PANELS;
     for (const b of BUTTONS) screen.setEnabled(b.frame, !dead.has(b.panel));
+    this.applyChatCaption(screen);
+  }
+
+  /** Re-word the fourth button where the host says it is something else (`chatCaption`). The
+   *  three stacked captions are the same words in three colours (renderSimpleButtonLayers),
+   *  so only their text is replaced and the template's font and colour stay. */
+  private applyChatCaption(screen: FdfScreen): void {
+    const caption = this.actions.chatCaption?.();
+    const button = screen.frame("UpperButtonBarChatButton");
+    if (!caption || !button) return;
+    // Asked again with every `refreshEnabled` (the host may not know it is a campaign until
+    // after the strip's first build), so written only when the answer is news to this button.
+    if (button.dataset.caption === caption.live) return;
+    button.dataset.caption = caption.live;
+    for (const label of button.querySelectorAll<HTMLElement>(".fdf-simple-text > span")) {
+      const dead = label.parentElement?.classList.contains("fdf-simple-text-dis");
+      label.innerHTML = wc3ToHtml(dead ? caption.dead : caption.live);
+    }
   }
 
   /** Hang the quest glow on the Quests button (again — see `questGlow`). Public because the

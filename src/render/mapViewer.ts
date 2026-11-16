@@ -168,6 +168,7 @@ import { GAME_HEIGHT, disposeWorldLayer, worldLayer } from "../ui/stage";
 import { EscMenu } from "../ui/escMenu";
 import { AllianceDialogOverlay } from "../ui/allianceDialog";
 import { ChatDialogOverlay } from "../ui/chatDialog";
+import { LogDialogOverlay, LOG_MAX_LINES } from "../ui/logDialog";
 import { QuestDialogOverlay, primeQuestStrings } from "../ui/questDialog";
 import { ConsoleUi, type ConsolePanel } from "../ui/consoleUi";
 import { parseMapInfo } from "../world/mapInfo";
@@ -1475,6 +1476,12 @@ export class MapViewerScene {
   private gameMenu: EscMenu | null = null; // F10 — the game's own EscMenuMainPanel.fdf
   private allies: AllianceDialogOverlay | null = null; // F11 — AllianceDialog.fdf + AllianceSlot.fdf
   private chatDialog: ChatDialogOverlay | null = null; // F12 — ChatDialog.fdf
+  private logDialog: LogDialogOverlay | null = null; // F12 in a campaign — LogDialog.fdf
+  /** Every message the map has put in front of this player — the script's `DisplayText…`
+   *  lines (quest updates and hints are those) and the console transmissions — for the
+   *  campaign's Message Log. As shown, markup and all; the oldest falls off at the panel's
+   *  own `TextAreaMaxLines`. */
+  private messageLog: string[] = [];
   private questLog: QuestDialogOverlay | null = null; // F9 — QuestDialog.fdf
   /** The console — both bands of ConsoleUI + UpperButtonBar + ResourceBar, all from the FDF. */
   private consoleUi: ConsoleUi | null = null;
@@ -4855,6 +4862,7 @@ export class MapViewerScene {
         // prints "%s has left the game." itself — the very line `announceGone` has just printed
         // for every map, scripted or not. Said once.
         if (this.goneLines.delete(msg)) return;
+        this.logMessage(msg);
         this.hud?.showMessage(msg, duration);
       },
       clearText: (player) => {
@@ -5764,6 +5772,7 @@ export class MapViewerScene {
     this.portraitTalkKey = "";
     this.destructibleDeaths = []; // …and out of any gate the last one broke
     this.chatHistory = []; // last match's conversation is not this one's
+    this.messageLog = []; // …nor its Message Log
     this.mutedPlayers.clear(); // …nor its mutes
     // Chat arriving over the wire lands in the same place a locally typed line does.
     if (this.rts) {
@@ -11596,6 +11605,10 @@ export class MapViewerScene {
       resourceHover: (kind) => this.hud?.showResourceTip(kind),
       clockHover: (on) => this.hud?.showClockTip(on),
       questGlow: () => this.hud?.questGlow() ?? null,
+      // A campaign's fourth button is Log, not Chat — same frame, the game's other caption.
+      chatCaption: () => (this.campaign
+        ? { live: this.globalStrings?.strings.get("KEY_LOG") ?? "Log (|Cfffed312F12|R)", dead: this.globalStrings?.strings.get("LOG") ?? "Log" }
+        : null),
     });
     this.consoleUi.setObserver(this.observer);
     this.hud = new GameHud(ui, driver);
@@ -11695,6 +11708,11 @@ export class MapViewerScene {
       // Done, and Escape: both are doors out of the log that `togglePanel` never sees, and in
       // single-player this panel STOPS THE WORLD. Recompute from what is actually open.
       onClose: () => this.syncPanelPause(),
+    });
+    this.logDialog?.dispose();
+    this.logDialog = new LogDialogOverlay(ui, this.vfs, SKIN_SECTION[this.localRace], {
+      lines: () => this.messageLog,
+      onClose: () => this.syncPanelPause(), // OK and Escape — doors `togglePanel` never sees
     });
     this.chatDialog?.dispose();
     this.chatDialog = new ChatDialogOverlay(ui, this.vfs, SKIN_SECTION[this.localRace], {
@@ -12081,6 +12099,13 @@ export class MapViewerScene {
    * arriving, control changing hands — is a line of record, and it reads with the map's
    * own text and stays there to be read.
    */
+  /** Keep a shown message for the Message Log (ui/logDialog.ts). */
+  private logMessage(text: string): void {
+    if (!text.trim()) return;
+    this.messageLog.push(text);
+    if (this.messageLog.length > LOG_MAX_LINES) this.messageLog.shift();
+  }
+
   private announce(text: string): void {
     if (text) this.hud?.showMessage(text, -1); // -1: the log's own default dwell
   }
@@ -12787,6 +12812,7 @@ export class MapViewerScene {
     const duration = scene.sceneDuration;
     const speaker = scene.speaker.trim();
     const text = speaker ? `|cfffcd312${speaker}:|r ${scene.text}` : scene.text;
+    this.logMessage(text);
     this.hud?.showMessage(text, duration > 0 ? duration : -1);
     if (!scene.portraitUnitId) {
       // A transmission from nobody (DoTransmissionBasicsXYBJ's null unit): text only.
@@ -12899,6 +12925,7 @@ export class MapViewerScene {
     if (panel === "quests") this.questLog?.show();
     else if (panel === "menu") this.gameMenu?.show();
     else if (panel === "allies") this.allies?.show();
+    else if (this.campaign) this.logDialog?.show(); // the fourth button is Log there (ui/logDialog.ts)
     else this.chatDialog?.show();
     this.syncPanelPause();
     return true;
@@ -12918,7 +12945,7 @@ export class MapViewerScene {
     if (panel === "quests") return this.questLog?.visible === true;
     if (panel === "menu") return this.gameMenu?.visible === true;
     if (panel === "allies") return this.allies?.visible === true;
-    return this.chatDialog?.visible === true;
+    return this.chatDialog?.visible === true || this.logDialog?.visible === true;
   }
 
   /** Is anything MODAL on screen — one of the four panels, or a dialog (a script's own
@@ -12936,7 +12963,9 @@ export class MapViewerScene {
    * Three reasons, and two of them are "there is already something in front of you":
    *
    *  • **A CAMPAIGN chapter** is single-player against the map's own AI, so there is nobody to
-   *    ally with and nobody to talk to. WC3 leaves Allies and Chat dead for the whole mission.
+   *    ally with and nobody to talk to. WC3 leaves Allies dead for the whole mission, and the
+   *    fourth button is not Chat there at all: it is **Log** (`KEY_LOG`), live, and opens the
+   *    Message Log (ui/logDialog.ts).
    *  • **Something MODAL is up** — a panel, a script's dialog, the match-over screen. All four
    *    go grey, the open one included: its button is behind that panel's own scrim and cannot
    *    be clicked at all, so drawing it live would be a lie. Its KEY still closes it
@@ -12954,10 +12983,7 @@ export class MapViewerScene {
    */
   private deadPanels(): ReadonlySet<ConsolePanel> {
     const dead = new Set<ConsolePanel>();
-    if (this.campaign) {
-      dead.add("allies");
-      dead.add("chat");
-    }
+    if (this.campaign) dead.add("allies");
     if (!this.mapScript?.interp.rt.quests.some((q) => q.enabled)) dead.add("quests");
     if (this.modalUp) for (const p of MapViewerScene.ALL_PANELS) dead.add(p);
     else if (this.hardPaused) for (const p of MapViewerScene.ALL_PANELS) if (p !== "menu") dead.add(p);
@@ -12970,6 +12996,7 @@ export class MapViewerScene {
     this.questLog?.hide();
     this.allies?.hide();
     this.chatDialog?.hide();
+    this.logDialog?.hide();
     this.syncPanelPause();
   }
 
@@ -17801,6 +17828,8 @@ export class MapViewerScene {
     this.allies = null;
     this.chatDialog?.dispose();
     this.chatDialog = null;
+    this.logDialog?.dispose();
+    this.logDialog = null;
     this.questLog?.dispose();
     this.questLog = null;
     this.consoleUi?.dispose();
