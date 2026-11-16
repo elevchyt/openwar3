@@ -13634,6 +13634,10 @@ export class MapViewerScene {
       const have = state?.researchLevel(this.localPlayer, upId) ?? 0;
       const next = have + 1;
       if (next > d.maxLevel) continue; // fully researched — the button is gone, as in WC3
+      // A rank the MAP has capped away is gone the same way, not greyed: Prologue02's
+      // `SetPlayerTechMaxAllowed(Player(0), 'Ropg', 0)` is why its Great Hall offers no Pillage.
+      const cap = state?.researchCap(this.localPlayer, upId) ?? -1;
+      if (cap >= 0 && next > cap) continue;
       const cost = this.upgrades.cost(upId, next);
       const tier = next - 1; // requirement tier is 0-based on the LEVEL for an upgrade
       const metTech = !state || state.meets(this.localPlayer, upId, tier);
@@ -13679,6 +13683,10 @@ export class MapViewerScene {
     for (const toId of this.tech.upgradesTo(sel.typeId)) {
       const d = this.registry.get(toId);
       if (!d) continue;
+      // Capped at zero (a map's `SetPlayerTechMaxAllowed(p, 'ostr', 0)`, or an `rtma` upgrade)
+      // is a HIDE, exactly as on the train card: unmet requirements grey a button, a
+      // withdrawn type has none.
+      if (world.tech?.maxAllowed(this.localPlayer, toId) === 0) continue;
       const metTech = world.canMake(this.localPlayer, toId, 0);
       const [gold, lumber] = this.upgradeCost(sel.typeId, d); // the DIFFERENCE, not the full price
       const afford = stash.gold >= gold && stash.lumber >= lumber;

@@ -169,6 +169,18 @@ export class TechState {
   }
 
   /**
+   * The highest LEVEL of an upgrade the map lets this player research, or -1 for "whatever the
+   * upgrade's own `maxlevel` is". `SetPlayerTechMaxAllowed` is one native for both halves of the
+   * tech tree: on a unit id it caps how many may exist, on an upgrade id how far it may be
+   * researched — a campaign map's generated `InitUpgrades_Player0` is a list of exactly these
+   * (Prologue02: `'Rome', 1` and `'Ropg', 0`), and a rank past the cap is not greyed, it is not
+   * on the card at all. Only a script writes it, so there is no `rtma` half to consult.
+   */
+  researchCap(player: number, upgradeId: string): number {
+    return this.maxAllowedOverride.get(player)?.get(upgradeId) ?? -1;
+  }
+
+  /**
    * How many HEROES this player may field at once. -1 = no limit, which is where every player
    * starts and where a custom map's players stay.
    *

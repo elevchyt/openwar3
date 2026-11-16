@@ -1123,6 +1123,9 @@ export class Authority {
         const have = state.researchLevel(player, cmd.upgradeId);
         const next = have + 1;
         if (next > d.maxLevel) return false;
+        // …nor past the level the MAP stops this player at (TechState.researchCap).
+        const cap = state.researchCap(player, cmd.upgradeId);
+        if (cap >= 0 && next > cap) return false;
         if (!state.meets(player, cmd.upgradeId, next - 1)) return false;
         const cost = this.upgrades.cost(cmd.upgradeId, next);
         const stash = this.sim.stashOf(player);
