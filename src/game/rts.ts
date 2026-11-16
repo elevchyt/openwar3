@@ -558,6 +558,10 @@ const WHITE_TINT = new Float32Array([1, 1, 1, 1]);
 const DEATH_CLIP_FALLBACK = 1.6; // seconds to hold a Death clip of unknown length
 const DECAY_CLIP_FALLBACK = 3; // seconds to hold a Decay Flesh clip of unknown length
 const CAST_ANIM_HOLD = 0.8; // seconds a cast animation is held from the picker
+/** A script's LOOPING clip (SetUnitAnimation "stand work") is held until the unit stops
+ *  being idle rather than for a time — this is "no deadline" written as a finite clock, so the
+ *  hold test can tell it from a timed gesture by size alone (setUnitAnimation). */
+const SCRIPT_LOOP_HOLD = 1e9;
 /** Tokens in an `Animnames` list that name no clip: they say how the picked one PLAYS
  *  ("looping") rather than which one it is. Kept out of the name match, so `spell,looping`
  *  (Healing Spray, Stampede, Earthquake, Starfall) resolves to "Spell" and not to nothing. */
@@ -5059,7 +5063,13 @@ export class RtsController {
     // only clip is "Death" (Bleach vs One Piece's Hyorinmaru dragon) fell straight to no
     // sequence at all and was never drawn.
     e.castAnimHeld = true;
-    e.castAnimT = seqDuration(e.unit.instance, seq, CAST_ANIM_HOLD);
+    // …and a LOOPING clip is held until the unit leaves idle, not for one pass of it. WC3 keeps a
+    // script's looping clip going for as long as the unit stands there: Prologue02's bridge
+    // cinematic sets its two Peasants to "stand work" (Peasant.mdx: 0.6 s, nonLooping = 0) and
+    // they hammer for the whole scene. Timed to the clip's length, ours hammered ONCE and the
+    // idle picker stood them back up. A one-shot clip ("attack", "spell") still ends with itself.
+    const looping = (e.unit.instance.model?.sequences?.[seq] as { nonLooping?: number } | undefined)?.nonLooping === 0;
+    e.castAnimT = looping ? SCRIPT_LOOP_HOLD : seqDuration(e.unit.instance, seq, CAST_ANIM_HOLD);
   }
 
   /** Record a building's footprint half-extents (WORLD units) so the render loop seats
@@ -5553,7 +5563,12 @@ export class RtsController {
         // than to the cast (Healing Spray keeps spraying after the order is done), so
         // answering only to `order === "cast"` cut it off at the backswing — and an Acolyte's
         // summon is not a cast at all, so it has no other way to be held.
-        if (e.castAnimSticky || ((u.order === "cast" || e.castAnimHeld) && !u.moving)) {
+        // A script's looping clip has no clock of its own, so it lasts exactly as long as the
+        // unit stays IDLE: any order (a cast in place, a harvest, an attack), a fight or a chop
+        // ends it as surely as a walk — a unit told to "stand work" and then attacked swings back.
+        const scriptLoop = e.castAnimT > SCRIPT_LOOP_HOLD / 2;
+        const leftIdle = scriptLoop && ((u.order !== "idle" && u.order !== "hold") || u.inCombat || u.working);
+        if (e.castAnimSticky || ((u.order === "cast" || e.castAnimHeld) && !u.moving && !leftIdle)) {
           setAnimRate(e, 1); // a cast gesture plays at its authored rate, unhasted
           continue;
         }
