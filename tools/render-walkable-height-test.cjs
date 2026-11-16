@@ -74,6 +74,30 @@ console.log("\n…and it turns and scales with the record");
   check("the z scale lifts the deck with it", big.heightAt(300, 0) === 20, big.heightAt(300, 0));
 }
 
+console.log("\na deck is on the LEVEL of the ground it lands on");
+{
+  // A river one cliff layer (128) below its banks: banks at x < -300 and x > 300 on level 640
+  // with the ground at 384, the bed between them on level 512 at 256. A flat plank spans it
+  // at 390 — resting on both banks, 134 clear of the water.
+  const cliff = (x) => (Math.abs(x) > 300 ? 640 : 512);
+  const ground = (x) => (Math.abs(x) > 300 ? 384 : 256);
+  const plank = {
+    vertices: new Float32Array([-500, -40, 390, 500, -40, 390, 500, 40, 390, -500, 40, 390]),
+    faces: new Uint16Array([0, 1, 2, 0, 2, 3]),
+  };
+  const s = new WalkableSurfaces();
+  s.add(1, [plank], { x: 0, y: 0, z: 0, angle: 0, scale: [1, 1, 1] });
+  check("mid-span reads the BANKS' level, not the river's", s.levelAt(0, 0, ground, cliff) === 640, s.levelAt(0, 0, ground, cliff));
+  check("beside the bridge the river is still the river", s.levelAt(0, 200, ground, cliff) === 512);
+  check("on the bank it is the bank", s.levelAt(450, 0, ground, cliff) === 640);
+  // A platform that touches nothing: two layers above the yard under it.
+  const yard = new WalkableSurfaces();
+  const slab = { vertices: new Float32Array([-100, -100, 256, 100, -100, 256, 100, 100, 256, -100, 100, 256]), faces: new Uint16Array([0, 1, 2, 0, 2, 3]) };
+  yard.add(1, [slab], { x: 0, y: 0, z: 0, angle: 0, scale: [1, 1, 1] });
+  check("a floating platform is whole levels above what is under it", yard.levelAt(0, 0, () => 0, () => 256) === 512, yard.levelAt(0, 0, () => 0, () => 256));
+  check("no decks at all costs nothing and changes nothing", new WalkableSurfaces().levelAt(5, 5, ground, cliff) === 512);
+}
+
 // --- the real bridge ---------------------------------------------------------------------
 const WC3 = join(REPO, "Warcraft III");
 if (!fs.existsSync(WC3) || !isCascInstallDir(WC3)) {

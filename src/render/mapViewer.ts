@@ -2458,7 +2458,15 @@ export class MapViewerScene {
       // by the re-tint itself, so an alliance changing hands under a filter reaches it too.
       this.rts.onWorldColorsChange = () => this.hud?.refreshChatColors();
       this.registerResourceNodes(nodes);
-      this.rts.initVisionBlockers(makeCliffLevelSampler(terrain)); // fog LOS: only cliff LEVELS + treelines block sight (not rolling groundHeight)
+      // Fog LOS: only cliff LEVELS + treelines block sight (not rolling groundHeight). A unit
+      // on a bridge is on the level of the banks the bridge joins, not of the river under it
+      // (WalkableSurfaces.levelAt) — so the decks are built first and folded into the field.
+      this.buildWalkableSurfaces(); // the bridges' decks, which units stand ON (render/walkableHeight.ts)
+      const cliffLevel = makeCliffLevelSampler(terrain);
+      const groundHeight = makeHeightSampler(terrain);
+      this.rts.initVisionBlockers(this.walkables.count
+        ? (x, y) => this.walkables.levelAt(x, y, groundHeight, cliffLevel)
+        : cliffLevel);
       this.rts.setNeutralPassive(nodes.neutral); // yellow ring for shops/taverns/etc.
       this.rts.setPlacedFootprints(nodes.placedFootprints); // each map building's stamp → freed when it dies
       this.rts.setCreepData(nodes.creeps); // per-creep guard/aggro data (Neutral Hostile)
@@ -2469,7 +2477,6 @@ export class MapViewerScene {
       // Watcher. Above the reserved block they are ordinal and identical on every machine,
       // because this walks the .doo in its own order.
       this.seedDestructibles();
-      this.buildWalkableSurfaces(); // the bridges' decks, which units stand ON (render/walkableHeight.ts)
       this.mapPlayerUnits = nodes.players; // pre-placed player units → seeded owned in startCustom (issue #33)
     }
   }

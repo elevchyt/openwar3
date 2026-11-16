@@ -116,6 +116,18 @@ asks whether there is a bridge over a point. Measured across Strahnbrad's span: 
 from bank to bank while the deck stands at **+161**. A unit beside a bridge can see onto it, and
 always could.
 
+**Nor is it LOW ground, which is the half that was missing.** Strahnbrad's river is level with
+its banks, so the terrain's own cliff level happened to be right from end to end. Most rivers
+are not: Prologue02's `LT05` at `(5440, -4224)` joins two banks on cliff layer **5** over water
+cut down to layer **4**, and read off the terrain alone a unit crossing dropped a level the
+moment it left the bank — blind to the bank it was walking toward (you cannot see up a cliff)
+and out of reach of a melee unit standing on it (`SimWorld.cliffApart`). So the field that is
+installed is `WalkableSurfaces.levelAt`: the terrain's cliff level, RAISED where a deck is the
+floor to the level of the ground that deck LANDS on (the commonest level among the points
+where the deck is within 40 units of the terrain; a platform touching nothing is whole levels
+above what is under its middle). A deck is level with what it joins — never above it, never
+below. Measured after: 640 from bank to bank across that span, 512 in the water either side.
+
 It still *looked* like high ground, and the reason was one line in the renderer. `fogWidgets`
 lights each prop from `bestStateAt(origin, radius)`, and `radius` was non-zero for TREES only
 (`treeFogRadius`, issue #43 — "light a prop from the BRIGHTEST cell of its footprint, not the

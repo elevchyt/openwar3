@@ -18647,8 +18647,8 @@ export class SimWorld {
   }
 
   /** `GetTerrainCliffLevel` — the terrain's cliff LAYER at a point (the w3e's own number, so a
-   *  fresh map's ground reads the editor's default rather than 0). Walkable destructibles
-   *  adding their own level on top (jassbot) are not modelled. 0 with no terrain. */
+   *  fresh map's ground reads the editor's default rather than 0). A walkable destructible's
+   *  deck reads the level of the banks it joins (WalkableSurfaces.levelAt). 0 with no terrain. */
   terrainCliffLevel(x: number, y: number): number {
     return this.cliffLevelAt ? Math.round(this.cliffLevelAt(x, y) / CLIFF_STEP) : 0;
   }

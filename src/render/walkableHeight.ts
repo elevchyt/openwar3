@@ -62,6 +62,14 @@ export interface WalkablePlacement {
  *  query does a handful of point-in-triangle tests instead of hundreds. */
 const BUCKET = 128;
 
+/** One cliff layer, in world units — the w3e's `layerHeight` step (game/heightmap.ts CELL). */
+const CLIFF_LEVEL = 128;
+/** How finely a deck is walked looking for where it lands, and how close to the terrain it
+ *  has to be to count as resting on it. Ours: Strahnbrad's bridge lands 8 above its bank and
+ *  is 80 clear of it a third of the way along, so 40 takes the landings and not the span. */
+const LANDING_STEP = 32;
+const LANDING_REACH = 40;
+
 /** One walkable destructible's deck, as world-space triangles in a flat bucket grid. */
 class WalkableSurface {
   readonly minX: number;
@@ -121,6 +129,41 @@ class WalkableSurface {
   }
   private row(y: number): number {
     return Math.min(this.rows - 1, Math.max(0, Math.floor((y - this.minY) / BUCKET)));
+  }
+
+  /** The cliff level this deck is ON — see `WalkableSurfaces.levelAt`. Found once. */
+  private level: number | undefined;
+
+  /**
+   * Which CLIFF LEVEL the deck belongs to: the level of the ground it LANDS on. A bridge's
+   * two ends rest on its banks, so wherever the deck is within a step of the terrain under it
+   * the terrain's own level is the deck's, and the commonest such reading is the answer (the
+   * higher on a tie; a reading part-way up a ramp is no level and is not counted). A deck
+   * that touches no ground at all — an invisible platform over a courtyard — is as many
+   * whole levels above the terrain under its middle as its height says.
+   */
+  levelOn(ground: (x: number, y: number) => number, cliff: (x: number, y: number) => number): number {
+    if (this.level !== undefined) return this.level;
+    const votes = new Map<number, number>();
+    for (let y = this.minY; y <= this.maxY; y += LANDING_STEP) {
+      for (let x = this.minX; x <= this.maxX; x += LANDING_STEP) {
+        const z = this.heightAt(x, y);
+        if (z === -Infinity || Math.abs(z - ground(x, y)) > LANDING_REACH) continue;
+        const c = cliff(x, y);
+        const whole = Math.round(c / CLIFF_LEVEL) * CLIFF_LEVEL;
+        if (Math.abs(c - whole) > CLIFF_LEVEL / 8) continue; // on a slope between two levels
+        votes.set(whole, (votes.get(whole) ?? 0) + 1);
+      }
+    }
+    let best = -Infinity, bestN = 0;
+    for (const [lvl, n] of votes) if (n > bestN || (n === bestN && lvl > best)) { best = lvl; bestN = n; }
+    if (bestN === 0) {
+      const cx = (this.minX + this.maxX) / 2, cy = (this.minY + this.maxY) / 2;
+      const z = this.heightAt(cx, cy);
+      const up = z === -Infinity ? 0 : Math.max(0, Math.round((z - ground(cx, cy)) / CLIFF_LEVEL));
+      best = Math.round(cliff(cx, cy) / CLIFF_LEVEL) * CLIFF_LEVEL + up * CLIFF_LEVEL;
+    }
+    return (this.level = best);
   }
 
   /** The highest surface of this deck at (x, y), or -Infinity where the ray misses it
@@ -199,5 +242,32 @@ export class WalkableSurfaces {
       if (z > best) best = z;
     }
     return best;
+  }
+
+  /**
+   * The CLIFF LEVEL at (x, y) with the decks counted: the terrain's own level, raised to a
+   * deck's where a unit there would be standing on one.
+   *
+   * A bridge spans a gap, and the gap is usually a river cut a whole cliff layer below its
+   * banks (Prologue02's `LT05`: banks on layer 5, the water under mid-span on layer 4). Read
+   * the level off the terrain alone and a unit crossing is on LOW ground the moment it leaves
+   * the bank: it cannot see the bank it is walking toward, and a melee unit on the bank cannot
+   * swing at it. A deck is level with what it joins — not above it and not below — so the
+   * answer is the level of the ground the deck lands on (`levelOn`), and only ever a RAISE:
+   * the terrain is always in the max, exactly as it is for the height.
+   */
+  levelAt(x: number, y: number, ground: (x: number, y: number) => number, cliff: (x: number, y: number) => number): number {
+    let level = cliff(x, y);
+    if (!this.surfaces.length) return level;
+    let floor: number | undefined;
+    for (const s of this.surfaces) {
+      const z = s.heightAt(x, y);
+      if (z === -Infinity) continue;
+      floor ??= ground(x, y);
+      if (z <= floor) continue; // the deck is under the grass here — the grass is the floor
+      const on = s.levelOn(ground, cliff);
+      if (on > level) level = on;
+    }
+    return level;
   }
 }
