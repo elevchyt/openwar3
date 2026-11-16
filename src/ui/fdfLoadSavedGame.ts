@@ -13,6 +13,7 @@ import { replayMapPath } from "./fdfViewReplay";
 import { readSaveHeader, type SaveHeader } from "../game/save/saveFile";
 import { SAVE_EXT, type SaveFileInfo, type SaveSink } from "../game/save/saveSink";
 import { OW3_STRINGS } from "../overrides";
+import { stripMarkup } from "../game/chat";
 
 // The Single Player menu's LOAD SAVED GAME screen (issue #159, docs/save-games.md), built from the
 // game's own UI\FrameDef\Glue\LoadSavedGameScreen.fdf: the saved games down the left
@@ -86,6 +87,10 @@ export function mountLoadSavedGameScreen(
     },
     onBuild: (s) => {
       screen = s;
+      // The FDF titles this screen LOAD_SINGLEPLAYER_SAVED_GAME ("Load Single-Player Saved
+      // Game"); ours reads as the button that opened it does — GlobalStrings.fdf's own
+      // KEY_LOAD_SAVED_GAME, "|CffffffffL|Road Saved Game", with its hotkey colour taken off.
+      s.setText("LoadSavedGameTitle", stripMarkup(str("KEY_LOAD_SAVED_GAME", "Load Saved Game")));
       paint();
       void sink.list().then((all) => {
         files = all.filter((f) => f.name.toLowerCase().endsWith(SAVE_EXT));
