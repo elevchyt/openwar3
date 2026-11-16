@@ -4023,8 +4023,9 @@ export class RtsController {
         this.seedNeutral(unit, def, loc);
         continue;
       }
-      const movetp = unit.row?.string("movetp");
-      if (!movetp || movetp === "_" || movetp === "none") continue; // buildings/immovable
+      // Buildings/immovable: the def's parsed MoveType (toMoveType folds "_"/"none"/blank to
+      // None) — and it carries a map's `umvt` override, which the raw row does not.
+      if (!def || def.moveType === MoveType.None) continue;
       const seqs = unit.instance.model.sequences;
       if (!seqs.some((s) => /walk/i.test(s.name))) continue; // no walk → treat as static
       // Neutral Hostile creep sitting on a USED start location: removed so the
