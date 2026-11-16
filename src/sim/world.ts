@@ -13445,10 +13445,17 @@ export class SimWorld {
 
   /** A unit type's own mana regeneration, before buffs/items/upgrades.
    *
-   *  A HERO's comes from Intelligence and nothing else. Everyone else's is UnitBalance.slk's
-   *  `regenMana`, which is a real per-type number the sim used to flatten to one constant:
-   *  a Sorceress 0.667, a Priest 0.72, a Spirit Walker 1, a Moon Well 1.5. UNIT_MANA_REGEN
-   *  survives only as the fallback for a mana-carrying type whose row states none.
+   *  Every type's base is UnitBalance.slk's `regenMana`, which is a real per-type number the
+   *  sim used to flatten to one constant: a Sorceress 0.667, a Priest 0.72, a Spirit Walker 1,
+   *  a Moon Well 1.5. UNIT_MANA_REGEN survives only as the fallback for a NON-hero
+   *  mana-carrying type whose row states none.
+   *
+   *  A HERO's row is not skipped: it ADDS to the Intelligence term (MiscGame `IntRegenBonus`),
+   *  exactly as `regenHP` adds to the Strength one in typeHpRegen. Every melee hero's row is
+   *  0.01 (Hamg, Hpal, Obla, Ofar, Udea, Edem…) and two campaign heroes carry 2 (Ecen
+   *  Cenarius, Uwar Archimonde); Liquipedia's hero infobox computes the same sum —
+   *  `(int) * 0.05 + 0.01` (Module:Infobox/Character/Custom, `_calculateManaRegen`) — and a
+   *  map's `umpr` on a hero is honoured with it. Issue #232: the row used to be dropped.
    *
    *  The MOON WELL is the one caster whose regeneration has a clock on it: "Regenerates mana
    *  at night" (NightElfUnitStrings [emow]) — a well drained by day stays drained until dusk,
@@ -13459,9 +13466,9 @@ export class SimWorld {
    *  that column, but "can restore mana" fits it exactly as well, so the alias is the honest
    *  discriminator. See tickReplenish.) */
   private baseManaRegen(u: SimUnit): number {
-    if (u.isHero) return REGEN_PER_INT() * u.int;
-    if (u.baseMaxMana <= 0) return 0;
     const def = this.unitReg?.get(u.typeId);
+    if (u.isHero) return (def?.manaRegen ?? 0) + REGEN_PER_INT() * u.int;
+    if (u.baseMaxMana <= 0) return 0;
     return def?.manaRegen || UNIT_MANA_REGEN;
   }
 

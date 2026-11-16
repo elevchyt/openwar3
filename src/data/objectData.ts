@@ -354,7 +354,7 @@ export const UNIT_SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   // heals in daylight is a map rewriting this, not `uhpr`.
   uhrt: (d, v) => { d.regenType = toRegenType(s(v)); },
   umpi: (d, v) => { d.manaStart = n(v); }, // the mana a caster is BORN with, not its maximum
-  umpr: (d, v) => { d.manaRegen = n(v); }, // mana/sec for a NON-hero caster
+  umpr: (d, v) => { d.manaRegen = n(v); }, // mana/sec of the type (a hero adds its Intelligence regen)
   usid: (d, v) => { d.sightDay = n(v); },
   usin: (d, v) => { d.sightNight = n(v); },
   // "Stats - Death Time (seconds)". Gameplay, not just art: it is how long a dying unit goes

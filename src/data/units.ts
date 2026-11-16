@@ -381,8 +381,8 @@ export interface UnitDef {
    *  100 of 300 (Liquipedia lists it as "Initial Mana"). 40 of the game's rows differ from
    *  their `manaN`, and every one of them is a caster you have to wait on. */
   manaStart: number;
-  /** UnitBalance.slk `regenMana` — mana/sec for a NON-hero caster (a hero's comes from its
-   *  Intelligence instead). It is a real per-type number and it spreads wide: a Sorceress
+  /** UnitBalance.slk `regenMana` — mana/sec for a caster's TYPE (a hero's ADDS its
+   *  Intelligence regen on top: every melee hero row is 0.01, see SimWorld.baseManaRegen). It is a real per-type number and it spreads wide: a Sorceress
    *  0.667, a Priest 0.72, a Spirit Walker 1, a Moon Well and an Obsidian Statue 1.5. The sim
    *  used one flat approximation for all of them until this column arrived. 0 when the row
    *  has none, which is most units — they have no mana either. */

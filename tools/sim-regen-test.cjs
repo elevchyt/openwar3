@@ -28,6 +28,9 @@ const DEFS = {
   earc: { hpRegen: 0.5, regenType: "night", abilities: [] },
   ugho: { hpRegen: 2, regenType: "blight", abilities: [] },
   Hpal: { hpRegen: 0.25, regenType: "always", abilities: [] },
+  // A hero's `regenMana` (issue #232): 0.01 on every melee hero row, 2 on Archimonde's.
+  Hamg: { hpRegen: 0.25, regenType: "always", manaRegen: 0.01, abilities: [] },
+  Uwar: { hpRegen: 0, regenType: "blight", manaRegen: 2, abilities: [] },
   hphx: { hpRegen: -25, regenType: "always", abilities: [] },
   uzig: { hpRegen: 0, regenType: "none", abilities: ["Abgs"] }, // Ziggurat — small blight
   unpl: { hpRegen: 0, regenType: "none", abilities: ["Abgl"] }, // Necropolis — large blight
@@ -154,6 +157,18 @@ check("Barracks never regenerates", regenAt(unit("hbar"), NIGHT), 0);
 {
   const pal = unit("Hpal", { isHero: true, str: 22, baseStr: 22, startStr: 22, agi: 13, baseAgi: 13, startAgi: 13, int: 17, baseInt: 17, startInt: 17 });
   check("Paladin = 0.25 base + 22 Strength * 0.05", regenAt(pal, DAY), 0.25 + 22 * 0.05);
+}
+
+// --- heroes' MANA: the row's `regenMana` ADDS to the Intelligence regen (IntRegenBonus 0.05),
+// as Liquipedia's hero infobox computes it: `(int) * 0.05 + 0.01` (issue #232) ---
+{
+  const hero = { isHero: true, maxMana: 285, baseMaxMana: 285, agi: 17, baseAgi: 17, startAgi: 17, str: 14, baseStr: 14, startStr: 14 };
+  const am = unit("Hamg", { ...hero, int: 19, baseInt: 19, startInt: 19 });
+  world.recomputeStats(am);
+  check("Archmage = 0.01 base + 19 Intelligence * 0.05", am.manaRegen, 0.01 + 19 * 0.05, 1e-9);
+  const arch = unit("Uwar", { ...hero, int: 20, baseInt: 20, startInt: 20 });
+  world.recomputeStats(arch);
+  check("Archimonde's row of 2 is kept too", arch.manaRegen, 2 + 20 * 0.05, 1e-9);
 }
 
 // --- the one negative regen in the game ---
