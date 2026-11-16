@@ -173,9 +173,15 @@ export function registerItemNatives(rt: Runtime): void {
     }
     return JNULL;
   });
+  // …and so is pawnable: whether a shop buys the item back is the SALE's rule, so the sim
+  // has to hear it too (issue #230). See SimWorld.setItemPawnable.
   def(rt, "SetItemPawnable", (c, a) => {
     const it = item(c, a[0]);
-    if (it) it.pawnable = a[1].k === "bool" && a[1].b;
+    const flag = a[1].k === "bool" && a[1].b;
+    if (it) {
+      it.pawnable = flag;
+      if (it.simId >= 0) c.rt.hooks?.setItemPawnable?.(it.simId, flag);
+    }
     return JNULL;
   });
   def(rt, "GetItemUserData", (c, a) => jInt(item(c, a[0])?.userData ?? 0));

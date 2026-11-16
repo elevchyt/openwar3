@@ -1708,7 +1708,7 @@ export class PlusItems {
       const held = u.inventory[slot];
       if (!held || !JUNK.has(held.itemId)) continue;
       const def = this.view.item(held.itemId);
-      if (!def || !def.pawnable || def.powerup) continue;
+      if (!def || !this.view.world.itemPawnable(held.itemId, held.id) || def.powerup) continue;
       return slot;
     }
     return -1;
@@ -1730,7 +1730,7 @@ export class PlusItems {
       const held = u.inventory[slot];
       if (!held) continue;
       const def = this.view.item(held.itemId);
-      if (!def || !def.pawnable || def.powerup) continue;
+      if (!def || !this.view.world.itemPawnable(held.itemId, held.id) || def.powerup) continue;
       if (def.usable || def.charges > 0 || def.perishable) continue;
       if (this.stacking(def)) continue;
       // …and it is only spare if an EARLIER slot already holds the same item.

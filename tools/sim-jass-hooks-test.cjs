@@ -79,7 +79,7 @@ const EXPECTED = [
   "unitName", "setUnitName",
   // UnitApplyTimedLife (pass 6; sim-summon-test.cjs).
   "applyTimedLife",
-  "setHeroXp", "setItemCharges", "setItemDroppable", "setItemInvulnerable", "setItemLife", "setItemPosition", "setPlayerTechMaxAllowed",
+  "setHeroXp", "setItemCharges", "setItemDroppable", "setItemInvulnerable", "setItemLife", "setItemPawnable", "setItemPosition", "setPlayerTechMaxAllowed",
   // StoreUnit — a chapter writing its hero down for the next one (docs/campaigns.md). Its
   // twin RestoreUnit is the AUTHORITY's, because putting one back means creating it.
   "storeUnit",

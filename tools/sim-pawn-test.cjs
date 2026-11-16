@@ -169,6 +169,35 @@ function check(what, got, want) {
   check("…and says nothing", world.drainSpellEffects().length, 0);
 }
 
+// --- SetItemPawnable is per ITEM and the SALE hears it (issue #230) --------------------
+// common.j's `SetItemPawnable takes item whichItem, boolean flag` — one item, not its type —
+// so the override sits on the entity id and beats the type's own `pawnable` column both ways.
+{
+  world = newWorld();
+  const h = hero("rat9"); // pawnable by type
+  const s = shop("ngme", 1200, 1000);
+  const held = h.inventory[0];
+  check("SetItemPawnable finds a HELD item", world.setItemPawnable(held.id, false), true);
+  check("…the sim now reads it unpawnable", world.itemPawnable("rat9", held.id), false);
+  check("…the type itself is untouched", world.itemPawnable("rat9"), true);
+  check("…the price is nothing", world.pawnPrice("rat9", 0, held.id).gold, 0);
+  check("…the sell order is refused", world.issueSellItem(h.id, 0, s.id), false);
+  check("…so is the sale", world.pawnItem(h.id, 0, s.id), false);
+  check("…the hero keeps it", h.inventory[0]?.itemId, "rat9");
+  check("…and is paid nothing", world.stashOf(0).gold, 0);
+  check("SetItemPawnable(true) gives it back", world.setItemPawnable(held.id, true), true);
+  check("…and it sells", world.pawnItem(h.id, 0, s.id), true);
+  check("…for half", world.stashOf(0).gold, 250);
+}
+{
+  world = newWorld();
+  const h = hero("glue"); // NOT pawnable by type
+  const s = shop("ngme", 1200, 1000);
+  world.setItemPawnable(h.inventory[0].id, true);
+  check("a quest item made pawnable sells", world.pawnItem(h.id, 0, s.id), true);
+  check("…and a second, untouched glue still would not", world.itemPawnable("glue"), false);
+}
+
 // --- a worthless item: no "+0" over the hero, but the shop still takes it ---------------
 {
   world = newWorld();

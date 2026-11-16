@@ -5491,9 +5491,9 @@ export class SimWorld {
    *  payouts. Selling a drunk-down bottle at the full-bottle price was a gold printer: buy,
    *  drink two, sell. An item whose type carries no charges (`uses` 0) is unaffected, and so
    *  is a call with no held item (a price quoted off the type alone). */
-  pawnPrice(itemId: string, charges?: number): { gold: number; lumber: number } {
+  pawnPrice(itemId: string, charges?: number, entityId?: number): { gold: number; lumber: number } {
     const def = this.itemReg?.get(itemId);
-    if (!def?.pawnable) return { gold: 0, lumber: 0 };
+    if (!def || !this.itemPawnable(itemId, entityId)) return { gold: 0, lumber: 0 };
     const share = def.charges > 0 && charges !== undefined ? Math.max(0, charges) / def.charges : 1;
     const rate = gameNum("PawnItemRate") * share;
     return { gold: Math.floor(def.gold * rate), lumber: Math.floor(def.lumber * rate) };
@@ -5509,7 +5509,7 @@ export class SimWorld {
     const held = u.inventory[slot];
     if (!held) return false;
     const def = this.itemReg.get(held.itemId);
-    if (!def || !def.pawnable) return false;
+    if (!def || !this.itemPawnable(held.itemId, held.id)) return false;
     // …and an UNDROPPABLE item is not sellable either, whatever its `pawnable` column says:
     // selling is one of the ways an item is "removed from a Hero's inventory" (setItemDroppable).
     if (!this.mayLeaveInventory(held)) return false;
@@ -5525,7 +5525,7 @@ export class SimWorld {
     if (!this.inPawnRange(u, shop)) return false;
     u.inventory[slot] = null;
     const stash = this.stashOf(u.owner);
-    const { gold, lumber } = this.pawnPrice(held.itemId, held.charges);
+    const { gold, lumber } = this.pawnPrice(held.itemId, held.charges, held.id);
     stash.gold += gold;
     stash.lumber += lumber;
     // Being paid is a thing you SEE (issue #120), and the seller is where you are looking —
@@ -26409,8 +26409,8 @@ export class SimWorld {
     const shop = this.units.get(shopId);
     if (!u || !shop || !u.inventory[slot] || !this.canPawnAt(shop) || this.castLocked(u) || this.itemsLocked(u)) return false;
     if (!this.shopServes(shopId, u.owner)) return false; // an enemy's shop takes nothing of yours either
-    const def = this.itemReg?.get(u.inventory[slot]!.itemId);
-    if (!def?.pawnable) return false;
+    const held = u.inventory[slot]!;
+    if (!this.itemPawnable(held.itemId, held.id)) return false;
     u.pendingSell = { shopId, slot };
     u.pendingGive = null;
     u.pendingUse = null;
@@ -28307,11 +28307,42 @@ export class SimWorld {
     return this.itemReg?.get(held.itemId)?.droppable ?? true;
   }
 
+  /**
+   * `SetItemPawnable(item, flag)` — whether a shop will BUY THIS ONE ITEM back (issue #230).
+   *
+   * Per-ITEM, like `SetItemDroppable` and for the same reason: common.j takes an `item`, not
+   * an item type, so a script may make one Claws of Attack unsellable and leave every other
+   * pair alone. Only the override lives here; an item nobody has called this on answers with
+   * its type's own `pawnable` column (`itemPawnable`). The handle keeps its own copy for
+   * `IsItemPawnable` — this is the one the SALE asks (pawnItem, issueSellItem, pawnPrice).
+   */
+  setItemPawnable(id: number, flag: boolean): boolean {
+    if (!this.items.has(id) && !this.itemSnapshot(id)) return false;
+    this.itemPawnableSet.set(id, flag);
+    return true;
+  }
+
+  /** The per-item `SetItemPawnable` overrides — see there. Sparse, and dropped with the item
+   *  itself (`forgetItem`). */
+  private readonly itemPawnableSet = new Map<number, boolean>();
+
+  /** Will a shop buy this item back? The script's per-item override when `entityId` names an
+   *  item it has spoken about, else the type's own `pawnable` column. With no `entityId` it is
+   *  the type alone (a price quoted off the row). */
+  itemPawnable(itemId: string, entityId?: number): boolean {
+    if (entityId !== undefined) {
+      const set = this.itemPawnableSet.get(entityId);
+      if (set !== undefined) return set;
+    }
+    return this.itemReg?.get(itemId)?.pawnable ?? false;
+  }
+
   /** An item entity is gone for good — drop anything remembered about it by id. Called from
    *  `RemoveItem` and nowhere else on purpose: `removeGroundItem` is ALSO how an item that was
    *  merely picked up leaves the ground, and the entity (and its flags) survive that. */
   private forgetItem(id: number): void {
     this.itemDroppable.delete(id);
+    this.itemPawnableSet.delete(id);
   }
 
   /** SetItemCharges. */

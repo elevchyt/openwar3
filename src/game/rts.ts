@@ -7900,12 +7900,12 @@ export class RtsController {
         // `ipaw` — whether a shop will buy it back. Drives the tooltip's grey ITEM_PAWN_TOOLTIP
         // hint, which is the only place the game ever tells you that dropping an item onto a
         // shop sells it (SimWorld.pawnItem is the thing it is talking about).
-        pawnable: def?.pawnable ?? false,
+        pawnable: this.sim.itemPawnable(held.itemId, held.id),
         // …and what that sale PAYS, which the game prints on the tooltip's cost row above the
         // hint. The sim's own price (SimWorld.pawnPrice), so the line cannot quote a number the
         // shop will not pay.
         ...(() => {
-          const p = this.sim.pawnPrice(held.itemId, held.charges);
+          const p = this.sim.pawnPrice(held.itemId, held.charges, held.id);
           return { sellGold: p.gold, sellLumber: p.lumber };
         })(),
       };

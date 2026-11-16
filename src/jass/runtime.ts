@@ -917,6 +917,8 @@ export interface EngineHooks {
    *  rather than a flag the script reads back: see SimWorld.setItemDroppable for the game's
    *  own wording of it and for what "leave" covers. */
   setItemDroppable?(itemId: number, flag: boolean): void;
+  /** SetItemPawnable — whether a shop will buy this one item back (SimWorld.setItemPawnable). */
+  setItemPawnable?(itemId: number, flag: boolean): void;
   /** SetItemInvulnerable — an item no attack may break (SimWorld.issueAttackItem). */
   setItemInvulnerable?(itemId: number, flag: boolean): void;
   /** SetWidgetLife on an item — its hit points on the ground; 0 breaks it. */
