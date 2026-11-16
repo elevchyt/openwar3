@@ -48,6 +48,7 @@ const check = (name, got, want) => {
 // DIFFERENT way — so a native wired to the wrong hook cannot pass by accident.
 const rangeCalls = [];
 const terrainCalls = [];
+const pointCalls = [];
 const hooks = {
   createUnit: (player, typeId) => (typeId === 'hfoo' ? 1 : 2),
   getUnitX: (id) => (id === 1 ? 100 : 5000),
@@ -66,9 +67,9 @@ const hooks = {
   isUnitMaskedTo: () => false,
   isUnitInvisibleTo: (id) => id === 2,
   isUnitDetectedTo: (id) => id === 1,
-  isPointVisibleTo: (p, x) => x === 100,
-  isPointFoggedTo: (p, x) => x === 900,
-  isPointMaskedTo: (p, x) => x === 4000,
+  isPointVisibleTo: (p, x, y) => { pointCalls.push(['visible', p, x, y]); return x === 100; },
+  isPointFoggedTo: (p, x, y) => { pointCalls.push(['fogged', p, x, y]); return x === 900; },
+  isPointMaskedTo: (p, x, y) => { pointCalls.push(['masked', p, x, y]); return x === 4000; },
 };
 
 const SRC = `
@@ -167,6 +168,24 @@ endfunction
 function LocFogged takes nothing returns boolean
     return IsLocationFoggedToPlayer(p, Player(0))
 endfunction
+// The bare-coordinate forms (common.j: "takes real x, real y, player whichPlayer"). Each point
+// is the one ITS hook answers true for, then asked of the wrong hook — and the player is
+// Player(3) so an argument read out of the wrong slot cannot pass as Player(0).
+function XYVisible takes nothing returns boolean
+    return IsVisibleToPlayer(100.0, 250.0, Player(3))
+endfunction
+function XYFogged takes nothing returns boolean
+    return IsFoggedToPlayer(900.0, 250.0, Player(3))
+endfunction
+function XYMasked takes nothing returns boolean
+    return IsMaskedToPlayer(4000.0, 250.0, Player(3))
+endfunction
+function XYVisibleAtFogged takes nothing returns boolean
+    return IsVisibleToPlayer(900.0, 250.0, Player(3))
+endfunction
+function XYMaskedAtVisible takes nothing returns boolean
+    return IsMaskedToPlayer(100.0, 250.0, Player(3))
+endfunction
 function PointInFirstRect takes nothing returns boolean
     return IsPointInRegion(r, 50.0, 50.0)
 endfunction
@@ -255,6 +274,16 @@ check('IsUnitInvisible is its own question', B('Invisible'), true);
 check('IsUnitDetected is its own question', B('Detected'), true);
 check('a location can be visible', B('LocVisible'), true);
 check('…and fogged is asked separately', B('LocFogged'), false);
+pointCalls.length = 0;
+check('IsVisibleToPlayer asks the visible hook', B('XYVisible'), true);
+check('…with x, y and the player from their own slots', pointCalls[0].join(','), 'visible,3,100,250');
+check('IsFoggedToPlayer asks the fogged hook', B('XYFogged'), true);
+check('…and only that one', pointCalls[1][0], 'fogged');
+check('IsMaskedToPlayer asks the masked hook', B('XYMasked'), true);
+check('…and only that one', pointCalls[2][0], 'masked');
+check('a fogged point is not visible', B('XYVisibleAtFogged'), false);
+check('a visible point is not masked', B('XYMaskedAtVisible'), false);
+check('one hook call per question', pointCalls.length, 5);
 
 console.log('\n--- a region is a UNION of its rects ---');
 check('inside the first rect', B('PointInFirstRect'), true);
