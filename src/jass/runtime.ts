@@ -657,6 +657,13 @@ export interface EngineHooks {
   setUnitUseFood?(unitId: number, useFood: boolean): void;
   /** Whether the unit eats food (`!SimUnit.foodFree`); undefined when it is gone. */
   getUnitUsesFood?(unitId: number): boolean | undefined;
+  /** `UnitAddSleep` — the unit's `SimUnit.canSleep` ("Make Unit Sleep At Night"). */
+  setUnitCanSleep?(unitId: number, canSleep: boolean): void;
+  /** `UnitCanSleep` / `UnitIsSleeping` — `SimUnit.canSleep` / `.asleep`; undefined when it is gone. */
+  getUnitCanSleep?(unitId: number): boolean | undefined;
+  getUnitSleeping?(unitId: number): boolean | undefined;
+  /** `UnitWakeUp` — `SimWorld.wakeUnit`: nocturnal sleep only, and the camp is not roused. */
+  wakeUnit?(unitId: number): void;
   setUnitState?(unitId: number, whichState: number, value: number): void;
   getUnitState?(unitId: number, whichState: number): number; // GetUnitState (life/mana/…)
   setUnitColor?(unitId: number, color: number): void; // SetUnitColor — team-colour tint

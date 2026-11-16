@@ -95,6 +95,10 @@ const EXPECTED = [
   "waygateActivate", "waygateDestination", "waygateIsActive", "waygateSetDestination",
   // ShowUnit / IsUnitHidden — a WORLD flag (SimUnit.hidden): off the field for every seat.
   "hideUnit", "isUnitHidden",
+  // SetUnitUseFood — the unit's own `foodFree` (jass-unit-defaults-test.cjs).
+  "setUnitUseFood", "getUnitUsesFood",
+  // The nocturnal-sleep natives — `canSleep`/`asleep`, through SimWorld.setCanSleep/wakeUnit.
+  "setUnitCanSleep", "getUnitCanSleep", "getUnitSleeping", "wakeUnit",
 ].sort();
 
 // Minimal unit-type rows for the roster checks. A Keep ('hkee') is deliberately NOT named

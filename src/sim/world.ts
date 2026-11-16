@@ -2581,6 +2581,7 @@ export interface SimUnit {
 
   strayT: number; // seconds chasing past GUARD_DISTANCE without being attacked (→ return)
   struckAt: number; // `elapsed` when a creep was last struck or hit by a harmful spell (provoke) — the sleep calm (campQuiet)
+  wokenAt: number; // `elapsed` when a script last woke it (UnitWakeUp, `wakeUnit`) — its OWN sleep calm (campQuiet)
   returnBestDist: number; // closest-to-home distance reached this return (stuck detection)
   returnStuckT: number; // seconds making no homeward progress while returning (→ give up, fight)
   // --- inventory (heroes) ---------------------------------------------------
@@ -9898,6 +9899,7 @@ export class SimWorld {
       | "reviveMana"
       | "strayT"
       | "struckAt"
+      | "wokenAt"
       | "returnBestDist"
       | "returnStuckT"
       | "inventory"
@@ -10203,6 +10205,7 @@ export class SimWorld {
       reviveMana: -1,
       strayT: 0,
       struckAt: -Infinity,
+      wokenAt: -Infinity,
       returnBestDist: 0,
       returnStuckT: 0,
       // The slots are the type's INVENTORY abilities' "Item Capacity" (`AInv` DataA — 6 for a
@@ -22610,7 +22613,9 @@ export class SimWorld {
    */
   private campQuiet(u: SimUnit): boolean {
     const calm = this.elapsed - CREEP_SLEEP_CALM;
-    if (u.struckAt > calm) return false;
+    // `wokenAt` is asked of THIS creep alone: a script waking one creep (wakeUnit) is not a fight,
+    // so it must not hold — or, through tickCreep's sleeper branch, rouse — its camp-mates.
+    if (u.struckAt > calm || u.wokenAt > calm) return false;
     for (const c of this.units.values()) {
       if (c.hp <= 0) continue;
       if (c.isCreep && (c === u || this.sameCamp(c, u))) {
@@ -29088,6 +29093,33 @@ export class SimWorld {
         c.campCallY = u.guardY;
       }
     }
+  }
+
+  /** `UnitWakeUp` (common.j; "This affects nocturnal sleep, not magical sleep",
+   *  UI\TriggerStrings.txt [UnitWakeUpBJHint]) — and so what blizzard.j's `EnableCreepSleepBJ(false)`
+   *  calls on every Neutral Hostile unit. Awake but not coming, as a creep that HEARD a shop being
+   *  used is (notifyCreepsOfShopUse): nothing here gives it a target, and its camp is not roused.
+   *  It does not stay up for the night either — the sleep rule still holds, so it dozes off again
+   *  once it is unprovoked — but not on the very next tick, or the native would be a no-op that
+   *  no script could observe: it gets the same CREEP_SLEEP_CALM a blow buys (`wokenAt`, campQuiet).
+   *  That calm is OURS, as CREEP_SLEEP_CALM itself is; no file says how soon a woken creep re-sleeps. */
+  wakeUnit(id: number): void {
+    const u = this.units.get(id);
+    if (!u || !u.asleep) return;
+    u.asleep = false;
+    u.wokenAt = this.elapsed;
+  }
+
+  /** `UnitAddSleep` — "Make Unit Sleep At Night" (UI\TriggerStrings.txt [UnitSetCanSleepBJ]): the
+   *  unit's `canSleep`, which a creep is seeded with off its UnitData row. Taking it away wakes the
+   *  unit now (tickCreep would on its next pass anyway), so `UnitIsSleeping` agrees at once. Only a
+   *  creep ever acts on it — "Units owned by players 1 though Max Player # never sleep"
+   *  ([UnitSetCanSleepBJHint]) — because only a creep runs tickCreep. */
+  setCanSleep(id: number, canSleep: boolean): void {
+    const u = this.units.get(id);
+    if (!u) return;
+    u.canSleep = canSleep;
+    if (!canSleep) u.asleep = false;
   }
 
   /** Laying a new foundation notifies the creeps around it (MiscData

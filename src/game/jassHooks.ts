@@ -93,6 +93,22 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     // pass-through to `sim.removeUnit`. Only `createUnit` is genuinely entangled, because
     // spawning has to load a model.
     killUnit: (id) => sim.killUnit(id),
+    // SetUnitUseFood — the unit's own `foodFree`, which `Authority.foodFor` and
+    // `AiPlayer.foodOf` read (and the snapshot carries to a LAN client's food bar).
+    setUnitUseFood: (id, useFood) => {
+      const u = sim.units.get(id);
+      if (u) u.foodFree = !useFood;
+    },
+    getUnitUsesFood: (id) => {
+      const u = sim.units.get(id);
+      return u ? !u.foodFree : undefined;
+    },
+    // The creep sleep natives — the same two fields tickCreep reads, written through the sim so
+    // that taking sleep away and waking a sleeper keep its rules (SimWorld.setCanSleep/wakeUnit).
+    setUnitCanSleep: (id, canSleep) => sim.setCanSleep(id, canSleep),
+    getUnitCanSleep: (id) => sim.units.get(id)?.canSleep,
+    getUnitSleeping: (id) => sim.units.get(id)?.asleep,
+    wakeUnit: (id) => sim.wakeUnit(id),
     // A gold mine is a record in `mines`, not a sim unit, so RemoveUnit on its handle goes to
     // the mine table: the mine leaves the map (SimWorld.removeMine). It used to be a no-op on
     // the theory that the only caller was the Undead start's swap — but a MAP may clear a mine
@@ -658,16 +674,6 @@ export function rosterHooks(
         case "foodUsed": return def.foodUsed; // UnitBalance `fused`
         case "foodMade": return def.foodMade; // UnitBalance `fmade`
       }
-    },
-    // SetUnitUseFood — the unit's own `foodFree`, which `Authority.foodFor` and
-    // `AiPlayer.foodOf` read (and the snapshot carries to a LAN client's food bar).
-    setUnitUseFood: (id, useFood) => {
-      const u = sim.units.get(id);
-      if (u) u.foodFree = !useFood;
-    },
-    getUnitUsesFood: (id) => {
-      const u = sim.units.get(id);
-      return u ? !u.foodFree : undefined;
     },
     // THIS unit's value where it has one of its own (a script's BlzSetUnit…Field, or the per-unit
     // state the engine already keeps — its damage class, its level), else its type's row.

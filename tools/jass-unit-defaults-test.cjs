@@ -1,5 +1,6 @@
 // The `GetUnitDefault…` natives, `GetUnitAcquireRange` and the food natives (`GetUnitFoodUsed`/
-// `Made`, `GetFoodUsed`/`Made`, `SetUnitUseFood`; src/jass/natives/world.ts): that each
+// `Made`, `GetFoodUsed`/`Made`, `SetUnitUseFood`) and the sleep natives (`UnitAddSleep`, `UnitCanSleep`,
+// `UnitIsSleeping`, `UnitWakeUp`; src/jass/natives/world.ts): that each
 // asks the unit's TYPE for its own column, and that it still answers for a unit that has DIED.
 //
 //   npx tsc -p tools/tsconfig.jass.json && node tools/jass-unit-defaults-test.cjs
@@ -47,7 +48,13 @@ const ROWS = {
 let next = 1;
 const alive = new Set();
 const foodFree = new Set(); // SimUnit.foodFree, as the game's hook writes it
+const canSleep = new Set(); // SimUnit.canSleep
+const asleep = new Set(); // SimUnit.asleep
 const hooks = {
+  setUnitCanSleep: (id, can) => { if (can) canSleep.add(id); else { canSleep.delete(id); asleep.delete(id); } },
+  getUnitCanSleep: (id) => (alive.has(id) ? canSleep.has(id) : undefined),
+  getUnitSleeping: (id) => (alive.has(id) ? asleep.has(id) : undefined),
+  wakeUnit: (id) => asleep.delete(id),
   setUnitUseFood: (id, use) => { if (use) foodFree.delete(id); else foodFree.add(id); },
   getUnitUsesFood: (id) => (alive.has(id) ? !foodFree.has(id) : undefined),
   createUnit: () => { const id = next++; alive.add(id); return id; },
@@ -100,6 +107,26 @@ function FarmOff takes nothing returns nothing
 endfunction
 function NullFood takes nothing returns integer
     return GetUnitFoodUsed(null) + GetUnitFoodMade(null)
+endfunction
+function CanSleep takes nothing returns boolean
+    return UnitCanSleep(gryph)
+endfunction
+function Sleeping takes nothing returns boolean
+    return UnitIsSleeping(gryph)
+endfunction
+function SleepOn takes nothing returns nothing
+    call UnitAddSleep(gryph, true)
+endfunction
+function SleepOff takes nothing returns nothing
+    call UnitAddSleep(gryph, false)
+endfunction
+function Wake takes nothing returns nothing
+    call UnitWakeUp(gryph)
+endfunction
+function NullSleep takes nothing returns boolean
+    call UnitWakeUp(null)
+    call UnitAddSleep(null, true)
+    return UnitIsSleeping(null) or UnitCanSleep(null)
 endfunction
 function Speed takes nothing returns real
     return GetUnitDefaultMoveSpeed(foot)
@@ -164,6 +191,20 @@ call('FootOn');
 check('SetUnitUseFood(true) takes it back', call('FootUsed').n, 2);
 call('FarmOff');
 check('supply USAGE only — a farm turned off still makes 6', call('FarmMade').n, 6);
+
+console.log('\n--- nocturnal sleep ---');
+check('UnitCanSleep reads canSleep (off)', call('CanSleep').b, false);
+call('SleepOn');
+check('UnitAddSleep(true) writes it', call('CanSleep').b, true);
+asleep.add(2); // night falls on the creep (tickCreep)
+check('UnitIsSleeping reads asleep', call('Sleeping').b, true);
+call('Wake');
+check('UnitWakeUp wakes it', call('Sleeping').b, false);
+asleep.add(2);
+call('SleepOff');
+check('UnitAddSleep(false) takes it away', call('CanSleep').b, false);
+check('…and the sleeper is up', call('Sleeping').b, false);
+check('a null unit neither sleeps nor can', call('NullSleep').b, false);
 
 console.log('\n--- a unit that has died ---');
 alive.clear(); // gone from the sim, as GetDyingUnit's unit is by the time its trigger runs

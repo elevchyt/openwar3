@@ -204,5 +204,39 @@ console.log("\nit does not doze off in the middle of a fight");
   check("…and back asleep once the camp has been quiet a while", creep.asleep && mate.asleep, true);
 }
 
+console.log("\nthe script natives: UnitWakeUp, UnitAddSleep (SimWorld.wakeUnit / setCanSleep)");
+{
+  // UnitWakeUp wakes ONE creep — not its camp — and gives it no target: awake, not coming.
+  const { world, creep } = camp(true);
+  const mate = addCreep(world, 3, creep.x + 150, creep.y, true);
+  world.timeOfDay = NIGHT;
+  run(world, 1);
+  check("the camp is asleep", creep.asleep && mate.asleep, true);
+  world.wakeUnit(creep.id);
+  check("UnitWakeUp wakes it at once", creep.asleep, false);
+  run(world, 1);
+  check("…and it stays up past the next tick (CREEP_SLEEP_CALM)", creep.asleep, false);
+  check("…without rousing its camp-mate", mate.asleep, true);
+  check("…or being given anybody to fight", creep.targetId, null);
+  run(world, 3);
+  check("…and, still night and unprovoked, it dozes off again", creep.asleep, true);
+}
+{
+  // UnitAddSleep(false): a sleeper is awake now and stays awake all night.
+  const { world, creep } = camp(true);
+  world.timeOfDay = NIGHT;
+  run(world, 1);
+  world.setCanSleep(creep.id, false);
+  check("UnitAddSleep(false) clears canSleep", creep.canSleep, false);
+  check("…and wakes it at once", creep.asleep, false);
+  run(world, 5);
+  check("…and it never sleeps again", creep.asleep, false);
+  // UnitAddSleep(true) on a `cansleep=0` creep puts it to bed with the rest.
+  const golem = addCreep(world, 4, creep.x - 150, creep.y, false);
+  world.setCanSleep(golem.id, true);
+  run(world, 1);
+  check("UnitAddSleep(true) lets a creep whose row says no sleep at night", golem.asleep, true);
+}
+
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");
 process.exit(failed ? 1 : 0);

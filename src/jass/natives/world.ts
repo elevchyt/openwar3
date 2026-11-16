@@ -429,6 +429,29 @@ export function registerWorldNatives(rt: Runtime): void {
     if (u && u.simId >= 0) c.rt.hooks?.setUnitUseFood?.(u.simId, a[1]?.k === "bool" && a[1].b);
     return JNULL;
   });
+  // Nocturnal sleep (common.j 1697–1702; blizzard.j's UnitSetCanSleepBJ/UnitCanSleepBJ/
+  // UnitIsSleepingBJ/UnitWakeUpBJ wrap them one for one). "This affects nocturnal sleep, not
+  // magical sleep" (UI\TriggerStrings.txt [UnitWakeUpBJHint]) — a Sleep spell's victim is a buff,
+  // and `UnitIsSleeping` is the same `SimUnit.asleep` that IsUnitType(u, UNIT_TYPE_SLEEPING) reads.
+  // The …Perm pair (sleep by DAY too, "when unprovoked") has no sim rule behind it yet.
+  def(rt, "UnitAddSleep", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.setUnitCanSleep?.(u.simId, a[1]?.k === "bool" && a[1].b);
+    return JNULL;
+  });
+  def(rt, "UnitCanSleep", (c, a) => {
+    const u = unit(c, a[0]);
+    return jBool(!!u && u.simId >= 0 && c.rt.hooks?.getUnitCanSleep?.(u.simId) === true);
+  });
+  def(rt, "UnitIsSleeping", (c, a) => {
+    const u = unit(c, a[0]);
+    return jBool(!!u && u.simId >= 0 && c.rt.hooks?.getUnitSleeping?.(u.simId) === true);
+  });
+  def(rt, "UnitWakeUp", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.wakeUnit?.(u.simId);
+    return JNULL;
+  });
   def(rt, "GetUnitTypeId", (c, a) => jInt(unit(c, a[0]) ? rawcodeToInt(unit(c, a[0])!.typeId) : 0));
   def(rt, "GetOwningPlayer", (c, a) => c.rt.playerHandle(unit(c, a[0])?.player ?? neutralSlot(PlayerSlot.NeutralPassive)));
   // Position/facing prefer the live sim value (a script-created unit's handle keeps its
