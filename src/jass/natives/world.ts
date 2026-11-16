@@ -139,6 +139,12 @@ export function registerWorldNatives(rt: Runtime): void {
     const u = unit(c, a[0]);
     return jInt(u && u.simId >= 0 ? c.rt.hooks?.countBuffs?.(u.simId, buffFilter(a, 1)) ?? 0 : 0);
   });
+  // UnitHasBuffsEx — the same filter, asked as a yes/no: common.j declares it argument for
+  // argument beside UnitCountBuffsEx, and it is that count > 0 (issue #236).
+  def(rt, "UnitHasBuffsEx", (c, a) => {
+    const u = unit(c, a[0]);
+    return jBool(!!u && u.simId >= 0 && (c.rt.hooks?.countBuffs?.(u.simId, buffFilter(a, 1)) ?? 0) > 0);
+  });
   // CreateCorpse(player, unitid, x, y, facing) → the body's `unit` — a DEAD one (simId -1, so
   // IsUnitType(…, UNIT_TYPE_DEAD) answers true off its type), or null when the type leaves no
   // corpse (SimWorld.createCorpse). Both rebalance maps lay bodies for their raise-dead items.

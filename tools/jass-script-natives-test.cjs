@@ -95,6 +95,12 @@ endfunction
 function CountMagicNeg takes nothing returns integer
     return UnitCountBuffsExBJ(bj_BUFF_POLARITY_NEGATIVE, bj_BUFF_RESIST_MAGIC, u, false, true)
 endfunction
+function HasPositiveAura takes nothing returns boolean
+    return UnitHasBuffsEx(u, true, false, false, false, false, true, false)
+endfunction
+function NullHasBuffs takes nothing returns boolean
+    return UnitHasBuffsEx(null, true, true, true, true, true, true, true)
+endfunction
 function Blast takes nothing returns boolean
     return UnitDamagePointLoc(u, 0.5, 250.0, Location(64.0, 32.0), 100.0, ATTACK_TYPE_CHAOS, DAMAGE_TYPE_UNIVERSAL)
 endfunction
@@ -177,6 +183,11 @@ call('StripNonTLife');
 check('bj_REMOVEBUFFS_NONTLIFE → the Ex form, both polarities, auras, no timed life', last(), ['removeBuffs', 1, F({ positive: true, negative: true, timedLife: false })]);
 check('UnitCountBuffsExBJ returns the count', call('CountMagicNeg').n, 2);
 check('…asked for negative MAGIC buffs, auras, no timed life', last(), ['countBuffs', 1, F({ negative: true, magic: true, timedLife: false })]);
+
+check('UnitHasBuffsEx is the count > 0', call('HasPositiveAura').b, true);
+check('…asked with every flag in its slot', last(), ['countBuffs', 1, F({ positive: true, timedLife: false, aura: true })]);
+calls.length = 0;
+check('…and false on a null unit, without asking the engine', [call('NullHasBuffs').b, calls.length], [false, 0]);
 
 console.log('\n--- trigger damage ---');
 check('UnitDamagePointLoc answers the engine', call('Blast').b, true);
