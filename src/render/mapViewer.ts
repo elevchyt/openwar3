@@ -5078,6 +5078,7 @@ export class MapViewerScene {
     sw.captureOrders = any("playerUnitEvent", 38, 40) || any("unitEvent", 75, 77);
     sw.captureConstruct = any("playerUnitEvent", 26, 28) || any("unitEvent", 64, 65);
     sw.captureTrain = any("playerUnitEvent", 32, 34) || any("unitEvent", 69, 71);
+    sw.captureResearch = any("playerUnitEvent", 35, 37) || any("unitEvent", 72, 74);
     sw.captureHeroEvents = any("playerUnitEvent", 41, 42) || any("unitEvent", 78, 79);
     sw.captureSpells = any("playerUnitEvent", 272, 276) || any("unitEvent", 289, 293);
     // 7.18 — items: DROP/PICKUP/USE are contiguous (48–50 player / 85–87 unit); SELL_ITEM
@@ -5157,6 +5158,8 @@ export class MapViewerScene {
       if (construct.length) engine.interp.pumpConstructEvents(construct);
       const trains = sw.drainTrainEvents();
       if (trains.length) engine.interp.pumpTrainEvents(trains);
+      const research = sw.drainResearchEvents();
+      if (research.length) engine.interp.pumpResearchEvents(research);
       const sales = sw.drainSellUnitEvents();
       if (sales.length) engine.interp.pumpSellUnitEvents(sales);
       const summons = sw.drainSummonEvents();

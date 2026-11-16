@@ -382,5 +382,38 @@ console.log("\n-- a building still going up is not part of the spread ----------
   check("…and researches nothing either", research(0, going, "Rhde"), false);
 }
 
+console.log("\n-- research raises EVENT_(PLAYER_)UNIT_RESEARCH_START / CANCEL / FINISH -------------");
+
+{
+  // GetResearched / GetResearchingUnit (issue #242): queued, cancelled and landed are all
+  // decided here in the sim, so all three phases are raised here — the building is the
+  // subject, the upgrade the payload. FINISH comes after the level is set, so a handler that
+  // reads GetPlayerTechCount sees the new rank.
+  newWorld();
+  world.captureResearch = true;
+  world.initStash(0, 1000, 1000);
+  const a = building("hbar", 0);
+  const view = (evs) => evs.map((e) => [e.phase, e.building.id, e.techId]);
+  check("an unwatched drain is empty", world.drainResearchEvents().length, 0);
+  research(0, a, "Rhde");
+  check("queueing raises START", view(world.drainResearchEvents()), [["start", a.id, "Rhde"]]);
+  world.cancelTrainAt(a.id, 0);
+  check("cancelling raises CANCEL", view(world.drainResearchEvents()), [["cancel", a.id, "Rhde"]]);
+  research(0, a, "Rhme");
+  world.drainResearchEvents();
+  for (let i = 0; i < 200 && a.building.queue.length; i++) tickQueues(1);
+  const fin = world.drainResearchEvents();
+  const levelAtFinish = world.tech.researchLevel(0, "Rhme");
+  check("landing raises FINISH", view(fin), [["finish", a.id, "Rhme"]]);
+  check("…with the level already set", levelAtFinish, 1);
+  check("…and the owner on the event", fin[0].building.owner, 0);
+  // Nobody listening — the default — records nothing.
+  newWorld();
+  world.initStash(0, 1000, 1000);
+  const b = building("hbar", 0);
+  research(0, b, "Rhde");
+  check("with captureResearch off nothing is recorded", world.drainResearchEvents().length, 0);
+}
+
 console.log(failed ? `\nFAILED (${failed})` : "\nproduction: all checks passed");
 process.exit(failed ? 1 : 0);

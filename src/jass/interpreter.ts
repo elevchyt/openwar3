@@ -78,6 +78,13 @@ export interface TrainEvent {
   trained: UnitSnapshot | null;
   phase: "start" | "cancel" | "finish";
 }
+/** A research milestone (EVENT_(PLAYER_)UNIT_RESEARCH_*): the researching building
+ *  (GetResearchingUnit) and the upgrade's rawcode (GetResearched). */
+export interface ResearchEvent {
+  building: UnitSnapshot;
+  techId: string;
+  phase: "start" | "cancel" | "finish";
+}
 /** A unit BOUGHT from a shop — EVENT_(PLAYER_)UNIT_SELL. `shop` is GetSellingUnit (and the
  *  subject a unit-scoped registration watches, as with a sold ITEM), `sold` is GetSoldUnit. */
 export interface SellUnitEvent {
@@ -197,6 +204,13 @@ const EVENT_PLAYER_UNIT_TRAIN_FINISH = 34;
 const EVENT_UNIT_TRAIN_START = 69;
 const EVENT_UNIT_TRAIN_CANCEL = 70;
 const EVENT_UNIT_TRAIN_FINISH = 71;
+// Research (common.j 35–37 player / 72–74 unit) — the block right after training's.
+const EVENT_PLAYER_UNIT_RESEARCH_START = 35;
+const EVENT_PLAYER_UNIT_RESEARCH_CANCEL = 36;
+const EVENT_PLAYER_UNIT_RESEARCH_FINISH = 37;
+const EVENT_UNIT_RESEARCH_START = 72;
+const EVENT_UNIT_RESEARCH_CANCEL = 73;
+const EVENT_UNIT_RESEARCH_FINISH = 74;
 const EVENT_PLAYER_HERO_LEVEL = 41;
 const EVENT_PLAYER_HERO_SKILL = 42;
 const EVENT_UNIT_HERO_LEVEL = 78;
@@ -1649,6 +1663,27 @@ export class Interpreter {
       const filterSubject = e.trained ? (responses.get("TrainedUnit") as JassValue) : b;
       this.dispatchToRegs(responses, (reg) =>
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, e.building.owner, b, filterSubject)) ||
+        (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, b)));
+    }
+  }
+
+  /** Pump research events — an upgrade queued / cancelled / finished at a building. The
+   *  subject is the RESEARCHING BUILDING: it is GetTriggerUnit and GetResearchingUnit, the
+   *  unit a unit-scoped registration watches and what a registration's filter is asked
+   *  about (there is no second unit, unlike a training's finish). GetResearched is the
+   *  upgrade's rawcode — common.j declares both responses under these three events. */
+  pumpResearchEvents(events: ReadonlyArray<ResearchEvent>): void {
+    for (const e of events) {
+      const b = this.rt.unitForSim(e.building);
+      const responses = new Map<string, JassValue>([
+        ["TriggerUnit", b],
+        ["ResearchingUnit", b],
+        ["Researched", jInt(rawcodeToInt(e.techId))],
+      ]);
+      const playerEvt = e.phase === "start" ? EVENT_PLAYER_UNIT_RESEARCH_START : e.phase === "cancel" ? EVENT_PLAYER_UNIT_RESEARCH_CANCEL : EVENT_PLAYER_UNIT_RESEARCH_FINISH;
+      const unitEvt = e.phase === "start" ? EVENT_UNIT_RESEARCH_START : e.phase === "cancel" ? EVENT_UNIT_RESEARCH_CANCEL : EVENT_UNIT_RESEARCH_FINISH;
+      this.dispatchToRegs(responses, (reg) =>
+        (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, e.building.owner, b)) ||
         (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, b)));
     }
   }

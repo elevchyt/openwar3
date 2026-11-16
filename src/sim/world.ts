@@ -1533,6 +1533,16 @@ export interface TrainEvent {
  *  Tavern's heroes, a Mercenary Camp's creeps, a Goblin Laboratory's zeppelin: every one of
  *  them arrives through the same queue a barracks trains from, so `noteTrainFinish` is where
  *  the two part company — a `Sellunits` ware is a SALE, anything else a training. */
+/** A research queue milestone (EVENT_(PLAYER_)UNIT_RESEARCH_*, common.j 35–37 player /
+ *  72–74 unit). The subject is the RESEARCHING BUILDING (GetResearchingUnit, and the unit a
+ *  unit-scoped registration watches); `techId` is the upgrade (GetResearched). Unlike a
+ *  training's finish, nothing new is born, so all three phases are raised in the sim. */
+export interface ResearchEvent {
+  building: EventUnitInfo;
+  techId: string; // the upgrade's rawcode (GetResearched)
+  phase: "start" | "cancel" | "finish";
+}
+
 export interface SellUnitEvent {
   shop: EventUnitInfo; // GetSellingUnit (and GetTriggerUnit)
   sold: EventUnitInfo; // GetSoldUnit
@@ -4006,6 +4016,7 @@ export class SimWorld {
   tileset = "";
   captureConstruct = false; // EVENT_(PLAYER_)UNIT_CONSTRUCT_* (7.17)
   captureTrain = false; // EVENT_(PLAYER_)UNIT_TRAIN_* (7.17)
+  captureResearch = false; // EVENT_(PLAYER_)UNIT_RESEARCH_* (common.j 35–37 / 72–74)
   captureHeroEvents = false; // EVENT_PLAYER_HERO_LEVEL / _SKILL (7.17)
   captureItems = false; // EVENT_(PLAYER_)UNIT_PICKUP/DROP/USE/SELL_ITEM (7.18)
   captureSellUnits = false; // EVENT_(PLAYER_)UNIT_SELL — a unit bought from a shop (269/286)
@@ -4022,6 +4033,7 @@ export class SimWorld {
   private spellEvents: SpellEvent[] = [];
   private constructEvents: ConstructEvent[] = [];
   private trainEvents: TrainEvent[] = [];
+  private researchEvents: ResearchEvent[] = [];
   private sellUnitEvents: SellUnitEvent[] = [];
   private summonEvents: SummonEvent[] = [];
   private heroEvents: HeroEvent[] = [];
@@ -6087,6 +6099,7 @@ export class SimWorld {
     const b = this.units.get(buildingId)?.building;
     if (!b || b.queue.length >= MAX_BUILD_QUEUE) return false;
     b.queue.push({ kind: "research", unitId: upgradeId, level, timeLeft: time, buildTime: time });
+    this.noteResearch(buildingId, upgradeId, "start"); // EVENT_(PLAYER_)UNIT_RESEARCH_START
     return true;
   }
 
@@ -6174,6 +6187,7 @@ export class SimWorld {
       this.noteTrain(buildingId, job.unitId, "cancel");
       this.returnStock(buildingId, job.unitId);
     }
+    if (job.kind === "research") this.noteResearch(buildingId, job.unitId, "cancel");
     return job;
   }
 
@@ -8127,6 +8141,8 @@ export class SimWorld {
             this.researchCompletions.push({ buildingId: u.id, upgradeId: job.unitId, level: job.level, owner: u.owner });
             this.noticeWire?.researched.push({ buildingId: u.id, upgradeId: job.unitId, level: job.level, owner: u.owner });
             this.applyUnitSwap(u.owner, job.unitId); // rtma: morph existing units (Headhunter→Berserker)
+            // Raised AFTER the level is set, so a handler's GetPlayerTechCount already reads it.
+            this.noteResearch(u.id, job.unitId, "finish"); // EVENT_(PLAYER_)UNIT_RESEARCH_FINISH
           } else if (job.kind === "upgrade") {
             this.morphUnit(u, job.unitId);
             this.stats.upgraded(u.owner, this.scoreValue(job.unitId)); // the score screen (matchStats.ts)
@@ -10853,6 +10869,20 @@ export class SimWorld {
     this.sellUnitEvents = [];
     return out;
   }
+  /** Record a research milestone (`captureResearch`): queued, cancelled, or landed. */
+  private noteResearch(buildingId: number, techId: string, phase: ResearchEvent["phase"]): void {
+    if (!this.captureResearch) return;
+    const b = this.units.get(buildingId);
+    if (b) this.researchEvents.push({ building: eventInfo(b), techId, phase });
+  }
+  /** Research events since the last drain (`captureResearch`). */
+  drainResearchEvents(): ResearchEvent[] {
+    if (!this.researchEvents.length) return this.researchEvents;
+    const out = this.researchEvents;
+    this.researchEvents = [];
+    return out;
+  }
+
   /** Training events since the last drain (`captureTrain`). */
   drainTrainEvents(): TrainEvent[] {
     if (!this.trainEvents.length) return this.trainEvents;

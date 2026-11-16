@@ -362,6 +362,13 @@ export function registerEventNatives(rt: Runtime): void {
     const v = resp(c, "TrainedUnitType");
     return v.k === "int" ? v : jInt(0);
   });
+  // Research responses (EVENT_(PLAYER_)UNIT_RESEARCH_START/CANCEL/FINISH): the building
+  // doing the research, and the upgrade's rawcode.
+  def(rt, "GetResearchingUnit", (c) => resp(c, "ResearchingUnit"));
+  def(rt, "GetResearched", (c) => {
+    const v = resp(c, "Researched");
+    return v.k === "int" ? v : jInt(0);
+  });
 
   // Item responses (EVENT_(PLAYER_)UNIT_PICKUP/DROP/USE/SELL_ITEM — 7.18). One pair
   // covers all four: the item that moved (GetManipulatedItem) and the unit that moved it

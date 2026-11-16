@@ -721,6 +721,11 @@ spell → order it cast → react when it goes off*. Built:
     engine, not the sim**, because a trained unit is born in the renderer (the sim owns no models):
     `SimWorld.noteTrainFinish` is called once the unit actually exists, so `GetTrainedUnit` hands
     the script a real unit. The subject unit (`GetTriggerUnit`) is the **training building**.
+  - **Research** (35–37 / 72–74) — all three phases in the sim, since nothing is born:
+    `enqueueResearch` (START), a cancelled research job (`dropJob`, CANCEL) and the job landing in
+    `tickBuildings` (FINISH, raised after the level is set so `GetPlayerTechCount` already reads
+    it). The subject is the **researching building** — `GetTriggerUnit` and `GetResearchingUnit`
+    — and `GetResearched` is the upgrade's rawcode (issue #242; `tools/jass-research-event-test.cjs`).
   - **Hero level / skill** (41–42 / 78–79) → `GetLevelingUnit`, `GetLearningUnit` /
     `GetLearnedSkill` / `GetLearnedSkillLevel`.
   - **`EVENT_UNIT_STATE_LIMIT`** (59, via `TriggerRegisterUnitStateEvent`) — the one event nothing
@@ -2182,7 +2187,7 @@ Echo Isles: town hall + 5 workers, 500/150, teams unchanged.
   wired and waiting: §7.18) and blizzard.j's `MeleeGrantItemsToHiredHero` (a tavern hero) can't run. Needs a purchase
   path: shop stock (`AddItemToStock`), the buy command card, gold, range.
 - **Events still missing:** `EVENT_PLAYER_UNIT_SUMMON` (the sim has the summon channel — same "born in the renderer"
-  shape as TRAIN_FINISH), `..._RESEARCH_*` / `..._UPGRADE_*` (no upgrade system yet), `_SELL`/`_SELL_ITEM`
+  shape as TRAIN_FINISH), `..._UPGRADE_*` (a structure's tier upgrade; `..._RESEARCH_*` landed — issue #242), `_SELL`/`_SELL_ITEM`
   (no shops — above). *(`..._SELECTED`/`_DESELECTED` landed — 7.28; `EVENT_PLAYER_STATE_LIMIT` — 7.2i.)*
 - **Melee leftovers** (7.3): melee **AI** (`StartMeleeAI` is a no-op, so a computer slot just sits — **the biggest one
   left by far, and now the only structural one**), hero-limit *enforcement* (the caps are recorded, not applied), and
