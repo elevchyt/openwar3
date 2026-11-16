@@ -21,6 +21,7 @@ and the field defaults are in [`src/data/gameplayConstants.ts`](../src/data/game
 | Distance we open on | **2400** | Ours, and a deliberate departure: the far end of the wheel (`MELEE_START` = `ZOOM_MAX`) |
 | Angle of attack | 304 (= −56°) | `bj_CAMERA_DEFAULT_AOA` |
 | Rotation / FarZ | 90 / 5000 | `bj_CAMERA_DEFAULT_ROTATION` / `_FARZ` |
+| **Near plane** | **100** | `UI\MiscData.txt` [Camera] `NearZ` — cinematics are authored against it (below) |
 | Focus height | **the terrain under it** | The camera keeps its distance to the GROUND, not to z = 0 |
 | Our zoom range | 1250 – 2400 | Ours; brackets WC3's 1650 default. WC3's own wheel stops are not documented anywhere we trust |
 | Wheel | 7 stops, eased out over 0.44 s | Ours. Nothing about WC3's camera snaps — see "The wheel moves in stops" |
@@ -122,6 +123,26 @@ detected as a focus move of ≥ 512 units in one frame and snaps instead.
 
 `CAMERA_FIELD_ZOFFSET` is therefore stored as what it is — an **offset above the terrain**, not the
 focus's world z. `readCamera`/`writeCamera` speak the offset; `followGround` adds the ground back.
+
+## The near plane is 100, and cinematics depend on it
+
+`UI\MiscData.txt` [Camera] carries `NearZ=100,100,100,100,100,100,60` beside `FarZ`: nothing within
+100 world units of the lens is drawn. That reads like a renderer's private business and is not. A
+camera object is placed by eye in the World Editor, under that same near plane, so nothing stops
+an author parking the eye inside a doodad — the editor never shows them the wall.
+
+Prologue02's closing scene is the case that found it. `gg_cam_Victory_Alternate_C` (the two-shot
+under "I'm fine, little brother") has rotation 55.8, AOA 346.5 and distance 1509.9 about a target
+two cliff layers below the prison yard, which puts the eye at about (-5089, -2884, 710) — some 70
+units behind a Barred Wall (`DSp9`) at (-5120, -2752) that stands square across the view. The
+real client cuts the wall away and shows Grom and Thrall in the yard; drawn with a near plane of
+16 the same shot was the inside of the wall: two blurred posts and a beam, with the orcs' legs
+between them. Nothing about the camera's position, lens or height was wrong — Grom and the wolf
+land on the same pixels either way.
+
+So the near plane is `CAMERA.NEARZ` (data/gameplayConstants.ts), for the match as well as the
+cutscene: any other "the camera is somewhere odd in this scene" report should be checked against
+what is standing within 100 units of the eye before anything about the camera is touched.
 
 ## A map's own camera
 

@@ -18844,7 +18844,9 @@ export class MapViewerScene {
     // In a cinematic the lens frames the strip BETWEEN the letterbox bars (cinematicLens).
     const cine = !this.interfaceShown;
     const fov = cine ? 2 * Math.atan(Math.tan(this.fov / 2) / CINE_STRIP) : this.fov;
-    scene.camera.perspective(fov, this.aspect(), 16, this.farZ > 0 ? this.farZ : this.distance * 8);
+    // The NEAR plane is the game's own 100 (CAMERA.NEARZ has why it matters): a cinematic's
+    // camera object may sit inside a doodad the real client never draws from there.
+    scene.camera.perspective(fov, this.aspect(), CAMERA.NEARZ, this.farZ > 0 ? this.farZ : this.distance * 8);
     scene.camera.moveToAndFace(eye, this.target, this.upVector(eye));
     if (cine) cinematicLens(scene.camera);
     this.sky?.follow(scene.camera); // the sky surrounds the EYE (render/sky.ts)

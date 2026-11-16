@@ -887,6 +887,20 @@ export const CAMERA = {
   DEFAULT_ROTATION: 90,
   /** bj_CAMERA_DEFAULT_FARZ — far clip plane. */
   DEFAULT_FARZ: 5000,
+  /**
+   * `UI\MiscData.txt` [Camera] `NearZ=100,100,100,100,100,100,60` — the NEAR clip plane, one
+   * entry per zoom stop and every stop the same. Blizzard.j has no `bj_` for it because no
+   * script is expected to move it.
+   *
+   * It is not a rendering detail: the campaign's cinematics are AUTHORED against it. A
+   * camera object is placed by eye in the editor, where anything within 100 units of the lens
+   * is simply not drawn, so nothing stops an author parking the eye in a wall — and they did.
+   * Prologue02's `gg_cam_Victory_Alternate_C` (the "I'm fine, little brother" two-shot) has
+   * its eye ~70 units behind a Barred Wall doodad at (-5120, -2752). With the game's near
+   * plane the wall is cut away and the shot is two orcs in a prison yard; with a near plane
+   * of 16 it is the inside of that wall.
+   */
+  NEARZ: 100,
 } as const;
 
 // ---------------------------------------------------------------------------
