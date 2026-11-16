@@ -3236,6 +3236,9 @@ const FREEZE_GROUP = "freezingbreath";
  *  OURS — the row carries no columns at all (see tickWander). */
 const WANDER_RADIUS = 400;
 const WANDER_EVERY = 8;
+/** How far past that radius a critter must be found before it is taken to have been MOVED
+ *  (and its post moved with it — tickWander). Ours: room for a stroll that ended a step wide. */
+const WANDER_SLACK = 64;
 const FACING_CAST_EPS = 0.4; // must roughly face a unit target to cast
 // Channelled abilities (base code): the caster stands locked for the channel and a
 // new order stops it AND the remaining ticks (unlike a backswing, which is free to
@@ -17944,7 +17947,7 @@ export class SimWorld {
    * the Deer…). The row has no columns at all, so how far and how often are not the game's to
    * read: both are OURS (WANDER_RADIUS, WANDER_EVERY) until a measurement against the real
    * client says otherwise. A critter left alone strolls to somewhere near the post it was put
-   * at (its guard post, else where it stands now), waits, and goes again; one that has been
+   * at (its guard post — which follows it when something else moves it), waits, and goes again; one that has been
    * given an order, or is fleeing, or is owned by a player who is moving it, is left alone.
    */
   private tickWander(u: SimUnit, dt: number): void {
@@ -17952,6 +17955,19 @@ export class SimWorld {
     if (!u.abilities.some((a) => a.code === "Awan" && a.level >= 1)) return;
     if ((u.wanderT = (u.wanderT ?? this.rng() * WANDER_EVERY) - dt) > 0) return;
     u.wanderT = WANDER_EVERY * (0.5 + this.rng());
+    // Its post is where it was PUT — and being sent somewhere is being put there. A stroll of
+    // its own never takes a critter further than WANDER_RADIUS from the post, so one found
+    // idle beyond that was moved by something else (a script's order, a player's, a flight
+    // from danger), and wandering "home" from there is not wandering: Prologue02's intro
+    // orders its four Vultures 7,500 units across the map to the far corner, and on their
+    // next stroll they flew all the way back to where the editor had placed them. The closing
+    // scene then orders them over the bay from the corner it left them in, timed to cross the
+    // shot of the ships — and ours, already beside the bay, arrived in seconds and hung there
+    // flapping for the whole of it. So the post follows the critter.
+    if (Math.hypot(u.x - u.guardX, u.y - u.guardY) > WANDER_RADIUS + WANDER_SLACK) {
+      u.guardX = u.x;
+      u.guardY = u.y;
+    }
     const hx = u.guardX;
     const hy = u.guardY;
     const a = this.rng() * Math.PI * 2;
