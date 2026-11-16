@@ -2240,6 +2240,18 @@ export interface SimUnit {
    *  ground mid-morph, and a planting one was already a building before it had sat down. */
   morphT: number;
   /**
+   * A walk ordered WHILE the unit was changing form, kept until the change is over.
+   *
+   * A form toggle that is underway cannot be re-tasked (`castLocked`), but an order to go
+   * somewhere is not a re-tasking of it — it is what the unit is to do NEXT, and the game
+   * takes it. The campaign depends on that: Prologue01 orders the Prophet to "ravenform" and,
+   * half a second into a 1.65-second change, to "move" — he finishes becoming a crow and
+   * flies off. Refused at the lock, the order was simply lost and the crow sat where the man
+   * had stood until the scene faded out on it. The newest one wins; anything else the unit is
+   * told in the meantime (a stop, a cast it can somehow take) forgets it.
+   */
+  afterMorph: { x: number; y: number; attack: boolean } | null;
+  /**
    * A change of ALTITUDE still being flown: a form toggle that moved the unit between the ground
    * and the air (an Obsidian Statue becoming a Destroyer, a Druid of the Talon taking Storm Crow
    * Form). `to` is the height being made for and `rate` the world units a second it climbs or
@@ -8531,6 +8543,44 @@ export class SimWorld {
    * pair can be entered from either side, which matters because several of these units are
    * TRAINED in their alternate form (the Spirit Walker arrives ethereal).
    */
+  /**
+   * Does this unit come into the world ALREADY in the alternate form of one of its own form
+   * toggles? Then it is wearing the alternate half of its model from its first frame, exactly
+   * as if it had morphed into it — `altModel` is a fact about the body, not a record of a
+   * button press.
+   *
+   * Nothing derived this for a unit that was placed or created in the form, and the flag is
+   * what the renderer keys the TRANSITION on (applyFormAnims plays the Morph clip of the form
+   * being left when it flips). So such a unit's first change of shape flipped nothing and was
+   * played with no clip at all: Prologue01 places the Prophet as `nmdm`, the crow of
+   * `[Amrf]` nmed ⇄ nmdm, and "unravenform" swapped a hovering bird for a standing man
+   * between two frames, with Medivh.mdx's 1.67-second "Morph Alternate" never drawn.
+   *
+   * Only a toggle with an off-switch counts (`Unorder` — see morphToggle): a timed hero form's
+   * alternate unit is nobody's birth form.
+   */
+  private bornAlternate(u: SimUnit): boolean {
+    if (!this.abilities) return false;
+    for (const a of u.abilities) {
+      const def = this.abilities.get(a.id);
+      if (def?.unOrder && this.isFormToggle(def) && def.levelData.some((l) => altFormOf(l) === u.typeId)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Which half of a form toggle a unit is standing in — "alternate" when its type is one of
+   * the ability's alternate forms (any rank's, as `morphToggle` asks it), "normal" otherwise —
+   * or null when the ability is not a form toggle at all. What an ORDER needs to know that a
+   * button press does not: `unravenform` is "be the druid", not "press Raven Form".
+   */
+  formOf(unitId: number, abilityId: string): "normal" | "alternate" | null {
+    const u = this.units.get(unitId);
+    const def = this.abilities?.get(abilityId);
+    if (!u || !def || !this.isFormToggle(def)) return null;
+    return def.levelData.some((l) => altFormOf(l) === u.typeId) ? "alternate" : "normal";
+  }
+
   morphToggle(u: SimUnit, def: AbilityDef, rank = 1, byTimer = false): boolean {
     const lvl = def.levelData[Math.min(Math.max(1, rank), def.levelData.length) - 1];
     const normal = lvl?.dataStr[0] ?? ""; // DataA "Normal Form Unit" — the same for all of them
@@ -9851,6 +9901,7 @@ export class SimWorld {
       | "entangler"
       | "ringSlot"
       | "morphT"
+      | "afterMorph"
       | "altitudeShift"
       | "portalLeft"
       | "portalX"
@@ -10154,6 +10205,7 @@ export class SimWorld {
       entangler: 0, // …and the Tree of Life that grew it (attachEntangled)
       ringSlot: 0,
       morphT: 0,
+      afterMorph: null,
       altitudeShift: null,
       portalLeft: 0,
       portalX: 0,
@@ -10251,6 +10303,7 @@ export class SimWorld {
       pendingSell: null,
       pendingDrop: null,
     };
+    u.altModel = this.bornAlternate(u);
     this.units.set(u.id, u);
     this.unitsVersion++; // see unitsInOrder
     this.settle(u);
@@ -10968,6 +11021,7 @@ export class SimWorld {
    *  long way round the building. */
   issueMove(id: number, tx: number, ty: number, targetId = 0): boolean {
     const u = this.units.get(id);
+    if (u && !targetId && this.holdForMorph(u, tx, ty, false)) return true;
     if (!u || this.castLocked(u)) return false;
     if (!this.canPursue(u)) return false; // a building goes nowhere — and must not sit on a "move" order
     const target = targetId ? this.units.get(targetId) : undefined;
@@ -11033,6 +11087,7 @@ export class SimWorld {
    *  route (WC3 A-click). Behaves like a move for pathing/arrival. */
   issueAttackMove(id: number, tx: number, ty: number): boolean {
     const u = this.units.get(id);
+    if (u && this.holdForMorph(u, tx, ty, true)) return true;
     if (!u || this.castLocked(u)) return false;
     // A tower cannot advance on anything, so an attack-move is not an order it can hold: it
     // would stand there on an "attackmove" it can never finish. Its own auto-acquisition is
@@ -11844,6 +11899,19 @@ export class SimWorld {
     return !!u && this.itemsLocked(u);
   }
 
+  /**
+   * A walk ordered mid-FORM-CHANGE: kept for when the change is over (SimUnit.afterMorph) and
+   * answered as taken. Only where the morph is the ONLY thing in the way, and only for a unit
+   * that will be able to walk — an Ancient settling its roots is becoming a building, and a
+   * hero mid-Town-Portal is refused for the portal's own reason.
+   */
+  private holdForMorph(u: SimUnit, x: number, y: number, attack: boolean): boolean {
+    if (!(u.morphT > 0) || u.hp <= 0 || u.devouredBy > 0 || u.portalLeft > 0 || u.building) return false;
+    if (u.baseSpeed <= 0 && !(this.unitReg?.get(u.typeId)?.speed ?? 0)) return false;
+    u.afterMorph = { x, y, attack };
+    return true;
+  }
+
   private castLocked(u: SimUnit): boolean {
     // A unit in a Kodo's BELLY does nothing at all until it is digested or spat out — no
     // order of anybody's reaches it, a script's or a computer's included (the authority only
@@ -11898,7 +11966,10 @@ export class SimWorld {
 
   stop(id: number): void {
     const u = this.units.get(id);
-    if (u) this.standDown(u, false);
+    if (u) {
+      u.afterMorph = null; // Stop means stop: not "…and then walk off once you have changed"
+      this.standDown(u, false);
+    }
   }
 
   /**
@@ -20916,7 +20987,16 @@ export class SimWorld {
       this.recomputeStats(u); // derive armour/speed/damage/regen/stun/invuln
       this.tickRegen(u, dt); // mana + (hero) hp regeneration
       this.tickReplenish(u, dt); // a Moon Well pouring itself into whoever is drinking
-      if (u.morphT > 0) u.morphT = Math.max(0, u.morphT - dt); // an Ancient mid-root/unroot
+      if (u.morphT > 0) {
+        u.morphT = Math.max(0, u.morphT - dt); // an Ancient mid-root/unroot
+        // …and the walk it was told to make while it changed (SimUnit.afterMorph).
+        if (u.morphT <= 0 && u.afterMorph) {
+          const { x, y, attack } = u.afterMorph;
+          u.afterMorph = null;
+          if (attack) this.issueAttackMove(u.id, x, y);
+          else this.issueMove(u.id, x, y);
+        }
+      }
       if (u.altitudeShift) this.tickAltitude(u, dt); // …and a Destroyer lifting off once its morph is done
       if (u.portalLeft > 0) this.tickTownPortal(u, dt); // …and a hero mid-Town-Portal
       if (u.rootSettle) this.tickRootSettle(u); // …and one mid-ROOT is still lowering itself onto its site

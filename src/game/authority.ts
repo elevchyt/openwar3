@@ -361,7 +361,7 @@ export class Authority {
       this.abilityOrders = new Set();
       for (const def of this.abilities.all()) {
         if (isHarvestCode(def.code)) continue;
-        for (const o of [def.order, def.orderOn, def.orderOff]) if (o) this.abilityOrders.add(o);
+        for (const o of [def.order, def.orderOn, def.orderOff, def.unOrder]) if (o) this.abilityOrders.add(o);
       }
     }
     return this.abilityOrders.has(order);
@@ -682,6 +682,16 @@ export class Authority {
       if (isHarvestCode(ab.code)) continue;
       const def = this.abilities.get(ab.id);
       if (!def) continue;
+      // A FORM TOGGLE is one button answering two orders, and each of them names the form it
+      // LEAVES the unit in: `ravenform` on a crow and `unravenform` on a druid are already
+      // true and do nothing, where pressing the button would flip the unit the wrong way.
+      // (`Unorder` was not matched at all before: a script could put a unit into its other
+      // form and never get it out — Prologue01 lands the Prophet with "unravenform".)
+      const form = def.unOrder && (def.order === order || def.unOrder === order) ? this.sim.formOf(unitId, ab.id) : null;
+      if (form) {
+        const want = def.order === order ? "alternate" : "normal";
+        return form === want ? true : this.sim.issueCast(unitId, ab.id, targetId, x, y);
+      }
       // By the row's ID, not its code: two Channels on one hero answer to two different orders.
       if (def.order === order) return this.sim.issueCast(unitId, ab.id, targetId, x, y);
       // "…on"/"…off" are the autocast toggles (Heal's "autocastoff"/"autocaston").

@@ -1379,6 +1379,37 @@ function fillIntrinsicOrders(defs: Map<string, AbilityDef>, vfs: DataSource): st
   return [...new Set(orderOf.values())];
 }
 
+/**
+ * An ability's ORDER belongs to its CLASS, so a row that states none answers to its class's.
+ *
+ * `AbilityData.slk` files every row under an `alias` and a `code`, and the code is the engine
+ * class that implements it. The order strings live in the AbilityFunc files under the ALIAS —
+ * and not every alias has a section there. `Amrf` "Raven Form (Medivh)" is the case that found
+ * it: code `Arav`, normal form `nmed`, alternate `nmdm`, and no `[Amrf]` in any Func file, so
+ * the row had no `Order` and no `Unorder` at all. Prologue01's closing scene is
+ *
+ *     call IssueImmediateOrderBJ( udg_Medivh, "unravenform" )   // the crow lands as a man
+ *     …
+ *     call IssueImmediateOrderBJ( udg_Medivh, "ravenform" )     // and leaves as a crow
+ *
+ * and both orders matched nothing: the Prophet delivered his lines as a hovering bird and
+ * never took off. The engine has no such gap, because an order id is the CLASS's — every
+ * `Arav` answers `ravenform`/`unravenform` whatever its row is called — so a row silent about
+ * an order takes its class row's (`[Arav] Order=ravenform, Unorder=unravenform`). Where the
+ * Func file speaks for the alias, it still wins.
+ */
+function inheritClassOrders(defs: Map<string, AbilityDef>): void {
+  for (const def of defs.values()) {
+    if (def.id === def.code) continue;
+    const cls = defs.get(def.code);
+    if (!cls) continue;
+    if (!def.order) def.order = cls.order;
+    if (!def.unOrder) def.unOrder = cls.unOrder;
+    if (!def.orderOn) def.orderOn = cls.orderOn;
+    if (!def.orderOff) def.orderOff = cls.orderOff;
+  }
+}
+
 export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
   const defs = new Map<string, AbilityDef>();
   const bytes = vfs.rawBytes("Units\\AbilityData.slk");
@@ -1518,6 +1549,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
   }
   for (const def of defs.values()) shapeRow(def);
   for (const id of UI_BUTTON_IDS) addUiButton(defs, id, func, strs);
+  inheritClassOrders(defs);
   const triggerOrders = fillIntrinsicOrders(defs, vfs);
 
   // Index every buff section — its models (so an ability that lists several buffs can pick
