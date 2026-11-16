@@ -49,6 +49,18 @@ export function registerRegionNatives(rt: Runtime): void {
     }
     return JNULL;
   });
+  // SetRectFromLoc(r, min, max) — SetRect with its two corners as locations (RectFromLoc's
+  // twin for an existing rect), normalised the same way.
+  def(rt, "SetRectFromLoc", (c, a) => {
+    const r = rect(c, a[0]), min = loc(c, a[1]), max = loc(c, a[2]);
+    if (r && min && max) {
+      r.minx = Math.min(min.x, max.x);
+      r.miny = Math.min(min.y, max.y);
+      r.maxx = Math.max(min.x, max.x);
+      r.maxy = Math.max(min.y, max.y);
+    }
+    return JNULL;
+  });
   const moveRectTo = (r: RectObj | undefined, cx: number, cy: number): void => {
     if (!r) return;
     const hw = (r.maxx - r.minx) / 2, hh = (r.maxy - r.miny) / 2;

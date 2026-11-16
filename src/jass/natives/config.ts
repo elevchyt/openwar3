@@ -26,6 +26,7 @@ export function registerConfigNatives(rt: Runtime): void {
   // I2R(GetPlayers())`), so the unimplemented native's 0 slept every AI thread for ever.
   def(rt, "GetPlayers", (c) => jInt(c.rt.setup.numPlayers));
   def(rt, "SetTeams", (c, a) => ((c.rt.setup.numTeams = asInt(a[0])), JNULL));
+  def(rt, "GetTeams", (c) => jInt(c.rt.setup.numTeams));
   def(rt, "SetGamePlacement", (c, a) => ((c.rt.setup.placement = c.rt.enumIndex(a[0])), JNULL));
 
   // --- start locations (whichStartLoc, x, y) → the map's placement grid ---

@@ -60,7 +60,13 @@ const hooks = {
   unitTypeName: (id) => (id === 'hfoo' ? 'footman' : undefined),
   terrainCliffLevel: (x, y) => (x > 0 ? 3 : 2),
   pauseCompAi: (p, pause) => calls.push(['pauseCompAi', p, pause]),
+  getResourceAmount: (id) => gold.get(id) ?? 0,
+  setResourceAmount: (id, amount) => gold.set(id, amount),
+  playerTechCount: (p, tech) => techLevels.get(`${p}:${tech}`) ?? 0,
+  setPlayerTechResearched: (p, tech, level) => techLevels.set(`${p}:${tech}`, Math.max(0, level)),
 };
+const gold = new Map();
+const techLevels = new Map();
 
 const SRC = `
 globals
@@ -147,6 +153,33 @@ endfunction
 function PauseAi takes nothing returns nothing
     call PauseCompAI(Player(4), true)
 endfunction
+function AddGold takes integer n returns integer
+    call AddResourceAmountBJ(n, u)
+    return GetResourceAmount(u)
+endfunction
+function AddTech takes integer n returns integer
+    call AddPlayerTechResearched(Player(2), 'Rhme', n)
+    return GetPlayerTechCount(Player(2), 'Rhme', true)
+endfunction
+function Counts takes nothing returns string
+    call SetPlayers(6)
+    call SetTeams(3)
+    return I2S(GetPlayers()) + "," + I2S(GetTeams())
+endfunction
+function RectLoc takes nothing returns string
+    local rect r = Rect(0.0, 0.0, 1.0, 1.0)
+    call SetRectFromLoc(r, Location(300.0, -50.0), Location(-100.0, 200.0))
+    return R2S(GetRectMinX(r)) + "," + R2S(GetRectMinY(r)) + "," + R2S(GetRectMaxX(r)) + "," + R2S(GetRectMaxY(r))
+endfunction
+function LocInRegion takes real x, real y returns boolean
+    local region rg = CreateRegion()
+    call RegionAddRect(rg, Rect(0.0, 0.0, 100.0, 100.0))
+    call RegionAddRect(rg, Rect(500.0, 500.0, 600.0, 600.0))
+    return IsLocationInRegion(rg, Location(x, y))
+endfunction
+function LocInNullRegion takes nothing returns boolean
+    return IsLocationInRegion(CreateRegion(), Location(0.0, 0.0))
+endfunction
 `;
 
 const realInfo = console.info;
@@ -222,6 +255,21 @@ console.log('\n--- the rest ---');
 check('GetTerrainCliffLevelBJ reads the terrain at each point', call('Cliffs').b, true);
 call('PauseAi');
 check('PauseCompAI(Player(4), true)', last(), ['pauseCompAi', 4, true]);
+
+console.log('\n--- the relative setters (issue #241) ---');
+gold.set(1, 12500);
+check('AddResourceAmountBJ(-500, mine) is SetResourceAmount(gold - 500)', call('AddGold', [{ k: 'int', n: -500 }]).n, 12000);
+check('…and +250 adds', call('AddGold', [{ k: 'int', n: 250 }]).n, 12250);
+techLevels.set('2:Rhme', 1);
+check('AddPlayerTechResearched(+2) from level 1 is level 3', call('AddTech', [{ k: 'int', n: 2 }]).n, 3);
+check('…and -1 takes one back off', call('AddTech', [{ k: 'int', n: -1 }]).n, 2);
+check('GetPlayers/GetTeams read back what SetPlayers/SetTeams wrote', call('Counts').s, '6,3');
+const R = (x, y) => [{ k: 'real', n: x }, { k: 'real', n: y }];
+check('SetRectFromLoc takes two corners and normalises them', call('RectLoc').s, '-100.000,-50.000,300.000,200.000');
+check('IsLocationInRegion: inside the first rect', call('LocInRegion', R(50, 50)).b, true);
+check('…inside the second rect of the union', call('LocInRegion', R(550, 520)).b, true);
+check('…between them: outside', call('LocInRegion', R(300, 300)).b, false);
+check('…an empty region holds nothing', call('LocInNullRegion').b, false);
 
 console.log('\n--- the 24-player table (a map saved by a 1.31+ editor) ---');
 {

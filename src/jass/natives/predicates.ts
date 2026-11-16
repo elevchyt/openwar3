@@ -160,6 +160,10 @@ export function registerPredicateNatives(rt: Runtime): void {
     return false;
   };
   def(rt, "IsPointInRegion", (c, a) => jBool(inRegion(c, a[0], asNum(a[1]), asNum(a[2]))));
+  def(rt, "IsLocationInRegion", (c, a) => {
+    const p = loc(c, a[1]);
+    return jBool(!!p && inRegion(c, a[0], p.x, p.y));
+  });
   def(rt, "IsUnitInRegion", (c, a) => {
     const id = simOf(c, a[1]);
     if (id === undefined) return jBool(false);
