@@ -505,7 +505,7 @@ export const MISC_UNREAD: ReadonlySet<string> = new Set([
   "ChanceToMiss", "CloseEnoughRange", "CreepCampPathingCellDistance", "DecayTime", "EffectDeathTime",
   "FogFlashTime", "FollowItemRange", "FollowRange", "GoldMineMaxGold", "GoldMineOwnDuration",
   "InvisSpeed", "MaxCollisionRadius", "RallyZOffset", "ReactionDelay",
-  "RootAngle", "ScaledAnimTime", "SelectionCircleBaseZ", "SpellCastRangeBuffer", "StructureDecayTime",
+  "RootAngle", "ScaledAnimTime", "SelectionCircleBaseZ", "StructureDecayTime",
   "StructureFollowRange", "TradingIncLarge", "TradingIncSmall",
 ]);
 

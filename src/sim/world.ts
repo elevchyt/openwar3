@@ -3669,6 +3669,9 @@ const FOGGED_ATTACK_REVEAL_TIME = 1;
 // same way — hiveworkshop "Vision guide" 290769.) How LONG it lasts is the type's own death
 // time (UnitData `death`, UnitDef.deathTime) — the body sees for as long as it takes to fall.
 const DYING_REVEAL_RADIUS = (): number => dataNum("DyingRevealRadius");
+// `Units\MiscData.txt` [Misc] SpellCastRangeBuffer = 300 — how far past its cast range a unit
+// target may get during the wind-up before the cast is dropped (tickCast, phase 2).
+const SPELL_CAST_RANGE_BUFFER = (): number => dataNum("SpellCastRangeBuffer");
 
 /**
  * The sight a body keeps while it falls — a dying unit's own eyes, outliving it.
@@ -16573,6 +16576,20 @@ export class SimWorld {
     // (a new order, or a stun via interruptForStun) aborts the spell — with no cost
     // for a normal spell, but a PRECAST_WARNING spell (Flame Strike) has already paid
     // at wind-up start, so an interrupt there simply wastes the cast. ---
+    //
+    // A UNIT target is only held for so far: `Units\MiscData.txt` [Misc]
+    // SpellCastRangeBuffer = 300, "distance target can move between starting cast and spell
+    // effect". The range is checked once, before the wind-up, so without this a hero who Blinks
+    // or runs off during the cast point was still struck from wherever he got to. Past the
+    // cast range plus the buffer the cast is dropped as an interrupt is — unpaid, exactly like
+    // the mana re-check below (and wasted for a spell that already paid at wind-up start).
+    if (pc.targetId) {
+      const t = this.units.get(pc.targetId);
+      if (t && this.castGap(u, t.x, t.y, t) > pc.range + SPELL_CAST_RANGE_BUFFER()) {
+        this.stop(u.id);
+        return;
+      }
+    }
     pc.castLeft -= dt;
     if (pc.castLeft > 0) return;
     // Commit: spend mana + start the cooldown, THEN fire. Re-check mana in case it
