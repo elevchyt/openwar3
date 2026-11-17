@@ -222,6 +222,45 @@ console.log("\nEndurance Aura (AOae): DataA is the move half and DataB the attac
   check("a Grunt beside a rank-3 Chieftain: +30% move, +15% attack", [aura?.value, aura?.value2], [0.3, 0.15]);
 }
 
+console.log("\nSilence (ANsi): Dur on a unit, HeroDur on a hero (#289)");
+{
+  const row = lvl("ANsi");
+  check("the row: Dur 16 / HeroDur 8", [row.duration, row.heroDuration], [16, 8]);
+  const w = world();
+  const ranger = caster(w, "Nbrn", C, C, 1);
+  const foot = dummy(w, "hfoo", C + 500, C);
+  const pal = dummy(w, "Hpal", C + 500, C + 80);
+  pal.isHero = true;
+  check("the press is accepted", w.issueCast(ranger.id, "ANsi", 0, foot.x, foot.y), true);
+  run(w, 1.5);
+  const silenced = (u) => u.buffs.some((b) => b.kind === "silence");
+  check("both are silenced", [silenced(foot), silenced(pal)], [true, true]);
+  run(w, 8);
+  check("eight seconds on the hero is free and the Footman is not", [silenced(foot), silenced(pal)], [true, false]);
+  run(w, 8);
+  check("…and the Footman after sixteen", silenced(foot), false);
+}
+
+console.log("\nEarthquake (AOeq): the field runs Dur1 = 25; HeroDur is the slow's, on heroes (#289)");
+{
+  const row = lvl("AOeq");
+  check("the row: Dur 25 / HeroDur 20, 50 a second to buildings", [row.duration, row.heroDuration, row.data[1]], [25, 20, 50]);
+  const w = world();
+  const seer = caster(w, "Ofar", C, C, 1);
+  const hall = dummy(w, "htow", C + 600, C);
+  hall.building = BUILT();
+  const foot = dummy(w, "hfoo", C + 600, C + 120);
+  const pal = dummy(w, "Hpal", C + 600, C - 120);
+  pal.isHero = true;
+  check("the press is accepted", w.issueCast(seer.id, "AOeq", 0, hall.x, hall.y), true);
+  run(w, 2);
+  const slow = (u) => u.buffs.find((b) => b.kind === "slow" && b.group === "quake");
+  check("the Footman's slow is Dur1 and the hero's HeroDur1", [Math.round(slow(foot).total), Math.round(slow(pal).total)], [25, 20]);
+  run(w, 40);
+  check("the building took twenty-five waves of 50 (1250), not twenty", Math.round((100000 - hall.hp) / 50), 25);
+  check("…and nothing that walks was hurt", foot.hp > 99990, true);
+}
+
 if (failed) {
   console.log(`\n${failed} check(s) FAILED`);
   process.exit(1);

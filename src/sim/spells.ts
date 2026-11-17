@@ -2586,7 +2586,9 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     // nothing and the spell was also silent (Silence1.wav resolves off this model).
     if (def.effectArt) api.emitEffect(def.effectArt, ctx.x, ctx.y, 0);
     for (const t of enemiesInArea(api, caster, def, ctx.x, ctx.y, lvl.area || 300)) {
-      api.applyBuff(t, { kind: "silence", group: "silence", timeLeft: lvl.duration || 8, sourceId: caster.id, ...fx(def) });
+      // `dur`: 16/20/24 s on a unit and `HeroDur` 8/10/12 on a hero or a resistant body. It
+      // used to be `Dur` for everyone, so a hero was silenced twice as long as the row allows.
+      api.applyBuff(t, { kind: "silence", group: "silence", timeLeft: dur(lvl, t) || 8, sourceId: caster.id, ...fx(def) });
     }
   },
 
@@ -2808,7 +2810,12 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // slowed unit wears `[BOeq] Targetart` (StasisTotemTarget, overhead) through fx(def).
   AOeq: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    const total = lvl.heroDuration || lvl.duration || 25;
+    // The FIELD runs `Dur1` (25) — the Ubertip's "Lasts <AOeq,Dur1> seconds", and the length
+    // of the channel that holds the Far Seer. `HeroDur1` (20) is what a hero duration always
+    // is: how long the effect lasts ON a hero, so it is the SLOW's, through `dur`. Reading it
+    // as the field's length cost the quake five of its twenty-five waves (1000 building
+    // damage for 1250) while the channel went on for all twenty-five (issue #289).
+    const total = lvl.duration || 25;
     const area = lvl.area || 250;
     api.addSpellField({
       code: def.code, x: ctx.x, y: ctx.y, area,
@@ -2822,7 +2829,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     });
     for (const t of enemiesInArea(api, caster, def, ctx.x, ctx.y, area)) {
       if (t.building) continue; // a building cannot be slowed; it is being knocked down instead
-      api.applyBuff(t, { kind: "slow", group: "quake", timeLeft: total, sourceId: caster.id, value: d(lvl, 2, 0.75), value2: 0, ...fx(def) });
+      api.applyBuff(t, { kind: "slow", group: "quake", timeLeft: dur(lvl, t) || total, sourceId: caster.id, value: d(lvl, 2, 0.75), value2: 0, ...fx(def) });
     }
   },
 
