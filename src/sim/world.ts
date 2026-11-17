@@ -48,7 +48,7 @@ import {
 import { perfNow, simProfile } from "./profile";
 import { flyHeight, type MissileFlight } from "./missile";
 import { HERO_KILL_VALUE, MatchStats } from "./matchStats";
-import { SPELL_HANDLERS, ITEM_INVULN_GROUP, AURA_BUFFS, SELF_INVIS_GROUP, BLADESTORM_GROUP, FIELD_PIERCES_SPELL_IMMUNITY, POLARITY_SPELLS, HEAL_SPELLS, FIGHTER_BUFFS, DISPEL_CODES, REPLENISH_BAR, replenishRefusal, survivesDispel, clockedBuff, worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, spellShieldBuff, drainTag, burningOilField, spellStealPlan, DRAIN_GROUP, CANNIBALIZE_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
+import { SPELL_HANDLERS, ITEM_INVULN_GROUP, AURA_BUFFS, SELF_INVIS_GROUP, BLADESTORM_GROUP, FIELD_PIERCES_SPELL_IMMUNITY, POLARITY_SPELLS, HEAL_SPELLS, SLOWED_BUFF, FROST_ARMOR_GROUP, dur as debuffDuration, FIGHTER_BUFFS, DISPEL_CODES, REPLENISH_BAR, replenishRefusal, survivesDispel, clockedBuff, worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, spellShieldBuff, drainTag, burningOilField, spellStealPlan, DRAIN_GROUP, CANNIBALIZE_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
 /** The buff group a Tornado's toss is applied under — both halves, so the invulnerability's wipe
  *  spares the stun it came with (clearStatusForInvulnerable). See tickTornado. */
 const TORNADO_SPIN_GROUP = "tornadoSpin";
@@ -578,6 +578,12 @@ export interface SimBuff {
    *  when the holder leaves, so it is not a timed buff anybody can end — see spells.ts
    *  `clockedBuff`, which every "is there anything here to dispel" question asks. */
   aura?: boolean;
+  /** The ability row (its id, and the rank it was cast at) a PROC of this buff reads when it
+   *  fires, long after the cast: Frost Armor's shield slows whoever strikes it for that row's
+   *  own `Dur`/`HeroDur` and flashes its buff's `Specialart` (applyFrostArmorChill). An id and
+   *  not the numbers, so a map's edited row — and a patched one — is read like any other. */
+  procAbility?: string;
+  procRank?: number;
 }
 
 /** The ORB EFFECT one blow carries, once the priority ladder has picked it (see
@@ -15641,11 +15647,15 @@ export class SimWorld {
         existing.delay = init.delay ?? 0; // a re-cast restarts the transition
         if (init.art) existing.art = init.art;
         if (init.buffId) existing.buffId = init.buffId;
+        if (init.procAbility) {
+          existing.procAbility = init.procAbility;
+          existing.procRank = init.procRank;
+        }
         return;
       }
     }
     const art = init.art ?? "";
-    u.buffs.push({ kind: init.kind, group, timeLeft: init.timeLeft, total: init.timeLeft, sourceId: init.sourceId, value: init.value ?? 0, value2: init.value2 ?? 0, art, fx: init.fx ?? (art ? [{ path: art, attach: [] }] : []), buffId: init.buffId ?? "", delay: init.delay ?? 0, meld: init.meld, nonLethal: init.nonLethal, untilHealed: init.untilHealed, undispellable: init.undispellable, aura: init.aura });
+    u.buffs.push({ kind: init.kind, group, timeLeft: init.timeLeft, total: init.timeLeft, sourceId: init.sourceId, value: init.value ?? 0, value2: init.value2 ?? 0, art, fx: init.fx ?? (art ? [{ path: art, attach: [] }] : []), buffId: init.buffId ?? "", delay: init.delay ?? 0, meld: init.meld, nonLethal: init.nonLethal, untilHealed: init.untilHealed, undispellable: init.undispellable, aura: init.aura, procAbility: init.procAbility, procRank: init.procRank });
   }
 
   private interruptForStun(u: SimUnit): void {
@@ -24498,6 +24508,37 @@ export class SimWorld {
     return dmg;
   }
 
+  /**
+   * FROST ARMOR's other half: "slows melee units that attack it for <AUfu,Dur1> seconds"
+   * (UndeadAbilityStrings [AUfu] Ubertip; its buff's own, "melee units that attack it will
+   * have their movement speed and attack rate reduced for a short duration").
+   *
+   * Called from dealDamage alone, which is the melee blow — a missile never passes through it,
+   * so "melee" needs no test here. The striker takes the generic Slowed buff (`Bfro`, the row
+   * the creep Frost Armors name beside `BUfa` in their `BuffID`; Liquipedia's Slowed card lists
+   * Frost Armor among its sources) at the engine's own frost magnitudes — the ability's Data
+   * columns are its armour and nothing else — for the ROW's `Dur`/`HeroDur`: 4 s on the Lich's,
+   * 5 on the creeps', and resisted like any other debuff (spells.ts `dur`). `[BUfa] Specialart`
+   * (FrostArmorDamage.mdl, at `chest`) is the chill landing on the attacker (see
+   * AbilityDef.buffSpecialArt). Like an orb's slow it rides only a blow that CONNECTED.
+   */
+  private applyFrostArmorChill(attacker: SimUnit, target: SimUnit): void {
+    if (attacker.hp <= 0 || attacker.building) return;
+    const shield = target.buffs.find((b) => b.group === FROST_ARMOR_GROUP && b.kind === "armor" && b.procAbility);
+    const def = shield?.procAbility ? this.abilities?.get(shield.procAbility) : undefined;
+    const lvl = def?.levelData[Math.max(0, Math.min(shield!.procRank ?? 1, def.levelData.length) - 1)];
+    if (!def || !lvl) return;
+    const time = debuffDuration(lvl, attacker);
+    if (!(time > 0)) return;
+    const worn = this.abilities?.buffFx?.(SLOWED_BUFF) ?? [];
+    this.applyBuffInternal(attacker, {
+      kind: "slow", group: "frostarmorchill", timeLeft: time, sourceId: target.id,
+      value: slowedMove(), value2: slowedAttack(), buffId: SLOWED_BUFF, art: worn[0]?.path ?? "", fx: worn,
+    });
+    if (def.buffSpecialArt) this.spellEffects.push({ art: def.buffSpecialArt, x: attacker.x, y: attacker.y, targetId: attacker.id, z: 0, attach: def.buffSpecialAttach });
+    this.recomputeStats(attacker);
+  }
+
   /** Land a melee strike. `w` is the slot it was swung with — a Gargoyle's ground claws and
    *  its air spit have different attack types, so the damage table must see the right one. */
   private dealDamage(attacker: SimUnit, target: SimUnit, w: SimWeapon, bonus = 0): void {
@@ -24537,6 +24578,7 @@ export class SimWorld {
     }
     // Thorns Aura: the target returns a fraction of the damage to the attacker.
     if (target.thorns > 0 && dealt > 0) this.landDamage(attacker, dealt * target.thorns, target.id, false);
+    if (dealt > 0) this.applyFrostArmorChill(attacker, target); // Frost Armor: the struck shield slows the striker
     if (dealt > 0) this.applyPulverize(attacker, target); // Tauren passive: chance for a splash
     this.applyOrbEffect(attacker, target, orb, dealt); // the one orb this swing carried
     this.applyStrikePassives(attacker, target, w.attackType); // War Club's strikes, Freezing Breath

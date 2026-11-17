@@ -14,7 +14,7 @@ Status:
 - `/` **partial** — listed in `KNOWN_ABILITIES` (the UI can aim it) but nothing casts it yet.
 - ` ` **todo** — not implemented.
 
-Totals: 799 rows — **alias** 398, **done** 327, **partial** 5, **passive** 14, **todo** 55.
+Totals: 799 rows — **alias** 398, **done** 328, **partial** 4, **passive** 14, **todo** 55.
 
 ## Art paths this install does not ship
 
@@ -410,7 +410,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `ACf2` | `AUfu` | Frost Armor | creeps |  |  | air,ground,friend,self,neutral |  | frostarmor | Frost Armor (creep,autocast) |
 | ~ | `ACfa` | `AUfa` | Frost Armor | creeps |  |  | air,ground,friend,self,neutral |  | frostarmor | Frost Armor (creep,old) |
 | ~ | `ACfu` | `AUfu` | Frost Armor | naga |  |  | air,ground,friend,self,neutral |  | frostarmor | Frost Armor (Autocast, Naga) |
-| / | `AUfa` | `AUfa` | Frost Armor | undead | H |  | air,ground,friend,self,neutral |  | frostarmor | Lich - Frost Armor |
+| x | `AUfa` | `AUfa` | Frost Armor | undead | H |  | air,ground,friend,self,neutral |  | frostarmor | Lich - Frost Armor |
 | x | `AUfu` | `AUfu` | Frost Armor | undead | H |  | air,ground,friend,self,neutral |  | frostarmor | Lich - Frost Armor (Autocast) |
 | ~ | `ANfa` | `AHca` | Frost Arrows | creeps | H |  | air,ground,enemy,neutral | 1 |  | Sea Witch - Frost Arrows |
 | ~ | `Afr2` | `Afra` | Frost Attack | undead |  |  | air,ground | 1 |  | Frost Attack (1,2) |

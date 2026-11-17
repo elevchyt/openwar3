@@ -377,6 +377,9 @@ export interface SimBuffInit {
   undispellable?: boolean;
   /** Laid by an AURA's refresh rather than cast. See SimBuff.aura. */
   aura?: boolean;
+  /** The ability (and rank) whose row a PROC of this buff reads. See SimBuff.procAbility. */
+  procAbility?: string;
+  procRank?: number;
 }
 
 /** The art half of an applyBuff: spread into a SimBuffInit (`...fx(def)`).
@@ -728,7 +731,7 @@ const FLAMESTRIKE_PILLAR = "Abilities\\Spells\\Human\\FlameStrike\\FlameStrike.m
 const FLAMESTRIKE_EMBERS = "Abilities\\Spells\\Human\\FlameStrike\\FlameStrikeEmbers.mdx";
 
 /** Effect duration on a target: heroes resist longer effects (herodur). */
-function dur(lvl: AbilityLevel, target: SimUnit): number {
+export function dur(lvl: AbilityLevel, target: SimUnit): number {
   // …and a RESISTANT unit takes the hero duration too — that is what Resistant Skin IS:
   // "effects last on resistant units as long as they would last on heroes" (Liquipedia).
   // Ensnare's 9 seconds become 3 on a Mountain Giant, a Tauren, an Avatar of Vengeance.
@@ -1166,6 +1169,9 @@ export function survivesDispel(b: { kind: BuffKind; group?: string; buffId?: str
  * what the frost sources share — and what a map's own frost ability names too.
  */
 export const SLOWED_BUFF = "Bfro";
+/** The buff group Frost Armor's shield is worn under — what a melee blow asks the struck unit
+ *  for (world.ts `applyFrostArmorChill`). */
+export const FROST_ARMOR_GROUP = "frostarmor";
 /**
  * Every buff row whose bearer is drawn CHILLED (rts.ts FROST_TINT): the generic Slowed buff
  * above, and Cold / Frost Arrows' own — AbilityData.slk gives `AHca` (the Ranger's Cold Arrows,
@@ -1411,6 +1417,15 @@ const thunderClap: Handler = (api, caster, def, rank, ctx) => {
 function keepAbilities(api: SpellApi, t: SimUnit): void {
   if (t.owner < 0 || t.abilities.every((a) => api.techMeets(t.owner, a.id))) t.mercenary = true;
 }
+
+/** Frost Armor's cast, shared by its two codes (`AUfu` autocast, `AUfa` plain) — see the
+ *  handlers' own comment for the row's columns. */
+const frostArmor: Handler = (api, caster, def, rank, ctx) => {
+  const t = api.getUnit(ctx.targetId);
+  if (!t || !api.ally(caster, t)) return;
+  const lvl = def.levelData[rank - 1];
+  api.applyBuff(t, { kind: "armor", group: FROST_ARMOR_GROUP, timeLeft: d(lvl, 0, 45), sourceId: caster.id, value: d(lvl, 1, 3), procAbility: def.id, procRank: rank, ...fx(def) });
+};
 
 export const SPELL_HANDLERS: Record<string, Handler> = {
   // Holy Light — heal a friendly living unit for dataA, or smite an enemy Undead
@@ -3191,14 +3206,17 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     if (mana > 0 || life > 0) api.missileBack(t, caster, def);
   },
 
-  // Frost Armor (Lich) — buff a friendly unit with +armour (dataB) for the
-  // duration (WC3 also slows melee attackers, which we don't model). Autocasts.
-  AUfu: (api, caster, def, rank, ctx) => {
-    const t = api.getUnit(ctx.targetId);
-    if (!t || !api.ally(caster, t)) return;
-    const lvl = def.levelData[rank - 1];
-    api.applyBuff(t, { kind: "armor", group: "frostarmor", timeLeft: lvl.duration || 60, sourceId: caster.id, value: d(lvl, 1, 3), ...fx(def) });
-  },
+  // Frost Armor (Lich; the creeps' `ACfa`/`ACf2`/`ACfu` on the same two codes) — "The shield
+  // adds <AUfu,DataB1> armor and slows melee units that attack it for <AUfu,Dur1> seconds.
+  // Lasts <AUfu,DataA1> seconds." (UndeadAbilityStrings [AUfu] Ubertip). So the row's TWO
+  // clocks are not where a buff's usually are: AbilityMetaData `Ufa1` "Armor Duration" is
+  // `DataA` (45 at every rank) and `Ufa2` "Armor Bonus" `DataB` (3/5/7), while `Dur`/`HeroDur`
+  // (4, the creeps' 5) is the length of the SLOW an attacker takes — read as the armour's it
+  // dropped the shield after four seconds (issue #284). The slow itself is laid at the blow
+  // (world.ts `applyFrostArmorChill`), off the ability and rank the shield remembers here.
+  AUfu: frostArmor,
+  // The same spell without the autocast toggle: `[AUfa]`, and the code behind the creeps' `ACfa`.
+  AUfa: frostArmor,
 
   // Far Sight (Far Seer) — "Reveals the area of the map that it is cast upon for <AOfs,Dur1>
   // seconds. Also reveals invisible units." (OrcAbilityStrings [AOfs]). Area1 is the radius

@@ -302,5 +302,42 @@ console.log("\nwho a blow may carry an orb TO (Targets Allowed, targs1)");
   check("the Mask of Death steals nothing from a building", w.resolveOrb(masked, tower), null);
 }
 
+console.log("\nFrost Armor: 45 seconds of armour, and a slow for whoever swings at it (issue #284)");
+{
+  // The real rows. [AUfu]: Dur 4 / HeroDur 4 is the SLOW, DataA 45 the "Armor Duration",
+  // DataB 3/5/7 the "Armor Bonus" (AbilityMetaData Ufa1/Ufa2). The creep's [ACf2] is the same
+  // code with a 5-second slow. `[BUfa] Specialart` is the chill on the attacker.
+  const frostLvl = (dur, armor) => lvl({ cost: 40, castRange: 800, duration: dur, heroDuration: dur, data: [45, armor] });
+  const AUfu = { ...abil("AUfu", "AUfu", {}, { buffSpecialArt: "FrostArmorDamage", buffSpecialAttach: ["chest"], targetFlags: ["air", "ground", "friend", "self", "neutral"] }),
+    levels: 3, levelData: [frostLvl(4, 3), frostLvl(4, 5), frostLvl(4, 7)] };
+  const ACf2 = abil("ACf2", "AUfu", { cost: 40, castRange: 800, duration: 5, heroDuration: 5, data: [45, 3] }, { buffSpecialArt: "FrostArmorDamage", targetFlags: ["air", "ground", "friend", "self", "neutral"] });
+  const w = world();
+  const rows = { AUfu, ACf2 };
+  w.abilities = { get: (id) => rows[id], all: () => Object.values(rows), buffFx: (id) => (id === "Bfro" ? [{ path: "FrostDamage", attach: [] }] : []) };
+  const lich = unit(w, { isHero: true });
+  const ghoul = unit(w);
+  w.applySpellEffect("AUfu", 2, lich, { targetId: ghoul.id }, AUfu);
+  const shield = ghoul.buffs.find((b) => b.group === "frostarmor");
+  check("the shield lasts DataA — 45 s, not the 4 s of Dur1", shield.timeLeft, 45);
+  check("…and adds the rank's DataB armour", [shield.kind, shield.value], ["armor", 5]);
+
+  const footman = unit(w, { owner: 1, team: 1 });
+  w.applyFrostArmorChill(footman, ghoul);
+  const chill = footman.buffs.find((b) => b.kind === "slow");
+  check("a melee attacker takes the generic Slowed buff", [chill.buffId, chill.art], ["Bfro", "FrostDamage"]);
+  check("…at the frost constants (MiscGame FrostMoveSpeedDecrease / FrostAttackSpeedDecrease)", [chill.value, chill.value2], [0.5, 0.25]);
+  check("…for the row's Dur1 = 4 s", chill.timeLeft, 4);
+  check("…with [BUfa] Specialart flashed on the ATTACKER", w.spellEffects.filter((e) => e.art === "FrostArmorDamage").map((e) => e.targetId), [footman.id]);
+  check("an unshielded unit chills nobody", (w.applyFrostArmorChill(ghoul, footman), ghoul.buffs.some((b) => b.kind === "slow")), false);
+
+  // The creep row: same code, its own 5-second slow.
+  const ogre = unit(w, { owner: 2, team: 2 });
+  w.applySpellEffect("AUfu", 1, ogre, { targetId: ogre.id }, ACf2);
+  const grunt = unit(w, { owner: 1, team: 1 });
+  w.applyFrostArmorChill(grunt, ogre);
+  check("the creep Frost Armor (ACf2) slows for ITS Dur1 = 5 s", grunt.buffs.find((b) => b.kind === "slow").timeLeft, 5);
+  check("the plain code AUfa (the creeps' ACfa) has the same handler", typeof require(join(REPO, ".sim-build", "src", "sim", "spells.js")).SPELL_HANDLERS.AUfa, "function");
+}
+
 console.log(`\n${failed ? `${failed} FAILED` : "orbs: all checks passed"}`);
 process.exit(failed ? 1 : 0);
