@@ -62,5 +62,15 @@ check("a mechanical unit does not — targs1 says organic", plague(golem), []);
 check("a magic-immune unit does not", plague(dryad), []);
 check("…and the Abomination does not infect itself", plague(abom), []);
 
+// Endurance Aura (`AOae`; `SCae` and the `AIae` item share the code) — two columns, not one:
+// DataA "Movement Speed Increase (%)" and DataB "Attack Speed Increase (%)". The real rows are
+// 0.10/0.20/0.30 and 0.05/0.10/0.15; the attack half used to be read off DataA (issue #288).
+{
+  const { AURA_BUFFS } = require(join(REPO, ".sim-build", "src", "sim", "spells.js"));
+  const at = (move, attack) => AURA_BUFFS.AOae({ data: [move, attack] }).map((b) => [b.kind, b.value, b.value2]);
+  check("Endurance rank 1: +10% move, +5% attack", at(0.1, 0.05), [["haste", 0.1, 0.05]]);
+  check("Endurance rank 3: +30% move, +15% attack", at(0.3, 0.15), [["haste", 0.3, 0.15]]);
+}
+
 console.log(`\n${failed ? `${failed} FAILED` : "all passed"}`);
 process.exit(failed ? 1 : 0);

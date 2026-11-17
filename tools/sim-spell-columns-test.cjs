@@ -210,6 +210,18 @@ console.log("\nDeath Pact (AUdp): DataB of the sacrifice's hit points, by rank (
   }
 }
 
+console.log("\nEndurance Aura (AOae): DataA is the move half and DataB the attack half (#288)");
+{
+  check("the rows: move 0.1/0.2/0.3, attack 0.05/0.1/0.15", [1, 2, 3].map((r) => [lvl("AOae", r).data[0], lvl("AOae", r).data[1]]), [[0.1, 0.05], [0.2, 0.1], [0.3, 0.15]]);
+  const w = world();
+  const chief = caster(w, "Otch", C, C, 1);
+  for (const a of chief.abilities) a.level = a.code === "AOae" ? 3 : 0;
+  const grunt = spawn(w, "ogru", C + 200, C, 0, 0);
+  run(w, 1);
+  const aura = grunt.buffs.find((b) => b.kind === "haste");
+  check("a Grunt beside a rank-3 Chieftain: +30% move, +15% attack", [aura?.value, aura?.value2], [0.3, 0.15]);
+}
+
 if (failed) {
   console.log(`\n${failed} check(s) FAILED`);
   process.exit(1);

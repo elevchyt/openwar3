@@ -4651,7 +4651,9 @@ export interface AuraEffect {
 export const AURA_BUFFS: Record<string, (lvl: AbilityLevel) => AuraEffect[]> = {
   AHad: (lvl) => [{ kind: "armor", value: d(lvl, 0, 1.5) }], // Devotion — +armour
   AHab: (lvl) => [{ kind: "manaRegen", value: d(lvl, 0, 0.75) }], // Brilliance — +mana regen/sec
-  AOae: (lvl) => [{ kind: "haste", value: d(lvl, 0, 0.1), value2: d(lvl, 0, 0.1) }], // Endurance — +move & attack speed
+  // Endurance — `Oae1 "Movement Speed Increase (%)"` 0.10/0.20/0.30 and `Oae2 "Attack Speed
+  // Increase (%)"` 0.05/0.10/0.15. Two columns: reading DataA for both doubled the attack half.
+  AOae: (lvl) => [{ kind: "haste", value: d(lvl, 0, 0.1), value2: d(lvl, 1, 0.05) }],
   AUau: (lvl) => [
     { kind: "haste", value: d(lvl, 0, 0.1), value2: 0 }, // Unholy — +move speed
     { kind: "hpRegen", value: d(lvl, 1, 0.5) }, // …and hp regen
