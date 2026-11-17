@@ -42,6 +42,8 @@ const upgrades = new UpgradeRegistry(new Map([
   up("Rosp", 3, [fx("rspi", 5, 7)]),
   up("Rosq", 2, [fx("rspi", 5, 0), fx("rspp", 0.2, 0.3)]), // the 1.31 shape
   up("Rusm", 1, [fx("rrai", 20)]),
+  // `[Rguv]` glyph of ultravision: effect1 = rauv, no base and no mod (UpgradeData.slk).
+  up("Rguv", 1, [fx("rauv", 0)]),
 ]));
 const unit = (id, over) => ({
   id, name: id, isHero: false, isBuilding: false, goldCost: 0, lumberCost: 0, buildTime: 10,
@@ -51,6 +53,8 @@ const unit = (id, over) => ({
 const units = new UnitRegistry(new Map([
   ["ohun", unit("ohun", { upgradesUsed: ["Rotr"], hpRegen: 0.25, regenType: "always" })],
   ["ogru", unit("ogru", {})],
+  // `[hfoo] upgrades` lists Rguv in UnitBalance.slk, as about a hundred rows do.
+  ["hfoo", unit("hfoo", { upgradesUsed: ["Rguv"] })],
   ["otrb", unit("otrb", { upgradesUsed: ["Rosp", "Rorb"], isBuilding: true, armorType: "large" })],
   ["owtw", unit("owtw", { upgradesUsed: ["Rosq", "Ror3"], isBuilding: true, armorType: "large" })],
   ["unec", unit("unec", { upgradesUsed: ["Rusm"] })],
@@ -60,7 +64,7 @@ const techNode = (id) => [id, {
   builds: [], upgrade: [], makeitems: [], sellitems: [], sellunits: [], revive: false,
 }];
 const tech = new TechRegistry(new Map(
-  ["ohun", "ogru", "otrb", "owtw", "unec", "Rotr", "Rorb", "Ror3", "Rosp", "Rosq", "Rusm"].map(techNode),
+  ["ohun", "ogru", "hfoo", "otrb", "owtw", "unec", "Rotr", "Rorb", "Ror3", "Rosp", "Rosq", "Rusm", "Rguv"].map(techNode),
 ));
 
 const WEAPON = (over = {}) => ({
@@ -113,6 +117,24 @@ const run = (w, steps) => { for (let i = 0; i < steps; i++) w.tick(SIM_DT); };
   troll.hp = 500;
   run(w, 60);
   check("…which is what the hit points actually do", Math.abs(troll.hp - 501.25) < 0.05, `${troll.hp}`);
+}
+
+// --- rauv: Glyph of Ultravision (issue #281) ---------------------------------------------------
+// The glyph (`guvi` → `AIgu`) researches `Rguv` outright (SimWorld.itemGlyph); the research's
+// one effect is `rauv`, and it used to have no case — the charge was spent and nobody saw.
+{
+  const w = world();
+  const footman = spawn(w, 1, 0, 1000, 1000, "hfoo");
+  const grunt = spawn(w, 2, 0, 1400, 1000, "ogru");
+  const theirs = spawn(w, 3, 1, 1800, 1000, "hfoo");
+  run(w, 2);
+  check("a Footman sees its row's 800 at night before the glyph", footman.sightNight === 800, `${footman.sightNight}`);
+  w.tech.setResearchLevel(0, "Rguv", 1);
+  w.tech.invalidate();
+  run(w, 2);
+  check("the Glyph of Ultravision gives it its day sight at night", footman.sightNight === 1400, `${footman.sightNight}`);
+  check("…and nothing to a unit whose row does not list the research", grunt.sightNight === 800, `${grunt.sightNight}`);
+  check("…nor to another player's", theirs.sightNight === 800, `${theirs.sightNight}`);
 }
 
 // --- rart: Reinforced Defenses ---------------------------------------------------------------

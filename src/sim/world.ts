@@ -3080,6 +3080,9 @@ interface UpgradeBonuses {
   abilityLevels: [string, number][];
   /** `raud` — ability id → what a research ADDS to that aura's `DataA` (see applyAuras). */
   auraData: [string, number][];
+  /** `rauv` — the research gives this unit night sight equal to its day sight (Glyph of
+   *  Ultravision's `Rguv`, the only stock row that carries it). */
+  ultravision: boolean;
 }
 /** The grid's cell, in world units. Ours, and free to be anything: the reach a body is offered is
  *  computed from the radii, so the size only decides how many cells a query walks and how many
@@ -13815,6 +13818,7 @@ export class SimWorld {
       weaponMask: -1,
       abilityLevels: [] as [string, number][],
       auraData: [] as [string, number][],
+      ultravision: false,
     };
     if (!this.tech || !this.upgradeReg || !this.unitReg) return b;
     const def = this.unitReg.get(u.typeId);
@@ -13876,6 +13880,13 @@ export class SimWorld {
           // shows `Ahlh` at level 1 (its first icon) and Advanced at level 2 (its second). Read
           // as the level SET, not added: an unresearched badge is hidden by its `Requires`, so
           // there is no level to add to.
+          // Ultravision (`rauv`, `UI\UnitEditorData.txt` [upgradeEffect] 32 =
+          // WESTRING_GE_UPGRADEEFFECT_ULTRAVISION): no magnitude, the effect IS the flag. One
+          // stock row carries it — `Rguv`, the upgrade a Glyph of Ultravision researches
+          // (itemGlyph) — and about a hundred UnitBalance rows list `Rguv` in `upgrades`
+          // (`hfoo`, `ogru`, `hpea`…), which is who "all of your units" turns out to be: this
+          // loop only ever reaches a unit whose own row names the research (issue #281).
+          case "rauv": b.ultravision = true; break;
           case "rlev": if (e.code) b.abilityLevels.push([e.code, v]); break;
           // Aura Data (`raud`, `code` = the aura): the research's total is ADDED to the aura's
           // `DataA`. Its one stock user is Improved War Drums (`Rwdm` base 0.1 / mod 0.1 on
@@ -14316,7 +14327,10 @@ export class SimWorld {
     // hero carrying one sees at night without ever having built a Hunter's Hall.
     const ultravision = (this.tech && this.tech.researchLevel(u.owner, "Reuv") > 0
       && u.abilities.some((a) => a.code === "Ault" && a.level >= 1))
-      || this.itemAbilityLevel(u, "Ault") !== null;
+      || this.itemAbilityLevel(u, "Ault") !== null
+      // …and the Glyph of Ultravision, which is neither: its research `Rguv` carries the
+      // upgrade EFFECT `rauv`, on every unit whose row lists it (sumUpgradeBonuses).
+      || upg.ultravision;
     u.sightNight = ultravision ? u.sightDay : u.baseSightNight + upg.sight;
     u.speed = Math.max(0, (u.baseSpeed + upg.speed + item.speed) * (1 - slowMove) * (1 + hasteMove));
     // …under the game's ceiling. Without it a Scroll of Speed's +200% walked a Footman at 810.
