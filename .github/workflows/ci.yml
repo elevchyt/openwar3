@@ -1,0 +1,43 @@
+# The checks that need NO game install (issue #303).
+#
+# OpenWar3 ships zero Blizzard assets, so nothing that reads the Warcraft III data can run
+# here — `pnpm sim:test`, `pnpm jass:test`, `pnpm data:verify` and the rest stay local, where
+# the contributor's own install is. What is left is what a pull request from a fork can be
+# held to: it typechecks, it adds no import cycle, and the test plan still parses.
+#
+# `pnpm relay:test` is NOT here yet: its loopback half loads the command router out of
+# `.sim-build/` (tools/tsconfig.sim.json), so it needs a prior build. Add it once it does not.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Nothing below launches the desktop app: skip the ~100 MB Electron binary.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      # pnpm comes from package.json's `packageManager` pin, so corepack must be on BEFORE
+      # setup-node looks for it to key the store cache.
+      - run: corepack enable
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm cycles
+      - run: node tools/test-plan-test.mjs

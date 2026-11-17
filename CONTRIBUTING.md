@@ -13,6 +13,7 @@ holds one deep-dive per subsystem — read the matching one before touching that
 You need:
 
 - **Node.js 24** (the version the dev box, the desktop app's Electron and `@types/node` all target).
+  It is pinned in `.nvmrc` (`nvm use`) and in `package.json`'s `engines`.
 - **pnpm 10.33.1** — the exact version is pinned in `package.json` (`packageManager`), so the
   easiest way is `corepack enable` and letting it pick the right one.
 - A **Warcraft III: The Frozen Throne 1.30.4** install — only for running the game and the
@@ -53,7 +54,8 @@ install at runtime and never committed, uploaded or bundled.
 
 ## Before you open a pull request
 
-Run these — they need no game install:
+Run these — they need no game install (CI runs the first two on every pull request,
+`.github/workflows/ci.yml`):
 
 ```bash
 pnpm typecheck   # tsc over the app and the Node/tooling config
