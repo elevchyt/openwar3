@@ -3045,6 +3045,15 @@ interface UpgradeBonuses {
   range: number; sight: number; speed: number; attackSpeed: number; damage: number;
   lumber: number; spillDist: number; spillRadius: number; weaponMask: number;
   attackLevel: number; armorLevel: number;
+  /** `rhpr` — hit points a second, on top of the type's own `regenHP` (Troll Regeneration). */
+  hpRegen: number;
+  /** `rart` — the armour CLASS the research swaps the type's for, or null (Reinforced Defenses). */
+  armorType: ArmorType | null;
+  /** `rspi` / `rspp` — what a melee blow on this building costs the attacker: a flat amount and
+   *  a share of the blow (Spiked Barricades; the share is 1.31's). */
+  spikes: number; spikesPct: number;
+  /** `rrai` — seconds added to the skeletons this unit's Raise Dead raises (Skeletal Mastery). */
+  raiseLife: number;
   /** `rlev` — ability id → the LEVEL a research sets it to (see sumUpgradeBonuses). */
   abilityLevels: [string, number][];
   /** `raud` — ability id → what a research ADDS to that aura's `DataA` (see applyAuras). */
@@ -13733,9 +13742,8 @@ export class SimWorld {
    *  `base + mod*(level-1)`. Priest Master Training therefore reads +200 max mana at level 2,
    *  not another +100 on top of level 1.
    *
-   *  Still deliberately unhandled rather than guessed at: `rart` (armour-type swap, Orc
-   *  Reinforced Defenses), `ratc` (attack target count — Moon Glaive's bounce), `rrai`,
-   *  `rent`, `rspi`, `rmin`, `radl`. `rtma` is not a stat at all — it flips a
+   *  Still deliberately unhandled rather than guessed at: `ratc` (attack target count — Moon
+   *  Glaive's bounce), `rent`, `rmin`, `radl`. `rtma` is not a stat at all — it flips a
    *  unit's availability and is handled by TechState.maxAllowed. */
   private upgradeBonuses(u: SimUnit): Readonly<UpgradeBonuses> {
     // The sum depends on three things only — the owner's research levels, the unit's TYPE (its
@@ -13762,6 +13770,7 @@ export class SimWorld {
       dice: 0, armor: 0, hp: 0, hpPct: 0, mana: 0, manaRegen: 0, range: 0, sight: 0, speed: 0,
       attackSpeed: 0, damage: 0, lumber: 0, spillDist: 0, spillRadius: 0,
       attackLevel: 0, armorLevel: 0,
+      hpRegen: 0, armorType: null as ArmorType | null, spikes: 0, spikesPct: 0, raiseLife: 0,
       // -1 = "no `renw` researched" — the unit keeps whatever mask its data shipped with.
       weaponMask: -1,
       abilityLevels: [] as [string, number][],
@@ -13830,6 +13839,32 @@ export class SimWorld {
           // gives with the upgrade. Keyed on the ability ID like `rlev`, so the Warsong Battle
           // Drums' item copy (`AIwd`, code `Aakb` too) is not improved by it.
           case "raud": if (e.code) b.auraData.push([e.code, v]); break;
+          // Hit Point Regeneration (`rhpr`, an `unreal`): hit points a SECOND, the unit of the
+          // `regenHP` column it adds to. Troll Regeneration (`Rotr`) is base 1 on the Headhunter,
+          // Berserker, Batrider and Witch Doctor — whose own row is 0.25, so the research
+          // quintuples it (0.8 on a custom map's frozen set, 1.25 in Reign of Chaos).
+          case "rhpr": b.hpRegen += v; break;
+          // Armor Type (`rart`): UpgradeEffectMetaData types its base as `defenseTypeInt`, the
+          // UnitEditorData enum whose 3 is Fortified — and Reinforced Defenses (`Rorb`) is 3 from
+          // 2.0.2 on. The 1.30.4 row (and the custom set, which no patch touches) says **1**,
+          // which that enum reads as Medium, while the research's own Ubertip is "so that they
+          // have Fortified armor": the old engine took the 1 as a switch. So 1 is Fortified here
+          // and every other value is the enum's.
+          case "rart": {
+            const t = v === 1 ? ArmorType.Fort : defenseTypeFrom(Math.round(v));
+            if (t) b.armorType = t;
+            break;
+          }
+          // Spiked Barricade Damage (`rspi`): what one melee blow on the building costs whoever
+          // swung it — 5 / 12 / 19 on the 1.30.4 row, "Deals <Rosp,base1> damage per attack".
+          // `rspp` is 1.31's second half, a SHARE of the blow on top (src/patches/data/1.31.0.json).
+          // Spent in dealDamage.
+          case "rspi": b.spikes += v; break;
+          case "rspp": b.spikesPct += v; break;
+          // Raise Dead Duration (`rrai`): seconds on the life of what this unit's Raise Dead
+          // raises — Skeletal Mastery (`Rusm`) on the Necromancer, 20 in melee and 15 on the
+          // custom set's Skeletal Longevity (`Rusl`). Spent in summonFromCorpse.
+          case "rrai": b.raiseLife += v; break;
         }
       }
     }
@@ -14115,6 +14150,11 @@ export class SimWorld {
     const raising = !!u.building && u.building.constructionLeft > 0;
     u.armor = raising ? 0 : u.baseArmor + ARMOR_PER_AGI() * dAgi + armorBonus + carapaceArmor + item.armor + upg.armor;
     u.bonusArmor = raising ? 0 : armorBonus + carapaceArmor + item.armor + upg.armor; // the buff/aura/item/upgrade portion (shown green in the HUD)
+    // `rart` (Reinforced Defenses): the research swaps the armour CLASS the damage table reads.
+    // Only off the type's OWN class — one a script wrote onto this unit (setUnitField) stays.
+    if (upg.armorType && u.armorType !== upg.armorType && u.armorType === this.unitReg?.get(u.typeId)?.armorType) {
+      u.armorType = upg.armorType;
+    }
     // The corner numbers on the info panel's two icons: the LEVEL researched, not the bonus.
     u.attackUpgrade = upg.attackLevel;
     u.armorUpgrade = upg.armorLevel;
@@ -14269,7 +14309,7 @@ export class SimWorld {
     u.manaRegen = this.manaRegenSuspended(u)
       ? 0
       : this.baseManaRegen(u) + manaRegenBonus + item.manaRegen + upg.manaRegen;
-    u.hpRegen = this.typeHpRegen(u) + (u.isHero ? REGEN_PER_STR() * u.str : 0) + hpRegenBonus + item.hpRegen;
+    u.hpRegen = this.typeHpRegen(u) + (u.isHero ? REGEN_PER_STR() * u.str : 0) + hpRegenBonus + item.hpRegen + upg.hpRegen;
     // Vampiric Aura only — the Mask of Death's life steal is an ORB (exclusive with every
     // other orb, and it works on a ranged attack), so it is applied at the blow instead.
     u.lifesteal = lifesteal;
@@ -20338,6 +20378,7 @@ export class SimWorld {
       caster.voodooAbil = def.id;
     },
     countOwned: (owner, typeId) => this.countOwnedOf(owner, typeId),
+    raiseDeadBonus: (caster) => this.upgradeBonuses(caster).raiseLife,
     summonCapMake: (casterId, typeIds, cap, incoming) => this.summonCapMake(casterId, typeIds, cap, incoming),
     revealArea: (owner, team, o) => this.addItemReveal(owner, team, o),
     // One copy beside the original, on the spot the summon placer finds for it (`atPoint`
@@ -24578,6 +24619,14 @@ export class SimWorld {
     }
     // Thorns Aura: the target returns a fraction of the damage to the attacker.
     if (target.thorns > 0 && dealt > 0) this.landDamage(attacker, dealt * target.thorns, target.id, false);
+    // Spiked Barricades (`Rosp`): "Surrounds Orc buildings with spikes that damage enemy melee
+    // attackers" — the flat `rspi` per blow plus 1.31's `rspp` share of the blow itself. A
+    // building still going up has no spikes yet, and `[Aspi] targs1 = enemy`.
+    if (target.building && dealt > 0 && !w.ranged && target.building.constructionLeft <= 0 && this.hostile(target, attacker)) {
+      const upg = this.upgradeBonuses(target);
+      const back = upg.spikes + upg.spikesPct * raw;
+      if (back > 0) this.landDamage(attacker, back, target.id, false);
+    }
     if (dealt > 0) this.applyFrostArmorChill(attacker, target); // Frost Armor: the struck shield slows the striker
     if (dealt > 0) this.applyPulverize(attacker, target); // Tauren passive: chance for a splash
     this.applyOrbEffect(attacker, target, orb, dealt); // the one orb this swing carried

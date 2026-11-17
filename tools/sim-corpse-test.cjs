@@ -90,10 +90,11 @@ function def(code, over = {}) {
 const caster = { id: 1, owner: 0, team: 0, x: 0, y: 0, facing: 0, hp: 500, maxHp: 500, isHero: true };
 
 /** A stub world holding a corpse pool, running the REAL claim rules over it. */
-function pool(corpses, owned = {}) {
+function pool(corpses, owned = {}, rrai = 0) {
   const log = { summons: [], raised: [], buffs: [], evictions: [] };
   const api = {
     countOwned: (_o, typeId) => owned[typeId] || 0,
+    raiseDeadBonus: () => rrai, // the caster's researched `rrai` (Skeletal Mastery)
     summonCapMake: (casterId, typeIds, cap, incoming) => log.evictions.push({ casterId, cap, incoming, beetles: typeIds.includes("ucs1") && typeIds.includes("ucsB") }),
     claimCorpses: (c, d, x, y, radius, max, o = {}) => {
       const order = o.order || "nearest";
@@ -150,6 +151,20 @@ console.log("shape A — one body becomes N of a fixed type");
     SPELL_HANDLERS.Arai(pool(corpses).api, caster, def("Arai", { data: [2, 0], dataStr: [, , "uske"], duration: 45, castRange: 600 }), 1);
     return corpses[1].raised;
   })(), true);
+}
+{
+  // Skeletal Mastery (issue #280). [Arai] LEVEL 2 is DataA 1 / DataB 1 / DataC uske / DataD uskm —
+  // "Causes one of the two skeletons created by Raise Dead to be a Skeletal Mage" — and the
+  // research's `rrai` 20 is added to the life of both.
+  const row2 = { data: [1, 1], dataStr: [, , "uske", "uskm"], duration: 45, castRange: 600 };
+  const { api, log } = pool([corpse({ x: 100, y: 0, decayLeft: 80 })], {}, 20);
+  SPELL_HANDLERS.Arai(api, caster, def("Arai", row2), 1);
+  eq("Skeletal Mastery: a Skeleton Warrior and a Skeletal Mage", log.summons.map((s) => s.unitId), ["uske", "uskm"]);
+  eq("…both for 45 + the research's 20 seconds", log.summons.map((s) => s.dur), [65, 65]);
+  // The creep copy answers to code `Arai` but its caster lists no research: bonus 0, its own Dur1.
+  const creep = pool([corpse({ x: 100, y: 0, decayLeft: 80 })]);
+  SPELL_HANDLERS.Arai(creep.api, caster, def("Arai", { data: [2, 0], dataStr: [, , "uske", "-"], duration: 40, castRange: 600 }), 1);
+  eq("a row whose DataD is blank raises no second type", creep.log.summons.map((s) => `${s.unitId}:${s.dur}`), ["uske:40", "uske:40"]);
 }
 {
   // [Avng] DataA 1, DataC even, DataE 6, Dur 50 — and BOUND to the Avatar.

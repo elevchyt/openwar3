@@ -296,6 +296,9 @@ export interface SpellApi {
    *  `Ucb5 "Max Units Summoned"` cap, which is the only thing stopping a Crypt Lord
    *  turning a battlefield of corpses into an army. */
   countOwned(owner: number, typeId: string): number;
+  /** Seconds the caster's researched upgrades add to what its Raise Dead raises — the `rrai`
+   *  effect, Skeletal Mastery's "+<Rusl,base1> seconds" (SimWorld.sumUpgradeBonuses). */
+  raiseDeadBonus(caster: SimUnit): number;
 
   /** Mirror Image: run the caster-vanishes -> missiles -> illusions sequence (AOmi).
    *  Staged over time in the world, so the handler only kicks it off. */
@@ -4424,7 +4427,16 @@ function lv(def: AbilityDef, rank: number): AbilityLevel {
  *   Spirit of Vengeance `Avng`  DataA 1  DataC even  Dur 50   Rng 600  DataE 6 — bound
  *
  *   DataA `Rai1` "Units Raised"      how many climb out of the ONE body
+ *   DataB `Rai2`                     …and how many of a SECOND type beside them
  *   DataC `Rai3` "Unit Type"         a RAWCODE, hence dataStr — not the SLK `unitid` column
+ *   DataD `Rai4`                     the second type's rawcode
+ *
+ * The second pair is `Arai`'s LEVEL 2 and nothing else's: 1 `uske` + 1 `uskm`, which is Skeletal
+ * Mastery — "Causes one of the two skeletons created by Raise Dead to be a Skeletal Mage"
+ * ([Rusm] Ubertip). The research sets that level through its own `rlev` effect, and its `rrai`
+ * half adds to the life of both (api.raiseDeadBonus). The bonus is the Raise Dead ROW's — in
+ * Reign of Chaos the effect names it outright (`rrai,15,-,Arai`) — and the caster must list
+ * the research, so the creep copy and the Rod of Necromancy raise at their own `Dur1`.
  *   DataE `Ucb5` "Max Summoned"      a live cap on the caster's total, 0 = uncapped
  *
  * `bound` is Vengeance's alone (its Spirits die with the Avatar). Everything else is data.
@@ -4445,13 +4457,19 @@ function summonFromCorpse(api: SpellApi, caster: SimUnit, def: AbilityDef, rank:
   const [corpse] = api.claimCorpses(caster, def, caster.x, caster.y, corpseReach(def.code, lvl), 1);
   if (!corpse) return;
   const art = summonArt(def);
-  const life = lvl.heroDuration || lvl.duration || 0;
+  let life = lvl.heroDuration || lvl.duration || 0;
+  if (life > 0 && def.code === "Arai") life += api.raiseDeadBonus(caster);
   const n = Math.max(1, d(lvl, 0, 1));
+  const unit2 = (lvl.dataStr[3] || "").trim();
+  const n2 = unit2.length === 4 ? Math.max(0, d(lvl, 1, 0)) : 0;
   if (evicts && cap > 0) api.summonCapMake(caster.id, beetleTypes(def), cap, n);
   // …and they climb out of the body, so they land ON it (atPoint) rather than a step in
   // front of the caster — who, for Raise Dead, is 600 units away.
   for (let i = 0; i < n; i++) {
     api.requestSummon(unit, corpse.x, corpse.y, corpse.facing, caster.owner, caster.team, life, caster.id, art, true, o.bound);
+  }
+  for (let i = 0; i < n2; i++) {
+    api.requestSummon(unit2, corpse.x, corpse.y, corpse.facing, caster.owner, caster.team, life, caster.id, art, true, o.bound);
   }
 }
 
