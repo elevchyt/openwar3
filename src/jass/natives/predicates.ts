@@ -95,6 +95,18 @@ export function registerPredicateNatives(rt: Runtime): void {
   // An ILLUSION is a copy the enemy is not meant to be able to tell from the original
   // (docs/illusions.md), which is exactly why a map asks: its own damage triggers must not
   // credit one. 275 call sites, all DotA's.
+  // IsUnitLoaded / IsUnitInTransport — "Unit is loaded into a transport" (IsUnitLoadedBJ,
+  // IsUnitInTransportBJ). The sim keeps ONE roster for every hold (a Zeppelin, a ship, a
+  // Burrow), and the passenger names its host, so both are a read of that.
+  def(rt, "IsUnitLoaded", (c, a) => {
+    const id = simOf(c, a[0]);
+    return jBool(id === undefined ? false : (c.rt.hooks?.unitTransport?.(id) ?? 0) !== 0);
+  });
+  def(rt, "IsUnitInTransport", (c, a) => {
+    const id = simOf(c, a[0]);
+    const host = simOf(c, a[1]);
+    return jBool(id !== undefined && host !== undefined && c.rt.hooks?.unitTransport?.(id) === host);
+  });
   def(rt, "IsUnitIllusion", (c, a) => {
     const id = simOf(c, a[0]);
     return jBool(id === undefined ? false : c.rt.hooks?.isUnitIllusion?.(id) ?? false);

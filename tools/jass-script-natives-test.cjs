@@ -48,6 +48,11 @@ const hooks = {
   stripHeroLevel: (id, n) => (calls.push(['strip', id, n]), true),
   xpHandicap: (p) => rates.get(p) ?? 1,
   setXpHandicap: (p, r) => rates.set(p, r),
+  playerHandicap: (p) => handicaps.get(p) ?? 1,
+  setPlayerHandicap: (p, h) => handicaps.set(p, h),
+  suspendHeroXp: (id, flag) => suspended.set(id, flag),
+  isHeroXpSuspended: (id) => suspended.get(id) ?? false,
+  findDestructable: () => 77,
   pauseTimedLife: (id, flag) => calls.push(['pauseTimedLife', id, flag]),
   setUnitClassification: (id, t, on) => (calls.push(['class', id, t, on]), t >= 9 && t <= 20),
   removeBuffs: (id, q) => calls.push(['removeBuffs', id, q]),
@@ -65,6 +70,8 @@ const hooks = {
   playerTechCount: (p, tech) => techLevels.get(`${p}:${tech}`) ?? 0,
   setPlayerTechResearched: (p, tech, level) => techLevels.set(`${p}:${tech}`, Math.max(0, level)),
 };
+const handicaps = new Map();
+const suspended = new Map();
 const gold = new Map();
 const techLevels = new Map();
 
@@ -177,6 +184,39 @@ function LocInRegion takes real x, real y returns boolean
     call RegionAddRect(rg, Rect(500.0, 500.0, 600.0, 600.0))
     return IsLocationInRegion(rg, Location(x, y))
 endfunction
+function PlainHandicapPct takes nothing returns real
+    return GetPlayerHandicapBJ(Player(1))
+endfunction
+function SetPlainHandicap takes nothing returns nothing
+    call SetPlayerHandicapBJ(Player(1), 70.00)
+endfunction
+function Suspended takes nothing returns boolean
+    return IsSuspendedXP(u)
+endfunction
+function Suspend takes nothing returns nothing
+    call SuspendHeroXPBJ(false, u)
+endfunction
+function Resume takes nothing returns nothing
+    call SuspendHeroXPBJ(true, u)
+endfunction
+globals
+    destructable gate = null
+    boolean sawGate = false
+    boolean sawDying = false
+endglobals
+function GateDied takes nothing returns nothing
+    set sawGate = GetTriggerDestructable() == gate
+    set sawDying = GetDyingDestructable() == GetTriggerDestructable()
+endfunction
+function WatchGate takes nothing returns nothing
+    local trigger t = CreateTrigger()
+    set gate = CreateDestructable('LTg1', 0.0, 0.0, 0.0, 1.0, 0)
+    call TriggerRegisterDeathEvent(t, gate)
+    call TriggerAddAction(t, function GateDied)
+endfunction
+function NoTriggerDestructable takes nothing returns boolean
+    return GetTriggerDestructable() == null
+endfunction
 function LocInNullRegion takes nothing returns boolean
     return IsLocationInRegion(CreateRegion(), Location(0.0, 0.0))
 endfunction
@@ -200,6 +240,26 @@ check('GetPlayerHandicapXPBJ is the rate × 100, and the rate starts at 1', call
 call('HalveHandicap');
 check("Test of Balance's halving lands", rates.get(1), 0.5);
 check('…and reads back halved', call('HandicapPct').n, 50);
+
+console.log('\n--- the handicap itself (issue #298) ---');
+check('GetPlayerHandicapBJ starts at 100 %, not 0 %', call('PlainHandicapPct').n, 100);
+call('SetPlainHandicap');
+check('SetPlayerHandicapBJ(70) stores 0.7', Math.round(handicaps.get(1) * 100), 70);
+check('…and reads back', Math.round(call('PlainHandicapPct').n), 70);
+
+console.log('\n--- IsSuspendedXP reads what SuspendHeroXP wrote ---');
+check('a hero starts unsuspended', call('Suspended').b, false);
+call('Suspend');
+check('SuspendHeroXPBJ(false, u) suspends — and IsSuspendedXP says so', call('Suspended').b, true);
+call('Resume');
+check('…and lifting it reads back', call('Suspended').b, false);
+
+console.log('\n--- GetTriggerDestructable ---');
+check('null outside an event', call('NoTriggerDestructable').b, true);
+call('WatchGate');
+interp.pumpDestructableDeaths([77]);
+check('in a death event it is the destructible that died', interp.rt.globals.get('sawGate')?.b, true);
+check('…the same handle GetDyingDestructable answers', interp.rt.globals.get('sawDying')?.b, true);
 
 console.log('\n--- timed life, classifications ---');
 call('Pause');

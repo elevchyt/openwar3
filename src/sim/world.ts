@@ -18711,6 +18711,18 @@ export class SimWorld {
     this.xpRates.set(player, Math.max(0, rate));
   }
 
+  /** `SetPlayerHandicap` / `GetPlayerHandicap` — the lobby's handicap, 1 = 100 %. STORED and
+   *  ANSWERED only: blizzard.j's `GetPlayerHandicapBJ` is this × 100, and with the setter a
+   *  no-op and no getter at all a script read 0 % where the game says 100 %. The handicap is
+   *  not yet applied to anything (in the game it scales a player's units' maximum life). */
+  private handicaps = new Map<number, number>();
+  playerHandicap(player: number): number {
+    return this.handicaps.get(player) ?? 1;
+  }
+  setPlayerHandicap(player: number, handicap: number): void {
+    this.handicaps.set(player, Math.max(0, handicap));
+  }
+
   /** `UnitPauseTimedLife` — stop (or restart) a unit's timed-life clock. */
   pauseTimedLife(unitId: number, flag: boolean): void {
     const u = this.units.get(unitId);

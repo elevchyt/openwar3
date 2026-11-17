@@ -284,6 +284,8 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     stripHeroLevel: (id, n) => sim.stripHeroLevel(id, n),
     xpHandicap: (player) => sim.xpHandicap(player),
     setXpHandicap: (player, rate) => sim.setXpHandicap(player, rate),
+    playerHandicap: (player) => sim.playerHandicap(player),
+    setPlayerHandicap: (player, handicap) => sim.setPlayerHandicap(player, handicap),
     pauseTimedLife: (id, flag) => sim.pauseTimedLife(id, flag),
     setUnitClassification: (id, t, on) => sim.setUnitClassification(id, t, on),
     removeBuffs: (id, q) => void sim.removeBuffs(id, q),
@@ -294,6 +296,8 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     isUnitInRange: (id, otherId, distance) => sim.unitInRange(id, otherId, distance),
     isUnitInRangeXY: (id, x, y, distance) => sim.unitInRangeXY(id, x, y, distance),
     isUnitIllusion: (id) => sim.units.get(id)?.isIllusion ?? false,
+    unitTransport: (id) => sim.units.get(id)?.garrisonHost ?? 0,
+    isHeroXpSuspended: (id) => sim.units.get(id)?.xpSuspended ?? false,
     unitRace: (id) => sim.units.get(id)?.race ?? "",
     // `IsTerrainPathable` — and remember its polarity: TRUE means NOT pathable, which the
     // install states outright (natives/predicates.ts quotes `UI\TriggerStrings.txt`). So each

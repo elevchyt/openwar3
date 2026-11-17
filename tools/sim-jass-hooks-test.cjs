@@ -54,6 +54,7 @@ const EXPECTED = [
   // script may change, the buff filters, a laid corpse and the cliff layer
   // (sim-script-natives-test.cjs).
   "damagePoint", "stripHeroLevel", "xpHandicap", "setXpHandicap", "pauseTimedLife",
+  "playerHandicap", "setPlayerHandicap", "unitTransport", "isHeroXpSuspended",
   "setUnitClassification", "removeBuffs", "countBuffs", "createCorpse", "terrainCliffLevel",
   // The PREDICATES whose answer is the world's rather than a viewpoint's (pass 4). The vision
   // half of that family is NOT here: `IsUnitVisible` and its four siblings are answered by the

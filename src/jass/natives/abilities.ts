@@ -174,4 +174,8 @@ export function registerAbilityNatives(rt: Runtime): void {
     if (id !== undefined) c.rt.hooks?.suspendHeroXp?.(id, truthy(a[1]));
     return JNULL;
   });
+  def(rt, "IsSuspendedXP", (c, a) => {
+    const id = simOf(c, a[0]);
+    return jBool(id === undefined ? false : c.rt.hooks?.isHeroXpSuspended?.(id) ?? false);
+  });
 }

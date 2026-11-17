@@ -279,7 +279,7 @@ export function registerMeleeNatives(rt: Runtime): void {
   });
   def(rt, "RemoveAllGuardPositions", (c, a) => (c.rt.hooks?.removeAllGuardPositions?.(playerIndex(c, a[0])), JNULL));
   for (const name of [
-    "SetPlayerHandicap", "SetUnitCreepGuard", "Preloader", "Preload",
+    "SetUnitCreepGuard", "Preloader", "Preload",
     "PreloadStart", "PreloadEnd", "PreloadEndEx", "PreloadRefresh", "PreloadGenClear", "PreloadGenStart",
   ]) {
     def(rt, name, () => JNULL);
@@ -289,6 +289,11 @@ export function registerMeleeNatives(rt: Runtime): void {
   // has to answer what the setter wrote, and the default is the engine's full rate.
   def(rt, "SetPlayerHandicapXP", (c, a) => (c.rt.hooks?.setXpHandicap?.(playerIndex(c, a[0]), asNum(a[1])), JNULL));
   def(rt, "GetPlayerHandicapXP", (c, a) => jReal(c.rt.hooks?.xpHandicap?.(playerIndex(c, a[0])) ?? 1));
+  // …and the handicap itself, the same shape: stored, default 1, so GetPlayerHandicapBJ
+  // (`GetPlayerHandicap(p) * 100`) reads 100 % and not 0 % (SimWorld.playerHandicap — it is
+  // answered, not yet applied to a unit's life).
+  def(rt, "SetPlayerHandicap", (c, a) => (c.rt.hooks?.setPlayerHandicap?.(playerIndex(c, a[0]), asNum(a[1])), JNULL));
+  def(rt, "GetPlayerHandicap", (c, a) => jReal(c.rt.hooks?.playerHandicap?.(playerIndex(c, a[0])) ?? 1));
   // PauseCompAI — a computer player's AI stops deciding (blizzard.j's PauseAllCompAI, which a
   // cinematic calls to freeze every computer while it plays).
   def(rt, "PauseCompAI", (c, a) => (c.rt.hooks?.pauseCompAi?.(playerIndex(c, a[0]), truthy(a[1])), JNULL));

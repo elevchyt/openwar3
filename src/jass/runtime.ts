@@ -793,6 +793,10 @@ export interface EngineHooks {
   /** Get/SetPlayerHandicapXP — a player's experience rate, 1 = 100 %. */
   xpHandicap?(player: number): number;
   setXpHandicap?(player: number, rate: number): void;
+  /** Get/SetPlayerHandicap — the player's handicap, 1 = 100 %. Stored and answered; it is
+   *  not yet APPLIED to anything (SimWorld.playerHandicap). */
+  playerHandicap?(player: number): number;
+  setPlayerHandicap?(player: number, handicap: number): void;
   /** UnitPauseTimedLife — hold (or release) a unit's timed-life clock. */
   pauseTimedLife?(unitId: number, flag: boolean): void;
   /** UnitAddType / UnitRemoveType — `t` is the ConvertUnitType index; false when the engine
@@ -859,6 +863,11 @@ export interface EngineHooks {
   isUnitInRangeXY?(unitId: number, x: number, y: number, distance: number): boolean;
   /** IsUnitIllusion — a Mirror Image / Wand of Illusion copy (docs/illusions.md). */
   isUnitIllusion?(unitId: number): boolean;
+  /** IsUnitLoaded / IsUnitInTransport — the hold a unit is riding in, 0 when it is in none
+   *  (SimUnit.garrisonHost: a transport, a Burrow, an Entangled Gold Mine — one roster). */
+  unitTransport?(unitId: number): number;
+  /** IsSuspendedXP — the reader of SuspendHeroXP's flag. */
+  isHeroXpSuspended?(unitId: number): boolean;
   /** IsUnitRace — the unit's race, as `UnitData.slk` spells it ("human", "orc", …). */
   unitRace?(unitId: number): string;
   /** IsTerrainPathable — `t` is common.j's `pathingtype` index. TRUE means BLOCKED: the

@@ -224,6 +224,9 @@ export function registerEventNatives(rt: Runtime): void {
   // A destructible's own death response. `TriggerRegisterDeathEvent` takes a WIDGET, so a
   // gate raises this pair where a unit raises GetDyingUnit (see pumpDestructableDeaths).
   def(rt, "GetDyingDestructable", (c) => resp(c, "DyingDestructable"));
+  // …and the native under it: a destructible's only event here is its death, so "the
+  // triggering destructable" is the one that died.
+  def(rt, "GetTriggerDestructable", (c) => resp(c, "DyingDestructable"));
   // EVENT_(PLAYER_)UNIT_LOADED — the passenger and the carrier it climbed into.
   def(rt, "GetLoadedUnit", (c) => resp(c, "LoadedUnit"));
   def(rt, "GetTransportUnit", (c) => resp(c, "TransportUnit"));
