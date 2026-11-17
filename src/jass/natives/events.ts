@@ -456,9 +456,15 @@ export function registerEventNatives(rt: Runtime): void {
       }
     }
   };
+  // Registered here (it is a BJ, not a native) only so the interpreter can run it thread-
+  // transparently; it must therefore answer exactly as Scripts\Blizzard.j's body does —
+  //     if TriggerEvaluate(trig) then / call TriggerExecute(trig)
+  // — which asks the CONDITIONS and nothing else. There is no enabled test: "Trigger - Run
+  // (checking conditions)" on an Initially Off trigger runs it, and the editor's own run-once
+  // idiom states the enabled test itself, inside the condition (issue #295).
   def(rt, "ConditionalTriggerExecute", (c, a) => {
     const t = trig(c, a[0]);
-    if (t && t.enabled) asTrigger(c, t, () => conditionsPass(c, t) && (runActions(c, t), true));
+    if (t) asTrigger(c, t, () => conditionsPass(c, t) && (runActions(c, t), true));
     return JNULL;
   });
   def(rt, "TriggerExecute", (c, a) => {

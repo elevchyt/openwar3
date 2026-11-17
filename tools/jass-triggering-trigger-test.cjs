@@ -143,5 +143,44 @@ for (let i = 0; i < 20; i++) timed.advanceTime(0.5); // ten seconds of polling
 check("the poll fired once and turned itself off", tnum("polls"), 1);
 check("…so the quest was handed out exactly once", tnum("given"), 1);
 
+// Issue #295. Blizzard.j: `if TriggerEvaluate(trig) then call TriggerExecute(trig)` — no
+// enabled test, in either the statement form or the expression form. "Initially Off" plus
+// "Trigger - Run (checking conditions)" is one of the commonest GUI idioms there is.
+console.log("\nConditionalTriggerExecute on a DISABLED trigger (Initially Off + Run checking conditions)");
+const OFF_SRC = `
+globals
+    trigger gg_trg_Off = null
+    integer offRuns    = 0
+    boolean offPass    = true
+endglobals
+function Trig_Off_Conditions takes nothing returns boolean
+    return offPass
+endfunction
+function Trig_Off_Actions takes nothing returns nothing
+    set offRuns = offRuns + 1
+endfunction
+function SetupOff takes nothing returns nothing
+    set gg_trg_Off = CreateTrigger()
+    call DisableTrigger( gg_trg_Off )
+    call TriggerAddCondition( gg_trg_Off, Condition( function Trig_Off_Conditions ) )
+    call TriggerAddAction( gg_trg_Off, function Trig_Off_Actions )
+endfunction
+function RunOff takes nothing returns nothing
+    call ConditionalTriggerExecute( gg_trg_Off )
+endfunction
+function RunOffFailing takes nothing returns nothing
+    set offPass = false
+    call ConditionalTriggerExecute( gg_trg_Off )
+endfunction
+`;
+const off = buildInterpreter([COMMON_J, BLIZZARD_J, OFF_SRC]);
+off.callFunction("InitBlizzard", []);
+off.callFunction("SetupOff", []);
+off.callFunction("RunOff", []);
+check("a disabled trigger run conditionally FIRES", off.rt.globals.get("offRuns")?.n, 1);
+check("…and it is still disabled afterwards", off.rt.globals.get("gg_trg_Off") && off.callFunction("IsTriggerEnabled", [off.rt.globals.get("gg_trg_Off")])?.b, false);
+off.callFunction("RunOffFailing", []);
+check("its CONDITIONS are still what gates it", off.rt.globals.get("offRuns")?.n, 1);
+
 console.log(failed ? `\n${failed} FAILED` : "\nall GetTriggeringTrigger checks passed");
 process.exit(failed ? 1 : 0);
