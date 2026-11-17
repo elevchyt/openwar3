@@ -1188,10 +1188,7 @@ body:not(.hud-tooltip-skinned) .dev-concede { outline: 1px solid rgba(200, 160, 
   pointer-events: auto;
   z-index: 1;
 }
-  position: absolute;
-  inset: 0;
-  background: center / contain no-repeat;
-}
+
 /* The real TimeIndicator model, rendered live on its own transparent canvas.
    Its aspect ratio is set from the model, on .hud-clock-skinned. */
 .hud-clock-canvas {
