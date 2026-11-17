@@ -1188,24 +1188,6 @@ body:not(.hud-tooltip-skinned) .dev-concede { outline: 1px solid rgba(200, 160, 
   pointer-events: auto;
   z-index: 1;
 }
-/* Rotating sun/moon disc behind the ring; the ring's transparent centre shows
-   it. Kept a true circle (equal width/height) so it isn't squished. */
-.hud-clock-face {
-  position: absolute;
-  left: 50%;
-  top: 48%;
-  width: 52%;
-  aspect-ratio: 1;
-  height: auto;
-  transform: translate(-50%, -50%);
-  border-radius: 50%;
-  overflow: hidden;
-  background-size: 200% 100%;
-  background-repeat: repeat-x;
-  background-position-y: center;
-  transition: background-position-x 3s linear;
-}
-.hud-clock-frame {
   position: absolute;
   inset: 0;
   background: center / contain no-repeat;
@@ -2404,21 +2386,6 @@ body.hud-number-skinned .hud-count-badge:not(.plain) {
 }
 .hud-count-badge.hud-hotkey-badge.long > span {
   font-size: max(6px, 32cqw);
-}
-
-/* Build-placement ghost: a box under the cursor, green = valid, red = blocked. */
-.build-ghost {
-  position: fixed;
-  transform: translate(-50%, -50%);
-  border: 2px solid #46e05a;
-  background: rgba(70, 224, 90, 0.18);
-  border-radius: 3px;
-  pointer-events: none;
-  z-index: 4;
-}
-.build-ghost.invalid {
-  border-color: #e05046;
-  background: rgba(224, 80, 70, 0.2);
 }
 
 /* Directional edge-scroll cursor: the game's own chevron at the pointer, pointing the pan
