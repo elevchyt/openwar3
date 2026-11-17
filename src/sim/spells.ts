@@ -489,6 +489,11 @@ export interface SpellFieldInit {
    *  target and stunning it for `Dur1` seconds" (2, `HeroDur1` 1 on a hero or a resistant
    *  body, the `dur` rule). Re-laid by each wave, like `dot`. */
   stun?: { duration: number; heroDuration: number; art: string; fx: BuffFx[]; buffId: string };
+  /** Two rings instead of one: the full `damagePerWave` inside `fullRadius` of the wave's
+   *  centre and `factor` × it from there out to `area` (measured to the body's edge, as the
+   *  area scan measures). Volcano's `Nvc6 "Half Damage Factor"`. The stun, the building
+   *  factor and everything else a wave does are the same in both rings. */
+  halfRing?: { fullRadius: number; factor: number };
   impactDelay?: number; // seconds between a wave's art SPAWNING and its damage landing. The shard
   //                       is a falling model, and WC3 hurts you when it hits the ground, not when
   //                       it appears in the sky. See SHARD_FALL.
@@ -736,6 +741,10 @@ const SHARD_FALL = 0.8;
 // (a ~0.7s flame burst) is dropped in a ring to paint the burning circle at ignition.
 const FLAMESTRIKE_PILLAR = "Abilities\\Spells\\Human\\FlameStrike\\FlameStrike.mdx";
 const FLAMESTRIKE_EMBERS = "Abilities\\Spells\\Human\\FlameStrike\\FlameStrikeEmbers.mdx";
+
+/** The share of Volcano's `Area1` that takes FULL damage; the rest takes `Nvc6 "Half Damage
+ *  Factor"`. OURS — the row gives no radius for the ring (see the `ANvc` handler). */
+const VOLCANO_FULL_SHARE = 0.5;
 
 /** Effect duration on a target: heroes resist longer effects (herodur). */
 export function dur(lvl: AbilityLevel, target: SimUnit): number {
@@ -2776,12 +2785,20 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   //   DataC "Wave Interval"            5     ┘ 0, 5 … 35, which is the tooltip's 35 seconds
   //   DataD "Building Damage Factor"   2
   //   DataE "Full Damage Amount"       100
-  //   DataF "Half Damage Factor"       0.5   NOT modelled: the row gives the factor and no
-  //                                          radius for the ring it applies to, so every body
-  //                                          in `Area1` takes the full amount
+  //   DataF "Half Damage Factor"       0.5   the outer ring's share — see below
   //   Dur / HeroDur                    2 / 1 the stun (`[BNvc]`, the Thunder Clap stars)
   // The handler used to read DataB — the wave COUNT — as its damage, twelve times a second
   // apart: 96 damage in all where the row says eight waves of 100 (issue #283).
+  //
+  // WHERE the half-damage ring starts is OURS, and the one number here that is. The row
+  // states the factor and exactly one distance (`Area1` = 500); no column, no string and
+  // nothing we could find written about the spell says where full damage stops, and the
+  // real spell throws individual rocks whose landing pattern (DataA's rings) we do not
+  // model either. So the two zones are laid out the way every OTHER full/half pair in the
+  // data is — full damage inside, the factor outside, the named area the outer edge
+  // (Pulverize's `War3`/`War4`, a weapon's Farea/Harea) — with the boundary at
+  // VOLCANO_FULL_SHARE of `Area1`: full to 250, half from 250 to 500. Retune that constant,
+  // not the handler, if the client is ever measured.
   ANvc: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
     api.addSpellField({
@@ -2790,6 +2807,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
       waves: Math.max(1, Math.round(d(lvl, 1, 8))),
       interval: d(lvl, 2, 5) || 5,
       buildingReduction: d(lvl, 3, 2), // a SHARE of the wave, so 2 is the row's "2 times more"
+      halfRing: { fullRadius: (lvl.area || 500) * VOLCANO_FULL_SHARE, factor: d(lvl, 5, 0.5) },
       stun: { duration: lvl.duration, heroDuration: lvl.heroDuration, ...fx(def) },
       casterId: caster.id, art: fieldArt(def), loopSound: fieldLoop(def), skipEthereal: true,
     });

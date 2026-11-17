@@ -19357,7 +19357,7 @@ export class SimWorld {
    *  They live OUTSIDE their field on purpose: shards already in the air still land
    *  when the channel is broken, so a Blizzard cancelled the instant before impact
    *  still deals that last wave. */
-  private waveImpacts: Array<{ code: string; t: number; x: number; y: number; area: number; damage: number; casterId: number; team: number; flags: string[]; maxDamage: number; buildingReduction: number; dot: SpellFieldInit["dot"]; stun?: SpellFieldInit["stun"]; pctOfMax: boolean; buildingsOnly: boolean; fellsTrees: boolean; skipEthereal?: boolean; hitArt?: string; hitAttach?: string[]; healField?: LiveSpellField }> = [];
+  private waveImpacts: Array<{ code: string; t: number; x: number; y: number; area: number; damage: number; casterId: number; team: number; flags: string[]; maxDamage: number; buildingReduction: number; dot: SpellFieldInit["dot"]; stun?: SpellFieldInit["stun"]; halfRing?: SpellFieldInit["halfRing"]; pctOfMax: boolean; buildingsOnly: boolean; fellsTrees: boolean; skipEthereal?: boolean; hitArt?: string; hitAttach?: string[]; healField?: LiveSpellField }> = [];
 
   // --- Mirror Image (AOmi) ------------------------------------------------------------
   //
@@ -19716,6 +19716,7 @@ export class SimWorld {
           buildingReduction: f.buildingReduction ?? 0,
           dot: f.dot,
           stun: f.stun,
+          halfRing: f.halfRing,
           pctOfMax: f.damagePctOfMax ?? false,
           buildingsOnly: f.buildingsOnly ?? false,
           fellsTrees: f.fellsTrees ?? false,
@@ -19942,6 +19943,8 @@ export class SimWorld {
       // victim's pool (`Udd1 "Max Life Drained per Second (%)"` = 0.04), which is what
       // makes it the one spell a Town Hall genuinely fears.
       if (w.pctOfMax) dmg = t.maxHp * dmg;
+      // The outer ring of a two-ring field (SpellFieldInit.halfRing — Volcano).
+      if (w.halfRing && Math.hypot(t.x - w.x, t.y - w.y) - t.radius > w.halfRing.fullRadius) dmg *= w.halfRing.factor;
       if (dmg > 0) this.landDamage(t, dmg * this.spellTypeMult(t), w.casterId, false); // spell damage: the armour CLASS (DamageBonusSpells), never the armour value
       // The wave's mark on the unit it struck (Starfall's star — SpellFieldInit.hitArt): rides
       // it for its own clip (`life` 0), so a unit that runs keeps its star over it. The

@@ -110,23 +110,28 @@ console.log("Volcano (ANvc): DataB waves of DataE, DataC apart, ×DataD on a bui
 {
   const w = world();
   const fire = caster(w, "Nfir", C, C, 1);
-  const foot = dummy(w, "hfoo", C + 500, C);
-  const hall = dummy(w, "htow", C + 500, C + 250);
+  // The eruption is centred 600 east of the Firelord. `near` stands inside the full-damage
+  // half of Area1 (500), `edge` in the outer ring; the hall is inside the full half too.
+  const X = C + 600;
+  const near = dummy(w, "hfoo", X, C + 100);
+  const edge = dummy(w, "hfoo", X, C - 400);
+  const hall = dummy(w, "htow", X + 150, C);
   hall.building = BUILT();
   const row = lvl("ANvc");
-  check("the row: 8 waves of 100, 5 s apart, ×2 on buildings, 2 s stun", [row.data[1], row.data[4], row.data[2], row.data[3], row.duration, row.heroDuration], [8, 100, 5, 2, 2, 1]);
-  check("the press is accepted", w.issueCast(fire.id, "ANvc", 0, foot.x, foot.y + 100), true);
+  check("the row: 8 waves of 100, 5 s apart, ×2 on buildings, half factor 0.5, 2 s stun", [row.data[1], row.data[4], row.data[2], row.data[3], row.data[5], row.duration, row.heroDuration], [8, 100, 5, 2, 0.5, 2, 1]);
+  check("the press is accepted", w.issueCast(fire.id, "ANvc", 0, X, C), true);
   run(w, 2);
-  // Whole waves of 100: the Footman's own trickle of regeneration is rounded away.
-  const wavesOn = (u) => Math.round((100000 - u.hp) / 100);
-  check("the first wave has landed: DataE = 100", wavesOn(foot), 1);
-  check("…a building takes DataD = 2 times that", wavesOn(hall), 2);
-  check("…and the unit is stunned", foot.buffs.some((b) => b.kind === "stun"), true);
+  // Whole waves of 100: the Footmen's own trickle of regeneration is rounded away.
+  const lost = (u) => Math.round((100000 - u.hp) / 50) * 50;
+  check("the first wave has landed: DataE = 100", lost(near), 100);
+  check("…a building takes DataD = 2 times that", lost(hall), 200);
+  check("…and the outer ring DataF = 0.5 of it", lost(edge), 50);
+  check("both units are stunned, ring or not", [near, edge].map((u) => u.buffs.some((b) => b.kind === "stun")), [true, true]);
   run(w, 2);
-  check("the stun is Dur1 = 2 s, so it is over before the next wave", foot.buffs.some((b) => b.kind === "stun"), false);
-  check("nothing more has landed inside one Wave Interval", wavesOn(foot), 1);
+  check("the stun is Dur1 = 2 s, so it is over before the next wave", near.buffs.some((b) => b.kind === "stun"), false);
+  check("nothing more has landed inside one Wave Interval", lost(near), 100);
   run(w, 50);
-  check("eight waves in all: 800, not 96", wavesOn(foot), 8);
+  check("eight waves in all: 800, not 96 — and 400 in the ring", [lost(near), lost(edge)], [800, 400]);
 }
 
 console.log("\nFlame Strike (AHfs): the fire runs on Dur1 = 9, whoever cast it (#285)");
