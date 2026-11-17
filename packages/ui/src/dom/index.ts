@@ -108,6 +108,8 @@ export interface ProgressBar {
   setLabel(text: string): void;
 }
 
+let progressBarSeq = 0;
+
 /** The loading screen's bar (LoadBar.mdx), in the kit's own frame. */
 export function createProgressBar(opts: { scale?: number; label?: string } = {}): ProgressBar {
   const root = document.createElement("div");
@@ -117,6 +119,10 @@ export function createProgressBar(opts: { scale?: number; label?: string } = {})
   bar.setAttribute("role", "progressbar");
   bar.setAttribute("aria-valuemin", "0");
   bar.setAttribute("aria-valuemax", "100");
+  // The bar's accessible name is the line under it (issue #310); setLabel rewrites that text in
+  // place, so the name follows it without touching the bar again.
+  const labelId = `ow3-progress-label-${++progressBarSeq}`;
+  bar.setAttribute("aria-labelledby", labelId);
   if (opts.scale) bar.style.setProperty("--ow3-progress-scale", String(opts.scale));
   const track = document.createElement("div");
   track.className = "ow3-progress__track";
@@ -128,6 +134,7 @@ export function createProgressBar(opts: { scale?: number; label?: string } = {})
   bar.append(track);
   const label = document.createElement("span");
   label.className = "ow3-progress__label";
+  label.id = labelId;
   root.append(bar, label);
 
   const api: ProgressBar = {
