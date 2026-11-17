@@ -3454,12 +3454,21 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.emitLightning(def.lightning[0] ?? "LEAS", caster, t, d0, 0, drainTag(caster.id));
   },
 
-  // Death Pact (Death Knight) — sacrifice a friendly non-hero unit to heal the
-  // caster for its remaining hit points.
-  AUdp: (api, caster, def, _rank, ctx) => {
+  // Death Pact (Death Knight) — sacrifice a friendly non-hero unit and take its life.
+  // `Udp2 "Life Converted to Life"` (DataB) is 1 / 2 / 3 by rank — the Ubertip's "giving
+  // <AUdp,DataB1,%>% of its hit points", and classic.battle.net's Death Knight page: "100% /
+  // 200% / 300% conversion". The rank used to be ignored, so every rank healed 100%
+  // (issue #287).
+  //
+  // WHICH hit points — the sacrifice's maximum or what it has left — no source read for
+  // this states: the tooltip and the classic page both say only "its hit points". It is the
+  // MAXIMUM here, the reading Dark Ritual beside it makes of the same `Udp` column group.
+  // Unverified against the client; if it is measured otherwise, both change together.
+  AUdp: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t || !api.ally(caster, t) || t.isHero) return;
-    api.spellHeal(caster, t.maxHp);
+    const lvl = def.levelData[rank - 1];
+    api.spellHeal(caster, t.maxHp * d(lvl, 1, 1));
     // One model per end of the pact, as UndeadAbilityFunc [AUdp] names them:
     //   Casterart = …\Undead\DeathPact\DeathPactCaster.mdl   the life arriving, on the Death Knight
     //   Targetart = …\Undead\DeathPact\DeathPactTarget.mdl   the sacrifice, at its `origin`

@@ -194,6 +194,22 @@ console.log("\nPurge (Aprg): slows for Dur / HeroDur, and deals DataC to a summo
   }
 }
 
+console.log("\nDeath Pact (AUdp): DataB of the sacrifice's hit points, by rank (#287)");
+{
+  check("the row: Life Converted to Life 1 / 2 / 3", [1, 2, 3].map((r) => lvl("AUdp", r).data[1]), [1, 2, 3]);
+  for (const rank of [1, 2, 3]) {
+    const w = world();
+    const dk = caster(w, "Udea", C, C, rank);
+    dk.baseMaxHp = dk.maxHp = 5000;
+    dk.hp = 1000;
+    const ghoul = spawn(w, "ugho", C + 200, C, 0, 0);
+    const life = ghoul.maxHp;
+    w.issueCast(dk.id, "AUdp", ghoul.id);
+    run(w, 1.5);
+    check(`rank ${rank}: a ${life}-life Ghoul is worth ${life * rank}`, [Math.round((dk.hp - 1000) / life), ghoul.hp <= 0 || !w.units.has(ghoul.id)], [rank, true]);
+  }
+}
+
 if (failed) {
   console.log(`\n${failed} check(s) FAILED`);
   process.exit(1);
