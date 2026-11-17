@@ -1039,12 +1039,27 @@ export function etherealHealBonus(): number {
   return gameNum("EtherealHealBonus");
 }
 
-/** The share of a hit that `armor` points of armour absorb: `n·k / (1 + k·n)`, with
- *  k = DefenseArmor. Diminishing returns, so armour never reaches 100%. Negative
- *  armour (Acid Bomb, Faerie Fire) falls out of the same formula as extra damage. */
+/** Below this, more negative armour changes nothing: the amplification stops at
+ *  2 − 0.94²⁰ ≈ ×1.71. In no install file — Liquipedia "Armor" ("capped at −20 armor");
+ *  the same page as the negative formula below, and OURS to keep honest until the real
+ *  client's armour slab has been read at a known negative value (issue #292). */
+const NEGATIVE_ARMOR_FLOOR = -20;
+
+/** The share of a hit that `armor` points of armour absorb, k = DefenseArmor.
+ *
+ *  Positive: `n·k / (1 + k·n)` — diminishing returns, so armour never reaches 100%.
+ *
+ *  Negative (Acid Bomb, Faerie Fire, Corruption) is a DIFFERENT curve, not the same one
+ *  run backwards: the multiplier is `2 − (1 − k)^(−n)`, i.e. the answer here is
+ *  `−(1 − (1 − k)^(−n))`, floored at NEGATIVE_ARMOR_FLOOR. It bends the other way — each
+ *  further point is worth less — so −10 is ×1.461 and −20 and everything under it ×1.710.
+ *  We used to return the linear `n·k` (×1.60, ×2.20, and no floor at all), which made
+ *  stacked armour reduction over-kill. Source: Liquipedia "Armor"; this formula is in NO
+ *  game file, so unlike `DefenseArmor` itself it is a community measurement. */
 export function armorDamageReduction(armor: number): number {
   const k = gameNum("DefenseArmor");
-  return (armor * k) / (1 + k * Math.max(0, armor));
+  if (armor >= 0) return (armor * k) / (1 + k * armor);
+  return -(1 - Math.pow(1 - k, -Math.max(armor, NEGATIVE_ARMOR_FLOOR)));
 }
 
 /** Expand one of the `f(x) = A·f(x-1) + B·x + C` tables out to `maxLevel`, where the

@@ -96,6 +96,22 @@ function check(what, got, want) {
   check("armour reduces trigger damage too", dealt, want);
 }
 
+// --- 2b. NEGATIVE armour is its own curve, with a floor (issue #292) -----------------------
+// Liquipedia "Armor": multiplier = 2 − 0.94^(−armour), capped at −20. Not in any game file.
+{
+  const near = (a, b) => Math.abs(a - b) < 0.0005;
+  check("−5 armour is ×1.266", near(1 - armorDamageReduction(-5), 1.266), true);
+  check("−10 armour is ×1.461, not the linear ×1.60", near(1 - armorDamageReduction(-10), 1.461), true);
+  check("−20 armour is ×1.710", near(1 - armorDamageReduction(-20), 1.710), true);
+  check("…and −30 is no worse", armorDamageReduction(-30), armorDamageReduction(-20));
+  check("the two branches meet at zero", armorDamageReduction(0), 0);
+  world = newWorld();
+  const src = unit();
+  const t = unit({ armor: -10, armorType: ArmorType.Medium });
+  const dealt = world.damageTarget(src.id, t.id, 100, NORMAL);
+  check("the blow uses it", near(dealt / (100 * damageMultiplier(AttackType.Normal, ArmorType.Medium)), 1.461), true);
+}
+
 // --- 3. magic immunity, and the one damage type that ignores it ---------------------------
 {
   world = newWorld();
