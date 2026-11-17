@@ -45,32 +45,32 @@ const FEATURES: ReadonlyArray<{ title: string; body: string; media: Media }> = [
   {
     title: "Multiplayer reconnect",
     body: "A dropped connection no longer costs you the game. In a team game your seat is held for two minutes, and the main menu offers to put you straight back in.",
-    media: { kind: "placeholder" },
+    media: { kind: "image", src: "/media/reconnect.avif", alt: "The main menu asking \"Reconnect?\" after a dropped team game on Lost Temple, with the time left to rejoin", fit: "inset" },
   },
   {
     title: "Push-to-talk voice chat",
     body: "Hold the / key and talk to your team in multiplayer, DotA-style. Each speaker's name lights up in their player colour.",
-    media: { kind: "placeholder" },
+    media: { kind: "image", src: "/media/voicechat.avif", alt: "Two allies talking at once, each name lit on a plate in their player colour", fit: "inset" },
   },
   {
     title: "Huge control groups",
     body: "No 12-unit limit. Bind your whole army to a single group key and move it as one.",
-    media: { kind: "placeholder" },
+    media: { kind: "image", src: "/media/controlgroups.avif", alt: "A 24-unit control group filling the selection panel", fit: "inset" },
   },
   {
     title: "Select army hotkey",
     body: "Press the - key to select every combat unit you own, workers left out. Double-tap to jump the camera to them.",
-    media: { kind: "placeholder" },
+    media: { kind: "image", src: "/media/selectarmy.avif", alt: "A human army, its two heroes and Gryphon Riders all selected with one key", fit: "inset" },
   },
   {
     title: "Voice control mode",
     body: "An accessibility option so more people can play: hold the . key and speak your orders. Speech is recognised on your own machine.",
-    media: { kind: "placeholder" },
+    media: { kind: "image", src: "/media/voicecontrol.avif", alt: "Units wearing spoken name tags beside the Voice commands hint box", fit: "inset" },
   },
   {
     title: "Proper text encoding",
     body: "Every alphabet displays out of the box, and side by side: Cyrillic, Chinese, Korean, Greek and more in the same chat, map or name. No more empty messages and names.",
-    media: { kind: "placeholder" },
+    media: { kind: "image", src: "/media/textencoding.avif", alt: "All-chat lines in English, Russian and Korean side by side", fit: "inset" },
   },
 ];
 
