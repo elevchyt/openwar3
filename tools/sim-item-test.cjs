@@ -519,7 +519,10 @@ console.log("\nan undroppable item cannot leave the inventory");
   world.transferItem(keeper, 0, mate);
   check("…it cannot be handed to another hero", mate.inventory.some((h) => h && h.id === ledger), false);
   check("…and the giver still has it", keeper.inventory[0] && keeper.inventory[0].id, ledger);
+  // …and the HUD has a line to say for all three (issue #299): [Errors] Cantdrop.
+  check("…and the refusal is the game's `Cantdrop`", world.itemLeaveError(keeper.id, 0), "Cantdrop");
   check("SetItemDroppable(true) gives it back", world.setItemDroppable(ledger, true), true);
+  check("…and the line goes with it", world.itemLeaveError(keeper.id, 0), null);
   check("…and now it drops", world.dropItem(keeper.id, 0, keeper.x + 10, keeper.y), true);
 }
 {
@@ -718,6 +721,27 @@ console.log("\nRune of Rebirth (`rreb` → `AIrb`) — the monster that held it 
   hero.x = 3000; hero.y = 3000;
   world.unitAddItem(hero.id, stray);
   check("a rune no monster held brings nobody", world.drainSummonRequests().length, 0);
+}
+
+console.log("\na restore with nothing to restore says why, and keeps its charge (issue #299)");
+{
+  world = newWorld();
+  const hero = give(unit({ isHero: true, hp: 1000, mana: 100 }), "phea");
+  check("a Potion of Healing at full life: `HPmaxed`", world.itemUseError(hero.id, 0, 0), "HPmaxed");
+  check("…and the press is not spent", world.useItem(hero.id, 0, 0, hero.x, hero.y) || hero.inventory[0].charges, ITEMS.get("phea").charges);
+  hero.hp = 400;
+  check("hurt, it is legal again", world.itemUseError(hero.id, 0, 0), null);
+  const mule = give(unit({ isHero: false, hp: 1000 }), "phea");
+  check("a non-hero carrier reads `UnitHPmaxed`", world.itemUseError(mule.id, 0, 0), "UnitHPmaxed");
+
+  world = newWorld();
+  const whole = give(unit({ isHero: true, hp: 1000, mana: 500 }), "sres");
+  check("a Scroll of Restoration, everyone whole: `HPmanamaxed`", world.itemUseError(whole.id, 0, 0), "HPmanamaxed");
+  const hurt = unit({ x: whole.x + 100, hp: 10 });
+  check("…one hurt Footman in the circle makes it legal", world.itemUseError(whole.id, 0, 0), null);
+  hurt.hp = hurt.maxHp;
+  whole.mana = 10;
+  check("…and so does the hero's own empty mana bar", world.itemUseError(whole.id, 0, 0), null);
 }
 
 console.log(failed ? `\nitems: ${failed} check(s) FAILED` : "\nitems: all checks passed");

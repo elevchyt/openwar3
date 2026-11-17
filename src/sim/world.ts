@@ -3948,6 +3948,19 @@ function autocastOutOfReach(u: SimUnit, t: SimUnit, range: number): boolean {
   return Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > range;
 }
 
+/** The instant RESTORE item abilities, by base code: which Data column holds the hit points
+ *  and which the mana (-1 = this row has no such half). `AIhe`/`AIha` put life in DataA and
+ *  `AIma`/`AImr` mana in DataA too, while `AIra` carries both (DataA life, DataB mana) —
+ *  Units\ItemAbilityData. Read by `useItem` and by `itemRestoreError`, so the press and its
+ *  refusal are one table. */
+const ITEM_RESTORE: Record<string, readonly [hpIdx: number, manaIdx: number]> = {
+  AIhe: [0, -1],
+  AIma: [-1, 0],
+  AIha: [0, -1],
+  AImr: [-1, 0],
+  AIra: [0, 1],
+};
+
 export class SimWorld {
   readonly units = new Map<number, SimUnit>();
   /**
@@ -27442,11 +27455,9 @@ export class SimWorld {
         // screen alone, exactly as a mined load does.
         case "AIgo": this.stashOf(u.owner).gold += d(0); this.floatCredit("gold", d(0), u.owner, u, u.id); fired = true; break;
         case "AIlu": this.stashOf(u.owner).lumber += d(0); this.floatCredit("lumber", d(0), u.owner, u, u.id); fired = true; break;
-        case "AIhe": fired = this.itemRestore(u, ad, 0, -1); break;
-        case "AIma": fired = this.itemRestore(u, ad, -1, 0); break;
-        case "AIha": fired = this.itemRestore(u, ad, 0, -1); break;
-        case "AImr": fired = this.itemRestore(u, ad, -1, 0); break;
-        case "AIra": fired = this.itemRestore(u, ad, 0, 1); break;
+        case "AIhe": case "AIma": case "AIha": case "AImr": case "AIra":
+          fired = this.itemRestore(u, ad, ITEM_RESTORE[ad.code][0], ITEM_RESTORE[ad.code][1]);
+          break;
         // Healing Salve / Clarity Potion / Potion & Scroll of Rejuvenation — restore over
         // TIME, not at once. DataA is the total hit points and DataB the total mana the
         // effect is worth across `Dur1`, so the per-second rate is the total over the
@@ -27861,6 +27872,12 @@ export class SimWorld {
       // exactly this: `Notownportalhalls` = "There are no friendly Town Halls to Town Portal
       // to." Answered on the CLICK so the scroll keeps its charge, as the staves are.
       if (ad.code === "AItp") return this.nearestHall(u.owner, u.x, u.y) ? null : "Notownportalhalls";
+      // A restore with nothing to restore: `useItem` keeps the charge, and this is the line
+      // that says why ("Hero has full health.", "Already at full mana." — itemRestoreError).
+      // (Only for an item that IS that one restore: a map's item with a second ability may
+      // still have something to do, and useItem fires whichever of them can.)
+      const full = def.abilities.length === 1 ? this.itemRestoreError(u, ad) : null;
+      if (full !== null) return full;
       // The UNIT-AIMED items. Each is refused by its own row's `targs1` and `Rng1` through the
       // one shared test a spell goes through (targetError) — which also asks the rules the flag
       // list cannot express (TARGET_RULES: the wand's mana pool, Control Magic's summons, the
@@ -27969,6 +27986,31 @@ export class SimWorld {
       if (mana > 0 && t.mana < t.maxMana) { t.mana = Math.min(t.maxMana, t.mana + mana); did = true; }
     }
     return did;
+  }
+
+  /** Why a RESTORE item pressed now would restore nothing — the [Errors] line the game keeps
+   *  for each shape of it — or null when somebody in its reach is short of what it gives (or
+   *  `ad` is no restore). The same walk `itemRestore` makes, so the two cannot disagree: the
+   *  press that keeps its charge is exactly the press that is told why (issue #299).
+   *
+   *  Three lines, one per shape of row: `HPmaxed` "Hero has full health." for the life half
+   *  alone (`UnitHPmaxed` "Already at full health." when the carrier is no hero — the split
+   *  the spell path makes, castError), `Manamaxed` "Already at full mana." for the mana half
+   *  alone, `HPmanamaxed` "Already at full mana and health." for a row carrying both. */
+  private itemRestoreError(u: SimUnit, ad: AbilityDef): string | null {
+    const idx = ITEM_RESTORE[ad.code];
+    if (!idx) return null;
+    const lvl = ad.levelData[0];
+    const val = (i: number) => (i < 0 || lvl?.data[i] === undefined || Number.isNaN(lvl.data[i]) ? 0 : lvl.data[i]);
+    const hp = val(idx[0]);
+    const mana = val(idx[1]);
+    for (const t of this.itemAreaTargets(u, ad)) {
+      if ((hp > 0 && t.hp < t.maxHp) || (mana > 0 && t.mana < t.maxMana)) return null;
+    }
+    if (hp > 0 && mana > 0) return "HPmanamaxed";
+    if (mana > 0) return "Manamaxed";
+    if (hp > 0) return u.isHero ? "HPmaxed" : "UnitHPmaxed";
+    return null;
   }
 
   // === the WORLD-LEVEL item actives (issue #130) ==========================================
@@ -28812,6 +28854,22 @@ export class SimWorld {
     const set = this.itemDroppable.get(held.id);
     if (set !== undefined) return set;
     return this.itemReg?.get(held.itemId)?.droppable ?? true;
+  }
+
+  /** Why the item in `slot` may not be dropped, handed over or sold — a commandstrings.txt
+   *  [Errors] key, or null when it may leave. The HUD asks before it spends the gesture, as it
+   *  asks `itemUseError` before a use (issue #299): the doors below all refuse an undroppable
+   *  item, and used to do it without a word.
+   *
+   *  The line is `Cantdrop` = "Item must remain in your inventory.", which sits in the file
+   *  beside `Cantpawn` and says what UI\TriggerStrings.txt says of SetItemDroppable ("cannot
+   *  be removed from a Hero's inventory"). Its near-namesake `Cantdropitem` = "Unable to drop
+   *  this item." is filed with `Canttakeitem` / `Cantuseitem`, the generic item-order
+   *  failures, and is not this rule's. (Read off the file's own grouping — not yet checked
+   *  against the running client.) */
+  itemLeaveError(unitId: number, slot: number): string | null {
+    const held = this.units.get(unitId)?.inventory[slot];
+    return held && !this.mayLeaveInventory(held) ? "Cantdrop" : null;
   }
 
   /**

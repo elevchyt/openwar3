@@ -3675,13 +3675,26 @@ export class RtsController {
   }
 
   /** Ctrl+N: bind the current own selection to control group N (overwrite). An
-   *  empty selection leaves the existing group untouched (WC3). */
+   *  empty selection leaves the existing group untouched (WC3) — and says so, in the two
+   *  lines commandstrings.txt [Errors] keeps for it (issue #299): `Emptycontrolgroup` =
+   *  "Unable to form an empty control group." with nothing selected, `Invalidcontrolgroup` =
+   *  "Unable to form a control group with units you do not control." with a selection that
+   *  holds nothing of yours (an enemy hero, a creep, a gold mine). */
   assignGroup(key: string): void {
     const { ids } = this.ownSelectionByKind();
-    if (ids.length) {
-      this.groups.set(key, ids);
-      this.onGroup?.("set", key, ids);
+    if (!ids.length) {
+      this.refuseGroup();
+      return;
     }
+    this.groups.set(key, ids);
+    this.onGroup?.("set", key, ids);
+  }
+
+  /** The control-group refusal for the selection as it stands — see assignGroup. A selected
+   *  gold mine or ground item is a selection too, and not one you control. */
+  private refuseGroup(): void {
+    const empty = this.selected.size === 0 && this.selectedMine === null && this.selectedItem === null;
+    this.refuseOrder(empty ? "Emptycontrolgroup" : "Invalidcontrolgroup");
   }
 
   /** A control group was set, added to or recalled — the replay's input track
@@ -3701,6 +3714,9 @@ export class RtsController {
     const existing = this.livingGroup(key);
     const sel = this.ownSelectionByKind();
     const kind = existing.length ? (this.sim.units.get(existing[0])?.building ? "building" : "unit") : sel.kind;
+    // Nothing of ours to add is the same refusal Ctrl+N gives (assignGroup); a selection of
+    // the group's OTHER kind is merely skipped, as it always was.
+    if (!sel.ids.length) this.refuseGroup();
     if (!kind) return;
     const merged = [...existing];
     const seen = new Set(existing);
@@ -3933,6 +3949,11 @@ export class RtsController {
     if (!to || to.hp <= 0 || !to.inventory.length) return false;
     this.armedItem = null; // whichever way it was aimed, the gesture is spent
     this.orderMode = null;
+    const stays = this.sim.itemLeaveError(from, armed); // undroppable: "Item must remain in your inventory."
+    if (stays !== null) {
+      this.refuseOrder(stays);
+      return true; // the click was the gesture, and it has been answered
+    }
     return this.execute(this.localPlayer, { c: "giveitem", unitId: from, slot: armed, targetId });
   }
 
@@ -7283,7 +7304,9 @@ export class RtsController {
       if (host && this.sim.isTransport(host)) {
         // A TRANSPORT's Load: the Zeppelin sets off for the unit and the unit for the
         // Zeppelin (SimWorld.issueLoad). "Unable to load target." — [Errors] Canttransport —
-        // for a building, a flier, a foe, or nobody at all.
+        // for a building, a flier, a foe, or nobody at all. A hold with no SEATS left for
+        // this passenger has its own line: `Noroom` "Cargo capacity unavailable." (issue #299).
+        if (p && picked !== null && this.controls(picked) && this.sim.holdRoom(host) < p.cargoSize) return this.refuseOrder("Noroom");
         if (!p || picked === null || !this.controls(picked) || !this.execute(this.localPlayer, { c: "load", transportId: hostId, unitId: picked })) return this.refuseOrder("Canttransport");
         this.orderMode = null;
         this.armedLoad = null;
@@ -7496,6 +7519,14 @@ export class RtsController {
       // Vault / Marketplace), an allied hero is handed it, and bare ground gets it dropped.
       const picked = this.pickAt(cssX, cssY);
       const to = picked !== null ? this.sim.units.get(picked) : undefined;
+      // An UNDROPPABLE item goes nowhere by this gesture — not to a shop, not to another hero,
+      // not onto the grass (docs/items.md) — and the sim refuses all three; this is the line
+      // that says so: [Errors] `Cantdrop` "Item must remain in your inventory." (issue #299).
+      const stays = this.sim.itemLeaveError(id, armed.slot);
+      if (stays !== null) {
+        this.refuseOrder(stays);
+        return true;
+      }
       // …and a shop that will not TRADE with you is not a shop for this gesture: an enemy's
       // Vault deals in items but takes none of yours (SimWorld.canUseShop), so the click
       // falls through to the ordinary drop rather than sending a sale that must be refused.
@@ -10484,6 +10515,14 @@ export class RtsController {
       const id = this.primary;
       const u = id !== null && this.orderees.has(id) ? this.sim.units.get(id) : undefined;
       if (gitem && id !== null && this.controls(id) && u?.inventory.length) {
+        // A Mirror Image's six slots are a picture (docs/illusions.md): it picks up nothing,
+        // and the game has the line for it — [Errors] `Illusionscantpickup` "Illusions cannot
+        // pick up items." Answered at the click, so the copy does not walk over to the item
+        // and stand on it saying nothing (issue #299).
+        if (u.isIllusion) {
+          this.refuseOrder("Illusionscantpickup");
+          return;
+        }
         const ok = this.execute(this.localPlayer, { c: "getitem", unitId: id, itemId: gitem.id });
         if (ok) {
           this.ack(false); // going to pick something up is a move, never the attack quote
