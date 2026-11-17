@@ -715,6 +715,16 @@ export interface EngineHooks {
   /** …and its pending item pickup/drop/use/sell events, for `NativeCtx.flushItemEvents`. */
   drainItemEvents?(): ReadonlyArray<unknown>;
   issueUnitOrder?(unitId: number, orderId: number, order: string, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number): boolean;
+  /** IssueTargetOrder aimed at an ITEM on the ground (`IssueTargetItemOrder`, the GUI's "Issue
+   *  Order Targeting An Item"): smart walks over and picks it up, attack strikes it. `itemId`
+   *  is the sim's item id — never a unit id (natives/orderTarget.ts). */
+  issueItemOrder?(unitId: number, orderId: number, order: string, itemId: number): boolean;
+  /** IssueTargetOrder aimed at a destructable the sim keeps no unit for — a TREE, known there
+   *  only by where it stands: smart/harvest gathers it, attack swings at it. */
+  issueTreeOrder?(unitId: number, orderId: number, order: string, x: number, y: number): boolean;
+  /** The sim unit standing in for a map destructable (a gate, a crate, a barricade), or 0 when
+   *  it has none (a tree, a bridge, a dead one). */
+  destructableUnit?(id: number): number;
   /** IssueNeutral*OrderById — an order to a neutral building on `player`'s behalf (a purchase:
    *  `orderId` is the ware's rawcode). True when the sale went through. */
   issueNeutralOrder?(player: number, shopId: number, orderId: number, kind: "immediate" | "point" | "target"): boolean;

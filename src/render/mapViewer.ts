@@ -4893,6 +4893,9 @@ export class MapViewerScene {
       // it drew, the footprints it stamped, and the stand-in instances that play their clips.
       findDestructable: (typeId, x, y) => findDestructibleAt(this.destructibles, typeId, x, y)?.id ?? 0,
       destructableInfo: (id) => this.destructibleSnapshot(id),
+      // The sim unit a gate or crate fights as — what `IssueTargetOrder` aims at when its
+      // widget is a destructable (jass/natives/orderTarget.ts). 0 for a tree or a bridge.
+      destructableUnit: (id) => this.destSimByDoo.get(id) ?? 0,
       killDestructable: (id, clip) => this.killDestructible(id, clipRe(clip)),
       restoreDestructable: (id, life, birth) => this.restoreDestructible(id, life, birth),
       setDestructableLife: (id, life) => this.setDestructibleLife(id, life),

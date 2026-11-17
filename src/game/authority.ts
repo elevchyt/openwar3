@@ -320,6 +320,47 @@ export class Authority {
   }
 
   /**
+   * `IssueTargetOrder` aimed at an ITEM lying on the ground (issue #294). common.j's target is
+   * a `widget`, and Blizzard.j's `IssueTargetItemOrder` is that native by another name, so this
+   * is the GUI's "Unit - Issue Order Targeting An Item" (`UI\TriggerData.txt` defaults it to
+   * `UnitOrderSmartItem`). The two orders an item answers are the two a player has for one:
+   * `smart` — a right-click, which PICKS IT UP (the "getitem" command above) — and `attack`,
+   * which strikes its 75 hit points (SimWorld.issueAttackItem). Anything else is refused: no
+   * ability in our tables is cast on a ground item by order string.
+   *
+   * Not a command, for the reasons `issueUnitOrder` gives.
+   */
+  issueItemOrder(unitId: number, orderId: number, order: string, itemId: number): boolean {
+    const s = order || orderIdToString(orderId);
+    let ok = false;
+    if (s === "smart") ok = this.sim.issueGetItem(unitId, itemId);
+    else if (s === "attack") ok = this.sim.issueAttackItem(unitId, itemId);
+    if (ok) this.sim.noteOrder(unitId, orderId, "target", 0, 0, 0, itemId);
+    return ok;
+  }
+
+  /**
+   * `IssueTargetOrder` aimed at a destructable the sim keeps no UNIT for — which is a TREE
+   * (`IssueTargetDestructableOrder(u, "harvest", tree)`; a gate or a crate has a stand-in unit
+   * and goes through `issueUnitOrder`). A tree is known to the sim only by where it stands, so
+   * the .doo record's own spot is what finds it. `smart` and `harvest` gather, as a worker's
+   * right-click does; `attack` swings the weapon at it (SimWorld.issueAttackTree). Each is the
+   * sim's own judgement of who may — a Footman told to harvest answers false.
+   */
+  issueTreeOrder(unitId: number, orderId: number, order: string, x: number, y: number): boolean {
+    const s = order || orderIdToString(orderId);
+    // Ours, not the game's: the slack for "the tree AT this record" — the sim plants a tree on
+    // the record's exact coordinates, so anything under a pathing cell is the same tree.
+    const tree = this.sim.nearestTree(x, y, 32);
+    if (!tree) return false;
+    let ok = false;
+    if (s === "smart" || s === "harvest") ok = this.sim.issueHarvest(unitId, "lumber", tree.id);
+    else if (s === "attack") ok = this.sim.issueAttackTree(unitId, tree.id);
+    if (ok) this.sim.noteOrder(unitId, orderId, "target", tree.x, tree.y, 0);
+    return ok;
+  }
+
+  /**
    * `IssueNeutralImmediateOrderById(player, shop, id)` and its point/target siblings: an order
    * given to a NEUTRAL building on a player's behalf — which is to say a purchase, since buying
    * is the only thing a player can ask of a unit that is not theirs. It is how a script shops

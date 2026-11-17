@@ -30,6 +30,7 @@
 import { orderIdToString, orderStringToId } from "../orders";
 import type { BoolExpr, JassPlayer, JassUnit, NativeCtx, RectObj, Runtime, UnitSnapshot } from "../runtime";
 import { asInt, asNum, asStr, jBool, jHandle, jInt, JNULL, truthy, type JassValue } from "../values";
+import { issueTargetOrder } from "./orderTarget";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -272,12 +273,15 @@ export function registerGroupNatives(rt: Runtime): void {
   const orderGroup = (c: NativeCtx, gv: JassValue, order: string, orderId: number, kind: "immediate" | "point" | "target", x: number, y: number, targetV: JassValue): JassValue => {
     const g = group(c, gv);
     if (!g) return jBool(false);
-    const t = kind === "target" ? unit(c, targetV) : undefined;
     let any = false;
     for (const hid of liveMembers(c, g)) {
       const u = c.rt.handles.get(hid) as JassUnit | undefined;
       if (!u || u.simId < 0) continue;
-      if (c.rt.hooks?.issueUnitOrder?.(u.simId, orderId, order, kind, x, y, t?.simId ?? 0)) any = true;
+      // A target is a WIDGET — a unit, an item or a destructable (natives/orderTarget.ts).
+      const ok = kind === "target"
+        ? issueTargetOrder(c, u.simId, orderId, order, targetV)
+        : c.rt.hooks?.issueUnitOrder?.(u.simId, orderId, order, kind, x, y, 0);
+      if (ok) any = true;
     }
     return jBool(any);
   };

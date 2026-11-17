@@ -18,7 +18,11 @@
 //   • the inventory's string-less orders (852008–852013 use a slot, 852002–852007 drag to one);
 //   • `IssueNeutralImmediateOrderById` — a purchase on a player's behalf — reaches its hook
 //     with the buyer, the shop and the ware, and answers what the hook answers;
-//   • `GetOrderTargetItem` for an order aimed at an item.
+//   • `GetOrderTargetItem` for an order aimed at an item;
+//   • `IssueTargetOrder`'s target is a WIDGET (issue #294): an item leaves through
+//     `issueItemOrder` with the ITEM's id — never through the unit hook, where that number
+//     names some unrelated unit — and a destructable through its stand-in unit or, having
+//     none (a tree), `issueTreeOrder` at its own spot. The group twin does the same.
 //
 // Reads only the developer's own local install (gitignored; zero shipped assets).
 
@@ -74,8 +78,16 @@ check('852008 is not a drag', orders.itemDragSlot(852008), -1);
 console.log('\nthe natives');
 const issued = [];
 const neutral = [];
+const itemOrders = [];
+const treeOrders = [];
 const hooks = {
   issueUnitOrder: (unitId, orderId, order, kind, x, y, targetId) => (issued.push({ unitId, orderId, order, kind, x, y, targetId }), order !== 'refuseme'),
+  issueItemOrder: (unitId, orderId, order, itemId) => (itemOrders.push({ unitId, orderId, order, itemId }), true),
+  issueTreeOrder: (unitId, orderId, order, x, y) => (treeOrders.push({ unitId, orderId, order, x, y }), true),
+  // Record 5 is a gate with a unit standing in for it (sim id 900); record 6 is a tree.
+  findDestructable: (typeId) => (typeId === 'LTg1' ? 5 : 6),
+  destructableInfo: (id) => ({ id, typeId: id === 5 ? 'LTg1' : 'LTlt', name: '', x: id * 100, y: id * 10, life: 50, maxLife: 50 }),
+  destructableUnit: (id) => (id === 5 ? 900 : 0),
   issueNeutralOrder: (player, shopId, orderId, kind) => (neutral.push({ player, shopId, orderId, kind }), orderId === 0x68666f6f /* 'hfoo' */),
 };
 const src = `
@@ -95,6 +107,20 @@ function ImmediateById takes unit u returns boolean
 endfunction
 function ByName takes unit u, unit t returns boolean
     return IssueTargetOrder(u, "thunderbolt", t)
+endfunction
+function AtItem takes unit u, item i returns boolean
+    return IssueTargetOrder(u, "smart", i) // Blizzard.j IssueTargetItemOrder, verbatim
+endfunction
+function AtGate takes unit u returns boolean
+    return IssueTargetOrder(u, "smart", CreateDestructable('LTg1', 0., 0., 0., 1., 0))
+endfunction
+function AtTree takes unit u returns boolean
+    return IssueTargetOrder(u, "harvest", CreateDestructable('LTlt', 0., 0., 0., 1., 0))
+endfunction
+function GroupAtItem takes unit u, item i returns boolean
+    local group g = CreateGroup()
+    call GroupAddUnit(g, u)
+    return GroupTargetOrder(g, "attack", i)
 endfunction
 function Buy takes unit shop returns boolean
     return IssueNeutralImmediateOrderById(Player(3), shop, 'hfoo')
@@ -131,6 +157,21 @@ check('an order by NAME carries the same number a script would write', issued.at
 check('a neutral purchase answers what the sale answered', interp.callFunction('Buy', [shop]).b, true);
 check('…and was asked of the shop, for the buyer, for that ware', neutral.at(-1), { player: 3, shopId: 13, orderId: 0x68666f6f, kind: 'immediate' });
 check('a refused sale answers false', interp.callFunction('BuyRefused', [shop]).b, false);
+
+console.log('\na target is a widget');
+// Item 12 shares its number with unit `t` on purpose: read as a unit id it is that Footman.
+const it = rt.itemForSim({ id: 12, typeId: 'ratc', charges: 0, x: 3, y: 4 });
+const before = issued.length;
+check('IssueTargetOrder at an item takes', interp.callFunction('AtItem', [u, it]).b, true);
+check('…as an ITEM order, with the item\'s id', itemOrders.at(-1), { unitId: 11, orderId: 851971, order: 'smart', itemId: 12 });
+check('…and never as an order at the unit holding that number', issued.length, before);
+check('a group order at an item takes', interp.callFunction('GroupAtItem', [u, it]).b, true);
+check('…as an item order for each member', itemOrders.at(-1), { unitId: 11, orderId: 851983, order: 'attack', itemId: 12 });
+check('…and still not as a unit order', issued.length, before);
+check('a destructable with a stand-in unit takes', interp.callFunction('AtGate', [u]).b, true);
+check('…as a unit order at the stand-in', issued.at(-1), { unitId: 11, orderId: 851971, order: 'smart', kind: 'target', x: 0, y: 0, targetId: 900 });
+check('a tree takes', interp.callFunction('AtTree', [u]).b, true);
+check('…as a tree order at the record\'s own spot', treeOrders.at(-1), { unitId: 11, orderId: orders.orderStringToId('harvest'), order: 'harvest', x: 600, y: 60 });
 
 console.log('\nan order aimed at an item');
 interp.callFunction('Listen', []);

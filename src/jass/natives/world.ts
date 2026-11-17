@@ -12,6 +12,7 @@ import { intToRawcode, rawcodeToInt } from "../lexer";
 import { orderIdOf, orderIdToString, orderStringToId } from "../orders";
 import type { BuffFilter, EngineHooks, JassPlayer, JassUnit, NativeCtx, Runtime, UnitTypeDefault } from "../runtime";
 import { asInt, asNum, asStr, jBool, jHandle, jInt, JNULL, jReal, jStr, type JassValue } from "../values";
+import { issueTargetOrder } from "./orderTarget";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -319,8 +320,9 @@ export function registerWorldNatives(rt: Runtime): void {
   const issue = (c: NativeCtx, unitV: JassValue, order: string, orderId: number, kind: "immediate" | "point" | "target", x: number, y: number, targetV: JassValue): JassValue => {
     const u = unit(c, unitV);
     if (!u || u.simId < 0) return jBool(false);
-    const t = kind === "target" ? unit(c, targetV) : undefined;
-    return jBool(c.rt.hooks?.issueUnitOrder?.(u.simId, orderId, order, kind, x, y, t?.simId ?? 0) ?? false);
+    // A target is a WIDGET — a unit, an item or a destructable (natives/orderTarget.ts).
+    if (kind === "target") return jBool(issueTargetOrder(c, u.simId, orderId, order, targetV));
+    return jBool(c.rt.hooks?.issueUnitOrder?.(u.simId, orderId, order, kind, x, y, 0) ?? false);
   };
   const byName = (c: NativeCtx, unitV: JassValue, orderV: JassValue, kind: "immediate" | "point" | "target", x: number, y: number, targetV: JassValue): JassValue => {
     const order = orderStr(orderV);

@@ -140,6 +140,29 @@ console.log("\nthe order ends when the item is picked up");
   check("the Footman stops", f.order, "idle");
 }
 
+// Issue #294. common.j's `IssueTargetOrder` takes a WIDGET, and Blizzard.j's
+// `IssueTargetItemOrder` is that native verbatim — so a script's order at an item arrives at
+// the authority as an ITEM order. The trap it replaces: item ids and unit ids are two number
+// spaces, and the item's id read as a unit's names whoever holds that number.
+console.log("\na SCRIPT's order aimed at an item (IssueTargetItemOrder)");
+{
+  const { Authority } = require(join(REPO, ".sim-build", "src", "game", "authority.js"));
+  const w = world();
+  const stub = { get: () => undefined };
+  const authority = new Authority(w, stub, stub, null, stub);
+  const hero = spawn(w, "Hpal", 1000, 1000, 0, 0);
+  hero.inventory = [null, null, null, null, null, null];
+  const id = w.createItem("phea", 1300, 1000);
+  check("smart at the item is taken", authority.issueItemOrder(hero.id, 851971, "smart", id), true);
+  check("…as the walk to pick it up, not a follow or an attack", hero.order, "getitem");
+  run(w, 10);
+  check("…and the hero ends up carrying it", hero.inventory.some((h) => h && h.id === id), true);
+  const f = spawn(w, "hfoo", 1000, 1200, 0, 0);
+  const second = w.createItem("phea", 1100, 1200);
+  check("attack at an item is the strike on it", authority.issueItemOrder(f.id, 851983, "attack", second) && f.order, "attackitem");
+  check("an order an item has no answer to is refused", authority.issueItemOrder(f.id, 851986, "move", second), false);
+}
+
 console.log("\nSetWidgetLife on an item");
 {
   const w = world();

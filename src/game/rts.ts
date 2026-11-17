@@ -10042,6 +10042,8 @@ export class RtsController {
         givesBounty: (p) => this.sim.givesBounty(p, teamOf(p)),
         currentOrderId: (id) => this.authority.currentOrderId(id),
         issueUnitOrder: (id, oid, o, k, x, y, t) => this.authority.issueUnitOrder(id, oid, o, k, x, y, t),
+        issueItemOrder: (id, oid, o, itemId) => this.authority.issueItemOrder(id, oid, o, itemId),
+        issueTreeOrder: (id, oid, o, x, y) => this.authority.issueTreeOrder(id, oid, o, x, y),
         issueNeutralOrder: (p, shop, oid, k) => this.authority.issueNeutralOrder(p, shop, oid, k),
         // The mine handle is a JASS fiction (MINE_ID_BASE), so it is resolved here, on the
         // side of the seam that holds both the world and the fiction's own decoder.
