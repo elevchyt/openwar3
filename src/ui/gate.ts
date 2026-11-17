@@ -78,8 +78,10 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
   action.className = "load-gate-action";
   action.append(btn.root, bar.root);
 
+  // A live region: the errors ("wrong folder" and the like) are read out as they appear (issue #310).
   const status = document.createElement("p");
   status.className = "load-gate-status";
+  status.setAttribute("role", "status");
 
   // "Download game files": the player's OWN install, zipped and kept somewhere they can reach from
   // a new machine (src/assets/downloadInstall.ts). A link under the button rather than a second
