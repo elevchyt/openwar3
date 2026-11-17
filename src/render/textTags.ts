@@ -272,6 +272,16 @@ export const BOUNTY_TEXT_STYLE: CombatTextStyle = {
   fadeStart: TEXT_TAG.BountyTextFadeStart,
 };
 
+/** The "miss" over a shot that went wide (issue #291) — the game's own `MissText*` row, and
+ *  the word itself is GlobalStrings.fdf's `MISS`. Slower and longer-lived than our crit number:
+ *  three seconds, fading from the first. */
+export const MISS_TEXT_STYLE: CombatTextStyle = {
+  height: MISC_UI.MissTextHeight,
+  rise: TEXT_TAG.MissTextVelocity[1],
+  lifetime: TEXT_TAG.MissTextLifetime,
+  fadeStart: TEXT_TAG.MissTextFadeStart,
+};
+
 /** The experience a kill hands a hero (issue #116) — the ONE tag here with no row behind it.
  *
  * 1.30.4, the client this project targets, floats no XP number at all: it arrived with

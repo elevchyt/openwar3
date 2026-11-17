@@ -87,8 +87,21 @@ How much a miss loses is `MissDamageReduction` = **0.5** in both `Units\MiscGame
 rings rolled the shooter's Curse and its own Evasion separately and a miss took its share to 0,
 so a 100% Curse made a siege weapon harmless.
 
-The other Liquipedia line on misses is not here yet: MiscData's `ChanceToMiss` (0.25, "if target
-is moving or on high ground") has no reader in the sim at all.
+The third way to miss is HIGH GROUND (issue #291, `shootsUphill` in `src/sim/world.ts`):
+`Units\MiscData.txt` `ChanceToMiss` = **0.25**, "missile chance to miss if target is moving or on
+high ground". The condition is the official basics page's
+([combat.shtml](https://classic.battle.net/war3/basics/combat.shtml), "High Ground"): "Ranged
+units (Missile) will miss a lot (25% chance to miss) when trying to shoot up to higher ground …
+charge up the hill to the same level as the enemy." So it is a CLIFF LEVEL (the sampler the fog
+and `cliffApart` use — rolling ground is not high ground; more than half a level, so one ramp is
+one level), any RANGED weapon, and a building is exempt at neither end (the same paragraph is
+about towers at the top of a ramp). A flyer at either end is exempt — that one is OURS: no source
+we could reach states it. For a shell it is the GROUND aimed at that is measured, so Attack Ground
+up a cliff misses too, and like every splash miss it still bursts at half.
+
+Every miss — an evade, a Curse, a cliff — floats the game's red "miss" (`MISS` in
+GlobalStrings.fdf, styled by the `MissText*` row of `UI\MiscData.txt` and `MissTextHeight`) over
+what was shot at: `CombatText` kind `miss`, whose word the client fills in.
 
 ## Artillery (Line)
 

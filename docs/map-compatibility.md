@@ -676,7 +676,7 @@ minimum limit … set to something like 150 instead of 30" — hiveworkshop 3358
 and a type with no speed stay 0, and an uprooted Ancient is a structure, floored at
 `MinBldgSpeed`), and **`StrAttackBonus`** (damage per point of primary attribute, an implied 1).
 
-`MISC_UNREAD` lists the 32 rows this engine declares but no system reads (trading, a miss chance,
+`MISC_UNREAD` lists the 29 rows this engine declares but no system reads (trading,
 the follow ranges, decay after death …); the map door logs a map's restatement of one as "no
 system reads" rather than applying it, and `tools/sim-map-misc-test.cjs` re-derives the list from
 the source so it cannot drift. Frost Nova now reads them too: its `BuffID` is `Bfro` at every rank and its

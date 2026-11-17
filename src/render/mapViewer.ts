@@ -185,7 +185,7 @@ import { SuspendDialogOverlay, type SuspendRow } from "../ui/suspendDialog";
 import { CinematicPanelOverlay } from "../ui/cinematicPanel";
 import { ScriptCamera, type CameraState } from "./scriptCamera";
 import { AutoCamera } from "../game/autoCamera";
-import { BOUNTY_TEXT_STYLE, CombatTextTags, GOLD_TEXT_STYLE, LUMBER_TEXT_STYLE, TextTagOverlay, XP_TEXT_STYLE, type CombatTextStyle, type TextTagContext } from "./textTags";
+import { BOUNTY_TEXT_STYLE, CombatTextTags, GOLD_TEXT_STYLE, LUMBER_TEXT_STYLE, MISS_TEXT_STYLE, TextTagOverlay, XP_TEXT_STYLE, type CombatTextStyle, type TextTagContext } from "./textTags";
 import { FdfLibrary } from "../ui/fdf/library";
 import { playFdfClick } from "../ui/fdf/render";
 import { blpToCanvas, blpToDataUrl } from "./blputil";
@@ -336,6 +336,9 @@ const BOUNTY_TEXT_COLOR = argbOfParts(TEXT_TAG.BountyTextColor);
 // ...and the one exception, the XP number, which 1.30.4 does not raise at all and therefore
 // keeps no colour for — see XP_TEXT_STYLE. A violet matched to the Reforged client that does.
 const XP_TEXT_COLOR = 0xffb478ff;
+// A miss is the file's own red (`MissTextColor` = 255,255,0,0) — pure, where our crit's is the
+// palette's 255,3,3.
+const MISS_TEXT_COLOR = argbOfParts(TEXT_TAG.MissTextColor);
 // A bounty sits where a credit does; the XP goes a hair above it. The two are raised by the
 // SAME event a step apart, and a hero that killed the creep in melee is standing on top of it,
 // so at one identical height they would print over each other.
@@ -349,7 +352,10 @@ const XP_TEXT_Z = 240;
 /** Colour, spec and height for one CREDIT kind — the four tags the engine raises to tell you
  *  what you were just paid (see CombatText). A crit and a deny are not in here: they report a
  *  blow, not a payment, and wear the victim's colour rather than the resource's. */
-const CREDIT_TEXT: Record<"gold" | "lumber" | "bounty" | "xp", { color: number; style: CombatTextStyle; z: number }> = {
+const CREDIT_TEXT: Record<"gold" | "lumber" | "bounty" | "xp" | "miss", { color: number; style: CombatTextStyle; z: number }> = {
+  // Not a credit, but styled the same way: the game keeps a whole row for it (MISS_TEXT_STYLE).
+  // It sits where a crit does — ON the unit that was shot at.
+  miss: { color: MISS_TEXT_COLOR, style: MISS_TEXT_STYLE, z: COMBAT_TEXT_Z },
   gold: { color: GOLD_TEXT_COLOR, style: GOLD_TEXT_STYLE, z: GOLD_TEXT_Z },
   lumber: { color: LUMBER_TEXT_COLOR, style: LUMBER_TEXT_STYLE, z: GOLD_TEXT_Z },
   bounty: { color: BOUNTY_TEXT_COLOR, style: BOUNTY_TEXT_STYLE, z: GOLD_TEXT_Z },
@@ -17432,7 +17438,9 @@ export class MapViewerScene {
           // client's (the same one the minimap dots and a cinematic's speaker names use).
           const credit = t.kind === "crit" || t.kind === "deny" ? undefined : CREDIT_TEXT[t.kind];
           this.combatText.spawn({
-            text: t.text,
+            // A miss carries no text of its own: the word is the client's (GlobalStrings.fdf
+            // `MISS` = "miss"), so a localized install prints its own.
+            text: t.kind === "miss" ? (this.globalStrings?.strings.get("MISS") ?? "miss") : t.text,
             color:
               credit?.color ??
               (t.colorSlot >= 0

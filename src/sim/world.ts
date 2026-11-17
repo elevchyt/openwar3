@@ -349,7 +349,9 @@ export interface SimLightning {
  * anyone draws it) and the area-of-interest test the host filters recipients by.
  */
 export interface CombatText {
-  kind: "crit" | "deny" | "gold" | "lumber" | "bounty" | "xp";
+  /** `miss` carries NO text: the word is the client's own `MISS` string (GlobalStrings.fdf),
+   *  which the sim has no business reading — the renderer fills it in. */
+  kind: "crit" | "deny" | "miss" | "gold" | "lumber" | "bounty" | "xp";
   /** The unit the text floats over, and follows. 0 for a deny — the victim is dead. */
   unitId: number;
   x: number;
@@ -23831,7 +23833,7 @@ export class SimWorld {
     const aimed = p.targetId ? this.units.get(p.targetId) : undefined;
     const aimedCaught = !!aimed && aimed.hp > 0 && !aimed.invulnerable
       && Math.hypot(aimed.x - a.aimX, aimed.y - a.aimY) - aimed.radius <= outer;
-    const hitShare = this.splashHitShare(shooter, aimedCaught ? aimed : undefined);
+    const hitShare = this.splashHitShare(shooter, aimedCaught ? aimed : undefined, { x: a.aimX, y: a.aimY });
     const ring = (gap: number): number => ringShare(a, gap) * hitShare;
     // What it kills SPLATTERS (the doc comment above) — an artillery rule, not a splash one.
     const nearest = this.burstRings(p, a, source, a.aimX, a.aimY, hitShare, { splatter: true });
@@ -23846,10 +23848,12 @@ export class SimWorld {
    * How much of a SPLASH attack lands: 1, or 1 − `MissDamageReduction` when the attack missed.
    * The miss is the ATTACK's and is rolled ONCE — the shooter's `miss` buffs (Curse, Drunken
    * Haze) and the Evasion of the unit it was aimed at (`aimed`; pass none when the burst no
-   * longer catches it) — never once per body in the rings.
+   * longer catches it) — never once per body in the rings. `at` is the GROUND the shell was
+   * thrown at, for the one roll that needs no unit: a shell lobbed up a cliff (`rollMiss`).
    */
-  private splashHitShare(shooter: SimUnit | undefined, aimed: SimUnit | undefined): number {
-    const missed = (!!shooter && this.rollMiss(shooter)) || (!!aimed && this.tryEvade(aimed));
+  private splashHitShare(shooter: SimUnit | undefined, aimed: SimUnit | undefined, at?: { x: number; y: number }): number {
+    const missed = (!!shooter && this.rollMiss(shooter, aimed ?? at, true)) || (!!aimed && this.tryEvade(aimed));
+    if (missed) this.noteMiss(aimed ?? at);
     return missed ? 1 - (miscGame("MissDamageReduction") as number) : 1;
   }
 
@@ -25425,8 +25429,10 @@ export class SimWorld {
     // Both are rolled ONCE per attack, and a SPLASH blow is a share of an attack whose roll
     // was already made (applyAreaSplash → `missedSplash`): a Demon Hunter standing in a
     // Mortar Team's outer ring does not get to dodge the ground under him.
-    if (!splash && this.tryEvade(target)) return 0;
-    if (!splash && attacker && this.rollMiss(attacker)) return 0;
+    if (!splash && (this.tryEvade(target) || (attacker && this.rollMiss(attacker, target, ranged)))) {
+      this.noteMiss(target);
+      return 0;
+    }
     // The script's DAMAGING event: the raw blow, before every reduction below — Defend, the
     // Arcanite Shield, the damage table, armour. "Misses don't trigger any damage events", which
     // is why it sits after the two rolls above. The attack TYPE it may change is the one the
@@ -25671,10 +25677,57 @@ export class SimWorld {
    *  AbilityMetaData gives Ocr4 `maxVal=1`, unlike the crit chance next to it. */
   /** Does this attacker's swing go wide? The highest `miss` buff it wears decides — the
    *  chances do not add up, the same way two slows don't (see recomputeStats). */
-  private rollMiss(attacker: SimUnit): boolean {
+  private rollMiss(attacker: SimUnit, at?: SimUnit | { x: number; y: number }, ranged = false): boolean {
     let chance = 0;
     for (const b of attacker.buffs) if (b.kind === "miss") chance = Math.max(chance, b.value);
-    return chance > 0 && this.rng() < chance;
+    if (chance > 0 && this.rng() < chance) return true;
+    // …and the one miss that is nobody's spell: shooting UPHILL. A draw of its own, made only
+    // when the shot IS uphill, so a fight on level ground rolls exactly what it always did.
+    return !!at && this.shootsUphill(attacker, at, ranged) && this.rng() < dataNum("ChanceToMiss");
+  }
+
+  /**
+   * HIGH GROUND: is this a ranged shot from a lower cliff level up at a higher one?
+   *
+   * The number is the install's — `Units\MiscData.txt` `ChanceToMiss=0.25`, under its own
+   * comment "missile chance to miss if target is moving or on high ground" — and the
+   * condition is the official basics page's (classic.battle.net/war3/basics/combat.shtml,
+   * "High Ground"): "Ranged units (Missile) will miss a lot (25% chance to miss) when trying
+   * to shoot up to higher ground. Whenever you see the red "Miss" notification, instruct your
+   * units to charge up the hill to the same level as the enemy." Read as:
+   *
+   *  - **a LEVEL, not a height.** "The same level as the enemy" is a cliff level, so this asks
+   *    the sampler the fog's line of sight and `cliffApart` already ask — rolling ground is not
+   *    high ground (hiveworkshop "About high ground advantage" 255594, the same thread
+   *    heightmap.ts makeCliffLevelSampler cites) — and by `cliffApart`'s own measure (more than half a level, so two bodies
+   *    on one ramp are level with each other). Warsmash compares raw terrain height instead
+   *    (CUnitDefaultAccuracyCheckListener); the page's wording is why we do not.
+   *  - **RANGED weapons only**, every delivery of them: `ranged` is the weapon's own class
+   *    (enums.ts isRangedWeapon — the missile family, artillery and the Rifleman's `instant`).
+   *    A melee blow cannot cross a cliff at all (`cliffApart`).
+   *  - **a BUILDING is not exempt at either end.** The same paragraph is about exactly that:
+   *    "enemy players might build towers at the top of their ramps" — a tower up there is
+   *    missed like anything else, and one at the foot of a cliff misses shooting up it.
+   *  - **a FLYER at either end is.** No source we could reach states it (the Hive threads are
+   *    behind a bot wall); it follows from the rule being about the ground a unit STANDS on,
+   *    which is `cliffApart`'s reading too. OURS until a source says otherwise.
+   *
+   * The comment's other half — "if target is moving" — is the artillery shell that lands where
+   * its target no longer is, which needs no roll here: a shell is thrown at the GROUND and is
+   * walked out from under (docs/artillery.md).
+   */
+  private shootsUphill(attacker: SimUnit, at: SimUnit | { x: number; y: number }, ranged: boolean): boolean {
+    if (!ranged || !this.cliffLevelAt || attacker.flying || ("flying" in at && at.flying)) return false;
+    return this.cliffLevelAt(at.x, at.y) - this.cliffLevelAt(attacker.x, attacker.y) > CLIFF_STEP / 2;
+  }
+
+  /** The red "miss" the client floats over what was shot at (the basics page's "red "Miss"
+   *  notification"; `MissText*` in UI\MiscData.txt is its row) — for EVERY miss, an evade and a
+   *  Curse as much as a cliff. Over the unit and riding it, or left on the ground a shell was
+   *  thrown at. Public, like the crit's number: it reports a blow, not a payment. */
+  private noteMiss(at: SimUnit | { x: number; y: number } | undefined): void {
+    if (!at) return;
+    this.combatTexts.push({ kind: "miss", unitId: "id" in at ? at.id : 0, x: at.x, y: at.y, text: "", colorSlot: -1, forPlayer: -1 });
   }
 
   private tryEvade(target: SimUnit): boolean {

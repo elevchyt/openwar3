@@ -281,7 +281,8 @@ export const MISC_DATA = {
   ScaledAnimTime: 60,
   /** Max random reaction delay (seconds). */
   ReactionDelay: 0.25,
-  /** A missile's chance to miss a moving target, or one on high ground. */
+  /** "missile chance to miss if target is moving or on high ground" — the file's own comment.
+   *  Read by the sim's uphill roll (world.ts shootsUphill, issue #291). */
   ChanceToMiss: 0.25,
   MissDamageReduction: 0.5,
 
@@ -493,7 +494,7 @@ function parseLike(raw: string, base: unknown): Shaped | null {
 
 /**
  * Rows this module DECLARES that no code reads yet — each names a system that does not exist
- * (trading, a miss chance, a building's decay after death, the follow ranges, …) or one that
+ * (trading, a building's decay after death, the follow ranges, …) or one that
  * reads its own number instead. A map restating one changes nothing, and the map door's log
  * says so rather than reporting it applied. `tools/sim-map-misc-test.cjs` re-derives this list
  * from the source, so a row that gains a reader must leave it (and one that loses its reader
@@ -502,7 +503,7 @@ function parseLike(raw: string, base: unknown): Shaped | null {
 export const MISC_UNREAD: ReadonlySet<string> = new Set([
   "AbilSaleAggroRange", "AgiMoveBonus", "ConstructionLifeDrainRate", "DisplayEnemyInventory",
   "AttackHalfAngle", "BuildingAngle", "BuildingUnblightRadius", "BulletDeathTime", "CancelTime",
-  "ChanceToMiss", "CloseEnoughRange", "CreepCampPathingCellDistance", "DecayTime", "EffectDeathTime",
+  "CloseEnoughRange", "CreepCampPathingCellDistance", "DecayTime", "EffectDeathTime",
   "FogFlashTime", "FollowItemRange", "FollowRange", "GoldMineMaxGold", "GoldMineOwnDuration",
   "InvisSpeed", "MaxCollisionRadius", "RallyZOffset", "ReactionDelay",
   "RootAngle", "ScaledAnimTime", "SelectionCircleBaseZ", "StructureDecayTime",
@@ -799,6 +800,13 @@ export const TEXT_TAG = {
   BountyTextVelocity: [0, 0.03, 100],
   BountyTextLifetime: 3,
   BountyTextFadeStart: 2,
+
+  /** "// missile 'miss' text tag data" — the red "miss" over a shot that went wide (an evade,
+   *  a Curse, a shot up a cliff). Pure red, three seconds, fading from the first. */
+  MissTextColor: [255, 255, 0, 0],
+  MissTextVelocity: [0, 0.03, 100],
+  MissTextLifetime: 3,
+  MissTextFadeStart: 1,
 } as const;
 
 /**
@@ -814,6 +822,7 @@ export const MISC_UI = {
   GoldTextHeight: 0.024,
   LumberTextHeight: 0.024,
   BountyTextHeight: 0.024,
+  MissTextHeight: 0.024,
 } as const;
 
 /** The word the Custom Game screen puts against "Map Size", from `GLUE.*MapRange`. */
