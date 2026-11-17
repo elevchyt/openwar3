@@ -261,6 +261,54 @@ console.log("\nEarthquake (AOeq): the field runs Dur1 = 25; HeroDur is the slow'
   check("…and nothing that walks was hurt", foot.hp > 99990, true);
 }
 
+// The victims below are undead standing off blight: `regenType = blight`, so nothing but the
+// blow moves their hit points and the splash can be read off them exactly.
+console.log("\nCleaving Attack (ANca): Area1 = 250 around the struck unit, and only what targs1 admits (#290)");
+{
+  const def = ABILITIES.get("ANca");
+  check("the row: only DataA is filled; the radius is Area1; no air, no structure", [def.levelData[0].data[0], Number.isNaN(def.levelData[0].data[3]) || def.levelData[0].data[3] === 0, def.levelData[0].area, def.targetFlags.includes("air"), def.targetFlags.includes("structure")], [0.4, true, 250, false, false]);
+  const w = world();
+  const pit = spawn(w, "Nplh", C, C, 0, 0, 1);
+  const struck = dummy(w, "ugho", C + 110, C);
+  // 270 from the struck Ghoul's centre: past the old 200 (+ its 31 of body), inside 250.
+  const beside = dummy(w, "ugho", C + 110, C + 270);
+  const far = dummy(w, "ugho", C + 110, C - 320);
+  const flyer = dummy(w, "ugar", C + 110, C + 120);
+  check("the attack is accepted", w.issueAttack(pit.id, struck.id, true, true), true);
+  let waited = 0;
+  while (struck.hp === 100000 && waited < 6) { w.tick(DT); waited += DT; }
+  run(w, 0.2);
+  check("the blow landed", struck.hp < 100000, true);
+  check("a Ghoul 270 away is cleaved (it was out of reach at 200)", beside.hp < 100000, true);
+  check("…one beyond Area1 is not", far.hp, 100000);
+  check("…and a Gargoyle overhead is not: targs1 has no `air`", flyer.hp, 100000);
+}
+
+console.log("\nPulverize (Awar): DataB inside DataC = 250, half of it out to DataD = 350 (#290)");
+{
+  const row = lvl("Awar");
+  check("the row: 25% for 60, full to 250, half to 350", [row.data[0], row.data[1], row.data[2], row.data[3]], [25, 60, 250, 350]);
+  const { loadTechRegistry } = require(join(REPO, ".sim-build", "src", "data", "techtree.js"));
+  const { loadUpgradeRegistry } = require(join(REPO, ".sim-build", "src", "data", "upgrades.js"));
+  const grid = new PathingGrid({ width: W, height: H, flags: new Uint8Array(W * H) }, [0, 0]);
+  const w = new SimWorld(grid, 1, ABILITIES, undefined, UNITS, loadTechRegistry(vfs), loadUpgradeRegistry(vfs));
+  w.tech.setResearchLevel(0, "Rows", 1);
+  w.tech.invalidate();
+  const tauren = spawn(w, "otau", C, C, 0, 0);
+  const struck = dummy(w, "ugho", C + 120, C);
+  const inner = dummy(w, "ugho", C + 120, C + 200);
+  const ring = dummy(w, "ugho", C + 120, C - 340); // 340 − its 31 of body: past 250, inside 350
+  const out = dummy(w, "ugho", C + 120, C + 420);
+  const flyer = dummy(w, "ugar", C + 120, C + 120);
+  w.issueAttack(tauren.id, struck.id, true, true);
+  run(w, 90);
+  const lost = (u) => 100000 - u.hp;
+  check("it went off, in whole 60s, on a Ghoul inside 250", [lost(inner) > 0, lost(inner) % 60], [true, 0]);
+  check("a Ghoul in the ring took exactly HALF of that (it used to take nothing)", lost(ring), lost(inner) / 2);
+  check("…one past 350 took nothing", lost(out), 0);
+  check("…and neither did a Gargoyle overhead", lost(flyer), 0);
+}
+
 if (failed) {
   console.log(`\n${failed} check(s) FAILED`);
   process.exit(1);

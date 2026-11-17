@@ -24819,7 +24819,10 @@ export class SimWorld {
   }
 
   /** Pulverize (Tauren passive Awar): dataA% chance that a landed attack also deals dataB
-   *  damage to enemies within dataC of the struck target. */
+   *  damage around the struck target — in full inside `War3 "Full Damage Radius"` (DataC,
+   *  250) and HALF between that and `War4 "Half Damage Radius"` (DataD, 350). The outer ring
+   *  used to be dropped altogether (issue #290). Who it reaches is the row's own `targs1 =
+   *  ground,enemy,neutral`, so not a flyer and not a building. */
   private applyPulverize(attacker: SimUnit, target: SimUnit): void {
     const lvl = this.passiveLevelData(attacker, "Awar");
     // Pulverize is granted by the Pulverize upgrade (Rows, Awar's Requires) — the ability
@@ -24828,10 +24831,13 @@ export class SimWorld {
     const chance = this.dataOf(lvl, 0, 25) / 100; // dataA — % chance
     if (chance <= 0 || this.rng() >= chance) return;
     const dmg = this.dataOf(lvl, 1, 60); // dataB — splash damage
-    const radius = this.dataOf(lvl, 2, 250) || 250; // dataC — splash radius
-    for (const t of this.unitsInAreaInternal(target.x, target.y, radius)) {
-      if (t === attacker || t.building || !this.hostile(attacker, t)) continue;
-      this.landDamage(t, dmg, attacker.id, false); // spell-style splash, ignores further armor
+    const full = this.dataOf(lvl, 2, 250) || 250; // dataC — Full Damage Radius
+    const half = Math.max(full, this.dataOf(lvl, 3, 0)); // dataD — Half Damage Radius
+    const flags = this.passiveTargetFlags(attacker, "Awar");
+    for (const t of this.unitsInAreaInternal(target.x, target.y, half)) {
+      if (t === attacker || !this.hostile(attacker, t) || !this.targsAdmit(t, flags)) continue;
+      const inner = Math.hypot(t.x - target.x, t.y - target.y) - t.radius <= full; // edge-to-centre, as the area scan measures
+      this.landDamage(t, inner ? dmg : dmg / 2, attacker.id, false); // spell-style splash, ignores further armor
     }
   }
 
@@ -25759,16 +25765,30 @@ export class SimWorld {
     return chance > 0 && this.rng() < chance;
   }
 
-  /** Cleaving Attack (ANca): the attacker splashes dataA of its swing to other
-   *  enemies within a short radius of the struck target (armor-reduced). */
+  /** The Targets Allowed of the passive `passiveLevelData` answers for — the unit's own ability
+   *  of this code, else the carried item's. Empty (restricts nothing) when there is no row. */
+  private passiveTargetFlags(u: SimUnit, code: string): string[] {
+    const ab = u.abilities.find((a) => a.code === code && a.level >= 1);
+    const def = ab ? this.abilityDefOf(ab) : this.itemAbility(u, code)?.def;
+    return def?.targetFlags ?? [];
+  }
+
+  /** Cleaving Attack (ANca): the attacker splashes dataA of its swing to other enemies
+   *  around the struck target (armor-reduced).
+   *
+   *  The radius is the row's `Area1` (250). It used to be read out of DataD, a column this
+   *  row does not fill — only DataA is — so it was always the 200 fallback (issue #290). And
+   *  WHAT it may strike is the row's own `targs1 = ground,enemy,neutral`: no `air`, no
+   *  `structure`, asked of the row rather than restated here. */
   private applyCleave(attacker: SimUnit, target: SimUnit, rawDamage: number): void {
     const lvl = this.passiveLevelData(attacker, "ANca");
     if (!lvl) return;
     const frac = this.dataOf(lvl, 0); // dataA — cleave fraction
     if (frac <= 0) return;
-    const radius = this.dataOf(lvl, 3, 200) || 200; // dataD — cleave radius
+    const radius = lvl.area || 250;
+    const flags = this.passiveTargetFlags(attacker, "ANca");
     for (const t of this.unitsInAreaInternal(target.x, target.y, radius)) {
-      if (t === target || t === attacker || t.building || !this.hostile(attacker, t)) continue;
+      if (t === target || t === attacker || !this.hostile(attacker, t) || !this.targsAdmit(t, flags)) continue;
       this.landDamage(t, rawDamage * frac, attacker.id, false); // splash ignores further armor tables
     }
   }
