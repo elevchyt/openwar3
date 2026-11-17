@@ -2597,8 +2597,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // for the FIRST THIRD of the duration (Dur=9 → 3s), then the subsiding "Half Damage
   // Dealt" (dataC) every "Half Damage Interval" (dataD, 1s) for the remaining two-thirds.
   // The old code spread dataA over the whole 9s as 1s waves (15 dps for 9s), so the burn
-  // did far too little per second and lasted three times too long. Heroes take the shorter
-  // herodur (2.67s) throughout. Damage begins the instant this handler runs — i.e. when the
+  // did far too little per second and lasted three times too long. Damage begins the instant this handler runs — i.e. when the
   // cast-point wind-up ends — since a field's first wave fires on its next tick (delay 0).
   AHfs: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
@@ -2614,7 +2613,13 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
       const ang = (i / 9) * Math.PI * 2;
       api.emitEffect(FLAMESTRIKE_EMBERS, ctx.x + Math.cos(ang) * ringR, ctx.y + Math.sin(ang) * ringR, 0);
     }
-    const total = caster.isHero && lvl.heroDuration > 0 ? lvl.heroDuration : lvl.duration || 9;
+    // The schedule is `Dur1` (9) and never `HeroDur1` (2.67): a hero duration is what an
+    // effect lasts ON a hero, and this is a fire on the ground. It used to be picked off the
+    // CASTER being a hero — which the Blood Mage always is — so the pillar burned for 0.89 s
+    // (three waves, 45 damage) where the Ubertip says "for 3 seconds" (nine, 135), and the
+    // whole spell for 2.67 s instead of 9 (issue #285). What 2.67 is FOR on this row is not
+    // stated anywhere we have read; nothing here uses it.
+    const total = lvl.duration || 9;
     const fullDur = total / 3; // the "3 seconds" full-damage pillar (Dur=9 → 3s)
     const fullInt = d(lvl, 1, 0.33) || 0.33; // Full Damage Interval
     const halfInt = d(lvl, 3, 1) || 1; // Half Damage Interval

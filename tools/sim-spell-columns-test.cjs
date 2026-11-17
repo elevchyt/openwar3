@@ -129,6 +129,29 @@ console.log("Volcano (ANvc): DataB waves of DataE, DataC apart, ×DataD on a bui
   check("eight waves in all: 800, not 96", wavesOn(foot), 8);
 }
 
+console.log("\nFlame Strike (AHfs): the fire runs on Dur1 = 9, whoever cast it (#285)");
+{
+  const w = world();
+  const mage = caster(w, "Hblm", C, C, 1);
+  const foot = dummy(w, "hfoo", C + 500, C);
+  const row = lvl("AHfs");
+  check("the row: Dur 9 / HeroDur 2.67, 15 every 0.33 then 4 every 1", [row.duration, row.heroDuration, row.data[0], row.data[1], row.data[2], row.data[3]], [9, 2.67, 15, 0.33, 4, 1]);
+  check("the press is accepted", w.issueCast(mage.id, "AHfs", 0, foot.x, foot.y), true);
+  // Find the ignition, then measure from it: the wind-up is the cast's, not the fire's.
+  let waited = 0;
+  while (foot.hp === 100000 && waited < 5) { w.tick(DT); waited += DT; }
+  const lost = () => 100000 - foot.hp;
+  run(w, 3.2);
+  // Nine full waves (3 s / 0.33) of 15, give or take the Footman's regeneration and the first
+  // half-damage tick: the old 2.67-second reading stopped at three waves, 45.
+  check("the pillar: about 135 in its 3 seconds, not 45", lost() > 125 && lost() < 145, true);
+  const afterPillar = lost();
+  run(w, 3);
+  check("…and still burning in the second third (Half Damage Dealt, 4 a second)", lost() > afterPillar + 8, true);
+  run(w, 6);
+  check("about 159 in all (9 × 15 + 6 × 4), not 53", lost() > 145 && lost() < 165, true);
+}
+
 if (failed) {
   console.log(`\n${failed} check(s) FAILED`);
   process.exit(1);
