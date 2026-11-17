@@ -4744,7 +4744,9 @@ body.in-game .load-gate { display: none; }
    BACK: the skip lands at full black and that is where the console arrives, so anything this
    does not cover pops in at full brightness over a screen that is still dark. Hence a z-index
    over the HUD (3), the cinematic panel (4) and the dialogs (6–7), and under the F10 menu's
-   own modal (50). */
+   own modal (50). A DIALOG that comes up takes the cover down outright
+   (`MapViewerScene.showDialog`): the cover is lifted on the sim's clock, and the chapter-ending
+   dialog pauses that clock, which once froze it black over the Victory dialog. */
 .cine-skip-cover {
   position: fixed;
   inset: 0;

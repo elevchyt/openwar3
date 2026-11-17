@@ -10575,7 +10575,8 @@ export class MapViewerScene {
       selectHero: (i) => driver.selectHero(i, true),
       panelOpen: (panel) => this.panelOpen(panel),
       togglePanel: (panel) => { this.togglePanel(panel); },
-      pause: (on) => { if (on !== this.playerPaused) this.askPause(on); },
+      // A player's pause is multiplayer-only, as the F10 menu's button is (`canPause`).
+      pause: (on) => { if (on !== this.playerPaused && (this.multiplayerMatch || !on)) this.askPause(on); },
       openChat: (scope) => this.hud?.openChat(scope ? { scope } : { scope: hasChatAllies(this.localPlayer, this.chatWorld()) ? "allies" : "all" }),
       sendChat: (text, scope) => this.sendChat(text, scope ? { scope } : { scope: hasChatAllies(this.localPlayer, this.chatWorld()) ? "allies" : "all" }),
       inventory: () => (this.rts?.inventorySlots() ?? []).map((sl) => (sl ? { name: sl.name, usable: sl.usable } : null)),
@@ -11654,6 +11655,10 @@ export class MapViewerScene {
         this.askPause(!this.playerPaused);
       },
       isPaused: () => this.playerPaused,
+      // …and only where somebody else is on the clock: a player's pause is a MULTIPLAYER
+      // feature, and in single player the button is not on the panel at all (the menu being
+      // open already stops the world there — `panelPaused`).
+      canPause: () => this.multiplayerMatch,
       // …and what the Options panels behind this menu need: the board a volume drag is heard
       // on (ui/escOptions.ts).
       sounds: () => this.sounds,
@@ -13302,6 +13307,18 @@ export class MapViewerScene {
     // watcher's — the end screen's Continue Game above all, which has no game to continue. They
     // are still SHOWN, greyed, so the screen is the one the match showed.
     if (d && this.replayPlayback) d = { ...d, buttons: d.buttons.map((b) => (b.quit ? b : { ...b, disabled: true })) };
+    // A dialog OUTRANKS the ESC-skip cover, and the cover must go when one comes up. The cover
+    // is lifted on the SIM's clock (`tickCinematicSkip`), and the dialog that ends a chapter
+    // stops that clock: blizzard.j's CustomVictoryDialogBJ calls `PauseGame(true)` in single
+    // player before `DialogDisplay`. Skip the last line of RoC Orc01's victory cinematic and
+    // its cancel trigger fades out for 1.00 s, sleeps 1.00 s and raises Victory — the cover
+    // held black for the fade, then froze there, over a dialog whose hotkeys still worked
+    // behind it. The skip has landed by then (or never will), and what the player should see
+    // under the dialog is the MAP's own fade, which sits beneath the dialogs already.
+    if (d && this.cinematicSkip) {
+      this.cinematicSkip = null;
+      this.cinematic?.setSkipCover(0);
+    }
     this.dialog?.update(d);
     this.dialogUp = !!d;
     document.body.classList.toggle("dialog-on", !!d);

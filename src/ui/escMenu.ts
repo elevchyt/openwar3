@@ -139,6 +139,12 @@ export interface EscMenuActions {
    *  open)? Decides which of the file's two captions the button wears. Absent reads as
    *  "never paused", which is what a screen with no pause to offer wants. */
   isPaused?(): boolean;
+  /** Is there a Pause Game button at all? A PLAYER's pause is a MULTIPLAYER feature — it
+   *  exists to stop the clock for the other people on it (timeouts, the "%s paused the game"
+   *  notice) — so in a single-player game (`bj_isSinglePlayer`: one human seat — a campaign,
+   *  a skirmish, a custom game) the button is not on the panel at all. Opening this menu
+   *  already stops a single-player world (docs/pause.md). Absent reads as "yes". */
+  canPause?(): boolean;
   /** The live SoundBoard, so the Options screen's Sound panel is audible as it is dragged. */
   sounds?(): SoundBoard | null;
   /** The match's game speed, and whether it is LOCKED — every multiplayer game is, because the
@@ -356,7 +362,8 @@ export class EscMenu {
         ],
       });
     }
-    children.push(...panel.children.map((c) => this.captionPause(c)));
+    const noPause = this.panel === "main" && this.actions.canPause?.() === false ? dropPause(panel) : null;
+    children.push(...(noPause?.children ?? panel.children).map((c) => this.captionPause(c)));
 
     return {
       type: "FRAME",
@@ -365,7 +372,7 @@ export class EscMenu {
       withChildren: false,
       props: [
         prop("Width", num(numProp(panel, "Width") ?? 0.288)),
-        prop("Height", num(numProp(panel, "Height") ?? 0.384)),
+        prop("Height", num((numProp(panel, "Height") ?? 0.384) - (noPause?.shrink ?? 0))),
       ],
       children,
     };
@@ -666,4 +673,32 @@ export class EscMenu {
     this.tip = next;
     if (this.screen) this.onBuild(this.screen);
   }
+}
+
+/**
+ * MainPanel WITHOUT its Pause Game button (`EscMenuActions.canPause`), laid out as if it had
+ * never been there. The layout is OURS — the FDF has one MainPanel and no single-player twin —
+ * and it is the least it can be: Save Game takes the Pause button's own anchor (and its
+ * TabFocusDefault), everything chained under Save rides up with it, and the panel loses exactly
+ * the height that moved, so Return to Game (anchored to the panel's BOTTOM) keeps its spacing
+ * rather than leaving a hole above it.
+ */
+function dropPause(panel: FdfFrame): { children: FdfFrame[]; shrink: number } {
+  const pause = findFrame(panel, "PauseButton");
+  const save = findFrame(panel, "SaveGameButton");
+  if (!pause || !save) return { children: panel.children, shrink: 0 };
+  const pointOf = (f: FdfFrame): FdfProp | undefined => f.props.find((p) => p.key === "SetPoint");
+  const yOf = (f: FdfFrame): number => pointOf(f)?.args[4]?.n ?? 0;
+  const shrink = Math.max(0, yOf(pause) - yOf(save)); // -0.067 − -0.104 = 0.037
+  const pausePoint = pointOf(pause);
+  const strip = (f: FdfFrame): FdfFrame | null => {
+    if (f.name === "PauseButton") return null;
+    let out = f;
+    if (f.name === "SaveGameButton" && pausePoint) {
+      out = { ...f, props: [...f.props.map((p) => (p.key === "SetPoint" ? pausePoint : p)), prop("TabFocusDefault")] };
+    }
+    if (!out.children.length) return out;
+    return { ...out, children: out.children.map(strip).filter((c): c is FdfFrame => !!c) };
+  };
+  return { children: panel.children.map(strip).filter((c): c is FdfFrame => !!c), shrink };
 }

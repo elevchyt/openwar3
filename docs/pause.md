@@ -33,6 +33,12 @@ Four things fall out of that block, and all four are implemented:
    not be able to hold the match hostage.
 4. **A solo game has no tally.** That is what the second notify line is for; the timeout ledger
    is only consulted when there is somebody else waiting on you.
+5. **A solo game has no Pause button at all** (the developer's rule: a player's pause is a
+   MULTIPLAYER feature). In single player (`bj_isSinglePlayer`, one human seat — a campaign,
+   a skirmish, a custom game) `EscMenuActions.canPause` is false and `rootFrame` builds
+   MainPanel without `PauseButton`: Save Game takes its anchor, the panel loses the height that
+   moved (`dropPause` — the layout is ours), and the voice "pause" route refuses too. Opening
+   the menu already stops a single-player world, which is all a solo player needs.
 
 ## Three sources, not one boolean
 
