@@ -55,6 +55,7 @@ const ABILITIES = new Map([
   // --- carried passives -------------------------------------------------------------------
   ["AIev", ability("AIev", "AEev", { levelData: [lvl({ data: D(0.15) })] })], // Talisman of Evasion
   ["AImb", ability("AImb", "AImm", { levelData: [lvl({ data: D(150) })] })], // Pendant of Energy
+  ["AIms", ability("AIms", "AIms", { levelData: [lvl({ data: D(60) })] })], // Boots of Speed — DataA 60
   ["AIsr", ability("AIsr", "AIsr", { levelData: [lvl({ data: D(NaN, 0.33) })] })], // Runed Bracers
   ["AIdd", ability("AIdd", "AIdd", { levelData: [lvl({ data: D(0.7, 1) })] })], // Arcanite Shield
   ["AImx", ability("AImx", "Amim", { levelData: [lvl({ data: D(10) })] })], // Necklace of Spell Immunity
@@ -103,7 +104,7 @@ const ITEMS = new Map([
   ["sreg", item("sreg", ["AIsl"])], ["hslv", item("hslv", ["AIrl"])], ["pclr", item("pclr", ["AIpr"])],
   ["phea", item("phea", ["AIh1"])], ["shea", item("shea", ["AIha"])], ["sres", item("sres", ["AIra"])],
   ["tkno", item("tkno", ["AIlm"])], ["tint", item("tint", ["AIim"])], ["tstr", item("tstr", ["AIsm"])],
-  ["evtl", passive("evtl", ["AIev"])], ["penr", passive("penr", ["AImb"])],
+  ["evtl", passive("evtl", ["AIev"])], ["penr", passive("penr", ["AImb"])], ["bspd", passive("bspd", ["AIms"])],
   ["brac", passive("brac", ["AIsr"])], ["arsh", passive("arsh", ["AIdd"])],
   ["nspi", passive("nspi", ["AImx"])], ["gemt", passive("gemt", ["Adt1"])],
   ["ward", passive("ward", ["AIcd"])], ["spsh", passive("spsh", ["ANss"])],
@@ -284,6 +285,25 @@ console.log("\na CARRIED ability is an ability  (passiveLevelData reads the inve
   const bare = unit({ isHero: true });
   world.recomputeStats(bare);
   check("…and an empty inventory does not", bare.maxMana, 500);
+}
+
+// Issue #282. `Units\MiscGame.txt` MoveSpeedBonusesStack=0 on the melee tables, 1 on the
+// two custom copies: whether a second pair of Boots of Speed (`bspd` → `AIms`, DataA 60) adds
+// anything is the data set's answer.
+console.log("\ntwo Boots of Speed are one pair's worth in melee  (MoveSpeedBonusesStack=0)");
+{
+  const { setMapDataSet } = require(join(REPO, ".sim-build", "src", "data", "edition.js"));
+  world = newWorld();
+  const one = give(unit({ isHero: true }), "bspd");
+  check("one pair is +60", one.speed, 330);
+  const two = give(give(unit({ isHero: true }), "bspd", 0), "bspd", 1);
+  check("a second pair adds nothing", two.speed, 330);
+  setMapDataSet("custom");
+  world.recomputeStats(two);
+  check("…but on a CUSTOM map they stack (the custom tables say 1)", two.speed, 390);
+  setMapDataSet("melee");
+  world.recomputeStats(two);
+  check("…and back in melee it is +60 again", two.speed, 330);
 }
 
 console.log("\nthe two damage cuts, each on the pipe its own tooltip names");

@@ -13698,6 +13698,7 @@ export class SimWorld {
       maxHp: 0, maxMana: 0, hpRegen: 0, weaponsOn: 0, magicReduction: 0, rangedReduction: 0,
     };
     if (!u.inventory.length || !this.itemReg || !this.abilities) return b;
+    const speedStack = gameNum("MoveSpeedBonusesStack") !== 0;
     for (const held of u.inventory) {
       if (!held) continue;
       const item = this.itemReg.get(held.itemId);
@@ -13725,7 +13726,10 @@ export class SimWorld {
           // The two the shops made reachable (issue #57). Both are plain passive bonuses, and
           // both were dead code paths until now because nothing sold them: Boots of Speed are
           // the Goblin Merchant's signature item, and the Periapt is the +HP staple.
-          case "AIms": b.speed += val(0); break; // Boots of Speed (+60 movement)
+          // Boots of Speed (+60 movement) — and whether a SECOND pair adds anything is the
+          // data's answer, `MoveSpeedBonusesStack`: 0 on the melee tables, where only the
+          // largest carried bonus counts, 1 on the custom ones, where they add (issue #282).
+          case "AIms": b.speed = speedStack ? b.speed + val(0) : Math.max(b.speed, val(0)); break;
           case "AIml": b.maxHp += val(0); break; // Periapt of Vitality (+150 max HP)
           // …and its mana twin, which had no case at all: `AImm` "MaxManaBonus" is the
           // Pendant of Energy's +150, the Pendant of Mana's +250 and the Mindstaff's +200

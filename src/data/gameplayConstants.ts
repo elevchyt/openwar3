@@ -135,6 +135,11 @@ export const MISC_GAME = {
   MaxUnitSpeed: 400,
   MinBldgSpeed: 25,
   MaxBldgSpeed: 400,
+  /** "Movement - Speed Bonuses Stack" (MiscMetaData `msbs`, a bool). 0 on the melee tables:
+   *  a hero carrying two Boots of Speed moves as fast as with one — the LARGEST carried
+   *  `AIms` bonus counts and the rest are dead weight (SimWorld.itemBonuses, issue #282).
+   *  The custom data sets say 1 (MISC_GAME_CUSTOM). */
+  MoveSpeedBonusesStack: 0,
 
   // --- frost (Frost Armor, Frost Attack) ------------------------------------
   FrostMoveSpeedDecrease: 0.5,
@@ -365,7 +370,7 @@ export const MISC_GAME_V0 = {
  * four `*Cluster` rows — are ones `MISC_GAME` does not model at all; Reign of Chaos's custom
  * copy is the older snapshot there.)
  *
- * Three rows, and the damage one is why this exists: **Spells hitting HERO armour is 0.70 on the
+ * Four rows, and the damage one is why this exists: **Spells hitting HERO armour is 0.70 on the
  * expansion's melee tables and 0.75 everywhere else**, so a chapter graded by the melee number
  * was quietly taking five percentage points off every spell aimed at a hero.
  *
@@ -381,6 +386,9 @@ export const MISC_GAME_CUSTOM = {
   // Hiring from a shop is SILENT on a custom map: 600 is the melee file's, and it is the radius
   // within which creeps hear the transaction (SimWorld.notifyCreepsOfShopUse).
   UnitSaleAggroRange: 0,
+  // Boots of Speed STACK on a custom map (both custom copies say 1 against the melee files' 0),
+  // so a chapter's hero with two pairs really is +120 (SimWorld.itemBonuses).
+  MoveSpeedBonusesStack: 1,
 } as const;
 
 /** The engine's food ceiling for the edition the client is on — 100, or Reign of Chaos's 90. */
