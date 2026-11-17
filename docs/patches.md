@@ -450,7 +450,7 @@ note saying so. That only matters for a ROLLBACK; at the latest level the chain 
 - **The upgrade display icons** are IN the chain now (1.32.0, fifteen `APai` badges, levelled by
   `rlev`), their PASBTN art derived at mount (docs/icons.md).
 - **Two code swaps with no behaviour behind them here** — Moon Glaive's rows moved to code
-  `Aaab` (the engine does not model the glaive's bounce at all yet) and `[utod] Researches`,
+  `Aaab` (the bounce is the weapon slot's `targCount`, not the ability's — docs/artillery.md) and `[utod] Researches`,
   which 1.30.4 states on two lines that the tech tree already unions.
 
 ## New base codes, and what the engine does with them
@@ -470,7 +470,8 @@ passed. `tools/patch-effects-test.cjs` asserts it for each code that matters.
 | `Afra`→`Afrb` | Frost Attack (New) `Afrc` | already implemented (the tower's code until 1.32.7, Frost Breath's after) |
 | `Aakb` | Warsong Battle Drums v2 `AIwd` (item `war2`) | already implemented (the Kodo's War Drums aura, carried) |
 | `AIvu` | Potion of Divinity v2 `AIvg` (item `pdi2`) | already implemented (the invulnerability potions) |
-| `Aatp`, `Amgi`, `AIhu`, `Auuf` | Prioritize, the glaive filter, Orb of Fire v2, Incite Unholy Frenzy | not implemented — the last two are unused at 2.0.4 |
+| `Amgi` | Glaive Bounce Filter (the Huntress) | implemented — the kinds a bounce goes neither to nor from (`SimWorld.bounceFilter`) |
+| `Aatp`, `AIhu`, `Auuf` | Prioritize, Orb of Fire v2, Incite Unholy Frenzy | not implemented — the last two are unused at 2.0.4 |
 
 Every other behaviour change is an `engine` entry in its release with `implemented: false` — the
 to-do list for `patchAtLeast()`.

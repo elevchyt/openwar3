@@ -283,7 +283,7 @@
     { "key": "orb-on-acquire", "note": "Orb effects fire on attacks at auto-acquired targets, not only on ordered attacks", "implemented": false },
     { "key": "orb-bought-while-silenced", "note": "An Orb of Slow or Orb of Lightning bought while its carrier is silenced still works", "implemented": false },
     { "key": "bash-orb-magic-immune-air", "note": "Bash stuns magic-immune air units when the Mountain King attacks with an orb", "implemented": false },
-    { "key": "amgi-bounce-filter", "note": "Bouncing Missile Filter (Amgi): a bouncing missile never bounces to or from a target its Targets Allowed names (the Huntress: structures)", "implemented": false },
+    { "key": "amgi-bounce-filter", "note": "Bouncing Missile Filter (Amgi): a bouncing missile never bounces to or from a target its Targets Allowed names (the Huntress: structures)", "implemented": true },
     { "key": "animate-dead-keeps-abilities", "note": "Units raised by the new Animate Dead (base code AUa2) keep the abilities they had alive", "implemented": false },
     { "key": "prioritize-group-toggle", "note": "The Gargoyle's Prioritize toggles correctly when a group is selected", "implemented": false },
     { "key": "life-drain-self-universal", "note": "Life Drain's damage to the Dark Ranger herself is Universal instead of Magic, so the transfer keeps working while she is magic immune", "implemented": false },

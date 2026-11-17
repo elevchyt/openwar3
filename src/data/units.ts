@@ -118,6 +118,14 @@ export interface WeaponSlotDef {
   areaQuarterFactor: number;
   splashTargets: string[]; // `splashTargs` — what the AREA may catch (vs `targets`, what it may aim at)
   /**
+   * `targCount` — "Attack N - Maximum Number of Targets": how many bodies ONE attack strikes,
+   * the aimed one included. Only a MISSILE (BOUNCE) slot (`weapTp` = `mbounce`) spends it: the
+   * Huntress's glaive is 2 (one bounce; Upgrade Moon Glaive's `ratc` makes it 3) and Naisha's
+   * is 5. On those two rows `Farea` (400) is how far a bounce may reach, `damageLoss` (0.5)
+   * what each hop sheds, and `splashTargs` who a bounce may land on. Every other row says 1.
+   */
+  targetCount: number;
+  /**
    * `showUI` — "Attack N - Show UI". Whether this attack gets an ATTACK COMMAND on the card.
    *
    * This is what separates a tower from a town hall: every tower, and the Orc Burrow, ships
@@ -990,6 +998,7 @@ function weaponSlots(w: Row | undefined, fn: Row | undefined, primaryVal: number
       areaHalfFactor: num(w, `Hfact${n}`, 0.5),
       areaQuarterFactor: num(w, `Qfact${n}`, 0.25),
       splashTargets: list(str(w, `splashTargs${n}`)),
+      targetCount: num(w, `targCount${n}`, 1),
       // The column is missing on a custom row that never thought about it; an attack that
       // exists is one you can aim, so "not stated" reads as shown — only an explicit 0 hides it.
       showUI: num(w, `showUI${n}`, 1) !== 0,

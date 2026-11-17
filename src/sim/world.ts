@@ -132,6 +132,11 @@ export interface SimWeapon {
   areaHalfFactor: number;
   areaQuarterFactor: number;
   splashTargets: string[]; // `splashTargs` — what the area may catch
+  /** `targCount` — how many bodies one attack of a MISSILE (BOUNCE) slot strikes, the aimed one
+   *  included (WeaponSlotDef.targetCount). `base` is the row's; Upgrade Moon Glaive's `ratc`
+   *  adds to it in recomputeStats, as Long Rifles adds to range. See SimProjectile.bounce. */
+  targetCount: number;
+  baseTargetCount: number;
   /** `weapTp` — artillery shots fly at the GROUND, everything else homes (see spawnProjectile). */
   weaponType: WeaponType;
   showUI: boolean; // `showUI` — does this attack get an Attack command on the card
@@ -237,6 +242,16 @@ export interface SimProjectile extends MissileFlight {
    * (26 of the 71 — a Nether Dragon's, the Obsidian Statue's), which is then a plain missile.
    */
   splash?: SplashRings;
+  /**
+   * A MISSILE (BOUNCE) shot (`weapTp` = `mbounce` — the Huntress's glaive, Naisha's): when it
+   * lands it leaves again for the nearest body it may strike within `radius` (`Farea`, 400) of
+   * the one it just hit, carrying `1 - loss` (`damageLoss`, 0.5) of what it carried in, until
+   * `left` hops are spent. `targets` is the slot's `splashTargs` — KIND and ALLEGIANCE, as for
+   * a burst — and `hit` is everybody this attack has struck, since a glaive never comes back
+   * to a body. `block` is 2.0.3's Bouncing Missile Filter (`Amgi`): kinds a glaive bounces
+   * neither to nor from. See bounceOn.
+   */
+  bounce?: { left: number; radius: number; loss: number; targets: string[]; hit: number[]; block?: string[] };
   /**
    * A WAVE: the travelling front of a line spell (Shock Wave, Carrion Swarm, Breath of
    * Fire). Aimed at a direction rather than a unit, and unlike every other projectile it
@@ -412,6 +427,9 @@ export function weaponsFromDef(def: UnitDef): SimWeapon[] {
       areaHalfFactor: s.areaHalfFactor,
       areaQuarterFactor: s.areaQuarterFactor,
       splashTargets: s.splashTargets,
+      // `?? 1`: a slot built outside the SLK loader (a fixture) states no count — one target.
+      targetCount: s.targetCount ?? 1,
+      baseTargetCount: s.targetCount ?? 1,
       weaponType: s.weaponType,
       showUI: s.showUI,
       // `acquire`, and the launch/impact offsets, are UNIT columns — not per-weapon ones.
@@ -3044,6 +3062,8 @@ interface UpgradeBonuses {
   dice: number; armor: number; hp: number; hpPct: number; mana: number; manaRegen: number;
   range: number; sight: number; speed: number; attackSpeed: number; damage: number;
   lumber: number; spillDist: number; spillRadius: number; weaponMask: number;
+  /** `ratc` — bodies added to a bouncing slot's `targCount` (Upgrade Moon Glaive). */
+  targetCount: number;
   attackLevel: number; armorLevel: number;
   /** `rhpr` — hit points a second, on top of the type's own `regenHP` (Troll Regeneration). */
   hpRegen: number;
@@ -13742,8 +13762,7 @@ export class SimWorld {
    *  `base + mod*(level-1)`. Priest Master Training therefore reads +200 max mana at level 2,
    *  not another +100 on top of level 1.
    *
-   *  Still deliberately unhandled rather than guessed at: `ratc` (attack target count — Moon
-   *  Glaive's bounce), `rent`, `rmin`, `radl`. `rtma` is not a stat at all — it flips a
+   *  Still deliberately unhandled rather than guessed at: `rent`, `rmin`, `radl`. `rtma` is not a stat at all — it flips a
    *  unit's availability and is handled by TechState.maxAllowed. */
   private upgradeBonuses(u: SimUnit): Readonly<UpgradeBonuses> {
     // The sum depends on three things only — the owner's research levels, the unit's TYPE (its
@@ -13768,7 +13787,7 @@ export class SimWorld {
   private sumUpgradeBonuses(u: SimUnit): UpgradeBonuses {
     const b = {
       dice: 0, armor: 0, hp: 0, hpPct: 0, mana: 0, manaRegen: 0, range: 0, sight: 0, speed: 0,
-      attackSpeed: 0, damage: 0, lumber: 0, spillDist: 0, spillRadius: 0,
+      attackSpeed: 0, damage: 0, lumber: 0, spillDist: 0, spillRadius: 0, targetCount: 0,
       attackLevel: 0, armorLevel: 0,
       hpRegen: 0, armorType: null as ArmorType | null, spikes: 0, spikesPct: 0, raiseLife: 0,
       // -1 = "no `renw` researched" — the unit keeps whatever mask its data shipped with.
@@ -13822,6 +13841,10 @@ export class SimWorld {
           // opens up the line-splash the weapon already carries a radius for.
           case "rasd": b.spillDist += v; break;
           case "rasr": b.spillRadius += v; break;
+          // Attack Target Count (`ratc`, an `int`): bodies added to the slot's `targCount`.
+          // Upgrade Moon Glaive (`Remg`) is base 1 on the Huntress, whose glaive is 2 — "strike
+          // additional units with her bouncing glaive attacks" (`[Amgl]` Ubertip): a third body.
+          case "ratc": b.targetCount += v; break;
           // Enable Weapons (`renw`) — an attackBits MASK that REPLACES `weapsOn`, it does not
           // add to it. Flying Machine Bombs (`Rhgb`) and Corrosive Breath (`Recb`) are 3 (both
           // slots); Impaling Bolt (`Repb`) is 2, which SWITCHES the Glaive Thrower off slot 1
@@ -14217,6 +14240,8 @@ export class SimWorld {
       w.cooldown = Math.max(w.baseCooldown * speedFactor, w.damagePoint + DAMAGE_POINT_FLOOR);
       w.spillDist = w.baseSpillDist + upg.spillDist; // Storm Hammers — see the spill fields on SimWeapon
       w.spillRadius = w.baseSpillRadius + upg.spillRadius;
+      // Upgrade Moon Glaive — only a slot that bounces has a count to add to (spawnProjectile).
+      w.targetCount = (w.baseTargetCount ?? 1) + upg.targetCount;
     }
     // Root (`Aroo`) swaps which WEAPON SLOT is live, and the Data columns say so outright
     // (AbilityMetaData Roo1..Roo4 → WorldEditStrings):
@@ -23333,6 +23358,14 @@ export class SimWorld {
       splash: w.weaponType === WeaponType.MissileSplash && Math.max(w.areaFull, w.areaHalf, w.areaQuarter) > 0
         ? this.splashRings(w)
         : undefined,
+      // A MISSILE (BOUNCE) slot: the glaive goes on from whoever it strikes (SimProjectile.bounce).
+      // Keyed on `weapTp` like the two above, and on a count that leaves a hop to make.
+      bounce: w.weaponType === WeaponType.MissileBounce && w.targetCount > 1 && w.areaFull > 0
+        ? {
+          left: w.targetCount - 1, radius: w.areaFull, loss: w.damageLoss, targets: w.splashTargets, hit: [t.id],
+          block: this.bounceFilter(u),
+        }
+        : undefined,
     };
     this.projectiles.set(id, proj);
     this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y, z: proj.z });
@@ -23663,6 +23696,7 @@ export class SimWorld {
           const shooter = this.units.get(p.sourceId);
           if (shooter) this.applyPillage(shooter, t, dealt); // ranged Pillage (Raider) off a struck building
           if (p.spill) this.applySpill(p, t); // Storm Hammers / Impaling Bolt carry on down the line
+          if (p.bounce) this.bounceOn(p, t); // a glaive leaves again for the next body
         }
         this.removeProjectile(p.id);
       } else {
@@ -23854,6 +23888,93 @@ export class SimWorld {
     if (a.targets.includes("tree")) {
       this.shellTrees(struck.x, struck.y, Math.max(a.quarter, a.half, a.full), (gap) => p.damage * hitShare * ringShare(a, gap));
     }
+  }
+
+  /**
+   * The BOUNCE of a MISSILE (BOUNCE) shot — `weapTp` = `mbounce`, the Huntress's glaive
+   * (Units\UnitWeapons.slk `[esen]`: targCount 2, damageLoss 0.5, Farea 400) and Naisha's
+   * (`[ensh]`, targCount 5). Issue #279: the glaive struck one body and stopped, and Upgrade
+   * Moon Glaive (`Remg`, `ratc` +1) bought nothing.
+   *
+   * Having just struck `struck`, the glaive leaves from where that body stands for the NEAREST
+   * one it may still hit within `Farea` of it, as a missile of its own (same art, speed and
+   * attack type, homing as the first did), carrying `1 - damageLoss` of what it carried in —
+   * 50%, then 25% — until the slot's count is spent. Who it may land on is the slot's
+   * `splashTargs`, read as a burst's is: the KIND (`ground,structure,debris` — a glaive never
+   * goes up to a flyer) and the ALLEGIANCE (`enemy`, so not through the Huntress's own army).
+   * No body is struck twice by one attack.
+   *
+   * 2.0.3's Bouncing Missile Filter (`Amgi`, src/patches/data/2.0.3.json) is `block`: "no
+   * longer bounce to or from structures" — its Targets Allowed names the kinds that END the
+   * chain when struck and are skipped as a next body.
+   *
+   * What a bounce does NOT carry is the blow's own riders — the orb, the strike passives, the
+   * spill: those were the aimed attack's, and the hop is only its damage.
+   */
+  /** The kinds `u`'s bouncing missile goes neither to nor from: the Targets Allowed of a
+   *  Bouncing Missile Filter (`Amgi`, 2.0.3 — `structure` on the Huntress) on its TYPE's
+   *  ability list. Read off the type because the row is a filter with no button, so it is
+   *  not one of the unit's live abilities (KNOWN_ABILITIES). Undefined before 2.0.3. */
+  private bounceFilter(u: SimUnit): string[] | undefined {
+    for (const id of this.unitReg?.get(u.typeId)?.abilities ?? []) {
+      const def = this.abilities?.get(id);
+      if (def?.code === "Amgi") return def.targetFlags;
+    }
+    return undefined;
+  }
+
+  private bounceOn(p: SimProjectile, struck: SimUnit): void {
+    const b = p.bounce!;
+    if (b.left < 1) return;
+    if (b.block?.includes(targetKeyOf(struck))) return; // never bounces FROM one of these
+    const source = this.units.get(p.sourceId)
+      ?? (p.sourceOwner !== undefined
+        ? ({ id: p.sourceId, owner: p.sourceOwner, team: p.sourceTeam ?? p.sourceOwner, neutralPassive: false } as SimUnit)
+        : undefined);
+    if (!source) return;
+    let next: SimUnit | undefined;
+    let best = Infinity;
+    for (const t of this.units.values()) {
+      if (b.hit.includes(t.id)) continue;
+      if (t.hp <= 0 || t.invulnerable || t.hidden || t.locust || isOffField(t)) continue; // nobody there to hit
+      const key = targetKeyOf(t);
+      if (b.targets.length && !b.targets.includes(key)) continue;
+      if (b.block?.includes(key)) continue; // …nor TO one
+      if (!this.splashAdmits(source, t, b.targets)) continue;
+      // An invisible body the shooter's side cannot see is not one a glaive goes looking for
+      // (the same test a missile in flight loses its target on — missileDisjointed).
+      if (p.sourceTeam !== undefined && t.team !== p.sourceTeam && t.invisible && !this.teamDetects(p.sourceTeam, t.x, t.y, t)) continue;
+      const gap = Math.hypot(t.x - struck.x, t.y - struck.y) - t.radius;
+      if (gap > b.radius || gap >= best) continue;
+      best = gap;
+      next = t;
+    }
+    if (!next) return;
+    const id = this.nextProjectileId++;
+    const z = p.impactZ;
+    const hop: SimProjectile = {
+      id,
+      x: struck.x,
+      y: struck.y,
+      z,
+      sourceId: p.sourceId,
+      targetId: next.id,
+      speed: p.speed,
+      damage: p.damage * (1 - b.loss),
+      art: p.art,
+      attackType: p.attackType,
+      weaponSound: p.weaponSound,
+      startZ: z,
+      impactZ: p.impactZ - struck.flyHeight + next.flyHeight,
+      startDist: Math.hypot(next.x - struck.x, next.y - struck.y),
+      arc: p.arc,
+      sourceOwner: p.sourceOwner,
+      sourceTeam: p.sourceTeam,
+      targetTeleports: next.teleports,
+      bounce: { ...b, left: b.left - 1, hit: [...b.hit, next.id] },
+    };
+    this.projectiles.set(id, hop);
+    this.spawnedProjectiles.push({ id, art: hop.art, x: hop.x, y: hop.y, z: hop.z });
   }
 
   /** The unit a burst is striking this instant, so `kill` can make the death a splatter

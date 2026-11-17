@@ -265,6 +265,10 @@ export const UNIT_SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   usr2: w2(n, (w, v) => { w.spillRadius = v; }),
   udl1: w1(n, (w, v) => { w.damageLoss = v; }),
   udl2: w2(n, (w, v) => { w.damageLoss = v; }),
+  // "Maximum Number of Targets" (`targCount`) — a bouncing missile's count, the aimed body
+  // included (WeaponSlotDef.targetCount).
+  utc1: w1(n, (w, v) => { w.targetCount = v; }),
+  utc2: w2(n, (w, v) => { w.targetCount = v; }),
   // AREA splash — the three concentric rings an artillery shot lands in (`Farea`/`Harea`/
   // `Qarea`) and what the burst may CATCH (`splashTargs`, which is not the same list as what
   // the shot may be aimed at). A custom tower given an area of effect had none of it: 42 of
@@ -478,7 +482,6 @@ export const UNIT_FIELD_NOTES: Record<string, string> = {
   // rather than adding a field. Left for that change, not for this one.
   udu1: "dmgUp1 — every one of the 837 stock rows leaves it empty", udu2: "dmgUp2 — likewise empty on every stock row",
   umh1: "missiles always home (MissileHoming)", umh2: "missiles always home (MissileHoming)",
-  utc1: "no multi-target attacks (targCount1)", utc2: "no multi-target attacks (targCount2)",
 
   // Movement / pathing we do not model yet.
   umas: "maxSpd — no speed clamp of either kind is applied yet, per-type or global",

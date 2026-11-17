@@ -842,7 +842,7 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   AIdd: { target: "passive" }, // Defend (item) — on a unit, pierceTaken/magicTaken (Elune's Grace, Spell Shield)
   AIde: { target: "passive" }, // Item Armor Bonus
   AIsb: { target: "passive" }, // Item Spell Bonus
-  Amgl: { target: "passive" }, // Moon Glaive
+  Amgl: { target: "passive" }, // Moon Glaive — the badge; the bounce is the weapon slot's (SimWorld.bounceOn)
   ANic: { target: "passive" }, // Incinerate
   ANde: { target: "passive" }, // Demolish
   Aphx: { target: "passive" }, // Phoenix morphing
