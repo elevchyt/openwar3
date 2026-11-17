@@ -7016,6 +7016,10 @@ export class RtsController {
    *  (render/mapViewer.ts) turns it into the gold line above the console and the error
    *  sound. Set by the host; the sim itself has no UI. */
   onRefuse?: (errorKey: string) => void;
+  /** The player's own string table (`GlobalStrings.fdf` + `InfoPanelStrings.fdf`), the lookup
+   *  the HUD's driver answers `uiString` with — the world hover slab words its "Level N" and
+   *  "Gold: N" lines from it, so a localized install hovers in its own language (issue #300). */
+  uiString?: (key: string, fallback: string) => string;
 
   /** Execute the armed order at a screen point. Returns true when consumed
    *  (the caller should then clear the HUD's armed state); false leaves it armed —
@@ -11590,6 +11594,10 @@ export class RtsController {
    *    • a neutral-passive prop (shop, critter, neutral building) → its name only.
    *    • a gold mine → "Gold Mine" + "Gold: N"; a ground item → its name. */
   private computeHoverTip(): { x: number; y: number; z: number; radius: number; lines: HoverLine[] } | null {
+    // Read, never retyped (docs/tooltips.md): `GlobalStrings.fdf` INFOPANEL_LEVEL "Level %u" and
+    // `InfoPanelStrings.fdf` COLON_GOLD "Gold:" — the info panel's own two strings (hud.ts).
+    const levelLine = (n: number): string => (this.uiString?.("INFOPANEL_LEVEL", "Level %u") ?? "Level %u").replace("%u", String(n));
+    const goldLine = (n: number): string => `${this.uiString?.("COLON_GOLD", "Gold:") ?? "Gold:"} ${n}`;
     if (this.hovered !== null) {
       // The slab floats over the unit, so it reads the same record the model does.
       const u = this.frameUnit(this.hovered);
@@ -11605,24 +11613,24 @@ export class RtsController {
         lines.push({ text: e.name, color: HOVER_TEXT });
         if (!u.neutralPassive && !guised) {
           const lvl = u.isHero ? u.level : (this.registry.get(e.typeId)?.level ?? 0);
-          if (lvl > 0) lines.push({ text: `Level ${lvl}`, color: HOVER_TEXT });
+          if (lvl > 0) lines.push({ text: levelLine(lvl), color: HOVER_TEXT });
         }
       } else if (u.owner === this.localPlayer) {
         // Your own units wear no owner line; only a hero (name + level) and a covered gold
         // mine (name + gold) are worth a slab.
         if (!u.isHero && gold === null) return null;
         lines.push({ text: u.properName || e.name, color: HOVER_TEXT });
-        if (u.isHero) lines.push({ text: `Level ${u.level}`, color: HOVER_TEXT });
+        if (u.isHero) lines.push({ text: levelLine(u.level), color: HOVER_TEXT });
       } else {
         // Another player's unit: the owner's name, coloured by diplomacy to us.
         const ally = this.localAlly(u.owner);
         lines.push({ text: this.playerLabel(u.owner), color: ally ? HOVER_OWNER_ALLY : HOVER_OWNER_ENEMY });
         if (u.isHero) {
           lines.push({ text: u.properName || e.name, color: HOVER_TEXT });
-          lines.push({ text: `Level ${u.level}`, color: HOVER_TEXT });
+          lines.push({ text: levelLine(u.level), color: HOVER_TEXT });
         }
       }
-      if (gold !== null) lines.push({ text: `Gold: ${gold}`, color: HOVER_TEXT });
+      if (gold !== null) lines.push({ text: goldLine(gold), color: HOVER_TEXT });
       return { x: u.x, y: u.y, z: this.standZ(e, u.x, u.y) + e.moveHeight, radius: e.selRadius, lines };
     }
     if (this.hoveredMine !== null) {
@@ -11631,7 +11639,7 @@ export class RtsController {
       const name = this.registry.get("ngol")?.name || "Gold Mine";
       return {
         x: m.x, y: m.y, z: this.heightAt(m.x, m.y), radius: 64,
-        lines: [{ text: name, color: HOVER_TEXT }, { text: `Gold: ${m.gold}`, color: HOVER_TEXT }],
+        lines: [{ text: name, color: HOVER_TEXT }, { text: goldLine(m.gold), color: HOVER_TEXT }],
       };
     }
     if (this.hoveredItem !== null) {

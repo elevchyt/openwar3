@@ -2460,6 +2460,7 @@ export class MapViewerScene {
       this.rts.setSoundBoard(this.sounds);
       this.rts.simWorld.tileset = terrain.tileset; // which critters belong here (itemMechanicalCritter)
       this.rts.onRefuse = (key) => this.refuse(key); // refused orders → the gold line + error sound
+      this.rts.uiString = (key, fallback) => this.globalStrings?.strings.get(key) ?? fallback; // the hover slab's "Level N" / "Gold: N"
       this.rts.onDisarmed = () => this.hud?.clearOrderMode(); // a cast began under the aim (RtsController.disarmOnCast)
       // Somebody handed us the keys to their army (or took them back). SHARED CONTROL only:
       // the other alliance settings change constantly and silently, and the data keeps a line
