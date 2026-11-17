@@ -182,6 +182,9 @@ export interface MeleeConfig {
   /** Advanced Options → Full Shared Unit Control: team-mates are seeded with
    *  `AllianceType.SharedControl` as well as the five ally grants. */
   sharedControl?: boolean;
+  /** The lobby's options as common.j `mapflag` bits (net/advancedOptions.ts `mapFlagsOf`) —
+   *  what the map script's `IsMapFlagSet` answers from, Random Hero above all (issue #296). */
+  mapFlags?: number;
   /** Advanced Options → All Talk (issue #133): voice chat reaches everybody, not just allies. */
   allTalk?: boolean;
   /** The HOST's Game Speed (src/data/gameSpeed.ts) — present on every networked match, where it

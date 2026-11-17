@@ -48,10 +48,19 @@ export function registerMeleeNatives(rt: Runtime): void {
   // expansion — common.ai's PickMeleeHero reads exactly that to draw from three heroes, not four.
   def(rt, "VersionCompatible", (c, a) => jBool(c.rt.enumIndex(a[0]) <= versionIndex()));
   def(rt, "VersionSupported", (c, a) => jBool(c.rt.enumIndex(a[0]) <= VERSION_FROZEN_THRONE));
-  // IsMapFlagSet(MAP_RANDOM_HERO) — a lobby melee option. We expose none of them yet, so
-  // every flag reads false: WC3's default melee game (no random hero → each player gets a
-  // free-hero token instead; no random races; no fixed teams).
-  def(rt, "IsMapFlagSet", () => jBool(false));
+  // The map flags (Runtime.mapFlags, issue #296): the lobby's Advanced Options seed them, a
+  // script's `SetMapFlag` writes them and Blizzard.j reads them back — `IsMapFlagSet(
+  // MAP_RANDOM_HERO)` swaps each player's free-hero token for a rolled hero standing by the
+  // hall. A `mapflag`'s index is its own bit (common.j: every one is a power of two).
+  def(rt, "IsMapFlagSet", (c, a) => {
+    const bit = c.rt.enumIndex(a[0]);
+    return jBool(bit > 0 && (c.rt.mapFlags & bit) !== 0);
+  });
+  def(rt, "SetMapFlag", (c, a) => {
+    const bit = c.rt.enumIndex(a[0]);
+    if (bit > 0) c.rt.mapFlags = truthy(a[1]) ? c.rt.mapFlags | bit : c.rt.mapFlags & ~bit;
+    return JNULL;
+  });
 
   // --- the game clock (MeleeStartingVisibility) ---
   // A melee game opens at 08:00 (bj_MELEE_STARTING_TOD), set through

@@ -1813,6 +1813,9 @@ export class MapViewerScene {
   private observers: ReadonlyArray<{ id: number; peer: number; name: string }> = [];
   /** Advanced Options → Lock Teams (`MeleeConfig.lockTeams`): the Allies dialog's boxes are dead. */
   private lockTeams = false;
+  /** The lobby's options as `mapflag` bits (`MeleeConfig.mapFlags`) — handed to the map script
+   *  before config(), where `IsMapFlagSet(MAP_RANDOM_HERO)` reads them (issue #296). */
+  private mapFlags = 0;
   /** Advanced Options → All Talk (`MeleeConfig.allTalk`): voice reaches everybody, not allies. */
   private allTalk = false;
   /** Every seat's race as the match resolved it — the voice plates wear the speaker's symbol. */
@@ -3034,6 +3037,7 @@ export class MapViewerScene {
     this.observer = config.observer === true || playback !== null;
     this.observers = config.observers ?? [];
     this.lockTeams = config.lockTeams === true;
+    this.mapFlags = config.mapFlags ?? 0;
     this.allTalk = config.allTalk === true;
     // A LAN client is told (every human slot in a shared config says "user", so
     // the fallback would seat every machine on the same player — see MeleeConfig.localPlayer).
@@ -5482,6 +5486,7 @@ export class MapViewerScene {
         worldWritingHooks: this.worldWritingHookNames(),
         localViewHooks: this.localViewHookNames(),
         lobby,
+        mapFlags: this.mapFlags,
         // What `GetPlayerColor(Player(PLAYER_NEUTRAL_AGGRESSIVE))` answers — a campaign map
         // (UndeadX05) colours its sleeping guards off it so they read as creeps.
         neutralColor: neutralTeamColor(this.vfs),

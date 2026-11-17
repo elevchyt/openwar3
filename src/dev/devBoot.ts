@@ -19,6 +19,7 @@ import { WebSocketTransport } from "../net/transport";
 import type { StartMatch as StartMatchMsg } from "../net/protocol";
 import { observerSeats, toConfig } from "../ui/fdfLan";
 import { buildStart, newSetup, seatPeers } from "../net/lobbySetup";
+import { mapFlagsOf } from "../net/advancedOptions";
 import { matchLinkFrom, type MatchLinkSetup } from "../game/matchLink";
 import { MELEE_INSANE, MELEE_NEWBIE, MELEE_NORMAL } from "../ai/ids";
 import { edition, setEdition, type Edition } from "../data/edition";
@@ -210,8 +211,12 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   // without the lobby (a 2v2 on Lost Temple: whether the match is decided when one side is
   // gone). Seats past the list keep the map's own team.
   const teams = (params.get("teams") ?? "").split(",").filter((t) => t.trim() !== "").map(Number);
+  // `?randomhero` — Advanced Options → Random Hero, as the lobby states it to the map script
+  // (`MeleeConfig.mapFlags`, issue #296): every seat starts with a rolled hero beside its hall.
+  const randomHero = params.has("randomhero");
   const devConfig = (info: MapInfo): MeleeConfig => {
-    const base = meleeConfigFor(info, player, seed, fog, race, aiRace, ai, aiPlus);
+    const seated = meleeConfigFor(info, player, seed, fog, race, aiRace, ai, aiPlus);
+    const base: MeleeConfig = { ...seated, mapFlags: mapFlagsOf({ randomHero }, fog) };
     const cfg = observe ? observeConfig(base, ai, aiPlus) : base;
     if (!teams.length) return cfg;
     return { ...cfg, slots: cfg.slots.map((s, i) => (i < teams.length && Number.isFinite(teams[i]) ? { ...s, team: teams[i] } : s)) };

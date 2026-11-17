@@ -1379,7 +1379,7 @@ console.log('\n[7.3] Melee from the script (EchoIsles war3map.j → blizzard.j M
     const START = [{ x: -5184, y: 2944 }, { x: 4672, y: 2944 }];
 
     /** One melee bring-up: races per slot → what the script did to the world. */
-    function runMelee(races) {
+    function runMelee(races, mapFlags = 0) {
       // The pre-placed world CreateAllUnits would have put down — a gold mine by each start
       // location, creeps camped on start 0, and a creep camp + a shop far away. This is what
       // mapViewer's bridge exposes from SimWorld (+ the mines, which are units to a script).
@@ -1444,6 +1444,8 @@ console.log('\n[7.3] Melee from the script (EchoIsles war3map.j → blizzard.j M
         isPlayerAlly: (p, q) => p === q,
       };
       const interp = buildInterpreter([COMMON_J, BLIZZARD_J, MAP_J], { gameType: 1, hooks });
+      // The lobby's Advanced Options, as loadMapScript seeds them: before config() (issue #296).
+      interp.rt.mapFlags = mapFlags;
       interp.run('config', []);
       // The lobby handoff: which slots are PLAYING, as which race (a "random" already rolled).
       interp.rt.applyLobby(races.map((raceIndex, i) => ({ index: i, raceIndex, controller: 1, team: i, startLocation: -1 })), 0);
@@ -1481,6 +1483,33 @@ console.log('\n[7.3] Melee from the script (EchoIsles war3map.j → blizzard.j M
     if (Math.hypot(hall.x - START[0].x, hall.y - START[0].y) < 0.01 && spread) {
       ok(`placement: Town Hall on the start location; all 5 Peasants clumped 320u off the mine (MeleeGetProjectedLoc)`);
     } else fail(`placement: hall (${hall.x},${hall.y}) vs start (${START[0].x},${START[0].y}); peasant clump centre (${cx.toFixed(0)},${cy.toFixed(0)}) spread=${spread}`);
+
+    // Random Hero (issue #296). `IsMapFlagSet` answered false to everything, so the lobby's box
+    // did nothing. Off — the default — nobody starts with a hero; on, MAP_RANDOM_HERO
+    // (common.j: ConvertMapFlag(8192*16)) makes each MeleeStartingUnits<Race> roll one of its
+    // race's four through MeleeRandomHeroLoc, off to the side of the hall.
+    const HEROES = { 0: ['Hamg', 'Hmkg', 'Hpal', 'Hblm'], 1: ['Obla', 'Ofar', 'Otch', 'Oshd'] };
+    const heroesOf = (run, p) => run.spawned.filter((u) => u.player === p && HEROES[p].includes(u.typeId));
+    if (heroesOf(r, 0).length === 0 && heroesOf(r, 1).length === 0 && r.interp.rt.mapFlags === 0) {
+      ok(`no Random Hero flag: nobody starts with a hero (the free-hero token branch)`);
+    } else fail(`default game spawned heroes: P0 ${heroesOf(r, 0).length}, P1 ${heroesOf(r, 1).length}, flags ${r.interp.rt.mapFlags}`);
+    const rh = runMelee([1, 2], 8192 * 16);
+    if (heroesOf(rh, 0).length === 1 && heroesOf(rh, 1).length === 1 && rh.spawned.length === meleeSpawns + 2) {
+      ok(`MAP_RANDOM_HERO set by the lobby: each player starts with ONE rolled hero of its own race (${heroesOf(rh, 0)[0].typeId}, ${heroesOf(rh, 1)[0].typeId})`);
+    } else fail(`random hero: P0 ${heroesOf(rh, 0).map((u) => u.typeId)}, P1 ${heroesOf(rh, 1).map((u) => u.typeId)}, ${rh.spawned.length} spawns (want ${meleeSpawns + 2})`);
+    // …and a SCRIPT's own SetMapFlag is read back, one bit at a time.
+    {
+      const rt = rh.interp.rt;
+      const flag = (i) => rt.enumHandle('mapflag', i);
+      const call = (name, ...a) => rt.natives.get(name)({ rt }, a);
+      const bool = (v) => v.k === 'bool' && v.b === true;
+      call('SetMapFlag', flag(32), { k: 'bool', b: true });
+      const on = bool(call('IsMapFlagSet', flag(32))) && bool(call('IsMapFlagSet', flag(8192 * 16))) && !bool(call('IsMapFlagSet', flag(16)));
+      call('SetMapFlag', flag(8192 * 16), { k: 'bool', b: false });
+      if (on && !bool(call('IsMapFlagSet', flag(8192 * 16))) && rt.mapFlags === 32) {
+        ok(`SetMapFlag writes and clears a flag and IsMapFlagSet reads it back — the others untouched`);
+      } else fail(`SetMapFlag round trip: on=${on}, flags now ${rt.mapFlags} (want 32)`);
+    }
 
     // MeleeStartingResources — the Frozen Throne purse (bj_MELEE_STARTING_GOLD_V1 = 500 /
     // _LUMBER_V1 = 150). Reign of Chaos would have given 750/200, so this also proves
@@ -2126,7 +2155,7 @@ endfunction`;
   } else fail(`local defeat played no sound: ${JSON.stringify(sounds)}`);
 
   // The defeat dialog offers "Continue Observing" only when the map allows observers on
-  // death (IsMapFlagSet(MAP_OBSERVERS_ON_DEATH)) — which we report false, so: quit only.
+  // death (IsMapFlagSet(MAP_OBSERVERS_ON_DEATH)) — unset here (no lobby asked for it), so: quit only.
   if (lost && lost.buttons.length === 1 && lost.buttons[0].quit === true) {
     ok(`with no observers-on-death map flag, the defeat dialog offers only Quit — no "Continue Observing"`);
   } else fail(`defeat buttons: ${JSON.stringify((lost?.buttons ?? []).map((b) => plain(b.text)))}`);

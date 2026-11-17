@@ -119,6 +119,9 @@ export function loadMapScript(
     runMain?: boolean;
     /** `watchers`: the player numbers only OBSERVING the match (Runtime.watchers). */
     lobby?: { slots: ReadonlyArray<LobbySlot>; localPlayer: number; watchers?: ReadonlyArray<number> };
+    /** The lobby's options as common.j `mapflag` bits (Runtime.mapFlags) — in place BEFORE
+     *  config() runs, so a map's own `SetMapFlag` lands on top of them. */
+    mapFlags?: number;
     /** The playercolor index the four NEUTRAL players answer `GetPlayerColor` with — the
      *  black swatch, whose index is the install's (render/teamColor.ts `neutralTeamColor`).
      *  Passed in rather than read here: the interpreter never opens the art. */
@@ -186,6 +189,7 @@ export function loadMapScript(
   if (placedUnitCount(map) === 0) interp.rt.recordOnlySpawnFns.delete("CreateAllUnits");
   opts.onBoot?.(engine);
   if (opts.restore) return engine;
+  interp.rt.mapFlags = opts.mapFlags ?? 0;
   interp.run("config", []);
   if (opts.lobby) interp.rt.applyLobby(opts.lobby.slots, opts.lobby.localPlayer, opts.lobby.watchers);
   if (opts.runMain) {

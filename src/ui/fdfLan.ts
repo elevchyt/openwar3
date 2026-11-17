@@ -10,7 +10,7 @@ import type { ListItem } from "./fdf/widgets";
 import { reachabilityLine, type LanLobby, type LobbyState } from "../net/lobby";
 import { LABEL_GOLD } from "./glueColors";
 import type { StartMatch } from "../net/protocol";
-import { advancedOf, visibilityFog } from "../net/advancedOptions";
+import { advancedOf, mapFlagsOf, visibilityFog } from "../net/advancedOptions";
 import { LAN_JOIN_OVERRIDE, OW3_STRINGS } from "../overrides";
 import { showJoinAddressDialog, type JoinAddressDialog } from "./joinAddressDialog";
 import { OBSERVER_PLAYER, type MeleeConfig, type SlotConfig } from "./lobby";
@@ -369,11 +369,14 @@ export function toConfig(msg: StartMatch, me: number | undefined, mapExplored: b
   // is on the bench instead, and that machine plays nobody (MeleeConfig.observer).
   const seat = slots.find((s) => s.peer === me)?.id;
   const watching = seat === undefined ? observers.find((o) => o.peer === me) : undefined;
+  const fog = visibilityFog(advanced.visibility, mapExplored);
   return {
     slots,
     // Advanced Options → Visibility. An older host's `start` carries none and reads as the
     // pane's own default, the map's own visibility.
-    fog: visibilityFog(advanced.visibility, mapExplored),
+    fog,
+    // …and the whole pane as the flags the map's script asks about (Random Hero, issue #296).
+    mapFlags: mapFlagsOf(advanced, fog),
     seed: msg.seed,
     localPlayer: watching ? watching.id : seat,
     ...(watching ? { observer: true } : {}),

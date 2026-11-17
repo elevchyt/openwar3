@@ -1879,6 +1879,20 @@ export class Runtime {
     return this.spawnDepth > 0;
   }
 
+  /**
+   * The MAP FLAGS — `SetMapFlag` / `IsMapFlagSet` (issue #296). common.j numbers every `mapflag`
+   * as a power of two (`MAP_FOG_HIDE_TERRAIN = ConvertMapFlag(1)` … `MAP_RANDOM_HERO =
+   * ConvertMapFlag(8192*16)`), so the set is one bitfield and a flag's enum index IS its bit.
+   *
+   * Seeded with the LOBBY's options before config() runs (`loadMapScript`'s `mapFlags`,
+   * net/advancedOptions.ts `mapFlagsOf`), written by the script's own `SetMapFlag`, and read by
+   * Blizzard.j: the four `MeleeStartingUnits<Race>` open on `IsMapFlagSet(MAP_RANDOM_HERO)` and
+   * `MeleeDefeatDialogBJ` offers "Continue Observing" on `MAP_OBSERVERS_ON_DEATH`. The native
+   * used to answer false to everything, so ticking Random Hero gave nobody a hero. A plain
+   * number field: it is match state and a saved game keeps it (docs/save-games.md).
+   */
+  mapFlags = 0;
+
   /** SetPlayerTechMaxAllowed / GetPlayerTechMaxAllowed — "player:tech" → cap. The SCRIPT's own
    *  copy, so that `ReducePlayerTechMaxAllowed` (which reads the cap back before lowering it)
    *  sees what it wrote; the cap that decides anything is the one the same native hands the sim

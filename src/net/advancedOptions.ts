@@ -32,16 +32,17 @@ export interface AdvancedOptions {
   sharedControl: boolean;
   /** Every seat's race is rolled at Start, whatever the row said. */
   randomRaces: boolean;
-  /** Each hero is a rolled one (`IsMapFlagSet(MAP_RANDOM_HERO)` in Blizzard.j). Carried and
-   *  shown; the native still answers false (src/jass/natives/melee.ts). */
+  /** Each player STARTS with a rolled hero instead of a free-hero token: Blizzard.j's four
+   *  `MeleeStartingUnits<Race>` read `IsMapFlagSet(MAP_RANDOM_HERO)` (`mapFlagsOf`). */
   randomHero: boolean;
   /**
    * How other people may WATCH the game. Only `FULL_OBSERVERS` changes anything here: it
    * opens an Observers force in the lobby (`lobbySetup.ts` `observerSlots`) whose members
-   * see the whole map and talk only to each other. The other two ways of watching are
-   * chosen, shown and carried, and nothing more — a referee is a full observer who may also
-   * talk to the players, and observers-on-defeat is a defeated player staying to watch; both
-   * are the same seat with one extra rule, and neither rule is written yet.
+   * see the whole map and talk only to each other. A referee is a full observer who may also
+   * talk to the players, and that rule is not written yet. Observers-on-defeat is a defeated
+   * player staying to watch: it reaches the script as `MAP_OBSERVERS_ON_DEATH` (`mapFlagsOf`),
+   * which is what makes Blizzard.j's defeat dialog offer "Continue Observing" — the button is
+   * the game's; what the loser then SEES is still their own fog, not an observer's whole map.
    */
   observers: ObserverSetting;
   visibility: Visibility;
@@ -120,4 +121,44 @@ export function advancedOf(a: Partial<AdvancedOptions> | undefined): AdvancedOpt
   const out = { ...DEFAULT_ADVANCED, ...(a ?? {}) };
   out.gameSpeed = toGameSpeed(out.gameSpeed); // off the wire: never trust it to be a rung
   return out;
+}
+
+/**
+ * common.j's `mapflag` constants — each one its own bit (`MAP_RANDOM_HERO =
+ * ConvertMapFlag(8192*16)`), which is what `IsMapFlagSet` is asked with. Only the ones a lobby
+ * option stands behind; the rest (handicaps, trading, cheats…) are a script's to set.
+ */
+export const MAP_FLAG = {
+  FOG_HIDE_TERRAIN: 1,
+  FOG_MAP_EXPLORED: 2,
+  FOG_ALWAYS_VISIBLE: 4,
+  OBSERVERS: 16,
+  OBSERVERS_ON_DEATH: 32,
+  LOCK_ALLIANCE_CHANGES: 1024,
+  SHARED_ADVANCED_CONTROL: 8192 * 8,
+  RANDOM_HERO: 8192 * 16,
+  RANDOM_RACES: 8192 * 32,
+} as const;
+
+/**
+ * The lobby's options as the map flags a script reads them back by (`Runtime.mapFlags`, issue
+ * #296). The two Blizzard.j itself asks for are `RANDOM_HERO` (the starting units) and
+ * `OBSERVERS_ON_DEATH` (the defeat dialog's "Continue Observing"); the others are stated so
+ * that a map's own `IsMapFlagSet` hears what the host chose rather than a flat false. Which
+ * option stands behind which flag is read off the flags' own NAMES — nothing in the install
+ * pairs them — and `fog` is the visibility as already resolved against the map's w3i
+ * (`visibilityFog`), so Default on an explored map reads as Map Explored.
+ */
+export function mapFlagsOf(a: Partial<AdvancedOptions>, fog: FogMode): number {
+  let flags = 0;
+  if (a.visibility === "HIDE_TERRAIN") flags |= MAP_FLAG.FOG_HIDE_TERRAIN;
+  else if (fog === "explored") flags |= MAP_FLAG.FOG_MAP_EXPLORED;
+  else if (fog === "revealall") flags |= MAP_FLAG.FOG_ALWAYS_VISIBLE;
+  if (a.observers === "FULL_OBSERVERS" || a.observers === "REFEREES") flags |= MAP_FLAG.OBSERVERS;
+  if (a.observers === "OBSERVERS_ON_DEFEAT") flags |= MAP_FLAG.OBSERVERS_ON_DEATH;
+  if (a.lockTeams) flags |= MAP_FLAG.LOCK_ALLIANCE_CHANGES;
+  if (a.sharedControl) flags |= MAP_FLAG.SHARED_ADVANCED_CONTROL;
+  if (a.randomHero) flags |= MAP_FLAG.RANDOM_HERO;
+  if (a.randomRaces) flags |= MAP_FLAG.RANDOM_RACES;
+  return flags;
 }

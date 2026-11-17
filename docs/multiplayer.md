@@ -3149,10 +3149,11 @@ rather than an expedition.
    **A detail checked against Blizzard rather than assumed.** The defeated player's dialog offers
    only *Quit Game*, with no "Continue Observing" — and that is faithful, not missing:
    `MeleeDefeatDialogBJ` adds that button only `if (not bj_meleeGameOver and
-   IsMapFlagSet(MAP_OBSERVERS_ON_DEATH))`, and observers-on-death is off in a default melee game.
+   IsMapFlagSet(MAP_OBSERVERS_ON_DEATH))`, and observers-on-death is off in a default melee game
+   (the flag is the lobby's Observers → "Observers on Defeat", seeded into `Runtime.mapFlags`
+   since issue #296; with it chosen the button is there).
    So under the default rules the wire staying up after a defeat matters for the OTHER players —
-   the host must keep hosting — rather than for the loser's spectating. It becomes directly
-   useful for them the day that lobby option exists.
+   the host must keep hosting — rather than for the loser's spectating.
 
    **Still not driven:** what a player defeated early sees when the match *finally* ends. They
    would get `room-closed` rather than a result screen (see above). The 1v1 ending is verified;

@@ -9,7 +9,7 @@ import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { profilePlayerName } from "../data/profiles";
-import { VISIBILITY_ITEMS, visibilityFog, type Visibility } from "../net/advancedOptions";
+import { VISIBILITY_ITEMS, mapFlagsOf, visibilityFog, type Visibility } from "../net/advancedOptions";
 import { startsExplored } from "../world/mapKind";
 import { freeColorsFor, swapColors } from "../net/lobbySetup";
 import { OBSERVER_PLAYER, meleeSeat, type Controller, type FogMode, type MeleeConfig, type SlotConfig } from "./lobby";
@@ -127,9 +127,12 @@ export async function mountSkirmish(
    *  · Full Shared Unit Control — `AllianceType.SharedControl` between team-mates at seed
    *    time. `MeleeConfig.forces` carries `allied` and `sharedVision` and nothing else, so
    *    this is a change to the alliance seeding rather than to the screen.
-   *  · Random Races / Random Hero — both are `IsMapFlagSet` flags that Blizzard.j's melee
-   *    initialisation reads (`MAP_RANDOM_HERO` swaps the free-hero token for a rolled hero),
-   *    and that native answers false to everything today (jass/natives/melee.ts).
+   *  · Random Races — every seat's race rolled at Start whatever its row says; the LAN lobby
+   *    does it in `lobbySetup.ts`, and this screen's `toConfig` does not yet.
+   *
+   * Random Hero is LIVE (issue #296): it is `IsMapFlagSet(MAP_RANDOM_HERO)`, which Blizzard.j's
+   * `MeleeStartingUnits<Race>` read to swap the free-hero token for a rolled hero, and the flag
+   * rides to the script in `MeleeConfig.mapFlags` (advancedOptions.ts `mapFlagsOf`).
    *
    * The Observers dropdown is not among them: it is GONE, and `observerMode` stands in its
    * place (see below, and src/overrides/).
@@ -272,8 +275,10 @@ export async function mountSkirmish(
   function start(): void {
     const picked = browser.selected;
     if (!picked) return;
+    const fog = visibilityFog(advanced.visibility, startsExplored(picked.info.classification.flags));
     h.onStart(picked.file, picked.info, toConfig(slots, picked.info, {
-      fog: visibilityFog(advanced.visibility, startsExplored(picked.info.classification.flags)),
+      fog,
+      mapFlags: mapFlagsOf(advanced, fog),
       computerPlus: advanced.computerPlus,
       observer: advanced.observerMode,
     }), picked.path);
@@ -398,7 +403,7 @@ export async function mountSkirmish(
   function fillAdvanced(s: FdfScreen): void {
     const text = (key: string): string => lib?.string(key) ?? key;
 
-    // The five that answer to nothing yet — see `advanced` for what each one is waiting on.
+    // The four that answer to nothing yet — see `advanced` for what each one is waiting on.
     // Drawn with the state they would carry so the pane reads as a real screen, and greyed so
     // it does not lie about being live.
     const dead: Array<[string, boolean]> = [
@@ -406,13 +411,17 @@ export async function mountSkirmish(
       ["TeamsTogetherCheckBox", advanced.teamsTogether],
       ["AdvSharedControlCheckBox", advanced.sharedControl],
       ["RandomRacesCheckBox", advanced.randomRaces],
-      ["RandomHeroCheckBox", advanced.randomHero],
     ];
     for (const [name, value] of dead) {
       const box = s.checkBox(name);
       if (!box) continue;
       box.checked = value;
       box.setEnabled(false);
+    }
+    const randomHero = s.checkBox("RandomHeroCheckBox");
+    if (randomHero) {
+      randomHero.checked = advanced.randomHero;
+      randomHero.onChange = (on) => { advanced.randomHero = on; };
     }
     // …and the one that does. Its four items are the FDF's own MenuItem list, under the
     // GlobalStrings names the game prints them by.
@@ -550,7 +559,7 @@ function isSeated(slot: Slot): boolean {
 function toConfig(
   slots: Slot[],
   info: MapInfo,
-  opts: { fog: FogMode; computerPlus: boolean; observer: boolean },
+  opts: { fog: FogMode; mapFlags: number; computerPlus: boolean; observer: boolean },
 ): MeleeConfig {
   const playing: SlotConfig[] = slots
     .filter(isSeated)
@@ -588,6 +597,7 @@ function toConfig(
     // Advanced Options → Visibility. Was hardcoded to "explored" while there was no screen
     // to say otherwise; the pane now opens on Default, which is the map's own (`visibilityFog`).
     fog: opts.fog,
+    mapFlags: opts.mapFlags,
     forces: info.forces.map((f) => ({ allied: f.allied, sharedVision: f.sharedVision })),
     seed: 1 + Math.floor(Math.random() * 2147483645),
     // Advanced Options → Observer Mode: nobody in `playing` is us, so the match is told which
