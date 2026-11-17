@@ -2,7 +2,8 @@ import { isRepairCode, NO_AOE_CURSOR, targetFlagSet, type AbilityDef, type Abili
 import type { SimUnit } from "../../sim/world";
 import { DISPEL_CODES, POLARITY_SPELLS, worthDispelling } from "../../sim/spells";
 import { friendlySpell, near, stripsOwnShield, treeAim, treeSpots, waveDistance, waveHalfWidth, type CasterView } from "../casting";
-import { MELEE } from "../../data/gameplayConstants";
+import { damageMultiplier, MELEE } from "../../data/gameplayConstants";
+import { AttackType } from "../../data/enums";
 import { MELEE_INSANE, MELEE_NEWBIE, WIND_WALK } from "../ids";
 import type { PlusProfile } from "./profile";
 import { aimCtx, HERO_KILL_HP, killValue, spellFacts, spellValue, type AimCtx } from "./targeting";
@@ -296,15 +297,17 @@ export function nukeBurst(code: string, lvl: AbilityLevel): number {
  * a different hat.
  *
  * The damage is compared against the target's CURRENT hit points and not against a fraction of
- * them: what a nuke buys is a body removed, and armour is not in the sum because untyped spell
- * damage does not pay it (`SimWorld`'s `spellDamage` goes straight to `landDamage`). What it
- * DOES pay is magic reduction, and a magic-immune target takes nothing at all — both are read
- * off the unit here for the same reason, so this cannot promise a kill the sim will not deliver.
+ * them: what a nuke buys is a body removed, and the armour VALUE is not in the sum because
+ * ability damage does not pay it (`SimWorld`'s `spellDamage`). What it DOES pay is the armour
+ * CLASS (`DamageBonusSpells` — whole on every worker in the stock game, but a map may give one
+ * Hero or Divine armour) and magic reduction, and a magic-immune target takes nothing at all —
+ * all read off the unit here for the same reason, so this cannot promise a kill the sim will
+ * not deliver.
  */
 export function nukeWorthIt(code: string, lvl: AbilityLevel, t: SimUnit): boolean {
   if (!t.isPeon) return true;
   if (t.magicImmune) return false;
-  return nukeBurst(code, lvl) * (1 - t.magicReduction) >= t.hp;
+  return nukeBurst(code, lvl) * damageMultiplier(AttackType.Spells, t.armorType) * (1 - t.magicReduction) >= t.hp;
 }
 
 // ==========================================================================================

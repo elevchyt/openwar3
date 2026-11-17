@@ -1018,8 +1018,9 @@ export function etherealDamageMultiplier(attack: AttackType): number {
   return i < 0 ? 1 : gameList("EtherealDamageBonus")[i] ?? 1;
 }
 
-/** The multiplier untyped ability damage (`spellDamage`, dealt as AttackType.None)
- *  applies to an ethereal target — the file's Spells column, ×1.66. */
+/** The multiplier ability damage (`spellDamage`) applies to an ethereal target — the
+ *  file's Spells column, ×1.66. The armour CLASS is graded beside it, by `DamageBonusSpells`
+ *  (SimWorld.spellTypeMult). */
 export function etherealSpellBonus(): number {
   return etherealDamageMultiplier(AttackType.Spells);
 }

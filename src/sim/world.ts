@@ -9227,7 +9227,7 @@ export class SimWorld {
     const dmg = this.dataOf(lvl, 0, 10);
     for (const t of this.unitsInAreaInternal(u.x, u.y, lvl.area || 160)) {
       if (t === u || t.hp <= 0 || t.invulnerable || !this.hostile(u, t) || !this.targsAdmit(t, def.targetFlags)) continue;
-      this.landDamage(t, dmg, u.id, false);
+      this.landDamage(t, dmg * this.spellTypeMult(t), u.id, false);
       // The flare rides the burnt unit's `Specialattach` bone (`head`) and lasts exactly as
       // long as its Stand clip runs — the model is one Stand and nothing else, so opened on
       // a Birth it has none it showed nothing, and a flat 2.5 s held its last frame.
@@ -9349,7 +9349,7 @@ export class SimWorld {
         const dmg = this.dataOf(cloak.level, 0, 10);
         for (const t of this.unitsInAreaInternal(u.x, u.y, cloak.level.area || 160)) {
           if (t === u || t.hp <= 0 || t.invulnerable || !this.hostile(u, t) || !this.targsAdmit(t, cloak.def.targetFlags)) continue;
-          this.landDamage(t, dmg, u.id, false);
+          this.landDamage(t, dmg * this.spellTypeMult(t), u.id, false);
           if (cloak.def.buffSpecialArt) this.spellEffects.push({ art: cloak.def.buffSpecialArt, x: t.x, y: t.y, targetId: t.id, z: 0 });
         }
       }
@@ -14927,7 +14927,8 @@ export class SimWorld {
       // a unit's health bar's worth of hp but never the last point itself.
       else if (b.kind === "dot" && b.value) {
         const before = u.hp;
-        u.hp = b.nonLethal ? Math.max(1, u.hp - b.value * dt) : u.hp - b.value * dt;
+        const bite = b.value * dt * this.spellTypeMult(u); // a dot is ability damage: DamageBonusSpells (issue #277)
+        u.hp = b.nonLethal ? Math.max(1, u.hp - bite) : u.hp - bite;
         // A dot IS "a spell which does damage", so it cancels a salve on the tick it bites —
         // burning under a Rain of Fire is exactly the fight you cannot regenerate through.
         // Flagged rather than dispelled here: we are walking u.buffs, which the break edits.
@@ -15008,7 +15009,7 @@ export class SimWorld {
       if (s.holder.hp <= 0) continue;
       for (const t of this.unitsInAreaInternal(s.holder.x, s.holder.y, s.radius)) {
         if (t === s.holder || t.hp <= 0 || t.building || t.invulnerable || this.godProtected(t)) continue;
-        t.hp -= s.dps * dt; // spell damage — no armor reduction
+        t.hp -= s.dps * dt * this.spellTypeMult(t); // spell damage — the armour class's Spells cell, no armour value
         this.breakItemRegen(t); // "hit by a spell which does damage" — see breakItemRegen
         if (t.hp <= 0) this.kill(t, s.killerId);
       }
@@ -19815,7 +19816,7 @@ export class SimWorld {
   private landInferno(drop: (typeof this.infernoDrops)[number]): void {
     for (const t of this.unitsInAreaInternal(drop.x, drop.y, drop.area)) {
       if (!this.areaEffectAffects(drop.casterId, drop.team, drop.flags, t)) continue;
-      this.landDamage(t, drop.damage, drop.casterId, false);
+      this.landDamage(t, drop.damage * this.spellTypeMult(t), drop.casterId, false);
       if (t.hp <= 0 || t.building) continue; // a building takes the damage and is not stunned
       this.applyBuffInternal(t, {
         kind: "stun",
@@ -19911,7 +19912,7 @@ export class SimWorld {
       // victim's pool (`Udd1 "Max Life Drained per Second (%)"` = 0.04), which is what
       // makes it the one spell a Town Hall genuinely fears.
       if (w.pctOfMax) dmg = t.maxHp * dmg;
-      if (dmg > 0) this.landDamage(t, dmg, w.casterId, false); // spell damage: ignore armor
+      if (dmg > 0) this.landDamage(t, dmg * this.spellTypeMult(t), w.casterId, false); // spell damage: the armour CLASS (DamageBonusSpells), never the armour value
       // The wave's mark on the unit it struck (Starfall's star — SpellFieldInit.hitArt): rides
       // it for its own clip (`life` 0), so a unit that runs keeps its star over it. The
       // model's own SND event is cued once per wave, not once per victim, as Blizzard's is.
@@ -20195,6 +20196,27 @@ export class SimWorld {
     return out;
   }
 
+  /**
+   * What `t`'s ARMOUR CLASS lets through of an ability's damage: `Units\MiscGame.txt`
+   * `DamageBonusSpells=1.00,1.00,1.00,1.00,1.00,0.70,0.05,1.00` — Hero 0.70, Divine 0.05,
+   * everything else whole (issue #277). Through `damageTable()`, so the edition / map-kind
+   * 2×2 and a map's own war3mapMisc.txt pick the row: a CUSTOM map's and Reign of Chaos's
+   * Hero cell is 0.75 (docs/editions.md).
+   *
+   * The table is keyed on the ATTACK type and an ability's is always Spells; what differs
+   * between abilities is the DAMAGE type (Magic / Universal / Normal / Enhanced — Hive
+   * 316271, see FIELD_PIERCES_SPELL_IMMUNITY), which decides spell immunity and Ethereal and
+   * says nothing about this row. So Volcano (Normal) and Bladestorm (Enhanced) are graded
+   * here like a Storm Bolt, and every place ability damage lands asks this — the spell
+   * handlers' seam, the fields' waves, the dots, Immolation, the Lightning Shield.
+   *
+   * A structure still being RAISED has no armour class (see applyDamage), here too.
+   */
+  private spellTypeMult(t: SimUnit): number {
+    if (t.building && t.building.constructionLeft > 0) return 1;
+    return damageMultiplier(AttackType.Spells, t.armorType);
+  }
+
   // === SpellApi (what spell handlers may do to the world) ===================
 
   private spellApi: SpellApi = {
@@ -20218,8 +20240,12 @@ export class SimWorld {
     // slowly. Ethereal's +66% is applied first for the same reason — it is a property of what
     // is being hit, not a second reduction to be netted off. Elune's Grace (`magicTaken`) is the
     // same kind of cut, worn by the unit instead of carried.
+    // …and the damage TABLE, which is not the armour VALUE: `DamageBonusSpells` (issue #277)
+    // is the row every ability is graded by, so a Hero takes 0.70 of a Storm Bolt and a
+    // Divine body 0.05 — see spellTypeMult. Before the shell, like the bracers: it is what
+    // the armour class lets through, so the pool is spent on the smaller number.
     spellDamage: (t, amount, src) =>
-      t.magicImmune ? 0 : this.landDamage(t, this.absorbSpellDamage(t, (t.ethereal ? amount * etherealSpellBonus() : amount) * (1 - t.magicReduction) * t.magicTaken), src, false),
+      t.magicImmune ? 0 : this.landDamage(t, this.absorbSpellDamage(t, (t.ethereal ? amount * etherealSpellBonus() : amount) * this.spellTypeMult(t) * (1 - t.magicReduction) * t.magicTaken), src, false),
     spellHeal: (t, amount) => {
       t.hp = Math.min(t.maxHp, t.hp + amount);
     },
@@ -26377,7 +26403,7 @@ export class SimWorld {
         for (const t of this.unitsInAreaInternal(u.x, u.y, radius)) {
           if (t.id === u.id || t.hp <= 0 || !this.hostile(src, t)) continue;
           const k = radius > 0 ? Math.min(1, Math.hypot(t.x - u.x, t.y - u.y) / radius) : 0;
-          this.landDamage(t, full * (1 - k * (1 - edge)), burn.sourceId, false);
+          this.landDamage(t, full * (1 - k * (1 - edge)) * this.spellTypeMult(t), burn.sourceId, false);
         }
         if (def.specialArt) this.spellEffects.push({ art: def.specialArt, x: u.x, y: u.y, targetId: 0, z: 0, sound: true });
       }
