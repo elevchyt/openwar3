@@ -1040,9 +1040,9 @@ export function etherealHealBonus(): number {
 }
 
 /** Below this, more negative armour changes nothing: the amplification stops at
- *  2 − 0.94²⁰ ≈ ×1.71. In no install file — Liquipedia "Armor" ("capped at −20 armor");
- *  the same page as the negative formula below, and OURS to keep honest until the real
- *  client's armour slab has been read at a known negative value (issue #292). */
+ *  2 − 0.94²⁰ ≈ ×1.71. In no install file and NOT on the classic basics page either, which
+ *  gives the formula below and no floor — the −20 is Liquipedia's "Armor" page alone, and
+ *  ours to keep honest until the real client's armour slab has been read past it (#292). */
 const NEGATIVE_ARMOR_FLOOR = -20;
 
 /** The share of a hit that `armor` points of armour absorb, k = DefenseArmor.
@@ -1050,12 +1050,14 @@ const NEGATIVE_ARMOR_FLOOR = -20;
  *  Positive: `n·k / (1 + k·n)` — diminishing returns, so armour never reaches 100%.
  *
  *  Negative (Acid Bomb, Faerie Fire, Corruption) is a DIFFERENT curve, not the same one
- *  run backwards: the multiplier is `2 − (1 − k)^(−n)`, i.e. the answer here is
- *  `−(1 − (1 − k)^(−n))`, floored at NEGATIVE_ARMOR_FLOOR. It bends the other way — each
- *  further point is worth less — so −10 is ×1.461 and −20 and everything under it ×1.710.
- *  We used to return the linear `n·k` (×1.60, ×2.20, and no floor at all), which made
- *  stacked armour reduction over-kill. Source: Liquipedia "Armor"; this formula is in NO
- *  game file, so unlike `DefenseArmor` itself it is a community measurement. */
+ *  run backwards. The official classic basics page states it
+ *  (classic.battle.net/war3/basics/armorandweapontypes.shtml): "For negative Armor, it is
+ *  damage increase = 2-0.94^(-armor)", with the worked example "A negative armor of 10
+ *  increases damage by 46.1%". So the answer here is `−(1 − (1 − k)^(−n))`, floored at
+ *  NEGATIVE_ARMOR_FLOOR. It bends the other way — each further point is worth less — where
+ *  we used to return the linear `n·k` (×1.60 at −10, ×2.20 at −20, and no floor at all),
+ *  which made stacked armour reduction over-kill. The page writes 0.94; it is 1 −
+ *  DefenseArmor, so a map that edits the constant moves both branches together. */
 export function armorDamageReduction(armor: number): number {
   const k = gameNum("DefenseArmor");
   if (armor >= 0) return (armor * k) / (1 + k * armor);
