@@ -689,7 +689,8 @@ spell → order it cast → react when it goes off*. Built:
   HP/mana refill, the skill point and the HERO_LEVEL event all happen exactly as on a kill.
 - **`src/jass/natives/world.ts`** — `SetUnitInvulnerable`, `SetUnitPathing` (the "ghost"),
   `SetUnitAnimation` / `QueueUnitAnimation` / `ResetUnitAnimation` (matched against the model's own
-  sequence names — `RtsController.setUnitAnimation`), `SetUnitUserData`/`GetUnitUserData` (the
+  sequence names — `RtsController.setUnitAnimation`; a QUEUED clip waits on the render entry for
+  the held one to end, `queueUnitAnimation`, never in the sim), `SetUnitUserData`/`GetUnitUserData` (the
   "custom value" every unit-indexing library rides on — pure script state, so it lives on the
   handle), `IsPlayerAlly`/`IsPlayerEnemy`.
 - **The MathAPI** (`natives/index.ts`): `SquareRoot`, `Sin`/`Cos`/`Tan`/`Asin`/`Acos`/`Atan`/`Atan2`,

@@ -973,6 +973,8 @@ export interface EngineHooks {
   setUnitPathing?(unitId: number, flag: boolean): void; // SetUnitPathing (false = ghost)
   /** SetUnitAnimation / ResetUnitAnimation — play the named clip ("" resets to stand). */
   setUnitAnimation?(unitId: number, animation: string): void;
+  /** QueueUnitAnimation — play the named clip after the one the unit is showing. */
+  queueUnitAnimation?(unitId: number, animation: string): void;
   /** AddUnitAnimationProperties — add (true) or remove (false) an animation TAG ("alternate",
    *  "work", "upgrade first") that picks which of the model's clips the unit wears. */
   addUnitAnimationProperties?(unitId: number, props: string, add: boolean): void;

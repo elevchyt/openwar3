@@ -425,6 +425,10 @@ interface Entry {
    *  playWorkAnimOnce), which is set to ModelDefined and held by this all the same.
    *  Cleared when castAnimT runs out. */
   castAnimHeld: boolean;
+  /** Clips a script QUEUED behind the one this body is holding (`QueueUnitAnimation`), oldest
+   *  first; each plays when the hold before it runs out. The picture's alone — the sim never
+   *  hears of it (docs/replays.md). See RtsController.queueUnitAnimation. */
+  animQueue?: string[];
   /** The TARGET tier's Birth clip while this building is upgrading into it (Scout Tower →
    *  Guard Tower). Resolved once per target and cached here because it costs a sequence-name
    *  pass; `seq` -1 means "this pair has no upgrade clip to play". See upgradeBirthFor. */
@@ -4760,10 +4764,11 @@ export class RtsController {
     // model whose ONLY clip is "Death", told `SetUnitAnimation(u, "death")` on the line after
     // its CreateUnit: dropped, it had nothing to play and was never seen at all.
     const anim = this.pendingAnim.get(simId);
-    if (anim !== undefined) {
-      this.pendingAnim.delete(simId);
-      this.setUnitAnimation(simId, anim);
-    }
+    const queued = this.pendingAnimQueue.get(simId); // read first: setUnitAnimation empties it
+    this.pendingAnim.delete(simId);
+    this.pendingAnimQueue.delete(simId);
+    if (anim !== undefined) this.setUnitAnimation(simId, anim);
+    if (queued) for (const q of queued) this.queueUnitAnimation(simId, q);
   }
 
   /**
@@ -4930,6 +4935,8 @@ export class RtsController {
   /** The clip half of `pendingLook`: a `SetUnitAnimation` waiting for its body. Kept apart
    *  because it is worn last, after attachInstance has put the spawn stand on. */
   private pendingAnim = new Map<number, string>();
+  /** …and the `QueueUnitAnimation`s that followed it, in order (queueUnitAnimation). */
+  private pendingAnimQueue = new Map<number, string[]>();
   /** Wear (and forget) whatever `pendingLook` holds for this body — attachInstance's call. */
   private applyPendingLook(e: Entry): void {
     const p = this.pendingLook.get(e.simId);
@@ -5033,8 +5040,67 @@ export class RtsController {
     const e = this.byId.get(simId);
     if (!e) {
       if (this.sim.units.has(simId)) this.pendingAnim.set(simId, animation); // body still loading (see pendingLook)
+      this.pendingAnimQueue.delete(simId);
       return;
     }
+    e.animQueue = undefined; // Set and Reset both start over: what was queued behind the old clip goes with it
+    this.playScriptClip(e, animation);
+  }
+
+  /**
+   * JASS QueueUnitAnimation (common.j `native QueueUnitAnimation takes unit whichUnit, string
+   * whichAnimation`; Blizzard.j `QueueUnitAnimationBJ`) — play this clip AFTER the one the unit
+   * is showing, not instead of it. The idiom is `SetUnitAnimation(u, "spell")` then
+   * `QueueUnitAnimation(u, "stand")`: answered as a second Set, only "stand" was ever seen
+   * (issue #297).
+   *
+   * The queue is the PICTURE's: nothing in the sim may wait on a clip ending (docs/replays.md),
+   * so it lives on the render Entry and is advanced where the hold runs out (tick). With
+   * nothing held there is nothing to wait for and the clip plays at once. Behind a LOOPING
+   * script clip — which by itself never ends — the loop is let finish the pass it is on; no
+   * source states that case, so that reading is OURS.
+   */
+  queueUnitAnimation(simId: number, animation: string): void {
+    if (!animation) return;
+    const e = this.byId.get(simId);
+    if (!e) {
+      if (!this.sim.units.has(simId)) return;
+      const q = this.pendingAnimQueue.get(simId); // body still loading (see pendingLook)
+      if (q) q.push(animation);
+      else this.pendingAnimQueue.set(simId, [animation]);
+      return;
+    }
+    if (e.castAnimT <= 0) {
+      this.playScriptClip(e, animation);
+      return;
+    }
+    (e.animQueue ??= []).push(animation);
+    if (e.castAnimT > SCRIPT_LOOP_HOLD / 2) {
+      const inst = e.unit.instance;
+      const iv = inst.model?.sequences?.[e.curSeq]?.interval;
+      const left = iv && iv.length >= 2 ? (iv[1] - inst.frame) / 1000 : 0;
+      e.castAnimT = left > 0 ? left : seqDuration(inst, e.curSeq, CAST_ANIM_HOLD);
+    }
+  }
+
+  /** The hold on this body has run out: play the next clip a script queued behind it, skipping
+   *  names the model has no clip for. False when the queue is empty (the picker takes over). */
+  private playQueuedAnim(e: Entry): boolean {
+    while (e.animQueue?.length) {
+      if (!this.playScriptClip(e, e.animQueue.shift()!)) continue;
+      // A looping clip with more queued behind it plays ONE pass, as one queued behind a loop does.
+      if (e.animQueue.length && e.castAnimT > SCRIPT_LOOP_HOLD / 2) {
+        e.castAnimT = seqDuration(e.unit.instance, e.curSeq, CAST_ANIM_HOLD);
+      }
+      if (!e.animQueue.length) e.animQueue = undefined;
+      return true;
+    }
+    e.animQueue = undefined;
+    return false;
+  }
+
+  /** setUnitAnimation's body, on an entry that exists. True when a clip was put on. */
+  private playScriptClip(e: Entry, animation: string): boolean {
     if (!animation) {
       // Reset: back to the idle stand, released to the normal animation picker.
       e.castAnimT = 0;
@@ -5046,12 +5112,12 @@ export class RtsController {
         e.unit.instance.setSequenceLoopMode(SequenceLoopMode.Loop);
         e.curSeq = e.anims.stand;
       }
-      return;
+      return false;
     }
     // A named clip may exist several times (Stand, Stand - 2): take the first match.
     const want = animation.toLowerCase();
     const seq = e.anims.seqNames.findIndex((n) => n.toLowerCase().startsWith(want));
-    if (seq < 0) return; // this model has no such clip — leave it alone (WC3 no-ops too)
+    if (seq < 0) return false; // this model has no such clip — leave it alone (WC3 no-ops too)
     e.unit.instance.setSequence(seq);
     e.unit.instance.setSequenceLoopMode(SequenceLoopMode.ModelDefined);
     e.curSeq = seq;
@@ -5070,6 +5136,7 @@ export class RtsController {
     // idle picker stood them back up. A one-shot clip ("attack", "spell") still ends with itself.
     const looping = (e.unit.instance.model?.sequences?.[seq] as { nonLooping?: number } | undefined)?.nonLooping === 0;
     e.castAnimT = looping ? SCRIPT_LOOP_HOLD : seqDuration(e.unit.instance, seq, CAST_ANIM_HOLD);
+    return true;
   }
 
   /** Record a building's footprint half-extents (WORLD units) so the render loop seats
@@ -5434,6 +5501,9 @@ export class RtsController {
         // …and fog still STOPS it: a Fountain of Life in explored fog does not pour. The
         // viewer's own clock drives this instance, so this is the one place it is stopped.
         if (u.building && !e.borrowedBody) this.applyFogFreeze(e);
+        // Nothing below runs for this body, so a script's QUEUED clip is advanced here: the
+        // hold's clock is run only while something waits behind it (queueUnitAnimation).
+        if (e.animQueue && (e.castAnimT -= dt) <= 0) this.playQueuedAnim(e);
         continue;
       }
       this.loc[0] = u.x;
@@ -5570,8 +5640,12 @@ export class RtsController {
         const leftIdle = scriptLoop && ((u.order !== "idle" && u.order !== "hold") || u.inCombat || u.working);
         if (e.castAnimSticky || ((u.order === "cast" || e.castAnimHeld) && !u.moving && !leftIdle)) {
           setAnimRate(e, 1); // a cast gesture plays at its authored rate, unhasted
+          // The clip played out with the unit still standing there: what a script queued
+          // behind it (QueueUnitAnimation) goes on now, in the frame the hold ends.
+          if (e.castAnimT <= 0 && e.animQueue) this.playQueuedAnim(e);
           continue;
         }
+        e.animQueue = undefined; // interrupted — the queue was behind a clip that is gone
         e.castAnimT = 0;
       }
       // Attacking is swing-driven: play a (random) attack clip ONCE per swing so
@@ -5824,6 +5898,7 @@ export class RtsController {
   private onDeath(simId: number): void {
     this.pendingLook.delete(simId); // a look still waiting for a body that never came
     this.pendingAnim.delete(simId);
+    this.pendingAnimQueue.delete(simId);
     const e = this.byId.get(simId);
     // An EXPLODED death (SetUnitExploded) leaves nothing to animate: the sim has already put the
     // unit's "Art - Special" burst where it stood, and the body simply goes.

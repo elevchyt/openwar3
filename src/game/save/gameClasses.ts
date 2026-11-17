@@ -42,7 +42,7 @@ export function registerGameSaveClasses(): void {
     "worldHeld",
     // a look or a clip waiting for a body that is still loading — the looks are carried by the
     // scene's half of the save instead (`captureLooks`), and re-worn on the bodies of the load
-    "pendingLook", "pendingAnim",
+    "pendingLook", "pendingAnim", "pendingAnimQueue",
   ]);
 }
 

@@ -520,15 +520,20 @@ export function registerWorldNatives(rt: Runtime): void {
     return JNULL;
   });
   // SetUnitAnimation plays a named clip ("attack", "stand victory", "birth"); the name
-  // is matched against the model's own sequence names. QueueUnitAnimation has no queue
-  // here — it plays the clip the same way; ResetUnitAnimation returns to the idle stand.
+  // is matched against the model's own sequence names. QueueUnitAnimation plays its clip
+  // AFTER the one showing (a queue the picture keeps — RtsController.queueUnitAnimation);
+  // ResetUnitAnimation returns to the idle stand.
   const anim = (c: NativeCtx, unitV: JassValue, name: string): JassValue => {
     const u = unit(c, unitV);
     if (u && u.simId >= 0) c.rt.hooks?.setUnitAnimation?.(u.simId, name);
     return JNULL;
   };
   def(rt, "SetUnitAnimation", (c, a) => anim(c, a[0], a[1].k === "string" ? a[1].s : ""));
-  def(rt, "QueueUnitAnimation", (c, a) => anim(c, a[0], a[1].k === "string" ? a[1].s : ""));
+  def(rt, "QueueUnitAnimation", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.queueUnitAnimation?.(u.simId, a[1].k === "string" ? a[1].s : "");
+    return JNULL;
+  });
   def(rt, "ResetUnitAnimation", (c, a) => anim(c, a[0], ""));
   // SetUnitExploded (common.j 1608) — the unit bursts into its "Art - Special" when it dies and
   // leaves no corpse (SimWorld.kill). A world fact: nothing can raise what was not left.
