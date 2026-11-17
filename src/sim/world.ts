@@ -19345,7 +19345,7 @@ export class SimWorld {
    *  They live OUTSIDE their field on purpose: shards already in the air still land
    *  when the channel is broken, so a Blizzard cancelled the instant before impact
    *  still deals that last wave. */
-  private waveImpacts: Array<{ code: string; t: number; x: number; y: number; area: number; damage: number; casterId: number; team: number; flags: string[]; maxDamage: number; buildingReduction: number; dot: SpellFieldInit["dot"]; pctOfMax: boolean; buildingsOnly: boolean; fellsTrees: boolean; skipEthereal?: boolean; hitArt?: string; hitAttach?: string[]; healField?: LiveSpellField }> = [];
+  private waveImpacts: Array<{ code: string; t: number; x: number; y: number; area: number; damage: number; casterId: number; team: number; flags: string[]; maxDamage: number; buildingReduction: number; dot: SpellFieldInit["dot"]; stun?: SpellFieldInit["stun"]; pctOfMax: boolean; buildingsOnly: boolean; fellsTrees: boolean; skipEthereal?: boolean; hitArt?: string; hitAttach?: string[]; healField?: LiveSpellField }> = [];
 
   // --- Mirror Image (AOmi) ------------------------------------------------------------
   //
@@ -19703,6 +19703,7 @@ export class SimWorld {
           maxDamage: f.maxDamagePerWave ?? 0,
           buildingReduction: f.buildingReduction ?? 0,
           dot: f.dot,
+          stun: f.stun,
           pctOfMax: f.damagePctOfMax ?? false,
           buildingsOnly: f.buildingsOnly ?? false,
           fellsTrees: f.fellsTrees ?? false,
@@ -19940,6 +19941,11 @@ export class SimWorld {
       // Rain of Fire's burn: every wave (re)lights whatever it hits for DataE dps.
       if (w.dot && w.dot.dps > 0 && !t.building) {
         this.applyBuffInternal(t, { kind: "dot", group: w.dot.group, timeLeft: t.isHero && w.dot.heroDuration > 0 ? w.dot.heroDuration : w.dot.duration, sourceId: w.casterId, value: w.dot.dps, art: w.dot.art, buffId: w.dot.buffId });
+      }
+      // Volcano's rocks stun what they hit (SpellFieldInit.stun) — a body, never a building.
+      if (w.stun && dmg > 0 && !t.building) {
+        const time = debuffDuration({ duration: w.stun.duration, heroDuration: w.stun.heroDuration } as AbilityLevel, t);
+        if (time > 0) this.applyBuffInternal(t, { kind: "stun", group: `field:${w.code}`, timeLeft: time, sourceId: w.casterId, art: w.stun.art, fx: w.stun.fx, buffId: w.stun.buffId });
       }
     }
     // Burn down trees too when the ability lists `tree` in Targets Allowed

@@ -485,6 +485,10 @@ export interface SpellFieldInit {
   //                             takes (0.5 → half, Starfall's 0.35 → 35%). 0/absent = full.
   dot?: { dps: number; duration: number; heroDuration: number; group: string; art: string; buffId: string }; // per-wave
   //       burn left on everything the wave hits (Rain of Fire's "and N damage per second for 3 seconds").
+  /** A STUN laid on every non-building a wave hurts — Volcano's "causing N damage to each
+   *  target and stunning it for `Dur1` seconds" (2, `HeroDur1` 1 on a hero or a resistant
+   *  body, the `dur` rule). Re-laid by each wave, like `dot`. */
+  stun?: { duration: number; heroDuration: number; art: string; fx: BuffFx[]; buffId: string };
   impactDelay?: number; // seconds between a wave's art SPAWNING and its damage landing. The shard
   //                       is a falling model, and WC3 hurts you when it hits the ground, not when
   //                       it appears in the sky. See SHARD_FALL.
@@ -2740,12 +2744,36 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     });
   },
 
-  // Volcano (Firelord, ult) — sustained eruption damaging the target area. Its damage type is
+  // Volcano (Firelord, ult) — a wave of molten rock every few seconds. Its damage type is
   // NORMAL (Hive 316271, and Tasyen's own test in that thread: "Vulkan DAMAGE_TYPE_NORMAL"),
   // so it reaches a spell-immune unit (FIELD_PIERCES_SPELL_IMMUNITY) and not an ethereal one.
+  //
+  // Columns Nvc1..Nvc6 (AbilityMetaData.slk), read against the row's own Ubertip — "Every
+  // <DataC1> seconds, a wave of molten rocks is hurled … causing <DataE1> damage to each
+  // target and stunning it for <Dur1> seconds. Buildings take <DataD1> times more damage …
+  // Lasts 35 seconds.":
+  //   DataA "Rock Ring Count"          3     presentation — not modelled
+  //   DataB "Wave Count"               8     ┐ a wave on the press and one every 5 s after:
+  //   DataC "Wave Interval"            5     ┘ 0, 5 … 35, which is the tooltip's 35 seconds
+  //   DataD "Building Damage Factor"   2
+  //   DataE "Full Damage Amount"       100
+  //   DataF "Half Damage Factor"       0.5   NOT modelled: the row gives the factor and no
+  //                                          radius for the ring it applies to, so every body
+  //                                          in `Area1` takes the full amount
+  //   Dur / HeroDur                    2 / 1 the stun (`[BNvc]`, the Thunder Clap stars)
+  // The handler used to read DataB — the wave COUNT — as its damage, twelve times a second
+  // apart: 96 damage in all where the row says eight waves of 100 (issue #283).
   ANvc: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 500, damagePerWave: d(lvl, 1, 8), waves: 12, interval: 1, casterId: caster.id, art: fieldArt(def), loopSound: fieldLoop(def), skipEthereal: true });
+    api.addSpellField({
+      code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 500,
+      damagePerWave: d(lvl, 4, 100),
+      waves: Math.max(1, Math.round(d(lvl, 1, 8))),
+      interval: d(lvl, 2, 5) || 5,
+      buildingReduction: d(lvl, 3, 2), // a SHARE of the wave, so 2 is the row's "2 times more"
+      stun: { duration: lvl.duration, heroDuration: lvl.heroDuration, ...fx(def) },
+      casterId: caster.id, art: fieldArt(def), loopSound: fieldLoop(def), skipEthereal: true,
+    });
   },
 
   // Earthquake (Far Seer, ult) — the ground itself comes apart. Columns Oeq1..Oeq4:
