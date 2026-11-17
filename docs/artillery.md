@@ -100,6 +100,24 @@ dealing damage to an area around the target area". We still burst it in the ring
 the line before that is not stated in any file or reference we have, so it is left alone; it only
 matters on a rolled-back patch, a Reign of Chaos client or a custom table set.
 
+## Missile (Splash) is NOT artillery — it homes, then bursts
+
+`msplash` (the Chimaera's slot 2, the Frost Wyrm, the Phoenix, Metamorphosis, the Ancient
+Protector's slot 2, Serpent Ward 4, the Destroyers, every dragon — 45 slots state rings, 26
+more state none and are plain missiles) is the other weapon type that reads `Farea`/`Harea`/
+`Qarea`, and the difference is the whole of it: the missile keeps its TARGET and homes, so it
+cannot be walked out from under, and where it lands it bursts around the unit it struck
+(`SimProjectile.splash`, `applyMissileSplash`). The struck unit takes the blow in full with
+everything a homing hit carries (orb, Freezing Breath, Liquid Fire); everybody else in the rings
+takes their ring's share through the same `burstRings` the shell uses.
+
+The rings, the shares, `splashTargs` as kind AND allegiance, the trees and the once-per-attack
+miss are all the shell's rules. Most of these rows DO name `enemy`, so a Frost Wyrm spares its
+own Ghouls; the ones that name nobody (`[nadr]` = `ground`, the creep dragons) burn whoever is
+there. Three things are NOT carried over: no splatter (that line is about the Artillery type),
+no Attack Ground, and no dead zone. Keyed on `weapTp`, never on "has rings" — twelve plain
+`missile` rows carry stray rings and do not splash.
+
 ## What it kills SPLATTERS
 
 "Units killed by Artillery attacks splatter and do not leave corpses behind" (Weapon Types).

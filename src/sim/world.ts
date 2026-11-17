@@ -118,9 +118,11 @@ export interface SimWeapon {
   baseSpillDist: number; // pre-upgrade (`rasd`/`rasr` add to these, as Long Rifles adds to range)
   baseSpillRadius: number;
   damageLoss: number;
-  /** AREA splash — the three concentric rings an ARTILLERY shot lands in (`Farea`/`Harea`/
-   *  `Qarea`; see WeaponSlotDef). Nonzero only on the siege weapons: Cannon Tower, Demolisher,
-   *  Mortar Team, Glaive Thrower. See spawnProjectile / applyAreaSplash. */
+  /** AREA splash — the three concentric rings a splashing shot lands in (`Farea`/`Harea`/
+   *  `Qarea`; see WeaponSlotDef). Nonzero on the ARTILLERY slots (Cannon Tower, Demolisher,
+   *  Mortar Team, Glaive Thrower), whose shell flies at the ground (applyAreaSplash), and on
+   *  the `msplash` ones (Chimaera, Frost Wyrm, Phoenix, the dragons), whose missile still
+   *  homes and bursts around whoever it struck (applyMissileSplash). See spawnProjectile. */
   areaFull: number;
   areaHalf: number;
   areaQuarter: number;
@@ -160,6 +162,15 @@ export interface SimWeapon {
   launchY: number;
   launchZ: number;
   impactZ: number;
+}
+
+/** The three rings a splashing shot bursts in, and the fraction of the damage each of the
+ *  outer two gets. They travel with the shot because they are the SLOT's (`Farea`/`Harea`/
+ *  `Qarea`, `Hfact`/`Qfact`, `splashTargs`) and not a rule — see WeaponSlotDef.areaHalfFactor. */
+export interface SplashRings {
+  full: number; half: number; quarter: number;
+  halfFactor: number; quarterFactor: number;
+  targets: string[];
 }
 
 /** An in-flight projectile: homes on its target's current position, dealing its
@@ -217,15 +228,15 @@ export interface SimProjectile extends MissileFlight {
    * out of the way, while a Guard Tower's homing arrow cannot. On arrival it damages
    * everything in its rings rather than the one unit it was aimed at (see applyAreaSplash).
    */
-  area?: {
-    aimX: number; aimY: number;
-    /** The three rings, and the fraction of the damage each of the outer two gets. The
-     *  fractions travel with the shot because they are the SLOT's (`Hfact`/`Qfact`) and not
-     *  a rule — see WeaponSlotDef.areaHalfFactor. */
-    full: number; half: number; quarter: number;
-    halfFactor: number; quarterFactor: number;
-    targets: string[];
-  };
+  area?: SplashRings & { aimX: number; aimY: number };
+  /**
+   * A MISSILE (SPLASH) shot (`weapTp` = `msplash` — the Chimaera, the Frost Wyrm, the Phoenix,
+   * Metamorphosis, every dragon): unlike a shell it is aimed at a UNIT and homes on it, so it
+   * cannot be walked out from under, but where it lands it bursts in the slot's rings around
+   * the body it struck (applyMissileSplash). Absent on an `msplash` row that states no rings
+   * (26 of the 71 — a Nether Dragon's, the Obsidian Statue's), which is then a plain missile.
+   */
+  splash?: SplashRings;
   /**
    * A WAVE: the travelling front of a line spell (Shock Wave, Carrion Swarm, Breath of
    * Fire). Aimed at a direction rather than a unit, and unlike every other projectile it
@@ -23265,6 +23276,12 @@ export class SimWorld {
       // only `weapTp` is the one the engine sorts missiles by: the Cannon Tower's slot 1 is
       // `artillery` with 50/100/125 rings, its slot 2 is a plain homing `missile` at buildings.
       area: isArtillery(w) ? this.shellArea(w, t.x, t.y) : undefined,
+      // A MISSILE (SPLASH) slot keeps its target and homes like any arrow; what it adds is the
+      // burst where it lands (SimProjectile.splash). Keyed on `weapTp` for the same reason the
+      // line above is — twelve plain `missile` rows carry stray rings and do not splash.
+      splash: w.weaponType === WeaponType.MissileSplash && Math.max(w.areaFull, w.areaHalf, w.areaQuarter) > 0
+        ? this.splashRings(w)
+        : undefined,
     };
     this.projectiles.set(id, proj);
     this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y, z: proj.z });
@@ -23283,8 +23300,12 @@ export class SimWorld {
   /** Where an artillery shell bursts and what its rings are — the SLOT's, carried on the shell
    *  so it bursts as loosed whatever becomes of the shooter. */
   private shellArea(w: SimWeapon, x: number, y: number): NonNullable<SimProjectile["area"]> {
+    return { aimX: x, aimY: y, ...this.splashRings(w) };
+  }
+
+  /** A slot's rings as a shot carries them (SplashRings). */
+  private splashRings(w: SimWeapon): SplashRings {
     return {
-      aimX: x, aimY: y,
       full: w.areaFull, half: w.areaHalf, quarter: w.areaQuarter,
       halfFactor: w.areaHalfFactor, quarterFactor: w.areaQuarterFactor,
       targets: w.splashTargets,
@@ -23574,7 +23595,12 @@ export class SimWorld {
           // dealt"), so the debuff half of an orb goes on first and the rest after.
           this.applyOrbArmorFirst(this.units.get(p.sourceId), t, p.orb);
           const hitsBefore = this.hits.length;
-          const dealt = this.applyDamage(t, p.damage, p.sourceId, p.attackType ?? AttackType.None, p.weaponSound ?? "", true);
+          // A MISSILE (SPLASH) shot is a splash attack, and a splash attack that misses still
+          // bursts at a reduced share (see applyAreaSplash) — so its one roll is made here, for
+          // the struck unit and the rings alike, and `applyDamage` is told not to roll again.
+          const share = p.splash ? this.splashHitShare(this.units.get(p.sourceId), t) : 1;
+          const dealt = this.applyDamage(t, p.damage * share, p.sourceId, p.attackType ?? AttackType.None, p.weaponSound ?? "", true, !!p.splash);
+          if (p.splash) this.applyMissileSplash(p, t, share);
           // The blow this missile struck is ITS hit: tag it with the art that flew, so the noise
           // is ChimaeraAcidMissile's "ChimaeraAcidHit" on a building and the lightning ball's
           // own on a soldier — each read off its model's SND event (AnimLookups MCAH → the three
@@ -23694,30 +23720,89 @@ export class SimWorld {
     const aimed = p.targetId ? this.units.get(p.targetId) : undefined;
     const aimedCaught = !!aimed && aimed.hp > 0 && !aimed.invulnerable
       && Math.hypot(aimed.x - a.aimX, aimed.y - a.aimY) - aimed.radius <= outer;
-    const missed = (!!shooter && this.rollMiss(shooter)) || (aimedCaught && this.tryEvade(aimed!));
-    const hitShare = missed ? 1 - (miscGame("MissDamageReduction") as number) : 1;
-    const ring = (gap: number): number => hitShare * (gap <= a.full ? 1 : gap <= a.half ? a.halfFactor : gap <= a.quarter ? a.quarterFactor : 0);
-    let nearest: SimUnit | undefined; // for an `aline` shot, whoever the line starts at
-    for (const t of this.units.values()) {
-      if (t.hp <= 0 || t.invulnerable || t.hidden || isOffField(t)) continue; // nobody there to hit
-      if (a.targets.length && !a.targets.includes(targetKeyOf(t))) continue;
-      if (!this.splashAdmits(source, t, a.targets)) continue;
-      const gap = Math.hypot(t.x - a.aimX, t.y - a.aimY) - t.radius;
-      // The outer rings' shares are the SLOT's own — a Mortar Team's "half" ring is 0.4 and
-      // its "quarter" ring 0.1. Only a row that states neither takes the names literally.
-      const frac = ring(gap);
-      if (frac <= 0) continue;
-      this.splatterId = t.id;
-      const dealt = this.applyDamage(t, p.damage * frac, p.sourceId, p.attackType ?? AttackType.None, p.weaponSound ?? "", true, true);
-      this.splatterId = 0;
-      if (shooter) this.applyPillage(shooter, t, dealt); // a Demolisher with Pillage loots what it shells
-      if (frac === hitShare && !nearest && this.hostile(source, t)) nearest = t;
-    }
+    const hitShare = this.splashHitShare(shooter, aimedCaught ? aimed : undefined);
+    const ring = (gap: number): number => ringShare(a, gap) * hitShare;
+    // What it kills SPLATTERS (the doc comment above) — an artillery rule, not a splash one.
+    const nearest = this.burstRings(p, a, source, a.aimX, a.aimY, hitShare, { splatter: true });
     if (a.targets.includes("tree")) this.shellTrees(a.aimX, a.aimY, outer, (gap) => p.damage * ring(gap));
     this.applyShellPassives(shooter, a.aimX, a.aimY, p.attackType ?? AttackType.None); // Fragmentation Shards, Burning Oil
     // Artillery (Line) — the Glaive Thrower — is BOTH: it bursts, and with Impaling Bolt
     // researched the bolt carries on down the line from whoever it hit (see applySpill).
     if (p.spill && nearest) this.applySpill(p, nearest);
+  }
+
+  /**
+   * How much of a SPLASH attack lands: 1, or 1 − `MissDamageReduction` when the attack missed.
+   * The miss is the ATTACK's and is rolled ONCE — the shooter's `miss` buffs (Curse, Drunken
+   * Haze) and the Evasion of the unit it was aimed at (`aimed`; pass none when the burst no
+   * longer catches it) — never once per body in the rings.
+   */
+  private splashHitShare(shooter: SimUnit | undefined, aimed: SimUnit | undefined): number {
+    const missed = (!!shooter && this.rollMiss(shooter)) || (!!aimed && this.tryEvade(aimed));
+    return missed ? 1 - (miscGame("MissDamageReduction") as number) : 1;
+  }
+
+  /**
+   * One burst's damage to every unit in its rings around (x, y): the ring's share of the
+   * shot, to whoever `splashTargs` admits by kind and by allegiance (`splashAdmits`). Shared by
+   * the artillery shell (applyAreaSplash) and the splash missile (applyMissileSplash), which
+   * differ only in where the centre is, in `skipId` (the unit a homing missile already struck
+   * in full) and in `splatter`. Returns the first hostile body in the full ring, which is
+   * where an `aline` shot's spill starts.
+   */
+  private burstRings(
+    p: SimProjectile, a: SplashRings, source: SimUnit, x: number, y: number, hitShare: number,
+    opts: { skipId?: number; splatter?: boolean } = {},
+  ): SimUnit | undefined {
+    const shooter = this.units.get(p.sourceId);
+    let nearest: SimUnit | undefined;
+    for (const t of this.units.values()) {
+      if (t.id === opts.skipId) continue;
+      if (t.hp <= 0 || t.invulnerable || t.hidden || isOffField(t)) continue; // nobody there to hit
+      if (a.targets.length && !a.targets.includes(targetKeyOf(t))) continue;
+      if (!this.splashAdmits(source, t, a.targets)) continue;
+      const gap = Math.hypot(t.x - x, t.y - y) - t.radius;
+      // The outer rings' shares are the SLOT's own — a Mortar Team's "half" ring is 0.4 and
+      // its "quarter" ring 0.1. Only a row that states neither takes the names literally.
+      const frac = ringShare(a, gap) * hitShare;
+      if (frac <= 0) continue;
+      if (opts.splatter) this.splatterId = t.id;
+      const dealt = this.applyDamage(t, p.damage * frac, p.sourceId, p.attackType ?? AttackType.None, p.weaponSound ?? "", true, true);
+      this.splatterId = 0;
+      if (shooter) this.applyPillage(shooter, t, dealt); // a Demolisher with Pillage loots what it shells
+      if (frac === hitShare && !nearest && this.hostile(source, t)) nearest = t;
+    }
+    return nearest;
+  }
+
+  /**
+   * The burst of a MISSILE (SPLASH) shot — `weapTp` = `msplash`: the Chimaera's acid, the Frost
+   * Wyrm's breath, the Phoenix, Metamorphosis, the Ancient Protector's rock, Serpent Ward 4,
+   * every dragon (45 slots of Units\UnitWeapons.slk state rings). The missile HOMED and has
+   * just struck `struck` in full, so this is everybody ELSE in the slot's rings, measured from
+   * where that unit stands at the impact (issue #278 — these all hit a single target before).
+   *
+   * Everything else is the shell's rule, read off the same columns: `Farea`/`Harea`/`Qarea`
+   * at 1/`Hfact`/`Qfact`, and `splashTargs` for both the KIND and the ALLEGIANCE. Most of
+   * these rows name `enemy` (unlike the siege rows — docs/artillery.md), so a Frost Wyrm does
+   * not freeze its own Ghouls; the ones that name nobody (`[nadr]` = `ground`, the creep
+   * dragons and wyrms) burn whoever is standing there, exactly as the data says. A row with
+   * `tree` (the Destroyers') takes its share off the trunks too.
+   *
+   * What it does NOT do is splatter: "Units killed by Artillery attacks splatter" is
+   * Liquipedia's line about the Artillery weapon type, and this is not one.
+   */
+  private applyMissileSplash(p: SimProjectile, struck: SimUnit, hitShare: number): void {
+    const a = p.splash!;
+    const source = this.units.get(p.sourceId)
+      ?? (p.sourceOwner !== undefined
+        ? ({ id: p.sourceId, owner: p.sourceOwner, team: p.sourceTeam ?? p.sourceOwner, neutralPassive: false } as SimUnit)
+        : undefined);
+    if (!source) return;
+    this.burstRings(p, a, source, struck.x, struck.y, hitShare, { skipId: struck.id });
+    if (a.targets.includes("tree")) {
+      this.shellTrees(struck.x, struck.y, Math.max(a.quarter, a.half, a.full), (gap) => p.damage * hitShare * ringShare(a, gap));
+    }
   }
 
   /** The unit a burst is striking this instant, so `kill` can make the death a splatter
@@ -31188,6 +31273,12 @@ function launchPoint(u: SimUnit, lx: number, ly: number, lz: number): [number, n
 /** A spell field while it runs: its init, the wave clock, the side and Targets Allowed captured
  *  at the press, and where the caster stood then (a thrown wave's fallback origin). */
 type LiveSpellField = SpellFieldInit & { timer: number; done: number; team: number; flags: string[]; ox: number; oy: number };
+
+/** The share of a burst a body whose hull is `gap` from the centre takes: all of it inside
+ *  `Farea`, the slot's `Hfact` out to `Harea`, its `Qfact` out to `Qarea`, nothing beyond. */
+function ringShare(a: SplashRings, gap: number): number {
+  return gap <= a.full ? 1 : gap <= a.half ? a.halfFactor : gap <= a.quarter ? a.quarterFactor : 0;
+}
 
 /** An ARTILLERY slot — `weapTp` artillery or aline, the two kinds Liquipedia's Weapon Types
  *  page files under Artillery: the shot is thrown at an AREA rather than a unit ("they do not

@@ -302,5 +302,70 @@ console.log("\nTHROWN FIELDS: Healing Spray's bottles and Cluster Rockets' rocke
   check("a rocket wave can be walked out from under", foe.hp === 1000, `hp ${foe.hp}`);
 }
 
+console.log("\nMISSILE (SPLASH): a homing missile bursts in its rings around whoever it struck (issue #278)");
+// UnitWeapons [ufro] — the Frost Wyrm: weapTp msplash, rings 25/50/200 at 1/0.2/0.1,
+// splashTargs ground,air,structure,debris,enemy. Unlike a shell the missile still HOMES.
+const wyrm = (over = {}) => mortar({
+  weaponType: "msplash", attackType: "magic", range: 300, missileArc: 0, missileSpeed: 900,
+  targets: ["ground", "structure", "debris", "air", "item", "ward"],
+  areaFull: 25, areaHalf: 50, areaQuarter: 200, areaHalfFactor: 0.2, areaQuarterFactor: 0.1,
+  splashTargets: ["ground", "air", "structure", "debris", "enemy"], ...over,
+}, { minRange: 0 });
+function breath(over = {}, setup = () => {}) {
+  const w = new SimWorld(grid(), 2);
+  const m = addUnit(w, 1, 0, 1000, 1000, wyrm(over));
+  const foe = addUnit(w, 2, 1, 1250, 1000, []);
+  const mid = addUnit(w, 3, 1, 1250, 1060, []); // 60 - 16 = 44 from the struck unit: the 0.2 ring
+  const far = addUnit(w, 4, 1, 1250, 850, []); // 150 - 16 = 134: the 0.1 ring
+  const out = addUnit(w, 5, 1, 1250, 1300, []); // 284 away: outside every ring
+  const friend = addUnit(w, 6, 0, 1290, 1000, []); // beside the struck unit, and the shooter's own
+  const u = { w, m, foe, mid, far, out, friend };
+  setup(u);
+  w.issueOrder(m.id, { kind: "attack", targetId: foe.id, force: true });
+  let launched = false, moved = false;
+  run(w, 600, () => launched && w.projectiles.size === 0, (w) => {
+    if (!w.projectiles.size) return;
+    launched = true;
+    if (over.walk && !moved) { moved = true; for (const x of [foe, mid, far, out, friend]) x.y += 400; } // everybody walks, together
+  });
+  const took = (x) => 1000 - x.hp;
+  return { foe: took(foe), mid: took(mid), far: took(far), out: took(out), friend: took(friend), w, ids: u };
+}
+{
+  const r = breath();
+  check("the struck unit takes the blow in full", r.foe > 0, `took ${r.foe.toFixed(1)}`);
+  check("a body in the Harea ring takes Hfact of it (0.2)", Math.abs(r.mid - r.foe * 0.2) < 1e-6, `${r.mid.toFixed(2)} vs ${r.foe.toFixed(2)}`);
+  check("a body in the Qarea ring takes Qfact of it (0.1)", Math.abs(r.far - r.foe * 0.1) < 1e-6, `${r.far.toFixed(2)} vs ${r.foe.toFixed(2)}`);
+  check("a body past the rings takes nothing", r.out === 0);
+  check("splashTargs names `enemy`, so the shooter's own unit beside it is spared", r.friend === 0, `took ${r.friend}`);
+  check("…and nothing it hits is struck twice", r.foe <= 50 + 1e-6, `took ${r.foe.toFixed(1)}`);
+}
+{
+  const r = breath({ splashTargets: ["ground"] }); // [nadr] and the creep dragons: no allegiance word
+  check("a row that names no allegiance burns the shooter's own side too", r.friend > 0, `friend took ${r.friend.toFixed(1)}`);
+}
+{
+  const r = breath({ walk: true });
+  check("the missile still HOMES: a target that walks is struck all the same", r.foe > 0, `took ${r.foe.toFixed(1)}`);
+  check("…and the burst is centred where it was struck, not where it was aimed", Math.abs(r.mid - r.foe * 0.2) < 1e-6 && r.out === 0);
+}
+{
+  const r = breath({ areaFull: 0, areaHalf: 0, areaQuarter: 0 }); // 26 msplash rows state no rings
+  check("an msplash row with no rings is a plain missile", r.foe > 0 && r.mid === 0 && r.far === 0);
+}
+{
+  const r = breath({ weaponType: "missile" }); // twelve plain `missile` rows carry stray rings
+  check("rings on a plain `missile` slot do not splash — weapTp is what sorts them", r.foe > 0 && r.mid === 0 && r.far === 0);
+}
+{
+  const hit = breath();
+  const miss = breath({}, ({ m }) => m.buffs.push({ kind: "miss", group: "curse", timeLeft: 999, sourceId: 0, value: 1 }));
+  check("a MISSED splash missile still bursts, at half of every ring", Math.abs(miss.foe - hit.foe / 2) < 1e-6 && Math.abs(miss.mid - hit.mid / 2) < 1e-6, `${miss.foe.toFixed(1)} / ${miss.mid.toFixed(2)}`);
+}
+{
+  const r = breath({ damage: 5000 });
+  check("what it kills does NOT splatter — that is the Artillery type's rule", !r.w.units.has(r.ids.foe.id) && !r.w.diedExploded(r.ids.foe.id));
+}
+
 console.log(failures ? `\nartillery: ${failures} FAILED` : "\nartillery: all checks passed");
 process.exit(failures ? 1 : 0);
