@@ -3247,7 +3247,6 @@ const REGEN_PER_INT = (): number => gameNum("IntRegenBonus"); // mana/sec per In
 const IAS_MAX = 4.0; // +400% — cannot swing faster than 5x its base attack time
 const IAS_MIN = -0.8; // -80% — cannot be slowed below 1/5 of its base attack rate
 const DAMAGE_POINT_FLOOR = 0.02; // a swing always lands 0.02s before it may start the next
-const UNIT_MANA_REGEN = 0.67; // flat mana/sec for non-hero casters (approx WC3 base)
 /** How long a NET (Web, or Ensnare on a flyer) takes to bring its flyer down to the ground, and
  *  to drag it clear of trees on the way (SimWorld.netAltitude). OURS: nothing in the data times
  *  the fall — the buff simply holds the unit on the ground — so this is only long enough to SEE
@@ -13638,8 +13637,11 @@ export class SimWorld {
    *
    *  Every type's base is UnitBalance.slk's `regenMana`, which is a real per-type number the
    *  sim used to flatten to one constant: a Sorceress 0.667, a Priest 0.72, a Spirit Walker 1,
-   *  a Moon Well 1.5. UNIT_MANA_REGEN survives only as the fallback for a NON-hero
-   *  mana-carrying type whose row states none.
+   *  a Moon Well 1.5. A zero is a ZERO: there used to be a flat 0.67 fallback for "a
+   *  mana-carrying type whose row states none", but no such row exists — every unit with a
+   *  `manaN` in all four UnitBalance.slk data sets states a non-zero `regenMana` — so the
+   *  only thing that ever reached it was a custom map's `umpr = 0`, whose caster then
+   *  refilled against its author's wishes (issue #293).
    *
    *  A HERO's row is not skipped: it ADDS to the Intelligence term (MiscGame `IntRegenBonus`),
    *  exactly as `regenHP` adds to the Strength one in typeHpRegen. Every melee hero's row is
@@ -13660,7 +13662,7 @@ export class SimWorld {
     const def = this.unitReg?.get(u.typeId);
     if (u.isHero) return (def?.manaRegen ?? 0) + REGEN_PER_INT() * u.int;
     if (u.baseMaxMana <= 0) return 0;
-    return def?.manaRegen || UNIT_MANA_REGEN;
+    return def?.manaRegen ?? 0;
   }
 
   /** A Moon Well by day: it refills at night and not otherwise, and the clock applies to the
