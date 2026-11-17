@@ -1643,7 +1643,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   },
 
   // Purge (Shaman) — strip ALL buffs from the target; an enemy is then slowed to a
-  // crawl for dataD seconds (movement only), and a summoned unit is destroyed outright.
+  // crawl for the row's duration (movement only), and a summoned unit takes DataC damage.
   Aprg: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
@@ -1659,13 +1659,25 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
       if (def.specialArt) api.emitEffect(def.specialArt, t.x, t.y, onUnit ? t.id : 0, undefined, def.specialAttach);
     };
     if (api.hostile(caster, t)) {
-      if (t.isSummon) { flash(false); api.spellDamage(t, 100000, caster.id); return; } // Purge destroys summons
-      // dataD = slow duration; heavy MOVE slow that recovers when it expires (no attack slow).
+      // `Prg3` "Summoned Unit Damage" — 400 (`ACpu` 200), the Ubertip's "Deals <Aprg,DataC1>
+      // damage to summoned units". It is a NUMBER: this used to be a flat 100000, which
+      // erased an Infernal that 400 leaves standing. A summon that survives is slowed like
+      // anything else; one that does not gets the flash where it stood.
+      if (t.isSummon) {
+        api.spellDamage(t, d(lvl, 2, 400), caster.id);
+        if (t.hp <= 0) { flash(false); return; }
+      }
+      // The slow lasts `Dur1` (15; `HeroDur1` 5 on a hero or a resistant body) — "Purged units
+      // will slowly regain their movement speed over <Aprg,Dur1> seconds". NOT DataD: that is
+      // `Prg4` "Unit Pause Duration", a real 0 on the Shaman's row, so reading it as the
+      // duration gave a slow that expired on the next tick — Purge never slowed anything
+      // (issue #286). Heavy MOVE slow, no attack slow; the speed coming back GRADUALLY over
+      // the duration is not modelled yet (it is flat, then gone).
       // The model ships the ensnare family's three SIZED sets ("Birth"/"… Medium"/"… Large"),
       // so the body's size rides on the buff exactly as a net's does (netFx, BuffFx.anim).
       const art = fx(def);
       const anim = api.bodySize(t);
-      api.applyBuff(t, { kind: "slow", group: "purge", timeLeft: d(lvl, 3, 3), sourceId: caster.id, value: 0.75, value2: 0, ...art, fx: art.fx.map((f) => ({ ...f, anim })) });
+      api.applyBuff(t, { kind: "slow", group: "purge", timeLeft: dur(lvl, t), sourceId: caster.id, value: 0.75, value2: 0, ...art, fx: art.fx.map((f) => ({ ...f, anim })) });
     } else flash(true);
     if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
   },

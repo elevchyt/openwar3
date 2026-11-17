@@ -152,6 +152,48 @@ console.log("\nFlame Strike (AHfs): the fire runs on Dur1 = 9, whoever cast it (
   check("about 159 in all (9 × 15 + 6 × 4), not 53", lost() > 145 && lost() < 165, true);
 }
 
+console.log("\nPurge (Aprg): slows for Dur / HeroDur, and deals DataC to a summon (#286)");
+{
+  const row = lvl("Aprg");
+  check("the row: Dur 15 / HeroDur 5, DataC 400, DataD (Unit Pause Duration) a real 0", [row.duration, row.heroDuration, row.data[2], row.data[3]], [15, 5, 400, 0]);
+  const purge = (target) => {
+    const w = world();
+    const shaman = spawn(w, "oshm", C, C, 0, 0);
+    shaman.baseMaxMana = shaman.maxMana = shaman.mana = 500;
+    shaman.weapons = [];
+    for (const a of shaman.abilities) a.autocastOn = false;
+    const t = target(w);
+    const ok = w.issueCast(shaman.id, "Aprg", t.id);
+    run(w, 1.5);
+    return { w, t, ok };
+  };
+  const slowOf = (u) => u.buffs.find((b) => b.kind === "slow" && b.group === "purge");
+  {
+    const { w, t, ok } = purge((w) => dummy(w, "hfoo", C + 400, C));
+    check("the press is accepted", ok, true);
+    check("a Footman is slowed", !!slowOf(t), true);
+    run(w, 10);
+    check("…and still slowed ten seconds on (Dur1 = 15)", !!slowOf(t), true);
+    run(w, 5);
+    check("…and free after fifteen", !!slowOf(t), false);
+  }
+  {
+    const { w, t } = purge((w) => { const h = dummy(w, "Hpal", C + 400, C); h.isHero = true; return h; });
+    check("a hero is slowed", !!slowOf(t), true);
+    run(w, 5);
+    check("…for HeroDur1 = 5", !!slowOf(t), false);
+  }
+  {
+    const { t } = purge((w) => { const s = dummy(w, "osw3", C + 400, C, 1500); s.isSummon = true; return s; });
+    check("a 1500-life summon takes DataC = 400 and stands", [Math.round((1500 - t.hp) / 100) * 100, t.hp > 0], [400, true]);
+    check("…and is slowed like anything else", !!slowOf(t), true);
+  }
+  {
+    const { w, t } = purge((w) => { const s = dummy(w, "hwat", C + 400, C, 300); s.isSummon = true; return s; });
+    check("a summon with less than that dies of it", t.hp <= 0 || !w.units.has(t.id), true);
+  }
+}
+
 if (failed) {
   console.log(`\n${failed} check(s) FAILED`);
   process.exit(1);
