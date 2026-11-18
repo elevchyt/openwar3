@@ -12,8 +12,10 @@ import type { PlayableRace } from "../data/races";
 //   • COMPUTER+ — ours, a melee player end to end, chosen per seat in the lobby's Advanced Options.
 //
 // Computer+ is refused in two places, and each refusal hands the seat Blizzard's own AI: on a
-// CUSTOM map (w3i melee flag clear — it has no melee shape to play), and in a CAMPAIGN chapter,
-// always, whatever the map's flag says. A chapter's computers are the mission's.
+// CUSTOM map (w3i melee flag clear — it has no melee shape to play) unless that map's script
+// runs the whole melee init (an ALTERED MELEE map, `AiMatch.alteredMelee` — the all-random "ATR"
+// maps), and in a CAMPAIGN chapter, always, whatever the map's flag says. A chapter's computers
+// are the mission's.
 
 /** One computer seat as the lobby arms it. */
 export interface AiSeat {
@@ -30,6 +32,9 @@ export interface AiSeat {
 export interface AiMatch {
   /** The w3i melee flag. */
   melee: boolean;
+  /** A custom map whose script runs the whole melee init (world/mapKind.ts `runsMeleeInit`) —
+   *  an ALTERED MELEE map, which Computer+ plays as the melee match it is. */
+  alteredMelee?: boolean;
   /** A campaign chapter (`MeleeConfig.campaign`). */
   campaign: boolean;
 }
@@ -67,6 +72,6 @@ export function pickAi(script: string, seat: AiSeat, match: AiMatch): AiPick {
   if (!race) return { ai: "script" };
   if (!seat.plus) return { ai: "melee", race, plusRefused: null };
   if (match.campaign) return { ai: "melee", race, plusRefused: "campaign" };
-  if (!match.melee) return { ai: "melee", race, plusRefused: "custom" };
+  if (!match.melee && !match.alteredMelee) return { ai: "melee", race, plusRefused: "custom" };
   return { ai: "plus", race };
 }

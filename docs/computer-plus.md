@@ -39,6 +39,41 @@ w3i sets the melee flag) — and `tools/ai-seating-test.cjs` pins each guard ON 
 can quietly become the only one. Checked live on Orc03 too, by forcing `plus` onto a seat and
 asking `startMeleeAIFor` for `human.ai`: Blizzard's AI took it.
 
+### …except an ALTERED MELEE map
+
+A custom map whose own script runs the WHOLE Melee Initialization — all eight `Melee*` calls a
+melee map's init trigger makes, `MeleeStartingAI` among them (`world/mapKind.ts`
+`runsMeleeInit`) — sets up a melee match with the melee library itself, and Computer+ plays it
+(`AiMatch.alteredMelee`, passed from `MapViewerScene.beginMatch`). The all-random "ATR" maps are
+the case: their w3i melee flag is clear, but they are a melee game with one rule on top (a random
+hero out of every altar, by trigger). Scanned over every map in the install, the four ATR maps
+and one test map run all eight, (4)Monolith runs five and no scenario more than one, so ALL eight
+is the line — Monolith's creep players and every scenario keep Blizzard's AI. A campaign chapter
+refuses it whatever its script runs. Such a map still reads the CUSTOM data set (docs/editions.md):
+its flag is what says which tables it plays on, and that is not this rule's to move.
+
+**The altar's own fallback** (`ComputerPlusAi.settleHeroSlots`, every difficulty) is what makes
+an ATR map playable at all. Their altars train three PLACEHOLDERS instead of heroes — on
+(2)SunhoofMesa_v1.4_ATR `h001`, then `h000`, then `h002`, Peasant-based units each enabled by
+the last through `SetPlayerTechMaxAllowed` — and the map's trigger swaps the one trained for a
+random hero of all 24. A hero slot names a TYPE (`pickHeroes`) and every hero row counts it by
+that type, so the Death Knight the undead asked for was never on the altar and the row stood at
+the top of the ladder all match. Two rules, run ahead of the plan every build pass:
+
+- A hero of ours in NO slot is ADOPTED into the first slot we have no hero for (living, dead, or
+  on its way back from an altar) — what the map made out of a placeholder becomes that slot's
+  hero, counted, revived (`reviveFirst`) and skilled off whatever it can learn
+  (`AiPlayer.spendSkillPoints`).
+- A slot whose hero cannot be had — the race's altar does not train it and no altar of ours
+  does, no Tavern sells it, or the map has withdrawn it (`maxAllowed` 0) — trains a RANDOM entry
+  of the altar's own list that the map still allows, off the AI's own stream. On a stock map the
+  planned hero is always on the list and this never fires.
+
+Checked live on Sunhoof Mesa: Normal fields its two random heroes (a Dark Ranger, then a Warden)
+and Insane its three; the person in seat 0 receives none of them (that took the
+`GetTriggerPlayer` fix in `Interpreter.withTrigger` — before it, every hero the computer's altar
+made was handed to Player 0).
+
 The two custom maps that DO have Computer+ are seated somewhere else entirely and are untouched
 by this — **Extreme Candy War** through `startCandyWarAI` and **WarChasers** through
 `startWarChasersAI`, each with its own AI object and its own rules for that one map

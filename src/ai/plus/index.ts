@@ -3322,6 +3322,64 @@ export class ComputerPlusAi {
     return carry;
   }
 
+  /**
+   * THE ALTAR'S OWN FALLBACK for the three hero slots, run every build pass ahead of the plan.
+   *
+   * The slots name heroes by TYPE, picked at seat time off the race's own four (`pickHeroes`),
+   * and every hero row counts the slot by that type — so a map that hands out its heroes some
+   * other way leaves a slot that can never be filled, and its row stands at the top of the
+   * ladder for the whole match. The "ATR" (all-random) melee maps are the case that was seen:
+   * (2)SunhoofMesa_v1.4_ATR's altars train three placeholder units instead of heroes (`h001`,
+   * then `h000`, then `h002`, each enabled by the last through `SetPlayerTechMaxAllowed`), and
+   * its own trigger swaps the one trained for a random hero of all 24 the moment it is done.
+   * Computer+ asked that altar for a Death Knight it does not train, and fielded no hero at all.
+   * Two rules, the developer's — the first is ours to make the second work:
+   *
+   *  · A HERO OF OURS IN NO SLOT is ADOPTED into the first slot we do not have a hero for. What
+   *    the map's script made out of a placeholder is that slot's hero from then on: the rows see
+   *    it, and it is revived like any other (`reviveFirst`). Its skills fall through to what it
+   *    can learn (`AiPlayer.spendSkillPoints`), since no table names a build for it.
+   *  · A SLOT WHOSE HERO CANNOT BE HAD — no altar of ours could train it, no Tavern sells it, or
+   *    the map has withdrawn it (`maxAllowed` 0) — trains a RANDOM entry of the altar's own list
+   *    that the map still allows instead, off the AI's own stream. On a stock map the planned
+   *    hero is always on the list, so nothing here ever fires there.
+   */
+  private settleHeroSlots(b: Brain): void {
+    const { ai, table } = b;
+    const world = this.host.world;
+    const slots = ["heroId", "heroId2", "heroId3"] as const;
+    // Living, dead, or already on its way back from an altar: a slot with any of those is FILLED
+    // (`heroFallen` alone skips the one being revived, which would re-roll the slot mid-revive).
+    const owned = new Set<string>();
+    for (const u of world.units.values()) {
+      if (u.owner === ai.player && u.hp > 0 && u.isHero && !u.isIllusion && !u.isSummon) owned.add(u.typeId);
+    }
+    for (const f of world.fallenHeroesOf(ai.player)) owned.add(f.typeId);
+    const filled = (id: string): boolean => !!id && (ai.count(id) > 0 || owned.has(id));
+    for (const type of owned) {
+      if (slots.some((k) => ai[k] === type)) continue;
+      const free = slots.find((k) => !filled(ai[k]));
+      if (!free) break;
+      ai[free] = type;
+    }
+    const altar = this.host.tech.get(table.altar);
+    const allowed = (id: string): boolean => (world.tech?.maxAllowed(ai.player, id) ?? -1) !== 0;
+    const obtainable = (id: string): boolean => {
+      if (!id || !allowed(id)) return false;
+      if (altar.trains.includes(id)) return true;
+      for (const u of world.units.values()) {
+        if (u.owner !== ai.player || u.hp <= 0 || !u.building) continue;
+        if (this.host.tech.get(u.typeId).trains.includes(id)) return true;
+      }
+      return this.tavernSells(id);
+    };
+    for (const k of slots) {
+      if (!ai[k] || filled(ai[k]) || obtainable(ai[k])) continue;
+      const pool = altar.trains.filter((id) => allowed(id) && !slots.some((s) => ai[s] === id));
+      if (pool.length) ai[k] = pool[pool.length === 1 ? 0 : ai.randomInt(1, pool.length) - 1];
+    }
+  }
+
   /** Does a Tavern on this map — a neutral building whose `Sellunits` lists the hero — sell
    *  `heroId` to anybody? Asked at seat time, when the map's own units are already placed. */
   private tavernSells(heroId: string): boolean {
@@ -3571,6 +3629,8 @@ export class ComputerPlusAi {
     // sent back in — the one case neither pass above can see, because every worker in it holds
     // a harvest order. See `AiPlayer.kickStalledMines` for the match it was seen in.
     ai.kickStalledMines(b.clock);
+    // The three hero slots, squared with the map before the plan reads them (`settleHeroSlots`).
+    this.settleHeroSlots(b);
     buildPlan(ctx);
     b.heroHold.gold = secondHeroHold(ctx);
     // What it is building is worth telling a TEAMMATE, and this is where the answer is already

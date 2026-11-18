@@ -1132,6 +1132,7 @@ export class RtsController {
     races: ReadonlyMap<number, PlayableRace> = new Map(slots.map((s) => [s.player, s.race])),
     melee = false,
     campaign = false,
+    alteredMelee = false,
   ): void {
     // A CAMPAIGN chapter's computers are always Blizzard's — the chapter's own `.ai` script, or a
     // race port if a chapter ever asks for one — and never Computer+, whatever the slot carries
@@ -1143,6 +1144,9 @@ export class RtsController {
     // `startMeleeAIFor` needs that it cannot read off the seat — see there. A new match says
     // its piece again, so the note below is once per MATCH and not once per session.
     this.meleeMap = melee;
+    // …and a custom map that sets up a melee match anyway (its script runs the whole Melee
+    // Initialization — the all-random "ATR" maps), which Computer+ plays (game/aiSeating.ts).
+    this.alteredMeleeMap = alteredMelee;
     this.warnedPlusOnCustom = false;
     // EVERY playing seat's start location, computers and people alike — what a Computer+ scout
     // walks its tour round (src/ai/plus/, `PlusHost.startLocations`). `slots` is only the
@@ -1289,7 +1293,7 @@ export class RtsController {
     // replaced by a race AI: a Murloc player on elf.ai builds nothing a Murloc can build and
     // stands still for the match, which is what (4)Monolith's creep players used to do.
     // (game/aiSeating.ts `pickAi` — the whole decision, pinned headlessly.)
-    const pick = pickAi(script, seat, { melee: this.meleeMap, campaign: this.campaignMatch });
+    const pick = pickAi(script, seat, { melee: this.meleeMap, alteredMelee: this.alteredMeleeMap, campaign: this.campaignMatch });
     if (pick.ai === "script") return this.startScriptAI(player, script, seat);
     const race = pick.race;
     // WHERE the computer's town is comes from its own buildings, never the lobby. common.ai
@@ -1314,6 +1318,12 @@ export class RtsController {
     // that reads the tech tree or the start locations is reading a melee shape that is not
     // there. Blizzard's own AI is what such a map was written against and is what the seat
     // gets: the switch is a melee setting, and this is where it stops being one.
+    //
+    // …EXCEPT an ALTERED MELEE map: a custom map whose own script runs the whole Melee
+    // Initialization (world/mapKind.ts `runsMeleeInit` — the all-random "ATR" maps). It has
+    // every one of those melee things, because it set them up with the melee library itself;
+    // what it adds is a rule on top (a random hero out of the altar), and Computer+ meets that
+    // with its altar fallback (plus/index.ts `settleHeroSlots`).
     //
     // The two custom maps that DO have Computer+ are seated somewhere else entirely and are
     // untouched by this — Extreme Candy War through `startCandyWarAI` and WarChasers through
@@ -1357,6 +1367,8 @@ export class RtsController {
   /** Was this match started on a MELEE map? Set by `prepareMeleeAI`; read by
    *  `startMeleeAIFor`, which refuses Computer+ anywhere else. */
   private meleeMap = false;
+  /** …or a custom map whose script runs the whole melee init (`prepareMeleeAI`). */
+  private alteredMeleeMap = false;
   private warnedPlusOnCustom = false;
   /** Say once, per match, that a Computer+ seat became a classic one — so a player who ticked
    *  the box and then watched Blizzard's AI play is not left guessing. */

@@ -172,6 +172,8 @@ import { LogDialogOverlay, LOG_MAX_LINES } from "../ui/logDialog";
 import { QuestDialogOverlay, primeQuestStrings } from "../ui/questDialog";
 import { ConsoleUi, type ConsolePanel } from "../ui/consoleUi";
 import { parseMapInfo } from "../world/mapInfo";
+import { runsMeleeInit } from "../world/mapKind";
+import { readMapScript } from "../world/triggers";
 import {
   CHAT_PLAYER_DOT, chatPrompt, chatRecipients, chatShowsPlayerDot, formatChatLine, hasChatAllies, observerLine,
   type ChatLine, type ChatTarget, type ChatWorld,
@@ -3198,6 +3200,9 @@ export class MapViewerScene {
       // …and whether this is a CAMPAIGN chapter, where Computer+ is refused outright whatever a
       // slot or a preference says: a chapter's computers are always Blizzard's.
       config.campaign === true,
+      // …and whether a CUSTOM map sets up a melee match anyway (its script runs the whole melee
+      // init — the all-random "ATR" maps), which Computer+ does play (game/aiSeating.ts).
+      !melee && !!this.mapArchive && runsMeleeInit(readMapScript(this.mapArchive)),
     );
     for (const slot of config.slots) this.rts!.simWorld.initStash(slot.id, startGold, startLumber);
     // …and the supply CEILING this map asks for, before a line of its script runs — a chapter

@@ -63,6 +63,22 @@ const scrolls = () => granted.map((g) => `${g.unitId}:${g.typeId}`);
 
 // The map's side of it: one function per melee action, exactly as the World Editor emits them.
 const SRC = `
+globals
+    integer udg_TrainedFor = -1
+endglobals
+// (2)SunhoofMesa_v1.4_ATR's own shape: a trigger on EVERY player's TRAIN_FINISH that hands the
+// hero to GetTriggerPlayer() — "Triggering Player", the GUI's commonest response.
+function Trig_Probe_Actions takes nothing returns nothing
+    set udg_TrainedFor = GetPlayerId(GetTriggerPlayer())
+endfunction
+function InitTrig_Probe takes nothing returns nothing
+    local trigger t = CreateTrigger()
+    call TriggerRegisterAnyUnitEventBJ(t, EVENT_PLAYER_UNIT_TRAIN_FINISH)
+    call TriggerAddAction(t, function Trig_Probe_Actions)
+endfunction
+function ProbeTrainedFor takes nothing returns integer
+    return udg_TrainedFor
+endfunction
 function ProbeTwinkCap takes nothing returns integer
     return bj_MELEE_MAX_TWINKED_HEROES
 endfunction
@@ -85,6 +101,7 @@ rt.applyLobby(
   0,
 );
 interp.callFunction("Trig_Melee_Initialization_Actions", []);
+interp.callFunction("InitTrig_Probe", []);
 
 // --- MeleeStartingAI ------------------------------------------------------------------------
 // Only the computer, and by the .ai file its RACE names — `elf.ai`, not `nightelf.ai`, is the
@@ -121,6 +138,15 @@ interp.pumpSellUnitEvents([{ shop: tavern, sold: at(21, "Nfir", 1) }]);
 check("a hero hired at a Tavern gets player 1's scroll", scrolls(), ["7:stwp", "21:stwp"]);
 interp.pumpSellUnitEvents([{ shop: tavern, sold: at(22, "Hmkg", 1) }]);
 check("player 1's second hire gets nothing", scrolls(), ["7:stwp", "21:stwp"]);
+
+// GetTriggerPlayer on a PLAYER-unit event is the player the registration was made for — the
+// trainer's owner. It answered null (= Player 0), so the ATR maps gave a computer's random
+// heroes to the person in seat 0.
+const orcAltar = at(30, "oalt", 1);
+interp.pumpTrainEvents([{ building: orcAltar, unitTypeId: "Obla", trained: at(31, "Obla", 1), phase: "finish" }]);
+check("GetTriggerPlayer on player 1's TRAIN_FINISH is player 1", interp.callFunction("ProbeTrainedFor", []).n, 1);
+interp.pumpTrainEvents([{ building: barracks, unitTypeId: "hfoo", trained: at(32, "hfoo", 0), phase: "finish" }]);
+check("…and on player 0's, player 0", interp.callFunction("ProbeTrainedFor", []).n, 0);
 
 console.log(failed ? `\n${failed} check(s) FAILED` : "\nall melee-library checks passed");
 process.exit(failed ? 1 : 0);

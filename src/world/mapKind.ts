@@ -1,6 +1,6 @@
 import type { MpqDataSource } from "../vfs/mpq";
 import { readW3i } from "../compat/w3i";
-import { readMapScript, type MapScript } from "./triggers";
+import { MELEE_INIT_FUNCS, readMapScript, type MapScript } from "./triggers";
 
 // Classify a map as **standard melee** vs **custom / scenario / game mode**.
 //
@@ -49,6 +49,20 @@ export const W3I_FLAGS = {
  */
 export function startsExplored(flags: number): boolean {
   return (flags & W3I_FLAGS.maskedAreaPartiallyVisible) !== 0;
+}
+
+/**
+ * Does this script run the WHOLE standard Melee Initialization — all eight `Melee*` calls a melee
+ * map's init trigger makes, `MeleeStartingAI` among them? That is an ALTERED MELEE map: the w3i
+ * melee flag is clear (it is a custom map, and reads the custom data set), but the match it sets
+ * up is a melee match — town hall, workers, the melee AI, defeat on no buildings — with a rule or
+ * two of its own laid on top. The all-random "ATR" maps are the case (a random hero out of every
+ * altar, by trigger). Scanned over every map in the install: the four ATR maps and one test map
+ * run all eight, (4)Monolith runs five, and no scenario more than one — so ALL eight is the line.
+ * What reads it is Computer+'s seating (game/aiSeating.ts `pickAi`), which plays such a map.
+ */
+export function runsMeleeInit(script: MapScript): boolean {
+  return MELEE_INIT_FUNCS.every((fn) => script.meleeFuncs.includes(fn));
 }
 
 export type MapKind = "melee" | "custom";

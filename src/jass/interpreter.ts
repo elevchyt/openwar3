@@ -1586,6 +1586,14 @@ export class Interpreter {
   private withTrigger(responses: Map<string, JassValue>, trig: TriggerObj, reg?: TriggerReg): Map<string, JassValue> {
     const m = new Map(responses);
     m.set("TriggeringTrigger", jHandle(trig.handleId, "trigger"));
+    // GetTriggerPlayer on an EVENT_PLAYER_UNIT_* event is the player the registration was made
+    // FOR — the unit's owner, which is what `playerUnitEventMatches` already matched it on. No
+    // pump of those events (train, death, construct, research, sell, spell…) put it in its
+    // responses, so it answered null, and a null player is Player 0: (2)SunhoofMesa_v1.4_ATR's
+    // `CreateUnit(GetTriggerPlayer(), udg_HeroType[…])` handed every hero a COMPUTER's altar
+    // made to the person in seat 0, and its tech swap went to them too. "Triggering Player" is
+    // one of the GUI's commonest responses, so this was every such trigger on every map.
+    if (reg?.kind === "playerUnitEvent" && !m.has("TriggerPlayer") && reg.params[0]) m.set("TriggerPlayer", reg.params[0]);
     const id = reg ? this.eventIdOf(reg) : undefined;
     if (id) m.set("TriggerEventId", id);
     return m;

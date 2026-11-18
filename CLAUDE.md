@@ -640,7 +640,11 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   It is a MELEE player END TO END, which is why it does not play a CUSTOM map at all:
   `startMeleeAIFor` refuses a Computer+ seat on a map whose w3i melee flag is clear and hands it
   Blizzard's own AI instead — a build order, an expansion clock and a wave aimed at another
-  player's town have nothing to mean where the map's own triggers own the seat. The two custom
+  player's town have nothing to mean where the map's own triggers own the seat. The one
+  exception is an ALTERED MELEE map, whose script runs all eight `Melee*` init calls
+  (`runsMeleeInit` — the all-random "ATR" maps): it plays those, and meets their random-hero
+  altars with `settleHeroSlots` (a hero in no slot is ADOPTED; a slot whose hero no altar or
+  Tavern can supply trains a random entry the altar still allows). The two custom
   maps that DO have it are seated somewhere else entirely (`startCandyWarAI`,
   `startWarChasersAI`), and neither goes through `StartMeleeAI`.
   CREEPING is PRICED, never measured in food ([`plus/power.ts`](src/ai/plus/power.ts)): a camp's

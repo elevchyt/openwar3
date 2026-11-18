@@ -9,7 +9,8 @@
 //
 // Around it, the rest of the decision `RtsController.startMeleeAIFor` acts on: a map's or a
 // chapter's own script is RUN (never replaced by a race AI), the race files are matched by
-// basename, Computer+ is refused on a custom map, and granted on a melee skirmish seat that asked.
+// basename, Computer+ is refused on a custom map — unless its script runs the whole melee init
+// (an altered melee map, the "ATR" maps) — and granted on a melee skirmish seat that asked.
 //
 // Run: pnpm sim:test
 const { writeFileSync } = require("node:fs");
@@ -31,6 +32,8 @@ const CAMPAIGN = { melee: false, campaign: true };
 const CAMPAIGN_MELEE_FLAG = { melee: true, campaign: true }; // a chapter whose w3i sets the melee flag
 const SKIRMISH = { melee: true, campaign: false };
 const CUSTOM = { melee: false, campaign: false };
+// A custom map whose script runs the whole melee init — the all-random "ATR" maps (world/mapKind.ts).
+const ALTERED = { melee: false, alteredMelee: true, campaign: false };
 
 console.log("a campaign chapter: armAiSeats clears every seat's Computer+ flag");
 const slots = [seat(1, "human", true), seat(2, "orc", false), seat(3, "undead")];
@@ -59,6 +62,9 @@ check("a melee skirmish seat that asked for Computer+ gets it", pickAi("human.ai
 check("…and the race comes from the FILE, as in the original", pickAi("elf.ai", seat(1, "human", true), SKIRMISH), { ai: "plus", race: "nightelf" });
 check("a seat that did not ask gets Blizzard's AI", pickAi("orc.ai", seat(1, "orc"), SKIRMISH), { ai: "melee", race: "orc", plusRefused: null });
 check("a custom map refuses Computer+ (said once, in the log)", pickAi("undead.ai", seat(1, "undead", true), CUSTOM), { ai: "melee", race: "undead", plusRefused: "custom" });
+check("an ALTERED MELEE map (the whole melee init, flag clear) seats Computer+", pickAi("undead.ai", seat(1, "undead", true), ALTERED), { ai: "plus", race: "undead" });
+check("…only for a seat that asked", pickAi("undead.ai", seat(1, "undead"), ALTERED), { ai: "melee", race: "undead", plusRefused: null });
+check("…and never in a campaign, whatever the script runs", pickAi("orc.ai", seat(1, "orc", true), { ...ALTERED, campaign: true }), { ai: "melee", race: "orc", plusRefused: "campaign" });
 check("a map's own script is run, never a race AI ((4)Monolith)", pickAi("war3mapImported\\Murloc_AI.ai", seat(4, "nightelf", true), SKIRMISH), { ai: "script" });
 
 console.log(failed ? `\nai-seating: ${failed} FAILED` : "\nai-seating: all checks passed");
