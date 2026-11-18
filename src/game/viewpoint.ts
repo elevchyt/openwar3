@@ -822,7 +822,22 @@ export class VisionSet {
   }
   fogModifierStart(id: number): void {
     const m = this.modifiers.get(id);
-    if (m) m.running = true;
+    if (!m) return;
+    m.running = true;
+    // A modifier that LIGHTS ground explores it the moment it starts, not at the next rebuild.
+    // The campaigns lean on exactly that: Blackrock & Roll's Blademaster and Ravages of the
+    // Plague's Fountain of Health are both
+    //     call CreateFogModifierRadiusLocBJ( true, …, FOG_OF_WAR_VISIBLE, <spot>, 1024.00 )
+    //     call DestroyFogModifier( GetLastCreatedFogModifier() )
+    //     call PingMinimapLocForForce( …, <spot>, 7.00 )
+    // — started and destroyed on adjacent lines, so a modifier that only ever acted inside
+    // `rebuild` was gone before any rebuild saw it and the pinged spot stayed black on the
+    // minimap. Stamped now, the sticky `explored`/`seen` layers keep it; `visible` is
+    // recomputed at the next rebuild, so the spot falls back to fog as it does in the game.
+    // MASKED is left to the rebuild: stamping it would ERASE exploration for good, where a
+    // masked modifier is something that is undone when it goes.
+    const state = fogStateOf(m.state);
+    if (state !== FogState.Unexplored) this.stampFor(m.player, m.area, state);
   }
   fogModifierStop(id: number): void {
     const m = this.modifiers.get(id);
