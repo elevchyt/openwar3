@@ -54,14 +54,12 @@ export const MAP_SITES: readonly MapSite[] = [
     name: "Hive Workshop",
     blurb: "The largest modding community — reviewed and approved maps.",
     home: "https://www.hiveworkshop.com/repositories/maps.564/",
-    parked: "the desktop app's view shows the Cloudflare check pass and then no page (2026-11-18). The sites themselves load in a bare Electron 44 view, so the fault is in how the game lays the view over the dialog.",
   },
   {
     id: "wc3maps",
     name: "wc3maps",
     blurb: "An archive of every map played on Battle.net, with its statistics.",
     home: "https://wc3maps.com/",
-    parked: "the desktop app's view shows the Cloudflare check pass and then no page (2026-11-18). The sites themselves load in a bare Electron 44 view, so the fault is in how the game lays the view over the dialog.",
   },
 ];
 
