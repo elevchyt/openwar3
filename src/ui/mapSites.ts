@@ -5,26 +5,26 @@ import { downloadedMapKey, keepDownloadedMap, requestMapWriteAccess } from "../a
 //
 // Nothing in 1.30.4 had this: Battle.net's map transfer was a LOBBY's, and a player who wanted a
 // map went and got it from a website. These are the three the developer named, and the community
-// still uses for exactly that. Two of them can only be OPENED, and one can be READ:
+// still uses for exactly that. One of them can only be OPENED, and one can be READ (Hive Workshop
+// was a third, and was taken out: its view never loaded):
 //
 //   · EpicWar serves its listing as plain HTML and its files through a signed link, so the game
 //     can search it and download a result in place — but a page cannot read it (no CORS), so the
 //     read goes through the desktop app's main process or, at localhost, the dev server
 //     (electron/mapSites.mjs holds the allow-list both of them use). A hosted web build has
-//     neither, and EpicWar is then opened like the others.
-//   · Hive Workshop and wc3maps sit behind Cloudflare's bot check. A plain fetch is refused by it,
-//     and it is not ours to get round; nor may either be framed (X-Frame-Options). So the desktop
-//     app SHOWS the real site inside the dialog, in a web view of its own laid over the tab, whose
+//     neither, and EpicWar is then opened like wc3maps.
+//   · wc3maps sits behind Cloudflare's bot check. A plain fetch is refused by it, and it is not
+//     ours to get round; nor may it be framed (X-Frame-Options). So the desktop app SHOWS the real site inside the dialog, in a web view of its own laid over the tab, whose
 //     map downloads land in Maps\Download\ and on the list by themselves
 //     (electron/mapSitesView.mjs) — the player never leaves the game. A browser has no such view,
 //     so on the web the site opens in a new tab and the player hands the file over through Import
 //     (or by dropping it on the dialog).
 //
-// Every map that comes in, by any of the three doors, is kept the way a LAN download is
+// Every map that comes in, by any of its doors, is kept the way a LAN download is
 // (assets/downloadedMaps.ts): `Maps\Download\<file name>`, an ordinary map of the install from
 // then on.
 
-export type MapSiteId = "hive" | "epicwar" | "wc3maps";
+export type MapSiteId = "epicwar" | "wc3maps";
 
 export interface MapSite {
   id: MapSiteId;
@@ -48,12 +48,6 @@ export const MAP_SITES: readonly MapSite[] = [
     blurb: "A huge archive of custom maps, new and old.",
     home: "https://www.epicwar.com/maps/",
     searchUrl: (q) => `https://www.epicwar.com/maps/?n=${encodeURIComponent(q)}`,
-  },
-  {
-    id: "hive",
-    name: "Hive Workshop",
-    blurb: "The largest modding community — reviewed and approved maps.",
-    home: "https://www.hiveworkshop.com/repositories/maps.564/",
   },
   {
     id: "wc3maps",

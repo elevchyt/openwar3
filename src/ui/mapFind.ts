@@ -22,6 +22,35 @@
 // text and focus.
 
 import { setGameTip } from "./gameTip";
+import { ninePatch } from "./ninePatch";
+
+/**
+ * The box's dress — a Warcraft III edit box, read out of the install (the field has no FrameDef of
+ * its own, so its FRAME is borrowed from one the 2003 UI already has): StandardTemplates.fdf
+ * `StandardEditBoxBackdropTemplate` (Battle.net's `BattleNetEditBoxBackdropTemplate` is the same
+ * art), the riveted iron frame over its dark fill — the profile name field and the Download Maps
+ * dialog's own search field. The developer's pick out of four (this, the Esc menu's gold-edged
+ * Save Game field, and each of the two laid flush over the list's own top border).
+ *
+ * The edge is the engine's 8-tile BackdropEdgeFile re-cut into a CSS nine-patch, trimmed to the
+ * texels it draws (`EDGE_KEEP`, ui/ninePatch.ts — the iron is opaque to texel 21 of 64).
+ */
+const EDGE = "UI\\Widgets\\BattleNet\\bnet-inputbox-border.blp";
+const FILL = "UI\\Widgets\\BattleNet\\bnet-inputbox-back.blp";
+const EDGE_KEEP = 24;
+
+/** The CSS variables the dressed box reads (style.css `.ow3-find-dressed`), off a BLP reader;
+ *  empty when the art is not there, and the box keeps its plain look. */
+export function findSkinVars(blp: (path: string) => HTMLCanvasElement | null): Record<string, string> {
+  const edge = ninePatch(blp(EDGE), EDGE_KEEP);
+  const fill = blp(FILL);
+  if (!edge || !fill) return {};
+  return {
+    "--ow3-find-edge": `url(${edge.url})`,
+    "--ow3-find-slice": String(edge.tile),
+    "--ow3-find-fill": `url(${fill.toDataURL()})`,
+  };
+}
 
 /** What the box needs from the map browser it searches. */
 export interface FindHost {
@@ -108,6 +137,12 @@ export class MapFind {
     this.paint();
   }
 
+  /** Dress the box in the install's edit-box art (`findSkinVars`). */
+  skin(vars: Record<string, string>): void {
+    for (const [k, v] of Object.entries(vars)) this.root.style.setProperty(k, v);
+    this.root.classList.toggle("ow3-find-dressed", Object.keys(vars).length > 0);
+  }
+
   /** What the box holds, trimmed. */
   get query(): string { return this.input.value.trim(); }
 
@@ -163,6 +198,7 @@ export class MapFind {
     root.style.width = `${list.offsetWidth - 2 * inset}px`;
     list.style.setProperty("--ow3-find-h", `${root.offsetHeight + inset}px`);
     list.classList.add("ow3-find-docked");
+
     if (this.wantFocus && document.activeElement !== this.input) {
       const at = this.input.selectionStart;
       this.input.focus();

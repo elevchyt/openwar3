@@ -1,5 +1,5 @@
 import {
-  ArrowLeft, ArrowRight, Check, Download, ExternalLink, FileUp, Globe, House, RotateCw, Search,
+  Check, Download, ExternalLink, FileUp, Globe, RotateCw, Search,
   createElement as lucideIcon, type IconNode,
 } from "lucide";
 import type { DataSource } from "../vfs/types";
@@ -30,9 +30,11 @@ import {
 // package, the same icon set the landing page's React build uses), drawn in the label's own gold:
 //
 //   · EpicWar — a search field and its results, each with a Download button.
-//   · Hive Workshop, wc3maps — the real site, INSIDE the tab: the desktop app lays a web view of
-//     its own over the tab's viewport (electron/mapSitesView.mjs), and what the player downloads
-//     there lands on the list by itself. A browser has no such view (neither site may be framed),
+//   · wc3maps — the real site, INSIDE the tab: the desktop app lays a web view of its own over
+//     the WHOLE tab (electron/mapSitesView.mjs) with no browser toolbar above it — no address, no
+//     back/forward/reload/home (the developer's call: the site is the tab, not a browser in it) —
+//     and what the player downloads there lands on the list by itself. A browser has no such view
+//     (the site may not be framed),
 //     so there the tab offers to open the site in a new tab, and Import takes the file back.
 //
 // Every map that comes in — a Download, an Import, a file dropped on the dialog, or a site view's
@@ -110,7 +112,6 @@ const RESULTS_SCROLLBAR = "StandardScrollBarTemplate";
 
 const TAB_FRAME: Record<MapSiteId, string> = {
   epicwar: "MapSitesTabEpicWar",
-  hive: "MapSitesTabHive",
   wc3maps: "MapSitesTabWc3maps",
 };
 const PAGES = ["MapSitesPageSearch", "MapSitesPageView", "MapSitesPageSite"] as const;
@@ -197,7 +198,6 @@ export async function showMapSitesDialog(opts: {
     MapSitesDialogTitle: TITLE,
     MapSitesDoneButtonText: "Done",
     MapSitesImportButtonText: "Import map file…",
-    MapSitesOpenOutsideText: "Open in browser",
     MapSitesViewRetryText: "Retry",
     MapSitesSiteNote: "Download a map there, then Import it here — or drop the file on this window.",
   };
@@ -345,38 +345,18 @@ export async function showMapSitesDialog(opts: {
 
   const fillView = (s: FdfScreen): void => {
     const site = siteById(model.tab);
-    const nav = (name: string, glyph: IconNode, tip: string, what: Parameters<SiteViewBridge["nav"]>[0]): void => {
-      iconInto(s, `${name}Text`, glyph, true);
-      const el = s.frame(name);
-      if (el) setGameTip(el, tip);
-      handlers[name] = () => view!.nav(what);
-    };
-    nav("MapSitesNavBack", ArrowLeft, "Back", "back");
-    nav("MapSitesNavForward", ArrowRight, "Forward", "forward");
-    nav("MapSitesNavReload", RotateCw, "Reload", "reload");
-    nav("MapSitesNavHome", House, `${site.name} home`, "home");
-    iconInto(s, "MapSitesOpenOutsideText", ExternalLink, false);
-    handlers.MapSitesOpenOutside = () => view!.nav("external");
     handlers.MapSitesViewRetry = () => view!.nav("reload");
-    setGameTip(s.frame("MapSitesOpenOutside")!, "Open this page in your own web browser");
     iconInto(s, "MapSitesViewRetryText", RotateCw, false);
     paintView(s);
     const port = s.frame("MapSitesViewport");
     if (port && tracker) tracker.place(site.id, site.home, port, () => !model.view.get(site.id)?.failed);
   };
 
-  /** The toolbar and the note under the view, in place — the view reports far too often (every
+  /** The note under the view, in place — the view reports far too often (every
    *  load start and stop of Cloudflare's interstitial) for each report to be a relayout. */
   const paintView = (s: FdfScreen): void => {
     const site = siteById(model.tab);
     const st = model.view.get(site.id);
-    s.setEnabled("MapSitesNavBack", !!st?.canGoBack);
-    s.setEnabled("MapSitesNavForward", !!st?.canGoForward);
-    let where = new URL(site.home).hostname;
-    try {
-      if (st?.url) { const u = new URL(st.url); where = `${u.hostname}${u.pathname === "/" ? "" : u.pathname}`; }
-    } catch { /* not a URL yet */ }
-    s.setText("MapSitesWhere", where);
     s.frame("MapSitesPageView")?.classList.toggle("ow3-sites-loading", !!st?.loading);
     s.setText("MapSitesViewNote", st?.failed ? `Could not reach ${site.name} (${st.failed}).` : `Loading ${site.name}…`);
   };

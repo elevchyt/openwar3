@@ -28,6 +28,7 @@ import type { HudDriver, HudSelection } from "./hud";
 import type { ObserverHero, ObserverIcon, ObserverPlayerView } from "../game/observerView";
 import { OBSERVER_MAX_HEROES } from "../game/observerView";
 import { setGameTip } from "./gameTip";
+import { ninePatch } from "./ninePatch";
 import { ReplayPanel } from "./replayPanel";
 import { wc3ToHtml, escapeHtml } from "./wc3Text";
 import { UI_HEIGHT } from "./fdf/layout";
@@ -97,31 +98,6 @@ export function clock(seconds: number): string {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
   const two = (n: number): string => String(n).padStart(2, "0");
   return h ? `${h}:${two(m)}:${two(r)}` : `${two(m)}:${two(r)}`;
-}
-
-/**
- * An 8-tile backdrop strip — the engine's BackdropEdgeFile, left, right, top, bottom and then
- * the four corners, with the two horizontal edges stored as VERTICAL bars — re-sliced into the
- * 3×3 nine-patch CSS `border-image` drives. The same cut hud.ts makes of the tooltip's strip,
- * at whatever tile size the strip has (its height).
- */
-function ninePatch(strip: HTMLCanvasElement | null): { url: string; tile: number } | null {
-  if (!strip) return null;
-  const t = strip.height;
-  if (strip.width < t * 8) return null;
-  const out = document.createElement("canvas");
-  out.width = out.height = t * 3;
-  const g = out.getContext("2d")!;
-  const tile = (i: number, cx: number, cy: number, turn = false): void => {
-    g.save();
-    g.translate(cx * t + t / 2, cy * t + t / 2);
-    if (turn) g.rotate(Math.PI / 2);
-    g.drawImage(strip, i * t, 0, t, t, -t / 2, -t / 2, t, t);
-    g.restore();
-  };
-  tile(0, 0, 1); tile(1, 2, 1); tile(2, 1, 0, true); tile(3, 1, 2, true);
-  tile(4, 0, 0); tile(5, 2, 0); tile(6, 0, 2); tile(7, 2, 2);
-  return { url: out.toDataURL(), tile: t };
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, parent?: HTMLElement): HTMLElementTagNameMap[K] => {

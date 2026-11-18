@@ -4375,6 +4375,47 @@ body.in-game .fdf-screen.fdf-ingame {
 .ow3-find-close[hidden] { display: none; }
 .ow3-find-close:hover,
 .ow3-find-close.pad-hover { color: #fff3a0; }
+/* The box in a Warcraft III edit box's dress (ui/mapFind.ts `findSkinVars`): the FDF backdrop's
+   two layers, the tiled fill pulled in by `BackdropBackgroundInsets` (::before, under the type)
+   and the edge strip's nine-patch over it (::after). The iron is drawn at the weight it has on a
+   0.03 field in the game (the Download Maps dialog's address bar): about a quarter of the
+   field's height. Lengths are ems of the list's type. */
+.ow3-find-dressed {
+  --ow3-find-pad-r: 0.9em;
+  --ow3-find-air: 0.455em; /* 0.125 + 0.9 − the iron's drawn 22/24 of 0.62em */
+}
+.ow3-find-dressed .ow3-find-box {
+  position: relative;
+  isolation: isolate;
+  height: 2.5em;
+  padding: 0 var(--ow3-find-pad-r) 0 0.75em;
+  background: none;
+  border-bottom: 0;
+  box-shadow: none;
+}
+.ow3-find-dressed .ow3-find-box::before {
+  content: "";
+  position: absolute;
+  inset: 0.2em;
+  z-index: -1;
+  background-image: var(--ow3-find-fill);
+  background-size: 4em;
+  pointer-events: none;
+}
+.ow3-find-dressed .ow3-find-box::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  border-style: solid;
+  border-width: 0.62em;
+  border-image-source: var(--ow3-find-edge);
+  border-image-slice: var(--ow3-find-slice);
+  border-image-repeat: round;
+  pointer-events: none;
+}
+.ow3-find-dressed .ow3-find-close { position: relative; z-index: 1; }
+.ow3-find-dressed.ow3-find-miss .ow3-find-input { color: #ff8a70; }
 .fdf-list.ow3-find-docked > .fdf-list-rows,
 .fdf-list.ow3-find-docked > .fdf-scrollbar { top: var(--ow3-find-h) !important; }
 /* The scrollbar's track art is baked at the list's full height (ui/fdf/widgets.ts), so on the
@@ -4385,11 +4426,17 @@ body.in-game .fdf-screen.fdf-ingame {
    discreet on purpose: the search box's own dim gold, lit only under the pointer, never a glue
    button. A map scroll with a down-arrow on it (SITES_GLYPH, an inline SVG in currentColor), stroked
    like the search box's magnifier; the button's colour is the glyph's. */
+/* The separator sits a little further from the glyph than the box's visible right edge does
+   (the developer's call): 0.6em of air left of the glyph's 1.1em and 0.125em right of it inside
+   the button, plus, on its right, whatever else lies between the button and the box's VISIBLE
+   edge (`--ow3-find-air`: the plain box's 0.35em right padding; on a dressed box, its padding
+   less the frame drawn over it). The glyph is pinned right. */
 .ow3-sites-entry {
   pointer-events: auto;
   position: relative;
   flex: 0 0 auto;
-  width: 1.35em;
+  box-sizing: border-box;
+  width: calc(1.7em + var(--ow3-find-air, 0.475em) + 1px);
   height: 1.35em;
   margin-left: 0.1em;
   padding: 0;
@@ -4398,15 +4445,14 @@ body.in-game .fdf-screen.fdf-ingame {
   background: none;
   color: #9c8a4a;
 }
-/* Lucide's file-down, centred in the button (the old hand-drawn scroll sat 0.14em right of
-   centre to keep its left curl off the separator; this glyph is symmetric). */
+/* Lucide's globe, at the button's right (see above). */
 .ow3-sites-glyph {
   position: absolute;
-  left: 50%;
+  right: 0.125em;
   top: 50%;
   width: 1.1em;
   height: 1.1em;
-  transform: translate(-50%, -50%);
+  transform: translateY(-50%);
 }
 .ow3-sites-entry:hover,
 .ow3-sites-entry.pad-hover { color: #fcd312; }

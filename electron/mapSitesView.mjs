@@ -1,16 +1,16 @@
 // The map sites, browsed INSIDE the game (src/ui/mapSitesPanel.ts, the Download Maps dialog).
 //
-// Hive Workshop and wc3maps cannot be READ by the game — both sit behind Cloudflare's bot check,
-// which a plain fetch is refused by, and that check is not ours to get round — and neither may be
-// put in an <iframe> (both send `X-Frame-Options: SAMEORIGIN`). What the desktop app CAN do is
+// wc3maps cannot be READ by the game — it sits behind Cloudflare's bot check, which a plain fetch
+// is refused by, and that check is not ours to get round — and it may not be put in an <iframe>
+// (it sends `X-Frame-Options: SAMEORIGIN`). What the desktop app CAN do is
 // show the real site in a web view of its own, laid exactly over the dialog's tab, so the player
 // browses it as they would in a browser without leaving the game. A view is a separate page with
 // its own compositor surface, so the page cannot draw over it: the dialog reports where its tab
 // is (`ow3:mapsite-view-show` / `-bounds`) and the view is placed and taken away to match.
 //
-// One view per site, kept while the game runs, so going from Hive to wc3maps and back finds Hive
-// where the player left it. All of them share one persistent session (`persist:mapsites`): a Hive
-// login or a passed Cloudflare check survives from one visit to the next and never mixes with the
+// One view per site, kept while the game runs, so going from EpicWar's tab to wc3maps and back
+// finds wc3maps where the player left it. All of them share one persistent session
+// (`persist:mapsites`): a login or a passed Cloudflare check survives from one visit to the next and never mixes with the
 // game page's storage. A view is a plain web page — no preload, no node, no bridge back.
 //
 // What it DOWNLOADS is the point: a `.w3x`/`.w3m` that finishes is written into the install's
@@ -22,7 +22,7 @@
 // made once and kept, its first `loadURL` was the only one ever issued, and Electron draws no
 // error page of its own — so one dropped connection, one renderer the system reaped while the
 // tab was away, and the site was "not loading at all" until the game was restarted. (It is not
-// Cloudflare: measured in this shell, both sites' checks pass unattended in about four seconds,
+// Cloudflare: measured in this shell, wc3maps' check passes unattended in about four seconds,
 // and at once on a session that has passed before. Nor is the user agent to be "cleaned" into
 // plain Chrome's — tried, and THAT is what the check then never lets through.) So a load is now
 // something the view looks after: a failed main-frame load is tried again (`RETRIES`, a little

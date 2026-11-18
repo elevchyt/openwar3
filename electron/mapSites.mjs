@@ -8,9 +8,9 @@
 // It is NOT an open proxy. The page names a URL, and the URL is refused unless it is on a host
 // below AND under its path — the EpicWar listing and its map pages, and the object store its
 // download links redirect to. Every redirect is followed by hand and checked the same way, so a
-// link cannot bounce the fetch anywhere else. Hive Workshop and wc3maps are not here at all: both
-// sit behind a Cloudflare bot check that a plain fetch is (rightly) refused by, so the game OPENS
-// them for the player instead of reading them.
+// link cannot bounce the fetch anywhere else. wc3maps is not here at all: it sits behind a
+// Cloudflare bot check that a plain fetch is (rightly) refused by, so the game OPENS it for the
+// player instead of reading it.
 //
 // Nothing is kept here: bytes go straight back to the page, which keeps a map the way it keeps a
 // LAN download (src/assets/downloadedMaps.ts).
@@ -84,7 +84,7 @@ export async function readMapSite(url) {
 
 /** The sites the desktop app may OPEN in its own browsing window — their front doors, and
  *  nothing a page could steer elsewhere. */
-export const OPENABLE_HOSTS = ["www.hiveworkshop.com", "hiveworkshop.com", "www.epicwar.com", "epicwar.com", "wc3maps.com", "www.wc3maps.com"];
+export const OPENABLE_HOSTS = ["www.epicwar.com", "epicwar.com", "wc3maps.com", "www.wc3maps.com"];
 
 export function mapSiteOpenable(url) {
   try {

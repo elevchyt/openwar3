@@ -12,7 +12,7 @@ import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
 import { uiFont, type FdfScreen } from "./fdf/render";
 import { rankMatches } from "./mapSearch";
-import { MapFind } from "./mapFind";
+import { MapFind, findSkinVars } from "./mapFind";
 import { MapSitesEntry } from "./mapSitesPanel";
 import type { ArrivedMap } from "./mapSites";
 import { gameFontsReady, onGameFontsReady } from "./gameFont";
@@ -215,6 +215,10 @@ export class MapBrowser {
         if (this.screen) this.fillList(this.screen);
       },
     });
+    this.finder.skin(findSkinVars((path) => {
+      const bytes = vfs.rawBytes(path);
+      return bytes ? blpToCanvas(bytes) : null;
+    }));
     this.sites = new MapSitesEntry({ vfs, arrive: (m) => void this.addMap(m) });
   }
 

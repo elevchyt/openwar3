@@ -15,7 +15,7 @@
 // toolbar as bare DOM in a flat gold outline, which sat inside the game's chrome looking like a
 // web page. So each is a frame out of StandardTemplates.fdf here:
 //
-//   · every button — a tab, a toolbar button, a row's Download, Import — is
+//   · every button — a tab, a row's Download, Import — is
 //     `StandardBorderedButtonTemplate`, the glue button that carries its own border (the big
 //     Done button's chained backdrop is a screen's furniture, not a row's);
 //   · the search field is `StandardEditBoxTemplate`, and the list and the site's viewport sit in
@@ -68,19 +68,10 @@ Frame "DIALOG" "MapSitesDialog" {
         }
     }
 
-    Frame "GLUETEXTBUTTON" "MapSitesTabHive" INHERITS WITHCHILDREN "StandardBorderedButtonTemplate" {
-        Width 0.125,
-        Height 0.03,
-        SetPoint LEFT, "MapSitesTabEpicWar", RIGHT, 0.003, 0.0,
-        ButtonText "MapSitesTabHiveText",
-        Frame "TEXT" "MapSitesTabHiveText" INHERITS "StandardButtonTextTemplate" {
-        }
-    }
-
     Frame "GLUETEXTBUTTON" "MapSitesTabWc3maps" INHERITS WITHCHILDREN "StandardBorderedButtonTemplate" {
         Width 0.125,
         Height 0.03,
-        SetPoint LEFT, "MapSitesTabHive", RIGHT, 0.003, 0.0,
+        SetPoint LEFT, "MapSitesTabEpicWar", RIGHT, 0.003, 0.0,
         ButtonText "MapSitesTabWc3mapsText",
         Frame "TEXT" "MapSitesTabWc3mapsText" INHERITS "StandardButtonTextTemplate" {
         }
@@ -120,76 +111,22 @@ Frame "DIALOG" "MapSitesDialog" {
         }
     }
 
-    // --- a site shown in the tab (desktop app): a toolbar, and the viewport the web view covers.
+    // --- a site shown in the tab (desktop app): the viewport the web view covers, the whole page.
+    // No browser toolbar (back/forward/reload/home, the address) — the developer's call.
     Frame "FRAME" "MapSitesPageView" {
         Width 0.62,
         Height 0.318,
         SetPoint TOPLEFT, "MapSitesDialog", TOPLEFT, 0.04, -0.088,
 
-        Frame "GLUETEXTBUTTON" "MapSitesNavBack" INHERITS WITHCHILDREN "StandardBorderedButtonTemplate" {
-            Width 0.034,
-            Height 0.03,
-            SetPoint TOPLEFT, "MapSitesPageView", TOPLEFT, 0.0, 0.0,
-            ButtonText "MapSitesNavBackText",
-            Frame "TEXT" "MapSitesNavBackText" INHERITS "StandardButtonTextTemplate" {
-            }
-        }
-        Frame "GLUETEXTBUTTON" "MapSitesNavForward" INHERITS WITHCHILDREN "StandardBorderedButtonTemplate" {
-            Width 0.034,
-            Height 0.03,
-            SetPoint LEFT, "MapSitesNavBack", RIGHT, 0.002, 0.0,
-            ButtonText "MapSitesNavForwardText",
-            Frame "TEXT" "MapSitesNavForwardText" INHERITS "StandardButtonTextTemplate" {
-            }
-        }
-        Frame "GLUETEXTBUTTON" "MapSitesNavReload" INHERITS WITHCHILDREN "StandardBorderedButtonTemplate" {
-            Width 0.034,
-            Height 0.03,
-            SetPoint LEFT, "MapSitesNavForward", RIGHT, 0.002, 0.0,
-            ButtonText "MapSitesNavReloadText",
-            Frame "TEXT" "MapSitesNavReloadText" INHERITS "StandardButtonTextTemplate" {
-            }
-        }
-        Frame "GLUETEXTBUTTON" "MapSitesNavHome" INHERITS WITHCHILDREN "StandardBorderedButtonTemplate" {
-            Width 0.034,
-            Height 0.03,
-            SetPoint LEFT, "MapSitesNavReload", RIGHT, 0.002, 0.0,
-            ButtonText "MapSitesNavHomeText",
-            Frame "TEXT" "MapSitesNavHomeText" INHERITS "StandardButtonTextTemplate" {
-            }
-        }
-
-        // Where the view is — the page's host and path, read-only.
-        Frame "BACKDROP" "MapSitesWhereBackdrop" INHERITS "StandardEditBoxBackdropTemplate" {
-            Width 0.318,
-            Height 0.03,
-            SetPoint LEFT, "MapSitesNavHome", RIGHT, 0.004, 0.0,
-        }
-        Frame "TEXT" "MapSitesWhere" INHERITS "StandardSmallTextTemplate" {
-            Width 0.298,
-            Height 0.03,
-            SetPoint LEFT, "MapSitesWhereBackdrop", LEFT, 0.01, 0.0,
-            FontColor 0.85 0.85 0.85 1.0,
-        }
-
-        Frame "GLUETEXTBUTTON" "MapSitesOpenOutside" INHERITS WITHCHILDREN "StandardBorderedButtonTemplate" {
-            Width 0.154,
-            Height 0.03,
-            SetPoint TOPRIGHT, "MapSitesPageView", TOPRIGHT, 0.0, 0.0,
-            ButtonText "MapSitesOpenOutsideText",
-            Frame "TEXT" "MapSitesOpenOutsideText" INHERITS "StandardButtonTextTemplate" {
-            }
-        }
-
         Frame "BACKDROP" "MapSitesViewportBackdrop" INHERITS "StandardEditBoxBackdropTemplate" {
             Width 0.62,
-            Height 0.285,
-            SetPoint TOPLEFT, "MapSitesNavBack", BOTTOMLEFT, 0.0, -0.003,
+            Height 0.318,
+            SetPoint TOPLEFT, "MapSitesPageView", TOPLEFT, 0.0, 0.0,
         }
         // The box the desktop app's web view is laid over, inside the backdrop's border.
         Frame "FRAME" "MapSitesViewport" {
             Width 0.61,
-            Height 0.275,
+            Height 0.308,
             SetPoint CENTER, "MapSitesViewportBackdrop", CENTER, 0.0, 0.0,
         }
         // Under the view while it loads; in its place when the site could not be reached.
