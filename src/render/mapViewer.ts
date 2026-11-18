@@ -18401,6 +18401,10 @@ export class MapViewerScene {
       for (const inst of cell.instances ?? []) {
         if (this.mapProps.has(inst)) continue; // the map's own — handled above, with its tint
         if (this.rts?.managesViewerInstance(inst)) continue; // adopted map unit: the RTS's rule
+        // The order-confirmation arrows are the PLAYER's own feedback, not a thing in the
+        // world: a right-click into the black mask still gets its arrows, and hiding them
+        // here cut the clip off after one frame.
+        if (this.orderArrows.some((a) => a.inst === inst)) continue;
         const loc = inst.localLocation;
         if (!loc) continue;
         if (vision.bestStateAt(loc[0], loc[1], 0) === FogState.Unexplored) {
