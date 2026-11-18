@@ -163,6 +163,8 @@ const IMPLIED_EVENT: Readonly<Record<string, string>> = {
   dialogEvent: "EVENT_DIALOG_CLICK",
   variable: "EVENT_GAME_VARIABLE_LIMIT",
   playerAllianceChange: "EVENT_PLAYER_ALLIANCE_CHANGED",
+  playerKey: "EVENT_PLAYER_KEY",
+  playerSync: "EVENT_PLAYER_SYNC_DATA",
   trackableHit: "EVENT_GAME_TRACKABLE_HIT",
   trackableTrack: "EVENT_GAME_TRACKABLE_TRACK",
 };
@@ -408,7 +410,8 @@ interface JassThread {
 export type ScriptInput =
   | { k: "dlg"; p: number; button: number; dialog: number }
   | { k: "frame"; p: number; frame: number; ev: number }
-  | { k: "pev"; p: number; ev: number };
+  | { k: "pev"; p: number; ev: number }
+  | { k: "key"; p: number; key: number; meta: number; down: boolean };
 
 export class Interpreter {
   /**
@@ -2351,6 +2354,34 @@ export class Interpreter {
     this.inputTap?.({ k: "pev", p: player, ev: eventIndex });
     const responses = new Map<string, JassValue>([["TriggerPlayer", this.rt.playerHandle(player)]]);
     this.dispatchToRegs(responses, (reg) => this.matchesPlayerEvent(reg, player, eventIndex));
+  }
+
+  /**
+   * A key went down or came up — `BlzTriggerRegisterPlayerKeyEvent(trigger, player, key, metaKey,
+   * keyDown)` (1.31). `key` is the virtual-key code an `oskeytype` wraps, `meta` the modifier
+   * bits held (METAKEY_SHIFT 1, CTRL 2, ALT 4, META 8). A registration matches its player, its
+   * key, its direction and its meta set EXACTLY: "metaKey … the key combination must match
+   * exactly" (jassdoc) — a trigger on plain A does not fire for Shift+A.
+   *
+   * A script INPUT, tapped like the rest (game/replay.ts): what the map hears from a player.
+   */
+  firePlayerKey(player: number, key: number, meta: number, down: boolean): void {
+    this.inputTap?.({ k: "key", p: player, key, meta, down });
+    const responses = new Map<string, JassValue>([
+      ["TriggerPlayer", this.rt.playerHandle(player)],
+      ["TriggerPlayerKey", this.rt.enumHandle("OsKeyType", key)],
+      ["TriggerPlayerMetaKey", jInt(meta)],
+      ["TriggerPlayerIsKeyDown", jBool(down)],
+    ]);
+    this.dispatchToRegs(responses, (reg) => reg.kind === "playerKey"
+      && this.rt.data<JassPlayer>(reg.params[0])?.index === player
+      && this.rt.enumIndex(reg.params[1] ?? JNULL) === key
+      && asInt(reg.params[2] ?? JNULL) === meta
+      && truthy(reg.params[3] ?? JNULL) === down);
+  }
+  /** Is any key event registered at all? The host only listens to the keyboard when one is. */
+  watchesKeys(): boolean {
+    return this.rt.triggerRegs.some((r) => r.kind === "playerKey");
   }
 
   /**

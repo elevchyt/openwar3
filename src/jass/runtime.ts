@@ -1554,6 +1554,30 @@ export interface EngineHooks {
   disableRestartMission?(flag: boolean): void;
   /** SetReservedLocalHeroButtons — leave this many hero-icon slots empty at the top of the stack. */
   setReservedHeroButtons?(count: number): void;
+
+  // --- the natives of 1.31 → 3.0 (natives/later.ts) ----------------------------------------
+  /** BlzQueue…OrderById — the order goes BEHIND what the unit is doing. False when it could
+   *  not be queued (an ability's order behind another order, a full queue). */
+  queueUnitOrder?(unitId: number, orderId: number, order: string, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number): boolean;
+  /** BlzGetUnitOrderCount — the order under way plus the ones queued behind it. */
+  unitOrderCount?(unitId: number): number;
+  /** BlzUnitClearOrders(u, onlyQueued) / BlzUnitForceStopOrder — drop the queue, and (unless
+   *  `onlyQueued`) stop what the unit is doing as well. */
+  clearUnitOrders?(unitId: number, onlyQueued: boolean): void;
+  /** BlzGetUnitAnimationDuration(ByIndex) — seconds of the clip by name or by sequence index. */
+  unitAnimationDuration?(unitId: number, animation: string | number): number;
+  /** BlzDisplayChatMessage — a chat line shown as said by `player`. */
+  displayChatMessage?(player: number, recipient: number, message: string): void;
+  /** BlzGetLocalClientWidth/Height, BlzIsLocalClientActive, BlzGetLocale. */
+  clientSize?(): { width: number; height: number };
+  clientActive?(): boolean;
+  localeName?(): string;
+  /** BlzGetMouseFocusUnit — the sim id of the unit under the pointer, 0 for none. */
+  mouseFocusUnit?(): number;
+  /** BlzGetNumDoodads / BlzGetDoodad… — the map's placed doodads, by index. */
+  doodadCount?(): number;
+  doodadInfo?(index: number): { x: number; y: number; z: number; scale: number; yaw: number; id: string; variation: number } | undefined;
+  setSingleDoodadAnimation?(index: number, animation: string, animRandom: boolean): void;
 }
 
 /** One camera move: the fields to blend and (optionally) where to pan the focus.

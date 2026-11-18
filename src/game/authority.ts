@@ -378,6 +378,50 @@ export class Authority {
   }
 
   /**
+   * `BlzQueue…OrderById` (1.32) — a script's order that goes BEHIND what the unit is doing: the
+   * shift-queue. A unit with nothing to do simply takes it. Otherwise the engine's own orders
+   * are queued (move, attack-move, patrol, hold, attack, follow); an ABILITY's order has no
+   * queued form here and is REFUSED rather than issued in place of the order it was meant to
+   * follow — the caller asked for "after", and "instead" is a different thing.
+   */
+  queueUnitOrder(unitId: number, orderId: number, order: string, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number): boolean {
+    const u = this.sim.units.get(unitId);
+    if (!u) return false;
+    if (u.order === "idle" && !u.orderQueue.length) return this.issueUnitOrder(unitId, orderId, order, kind, x, y, targetId);
+    const s = order || orderIdToString(orderId);
+    if (kind === "point") {
+      if (s === "move" || s === "smart") return this.sim.queueOrder(unitId, { kind: "move", x, y });
+      if (s === "attack") return this.sim.queueOrder(unitId, { kind: "attackmove", x, y });
+      if (s === "patrol") return this.sim.queueOrder(unitId, { kind: "patrol", x, y });
+      return false;
+    }
+    if (kind === "target") {
+      const t = this.sim.units.get(targetId);
+      if (!t) return false;
+      if (s === "attack") return this.sim.queueOrder(unitId, { kind: "attack", targetId, force: true });
+      if (s === "smart") {
+        return this.sim.queueOrder(unitId, this.sim.hostile(u, t) ? { kind: "attack", targetId } : { kind: "follow", targetId });
+      }
+      if (s === "move") return this.sim.queueOrder(unitId, { kind: "follow", targetId });
+      return false;
+    }
+    if (s === "holdposition") return this.sim.queueOrder(unitId, { kind: "hold" });
+    return false;
+  }
+
+  /** `BlzGetUnitOrderCount` — the order under way, if any, plus what is queued behind it. */
+  unitOrderCount(unitId: number): number {
+    const u = this.sim.units.get(unitId);
+    return u ? (u.order === "idle" ? 0 : 1) + u.orderQueue.length : 0;
+  }
+
+  /** `BlzUnitClearOrders(u, onlyQueued)` / `BlzUnitForceStopOrder(u, …)`. */
+  clearUnitOrders(unitId: number, onlyQueued: boolean): void {
+    this.sim.clearQueue(unitId);
+    if (!onlyQueued) this.sim.stop(unitId);
+  }
+
+  /**
    * `IssueBuildOrder` / `IssueBuildOrderById` — a script tells a worker to put up a structure.
    * Through the `build` command's own gates (it is a worker, it builds that, the tech is met,
    * the price is there and is taken), so a trigger founds nothing a click could not. Dispatched

@@ -43,6 +43,7 @@ Reforged 2.0 World Editor wrote with fields the 2003 formats did not have.
 | `w3i.ts` | the TOLERANT `war3map.w3i` read — keeps what parsed, which is what a protected map needs |
 | `mapFormat.ts` | the `MapFormatProfile` asked once at the map door, and `unsupportedReason` |
 | `prelude.ts` | our own JASS declaring what a 1.31+ map refers to and 1.30.4's `common.j` does not |
+| `preludeLater.ts` | its second half: the natives, enum types and constants of 1.31 → 3.0 (answered by `src/jass/natives/later.ts`) |
 | `frames.ts` | the 1.31 custom-UI frame API as an object model (it does not draw yet) |
 | `lua/` | the Lua front end for a `war3map.lua` map — one Lua state over the running JASS runtime |
 

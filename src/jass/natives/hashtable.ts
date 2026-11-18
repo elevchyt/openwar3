@@ -77,6 +77,8 @@ const HANDLE_TYPES = [
   "DefeatCondition", "TimerDialog", "Leaderboard", "Multiboard", "MultiboardItem",
   "Trackable", "Dialog", "Button", "TextTag", "Lightning", "Image", "Ubersplat", "Region",
   "FogState", "FogModifier", "Agent", "Hashtable",
+  // 1.31's SaveFrameHandle / LoadFrameHandle (declared by src/compat/preludeLater.ts).
+  "Frame",
 ];
 
 export function registerHashtableNatives(rt: Runtime): void {

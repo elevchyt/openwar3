@@ -74,6 +74,11 @@ export interface FrameObj {
   /** `BlzFrameClearAllPoints` / `BlzFrameSetAllPoints` ran: a stamped frame's own FDF anchors
    *  are gone, not merely added to. */
   cleared: boolean;
+  /** Properties 1.31/1.32 let a script set that the drawing does not read yet — text colour,
+   *  font, alignment, level, a slider's range and step, a sprite's model, a vertex colour.
+   *  KEPT, so the frame is a faithful record of what the map asked for and the two that have
+   *  getters (`BlzFrameGetTextSizeLimit`) answer; absent until a script sets one. */
+  extra?: Record<string, number | string | boolean>;
   tooltip: number; // handle id of the frame shown as this one's tooltip, 0 for none
   /** This frame IS a tooltip — the engine shows it only while its owner is hovered. */
   tooltipOf: number;
@@ -345,6 +350,63 @@ export function registerFrameNatives(rt: Runtime): void {
     }
     return JNULL;
   });
+
+  // --- the rest of the 1.31 / 1.32 frame setters (declared by src/compat/preludeLater.ts) ---
+  // BlzFrameAddText appends a line to a TEXTAREA; it is a text change like any other.
+  def(rt, "BlzFrameAddText", (c, a) => {
+    const f = frame(c, a[0]);
+    if (f) {
+      const line = c.rt.resolveTrigStr(asStr(a[1]));
+      f.text = f.textSet && f.text ? `${f.text}\n${line}` : line;
+      const first = !f.textSet;
+      f.textSet = true;
+      const m = model(c);
+      if (first) m.revision++;
+      m.textRevision++;
+      m.textChanged.add(f.handleId);
+    }
+    return JNULL;
+  });
+  // Re-parenting moves the frame in the tree the drawing walks, so it is a real change.
+  set("BlzFrameSetParent", (f, a) => { f.parent = handleOf(a[1] ?? JNULL); });
+  // Kept on the frame; see FrameObj.extra for why they are stored rather than dropped.
+  const keep = (name: string, fill: (a: JassValue[], c: NativeCtx) => Record<string, number | string | boolean>): void =>
+    set(name, (f, a, c) => { f.extra = { ...f.extra, ...fill(a, c) }; });
+  keep("BlzFrameSetTextSizeLimit", (a) => ({ textSizeLimit: asInt(a[1]) }));
+  keep("BlzFrameSetTextColor", (a) => ({ textColor: asInt(a[1]) }));
+  keep("BlzFrameSetFocus", (a) => ({ focus: truthy(a[1]) }));
+  keep("BlzFrameSetModel", (a) => ({ model: asStr(a[1]), modelCamera: asInt(a[2]) }));
+  keep("BlzFrameSetSpriteAnimate", (a) => ({ spriteAnim: asInt(a[1]), spriteFlags: asInt(a[2]) }));
+  keep("BlzFrameCageMouse", (a) => ({ cageMouse: truthy(a[1]) }));
+  keep("BlzFrameSetMinMaxValue", (a) => ({ minValue: asNum(a[1]), maxValue: asNum(a[2]) }));
+  keep("BlzFrameSetStepSize", (a) => ({ stepSize: asNum(a[1]) }));
+  keep("BlzFrameSetVertexColor", (a) => ({ vertexColor: asInt(a[1]) }));
+  keep("BlzFrameSetLevel", (a) => ({ level: asInt(a[1]) }));
+  keep("BlzFrameSetFont", (a) => ({ font: asStr(a[1]), fontHeight: asNum(a[2]), fontFlags: asInt(a[3]) }));
+  keep("BlzFrameSetTextAlignment", (a, c) => ({ alignVert: c.rt.enumIndex(a[1] ?? JNULL), alignHorz: c.rt.enumIndex(a[2] ?? JNULL) }));
+  keep("BlzTextAreaFrameSetAutoScroll", (a) => ({ autoScroll: truthy(a[1]) }));
+  def(rt, "BlzFrameGetTextSizeLimit", (c, a) => jInt(Number(frame(c, a[0])?.extra?.textSizeLimit ?? 0)));
+  def(rt, "BlzFrameGetEnable", (c, a) => jBool(frame(c, a[0])?.enabled ?? false));
+  def(rt, "BlzFrameGetAlpha", (c, a) => jInt(frame(c, a[0])?.alpha ?? 0));
+  // The size a script SET. A frame sized only by its FDF or its anchors answers 0: the solved
+  // box is the drawing's, and the model does not hold it.
+  def(rt, "BlzFrameGetWidth", (c, a) => ({ k: "real", n: frame(c, a[0])?.width ?? 0 }));
+  def(rt, "BlzFrameGetHeight", (c, a) => ({ k: "real", n: frame(c, a[0])?.height ?? 0 }));
+  // A frame's children, in the order they were made (handle ids only ever grow).
+  const children = (c: NativeCtx, v: JassValue | undefined): FrameObj[] => {
+    const f = frame(c, v ?? JNULL);
+    return f ? [...model(c).frames.values()].filter((k) => k.parent === f.handleId).sort((x, y) => x.handleId - y.handleId) : [];
+  };
+  def(rt, "BlzFrameGetChildrenCount", (c, a) => jInt(children(c, a[0]).length));
+  def(rt, "BlzFrameGetChild", (c, a) => out(children(c, a[0])[asInt(a[1])]));
+  // The value and the text of the frame an event fired on — what a slider or an edit box
+  // event is read with. Answered off the frame itself, which is where the drawing writes them.
+  const triggerFrame = (c: NativeCtx): FrameObj | undefined => {
+    const v = c.rt.eventResponse("TriggerFrame");
+    return v.k === "handle" ? frame(c, v) : undefined;
+  };
+  def(rt, "BlzGetTriggerFrameValue", (c) => ({ k: "real", n: triggerFrame(c)?.value ?? 0 }));
+  def(rt, "BlzGetTriggerFrameText", (c) => jStr(triggerFrame(c)?.text ?? ""));
 
   // --- reading ----------------------------------------------------------------------
   def(rt, "BlzFrameIsVisible", (c, a) => jBool(frame(c, a[0])?.visible ?? false));

@@ -41,6 +41,8 @@ const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.s
 interface EffectObj {
   handleId: number;
   engineId: number;
+  /** The scale a script last set (BlzSetSpecialEffectScale), for BlzGetSpecialEffectScale. */
+  scale?: number;
 }
 
 /** WC3 names an attachment point as a comma-list of TOKENS ("origin", "overhead",
@@ -152,7 +154,15 @@ export function registerEffectNatives(rt: Runtime): void {
   onFx("BlzSetSpecialEffectYaw", (c, id, a) => turn(c, id, asNum(a[1]), null, null));
   onFx("BlzSetSpecialEffectPitch", (c, id, a) => turn(c, id, null, asNum(a[1]), null));
   onFx("BlzSetSpecialEffectRoll", (c, id, a) => turn(c, id, null, null, asNum(a[1])));
-  onFx("BlzSetSpecialEffectScale", (c, id, a) => c.rt.hooks?.setSpecialEffectScale?.(id, asNum(a[1])));
+  def(rt, "BlzSetSpecialEffectScale", (c, a) => {
+    const e = c.rt.data<EffectObj>(a[0] ?? JNULL);
+    if (!e) return JNULL;
+    e.scale = asNum(a[1]);
+    c.rt.hooks?.setSpecialEffectScale?.(e.engineId, e.scale);
+    return JNULL;
+  });
+  // 1.31's getter (declared by src/compat/preludeLater.ts): what the setter wrote, 1 before it.
+  def(rt, "BlzGetSpecialEffectScale", (c, a) => jReal(c.rt.data<EffectObj>(a[0] ?? JNULL)?.scale ?? 1));
   onFx("BlzSetSpecialEffectColor", (c, id, a) => {
     const [r, g, b] = [channel255(a[1]), channel255(a[2]), channel255(a[3])];
     if (r !== null && g !== null && b !== null) c.rt.hooks?.setSpecialEffectColor?.(id, r, g, b);

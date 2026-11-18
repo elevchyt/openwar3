@@ -3456,6 +3456,9 @@ export class MapViewerScene {
       case "frame":
         interp?.fireFrameEvent(e.frame, e.ev, e.p);
         return;
+      case "key":
+        interp?.firePlayerKey(e.p, e.key, e.meta, e.down);
+        return;
       case "pev":
         if (e.left) {
           // A player who LEFT (a LAN seat going, `seatLeft`): the slot state the victory check
@@ -5319,6 +5322,57 @@ export class MapViewerScene {
       },
       // SetReservedLocalHeroButtons(n) — n empty places at the top of the hero bar.
       setReservedHeroButtons: (count) => this.hud?.setReservedHeroSlots(count),
+
+      // --- the natives of 1.31 → 3.0 (jass/natives/later.ts): the screen's half ------------
+      clientSize: () => ({ width: window.innerWidth, height: window.innerHeight }),
+      clientActive: () => document.hasFocus(),
+      // BlzDisplayChatMessage(player, recipient, message): a line in the chat display as said
+      // by that player. `recipient` is the chat channel (0 all, 1 allies, 2 observers,
+      // 3 private); the display has the two the game's own chat has.
+      displayChatMessage: (player, recipient, message) => this.showChat({ from: player, text: message, target: { scope: recipient === 1 ? "allies" : "all" } }),
+      doodadCount: () => this.viewer.map?.doodads.length ?? 0,
+      doodadInfo: (index) => this.doodadInfo(index),
+      setSingleDoodadAnimation: (index, animation, animRandom) => {
+        const at = this.doodadInfo(index);
+        if (at) this.setDoodadAnimation({ x: at.x, y: at.y, radius: 1 }, at.id, true, animation, animRandom);
+      },
+    };
+  }
+
+  /**
+   * The keyboard, for a map that registered `BlzTriggerRegisterPlayerKeyEvent` (1.31) — and only
+   * for one that did, so every other map's keys cost a single test. An `oskeytype` is the
+   * Windows virtual-key code, which is what a browser's `keyCode` still reports; the meta key
+   * is the set of modifiers held (METAKEY_SHIFT 1, CTRL 2, ALT 4, META 8). A held key's
+   * auto-repeat is not a second press, and a key typed into a text box is not the map's.
+   *
+   * Raised on the machine that runs the script. A LAN client's keys do not reach the host's
+   * interpreter yet; a replay hears the recorded ones instead (game/replay.ts, `key`).
+   */
+  private scriptKey(e: KeyboardEvent, down: boolean): void {
+    const interp = this.mapScript?.interp;
+    if (!interp || this.replayPlayback || !interp.watchesKeys()) return;
+    if (down && e.repeat) return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    const meta = (e.shiftKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.altKey ? 4 : 0) | (e.metaKey ? 8 : 0);
+    interp.firePlayerKey(this.localPlayer, e.keyCode, meta, down);
+  }
+
+  /** `BlzGetDoodad…(index)` — one of the map's placed doodads, by its place in the viewer's own
+   *  list (the order war3map.doo lists them). The scale is the model instance's uniform one and
+   *  the yaw its rotation about Z; a 1.30 .doo carries no pitch, roll or per-axis scale. */
+  private doodadInfo(index: number): { x: number; y: number; z: number; scale: number; yaw: number; id: string; variation: number } | undefined {
+    type Placed = { row?: { string(key: string): string | undefined }; instance: { localLocation: Float32Array; localRotation?: Float32Array; localScale?: Float32Array } };
+    const d = (this.viewer.map?.doodads as unknown as Placed[] | undefined)?.[index];
+    if (!d) return undefined;
+    const [x, y, z] = d.instance.localLocation;
+    const q = d.instance.localRotation;
+    // A rotation about Z alone is the quaternion (0, 0, sin(a/2), cos(a/2)).
+    const yaw = q ? 2 * Math.atan2(q[2], q[3]) : 0;
+    return {
+      x, y, z, yaw, scale: d.instance.localScale?.[0] ?? 1,
+      id: d.row?.string("doodID") ?? d.row?.string("DestructableID") ?? "", variation: 0,
     };
   }
 
@@ -19772,6 +19826,7 @@ export class MapViewerScene {
     const c = this.canvas;
     this.bindVoiceKeys();
     this.on(window, "keydown", (e: KeyboardEvent) => {
+      this.scriptKey(e, true);
       // ESC during a cinematic SKIPS it — WC3 raises EVENT_PLAYER_END_CINEMATIC for the
       // local player and the map's own skip trigger takes it from there (see
       // Interpreter.firePlayerEvent for the NightElfX01 trigger this exists for).
@@ -19841,6 +19896,7 @@ export class MapViewerScene {
       this.checkCheatCode(e.key);
     });
     this.on(window, "keyup", (e: KeyboardEvent) => {
+      this.scriptKey(e, false);
       const k = e.key.toLowerCase();
       this.keys.delete(k);
       // Letting go of SHIFT ends a shift-queued placement (issue #123 — the original game

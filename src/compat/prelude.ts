@@ -1,4 +1,5 @@
 import { fieldConstantsJass } from "./blzFields";
+import { LATER_PRELUDE } from "./preludeLater";
 
 // The JASS a later-format map expects and 1.30.4's own `common.j` does not declare.
 //
@@ -339,4 +340,4 @@ function fieldActionsJass(): string {
  * one table, and an index typed twice is an index that eventually differs. Appended last, so a
  * `globals` block never lands in the middle of the type and native declarations above it.
  */
-export const COMPAT_PRELUDE = `${PRELUDE_BODY}\n${fieldConstantsJass()}\n${fieldActionsJass()}\n`;
+export const COMPAT_PRELUDE = `${PRELUDE_BODY}\n${LATER_PRELUDE}\n${fieldConstantsJass()}\n${fieldActionsJass()}\n`;

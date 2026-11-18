@@ -5182,6 +5182,17 @@ export class RtsController {
     return pick >= 0 ? pick : first;
   }
 
+  /** `BlzGetUnitAnimationDuration` / `…ByIndex` — seconds of one clip of this unit's model: the
+   *  first whose name starts with `animation`, or the sequence at that index. 0 for a unit with
+   *  no body yet or a model with no such clip. */
+  unitAnimationDuration(simId: number, animation: string | number): number {
+    const e = this.byId.get(simId);
+    if (!e) return 0;
+    const seq = this.scriptClipSeq(e, typeof animation === "number" ? `#${Math.max(0, Math.floor(animation))}` : animation);
+    const iv = (e.unit.instance.model?.sequences?.[seq] as { interval?: ArrayLike<number> } | undefined)?.interval;
+    return seq >= 0 && iv && iv.length >= 2 ? Math.max(0, (iv[1] - iv[0]) / 1000) : 0;
+  }
+
   /** setUnitAnimation's body, on an entry that exists. True when a clip was put on. */
   private playScriptClip(e: Entry, animation: string): boolean {
     if (!animation) {
@@ -10246,6 +10257,12 @@ export class RtsController {
         this.abilities.setCustom(abilId, clone);
         this.abilityEdits.set(abilId, clone); // kept for a saved game, as the tooltips are
       },
+      // The 1.32 order queue and its two readers (natives/later.ts).
+      queueUnitOrder: (id, oid, o, k, x, y, t) => this.authority.queueUnitOrder(id, oid, o, k, x, y, t),
+      unitOrderCount: (id) => this.authority.unitOrderCount(id),
+      clearUnitOrders: (id, onlyQueued) => this.authority.clearUnitOrders(id, onlyQueued),
+      // BlzGetUnitAnimationDuration(ByIndex) — off the model's own sequence interval.
+      unitAnimationDuration: (id, animation) => this.unitAnimationDuration(id, animation),
       // IssueBuildOrder — through the build command's own gates (Authority.issueBuildOrder).
       issueBuildOrder: (peonId, typeId, x, y) => this.authority.issueBuildOrder(peonId, typeId, x, y),
       // ReviveHero — the controller's, because a revival needs a body spawned and, for a hero
