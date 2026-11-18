@@ -435,6 +435,30 @@ export class Authority {
   }
 
   /**
+   * Has this player as many of `typeId` as the map allows — `SetPlayerTechMaxAllowed(p, id, N)`?
+   *
+   * The cap is a COUNT, not a switch, and it counts what is IN PRODUCTION as well as what is
+   * standing: that is the whole of why a melee altar drops a hero's button the moment she is
+   * queued, and it is not a hero rule. The all-random "ATR" maps prove it on a plain unit —
+   * every altar trains a dummy `h001` ("random hero", a lowercase id and so not a hero at
+   * all) capped at 1, the map's train-finish trigger swaps the dummy for a rolled hero and
+   * moves the cap to the next dummy. Read as "0 = off, anything else = on", the dummy's button
+   * stayed on the card while it trained and the queue took seven of them.
+   *
+   * A hero is measured against the ROSTER (`heroCensus`: fielded, queued, hired and DEAD — a
+   * fallen hero is still one of yours); anything else against `countOwned`. -1 is no cap.
+   */
+  typeCapReached(player: number, typeId: string, census?: Map<string, number>): boolean {
+    const limit = this.sim.tech?.maxAllowed(player, typeId) ?? -1;
+    if (limit < 0) return false;
+    if (limit === 0) return true;
+    const have = this.registry.get(typeId)?.isHero
+      ? ((census ?? this.heroCensus(player)).get(typeId) ?? 0)
+      : this.countOwned(player, typeId);
+    return have >= limit;
+  }
+
+  /**
    * Food used/made by a player's units — including food RESERVED for units still in
    * training (WC3 takes food when training begins, like gold/lumber). A queued unit's food
    * moves seamlessly to the live count when it spawns (no double-up).
@@ -1038,8 +1062,7 @@ export class Authority {
         if (def.isHero) {
           const census = this.heroCensus(player);
           for (const n of census.values()) heroCount += n;
-          const typeLimit = this.sim.tech?.maxAllowed(player, cmd.unitId) ?? -1; // -1 = no limit
-          if (typeLimit >= 0 && (census.get(cmd.unitId) ?? 0) >= typeLimit) return false;
+          if (this.typeCapReached(player, cmd.unitId, census)) return false;
           const rosterLimit = this.sim.tech?.heroLimit(player) ?? -1;
           if (rosterLimit >= 0 && heroCount >= rosterLimit) return false;
         }
@@ -1049,6 +1072,9 @@ export class Authority {
         // honours a hard `SetPlayerTechMaxAllowed(…, 0)`: a script that withdraws a unit type has
         // withdrawn it from shelves too.
         const owned = def.isHero ? heroCount : this.countOwned(player, cmd.unitId);
+        // …and the same cap on anything that is NOT a hero (`typeCapReached`): a unit type the
+        // script allows N of is refused at N, counting the ones still in a queue.
+        if (!def.isHero && this.typeCapReached(player, cmd.unitId)) return false;
         if (isSold && !this.sim.soldUnitNeedsTech(cmd.unitId)) {
           if (this.sim.tech && this.sim.tech.maxAllowed(player, cmd.unitId) === 0) return false;
         } else if (!this.sim.canMake(player, cmd.unitId, owned)) return false;

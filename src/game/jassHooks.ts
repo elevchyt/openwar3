@@ -665,6 +665,24 @@ export function rosterHooks(
   return {
     // Unit groups (7.16): every GroupEnumUnits* scan reads the live sim through here.
     enumUnits: () => unitSnapshots(sim),
+    // GetUnitRallyPoint / GetUnitRallyUnit. A building born with no flag (`RallyKind` "none")
+    // answers its own position — see the natives for why that, and not null, is the reading.
+    // A rallied MINE is a unit to a script (MINE_ID_BASE); a rallied unit that has since died
+    // leaves the stored point, as the sim's own rally does.
+    getUnitRally: (id) => {
+      const u = sim.units.get(id);
+      if (!u) return undefined;
+      const b = u.building;
+      if (!b || b.rallyKind === "none") return { x: u.x, y: u.y };
+      if (b.rallyKind === "unit") {
+        const t = unitSnapshot(sim, b.rallyTargetId);
+        if (t) return { x: t.x, y: t.y, unit: t };
+      } else if (b.rallyKind === "mine") {
+        const m = sim.mines.get(b.rallyTargetId);
+        if (m) return { x: m.x, y: m.y, unit: { id: MINE_ID_BASE + m.id, typeId: "ngol", owner: neutralSlot(PlayerSlot.NeutralPassive), x: m.x, y: m.y, facing: 0 } };
+      }
+      return { x: b.rallyX, y: b.rallyY };
+    },
     // One column of a unit's TYPE row, for the 1.31 field accessors (natives/blzFields.ts).
     // Here because that is where the registry is: the key is the compatibility layer's own
     // (src/compat/blzFields.ts), and a key with no row here answers undefined, which the

@@ -13635,13 +13635,13 @@ export class MapViewerScene {
     for (const uid of list) {
       const d = this.registry.get(uid);
       if (!d) continue;
-      // Already have/queued as many of THIS hero as the map allows — one, in a melee game.
-      const typeLimit = world.tech?.maxAllowed(this.localPlayer, uid) ?? -1;
-      if (d.isHero && typeLimit >= 0 && (heroes.get(uid) ?? 0) >= typeLimit) continue;
-      // An `rtma` upgrade can make a unit unavailable outright — the plain Siege Engine
+      // Already have/queued as many of THIS type as the map allows — one of each hero in a
+      // melee game, and equally the one "random hero" dummy an ATR map's altar may train at a
+      // time (Authority.typeCapReached: the cap counts the queue, hero or not).
+      // An `rtma` upgrade can make a unit unavailable outright too — the plain Siege Engine
       // vanishes from the Workshop card the moment Barrage is researched, replaced by the
-      // Barrage-equipped one. That's a hide, not a grey-out.
-      if (world.tech && world.tech.maxAllowed(this.localPlayer, uid) === 0) continue;
+      // Barrage-equipped one. Both are a hide, not a grey-out.
+      if (this.rts!.typeCapReached(this.localPlayer, uid, heroes)) continue;
 
       const owned = this.trainTier(uid, heroCount);
       const freeHero = d.isHero && this.rts!.hasFreeHero(this.localPlayer); // first hero is free

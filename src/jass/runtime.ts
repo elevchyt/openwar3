@@ -703,6 +703,13 @@ export interface EngineHooks {
   getUnitX?(unitId: number): number | undefined;
   getUnitY?(unitId: number): number | undefined;
   getUnitFacing?(unitId: number): number | undefined;
+  /**
+   * GetUnitRallyPoint / GetUnitRallyUnit — where a building sends what it produces. `x`/`y` is
+   * the point (the building's OWN position while no flag has been planted — never the map
+   * origin); `unit` is the unit the flag was put on, a gold mine included. Undefined for a
+   * unit that is not in the world.
+   */
+  getUnitRally?(unitId: number): { x: number; y: number; unit?: { id: number; typeId: string; owner: number; x: number; y: number; facing: number } } | undefined;
   // --- orders (7.14): IssueXOrder → sim; GetUnitCurrentOrder ← sim ---
   /** Issue{Immediate,Point,Target}Order — order id + target kind → the matching sim
    *  command (a trigger-issued unit marches/attacks/casts). Returns whether the order

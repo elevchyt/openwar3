@@ -196,6 +196,32 @@ function site(typeId, owner, built, damage) {
   check("…and pays nothing", stash(0), [0, 0]);
 }
 
+console.log("\n-- a tech cap of N counts the QUEUE, hero or not (SetPlayerTechMaxAllowed) -----------");
+{
+  // The all-random "ATR" maps cap an altar's dummy "random hero" (a plain unit, `h001`) at 1.
+  // Read as an on/off switch, the dummy stayed trainable while it trained and the queue took
+  // seven of them; a cap is a count, and what is in production is counted.
+  newWorld();
+  world.initStash(0, 5000, 1000);
+  building("hhou", 0);
+  building("hhou", 0);
+  const bar = building("hbar", 0);
+  check("no cap: not reached", authority.typeCapReached(0, "hfoo"), false);
+  world.tech.setMaxAllowed(0, "hfoo", 1);
+  check("capped at 1, none yet: not reached", authority.typeCapReached(0, "hfoo"), false);
+  check("the first is queued", x(0, { c: "train", buildingId: bar.id, unitId: "hfoo" }), true);
+  check("…and now the cap is reached, while it is still in the queue", authority.typeCapReached(0, "hfoo"), true);
+  check("the second is refused", x(0, { c: "train", buildingId: bar.id, unitId: "hfoo" }), false);
+  check("…and nothing was queued or charged for it", [bar.building.queue.length, stash(0)[0]], [1, 5000 - 135]);
+  check("another type is not touched by it", x(0, { c: "train", buildingId: bar.id, unitId: "hrif" }), true);
+  world.tech.setMaxAllowed(0, "hfoo", 2);
+  check("raised to 2: one more", x(0, { c: "train", buildingId: bar.id, unitId: "hfoo" }), true);
+  check("…and no third", x(0, { c: "train", buildingId: bar.id, unitId: "hfoo" }), false);
+  world.tech.setMaxAllowed(0, "hfoo", 0);
+  check("a cap of 0 is always reached", authority.typeCapReached(0, "hfoo"), true);
+  check("the cap is the player's own", authority.typeCapReached(1, "hfoo"), false);
+}
+
 if (failed) {
   console.log(`\n${failed} check(s) FAILED`);
   process.exit(1);

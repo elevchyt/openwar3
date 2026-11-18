@@ -479,6 +479,39 @@ export function registerWorldNatives(rt: Runtime): void {
     l.handleId = c.rt.handles.alloc(l);
     return jHandle(l.handleId, "location");
   };
+  // The rally point, as a script reads it. A map's own production trigger is the caller: the
+  // all-random "ATR" maps REMOVE the dummy an altar trains, make a rolled hero in its place and
+  // then walk it where the dummy would have gone —
+  //
+  //     udg_L2 = GetUnitRallyPoint(GetTriggerUnit())
+  //     udg_RallyUnit = GetUnitRallyUnit(GetTriggerUnit())
+  //     if udg_RallyUnit ~= nil and udg_RallyUnit ~= GetTriggerUnit() then
+  //         IssueTargetOrderById(udg_U2, 851971, udg_RallyUnit)     -- smart
+  //     else IssuePointOrderByIdLoc(udg_U2, 851986, udg_L2)         -- move
+  //
+  // — so with none of the three implemented the location was null, a null location reads as
+  // (0, 0), and every hero out of every altar marched to the middle of the map. That script
+  // also says what a building with NO flag answers: it guards against the rally unit being the
+  // building ITSELF, and it moves to the point unconditionally, which only leaves the hero
+  // standing at the altar if the point is the altar. So an unset rally is the building's own
+  // position, and a location is always handed back (the script frees it with RemoveLocation).
+  const rallyOf = (c: NativeCtx, v: JassValue) => {
+    const u = unit(c, v);
+    return u && u.simId >= 0 ? c.rt.hooks?.getUnitRally?.(u.simId) : undefined;
+  };
+  def(rt, "GetUnitRallyPoint", (c, a) => {
+    const r = rallyOf(c, a[0]);
+    if (r) return location(c, r.x, r.y);
+    const u = unit(c, a[0]);
+    if (!u) return JNULL;
+    const [x, y] = posOf(c, u);
+    return location(c, x, y);
+  });
+  def(rt, "GetUnitRallyUnit", (c, a) => {
+    const r = rallyOf(c, a[0]);
+    return r?.unit ? c.rt.unitForSim(r.unit) : JNULL;
+  });
+
   def(rt, "GetUnitLoc", (c, a) => {
     const u = unit(c, a[0]);
     const [x, y] = u ? posOf(c, u) : [0, 0];

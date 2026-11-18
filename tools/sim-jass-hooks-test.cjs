@@ -431,10 +431,34 @@ const roster = rosterHooks(world, { get: (id) => TYPEDEFS[id] }, teamOf);
 // it reads one column of a unit's TYPE row, which is the registry and nothing else, so it
 // belongs in exactly this factory and under exactly this rule. `unitTypeDefault` (the
 // GetUnitDefault… natives) is the same read keyed by TYPE id, for a unit already gone.
-check("rosterHooks is exactly the ten", Object.keys(roster).sort(), [
-  "enumUnits", "findPlacedUnit", "isUnitAlly", "isUnitIdType", "isUnitType",
+// `getUnitRally` (GetUnitRallyPoint / GetUnitRallyUnit) is a read of one building's own state.
+check("rosterHooks is exactly the eleven", Object.keys(roster).sort(), [
+  "enumUnits", "findPlacedUnit", "getUnitRally", "isUnitAlly", "isUnitIdType", "isUnitType",
   "playerStructureCount", "playerTypedUnitCount", "playerUnitCount", "unitTypeDefault", "unitTypeField",
 ].sort());
+
+// The rally point as a script reads it. The all-random "ATR" maps walk every hero an altar
+// makes to `GetUnitRallyPoint(altar)`; with the native missing that was a null location, which
+// reads as the map origin, and every hero marched to the middle of the map.
+{
+  // A stand-in altar, as this file's other fixtures are: the hook reads four fields off it.
+  world.units.set(70, { id: 70, owner: 0, team: 0, hp: 100, x: 1200, y: -800, facing: 0, typeId: "hkee", building: { constructionLeft: 0, rallyKind: "none", rallyX: 0, rallyY: 0, rallyTargetId: 0 } });
+  const trainer = world.units.get(70);
+  {
+    const b = trainer.building;
+    check("no flag planted: the rally point is the building itself", [roster.getUnitRally(trainer.id).x, roster.getUnitRally(trainer.id).y], [trainer.x, trainer.y]);
+    check("…and there is no rally unit", roster.getUnitRally(trainer.id).unit, undefined);
+    world.setRally(trainer.id, trainer.x + 640, trainer.y - 320, "point");
+    check("a planted flag is the point", [roster.getUnitRally(trainer.id).x, roster.getUnitRally(trainer.id).y], [trainer.x + 640, trainer.y - 320]);
+    const other = [...world.units.values()].find((u) => u.id !== trainer.id);
+    if (other) {
+      world.setRally(trainer.id, other.x, other.y, "unit", other.id);
+      check("a flag on a unit is that unit", roster.getUnitRally(trainer.id).unit?.id, other.id);
+    }
+    check("a unit that is not in the world has no rally", roster.getUnitRally(987654321), undefined);
+    world.units.delete(70);
+  }
+}
 
 // IsUnitIdType is the same reading asked of a TYPE. Extreme Candy War's Hero_Death trigger is
 // "a unit dies" conditioned on IsUnitIdType(GetUnitTypeId(GetDyingUnit()), UNIT_TYPE_HERO) — the

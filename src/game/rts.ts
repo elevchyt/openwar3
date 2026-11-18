@@ -10295,6 +10295,11 @@ export class RtsController {
     this.authority.setMapFoodCeiling(value);
   }
 
+  /** @see Authority.typeCapReached */
+  typeCapReached(player: number, typeId: string, census?: Map<string, number>): boolean {
+    return this.authority.typeCapReached(player, typeId, census);
+  }
+
   /** @see Authority.heroCensus — the command card draws the hero buttons from the same roster
    *  the authority gates them on, so there is one answer to "have I got this hero already". */
   heroCensus(player: number): Map<string, number> {
