@@ -434,6 +434,7 @@ export function createLuaMapScript(interp: Interpreter, seed: number): LuaMapScr
   return {
     load(source: string, chunkName: string): void {
       run(source, chunkName);
+      for (const name of rt.recordOnlySpawnFns) scopeRecordOnly(name);
       // Publish the chunk's OWN global functions under their real names, so the interpreter
       // calls `config` and `main` exactly as it calls a JASS map's (see note 5). Anything that
       // was a global before the chunk ran is the standard library or one of our own cached
@@ -457,6 +458,45 @@ export function createLuaMapScript(interp: Interpreter, seed: number): LuaMapScr
       handleBoxes.clear();
     },
   };
+
+  /**
+   * Put the RECORD-ONLY scope round one of the chunk's own functions — `CreateAllUnits`, whose
+   * `CreateUnit` rows describe units the engine has ALREADY placed from war3mapUnits.doo
+   * (`Runtime.recordOnlySpawnFns`). The JASS interpreter scopes `Runtime.spawnDepth` round the
+   * call itself (interpreter.ts `callUserG`), but a Lua map's `main` calls a LUA function the
+   * interpreter never enters, so without this every pre-placed unit a Lua map's script makes
+   * stood on the map TWICE: the four ATR maps each had two Mercenary Camps at every camp, with
+   * two shelves stocked by the map's triggers. The wrapper is a JS function, so the function
+   * cannot wait inside it — nor does `CreateAllUnits` ever wait. Asked at CALL time, as the
+   * JASS side asks, so a map with no placed units (jass/index.ts) spawns them for real.
+   */
+  function scopeRecordOnly(name: string): void {
+    lua.lua_getglobal(L, to_luastring(name));
+    if (lua.lua_type(L, -1) !== lua.LUA_TFUNCTION) {
+      lua.lua_pop(L, 1);
+      return;
+    }
+    const ref = lauxlib.luaL_ref(L, lua.LUA_REGISTRYINDEX); // pops the original
+    lua.lua_pushjsfunction(L, (C: LuaState) => {
+      const n = lua.lua_gettop(C);
+      lua.lua_rawgeti(C, lua.LUA_REGISTRYINDEX, ref);
+      lua.lua_insert(C, 1);
+      const scoped = rt.recordOnlySpawnFns.has(name);
+      if (scoped) rt.spawnDepth++;
+      let status: number;
+      try {
+        status = lua.lua_pcall(C, n, lua.LUA_MULTRET, 0);
+      } finally {
+        if (scoped) rt.spawnDepth--;
+      }
+      if (status !== lua.LUA_OK) {
+        rt.warnOnce(name, `Lua error: ${lua.lua_gettop(C) ? to_jsstring(lua.lua_tostring(C, -1)) : "?"}`);
+        return 0;
+      }
+      return lua.lua_gettop(C);
+    });
+    lua.lua_setglobal(L, to_luastring(name));
+  }
 
   /** Register the function on top of the stack under a REAL name (pops it). */
   function nameForFunctionNamed(name: string): void {

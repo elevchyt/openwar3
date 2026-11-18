@@ -481,6 +481,15 @@ export interface PlusProfile {
    * always, but it would add some nice variation)"*. OURS.
    */
   readonly mercChance: number;
+  /**
+   * On an ALTERED MELEE map (the all-random "ATR" maps) a Mercenary Camp is part of the army:
+   * the gold it keeps in the bank before it hires one (index.ts `mercSupplyPass`) — the same
+   * kind of floor `itemReserve` is, because a mercenary is bought out of gold the build ladder
+   * was going to spend and the ladder must keep first call on it. The developer: *"in ATR,
+   * using Mercenary Camps to build a portion of your army is a very common practice"*. Every
+   * difficulty hires; the floor is what grades them. OURS.
+   */
+  readonly mercReserve: number;
   /** Does it send an early scout? (Only matters for finding expansions — a melee player is
    *  handed every start location, see AiPlayer.knows.) */
   readonly scout: boolean;
@@ -638,7 +647,7 @@ export const PLUS_EASY: PlusProfile = {
   // gives an order and then watches it happen. `pullOutHp` 0 is that in one number.
   focusFire: false, finishWounded: false, meleeHeroReach: false, tankFirst: false, pullOutHp: 0, stutterStep: false, pullRejoin: false, sendHomeHp: 0, rejoinHp: 0, dispelSummons: false, shedShield: false, creeps: true, creepAt: 240, creepFood: 8,
   creepCamps: 2, creepCampMax: CAMP_GREEN_MAX, creepRange: 3000, creepRest: 0, creepGreenUntil: 0, creepHunger: 1,
-  harass: false, roam: false, mercChance: 0, scout: false, sweepEvery: Infinity, expansionFirst: 0.5,
+  harass: false, roam: false, mercChance: 0, mercReserve: 400, scout: false, sweepEvery: Infinity, expansionFirst: 0.5,
   shopping: 0, eagerMana: false, invulnEach: false, itemReserve: Infinity, keepPortal: false, portalToAttack: false,
   concedeAfter: 24, finalFight: false,
 };
@@ -724,7 +733,7 @@ export const PLUS_NORMAL: PlusProfile = {
   // the one piece of micro a player picks up long before they learn to focus a target.
   focusFire: false, finishWounded: false, meleeHeroReach: false, tankFirst: false, pullOutHp: 0.25, stutterStep: false, pullRejoin: false, sendHomeHp: 0, rejoinHp: 0, dispelSummons: false, shedShield: false, creeps: true, creepAt: 300, creepFood: 10,
   creepCamps: Infinity, creepCampMax: Infinity, creepRange: Infinity, creepRest: 60, creepGreenUntil: 420, creepHunger: 1,
-  harass: false, roam: false, mercChance: 0, scout: true, sweepEvery: 120, expansionFirst: 0.75,
+  harass: false, roam: false, mercChance: 0, mercReserve: 250, scout: true, sweepEvery: 120, expansionFirst: 0.75,
   // A third of a belt, and it keeps 500 gold back for the build order. It DOES keep a Town
   // Portal and replace it: a scroll is the difference between losing a fight and losing an army,
   // and a player at this level has learnt that much.
@@ -775,7 +784,7 @@ export const PLUS_INSANE: PlusProfile = {
   // developer's numbers). It also kills summons with its dispels first (`dispelSummons`).
   focusFire: true, finishWounded: true, meleeHeroReach: true, tankFirst: true, pullOutHp: 0.25, stutterStep: true, pullRejoin: true, sendHomeHp: 0.15, rejoinHp: 0.22, dispelSummons: true, shedShield: true, creeps: true, creepAt: 90, creepFood: 8,
   creepCamps: Infinity, creepCampMax: Infinity, creepRange: Infinity, creepRest: 0, creepGreenUntil: 0, creepHunger: 1.2,
-  harass: true, roam: true, mercChance: 0.5, scout: true, sweepEvery: 75, expansionFirst: 0.85,
+  harass: true, roam: true, mercChance: 0.5, mercReserve: 150, scout: true, sweepEvery: 75, expansionFirst: 0.85,
   // A full belt and a Town Portal on the hero. Both are what separates a player who has been
   // here before from one who has not.
   shopping: 6, eagerMana: true, invulnEach: true, itemReserve: 200, keepPortal: true, portalToAttack: true,

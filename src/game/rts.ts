@@ -1193,6 +1193,9 @@ export class RtsController {
       playerRace: (player) => this.meleeRaces.get(player) ?? null,
       // …and whether a seat's game is over, which only the map's script knows (`isPlayerOut`).
       playerOut: (player) => this.isPlayerOut?.(player) ?? false,
+      // …and whether this is an ALTERED MELEE map (the all-random "ATR" maps), on which
+      // Computer+ hires mercenaries as part of its army (plus/index.ts `mercSupplyPass`).
+      alteredMelee: () => this.alteredMeleeMap,
     };
     this.meleeAi = new MeleeAi(host);
     this.scriptAi = new ScriptAi(host);

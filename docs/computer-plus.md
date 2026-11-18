@@ -85,6 +85,29 @@ because a scenario runs none of the melee library.
 first one: a different strategy layer, a different army manager, a different spell chooser and a
 different set of manners, seated per slot by a checkbox in Advanced Options.
 
+#### Mercenaries are part of the army there
+
+On an altered melee map, Computer+ hires a portion of its army from the Mercenary Camp on its
+own side of the map (`mercSupplyPass`, every difficulty), as ATR players do. The maps are built
+for it: at 0:00 every camp is replaced by the map's own `n00A` (a copy of `nmer`, its stock list
+emptied), whose shelf is ten slots, one per creep LEVEL, each turning into a random creep of that
+level on the map's clock (level 1 at 1:00 … level 10 at 25:00, the `Replace_Dummy` trigger). The
+placeholders are Chickens and have no weapon, which is what keeps the AI off them (`mercWare`).
+
+- **Which camp:** nearer our start than any other player's, and only once its guards are dead
+  (`campHealthAt`, the reading that ends a creep run). Clearing it is ordinary creeping.
+- **What:** the highest-level soldier on the shelf that fits, ties at random.
+- **How much:** mercenaries hold at most `MERC_SHARE` (a third) of the live army ceiling ON TOP
+  of it, never more than the free supply, and are bought out of the gold above
+  `PlusProfile.mercReserve` (400 / 250 / 150) — the build ladder keeps first call on the bank.
+- **How:** one PEON walks to the counter (`AiPlayer.hireFromShop`, the Tavern hero's errand, so
+  the two share one runner and the hero hire goes first). Not merely a worker: a Ghoul picked
+  as the runner was walked away by the army's own orders and the hire never landed.
+
+A camp is recognised by its own id OR by the stock id a map's custom type was made from
+(`UnitDef.baseId`), and its shelf is read LIVE (`shopWaresOf`), never off the type's
+`Sellunits` — both are why Insane's "hire after clearing a camp" (`mercPass`) also works there now.
+
 ## What AMAI contributed, and what it did not
 
 [AMAI](https://github.com/SMUnlimited/AMAI) is the reference issue #124 names, and being honest

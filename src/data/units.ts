@@ -138,6 +138,12 @@ export interface WeaponSlotDef {
 
 export interface UnitDef {
   id: string;
+  /** For a map's CUSTOM type (a w3u custom-table object), the stock type it was made from —
+   *  the object's `oldId`, followed through a chain of customs to the stock root. Undefined for
+   *  a stock type. What a rule keyed on a stock id asks when the map has renamed the thing: the
+   *  ATR maps replace every Mercenary Camp with their own `n00A` (based on `nmer`, its stock
+   *  list emptied and refilled by script), and a camp is still a camp. */
+  baseId?: string;
   name: string;
   /** The unit's internal TYPE name (unitUI "name": "townhall", "greathall", "footman").
    *  Not the display name — this is what JASS's GetPlayerTypedUnitCount matches on, which

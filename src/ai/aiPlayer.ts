@@ -293,6 +293,8 @@ export class AiPlayer {
   /** …and the game clock at which the errand lapses unless a hire pass renews it: a row that
    *  stops asking (the plan moved on, the hero came some other way) must hand the worker back. */
   private tavernRunnerUntil = 0;
+  /** …and the shop it is walking to (`hireFromShop`), so a second errand can tell it is taken. */
+  private runnerShop = 0;
   /** Building id → when it was first seen going up with nobody building it (`resumeOrphans`). */
   private orphanSince = new Map<number, number>();
   /** Is this unit the army's, the scout, or on the Tavern errand — anything but the economy's? */
@@ -1136,6 +1138,26 @@ export class AiPlayer {
     }
     if (!tavern) return false;
     if (!this.heroLegal(id)) return false;
+    return this.hireFromShop(tavern.id, id);
+  }
+
+  /**
+   * Buy `id` off a neutral shelf, sending a worker to stand at the counter first — the half of
+   * `hireAtTavern` that is not about Taverns. Computer+'s mercenaries on an ALTERED MELEE map
+   * come through here too (plus/index.ts `mercSupplyPass`), and so share ONE runner with the
+   * hero hire: the two never pull one worker two ways, and an errand the caller stops renewing
+   * lapses after `TAVERN_ERRAND` either way. True only when the purchase was made.
+   */
+  /** Is the shop runner out on an errand to some OTHER shop? The hero hire is a build-ladder row
+   *  and goes first; a mercenary errand waits for it rather than turning the worker round. */
+  runnerBusyElsewhere(shopId: number): boolean {
+    return this.tavernRunner !== 0 && this.host.world.elapsed < this.tavernRunnerUntil && this.runnerShop !== shopId;
+  }
+
+  hireFromShop(shopId: number, id: string): boolean {
+    const world = this.host.world;
+    const tavern = world.units.get(shopId);
+    if (!tavern || tavern.hp <= 0) return false;
     if (world.hasUnitAtShop(tavern.id, this.player)) {
       if (!this.host.execute(this.player, { c: "train", buildingId: tavern.id, unitId: id })) return false;
       this.tavernRunner = 0;
@@ -1146,7 +1168,9 @@ export class AiPlayer {
       runner = undefined;
       let near = Infinity;
       for (const u of world.units.values()) {
-        if (u.owner !== this.player || u.hp <= 0 || !u.worker || u.repair) continue;
+        // A PEON, not merely a worker: a Ghoul harvests lumber and is a soldier too, and the
+        // army's own orders walked one picked here away from the counter for good.
+        if (u.owner !== this.player || u.hp <= 0 || !u.worker || !u.isPeon || u.repair) continue;
         if (isOffField(u) || u.buildPending || u.insideBuild || u.constructing) continue;
         if (this.captainHeld.has(u.id)) continue;
         const d = Math.hypot(u.x - tavern.x, u.y - tavern.y);
@@ -1155,6 +1179,7 @@ export class AiPlayer {
       if (!runner) return false;
       this.tavernRunner = runner.id;
     }
+    this.runnerShop = tavern.id;
     this.tavernRunnerUntil = world.elapsed + TAVERN_ERRAND;
     if (runner.order !== "move") {
       this.order({ c: "order", unitId: runner.id, order: { kind: "move", x: tavern.x, y: tavern.y }, queued: false });

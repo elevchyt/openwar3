@@ -341,6 +341,14 @@ Five things are the design, and each is a decision the shape of the API forced:
    `Trig_*_Actions`. That is what makes the map start at all, and what lets blizzard.j's
    `ExecuteFunc("…")` find a Lua trigger.
 
+**`CreateAllUnits` is record-only in Lua too.** The engine places a map's pre-placed units from
+war3mapUnits.doo, so the JASS interpreter puts `Runtime.spawnDepth` round the script's own
+`CreateAllUnits` and its `CreateUnit` rows only ADOPT what already stands there. A Lua map's
+`main` calls a Lua function the interpreter never enters, so the host wraps that global in the
+same scope (`scopeRecordOnly`). Without it EVERY pre-placed unit of a Lua map stood twice —
+Sunhoof Mesa ATR started with 231 units instead of 127: two of every creep camp, gold mine,
+Tavern and Mercenary Camp.
+
 Beside those, two things a Lua map needs that JASS does not: **`__jarray`** (a JASS array in
 Lua mode is a table that reads its type's default at an unwritten index — the corpus map calls
 it 390 times, once per array its triggers declare) and **`FourCC`** (JASS writes a rawcode as

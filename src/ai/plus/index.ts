@@ -139,6 +139,13 @@ export interface PlusHost extends AiHost {
    */
   playerRace(player: number): PlayableRace | null;
   /**
+   * Is this an ALTERED MELEE map — a custom map whose script runs the whole melee init
+   * (world/mapKind.ts `runsMeleeInit`; in the install, exactly the four all-random "ATR" maps)?
+   * What scopes the mercenary army to those maps (`mercSupplyPass`). Absent = no, which is every
+   * headless test host and every ordinary melee map.
+   */
+  alteredMelee?(): boolean;
+  /**
    * Is this seat's game OVER — defeated, or gone? Blizzard.j's `RemovePlayer` (reached through
    * `MeleeDoLeave` and the defeat check alike) is the one door every such seat goes out of.
    *
@@ -1167,10 +1174,22 @@ const CREEP_UNTIL_LEVEL = 5;
  *  and RED camps are still worth it past that one — green ones are not. OURS. */
 const HUNGRY_UNTIL_LEVEL = 9;
 /** A MERCENARY CAMP (`[nmer]`, and the tileset twins `[nmr0]`…`[nmrf]` — every one is "Mercenary
- *  Camp" in NeutralUnitStrings.txt), how far from the cleared camp's centre it may stand to be
- *  that camp's, and how long the party has to hire there once the guards are dead. OURS. */
-const isMercCamp = (typeId: string): boolean => typeId === "nmer" || /^nmr[0-9a-f]$/.test(typeId);
+ *  Camp" in NeutralUnitStrings.txt) — by its own id or by the stock id a map's custom camp was
+ *  made from (`ComputerPlusAi.isMercCamp`) — how far from the cleared camp's centre it may stand
+ *  to be that camp's, and how long the party has to hire there once the guards are dead. OURS. */
+const isMercCampId = (typeId: string | undefined): boolean => !!typeId && (typeId === "nmer" || /^nmr[0-9a-f]$/.test(typeId));
 const MERC_CAMP_REACH = 800;
+/** On an ALTERED MELEE map, the share of the army ceiling (`PlusProfile.armyFood`, live) that
+ *  MERCENARIES may hold ON TOP of it (`mercSupplyPass`). A portion of the army, never the army:
+ *  the build order still owns the ceiling it was tuned to, and a camp restocks one body at a
+ *  time, so a bigger share would only be the bank waiting on a shelf. OURS. */
+const MERC_SHARE = 1 / 3;
+/** …and how often it looks at the shelf at all — a camp restocks on a scale of minutes, and
+ *  the walk is a worker off the economy. OURS. */
+const MERC_SUPPLY_EVERY = 5;
+/** …and how long one hire's errand may take before it is given up — a camp across half the map
+ *  is ~4500 units, seventeen seconds at a Peasant's 270, so this is the walk twice over. OURS. */
+const MERC_ERRAND = 40;
 const MERC_WINDOW = 10;
 /** The latest an Insane computer waits for its POWER SPIKE before its waves may go at a main
  *  anyway (`spikeHeld`). OURS. It was 18 minutes, which with the night elf's tier 3 arriving at
@@ -2749,6 +2768,10 @@ interface Brain {
    *  there (`mercPass`); and every camp already rolled for, so each is rolled ONCE a match. */
   merc: { shopId: number; count: number; until: number } | null;
   mercRolled: Set<number>;
+  /** On an ALTERED MELEE map: the mercenary a worker has been sent to hire (`mercSupplyPass`),
+   *  renewed every pass until it lands, and the clock of the next look at the shelf. */
+  mercHire: { shopId: number; unitId: string; until: number } | null;
+  mercNext: number;
   /** Has this player reached its POWER SPIKE (`spikeHeld`)? Latched. */
   spikeMet: boolean;
   /** When the map was found MINED OUT and the FINAL FIGHT began (`noteMinedOut`), -1 before.
@@ -3101,6 +3124,8 @@ export class ComputerPlusAi {
       vanguardDone: false,
       merc: null,
       mercRolled: new Set(),
+      mercHire: null,
+      mercNext: 0,
       spikeMet: false,
       finalSince: -1,
       finalFought: null,
@@ -3819,6 +3844,7 @@ export class ComputerPlusAi {
     // about being at home. (A statue trained mid-battle arrives with both autocasts off.)
     this.statuePass(b);
     this.mercPass(b);
+    this.mercSupplyPass(b);
     // Only while MASSING. A well trip replaces whatever the unit was doing, so running this
     // during a fight would walk a Grunt at 60 % out of the battle line and across the base —
     // which is not healing, it is leaving. "When it returned to the base" is the whole
@@ -8938,7 +8964,7 @@ export class ComputerPlusAi {
     if (b.profile.mercChance <= 0) return;
     const world = this.host.world;
     for (const u of world.units.values()) {
-      if (u.hp <= 0 || !u.building || !isMercCamp(u.typeId)) continue;
+      if (u.hp <= 0 || !u.building || !this.isMercCamp(u.typeId)) continue;
       if (Math.hypot(u.x - at.x, u.y - at.y) > MERC_CAMP_REACH || b.mercRolled.has(u.id)) continue;
       if (!world.canUseShop(u.id, b.ai.player)) continue;
       b.mercRolled.add(u.id);
@@ -8962,12 +8988,128 @@ export class ComputerPlusAi {
     const shop = world.units.get(m.shopId);
     if (!shop || shop.hp <= 0 || m.count <= 0 || b.clock > m.until) return void (b.merc = null);
     if (!world.hasUnitAtShop(shop.id, b.ai.player)) return;
-    const wares = this.host.tech.get(shop.typeId).sellunits.filter((id) =>
-      !this.host.registry.get(id)?.isHero && world.shopStock(shop.id, id) !== 0);
+    // The LIVE shelf (`shopWaresOf`: the data's list plus whatever the script stocked), never the
+    // type's `Sellunits` alone — an ATR camp's data list is empty and its whole stock is script-made.
+    const wares = world.shopWaresOf(shop.id).units.filter((id) => this.mercWare(id) && world.shopStock(shop.id, id) !== 0);
     if (!wares.length) return void (b.merc = null);
     const pick = wares[b.ai.randomInt(0, wares.length - 1)];
     if (this.issue(b, { c: "train", buildingId: shop.id, unitId: pick })) m.count--;
     else b.merc = null; // not affordable, or no food: the variation is not worth saving for
+  }
+
+  /** A Mercenary Camp by its own id, or by the stock id a map's CUSTOM camp was made from
+   *  (`UnitDef.baseId`) — the ATR maps replace every camp with their own `n00A` at 0:00. */
+  private isMercCamp(typeId: string): boolean {
+    return isMercCampId(typeId) || isMercCampId(this.host.registry.get(typeId)?.baseId);
+  }
+
+  /** A shelf entry worth hiring as a SOLDIER: not a hero (that is the Tavern's row), not a
+   *  building or a worker, and armed. The last is what leaves out the ATR camps' PLACEHOLDERS —
+   *  `n000`…`n009` are Chickens (`[nech]`, no weapon) holding a level's slot until the map's
+   *  `Replace_Dummy` trigger swaps in a random creep of that level. */
+  private mercWare(id: string): boolean {
+    const def = this.host.registry.get(id);
+    return !!def && !def.isHero && !def.isBuilding && !def.classification.includes("peon")
+      && def.weapons.length > 0;
+  }
+
+  /**
+   * MERCENARIES AS ARMY — on an ALTERED MELEE map only (`PlusHost.alteredMelee`: in the install,
+   * exactly the four all-random "ATR" maps). The developer: *"in ATR, using Mercenary Camps to
+   * build a portion of your army is a very common practice"*, and the maps are built for it:
+   * every camp is replaced at 0:00 by the map's own `n00A`, whose shelf is ten slots, one per
+   * creep LEVEL, each turning into a RANDOM creep of that level on the map's clock (level 1 at
+   * 1:00, 2 at 3:00, 3 at 4:00 … 10 at 25:00 — the `udg_timer` thresholds in its
+   * `Replace_Dummy` trigger), and each camp sits on one player's own side of the map.
+   *
+   * So: the camp on OUR side (nearer our start than any other player's), once its guards are
+   * dead — a worker is not walked into a live camp, and the creeping that clears it is the
+   * ordinary creeping. Then, every `MERC_SUPPLY_EVERY`, the STRONGEST soldier on the shelf
+   * (highest level, ties at random) that fits three budgets: the FOOD the mercenaries may hold
+   * on top of the army ceiling (`MERC_SHARE` of it, so they are a portion and never the army),
+   * the supply actually free, and the gold above `PlusProfile.mercReserve` (the build ladder
+   * keeps first call on the bank, exactly as with items). The hire goes through the Tavern's
+   * errand (`AiPlayer.hireFromShop`): one worker walks to the counter, the purchase is the
+   * ordinary `train` at the shop, and the worker goes back to work. What is hired is an
+   * ordinary unit of ours from then on (`SimUnit.mercenary`), and the army takes it in.
+   */
+  private mercSupplyPass(b: Brain): void {
+    if (!this.host.alteredMelee?.()) return;
+    const ai = b.ai;
+    const world = this.host.world;
+    const hire = b.mercHire;
+    if (hire) {
+      // An errand under way: renewed until it lands, or dropped when the shelf, the money or
+      // the room has gone in the meantime (another player bought it; a row took the gold).
+      const shop = world.units.get(hire.shopId);
+      if (!shop || shop.hp <= 0 || b.clock > hire.until || world.shopStock(hire.shopId, hire.unitId) === 0
+        || !this.mercFits(b, hire.unitId, this.mercRoom(b))) {
+        b.mercHire = null;
+        return;
+      }
+      if (ai.hireFromShop(hire.shopId, hire.unitId)) b.mercHire = null;
+      return;
+    }
+    if (b.clock < b.mercNext) return;
+    b.mercNext = b.clock + MERC_SUPPLY_EVERY;
+    const shop = this.homeMercCamp(b);
+    if (!shop || ai.runnerBusyElsewhere(shop.id)) return;
+    const room = this.mercRoom(b);
+    if (room <= 0) return;
+    let best: string[] = [];
+    let bestLevel = -1;
+    for (const id of world.shopWaresOf(shop.id).units) {
+      if (!this.mercWare(id) || world.shopStock(shop.id, id) === 0 || !this.mercFits(b, id, room)) continue;
+      const level = this.host.registry.get(id)!.level;
+      if (level > bestLevel) { bestLevel = level; best = [id]; }
+      else if (level === bestLevel) best.push(id);
+    }
+    if (!best.length) return;
+    const unitId = best[ai.randomInt(0, best.length - 1)];
+    b.mercHire = { shopId: shop.id, unitId, until: b.clock + MERC_ERRAND };
+    if (ai.hireFromShop(shop.id, unitId)) b.mercHire = null;
+  }
+
+  /** Food the mercenaries may still take: `MERC_SHARE` of the live army ceiling, less the
+   *  hired soldiers already standing. */
+  private mercRoom(b: Brain): number {
+    const ceiling = liveProfile(b.profile, b.clock).armyFood;
+    let held = 0;
+    for (const u of this.host.world.units.values()) {
+      if (u.owner !== b.ai.player || u.hp <= 0 || !u.mercenary || u.building || isCopy(u)) continue;
+      held += this.host.registry.get(u.typeId)?.foodUsed ?? 0;
+    }
+    return Math.floor(ceiling * MERC_SHARE) - held;
+  }
+
+  /** Does this mercenary fit the room, the free supply and the purse above `mercReserve`? */
+  private mercFits(b: Brain, id: string, room: number): boolean {
+    const def = this.host.registry.get(id);
+    if (!def) return false;
+    if (def.foodUsed > room || def.foodUsed > b.ai.foodCap() - b.ai.foodUsed()) return false;
+    return b.ai.gold() - def.goldCost >= b.profile.mercReserve && b.ai.wood() >= def.lumberCost;
+  }
+
+  /** The Mercenary Camp on OUR side of the map whose guards are dead, or null: nearer our start
+   *  than any other playing seat's (each ATR camp sits by one player's base — walking a worker
+   *  across to the other one is feeding it to that player), standing, open to us, and with no
+   *  living camp left around it (`campHealthAt`, the same reading that ends a creep run). */
+  private homeMercCamp(b: Brain): SimUnit | null {
+    const world = this.host.world;
+    const home = b.ai.home();
+    const others = this.host.startLocations().filter((s) => s.player !== b.ai.player);
+    let best: SimUnit | null = null;
+    let bestD = Infinity;
+    for (const u of world.units.values()) {
+      if (u.hp <= 0 || !u.building || !this.isMercCamp(u.typeId)) continue;
+      if (!world.canUseShop(u.id, b.ai.player)) continue;
+      const d = Math.hypot(u.x - home.x, u.y - home.y);
+      if (d >= bestD || others.some((s) => Math.hypot(u.x - s.x, u.y - s.y) <= d)) continue;
+      if (b.ai.campHealthAt(u.x, u.y, MERC_CAMP_REACH) > 0) continue;
+      bestD = d;
+      best = u;
+    }
+    return best;
   }
 
   /** Switch an autocast ON if it is off. `{ c: "autocast" }` is a TOGGLE, so both of these

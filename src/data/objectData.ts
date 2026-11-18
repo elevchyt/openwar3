@@ -713,6 +713,9 @@ export function applyMapUnitData(registry: UnitRegistry, w3uBytes: Uint8Array, w
     const base = (layer.skin ? registry.get(obj.newId) : undefined) ?? registry.base(obj.oldId) ?? registry.get(obj.oldId);
     if (!base) continue; // base type unknown (chained custom / non-unit) — skip, don't crash
     const def = cloneDef(base, obj.newId);
+    // …and remembers what it was made from (UnitDef.baseId) — a skin layer's row is already the
+    // custom one and keeps the root it carries.
+    def.baseId = base.baseId ?? (base.id === obj.newId ? undefined : base.id);
     applyMods(def, obj.modifications, trigStr);
     registry.setCustom(obj.newId, def);
     count++;
