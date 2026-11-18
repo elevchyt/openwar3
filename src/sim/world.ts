@@ -3254,10 +3254,9 @@ const REGEN_PER_INT = (): number => gameNum("IntRegenBonus"); // mana/sec per In
 const IAS_MAX = 4.0; // +400% — cannot swing faster than 5x its base attack time
 const IAS_MIN = -0.8; // -80% — cannot be slowed below 1/5 of its base attack rate
 const DAMAGE_POINT_FLOOR = 0.02; // a swing always lands 0.02s before it may start the next
-/** How long a NET (Web, or Ensnare on a flyer) takes to bring its flyer down to the ground, and
- *  to drag it clear of trees on the way (SimWorld.netAltitude). OURS: nothing in the data times
- *  the fall — the buff simply holds the unit on the ground — so this is only long enough to SEE
- *  it come down rather than blink there. */
+/** How long a flyer let go by a NET (Web, or Ensnare) takes to climb back to its altitude, and
+ *  how long a netted one takes to be dragged clear of trees (SimWorld.netAltitude). OURS:
+ *  nothing in the data times either. The FALL itself takes no time at all. */
 const NET_DROP_TIME = 0.4;
 /** How long a unit takes between the ground and the air when NOTHING says how long: a type swap
  *  whose row carries no "Altitude Adjustment Duration" (`Eme3`) — the Archer climbing onto her
@@ -8919,9 +8918,10 @@ export class SimWorld {
   /**
    * A NET (Web, or Ensnare on a flyer) taking a flyer down to the ground, or letting it go.
    *
-   * The way down is a FALL rather than a snap, over NET_DROP_TIME (ours — nothing in the data
-   * times it), booked as an `altitudeShift` so the same per-tick flight that lifts a Destroyer
-   * carries it. The way back up returns to the type's own `moveheight` (see recomputeStats).
+   * The way down is INSTANT — the flyer is on the ground the tick the net lands. The way back
+   * up is a climb over NET_DROP_TIME (ours — nothing in the data times it) to the type's own
+   * `moveheight` (see recomputeStats), booked as an `altitudeShift` so the same per-tick flight
+   * that lifts a Destroyer carries it.
    *
    * And where it lands has to be somewhere a GROUND body can be: a Gargoyle netted over a
    * forest cannot lie in the trees, so it is DRAGGED along the line toward whoever threw the
@@ -8934,13 +8934,22 @@ export class SimWorld {
   private netAltitude(u: SimUnit, down: boolean, sourceId: number): void {
     const typeHeight = this.unitReg?.get(u.typeId)?.moveHeight ?? 0;
     const to = down ? 0 : typeHeight;
-    const rate = Math.abs(to - u.flyHeight) / NET_DROP_TIME;
-    u.altitudeShift = { to, rate: rate > 0 ? rate : Infinity, wait: false };
-    if (!down) return;
+    // The way DOWN is not flown: a netted flyer is on the ground the instant the net lands, as
+    // in the original (the developer's account of it) — only the way back UP is a climb. The
+    // booking is kept at an unbounded rate so a DRAG can still ride it (tickAltitude holds the
+    // height at `to` until the haul is done).
+    if (down) {
+      u.flyHeight = 0;
+      u.altitudeShift = null;
+    } else {
+      const rate = Math.abs(to - u.flyHeight) / NET_DROP_TIME;
+      u.altitudeShift = { to, rate: rate > 0 ? rate : Infinity, wait: false };
+      return;
+    }
     const spot = this.netLandingSpot(u, sourceId);
     if (spot) {
       const d = Math.hypot(spot[0] - u.x, spot[1] - u.y);
-      if (d > 0.5) u.altitudeShift.drag = { x: spot[0], y: spot[1], rate: d / NET_DROP_TIME };
+      if (d > 0.5) u.altitudeShift = { to: 0, rate: Infinity, wait: false, drag: { x: spot[0], y: spot[1], rate: d / NET_DROP_TIME } };
     }
   }
 
