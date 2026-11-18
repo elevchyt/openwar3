@@ -4531,7 +4531,7 @@ export class GameHud {
    *
    * A passenger that takes MORE THAN ONE seat (UnitDef.cargoSize — a Demolisher is 2, a Siege
    * Engine 4) spans that many pockets: its icon and health bar in the first, and the same
-   * icon DIMMED with no bar in each one after, so the panel reads "this one is taking two
+   * icon and bar, the icon DIMMED, in each one after, so the panel reads "this one is taking two
    * seats" rather than "there are two of these" (issue #128). Clicking any pocket of it puts
    * the whole unit off.
    *
@@ -4589,7 +4589,7 @@ export class GameHud {
         p.slot.classList.add("filled");
         p.slot.classList.toggle("extra", k > 0); // the dimmed continuation of a wide unit
         p.art.style.backgroundImage = url ? `url(${url})` : "";
-        p.track.hidden = k > 0;
+        p.track.hidden = false; // every seat a wide unit fills carries its bar
         const frac = Math.max(0, Math.min(1, c.hpFrac));
         // Same bar the group grid draws: the slab clipped to the fraction, tinted by state.
         p.fill.style.clipPath = `inset(0 ${(1 - frac) * 100}% 0 0)`;

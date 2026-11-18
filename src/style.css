@@ -2845,7 +2845,7 @@ body.hud-statbar-skinned .hud-sel-icon-fill.mana { background-image: var(--statb
    Zeppelin's eight as 2×4, a ship's ten as 2×5 — each the game's own `human-transport-slot.blp`
    (war3skins `CargoBackdrop`, one 64×64 framed square), with the passenger's icon inset and
    its health bar along the pocket's foot. A unit that takes two seats spans two pockets, the
-   second wearing the same icon dimmed and no bar. Clicking a filled pocket puts that unit off. */
+   second wearing the same icon dimmed, at the same size and with the same bar. Clicking a filled pocket puts that unit off. */
 .hud-cargo {
   display: grid;
   grid-template-columns: repeat(var(--cargo-cols, 4), 1fr);
@@ -2898,9 +2898,10 @@ body.hud-widget-skinned .hud-cargo-slot {
   background-position: center;
   background-repeat: no-repeat;
 }
-/* The second (third, fourth) seat of a wide unit: the same picture, dimmed, and no bar —
-   "it is taking this seat too", not "here is another one". */
-.hud-cargo-slot.extra .hud-cargo-art { filter: brightness(0.45); top: 9%; bottom: 9%; }
+/* The second (third, fourth) seat of a wide unit: the same picture at the same size, with the
+   same bar, only dimmed — "it is taking this seat too", not "here is another one". A bigger
+   picture with no bar read as a different, larger unit (the developer's call). */
+.hud-cargo-slot.extra .hud-cargo-art { filter: brightness(0.45); }
 .hud-cargo-slot.extra.filled:hover .hud-cargo-art,
 .hud-cargo-slot.extra.filled.pad-hover .hud-cargo-art { filter: brightness(0.6); }
 .hud-cargo-track {

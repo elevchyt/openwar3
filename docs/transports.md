@@ -70,7 +70,7 @@ it.
 `SelectionInfo.cargo` (owner's side only — an enemy's hold shows nothing) lists the passengers
 in boarding order with the seats each takes; `renderCargo` in `ui/hud.ts` lays them into
 `cargoSlots` pockets, 4 to a row (5 for a ship's ten). A wide unit spans its `size` pockets: the
-icon and health bar in the first, the same icon **dimmed with no bar** in the rest, so it reads
+icon and health bar in the first, the same icon **dimmed** (same size, same bar) in the rest, so it reads
 "this one takes two seats" rather than "there are two of these". The panel replaces the stat
 lines while anybody is aboard and the stats come back the moment the last one steps off.
 
