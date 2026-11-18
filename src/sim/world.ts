@@ -4372,6 +4372,10 @@ export class SimWorld {
   private readonly rebirthTags = new Map<number, { deadId: number; typeId: string; x: number; y: number; facing: number }>();
   // Per-unit creep drop tables, seeded at spawn (map .doo), rolled on death.
   private unitDrops = new Map<number, ItemDropSet[]>();
+  /** The Black Arrow a blow in flight carries onto its target (applyOrbArmorFirst →
+   *  applyOrbEffect), so the arrow that KILLS raises a minion as well as the one that marks.
+   *  Only ever set for the length of one blow; null between them. */
+  private arrowBlow: { targetId: number; mark: NonNullable<SimUnit["blackArrow"]> } | null = null;
   // --- spell / ability event channels drained by the renderer each frame ---
   // Spell effect models to play at a unit/point (targetArt/casterArt/areaArt). `soundLabel`
   // is an AbilitySounds.slk LABEL to fire with the model — for the cue whose WAV does NOT
@@ -25459,14 +25463,25 @@ export class SimWorld {
    *  was absorbed or the target was immune) — an orb whose effect is a share of the hit
    *  needs it, and every orb needs to know the blow actually connected. */
   private applyOrbEffect(attacker: SimUnit | undefined, target: SimUnit, orb: ResolvedOrb | null | undefined, dealt: number): void {
-    if (!attacker || !orb || target.hp <= 0) return;
-    // A blow that did not connect carries nothing: "Missing an Attack does not trigger the
-    // reduction" (Liquipedia, Orb of Corruption), and the same holds for the slow, the
-    // poison and the mark. `dealt` is 0 for an evaded swing, an invulnerable target and the
-    // physical immunity of an ethereal one — every way an attack fails to land.
-    if (dealt <= 0) return;
-    this.runOrbPart(attacker, target, orb, dealt);
-    for (const part of orb.extra ?? []) this.runOrbPart(attacker, target, part, dealt);
+    try {
+      if (!attacker || !orb || target.hp <= 0) return;
+      // A blow that did not connect carries nothing: "Missing an Attack does not trigger the
+      // reduction" (Liquipedia, Orb of Corruption), and the same holds for the slow, the
+      // poison and the mark. `dealt` is 0 for an evaded swing, an invulnerable target and the
+      // physical immunity of an ethereal one — every way an attack fails to land.
+      if (dealt <= 0) return;
+      this.runOrbPart(attacker, target, orb, dealt);
+      for (const part of orb.extra ?? []) this.runOrbPart(attacker, target, part, dealt);
+    } finally {
+      this.arrowBlow = null; // the blow is over: its arrow either killed or is now a mark
+    }
+  }
+
+  /** May a Black Arrow / Orb of Darkness mark take on this unit? `targs1` is
+   *  `air,ground,enemy,organic,neutral` — no `structure` — and a hero or a summon leaves no
+   *  corpse to make a skeleton of. */
+  private blackArrowTakes(target: SimUnit, lvl: AbilityLevel): boolean {
+    return !!lvl.summon && !target.building && !target.isHero && !target.isSummon;
   }
 
   private runOrbPart(attacker: SimUnit, target: SimUnit, orb: ResolvedOrb, dealt: number): void {
@@ -25501,10 +25516,10 @@ export class SimWorld {
       case "ANbs": {
         const bonus = this.dataOf(lvl, 0);
         if (bonus > 0) this.landDamage(target, bonus, attacker.id, false);
-        // The mark only takes on something that could leave a body to raise: `targs1` is
-        // `air,ground,enemy,organic,neutral` — no `structure` — and a hero or a summon
-        // leaves no corpse to make a skeleton of. The bonus damage above lands regardless.
-        if (target.hp > 0 && lvl.summon && !target.building && !target.isHero && !target.isSummon) {
+        // The mark only takes on something that could leave a body to raise
+        // (blackArrowTakes). The bonus damage above lands regardless — and if it is what
+        // kills, the blow's own arrow (arrowBlow) still raises the minion.
+        if (target.hp > 0 && this.blackArrowTakes(target, lvl)) {
           target.blackArrow = { abilityId: def.id, rank: orb.rank, sourceId: attacker.id, owner: attacker.owner, team: attacker.team };
           this.applyBuffInternal(target, { kind: "mark", group: "blackarrow", timeLeft: dur || 2, sourceId: attacker.id, ...this.buffArtOf(def) });
         }
@@ -25685,8 +25700,17 @@ export class SimWorld {
    * 375 gold in a big fight. Everything else an orb does happens after (applyOrbEffect).
    */
   private applyOrbArmorFirst(attacker: SimUnit | undefined, target: SimUnit, orb: ResolvedOrb | null | undefined): void {
+    this.arrowBlow = null;
     if (!attacker || !orb || target.hp <= 0) return;
     for (const part of [orb, ...(orb.extra ?? [])]) {
+      // Black Arrow / Orb of Darkness: the arrow that KILLS raises a minion too — that is the
+      // whole of how the spell is played (autocast on, last-hit the camp). The mark itself is
+      // laid after the blow (runOrbPart) and only on a target still standing, so the killing
+      // arrow is carried across the blow here and read by orbDeathEffects if it is the one
+      // that drops the unit. Cleared once the blow is done (applyOrbEffect).
+      if ((part.def.code === "ANba" || part.def.code === "ANbs") && this.blackArrowTakes(target, part.lvl)) {
+        this.arrowBlow = { targetId: target.id, mark: { abilityId: part.def.id, rank: part.rank, sourceId: attacker.id, owner: attacker.owner, team: attacker.team } };
+      }
       if (part.def.code !== "AIcb") continue;
       const lvl = part.lvl;
       const dur = target.isHero && lvl.heroDuration > 0 ? lvl.heroDuration : lvl.duration;
@@ -26811,9 +26835,14 @@ export class SimWorld {
    * on the matching buff still being on: the mark and its timer are the same effect.
    */
   private orbDeathEffects(u: SimUnit): void {
-    const mark = u.blackArrow;
+    // The mark a living unit carries (and its buff still running), or the arrow that is
+    // killing it right now (arrowBlow — a creep dropped by the arrow itself never wore one).
+    const worn = u.blackArrow && u.buffs.some((b) => b.group === "blackarrow") ? u.blackArrow : null;
+    const blow = this.arrowBlow?.targetId === u.id ? this.arrowBlow.mark : null;
+    const mark = worn ?? blow;
     u.blackArrow = null;
-    if (mark && this.abilities && u.buffs.some((b) => b.group === "blackarrow")) {
+    if (blow) this.arrowBlow = null; // one corpse, one raise
+    if (mark && this.abilities) {
       const def = this.abilities.get(mark.abilityId);
       const lvl = def?.levelData[Math.min(mark.rank, def.levelData.length) - 1];
       if (def && lvl && lvl.summon) {
@@ -27127,7 +27156,10 @@ export class SimWorld {
         roll -= entry.chance;
       }
       if (!chosen) continue;
-      const def = this.itemReg.resolveDrop(chosen, this.rng);
+      // An ARROW, never `this.rng`: `rng` is a method that counts its draws on `this`
+      // (rngDraws, the replay's roll count), and handed over bare it threw on the first
+      // random-class drop (`YjI2`…) — mid-step, every step, which froze the match for good.
+      const def = this.itemReg.resolveDrop(chosen, () => this.rng());
       if (!def) continue;
       // Fan multiple drops out around the corpse so they don't stack on one spot.
       const ang = (n * 2.399963) % (Math.PI * 2); // golden-angle spread

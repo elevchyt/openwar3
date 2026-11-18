@@ -89,7 +89,7 @@ one and a brand-new custom unit are decided by the same line, and `ua1w` (weapTp
 |---|---|---|
 | `AHfa` | Searing Arrows (PotM, `ACsa` creeps) | `DataA` bonus damage |
 | `AHca` | Cold / Frost Arrows (Naga `ANfa`, Skeletal Marksman `ACcw`) | `DataA` extra damage, `DataB`/`DataC` move/attack slow |
-| `ANba` | Black Arrow (Dark Ranger, `ACbk`) | `DataA` damage; a victim that dies marked rises as `UnitID1` |
+| `ANba` | Black Arrow (Dark Ranger, `ACbk`) | `DataA` damage; a victim that dies marked rises as `UnitID1` — and so does one the ARROW ITSELF kills (`SimWorld.arrowBlow`, carried across the blow: the mark is only laid on a unit still standing, so a creep one-shot by the arrow used to leave no skeleton) |
 | `ANia`/`ANic` | Incinerate (Firelord) | `DataA` × the stack count, and a death blast for `DataB` |
 | `Afak` | Orb of Annihilation (Destroyer) | `DataA` damage + falloff splash |
 | `AEpa` | Poison Arrows | `DataA` damage + poison |

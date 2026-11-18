@@ -46,7 +46,11 @@ const Aspo = abil("Aspo", "Aspo", { duration: 5, heroDuration: 1, data: [4, 0.5,
 // Feedback (`Afbk`, Spell Breaker): 20 mana off a unit / 4 off a hero, ×1 as damage.
 const Afbk = abil("Afbk", "Afbk", { castRange: 20, data: [20, 1, 4, 1, 0] }, { targetFlags: ["air", "ground", "enemy", "neutral"] });
 
-const ABILITIES = Object.fromEntries([AIfb, AIob, AIcb, AIva, AHfa, AHca, Aspo, Afbk].map((a) => [a.id, a]));
+// Black Arrow (`ANba`, Dark Ranger): DataA 2 bonus damage, DataB 1 minion of UnitID1 `ndr1`
+// for DataC 80 s, Dur 2 — `targs1` air,ground,enemy,organic,neutral.
+const ANba = abil("ANba", "ANba", { cost: 6, castRange: 600, duration: 2, data: [2, 1, 80], summon: "ndr1" }, { targetFlags: ["air", "ground", "enemy", "organic", "neutral"] });
+
+const ABILITIES = Object.fromEntries([AIfb, AIob, AIcb, AIva, AHfa, AHca, Aspo, Afbk, ANba].map((a) => [a.id, a]));
 const ITEMS = {
   ofir: { abilities: ["AIfb"] },
   ofro: { abilities: ["AIob"] },
@@ -233,6 +237,48 @@ console.log("\nwhat the winning orb actually does");
   const foe = unit(w, { owner: 1, team: 1 });
   w.applyOrbEffect(hero, foe, w.resolveOrb(hero, foe), 0);
   check("a missed swing applies no orb effect", foe.buffs.length, 0);
+}
+
+console.log("\nBlack Arrow: the arrow that KILLS raises a Dark Minion too");
+// What applyDamage → kill() reads off a body beyond the orb fields above.
+const BODY = { linkT: 0, linkGroup: [], garrison: [], ethereal: false, thorns: 0, summonLeft: 0, constructing: null, inMine: false, resId: 0, order: "idle", facing: 0, radius: 16 };
+{
+  // The Sunhoof Mesa report: with autocast on, a creep the arrow itself dropped left no
+  // skeleton — the mark was laid after the blow and only on a unit still standing, so only
+  // a creep marked by an EARLIER arrow ever rose. The killing blow is what the spell is for.
+  const w = world();
+  const ranger = unit(w, { isHero: true, abilities: [{ id: "ANba", code: "ANba", level: 1, cooldownLeft: 0, autocastOn: true }] });
+  const pig = unit(w, { owner: 12, team: 12, hp: 5, maxHp: 50, typeId: "npig", ...BODY });
+  const orb = w.resolveOrb(ranger, pig);
+  check("the arrow is the blow's orb", orb?.def.id ?? null, "ANba");
+  w.applyOrbArmorFirst(ranger, pig, orb);
+  const dealt = w.applyDamage(pig, 20, ranger.id, "hero", "", true);
+  w.applyOrbEffect(ranger, pig, orb, dealt);
+  check("the arrow killed the creep", pig.hp <= 0, true);
+  check("…and a Dark Minion is raised for the Dark Ranger's owner", w.summonRequests.map((r) => [r.unitId, r.owner, r.summonLeft]), [["ndr1", 0, 80]]);
+  check("…and nothing of the blow is left behind", w.arrowBlow, null);
+}
+{
+  // A creep the arrow merely wounds is MARKED, and dies to anybody's blow inside the 2 s.
+  const w = world();
+  const ranger = unit(w, { isHero: true, abilities: [{ id: "ANba", code: "ANba", level: 1, cooldownLeft: 0, autocastOn: true }] });
+  const foe = unit(w, { owner: 12, team: 12, hp: 500, maxHp: 500, ...BODY });
+  const orb = w.resolveOrb(ranger, foe);
+  w.applyOrbArmorFirst(ranger, foe, orb);
+  w.applyOrbEffect(ranger, foe, orb, w.applyDamage(foe, 20, ranger.id, "hero", "", true));
+  check("a wounding arrow leaves the mark", !!foe.blackArrow && foe.buffs.some((b) => b.group === "blackarrow"), true);
+  check("…and raises nothing yet", w.summonRequests.length, 0);
+}
+{
+  // A blow that misses carries no arrow, and leaves nothing pending for the next death.
+  const w = world();
+  const ranger = unit(w, { isHero: true, abilities: [{ id: "ANba", code: "ANba", level: 1, cooldownLeft: 0, autocastOn: true }] });
+  const foe = unit(w, { owner: 12, team: 12, hp: 500, maxHp: 500 });
+  const orb = w.resolveOrb(ranger, foe);
+  w.applyOrbArmorFirst(ranger, foe, orb);
+  w.applyOrbEffect(ranger, foe, orb, 0);
+  check("a missed arrow marks nothing", foe.blackArrow, null);
+  check("…and holds no arrow over to the next blow", w.arrowBlow, null);
 }
 
 console.log("\ncarrying an orb, as opposed to winning with one");
