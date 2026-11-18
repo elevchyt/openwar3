@@ -848,11 +848,14 @@ interface LocustSwarm {
 // return" at the end) and r/WC3 "A closer look at Locust Swarm" (critter-like wandering
 // between bites, which is why the spell never reaches its paper damage). So these four are
 // OURS, tuned to look like that, and not the game's:
-/** How far from the Crypt Lord an idle locust buzzes. Well inside `Area1` (800). */
-const LOCUST_WANDER_RADIUS = 300;
-/** Seconds a locust keeps one heading before it picks another (rolled between the two). */
-const LOCUST_WANDER_MIN = 0.5;
-const LOCUST_WANDER_MAX = 1.1;
+/** How far from the Crypt Lord an idle locust ranges, as a share of the swarm's `Area1` (800 →
+ *  680). Measured off the real client (1.30.4, an idle level-6 Crypt Lord): the locusts are
+ *  strewn over most of the screen around him, not gathered at his feet — 300 was a huddle. */
+const LOCUST_WANDER_SHARE = 0.85;
+/** Seconds a locust keeps one heading before it picks another (rolled between the two). Long
+ *  enough at `uloc`'s 400 speed to cross a good part of that ring in one straight run. */
+const LOCUST_WANDER_MIN = 0.9;
+const LOCUST_WANDER_MAX = 2.0;
 /** How often a locust re-aims at a caster that is walking. */
 const LOCUST_STEER = 0.25;
 /** A recalled locust that has not reached the Crypt Lord by now is simply taken off. */
@@ -19815,7 +19818,7 @@ export class SimWorld {
    *    with `uloc`'s own weapon. A victim that leaves the area, dies or goes untouchable is
    *    let go.
    *  · WANDER — with nothing to bite it never hovers: it flies to a fresh spot near him every
-   *    second or so (LOCUST_WANDER_*).
+   *    second or two, anywhere in most of the area (LOCUST_WANDER_*).
    *  · CARRY — a locust holding `Uls5` (20) or more flies home, heals him by what it holds and
    *    goes back out.
    *  · RECALL — when the duration runs out every locust flies home, turns in whatever it has
@@ -19924,7 +19927,7 @@ export class SimWorld {
         if (b.wanderT <= 0 || u.order !== "move") {
           b.wanderT = LOCUST_WANDER_MIN + this.rng() * (LOCUST_WANDER_MAX - LOCUST_WANDER_MIN);
           const ang = this.rng() * Math.PI * 2;
-          const r = LOCUST_WANDER_RADIUS * Math.sqrt(this.rng());
+          const r = s.area * LOCUST_WANDER_SHARE * Math.sqrt(this.rng());
           this.issueMove(id, caster.x + Math.cos(ang) * r, caster.y + Math.sin(ang) * r);
         }
       }

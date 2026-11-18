@@ -95,16 +95,18 @@ console.log("\nRelease: one locust every 0.2 s, twenty in all, out of the Crypt 
     for (const u of locusts(w)) {
       samples++;
       if (Math.hypot(u.x - u.prevX, u.y - u.prevY) < 0.5) still++;
-      if (Math.hypot(u.x - lord.x, u.y - lord.y) > 420) far++;
+      if (Math.hypot(u.x - lord.x, u.y - lord.y) > 0.85 * 800 + 40) far++;
     }
   });
   check("it is moving on (nearly) every step", still / samples < 0.1, `${(100 * still / samples).toFixed(1)}% of steps still`);
   check("never farther than its wander ring", far === 0, `${far} samples outside`);
+  const reach = Math.max(...locusts(w).map((u) => Math.hypot(u.x - lord.x, u.y - lord.y)));
+  check("and they range wide — not a huddle at his feet", reach > 450, `farthest ${reach.toFixed(0)}`);
 
   console.log("\nFollow: the swarm goes where the Crypt Lord goes");
   w.issueMove(lord.id, 3600, 2000);
   run(w, 12.0);
-  const strag = locusts(w).filter((u) => Math.hypot(u.x - lord.x, u.y - lord.y) > 450).length;
+  const strag = locusts(w).filter((u) => Math.hypot(u.x - lord.x, u.y - lord.y) > 0.85 * 800 + 60).length;
   check("he walked 1600 away and all twenty are around him", strag === 0 && Math.abs(lord.x - 3600) < 100, `${strag} stragglers, lord at ${lord.x.toFixed(0)}`);
 
   console.log("\nRecall: at 30 s every locust flies home and is gone — removed, not killed");

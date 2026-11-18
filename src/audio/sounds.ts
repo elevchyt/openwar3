@@ -362,7 +362,7 @@ export class SoundBoard {
    *  the keys queued behind it, and what file each key is on (an owner or a waiter) —
    *  the stop call is given only the key. */
   private loopOwner = new Map<string, string>();
-  private loopQueue = new Map<string, Array<{ key: string; at?: SoundPos }>>();
+  private loopQueue = new Map<string, Array<{ key: string; at?: SoundPos; gain?: number }>>();
   private loopFile = new Map<string, string>();
   /** Every WAV currently in the air, at most one copy each — the never-stack rule
    *  (see pickVariant). Keyed by file path, since that is what "the same sound" means. */
@@ -1203,14 +1203,14 @@ export class SoundBoard {
   /** The panner each positioned path loop plays through, by its key (movePathLoop). */
   private readonly loopPanners = new Map<string, PannerNode>();
 
-  setPathLoop(key: string, path: string, on: boolean, at?: SoundPos): void {
+  setPathLoop(key: string, path: string, on: boolean, at?: SoundPos, gain = 0.6): void {
     if (on) {
       if (this.loops.has(key) || this.loopFile.get(key) === path) return;
       if (!path || !this.vfs.exists(path)) return;
       const owner = this.loopOwner.get(path);
       if (owner !== undefined && owner !== key) {
         const queue = this.loopQueue.get(path) ?? this.loopQueue.set(path, []).get(path)!;
-        queue.push({ key, at });
+        queue.push({ key, at, gain });
         this.loopFile.set(key, path);
         return;
       }
@@ -1219,7 +1219,7 @@ export class SoundBoard {
       this.loops.set(key, placeholder); // reserve synchronously so we don't double-start
       this.loopOwner.set(path, key);
       this.loopFile.set(key, path);
-      const clip: Clip = { paths: [path], gain: 0.6, pitch: 1, pitchVar: 0, threeD: true, refDist: 800, maxDist: 10000, cutoff: 0 };
+      const clip: Clip = { paths: [path], gain, pitch: 1, pitchVar: 0, threeD: true, refDist: 800, maxDist: 10000, cutoff: 0 };
       void this.buffer(path).then((buf) => {
         // Bail if the loop was stopped (or restarted) while the WAV was decoding —
         // otherwise a Blizzard cancelled mid-load leaves its wind howling forever.
@@ -1258,7 +1258,7 @@ export class SoundBoard {
       const next = queue?.shift();
       if (next) {
         this.loopFile.delete(next.key); // it's no longer waiting — let the start path run
-        this.setPathLoop(next.key, file, true, next.at); // the bed carries on at their spot
+        this.setPathLoop(next.key, file, true, next.at, next.gain); // the bed carries on at their spot
       }
     }
   }

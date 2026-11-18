@@ -1239,6 +1239,11 @@ const RACE_STRING_KEY: Record<PlayableRace | "random", string> = {
   human: "HUMAN", orc: "ORC", undead: "UNDEAD", nightelf: "NIGHT_ELF", random: "RANDOM",
 };
 
+/** A field bed that plays quieter than the rest (SoundBoard.setPathLoop's default is 0.6).
+ *  Locust Swarm's rides the hero the camera is on for thirty seconds, so it never falls off
+ *  with distance the way a Blizzard cast across the screen does. OURS, by ear. */
+const FIELD_LOOP_GAIN: Record<string, number> = { AUls: 0.28 };
+
 export class MapViewerScene {
   // The game camera's shape — what the view opens at and what ResetToGameCamera returns to
   // (7.24).
@@ -7112,7 +7117,7 @@ export class MapViewerScene {
       const at = { x: f.x, y: f.y, z: this.rts!.groundHeightAt(f.x, f.y) };
       if (!this.fieldLoops.has(key)) {
         this.fieldLoops.add(key);
-        this.sounds?.setPathLoop(key, wav, true, at);
+        this.sounds?.setPathLoop(key, wav, true, at, FIELD_LOOP_GAIN[f.code]);
       } else if (f.follow) this.sounds?.movePathLoop(key, at);
     }
     for (const key of this.fieldLoops) {
@@ -17378,7 +17383,10 @@ export class MapViewerScene {
         // Sustain the looping bed under each running channelled field, and drop it the
         // frame the field ends — waves exhausted OR caster interrupted (world tears the
         // field down either way, so this needs no interrupt handling of its own).
-        this.updateFieldLoops(world.activeSpellFields());
+        // …and a STOPPED world is silent: a bed is a sound the world is making, and left
+        // running it droned on under the pause menu for as long as the game sat there. An
+        // empty list stops every bed; the reconcile starts them again on the frame play resumes.
+        this.updateFieldLoops(this.paused ? [] : world.activeSpellFields());
         this.playCargoSounds();
         // Cast animations (throw/slam/spell) begin at the wind-up.
         for (const c of this.rts!.drainFxCastStarts()) {
