@@ -376,6 +376,18 @@ export class SoundBoard {
   private listener: Listener | null = null; // last camera frame (for WANT3D panning)
   /** VolumeGroupSetVolume scales (0–1), one per SOUND_VOLUMEGROUP_* index. */
   private groups = new Array<number>(VOLUME_GROUPS).fill(1);
+  /** The PLAYER's volumes (Options → Sound), kept apart from the script's `groups` above:
+   *  a map's VolumeGroupSetVolume / VolumeGroupReset / SetMusicVolume belong to the map (a
+   *  cinematic ducks UNITSOUNDS and puts it back with VolumeGroupResetImmediateBJ), and when
+   *  both lived in one array the map's reset quietly handed the player full volume again.
+   *  The two multiply. */
+  private userGroups = new Array<number>(VOLUME_GROUPS).fill(1);
+  private userMusic = 1;
+  /** The script's own `sound` handles (campaign dialogue — Arthas, Gerard, the bandit lord —
+   *  and every other CreateSound) belong to no volumegroup (see SOUND_GROUP), but they are
+   *  still SOUND EFFECTS to the player, so the effects slider scales them through this bus. */
+  private userScript = 1;
+  private scriptBus: GainNode | null = null;
   /** Sounds a trigger script started (StartSound), keyed by its `sound` handle id, so
    *  StopSound / GetSoundIsPlaying / a moving attached sound can all find them again. */
   private scripts = new Map<number, ScriptVoice>();
@@ -459,6 +471,9 @@ export class SoundBoard {
       this.master = this.ctx.createGain();
       this.master.gain.value = this.muted ? 0 : this.volume;
       this.master.connect(this.ctx.destination);
+      this.scriptBus = this.ctx.createGain();
+      this.scriptBus.gain.value = this.userScript;
+      this.scriptBus.connect(this.master);
       this.applyListener(); // push the camera frame captured before the first gesture
     }
     if (this.ctx.state === "suspended") {
@@ -1329,10 +1344,10 @@ export class SoundBoard {
       if (positional) {
         const panner = this.panner(clip, s.at!);
         applyCone(panner, s);
-        out.connect(panner).connect(this.master);
+        out.connect(panner).connect(this.scriptBus ?? this.master);
         token.panner = panner;
       } else {
-        out.connect(this.master);
+        out.connect(this.scriptBus ?? this.master);
       }
       token.src = src;
       token.gain = gain;
@@ -1616,7 +1631,7 @@ export class SoundBoard {
     const src = this.ctx.createBufferSource();
     src.buffer = buf;
     const gain = this.ctx.createGain();
-    gain.gain.value = this.musicVolume * (this.groups[VG_MUSIC] ?? 1);
+    gain.gain.value = this.musicGain();
     src.connect(gain).connect(this.master);
     src.start(0, Math.max(0, offsetSec));
     return { src, gain, startedAt: this.ctx.currentTime - Math.max(0, offsetSec) };
@@ -1635,8 +1650,12 @@ export class SoundBoard {
     }
   }
 
+  private musicGain(): number {
+    return this.musicVolume * (this.groups[VG_MUSIC] ?? 1) * this.userMusic;
+  }
+
   private applyMusicGain(): void {
-    const v = this.musicVolume * (this.groups[VG_MUSIC] ?? 1);
+    const v = this.musicGain();
     if (this.music) this.music.gain.gain.value = v;
     if (this.thematic) this.thematic.gain.gain.value = v;
   }
@@ -1915,7 +1934,7 @@ export class SoundBoard {
    *  for the one-shot pools (they're a second long); the music bus holds a live gain. */
   private gain(value: number, group?: number): GainNode {
     const g = this.ctx!.createGain();
-    g.gain.value = value * (group === undefined ? 1 : this.groups[group] ?? 1);
+    g.gain.value = value * (group === undefined ? 1 : (this.groups[group] ?? 1) * (this.userGroups[group] ?? 1));
     return g;
   }
 
@@ -1924,6 +1943,19 @@ export class SoundBoard {
     if (group < 0 || group >= VOLUME_GROUPS) return;
     this.groups[group] = Math.max(0, Math.min(1, scale));
     if (group === VG_MUSIC) this.applyMusicGain();
+  }
+
+  /** The player's Options → Sound volumes, as GAINS (0–1, already through the slider's
+   *  taper — `sliderGain` in data/options.ts). Separate from the script's groups above. */
+  setUserVolumes(groups: Partial<Record<number, number>>, music: number, script: number): void {
+    for (const [k, v] of Object.entries(groups)) {
+      const g = Number(k);
+      if (g >= 0 && g < VOLUME_GROUPS && v !== undefined) this.userGroups[g] = Math.max(0, Math.min(1, v));
+    }
+    this.userMusic = Math.max(0, Math.min(1, music));
+    this.userScript = Math.max(0, Math.min(1, script));
+    if (this.scriptBus) this.scriptBus.gain.value = this.userScript;
+    this.applyMusicGain();
   }
 
   /** VolumeGroupReset — back to full on every group. */

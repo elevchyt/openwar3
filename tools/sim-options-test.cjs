@@ -30,7 +30,7 @@ global.localStorage = {
 global.window = global.window || {};
 
 const {
-  OPTION_DEFS, defaultOptions, loadOptions, saveOptions, applyAudioOptions,
+  OPTION_DEFS, defaultOptions, loadOptions, saveOptions, applyAudioOptions, sliderGain,
 } = require(join(REPO, ".sim-build", "src", "data", "options.js"));
 const {
   applyVideoOptions, videoSettings, animStride, maxOmniLights, renderSize, renderScale,
@@ -45,14 +45,14 @@ console.log("defaults cover every option in the table");
 {
   const d = defaultOptions();
   check("one default per def", Object.keys(d).length, OPTION_DEFS.length);
-  check("a known default is right", d.musicVolume, 70);
+  check("a known default is right", d.musicVolume, 50);
   check("a bool default is a bool", typeof d.soundEnabled, "boolean");
 }
 
 console.log("\nload with nothing stored yields the defaults");
 {
   store.clear();
-  check("music volume is the default", loadOptions().musicVolume, 70);
+  check("music volume is the default", loadOptions().musicVolume, 50);
 }
 
 console.log("\nsave then load round-trips a changed value");
@@ -67,7 +67,7 @@ console.log("\nsave then load round-trips a changed value");
   check("range persisted", back.musicVolume, 20);
   check("bool persisted", back.soundEnabled, false);
   check("choice persisted", back.modelDetail, "low");
-  check("an untouched value keeps its default", back.soundVolume, 100);
+  check("an untouched value keeps its default", back.soundVolume, 50);
 }
 
 console.log("\na stored value of the wrong shape is ignored (defaults stand)");
@@ -76,7 +76,7 @@ console.log("\na stored value of the wrong shape is ignored (defaults stand)");
   // A hand-edited / stale store puts a string where a number belongs, and a stray key.
   store.set("openwar3.options", JSON.stringify({ musicVolume: "loud", bogus: 1, soundVolume: 55 }));
   const back = loadOptions();
-  check("bad-typed value rejected", back.musicVolume, 70);
+  check("bad-typed value rejected", back.musicVolume, 50);
   check("well-typed value accepted", back.soundVolume, 55);
   check("unknown key dropped", back.bogus, undefined);
 }
@@ -97,31 +97,46 @@ console.log("\na store from before issue #141 does not turn the health bars off"
 
 console.log("\nthe audio applier maps the sound options onto the SoundBoard");
 {
-  const calls = { groups: {}, music: null };
+  const calls = { groups: {}, music: null, script: null };
   const fake = {
-    setVolumeGroup: (g, s) => { calls.groups[g] = s; },
-    setMusicVolume: (v) => { calls.music = v; },
+    setUserVolumes: (g, m, s) => { calls.groups = g; calls.music = m; calls.script = s; },
   };
-  const o = defaultOptions(); // sound on, sfx 100, music on, music 70, all categories on
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
+  const o = defaultOptions(); // sound on, sfx 50, music on, music 50, all categories on
   applyAudioOptions(fake, o);
-  check("SFX groups at full", [calls.groups[SOUND_GROUP.COMBAT], calls.groups[SOUND_GROUP.SPELLS], calls.groups[SOUND_GROUP.UI]], [1, 1, 1]);
-  check("music at 70% → 0..127", calls.music, Math.round(0.7 * 127));
+  const half = sliderGain(50);
+  check("the 50% default is −18 dB, not half amplitude", near(half, Math.pow(10, -18 / 20)), true);
+  check("SFX groups at the default", [calls.groups[SOUND_GROUP.COMBAT], calls.groups[SOUND_GROUP.SPELLS], calls.groups[SOUND_GROUP.UI]], [half, half, half]);
+  check("script sounds (campaign dialogue) follow the SFX slider", calls.script, half);
+  check("music at its default", calls.music, half);
 
-  // Half SFX volume scales the effect groups but not the music.
-  applyAudioOptions(fake, { ...o, soundVolume: 50 });
-  check("effect groups halved", calls.groups[SOUND_GROUP.COMBAT], 0.5);
-  check("music untouched by the SFX slider", calls.music, Math.round(0.7 * 127));
+  // The taper: full is full, 0 is silence, and every notch is the same number of dB.
+  check("100% is unity", sliderGain(100), 1);
+  check("0% is silence", sliderGain(0), 0);
+  check("equal steps are equal ratios", near(sliderGain(75) / sliderGain(50), sliderGain(50) / sliderGain(25)), true);
+  check("1% still makes a sound", sliderGain(1) > 0, true);
+  let rising = true;
+  for (let p = 1; p <= 100; p++) if (!(sliderGain(p) > sliderGain(p - 1))) rising = false;
+  check("strictly rising", rising, true);
+
+  // The SFX slider scales the effects and the script sounds but not the music.
+  applyAudioOptions(fake, { ...o, soundVolume: 100 });
+  check("effect groups at full", calls.groups[SOUND_GROUP.COMBAT], 1);
+  check("script sounds at full", calls.script, 1);
+  check("music untouched by the SFX slider", calls.music, half);
 
   // A per-category checkbox multiplies its own group only.
   applyAudioOptions(fake, { ...o, unitSounds: false, ambientSounds: false });
   check("unit sounds off zeroes UNITSOUNDS", calls.groups[SOUND_GROUP.UNITSOUNDS], 0);
   check("ambient off zeroes AMBIENT", calls.groups[SOUND_GROUP.AMBIENT], 0);
-  check("combat unaffected by those", calls.groups[SOUND_GROUP.COMBAT], 1);
+  check("combat unaffected by those", calls.groups[SOUND_GROUP.COMBAT], half);
+  check("dialogue unaffected by Unit Sounds", calls.script, half);
 
-  // The master Sound switch zeroes every effect group; Music has its own switch.
+  // The master Sound switch zeroes every effect group and the dialogue; Music has its own switch.
   applyAudioOptions(fake, { ...o, soundEnabled: false });
   check("sound off zeroes UI too", calls.groups[SOUND_GROUP.UI], 0);
-  check("…but music still plays", calls.music, Math.round(0.7 * 127));
+  check("sound off zeroes dialogue", calls.script, 0);
+  check("…but music still plays", calls.music, half);
   applyAudioOptions(fake, { ...o, musicEnabled: false });
   check("music off zeroes the track", calls.music, 0);
 }

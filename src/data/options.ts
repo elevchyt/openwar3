@@ -231,9 +231,9 @@ export const OPTION_DEFS: readonly OptionDef[] = [
 
   // --- Sound (all live-applied through applyAudioOptions) ---
   { key: "soundEnabled", frame: "SoundCheckBox", kind: "bool", panel: "sound", def: true },
-  { key: "soundVolume", frame: "SoundVolumeSlider", kind: "range", panel: "sound", def: 100 },
+  { key: "soundVolume", frame: "SoundVolumeSlider", kind: "range", panel: "sound", def: 50 },
   { key: "musicEnabled", frame: "MusicCheckBox", kind: "bool", panel: "sound", def: true },
-  { key: "musicVolume", frame: "MusicVolumeSlider", kind: "range", panel: "sound", def: 70 },
+  { key: "musicVolume", frame: "MusicVolumeSlider", kind: "range", panel: "sound", def: 50 },
   { key: "ambientSounds", frame: "AmbientCheckBox", kind: "bool", panel: "sound", def: true },
   { key: "movementSounds", frame: "MovementCheckBox", kind: "bool", panel: "sound", def: true },
   { key: "unitSounds", frame: "UnitCheckBox", kind: "bool", panel: "sound", def: true },
@@ -347,7 +347,12 @@ const bool = (v: OptionValue): boolean => v === true;
  *     COMBAT / SPELLS / UI = soundOn · soundVol         (clangs, spells, the menu click itself)
  *     AMBIENT = soundOn · soundVol · ambientSounds      (dawn cries, the menu wind bed)
  *     UNITMOVEMENT = soundOn · soundVol · movementSounds (footsteps — no pool yet, set for when there is)
- *     MUSIC (via setMusicVolume) = musicOn · musicVol
+ *     MUSIC = musicOn · musicVol
+ *     SCRIPT SOUNDS (campaign dialogue, every CreateSound) = soundOn · soundVol
+ *
+ * These are the PLAYER's volumes and go to `setUserVolumes`, never to the script's own
+ * `setVolumeGroup`/`setMusicVolume`: a cinematic's VolumeGroupReset would otherwise hand the
+ * player full volume back. Each slider goes through `sliderGain`'s taper first.
  *
  * Turning "Sound" off zeroes every effect group (including the UI click — WC3 does the same).
  */
@@ -358,18 +363,43 @@ export function computerPlusDefault(): boolean {
   return loadOptions().computerPlusDefault === true;
 }
 
+/** The decibels the volume sliders span, top to bottom (ours — no file states the game's
+ *  taper). Loudness is heard on a LOG scale, so a slider that scaled the amplitude in a
+ *  straight line put almost all of its audible range in its bottom third: 30% was nearly as
+ *  loud as 100% and 10% nearly silent. An audio taper instead lowers the level by the same
+ *  number of dB per notch: 36 dB over the travel puts the 50% default at −18 dB (×0.13),
+ *  75% at −9 dB and 25% at −27 dB, each step sounding about as big as the last. */
+const SLIDER_DB_RANGE = 36;
+/** Below this the taper fades linearly to true silence, so 1% is a whisper and 0% is off
+ *  rather than the bottom of the dB range. */
+const SLIDER_FADE_BELOW = 0.1;
+
+/** A volume slider's 0–100 position → a gain (0–1) on an audio taper. */
+export function sliderGain(percent: number): number {
+  const x = Math.max(0, Math.min(1, percent / 100));
+  if (x <= 0) return 0;
+  const g = Math.pow(10, (-SLIDER_DB_RANGE * (1 - x)) / 20);
+  return x < SLIDER_FADE_BELOW ? g * (x / SLIDER_FADE_BELOW) : g;
+}
+
 export function applyAudioOptions(sounds: SoundBoard, opts: Options): void {
   const soundOn = bool(opts.soundEnabled);
-  const sfx = soundOn ? num(opts.soundVolume, 100) / 100 : 0;
-  const musicScale = bool(opts.musicEnabled) ? num(opts.musicVolume, 70) / 100 : 0;
+  const sfx = soundOn ? sliderGain(num(opts.soundVolume, 50)) : 0;
+  const music = bool(opts.musicEnabled) ? sliderGain(num(opts.musicVolume, 50)) : 0;
 
-  sounds.setVolumeGroup(SOUND_GROUP.UNITSOUNDS, sfx * (bool(opts.unitSounds) ? 1 : 0));
-  sounds.setVolumeGroup(SOUND_GROUP.COMBAT, sfx);
-  sounds.setVolumeGroup(SOUND_GROUP.SPELLS, sfx);
-  sounds.setVolumeGroup(SOUND_GROUP.UI, sfx);
-  sounds.setVolumeGroup(SOUND_GROUP.AMBIENT, sfx * (bool(opts.ambientSounds) ? 1 : 0));
-  sounds.setVolumeGroup(SOUND_GROUP.UNITMOVEMENT, sfx * (bool(opts.movementSounds) ? 1 : 0));
-  sounds.setMusicVolume(Math.round(musicScale * 127));
+  sounds.setUserVolumes(
+    {
+      [SOUND_GROUP.UNITSOUNDS]: sfx * (bool(opts.unitSounds) ? 1 : 0),
+      [SOUND_GROUP.COMBAT]: sfx,
+      [SOUND_GROUP.SPELLS]: sfx,
+      [SOUND_GROUP.UI]: sfx,
+      [SOUND_GROUP.AMBIENT]: sfx * (bool(opts.ambientSounds) ? 1 : 0),
+      [SOUND_GROUP.UNITMOVEMENT]: sfx * (bool(opts.movementSounds) ? 1 : 0),
+      [SOUND_GROUP.FIRE]: sfx,
+    },
+    music,
+    sfx,
+  );
 }
 
 /** Options → Gameplay → "Automatically Save Replays" (issue #158): keep every match's replay,
