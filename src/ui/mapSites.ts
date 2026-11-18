@@ -68,6 +68,10 @@ export interface SiteViewState {
   url: string;
   title: string;
   loading: boolean;
+  /** Cloudflare's "Just a moment…" check is up — it passes by itself in a few seconds. */
+  checking?: boolean;
+  /** Why the view could not load, once the shell has stopped retrying; null while it is fine. */
+  failed?: string | null;
   canGoBack: boolean;
   canGoForward: boolean;
 }

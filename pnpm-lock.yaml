@@ -22,6 +22,9 @@ importers:
       electron-updater:
         specifier: ^6.6.2
         version: 6.8.9
+      lucide:
+        specifier: ^1.75.0
+        version: 1.75.0
       onnxruntime-web:
         specifier: 1.31.0-dev.20260914-8d85527a0
         version: 1.31.0-dev.20260914-8d85527a0
@@ -1398,6 +1401,9 @@ packages:
   lru-cache@6.0.0:
     resolution: {integrity: sha512-Jo6dJ04CmSjuznwJSS3pUeWmd/H0ffTlkXXgwZi+eq1UCmqQwCh+eLsYOYCwY991i2Fah4h1BEMCx4qThGbsiA==}
     engines: {node: '>=10'}
+
+  lucide@1.75.0:
+    resolution: {integrity: sha512-WNKnvz1XU6pcNuldOVx6gQx755isQcx8wWnIq8J6NNlHkqo9NJVLyTXC+0cizbdYEwROBSp/PXpMNqwf3d85XA==}
 
   matcher@3.0.0:
     resolution: {integrity: sha512-OkeDaAZ/bQCxeFAozM55PKcKU0yJMPGifLwV4Qgjitu+5MoAfSQN4lsLJeXZ1b8w0x+/Emda6MZgXS1jvsapng==}
@@ -3192,6 +3198,8 @@ snapshots:
   lru-cache@6.0.0:
     dependencies:
       yallist: 4.0.0
+
+  lucide@1.75.0: {}
 
   matcher@3.0.0:
     dependencies:

@@ -18,6 +18,19 @@
 // and handed to the page, which adds it to the map list and picks it. Anything else (a .zip, a
 // .rar) goes through Chromium's own save dialog — it is the player's file, not a map we can keep.
 //
+// A view that did not LOAD used to stay a black rectangle for as long as the game ran: a view is
+// made once and kept, its first `loadURL` was the only one ever issued, and Electron draws no
+// error page of its own — so one dropped connection, one renderer the system reaped while the
+// tab was away, and the site was "not loading at all" until the game was restarted. (It is not
+// Cloudflare: measured in this shell, both sites' checks pass unattended in about four seconds,
+// and at once on a session that has passed before. Nor is the user agent to be "cleaned" into
+// plain Chrome's — tried, and THAT is what the check then never lets through.) So a load is now
+// something the view looks after: a failed main-frame load is tried again (`RETRIES`, a little
+// further apart each time), a renderer that went away is reloaded, a view that comes back on
+// screen with nothing in it loads again, and when the tries run out the view is taken OFF the
+// tab and the page is told why (`state.failed`), so the dialog can say so and offer Retry
+// instead of sitting under a dead surface.
+//
 // Three things the page would otherwise lose while a view has the keyboard and the pointer:
 // Escape (the dialog's close key — forwarded), the game's own cursor (the page hands over its CSS
 // `cursor` and it is inserted into every page the view loads; CLAUDE.md: never an OS cursor), and
@@ -31,6 +44,14 @@ import { mapSiteOpenable } from "./mapSites.mjs";
 
 const { session, shell } = electron;
 const PARTITION = "persist:mapsites";
+
+/** How often a failed load is tried again by itself before the dialog is told. Ours. */
+const RETRIES = 2;
+/** ms before the first retry; the next waits twice as long. Ours. */
+const RETRY_MS = 900;
+/** Chromium's `ERR_ABORTED`: a navigation that was REPLACED (a redirect, the player clicking on,
+ *  a download taking the response) — not a page that failed. */
+const ERR_ABORTED = -3;
 
 /** `WebContentsView` (Electron 30+), or the legacy shell's `BrowserView` (Electron 18 —
  *  docs/linux.md), behind the four calls this file makes. */
@@ -75,7 +96,7 @@ const bounds = (r) => ({
  * cannot — the page is told why, and still gets the map for this session).
  */
 export function wireMapSiteViews(ipcMain, BrowserWindow, save) {
-  /** site key → { view, game, home } */
+  /** site key → { view, game, home, attached, failed, retries, retryTimer, dead } */
   const views = new Map();
   let shown = null; // the key on screen
   let cursorCss = "";
@@ -93,7 +114,11 @@ export function wireMapSiteViews(ipcMain, BrowserWindow, save) {
       key,
       url: wc.getURL(),
       title: wc.getTitle(),
-      loading: wc.isLoading(),
+      loading: wc.isLoading() || !!v.retryTimer,
+      // Cloudflare's interstitial, by the one thing it reliably says about itself. The dialog
+      // words its status line off this; nothing is DONE about it — it passes by itself.
+      checking: /^just a moment/i.test(wc.getTitle()),
+      failed: v.failed,
       canGoBack: nav.canGoBack(),
       canGoForward: nav.canGoForward(),
     });
@@ -133,11 +158,38 @@ export function wireMapSiteViews(ipcMain, BrowserWindow, save) {
     if (cursorCss) void wc.insertCSS(`*, *::before, *::after { cursor: ${cursorCss} !important; }`).catch(() => {});
   };
 
+  /** Put the view on the window (or take it off) — once, however often it is asked. */
+  const attach = (v, on) => {
+    if (!v.game || v.game.isDestroyed() || v.attached === on) return;
+    v.attached = on;
+    if (on) {
+      v.view.attach(v.game);
+      // A surface that was off the window while its page painted can come back showing nothing
+      // until something makes it draw; asking costs one frame.
+      try { v.view.webContents.invalidate(); } catch { /* gone */ }
+    } else {
+      v.view.detach(v.game);
+    }
+  };
+
+  /** Load `url` (the site's front door by default) with a clean slate. */
+  const load = (key, url) => {
+    const v = views.get(key);
+    if (!v || v.view.webContents.isDestroyed()) return;
+    clearTimeout(v.retryTimer);
+    v.retryTimer = null;
+    v.failed = null;
+    v.dead = false;
+    if (shown === key) attach(v, true);
+    void v.view.webContents.loadURL(url || v.home).catch(() => { /* `did-fail-load` has it */ });
+    state(key);
+  };
+
   const viewFor = (key, home, game) => {
     let v = views.get(key);
     if (v && !v.view.webContents.isDestroyed()) { v.game = game; return v; }
     const view = makeView();
-    v = { view, game, home };
+    v = { view, game, home, attached: false, failed: null, retries: 0, retryTimer: null, dead: false };
     views.set(key, v);
     const wc = view.webContents;
     // A link that wants a new window stays in this view: the player is in a dialog, and a
@@ -150,6 +202,35 @@ export function wireMapSiteViews(ipcMain, BrowserWindow, save) {
     for (const ev of ["did-start-loading", "did-stop-loading", "did-navigate", "did-navigate-in-page", "page-title-updated"]) {
       wc.on(ev, () => state(key));
     }
+    // A load that FAILED (see the head of this file). Only the main frame's: a site's own
+    // advert or tracker failing is its business.
+    wc.on("did-fail-load", (_event, code, description, url, isMainFrame) => {
+      if (!isMainFrame || code === ERR_ABORTED) return;
+      if (v.retries < RETRIES) {
+        const wait = RETRY_MS * 2 ** v.retries++;
+        clearTimeout(v.retryTimer);
+        v.retryTimer = setTimeout(() => {
+          v.retryTimer = null;
+          if (!wc.isDestroyed()) void wc.loadURL(url || v.home).catch(() => {});
+        }, wait);
+        state(key);
+        return;
+      }
+      v.failed = String(description || `error ${code}`);
+      // Off the tab, so the dialog's own words are what the player sees there.
+      if (shown === key) attach(v, false);
+      state(key);
+    });
+    // A page that ANSWERED — any status, Cloudflare's 403 included — is a connection that works,
+    // and the tries start over. Not `did-finish-load`: a failed load commits Chromium's own
+    // (empty) error document and finishes too, which made the retries endless.
+    wc.on("did-navigate", (_event, _url, httpResponseCode) => { if (httpResponseCode > 0) v.retries = 0; });
+    // The renderer went away (a crash, or the system short of memory while the game runs). A
+    // view on screen reloads now; one that is away reloads when it is next shown.
+    wc.on("render-process-gone", () => {
+      v.dead = true;
+      if (shown === key && v.retries < RETRIES) { v.retries++; load(key, wc.getURL()); }
+    });
     // Escape is the DIALOG's key, and the view has the keyboard while the player is in it.
     wc.on("before-input-event", (event, input) => {
       if (input.type === "keyDown" && input.key === "Escape") {
@@ -166,7 +247,7 @@ export function wireMapSiteViews(ipcMain, BrowserWindow, save) {
     const v = views.get(shown);
     shown = null;
     if (v && v.game && !v.game.isDestroyed()) {
-      v.view.detach(v.game);
+      attach(v, false);
       v.game.webContents.focus();
     }
   };
@@ -183,9 +264,17 @@ export function wireMapSiteViews(ipcMain, BrowserWindow, save) {
     const v = viewFor(key, home, game);
     v.view.setBounds(bounds(rect));
     if (shown !== key) {
-      v.view.attach(game);
       shown = key;
-      insertCursor(v.view.webContents);
+      const wc = v.view.webContents;
+      // Back on screen with nothing to show — its renderer went while it was away, an earlier
+      // load gave up, or it never got as far as an address: start again rather than present it.
+      if (v.dead || v.failed || (!wc.getURL() && !wc.isLoading() && !v.retryTimer)) {
+        v.retries = 0;
+        load(key, wc.getURL());
+      } else {
+        attach(v, true);
+      }
+      insertCursor(wc);
     }
     state(key);
   });
@@ -200,8 +289,10 @@ export function wireMapSiteViews(ipcMain, BrowserWindow, save) {
     const nav = wc.navigationHistory ?? wc;
     if (what === "back" && nav.canGoBack()) nav.goBack();
     else if (what === "forward" && nav.canGoForward()) nav.goForward();
-    else if (what === "reload") wc.reload();
-    else if (what === "home") void wc.loadURL(v.home);
+    // Both go through `load`: after a failure there is no page to `reload()`, and the view has
+    // to come back onto the tab.
+    else if (what === "reload") { v.retries = 0; load(shown, wc.getURL()); }
+    else if (what === "home") { v.retries = 0; load(shown, v.home); }
     // The page the player is on, in their own browser — a site's login through a password
     // manager, say. Only an http(s) address is ever handed to the shell.
     else if (what === "external" && /^https?:\/\//.test(wc.getURL())) void shell.openExternal(wc.getURL());

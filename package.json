@@ -54,6 +54,7 @@
   "dependencies": {
     "@huggingface/transformers": "4.3.1",
     "electron-updater": "^6.6.2",
+    "lucide": "^1.75.0",
     "onnxruntime-web": "1.31.0-dev.20260914-8d85527a0",
     "ws": "^8.21.1"
   },

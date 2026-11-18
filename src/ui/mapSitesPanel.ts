@@ -1,14 +1,18 @@
+import {
+  ArrowLeft, ArrowRight, Check, Download, ExternalLink, FileUp, House, RotateCw, Search,
+  createElement as lucideIcon, type IconNode,
+} from "lucide";
 import type { DataSource } from "../vfs/types";
-import { mountFdfScreen, type FdfScreen } from "./fdf/render";
-import type { FdfFrame } from "./fdf/parser";
-import type { FdfLibrary } from "./fdf/library";
+import { mountFdfScreen, type FdfScreen, type FdfScreenHandlers } from "./fdf/render";
+import type { Arg, FdfFrame } from "./fdf/parser";
+import { cloneNamespaced, type FdfLibrary } from "./fdf/library";
 import { MAP_SITES_DIALOG_OVERRIDE, OW3_STRINGS } from "../overrides";
 import { setGameTip } from "./gameTip";
 import { mountWorking } from "./workingIndicator";
 import {
   MAP_SITES, askToKeep, canSearchInGame, downloadEpicWar, epicWarThumb, importMapFiles,
   onSiteDownload, onSiteProgress, openMapSite, searchEpicWar, siteById, siteView,
-  type ArrivedMap, type EpicWarMap, type MapSite, type MapSiteId, type SiteViewBridge, type ViewRect,
+  type ArrivedMap, type EpicWarMap, type MapSiteId, type SiteViewBridge, type SiteViewState, type ViewRect,
 } from "./mapSites";
 
 // The map list's way to the map sites (ui/mapSites.ts): a small download glyph at the right end of
@@ -20,7 +24,10 @@ import {
 // download control competes with every row, so it wears the search box's own dim gold and lights
 // only under the pointer. The dialog is the Join Server dialog's chrome (MapSitesDialog.fdf) with
 // a tab per site, EpicWar FIRST and open by default, because it is the one the game can search
-// and download from in place:
+// and download from in place. Everything in it is a glue control out of StandardTemplates.fdf
+// (the bordered glue button, the edit box, the glue scroll bar — see MapSitesDialog.fdf for which
+// and why), and the icons on its buttons are Lucide's (lucide.dev, ISC licence — the `lucide`
+// package, the same icon set the landing page's React build uses), drawn in the label's own gold:
 //
 //   · EpicWar — a search field and its results, each with a Download button.
 //   · Hive Workshop, wc3maps — the real site, INSIDE the tab: the desktop app lays a web view of
@@ -39,15 +46,6 @@ export interface MapSitesHost {
 }
 
 const DIALOG_FDF = "UI\\FrameDef\\Glue\\DialogWar3.fdf";
-
-/** The dialog's box, in screen units — as large as a 4:3 screen comfortably holds, because two of
- *  its tabs are a whole website. Ours. */
-const DIALOG_W = 0.7;
-const DIALOG_H = 0.5;
-/** The body's margins inside the box: title above, Done below (MapSitesDialog.fdf). */
-const BODY_X = 0.04;
-const BODY_TOP = 0.056;
-const BODY_BOTTOM = 0.066;
 
 const TITLE = "Download Maps";
 
@@ -107,21 +105,71 @@ export class MapSitesEntry {
 
 // --- the dialog ---------------------------------------------------------------------------
 
-/** Set a frame's Width and Height. mapBrowser's `size`, restated: the map browser imports this
- *  module, and the build refuses a cycle (tools/import-cycle-test.mjs). */
-function sizeFrame(f: FdfFrame | undefined, w: number, h: number): void {
-  if (!f) return;
-  const n = (v: number) => [{ s: String(v), n: v, str: false }];
-  f.props = f.props.filter((p) => p.key !== "Width" && p.key !== "Height");
-  f.props.push({ key: "Width", args: n(w) }, { key: "Height", args: n(h) });
+/** One stamped result row's height plus the gap under it — MapSitesDialog.fdf `MapSitesRow`. Ours. */
+const ROW_PITCH = 0.047;
+/** The glue scroll bar the result list wears (StandardTemplates.fdf: the stepped glue bar, the
+ *  one the map list itself has — ListBoxWar3.fdf `ListScrollBar`). */
+const RESULTS_SCROLLBAR = "StandardScrollBarTemplate";
+
+const TAB_FRAME: Record<MapSiteId, string> = {
+  epicwar: "MapSitesTabEpicWar",
+  hive: "MapSitesTabHive",
+  wc3maps: "MapSitesTabWc3maps",
+};
+const PAGES = ["MapSitesPageSearch", "MapSitesPageView", "MapSitesPageSite"] as const;
+type PageName = (typeof PAGES)[number];
+
+const num = (v: number): Arg => ({ s: String(v), n: v, str: false });
+const str = (v: string): Arg => ({ s: v, n: null, str: true });
+
+function findFrame(f: FdfFrame, name: string): FdfFrame | undefined {
+  if (f.name === name) return f;
+  for (const c of f.children) {
+    const hit = findFrame(c, name);
+    if (hit) return hit;
+  }
+  return undefined;
 }
 
-function buildRoot(lib: FdfLibrary): FdfFrame {
-  const root = lib.resolveRoot("MapSitesDialog");
-  if (!root) throw new Error("MapSitesDialog.fdf: no MapSitesDialog frame");
-  sizeFrame(root, DIALOG_W, DIALOG_H);
-  sizeFrame(root.children.find((c) => c.name === "MapSitesBody"), DIALOG_W - 2 * BODY_X, DIALOG_H - BODY_TOP - BODY_BOTTOM);
-  return root;
+/** Drop the named frames from the tree (a page not on show, a note with nothing to say). */
+function drop(root: FdfFrame, names: ReadonlySet<string>): void {
+  root.children = root.children.filter((c) => !names.has(c.name));
+  for (const c of root.children) drop(c, names);
+}
+
+/** A Lucide icon, sized and coloured by the label it stands in (style.css `.ow3-sites-icon`). */
+function icon(node: IconNode): SVGElement {
+  const svg = lucideIcon(node, { "stroke-width": 2.25, "aria-hidden": "true" });
+  svg.classList.add("ow3-sites-icon");
+  return svg;
+}
+
+/** Put an icon into a button's label: in place of the words, or in front of them. */
+function iconInto(screen: FdfScreen, textFrame: string, node: IconNode, alone: boolean): void {
+  const span = screen.frame(textFrame)?.querySelector("span");
+  if (!span) return;
+  if (alone) span.replaceChildren(icon(node));
+  else span.prepend(icon(node));
+  span.classList.toggle("ow3-sites-iconlabel", !alone);
+}
+
+/** A result row's Download button, as the player last left it. */
+type RowState = { label: string; done: boolean; busy: boolean };
+
+/** What the dialog shows — kept OUTSIDE the screen, because every relayout (a resize, a new set
+ *  of results, a site failing) throws the whole DOM away and builds it again from this. */
+interface Model {
+  tab: MapSiteId;
+  query: string;
+  /** `null` until a search has answered. */
+  results: EpicWarMap[] | null;
+  /** What the list says when it has no rows. */
+  note: string;
+  searching: boolean;
+  rows: Map<string, RowState>;
+  status: string;
+  /** The site view's last report, per site. */
+  view: Map<string, SiteViewState>;
 }
 
 export async function showMapSitesDialog(opts: {
@@ -133,19 +181,335 @@ export async function showMapSitesDialog(opts: {
   const scrim = document.createElement("div");
   scrim.className = "glue-dialog-scrim dimmed ow3-sites-scrim";
   opts.container.appendChild(scrim);
+
+  const view = siteView();
+  const inGame = canSearchInGame();
+  const model: Model = {
+    tab: "epicwar", query: "", results: null, note: inGame ? "Type a map's name to search EpicWar's archive." : "",
+    searching: false, rows: new Map(), status: "", view: new Map(),
+  };
+  /** The page a tab is drawn with: EpicWar searched in place, a site in the desktop app's view,
+   *  or — a browser — a site the game can only open. */
+  const pageFor = (id: MapSiteId): PageName =>
+    id === "epicwar" ? (inGame ? "MapSitesPageSearch" : "MapSitesPageSite") : view ? "MapSitesPageView" : "MapSitesPageSite";
+
+  // Both of these are read by the renderer on every build, so a row's handler or a button's
+  // label is put here BEFORE the relayout that draws it (ui/fdf/render.ts `wireButton`).
+  const handlers: FdfScreenHandlers = {};
+  const texts: Record<string, string> = {
+    MapSitesDialogTitle: TITLE,
+    MapSitesDoneButtonText: "Done",
+    MapSitesImportButtonText: "Import map file…",
+    MapSitesOpenOutsideText: "Open in browser",
+    MapSitesViewRetryText: "Retry",
+    MapSitesSiteNote: "Download a map there, then Import it here — or drop the file on this window.",
+  };
+  for (const site of MAP_SITES) texts[`${TAB_FRAME[site.id]}Text`] = site.name;
+
   let screen: FdfScreen | null = null;
-  let body: TabbedBody | null = null;
   let open = true;
+  let searchTimer = 0;
+  let searchAbort: AbortController | null = null;
+  const tracker = view ? new ViewTracker(view, (msg) => say(msg)) : null;
+
+  const say = (msg: string): void => {
+    model.status = msg;
+    screen?.setText("MapSitesStatus", msg);
+  };
+  const relayout = (): void => {
+    if (!screen) return;
+    // A relayout builds a new edit box, so the one the player is typing in has to be handed
+    // back its focus and caret.
+    const input = searchInput();
+    const typing = !!input && document.activeElement === input;
+    const caret = typing ? input!.selectionStart : null;
+    screen.relayout();
+    const next = searchInput();
+    if (typing && next) {
+      next.focus();
+      if (caret !== null) next.setSelectionRange(caret, caret);
+    }
+  };
+  const searchInput = (): HTMLInputElement | null =>
+    screen?.frame("MapSitesSearchBox")?.querySelector("input") ?? null;
+
+  // --- the frame tree for this build ---
+  const buildRoot = (lib: FdfLibrary): FdfFrame => {
+    const root = lib.resolveRoot("MapSitesDialog");
+    if (!root) throw new Error("MapSitesDialog.fdf: no MapSitesDialog frame");
+    const page = pageFor(model.tab);
+    const gone = new Set<string>(PAGES.filter((p) => p !== page));
+    if (page === "MapSitesPageSearch") {
+      const results = model.results ?? [];
+      const host = findFrame(root, "MapSitesResults");
+      if (host && results.length) {
+        gone.add("MapSitesResultsNote");
+        const row = lib.resolveRoot("MapSitesRow");
+        results.forEach((m, i) => {
+          if (!row) return;
+          const r = cloneNamespaced(row, `_r${i}`);
+          r.props.push({ key: "SetPoint", args: [str("TOPLEFT"), str("MapSitesResults"), str("TOPLEFT"), num(0), num(-i * ROW_PITCH)] });
+          host.children.push(r);
+          texts[`MapSitesRowName_r${i}`] = m.title;
+          texts[`MapSitesRowMeta_r${i}`] = [m.author && `by ${m.author}`, m.players ? `${m.players} players` : "", m.size, m.category]
+            .filter(Boolean).join("  ·  ");
+          texts[`MapSitesRowGetText_r${i}`] = rowState(m).label;
+          handlers[`MapSitesRowGet_r${i}`] = () => void download(m, i);
+        });
+        // The bar draws only while the rows overrun the box (ui/fdf/widgets.ts buildScrollFrame).
+        const bar = lib.resolveRoot(RESULTS_SCROLLBAR);
+        if (bar) {
+          bar.name = "MapSitesResultsScrollBar";
+          host.children.push(bar);
+        }
+      }
+    }
+    if (page === "MapSitesPageView") {
+      const st = model.view.get(model.tab);
+      if (!st?.failed) gone.add("MapSitesViewRetry");
+    }
+    drop(root, gone);
+    return root;
+  };
+
+  const rowState = (m: EpicWarMap): RowState =>
+    model.rows.get(m.id) ?? { label: m.playable ? "Download" : "Not a map", done: false, busy: false };
+
+  // --- what each build is filled with ---
+  const onBuild = (s: FdfScreen): void => {
+    screen = s;
+    // The open tab is LATCHED — held pressed, as the Options screen holds its category — and
+    // its label takes the template's own FontHighlightColor (white), since a pressed glue face
+    // alone barely reads across a row of three.
+    for (const site of MAP_SITES) {
+      const tab = s.frame(TAB_FRAME[site.id]);
+      tab?.classList.add("ow3-sites-tab");
+      tab?.classList.toggle("fdf-latched", site.id === model.tab);
+    }
+    iconInto(s, "MapSitesImportButtonText", FileUp, false);
+    setGameTip(s.frame("MapSitesImportButton")!, "Add a .w3x or .w3m you already have to your maps");
+    s.setText("MapSitesStatus", model.status);
+    const page = pageFor(model.tab);
+    if (page === "MapSitesPageSearch") fillSearch(s);
+    else if (page === "MapSitesPageView") fillView(s);
+    else fillSite(s);
+  };
+
+  const fillSearch = (s: FdfScreen): void => {
+    const box = s.editBox("MapSitesSearchBox");
+    const input = searchInput();
+    if (box && input) {
+      box.value = model.query;
+      input.placeholder = "Search EpicWar";
+      input.spellcheck = false;
+      input.classList.add("ow3-sites-searchinput");
+      const glass = icon(Search);
+      glass.classList.add("ow3-sites-glass");
+      glass.style.fontSize = input.style.fontSize; // the field's own type, so it scales with the screen
+      input.parentElement?.prepend(glass);
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !input.value) return; // the dialog's
+        e.stopPropagation(); // the screen's accelerators are not this field's letters
+        if (e.key === "Enter") { e.preventDefault(); runSearch(); }
+        if (e.key === "Escape") { e.preventDefault(); input.value = ""; model.query = ""; }
+      });
+      box.onChange = (v) => {
+        model.query = v;
+        window.clearTimeout(searchTimer);
+        searchTimer = window.setTimeout(runSearch, 450);
+      };
+    }
+    s.setText("MapSitesResultsNote", model.note);
+    if (model.searching) {
+      const host = s.frame("MapSitesResultsBackdrop");
+      if (host) mountWorking(host);
+    }
+    (model.results ?? []).forEach((m, i) => {
+      const thumb = s.frame(`MapSitesRowThumb_r${i}`);
+      if (thumb) {
+        const img = document.createElement("img");
+        img.className = "ow3-sites-thumb";
+        img.alt = "";
+        void epicWarThumb(m).then((url) => { if (url) img.src = url; });
+        thumb.append(img);
+      }
+      s.frame(`MapSitesRow_r${i}`)?.classList.add("ow3-sites-row");
+      const st = rowState(m);
+      const btn = `MapSitesRowGet_r${i}`;
+      s.setEnabled(btn, m.playable && !st.busy && !st.done);
+      if (m.playable) iconInto(s, `MapSitesRowGetText_r${i}`, st.done ? Check : Download, false);
+      s.frame(btn)?.classList.toggle("ow3-sites-done", st.done);
+      if (!m.playable) setGameTip(s.frame(btn)!, `${m.fileName} is not a .w3x or .w3m map`);
+    });
+  };
+
+  const fillView = (s: FdfScreen): void => {
+    const site = siteById(model.tab);
+    const nav = (name: string, glyph: IconNode, tip: string, what: Parameters<SiteViewBridge["nav"]>[0]): void => {
+      iconInto(s, `${name}Text`, glyph, true);
+      const el = s.frame(name);
+      if (el) setGameTip(el, tip);
+      handlers[name] = () => view!.nav(what);
+    };
+    nav("MapSitesNavBack", ArrowLeft, "Back", "back");
+    nav("MapSitesNavForward", ArrowRight, "Forward", "forward");
+    nav("MapSitesNavReload", RotateCw, "Reload", "reload");
+    nav("MapSitesNavHome", House, `${site.name} home`, "home");
+    iconInto(s, "MapSitesOpenOutsideText", ExternalLink, false);
+    handlers.MapSitesOpenOutside = () => view!.nav("external");
+    handlers.MapSitesViewRetry = () => view!.nav("reload");
+    setGameTip(s.frame("MapSitesOpenOutside")!, "Open this page in your own web browser");
+    iconInto(s, "MapSitesViewRetryText", RotateCw, false);
+    paintView(s);
+    const port = s.frame("MapSitesViewport");
+    if (port && tracker) tracker.place(site.id, site.home, port, () => !model.view.get(site.id)?.failed);
+  };
+
+  /** The toolbar and the note under the view, in place — the view reports far too often (every
+   *  load start and stop of Cloudflare's interstitial) for each report to be a relayout. */
+  const paintView = (s: FdfScreen): void => {
+    const site = siteById(model.tab);
+    const st = model.view.get(site.id);
+    s.setEnabled("MapSitesNavBack", !!st?.canGoBack);
+    s.setEnabled("MapSitesNavForward", !!st?.canGoForward);
+    let where = new URL(site.home).hostname;
+    try {
+      if (st?.url) { const u = new URL(st.url); where = `${u.hostname}${u.pathname === "/" ? "" : u.pathname}`; }
+    } catch { /* not a URL yet */ }
+    s.setText("MapSitesWhere", where);
+    s.frame("MapSitesPageView")?.classList.toggle("ow3-sites-loading", !!st?.loading);
+    s.setText("MapSitesViewNote", st?.failed ? `Could not reach ${site.name} (${st.failed}).` : `Loading ${site.name}…`);
+  };
+
+  const fillSite = (s: FdfScreen): void => {
+    const site = siteById(model.tab);
+    s.setText("MapSitesSiteName", site.name);
+    s.setText("MapSitesSiteBlurb", site.blurb);
+    s.setText("MapSitesSiteOpenText", `Open ${site.name}`);
+    iconInto(s, "MapSitesSiteOpenText", ExternalLink, false);
+    s.setText("MapSitesSiteHost", new URL(site.home).hostname);
+    handlers.MapSitesSiteOpen = () => openMapSite(site);
+  };
+
+  // --- what the player does ---
+  const selectTab = (id: MapSiteId): void => {
+    if (id === model.tab) return;
+    tracker?.leave();
+    model.tab = id;
+    say(id !== "epicwar" && view ? "Maps you download here are added to your list automatically." : "");
+    relayout();
+    if (pageFor(id) === "MapSitesPageSearch") requestAnimationFrame(() => searchInput()?.focus());
+  };
+  for (const site of MAP_SITES) handlers[TAB_FRAME[site.id]] = () => selectTab(site.id);
+
+  const runSearch = (): void => {
+    window.clearTimeout(searchTimer);
+    const q = model.query.trim();
+    searchAbort?.abort();
+    if (!q) return;
+    const abort = (searchAbort = new AbortController());
+    model.searching = true;
+    model.results = [];
+    model.note = "";
+    relayout();
+    searchEpicWar(q, abort.signal)
+      .then((maps) => {
+        if (!open || abort.signal.aborted) return;
+        model.results = maps;
+        model.note = maps.length ? "" : `Nothing on EpicWar matches "${q}".`;
+      })
+      .catch((err: Error) => {
+        if (!open || abort.signal.aborted) return;
+        model.results = [];
+        model.note = `Could not reach EpicWar: ${err.message}`;
+      })
+      .finally(() => {
+        if (!open || abort.signal.aborted) return;
+        model.searching = false;
+        // A new list starts at its top (the renderer otherwise keeps the old scroll).
+        const v = screen?.frame("MapSitesResults")?.querySelector<HTMLElement>(":scope > .fdf-scroll-view");
+        if (v) v.scrollTop = 0;
+        relayout();
+      });
+  };
+
+  /** Show a row's button as it now is, without a relayout (the list keeps its scroll). */
+  const paintRow = (m: EpicWarMap, i: number, st: RowState): void => {
+    model.rows.set(m.id, st);
+    texts[`MapSitesRowGetText_r${i}`] = st.label;
+    if (!screen) return;
+    screen.setText(`MapSitesRowGetText_r${i}`, st.label);
+    iconInto(screen, `MapSitesRowGetText_r${i}`, st.done ? Check : Download, false);
+    screen.setEnabled(`MapSitesRowGet_r${i}`, !st.busy && !st.done);
+    screen.frame(`MapSitesRowGet_r${i}`)?.classList.toggle("ow3-sites-done", st.done);
+  };
+
+  const download = async (m: EpicWarMap, i: number): Promise<void> => {
+    const keep = askToKeep(); // inside the click: the browser's folder grant needs the gesture
+    paintRow(m, i, { label: "Downloading…", busy: true, done: false });
+    try {
+      await keep;
+      const got = await downloadEpicWar(m);
+      opts.arrive(got);
+      paintRow(m, i, { label: "Added", busy: false, done: true });
+      say(got.saveError ? `Added ${got.file.name} for this session only: ${got.saveError}` : `Added ${got.file.name} to Maps\\Download.`);
+    } catch (err) {
+      paintRow(m, i, { label: "Retry", busy: false, done: false });
+      say(`Could not download ${m.fileName}: ${(err as Error).message}`);
+    }
+  };
+
+  // Import: the glue button opens a hidden file input (it is inside the click, as a picker must be).
+  const picker = Object.assign(document.createElement("input"), { type: "file", accept: ".w3x,.w3m", multiple: true });
+  picker.hidden = true;
+  picker.addEventListener("change", () => {
+    const files = [...(picker.files ?? [])];
+    picker.value = "";
+    if (files.length) void runImport(files, opts.arrive, say);
+  });
+  scrim.append(picker);
+  handlers.MapSitesImportButton = () => picker.click();
+
+  // --- the shell's reports ---
+  const offs: Array<() => void> = [];
+  offs.push(onSiteProgress((p) => {
+    if (p.failed) say(`${p.name} did not download (${p.failed}).`);
+    else if (p.total) say(`Downloading ${p.name} — ${Math.floor((100 * (p.received ?? 0)) / p.total)}%`);
+    else say(`Downloading ${p.name}…`);
+  }));
+  // The map itself goes to the list through the entry (`MapSitesEntry`); this only SAYS so.
+  offs.push(onSiteDownload((m) => {
+    say(m.saveError ? `Added ${m.file.name} for this session only: ${m.saveError}` : `Added ${m.file.name} to Maps\\Download.`);
+  }));
+  if (view) {
+    offs.push(view.onState((st) => {
+      const was = model.view.get(st.key);
+      model.view.set(st.key, st);
+      if (st.key !== model.tab || !screen) return;
+      // A failure (or its end) changes what the page HAS — the Retry button — so that one is a
+      // relayout; everything else is painted in place.
+      if (!!was?.failed !== !!st.failed) relayout();
+      else paintView(screen);
+      if (st.failed) say(`${siteById(model.tab).name} could not be reached. Check your connection, then press Retry.`);
+      else if (st.checking) say(`${siteById(model.tab).name} is checking the connection (Cloudflare) — this takes a few seconds.`);
+      else if (!st.loading) say("Maps you download here are added to your list automatically.");
+    }));
+    offs.push(view.onEscape(() => close()));
+  }
 
   const close = (): void => {
     if (!open) return;
     open = false;
     window.removeEventListener("keydown", onKey, true);
-    body?.dispose();
+    window.clearTimeout(searchTimer);
+    searchAbort?.abort();
+    for (const off of offs) off();
+    tracker?.leave();
     screen?.dispose();
     scrim.remove();
     opts.onClosed?.();
   };
+  handlers.MapSitesDoneButton = close;
   const onKey = (e: KeyboardEvent): void => {
     // Typing in the search field is the field's; only Escape is the dialog's.
     if (e.key !== "Escape") return;
@@ -155,7 +519,7 @@ export async function showMapSitesDialog(opts: {
   };
   window.addEventListener("keydown", onKey, true);
   scrim.addEventListener("mousedown", (e) => { if (e.target === scrim) close(); });
-  wireDrop(scrim, opts.arrive, (msg) => body?.status(msg));
+  wireDrop(scrim, opts.arrive, say);
 
   try {
     screen = await mountFdfScreen({
@@ -166,27 +530,17 @@ export async function showMapSitesDialog(opts: {
       overrides: [OW3_STRINGS, MAP_SITES_DIALOG_OVERRIDE],
       buildRoot,
       centerRoot: true,
-      textOverrides: {
-        MapSitesDialogTitle: TITLE,
-        MapSitesDoneButtonText: "Done",
-      },
-      handlers: { MapSitesDoneButton: close },
-      onBuild: (s) => {
-        screen = s;
-        const host = s.frame("MapSitesBody");
-        if (!host) return;
-        // The body is DOM, sized off the FDF box it fills: one screen unit is the box's height
-        // over the body's, and the type is a hair over the tooltip's 0.011 (UI\MiscUI.txt
-        // [FontHeights]) — the results are read at arm's length, a tooltip at the cursor.
-        const unit = host.clientHeight / (DIALOG_H - BODY_TOP - BODY_BOTTOM);
-        if (!body) body = new TabbedBody(opts.arrive, close);
-        body.mount(host, unit * 0.0115);
-      },
+      textOverrides: texts,
+      handlers,
+      // The field takes letters; no button here has an accelerator worth the collision.
+      noShortcutKeys: true,
+      onBuild,
     });
   } catch (err) {
     close();
     throw err;
   }
+  if (pageFor(model.tab) === "MapSitesPageSearch") requestAnimationFrame(() => searchInput()?.focus());
   return { close };
 }
 
@@ -218,189 +572,49 @@ async function runImport(files: File[], arrive: (m: ArrivedMap) => void, say: (m
   ].filter(Boolean).join(" "));
 }
 
-/** "Import map file…": a link-styled button over a hidden file input. */
-function importButton(arrive: (m: ArrivedMap) => void, say: (msg: string) => void): HTMLElement {
-  const input = Object.assign(document.createElement("input"), { type: "file", accept: ".w3x,.w3m", multiple: true });
-  input.hidden = true;
-  input.addEventListener("change", () => {
-    const files = [...(input.files ?? [])];
-    input.value = "";
-    if (files.length) void runImport(files, arrive, say);
-  });
-  const b = textButton("Import map file…", () => input.click(), "ow3-sites-link");
-  setGameTip(b, "Add a .w3x or .w3m you already have to your maps");
-  const wrap = document.createElement("span");
-  wrap.append(b, input);
-  return wrap;
-}
-
-function textButton(label: string, onClick: () => void, cls = "ow3-sites-btn"): HTMLButtonElement {
-  const b = document.createElement("button");
-  b.type = "button";
-  b.className = cls;
-  b.textContent = label;
-  b.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
-  return b;
-}
-
-const div = (cls: string, text?: string): HTMLDivElement => {
-  const d = document.createElement("div");
-  d.className = cls;
-  if (text !== undefined) d.textContent = text;
-  return d;
-};
-
-/** A tab's content. `shown` runs once it is in the DOM and laid out. */
-interface TabPage {
-  readonly root: HTMLElement;
-  shown(): void;
-  dispose(): void;
-}
-
-/** The dialog's body: one tab per site, EpicWar first, and a foot with Import and a status line. */
-class TabbedBody {
-  private readonly root = div("ow3-sites-body");
-  private readonly tabs = div("ow3-sites-tabs");
-  private readonly page = div("ow3-sites-page");
-  private readonly foot = div("ow3-sites-foot");
-  private readonly line = div("ow3-sites-status");
-  private tab: MapSiteId = "epicwar";
-  private current: TabPage | null = null;
-  private readonly offProgress: () => void;
-  private readonly offArrived: () => void;
-
-  constructor(private readonly arrive: (m: ArrivedMap) => void, private readonly close: () => void) {
-    for (const site of MAP_SITES) {
-      const t = textButton(site.name, () => this.select(site.id), "ow3-sites-tab");
-      t.dataset.site = site.id;
-      this.tabs.append(t);
-    }
-    this.foot.append(importButton(arrive, (m) => this.status(m)), this.line);
-    this.root.append(this.tabs, this.page, this.foot);
-    this.offProgress = onSiteProgress((p) => {
-      if (p.failed) this.status(`${p.name} did not download (${p.failed}).`);
-      else if (p.total) this.status(`Downloading ${p.name} — ${Math.floor((100 * (p.received ?? 0)) / p.total)}%`);
-      else this.status(`Downloading ${p.name}…`);
-    });
-    // The map itself goes to the list through the entry (`MapSitesEntry`); this only SAYS so.
-    this.offArrived = onSiteDownload((m) => {
-      this.status(m.saveError ? `Added ${m.file.name} for this session only: ${m.saveError}` : `Added ${m.file.name} to Maps\\Download.`);
-    });
-    this.paint();
-  }
-
-  mount(host: HTMLElement, fontPx: number): void {
-    this.root.style.fontSize = `${fontPx}px`;
-    host.append(this.root);
-    this.current?.shown();
-  }
-
-  status(msg: string): void { this.line.textContent = msg; }
-
-  dispose(): void {
-    this.offProgress();
-    this.offArrived();
-    this.current?.dispose();
-  }
-
-  private select(id: MapSiteId): void {
-    if (id === this.tab) return;
-    this.tab = id;
-    this.paint();
-    if (this.root.isConnected) this.current?.shown();
-  }
-
-  private paint(): void {
-    for (const t of this.tabs.children) (t as HTMLElement).classList.toggle("on", (t as HTMLElement).dataset.site === this.tab);
-    this.current?.dispose();
-    const site = siteById(this.tab);
-    const view = siteView();
-    const say = (m: string): void => this.status(m);
-    this.current = site.id === "epicwar" && canSearchInGame()
-      ? new EpicWarSearch(this.arrive, say)
-      : view && site.id !== "epicwar"
-        ? new SiteViewPage(site, view, say, this.close)
-        : sitePage(site);
-    this.status(site.id !== "epicwar" && view ? "Maps you download here are added to your list automatically." : "");
-    this.page.replaceChildren(this.current.root);
-  }
-}
-
-/** A site the game can neither search nor show (a browser): what it is, and a way to open it. */
-function sitePage(site: MapSite): TabPage {
-  const root = div("ow3-sites-sitepage");
-  root.append(
-    div("ow3-sites-sitename", site.name),
-    div("ow3-sites-blurb", site.blurb),
-    textButton(`Open ${site.name}`, () => openMapSite(site)),
-    div("ow3-sites-note", "Download a map there, then Import it here — or drop the file on this window."),
-    div("ow3-sites-host", new URL(site.home).hostname),
-  );
-  return { root, shown: () => {}, dispose: () => {} };
-}
-
 // --- a site, shown in the tab (desktop app) ----------------------------------------------
 
 /**
- * The real site inside the tab: a toolbar of ours (Back, Forward, Reload, Home, where it is, and
- * the way out to the player's own browser) over a VIEWPORT the desktop app lays its web view on.
- * The view is a separate surface the page cannot draw over, so this keeps it exactly on the
- * viewport — through the dialog's fade-in, a window resize and a relayout — and takes it away
- * the moment the tab is left or the dialog closes.
+ * Keeps the desktop app's web view exactly on the viewport frame — through the dialog's fade-in,
+ * a window resize and every relayout (each of which builds a NEW viewport element) — and takes it
+ * away the moment the tab is left or the dialog closes. The view is a separate surface the page
+ * cannot draw over, which is why it must never be left anywhere else.
  */
-class SiteViewPage implements TabPage {
-  readonly root = div("ow3-sites-viewpage");
-  private readonly viewport = div("ow3-sites-viewport");
-  private readonly where = div("ow3-sites-where");
-  private readonly back: HTMLButtonElement;
-  private readonly forward: HTMLButtonElement;
-  private readonly offs: Array<() => void> = [];
+class ViewTracker {
+  private el: HTMLElement | null = null;
+  private key: string | null = null;
+  private home = "";
+  private wanted: () => boolean = () => true;
   private readonly resize = new ResizeObserver(() => this.sync());
   private last = "";
   private raf = 0;
-  private alive = true;
   private placed = false;
 
-  constructor(
-    private readonly site: MapSite,
-    private readonly view: SiteViewBridge,
-    private readonly say: (msg: string) => void,
-    close: () => void,
-  ) {
-    const bar = div("ow3-sites-viewbar");
-    const icon = (glyph: string, tip: string, what: Parameters<SiteViewBridge["nav"]>[0]): HTMLButtonElement => {
-      const b = textButton(glyph, () => view.nav(what), "ow3-sites-navbtn");
-      setGameTip(b, tip);
-      return b;
-    };
-    this.back = icon("‹", "Back", "back");
-    this.forward = icon("›", "Forward", "forward");
-    const out = textButton("Open in browser ↗", () => view.nav("external"), "ow3-sites-link");
-    setGameTip(out, "Open this page in your own web browser");
-    bar.append(this.back, this.forward, icon("⟳", "Reload", "reload"), icon("⌂", `${site.name} home`, "home"), this.where, out);
-    this.viewport.append(div("ow3-sites-viewwait", `Loading ${site.name}…`));
-    this.root.append(bar, this.viewport);
-    this.where.textContent = new URL(site.home).hostname;
-    this.back.disabled = this.forward.disabled = true;
-    this.offs.push(
-      view.onState((s) => { if (s.key === this.site.id) this.paintState(s.url, s.loading, s.canGoBack, s.canGoForward); }),
-      view.onEscape(close),
-    );
+  constructor(private readonly view: SiteViewBridge, private readonly say: (msg: string) => void) {
     window.addEventListener("resize", this.onResize);
   }
 
-  shown(): void {
-    this.resize.observe(this.viewport);
+  /** Lay `key`'s view over `el` (a freshly built viewport). `wanted` says whether it should be on
+   *  screen at all — not while the shell reports it failed, when the dialog's Retry is there. */
+  place(key: string, home: string, el: HTMLElement, wanted: () => boolean): void {
+    if (this.key !== key) { this.leave(); this.key = key; }
+    this.home = home;
+    this.wanted = wanted;
+    this.resize.disconnect();
+    this.el = el;
+    this.last = "";
+    this.resize.observe(el);
     this.follow();
   }
 
-  dispose(): void {
-    this.alive = false;
+  leave(): void {
     cancelAnimationFrame(this.raf);
     this.resize.disconnect();
-    window.removeEventListener("resize", this.onResize);
-    for (const off of this.offs) off();
-    this.view.hide();
+    this.el = null;
+    if (this.placed) this.view.hide();
+    this.placed = false;
+    this.key = null;
+    this.last = "";
   }
 
   private readonly onResize = (): void => this.follow();
@@ -410,7 +624,7 @@ class SiteViewPage implements TabPage {
   private follow(): void {
     const until = performance.now() + 700;
     const step = (): void => {
-      if (!this.alive) return;
+      if (!this.el) return;
       this.sync();
       if (performance.now() < until) this.raf = requestAnimationFrame(step);
     };
@@ -419,138 +633,25 @@ class SiteViewPage implements TabPage {
   }
 
   private sync(): void {
-    if (!this.alive || !this.viewport.isConnected) return;
-    const r = this.viewport.getBoundingClientRect();
+    const el = this.el;
+    if (!el || !el.isConnected || !this.key) return;
+    const r = el.getBoundingClientRect();
     if (r.width < 2 || r.height < 2) return;
     const rect: ViewRect = { x: r.left, y: r.top, width: r.width, height: r.height };
-    const key = `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}`;
-    if (key === this.last) return;
-    this.last = key;
+    const at = `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}`;
+    if (at === this.last) return;
+    this.last = at;
     if (!this.placed) {
       this.placed = true;
+      const key = this.key;
       // The game's own cursor goes over with it: the view is a page of its own, and would
       // otherwise wear the operating system's (CLAUDE.md — never an OS cursor).
       const cursor = getComputedStyle(document.body).cursor;
-      this.view.show(this.site.id, this.site.home, rect, cursor).catch((err: Error) => {
-        this.say(`Could not open ${this.site.name}: ${err.message}`);
+      this.view.show(key, this.home, rect, cursor).catch((err: Error) => {
+        this.say(`Could not open the site: ${err.message}`);
       });
-    } else {
+    } else if (this.wanted()) {
       this.view.bounds(rect);
-    }
-  }
-
-  private paintState(url: string, loading: boolean, canBack: boolean, canForward: boolean): void {
-    this.back.disabled = !canBack;
-    this.forward.disabled = !canForward;
-    this.root.classList.toggle("loading", loading);
-    try {
-      const u = new URL(url);
-      this.where.textContent = `${u.hostname}${u.pathname === "/" ? "" : u.pathname}`;
-    } catch {
-      this.where.textContent = url;
-    }
-  }
-}
-
-// --- EpicWar, searched in place ------------------------------------------------------------
-
-class EpicWarSearch implements TabPage {
-  readonly root = div("ow3-sites-search");
-  private readonly input = document.createElement("input");
-  private readonly list = div("ow3-sites-results");
-  private abort: AbortController | null = null;
-  private timer = 0;
-  private alive = true;
-
-  constructor(
-    private readonly arrive: (m: ArrivedMap) => void,
-    private readonly say: (msg: string) => void,
-  ) {
-    const box = div("ow3-sites-field");
-    box.append(Object.assign(document.createElement("span"), { className: "ow3-find-glass" }));
-    this.input.className = "ow3-sites-input";
-    this.input.placeholder = "Search EpicWar";
-    this.input.spellcheck = false;
-    this.input.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && !this.input.value) return; // the dialog's
-      e.stopPropagation(); // the screen's accelerators are not this field's letters
-      if (e.key === "Enter") { e.preventDefault(); this.run(); }
-      if (e.key === "Escape") { e.preventDefault(); this.input.value = ""; }
-    });
-    this.input.addEventListener("input", () => {
-      window.clearTimeout(this.timer);
-      this.timer = window.setTimeout(() => this.run(), 450);
-    });
-    box.append(this.input);
-    this.root.append(box, this.list);
-    this.list.append(div("ow3-sites-empty", "Type a map's name to search EpicWar's archive."));
-  }
-
-  shown(): void { requestAnimationFrame(() => this.input.focus()); }
-
-  dispose(): void {
-    this.alive = false;
-    window.clearTimeout(this.timer);
-    this.abort?.abort();
-  }
-
-  private run(): void {
-    window.clearTimeout(this.timer);
-    const q = this.input.value.trim();
-    this.abort?.abort();
-    if (!q) return;
-    const abort = (this.abort = new AbortController());
-    this.list.replaceChildren();
-    mountWorking(this.list);
-    searchEpicWar(q, abort.signal)
-      .then((maps) => { if (this.alive && !abort.signal.aborted) this.paint(maps, q); })
-      .catch((err: Error) => {
-        if (!this.alive || abort.signal.aborted) return;
-        this.list.replaceChildren(div("ow3-sites-empty", `Could not reach EpicWar: ${err.message}`));
-      });
-  }
-
-  private paint(maps: EpicWarMap[], q: string): void {
-    this.list.replaceChildren();
-    if (!maps.length) {
-      this.list.append(div("ow3-sites-empty", `Nothing on EpicWar matches "${q}".`));
-      return;
-    }
-    for (const m of maps) this.list.append(this.row(m));
-  }
-
-  private row(m: EpicWarMap): HTMLElement {
-    const row = div(`ow3-sites-result${m.playable ? "" : " ow3-sites-dead"}`);
-    const img = document.createElement("img");
-    img.className = "ow3-sites-thumb";
-    img.alt = "";
-    void epicWarThumb(m).then((url) => { if (url) img.src = url; });
-    const text = div("ow3-sites-text");
-    const meta = [m.author && `by ${m.author}`, m.players ? `${m.players} players` : "", m.size, m.category]
-      .filter(Boolean).join("  ·  ");
-    text.append(div("ow3-sites-name", m.title), div("ow3-sites-meta", meta));
-    const btn = textButton(m.playable ? "Download" : "Not a map", () => void this.download(m, btn));
-    btn.disabled = !m.playable;
-    if (!m.playable) setGameTip(btn, `${m.fileName} is not a .w3x or .w3m map`);
-    row.append(img, text, btn);
-    return row;
-  }
-
-  private async download(m: EpicWarMap, btn: HTMLButtonElement): Promise<void> {
-    const keep = askToKeep(); // inside the click: the browser's folder grant needs the gesture
-    btn.disabled = true;
-    btn.textContent = "Downloading…";
-    try {
-      await keep;
-      const got = await downloadEpicWar(m);
-      this.arrive(got);
-      btn.textContent = "Added ✓";
-      btn.classList.add("done");
-      this.say(got.saveError ? `Added ${got.file.name} for this session only: ${got.saveError}` : `Added ${got.file.name} to Maps\\Download.`);
-    } catch (err) {
-      btn.disabled = false;
-      btn.textContent = "Retry";
-      this.say(`Could not download ${m.fileName}: ${(err as Error).message}`);
     }
   }
 }

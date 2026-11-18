@@ -8,13 +8,30 @@
 // **Why a file of ours.** No FrameDef in the install describes it, and `UI\FrameDef\` is the
 // player's (src/overrides/README.md). It is the Join Server dialog's chrome
 // (JoinAddressDialog.fdf), frame for frame: the Battle.net dialogue box, a gold title, and Done
-// with `DialogButtonOK`'s own geometry. What sits between them is not FDF at all — the tabs, the
-// results and the site toolbar are drawn by the panel into `MapSitesBody`, because no 2003
-// control is a result row with a thumbnail and a Download button, and a website is laid over the
-// tab by the desktop app (electron/mapSitesView.mjs).
+// with `DialogButtonOK`'s own geometry.
 //
-// The box's Width and Height are restated by the panel (`buildRoot`), which sizes the body with
-// them — one number for each, in ui/mapSitesPanel.ts.
+// **Everything between them is the game's own controls too** (the developer's call: once the
+// data is mounted, a button is a glue button). The first cut drew its tabs, field, list and
+// toolbar as bare DOM in a flat gold outline, which sat inside the game's chrome looking like a
+// web page. So each is a frame out of StandardTemplates.fdf here:
+//
+//   · every button — a tab, a toolbar button, a row's Download, Import — is
+//     `StandardBorderedButtonTemplate`, the glue button that carries its own border (the big
+//     Done button's chained backdrop is a screen's furniture, not a row's);
+//   · the search field is `StandardEditBoxTemplate`, and the list and the site's viewport sit in
+//     `StandardEditBoxBackdropTemplate` — the box `ListBoxWar3.fdf` puts behind the map list;
+//   · the results scroll under `StandardScrollBarTemplate`, the glue bar with its stepper
+//     arrows, handed to `MapSitesResults` by the panel (a FRAME given a SCROLLBAR scrolls its
+//     children — ui/fdf/widgets.ts `buildScrollFrame`).
+//
+// The three PAGES (`MapSitesPageSearch` / `…View` / `…Site`) share one box; the panel keeps the
+// one the open tab wants and drops the other two before the build (`buildRoot`). `MapSitesRow`
+// is a TEMPLATE, stamped once per result. What is still not FDF is small: a result's thumbnail
+// and the icons on the buttons are put into these frames by the panel, and the website itself
+// is laid over `MapSitesViewport` by the desktop app (electron/mapSitesView.mjs).
+//
+// Every size below is ours — nothing in the install describes this dialog — on the game's own
+// 0.8 × 0.6 screen.
 
 Frame "DIALOG" "MapSitesDialog" {
     Height 0.5,
@@ -40,11 +57,219 @@ Frame "DIALOG" "MapSitesDialog" {
         FontJustificationH JUSTIFYLEFT,
     }
 
-    // Filled by the panel. Sized in `buildRoot` off the box: from under the title to above Done.
-    Frame "FRAME" "MapSitesBody" {
-        Width 0.52,
-        Height 0.32,
-        SetPoint TOPLEFT, "MapSitesDialogTitle", BOTTOMLEFT, 0.0, -0.008,
+    // --- the tabs: one per site, EpicWar first. The open one is LATCHED (kept pressed), as the
+    // Options screen keeps its category button.
+    Frame "GLUETEXTBUTTON" "MapSitesTabEpicWar" INHERITS WITHCHILDREN "StandardBorderedButtonTemplate" {
+        Width 0.125,
+        Height 0.03,
+        SetPoint TOPLEFT, "MapSitesDialog", TOPLEFT, 0.04, -0.052,
+        ButtonText "MapSitesTabEpicWarText",
+        Frame "TEXT" "MapSitesTabEpicWarText" INHERITS "StandardButtonTextTemplate" {
+        }
+    }
+
+    Frame "GLUETEXTBUTTON" "MapSitesTabHive" INHERITS WITHCHILDREN "StandardBorderedButtonTemplate" {
+        Width 0.125,
+        Height 0.03,
+        SetPoint LEFT, "MapSitesTabEpicWar", RIGHT, 0.003, 0.0,
+        ButtonText "MapSitesTabHiveText",
+        Frame "TEXT" "MapSitesTabHiveText" INHERITS "StandardButtonTextTemplate" {
+        }
+    }
+
+    Frame "GLUETEXTBUTTON" "MapSitesTabWc3maps" INHERITS WITHCHILDREN "StandardBorderedButtonTemplate" {
+        Width 0.125,
+        Height 0.03,
+        SetPoint LEFT, "MapSitesTabHive", RIGHT, 0.003, 0.0,
+        ButtonText "MapSitesTabWc3mapsText",
+        Frame "TEXT" "MapSitesTabWc3mapsText" INHERITS "StandardButtonTextTemplate" {
+        }
+    }
+
+    // --- EpicWar, searched in place: a field, and the results under it.
+    Frame "FRAME" "MapSitesPageSearch" {
+        Width 0.62,
+        Height 0.318,
+        SetPoint TOPLEFT, "MapSitesDialog", TOPLEFT, 0.04, -0.088,
+
+        Frame "EDITBOX" "MapSitesSearchBox" INHERITS WITHCHILDREN "StandardEditBoxTemplate" {
+            Width 0.62,
+            Height 0.034,
+            SetPoint TOPLEFT, "MapSitesPageSearch", TOPLEFT, 0.0, 0.0,
+        }
+
+        Frame "BACKDROP" "MapSitesResultsBackdrop" INHERITS "StandardEditBoxBackdropTemplate" {
+            Width 0.62,
+            Height 0.281,
+            SetPoint TOPLEFT, "MapSitesSearchBox", BOTTOMLEFT, 0.0, -0.003,
+        }
+
+        // The rows, and the scroll bar the panel hands it. Inset from the box's border.
+        Frame "FRAME" "MapSitesResults" {
+            Width 0.608,
+            Height 0.269,
+            SetPoint TOPLEFT, "MapSitesResultsBackdrop", TOPLEFT, 0.006, -0.006,
+        }
+
+        // What the list says when it has no rows: the prompt, "nothing matches", an error.
+        Frame "TEXT" "MapSitesResultsNote" INHERITS "StandardInfoTextTemplate" {
+            Width 0.56,
+            Height 0.05,
+            SetPoint CENTER, "MapSitesResultsBackdrop", CENTER, 0.0, 0.0,
+            FontColor 0.6 0.6 0.6 1.0,
+        }
+    }
+
+    // --- a site shown in the tab (desktop app): a toolbar, and the viewport the web view covers.
+    Frame "FRAME" "MapSitesPageView" {
+        Width 0.62,
+        Height 0.318,
+        SetPoint TOPLEFT, "MapSitesDialog", TOPLEFT, 0.04, -0.088,
+
+        Frame "GLUETEXTBUTTON" "MapSitesNavBack" INHERITS WITHCHILDREN "StandardBorderedButtonTemplate" {
+            Width 0.034,
+            Height 0.03,
+            SetPoint TOPLEFT, "MapSitesPageView", TOPLEFT, 0.0, 0.0,
+            ButtonText "MapSitesNavBackText",
+            Frame "TEXT" "MapSitesNavBackText" INHERITS "StandardButtonTextTemplate" {
+            }
+        }
+        Frame "GLUETEXTBUTTON" "MapSitesNavForward" INHERITS WITHCHILDREN "StandardBorderedButtonTemplate" {
+            Width 0.034,
+            Height 0.03,
+            SetPoint LEFT, "MapSitesNavBack", RIGHT, 0.002, 0.0,
+            ButtonText "MapSitesNavForwardText",
+            Frame "TEXT" "MapSitesNavForwardText" INHERITS "StandardButtonTextTemplate" {
+            }
+        }
+        Frame "GLUETEXTBUTTON" "MapSitesNavReload" INHERITS WITHCHILDREN "StandardBorderedButtonTemplate" {
+            Width 0.034,
+            Height 0.03,
+            SetPoint LEFT, "MapSitesNavForward", RIGHT, 0.002, 0.0,
+            ButtonText "MapSitesNavReloadText",
+            Frame "TEXT" "MapSitesNavReloadText" INHERITS "StandardButtonTextTemplate" {
+            }
+        }
+        Frame "GLUETEXTBUTTON" "MapSitesNavHome" INHERITS WITHCHILDREN "StandardBorderedButtonTemplate" {
+            Width 0.034,
+            Height 0.03,
+            SetPoint LEFT, "MapSitesNavReload", RIGHT, 0.002, 0.0,
+            ButtonText "MapSitesNavHomeText",
+            Frame "TEXT" "MapSitesNavHomeText" INHERITS "StandardButtonTextTemplate" {
+            }
+        }
+
+        // Where the view is — the page's host and path, read-only.
+        Frame "BACKDROP" "MapSitesWhereBackdrop" INHERITS "StandardEditBoxBackdropTemplate" {
+            Width 0.318,
+            Height 0.03,
+            SetPoint LEFT, "MapSitesNavHome", RIGHT, 0.004, 0.0,
+        }
+        Frame "TEXT" "MapSitesWhere" INHERITS "StandardSmallTextTemplate" {
+            Width 0.298,
+            Height 0.03,
+            SetPoint LEFT, "MapSitesWhereBackdrop", LEFT, 0.01, 0.0,
+            FontColor 0.85 0.85 0.85 1.0,
+        }
+
+        Frame "GLUETEXTBUTTON" "MapSitesOpenOutside" INHERITS WITHCHILDREN "StandardBorderedButtonTemplate" {
+            Width 0.154,
+            Height 0.03,
+            SetPoint TOPRIGHT, "MapSitesPageView", TOPRIGHT, 0.0, 0.0,
+            ButtonText "MapSitesOpenOutsideText",
+            Frame "TEXT" "MapSitesOpenOutsideText" INHERITS "StandardButtonTextTemplate" {
+            }
+        }
+
+        Frame "BACKDROP" "MapSitesViewportBackdrop" INHERITS "StandardEditBoxBackdropTemplate" {
+            Width 0.62,
+            Height 0.285,
+            SetPoint TOPLEFT, "MapSitesNavBack", BOTTOMLEFT, 0.0, -0.003,
+        }
+        // The box the desktop app's web view is laid over, inside the backdrop's border.
+        Frame "FRAME" "MapSitesViewport" {
+            Width 0.61,
+            Height 0.275,
+            SetPoint CENTER, "MapSitesViewportBackdrop", CENTER, 0.0, 0.0,
+        }
+        // Under the view while it loads; in its place when the site could not be reached.
+        Frame "TEXT" "MapSitesViewNote" INHERITS "StandardInfoTextTemplate" {
+            Width 0.5,
+            Height 0.05,
+            SetPoint CENTER, "MapSitesViewportBackdrop", CENTER, 0.0, 0.02,
+            FontColor 0.6 0.6 0.6 1.0,
+        }
+        Frame "GLUETEXTBUTTON" "MapSitesViewRetry" INHERITS WITHCHILDREN "StandardBorderedButtonTemplate" {
+            Width 0.13,
+            Height 0.03,
+            SetPoint TOP, "MapSitesViewNote", BOTTOM, 0.0, -0.006,
+            ButtonText "MapSitesViewRetryText",
+            Frame "TEXT" "MapSitesViewRetryText" INHERITS "StandardButtonTextTemplate" {
+            }
+        }
+    }
+
+    // --- a site the game can neither read nor show (a browser): what it is, and the way to it.
+    Frame "FRAME" "MapSitesPageSite" {
+        Width 0.62,
+        Height 0.318,
+        SetPoint TOPLEFT, "MapSitesDialog", TOPLEFT, 0.04, -0.088,
+
+        Frame "BACKDROP" "MapSitesSiteBackdrop" INHERITS "StandardEditBoxBackdropTemplate" {
+            SetAllPoints,
+        }
+        Frame "TEXT" "MapSitesSiteName" INHERITS "StandardTitleTextTemplate" {
+            Width 0.56,
+            Height 0.024,
+            SetPoint TOP, "MapSitesPageSite", TOP, 0.0, -0.07,
+            FontColor 0.99 0.827 0.0705 1.0,
+            FontJustificationH JUSTIFYCENTER,
+        }
+        Frame "TEXT" "MapSitesSiteBlurb" INHERITS "StandardInfoTextTemplate" {
+            Width 0.56,
+            Height 0.02,
+            SetPoint TOP, "MapSitesSiteName", BOTTOM, 0.0, -0.006,
+            FontColor 0.85 0.85 0.85 1.0,
+        }
+        Frame "GLUETEXTBUTTON" "MapSitesSiteOpen" INHERITS WITHCHILDREN "StandardBorderedButtonTemplate" {
+            Width 0.22,
+            Height 0.034,
+            SetPoint TOP, "MapSitesSiteBlurb", BOTTOM, 0.0, -0.016,
+            ButtonText "MapSitesSiteOpenText",
+            Frame "TEXT" "MapSitesSiteOpenText" INHERITS "StandardButtonTextTemplate" {
+            }
+        }
+        Frame "TEXT" "MapSitesSiteNote" INHERITS "StandardSmallTextTemplate" {
+            Width 0.56,
+            Height 0.018,
+            SetPoint TOP, "MapSitesSiteOpen", BOTTOM, 0.0, -0.016,
+            FontColor 0.6 0.6 0.6 1.0,
+            FontJustificationH JUSTIFYCENTER,
+        }
+        Frame "TEXT" "MapSitesSiteHost" INHERITS "StandardSmallTextTemplate" {
+            Width 0.56,
+            Height 0.016,
+            SetPoint TOP, "MapSitesSiteNote", BOTTOM, 0.0, -0.004,
+            FontColor 0.4 0.4 0.4 1.0,
+            FontJustificationH JUSTIFYCENTER,
+        }
+    }
+
+    // --- the foot: one line of status over Import (left) and Done (centre).
+    Frame "TEXT" "MapSitesStatus" INHERITS "StandardSmallTextTemplate" {
+        Width 0.62,
+        Height 0.016,
+        SetPoint TOPLEFT, "MapSitesDialog", TOPLEFT, 0.04, -0.41,
+        FontColor 0.7 0.7 0.7 1.0,
+    }
+
+    Frame "GLUETEXTBUTTON" "MapSitesImportButton" INHERITS WITHCHILDREN "StandardBorderedButtonTemplate" {
+        Width 0.17,
+        Height 0.03,
+        SetPoint BOTTOMLEFT, "MapSitesDialog", BOTTOMLEFT, 0.04, 0.034,
+        ButtonText "MapSitesImportButtonText",
+        Frame "TEXT" "MapSitesImportButtonText" INHERITS "StandardButtonTextTemplate" {
+        }
     }
 
     // Done — `DialogButtonOK`'s own geometry (DialogWar3.fdf), copied from the Join Server dialog.
@@ -58,6 +283,38 @@ Frame "DIALOG" "MapSitesDialog" {
             ButtonText "MapSitesDoneButtonText",
             Frame "TEXT" "MapSitesDoneButtonText" INHERITS "StandardButtonTextTemplate" {
             }
+        }
+    }
+}
+
+// One result — STAMPED per row by the panel (`cloneNamespaced`), never mounted itself. A thumbnail
+// box the panel puts the picture in, the map's name over its particulars, and Download.
+Frame "FRAME" "MapSitesRow" {
+    Width 0.59,
+    Height 0.045,
+
+    Frame "FRAME" "MapSitesRowThumb" {
+        Width 0.039,
+        Height 0.039,
+        SetPoint LEFT, "MapSitesRow", LEFT, 0.003, 0.0,
+    }
+    Frame "TEXT" "MapSitesRowName" INHERITS "StandardValueTextTemplate" {
+        Width 0.405,
+        Height 0.017,
+        SetPoint TOPLEFT, "MapSitesRowThumb", TOPRIGHT, 0.008, -0.003,
+    }
+    Frame "TEXT" "MapSitesRowMeta" INHERITS "StandardSmallTextTemplate" {
+        Width 0.405,
+        Height 0.014,
+        SetPoint TOPLEFT, "MapSitesRowName", BOTTOMLEFT, 0.0, -0.002,
+        FontColor 0.6 0.6 0.6 1.0,
+    }
+    Frame "GLUETEXTBUTTON" "MapSitesRowGet" INHERITS WITHCHILDREN "StandardBorderedButtonTemplate" {
+        Width 0.12,
+        Height 0.03,
+        SetPoint RIGHT, "MapSitesRow", RIGHT, -0.004, 0.0,
+        ButtonText "MapSitesRowGetText",
+        Frame "TEXT" "MapSitesRowGetText" INHERITS "StandardButtonTextTemplate" {
         }
     }
 }
