@@ -2204,6 +2204,80 @@ Echo Isles: town hall + 5 workers, 500/150, teams unchanged.
   `Game.dll` string dump, not measured. To settle it, read the clock off a real client.
 - **Lua** (`war3map.lua`, Reforged 1.31+) — only when we target that version.
 
+## Every native common.j declares now has an answer (issue #313)
+
+`pnpm jass:coverage -- --all` used to list 178 natives the install's own 1.30.4 `common.j` declares
+and nothing implemented. Each one logged "not implemented — safe default" once and answered
+null/0/false, so no map stopped and each map silently lost what the call was for. They are
+answered now, in four modules beside the rest (`src/jass/natives/`):
+
+| module | what it holds |
+| --- | --- |
+| `unitExtras.ts` | an animation by index or rarity, vision lent per unit, a body that does not rot, construction/upgrade progress, alarms, day-sleepers, rescue, the propulsion window, timed life, build orders, the "instant" orders, `CreateUnitByName`, `SetPlayerUnitsOwner`, the special minimap icon |
+| `pools.ts` | unit pools and item pools (a weighted draw over the script's seeded stream), `Add/Remove…AllStock` |
+| `abilityInfo.ts` | an ability's art and sound by object id, `AddSpellEffectById…`, the tooltip/icon/card position of a button's other two faces, one item's own words and icon, `BlzDecPlayerTechResearched` |
+| `gameExtras.ts` | `SetTerrainPathable`, a region's cells, `SetDoodadAnimation`, the three `Enable…Select`, `ForceUIKey`/`ForceUICancel`, `Cheat`, `DoNotSaveReplay`, tax, score, trackables, and the settings and engine-internal natives |
+
+…plus the events that came with them: `EVENT_PLAYER_UNIT_DECAY`, `EVENT_PLAYER_UNIT_RESCUED`
+(with `GetRescuer`), `EVENT_PLAYER_ALLIANCE_CHANGED` (raised by `SetPlayerAlliance` on a write that
+changes the setting — Blizzard.j's melee library registers it for every player and re-checks for
+victors off it) and `TriggerRegisterFilterUnitEvent`.
+
+**Three kinds, and the kind is stated beside each registration.** BEHAVIOUR is a native that
+changes or reads something the engine really keeps. STORED is a setting the game keeps that
+nothing else here consumes (creature density, supported game types, a custom campaign's button
+row) — written and read back, so a script that sets one and asks later gets its own answer.
+NOTHING ON PURPOSE is Blizzard's test harness (`Automation…`), the ladder (`RequestExtra…Data`, the
+tournament getters), the lockstep sync markers (`TriggerSync…`), and the natives the game itself
+never finished: `AbilityId` "always returns zero" and `AbilityId2String` "always returns an empty
+string" (jassdoc — ability NAMES were never implemented, so the five natives that take an
+`abilityString` do nothing in the real client either), `BlzSetItemName` "doesn't work", `SetUnitFog`
+"unknown, unused". Those are registered to answer exactly what the game answers.
+
+Things the install settles that are easy to get backwards:
+
+- **The propulsion window is an asymmetric trio.** Blizzard.j converts degrees→radians before
+  `SetUnitPropWindow` and radians→degrees after `GetUnitPropWindow`, and passes
+  `GetUnitDefaultPropWindow` straight through — so the default is already in DEGREES (UnitData
+  `propWin`). The sim has no propulsion rule to feed it to yet: the value is stored and read back.
+- **`UnitGenerateAlarms(u, generate)` IS `UnitIgnoreAlarm(u, not generate)`** (Blizzard.j 3570).
+- **`SetPlayerUnitsOwner`'s second argument is an INTEGER** player index, not a player handle.
+- **`BlzUnitCancelTimedLife` kills the unit** — "Removes a unit's timed life, therefore killing
+  it. Does nothing when used on a regular unit" (jassdoc).
+- **Rescue is an EVENT.** The engine's whole share is `EVENT_PLAYER_UNIT_RESCUED` raised when one
+  of a rescuer's units comes near; changing the owner, the sound and the ping are Blizzard.j's
+  (`RescueUnitBJ`). The default range is not in any data file — 384 is the value the World Editor
+  offers for "Set Rescue Range" (`UI\TriggerData.txt`), which is the nearest thing the install has.
+
+What is still NOT behaviour, so nobody mistakes a `✓` for it:
+
+- **Bone look-at and clip blending** (`SetUnitLookAt`, `ResetUnitLookAt`, `SetUnitBlendTime`) —
+  nothing in the model viewer we draw with does either.
+- **Events declared but not raised:** the hero-revive four (`GetRevivableUnit`/`GetRevivingUnit`),
+  `EVENT_UNIT_ACQUIRED_TARGET`/`_TARGET_IN_RANGE` (`GetEventTargetUnit`), `EVENT_PLAYER_UNIT_DETECTED`,
+  the 1.29 mouse events (the four `BlzGetTriggerPlayerMouse…` getters answer zero outside one), and
+  a trackable's hit/track (the object, its model and its registrations are real; no pointer is
+  tested against it).
+- **`GetSpellTargetItem`** is always null (a cast carries no item target here), and
+  `GetOrderTargetDestructable`/`GetSpellTargetDestructable` answer for a gate or a crate — which
+  fight as sim units — and null for a TREE, which an order knows only by position.
+- **The "instant" orders** issue the order and do not use the extra `instantTargetWidget`; no source
+  says what the engine does with it.
+- **`TriggerExecuteWait`** runs the callee as `TriggerExecute` does and does not park the caller.
+- **`EnableSelect`/`EnableDragSelect`'s `ui` flag** (draw the indicator or not) and `EnablePreSelect`
+  are not modelled; the `state` half of the first two is.
+- **Hooks with no host yet** (the native is registered and calls a hook nothing implements):
+  `DisplayLoadDialog`, `SetPlayerOnScoreScreen`, `DisableRestartMission`,
+  `SetReservedLocalHeroButtons`.
+- **`BlzSetSpecialEffectTimeScale` / `BlzSetSpecialEffectTime`** stay unimplemented on purpose —
+  their documentation does not settle whether normal speed is 1.0 or 100.0 (natives/effects.ts);
+  `BlzPlaySpecialEffectWithTimeScale` plays its clip and leaves the speed alone.
+- **The special minimap icon and a unit's lent sight are the authority's**: neither rides a LAN
+  snapshot yet.
+
+Pinned by `tools/jass-native-gaps-test.cjs` (the wiring, through Blizzard.j's own wrappers) and
+`tools/sim-native-gaps-test.cjs` (what the world then does).
+
 ## A bare `\r` is a line terminator, and a map protector writes them
 
 JASS is line-oriented: a statement ends at the end of its line, so the terminator is a TOKEN and

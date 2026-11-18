@@ -34,7 +34,14 @@ export function registerConfigNatives(rt: Runtime): void {
     c.rt.setup.startLocations.set(asInt(a[0]), { x: asNum(a[1]), y: asNum(a[2]) });
     return JNULL;
   });
-  def(rt, "SetStartLocPrio", () => JNULL); // AI start-loc priorities — recorded as no-ops
+  // SetStartLocPrio(whichStartLoc, prioSlotIndex, otherStartLocIndex, priority) — the map's
+  // preference ordering between start locations. The lobby seats players, so nothing acts on
+  // it; it is RECORDED (other * 4 + priority, keyed start:slot) so GetStartLocPrio /
+  // GetStartLocPrioSlot read back what the map wrote (natives/gameExtras.ts).
+  def(rt, "SetStartLocPrio", (c, a) => {
+    c.rt.nativeTable<string, number>("startLocPrio").set(`${asInt(a[0])}:${asInt(a[1])}`, asInt(a[2]) * 4 + Math.max(0, c.rt.enumIndex(a[3])));
+    return JNULL;
+  });
   def(rt, "SetStartLocPrioCount", () => JNULL);
   // …and their 1.31 twins, which say the same thing about which start an ENEMY should be put
   // at. Declared by our own compat prelude (src/compat/prelude.ts); no-ops for the same reason

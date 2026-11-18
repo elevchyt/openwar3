@@ -45,6 +45,10 @@ import { registerAbilityBlzNatives } from "./abilityBlz";
 import { registerAbilityFieldNatives } from "./abilityFields";
 import { registerWidgetNatives } from "./widgets";
 import { registerWorldNatives } from "./world";
+import { registerUnitExtraNatives } from "./unitExtras";
+import { registerPoolNatives } from "./pools";
+import { registerAbilityInfoNatives } from "./abilityInfo";
+import { registerGameExtraNatives } from "./gameExtras";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -196,5 +200,10 @@ export function registerNatives(rt: Runtime): void {
   registerVisionNatives(rt); // alliances/shared vision + BOTH fogs (7.22)
   registerWeatherNatives(rt); // the map's atmosphere — rain/snow/fog particles (7.23)
   registerSaveNatives(rt); // SaveGame / LoadGame / SaveGameExists (issue #159)
+  // Issue #313 — the natives common.j declares that nothing answered:
+  registerUnitExtraNatives(rt); // animation by index, vision per unit, alarms, rescue, build orders
+  registerPoolNatives(rt); // unit/item pools and the "all stock" four
+  registerAbilityInfoNatives(rt); // an ability's art by id, its other button faces, an item's words
+  registerGameExtraNatives(rt); // terrain pathing, selection, tax, score, and the engine-internal ones
   registerUtilNatives(rt);
 }

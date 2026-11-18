@@ -162,6 +162,9 @@ const IMPLIED_EVENT: Readonly<Record<string, string>> = {
   dialogButton: "EVENT_DIALOG_BUTTON_CLICK",
   dialogEvent: "EVENT_DIALOG_CLICK",
   variable: "EVENT_GAME_VARIABLE_LIMIT",
+  playerAllianceChange: "EVENT_PLAYER_ALLIANCE_CHANGED",
+  trackableHit: "EVENT_GAME_TRACKABLE_HIT",
+  trackableTrack: "EVENT_GAME_TRACKABLE_TRACK",
 };
 const EVENT_UNIT_DEATH = 53;
 const EVENT_PLAYER_UNIT_DEATH = 20;
@@ -171,6 +174,8 @@ interface EventUnitInfoLike {
   id: number;
   owner: number;
 }
+/** …and all of it: what `Runtime.unitForSim` needs to mint or find the unit's handle. */
+type SimUnitRef = Parameters<Runtime["unitForSim"]>[0];
 // 1.31's per-PLAYER damage event, which a modern map registers ONCE instead of once per unit.
 // The index is OURS, not the file's: 1.30.4's common.j does not carry the constant at all, so
 // it is declared in our own compat prelude (src/compat/prelude.ts) and the two must agree —
@@ -242,6 +247,10 @@ const EVENT_UNIT_SUMMON = 84;
 const ITEM_PHASES = ["drop", "pickup", "use"] as const;
 // A unit loaded into a transport / burrow (common.j 51 player, 88 unit).
 const EVENT_PLAYER_UNIT_LOADED = 51;
+const EVENT_PLAYER_UNIT_RESCUED = 19;
+const EVENT_PLAYER_UNIT_DECAY = 21;
+const EVENT_UNIT_DECAY = 54;
+const EVENT_UNIT_RESCUED = 63;
 const EVENT_UNIT_LOADED = 88;
 // Selection (common.j 24/25 player, 57/58 unit) — what TriggerRegisterPlayerSelectionEventBJ
 // compiles to. See pumpSelectionEvents.
@@ -253,6 +262,9 @@ const EVENT_UNIT_DESELECTED = 58;
 const isRect = (o: unknown): o is RectObj =>
   !!o && typeof (o as RectObj).minx === "number" && typeof (o as RectObj).maxx === "number";
 const isRegion = (o: unknown): o is RegionObj => !!o && Array.isArray((o as RegionObj).rects);
+/** Is the point in a cell `RegionClearCell` took out of a region? Cells are half-open. */
+export const inRegionHole = (holes: NonNullable<RegionObj["holes"]>, x: number, y: number): boolean =>
+  holes.some((h) => x >= h.minx && x < h.maxx && y >= h.miny && y < h.maxy);
 
 class ReturnSignal {
   constructor(readonly value: JassValue) {}
@@ -1680,8 +1692,11 @@ export class Interpreter {
   private rectMembers(reg: TriggerReg, units: ReadonlyArray<UnitSnapshot>): Set<number> | null {
     const rects = this.rectsOf(reg.params[0]);
     if (!rects.length) return null;
+    const region = reg.params[0]?.k === "handle" ? this.rt.handles.get(reg.params[0].h) : undefined;
+    const holes = isRegion(region) ? region.holes : undefined;
     const cur = new Set<number>();
     for (const u of units) {
+      if (holes && inRegionHole(holes, u.x, u.y)) continue; // RegionClearCell
       for (const r of rects) {
         if (u.x >= r.minx && u.x <= r.maxx && u.y >= r.miny && u.y <= r.maxy) {
           cur.add(u.id);
@@ -1749,6 +1764,9 @@ export class Interpreter {
     const handle = this.rt.unitForSim(u);
     if (!this.eventFilterPasses(reg.params[reg.kind === "unitInRange" ? 2 : 1], handle)) return;
     const responses = new Map<string, JassValue>([["TriggerUnit", handle], [respKey, handle]]);
+    // GetTriggeringRegion — the region the registration was made on (not the circle of a
+    // unit-in-range event, which has none).
+    if (reg.kind !== "unitInRange" && reg.params[0]) responses.set("TriggeringRegion", reg.params[0]);
     this.fireTrigger(trig, this.withTrigger(responses, trig, reg));
   }
 
@@ -2158,6 +2176,41 @@ export class Interpreter {
   }
 
   /**
+   * Pump DECAY events — `EVENT_PLAYER_UNIT_DECAY` (21) / `EVENT_UNIT_DECAY` (54): a dead unit's
+   * death clip has played out and its body has begun to rot (SimWorld.tickCorpses says when).
+   * The unit is gone from the world by then, so its handle is the one its death left behind;
+   * `GetDecayingUnit` and `GetTriggerUnit` both answer it.
+   */
+  pumpDecayEvents(events: ReadonlyArray<SimUnitRef>): void {
+    for (const e of events) {
+      const unit = this.rt.unitForSim(e);
+      const responses = new Map<string, JassValue>([["TriggerUnit", unit], ["DecayingUnit", unit]]);
+      this.dispatchToRegs(responses, (reg) =>
+        (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, EVENT_PLAYER_UNIT_DECAY, e.owner, unit)) ||
+        (reg.kind === "unitEvent" && this.unitEventIs(reg, EVENT_UNIT_DECAY) && this.paramUnitIs(reg, unit)));
+    }
+  }
+
+  /**
+   * Pump RESCUE events — `EVENT_PLAYER_UNIT_RESCUED` (19) / `EVENT_UNIT_RESCUED` (63).
+   *
+   * Filed under the RESCUED unit's owner, and Blizzard.j is what settles that:
+   * `TryInitRescuableTriggersBJ` registers the event for every player and its action hands
+   * `GetTriggerUnit()` to `GetOwningPlayer(GetRescuer())` — so the triggering unit is the one
+   * being rescued, still its old owner's at that moment, and `GetRescuer` is the unit that
+   * walked up to it (Blizzard.j 6735–6761).
+   */
+  pumpRescueEvents(events: ReadonlyArray<{ unit: SimUnitRef; rescuer: SimUnitRef }>): void {
+    for (const e of events) {
+      const unit = this.rt.unitForSim(e.unit);
+      const responses = new Map<string, JassValue>([["TriggerUnit", unit], ["Rescuer", this.rt.unitForSim(e.rescuer)]]);
+      this.dispatchToRegs(responses, (reg) =>
+        (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, EVENT_PLAYER_UNIT_RESCUED, e.unit.owner, unit)) ||
+        (reg.kind === "unitEvent" && this.unitEventIs(reg, EVENT_UNIT_RESCUED) && this.paramUnitIs(reg, unit)));
+    }
+  }
+
+  /**
    * Pump SELECTION events — `EVENT_PLAYER_UNIT_SELECTED` / `_DESELECTED` (24/25), and their
    * unit-scoped twins (57/58).
    *
@@ -2206,7 +2259,8 @@ export class Interpreter {
       const u = this.rt.data<JassUnit>(reg.params[0] ?? JNULL);
       if (!trig || !u) continue;
       const handle = jHandle(u.handleId, "unit");
-      this.fireTrigger(trig, this.withTrigger(new Map([["TriggerUnit", handle]]), trig, reg));
+      // GetEventUnitState — the state the registration watches (its 2nd argument).
+      this.fireTrigger(trig, this.withTrigger(new Map([["TriggerUnit", handle], ["EventUnitState", reg.params[1] ?? JNULL]]), trig, reg));
     }
   }
 
@@ -2232,7 +2286,8 @@ export class Interpreter {
       const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
       const p = this.rt.data<JassPlayer>(reg.params[0] ?? JNULL);
       if (!trig || !p) continue;
-      this.fireTrigger(trig, this.withTrigger(new Map([["TriggerPlayer", this.rt.playerHandle(p.index)]]), trig, reg));
+      // GetEventPlayerState — the state the registration watches (its 2nd argument).
+      this.fireTrigger(trig, this.withTrigger(new Map([["TriggerPlayer", this.rt.playerHandle(p.index)], ["EventPlayerState", reg.params[1] ?? JNULL]]), trig, reg));
     }
   }
 
@@ -2371,6 +2426,9 @@ export class Interpreter {
   private dispatchToRegs(responses: Map<string, JassValue>, pred: (reg: TriggerReg) => boolean): void {
     for (const reg of [...this.rt.triggerRegs]) {
       if (!pred(reg)) continue;
+      // `TriggerRegisterFilterUnitEvent` is a unit event with a boolexpr on the end (params[2]);
+      // the plain `TriggerRegisterUnitEvent` has none, so this asks nothing of it.
+      if (reg.kind === "unitEvent" && reg.params[2] && !this.eventFilterPasses(reg.params[2], responses.get("TriggerUnit") ?? JNULL)) continue;
       const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
       if (trig) this.fireTrigger(trig, this.withTrigger(responses, trig, reg));
     }

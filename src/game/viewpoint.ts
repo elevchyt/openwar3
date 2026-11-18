@@ -166,6 +166,9 @@ export class Viewpoint {
    * no slot to own anything, so team membership is what "ours" means there — and only there.
    */
   revealsFor(u: SimUnit): boolean {
+    // `UnitShareVision` lends ONE unit's sight to a player whatever the alliance says — a
+    // campaign's way of letting you watch an ally's scout without opening their whole map.
+    if (this.player >= 0 && u.visionSharedWith?.includes(this.player)) return true;
     return this.revealsForOwner(u.owner, u.team);
   }
 
@@ -366,7 +369,8 @@ export class Viewpoint {
     // own sight, which then lights whatever it reaches through it (FogModifier.afterUnits).
     this.stampModifiers(modifiers, false);
     for (const u of this.world.units.values()) {
-      if (u.neutralPassive) continue; // shops/critters don't scout for you
+      // Shops/critters don't scout for you — unless a script lent that one unit's sight to us.
+      if (u.neutralPassive && !(this.player >= 0 && u.visionSharedWith?.includes(this.player))) continue;
       if (!this.revealsFor(u)) continue;
       const r = (day ? u.sightDay : u.sightNight) || u.sightDay || 800;
       // The unit id opts this sight into the shared footprint cache: a unit that has not

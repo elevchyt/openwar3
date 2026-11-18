@@ -100,6 +100,14 @@ const EXPECTED = [
   "setUnitUseFood", "getUnitUsesFood",
   // The nocturnal-sleep natives — `canSleep`/`asleep`, through SimWorld.setCanSleep/wakeUnit.
   "setUnitCanSleep", "getUnitCanSleep", "getUnitSleeping", "wakeUnit",
+  // Issue #313 — the world half of the natives common.j declares that nothing answered
+  // (sim-native-gaps-test.cjs says what each does).
+  "addToAllStock", "removeFromAllStock", "shareUnitVision", "suspendDecay",
+  "setConstructionProgress", "setUpgradeProgress", "setUnitIgnoreAlarm", "unitIgnoresAlarm",
+  "setUnitSleepPerm", "unitSleepPerm", "setUnitRescuable", "setUnitRescueRange",
+  "setUnitPropWindow", "getUnitPropWindow", "unitCollisionSize", "isUnitSelectable",
+  "cancelTimedLife", "interruptAttack", "setUnitAltIcon", "setAltMinimapIcon", "unitsOwnedBy",
+  "setPlayerTaxRate", "playerScore", "setTerrainPathable",
 ].sort();
 
 // Minimal unit-type rows for the roster checks. A Keep ('hkee') is deliberately NOT named
@@ -432,9 +440,10 @@ const roster = rosterHooks(world, { get: (id) => TYPEDEFS[id] }, teamOf);
 // belongs in exactly this factory and under exactly this rule. `unitTypeDefault` (the
 // GetUnitDefault… natives) is the same read keyed by TYPE id, for a unit already gone.
 // `getUnitRally` (GetUnitRallyPoint / GetUnitRallyUnit) is a read of one building's own state.
-check("rosterHooks is exactly the eleven", Object.keys(roster).sort(), [
+// `unitTypePropWindow` (GetUnitDefaultPropWindow) is one more column of the type's row.
+check("rosterHooks is exactly the twelve", Object.keys(roster).sort(), [
   "enumUnits", "findPlacedUnit", "getUnitRally", "isUnitAlly", "isUnitIdType", "isUnitType",
-  "playerStructureCount", "playerTypedUnitCount", "playerUnitCount", "unitTypeDefault", "unitTypeField",
+  "playerStructureCount", "playerTypedUnitCount", "playerUnitCount", "unitTypeDefault", "unitTypeField", "unitTypePropWindow",
 ].sort());
 
 // The rally point as a script reads it. The all-random "ATR" maps walk every hero an altar

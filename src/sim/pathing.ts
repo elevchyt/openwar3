@@ -331,6 +331,22 @@ export class PathingGrid {
     if (this.blockStamps[i] > 0 && --this.blockStamps[i] === 0) { this.regionsDirty = true; this.stampVersion++; }
   }
 
+  /**
+   * `SetTerrainPathable` — a script rewrites the TERRAIN's own flag on one cell, as the map's
+   * war3map.wpm would have stated it. Not a stamp: nothing counts it and nothing releases it, so
+   * a tree felled on the cell later does not reopen what the script shut. `on` SETS the flag,
+   * i.e. makes the cell UNwalkable / UNflyable / UNbuildable / closed to boats.
+   */
+  setTerrainFlag(cx: number, cy: number, flag: PathingFlag, on: boolean): void {
+    if (!this.inBounds(cx, cy)) return;
+    const i = cy * this.width + cx;
+    const next = on ? this.flags[i] | flag : this.flags[i] & ~flag;
+    if (next === this.flags[i]) return;
+    this.flags[i] = next;
+    this.regionsDirty = true;
+    this.stampVersion++;
+  }
+
   /** Mark/clear a cell unbuildable — building footprints' full (blue) extent, so
    *  the next building can't crowd in and close the walkable corridor between them. */
   blockBuild(cx: number, cy: number): void {

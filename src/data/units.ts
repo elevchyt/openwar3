@@ -349,6 +349,10 @@ export interface UnitDef {
    *  structures that DO turn, and the data says so: `etol`/`etoa` carry turnRate 0.4. */
   turnRate: number;
   moveHeight: number; // fly altitude above ground (0 for ground units)
+  /** UnitData `propWin` — the propulsion window, DEGREES: how far off its heading a unit may be
+   *  and still move forward. What `GetUnitDefaultPropWindow` answers (in degrees, as the file has
+   *  it — Blizzard.j's GetUnitDefaultPropWindowBJ passes it through unconverted). */
+  propWin: number;
   collision: number;
   // Fog-of-war sight radii (UnitBalance.slk `sight`/`nsight`, world units). Night
   // is normally shorter — e.g. Footman 1400/800, Peasant 800/600, Town Hall 900/600.
@@ -592,6 +596,18 @@ export class UnitRegistry {
       && (level < 0 || d.level === level));
     return pool.length ? pool[Math.floor(rng() * pool.length)] : undefined;
   }
+  /**
+   * The pool `ChooseRandomNPBuilding` draws from: "a random neutral passive building, such as
+   * the 'Goblin Merchant' or 'Tavern' … not necessarily on the map already" (jassdoc). No file
+   * lists it, so the pool is READ: the buildings UnitUI marks with a neutral-building minimap
+   * icon (`nbmmIcon`) — the Tavern, the shops, the Mercenary Camps, the Goblin Laboratory, the
+   * fountains — which is the engine's own answer to "which neutral buildings matter". That
+   * reading is OURS. Registry order, so a seeded RNG draws the same type on every client.
+   */
+  chooseRandomNPBuilding(rng: () => number): UnitDef | undefined {
+    const pool = this.all().filter((d) => d.isBuilding && d.minimapIcon && !d.special && !d.campaign);
+    return pool.length ? pool[Math.floor(rng() * pool.length)] : undefined;
+  }
   /** Add/override a def in the per-map overlay (custom object data). */
   setCustom(id: string, def: UnitDef): void {
     this.custom.set(id, def);
@@ -771,6 +787,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       // row at all takes the default.
       turnRate: d ? num(d, "turnrate", 0) : 0.5,
       moveHeight: d ? num(d, "moveheight", 0) : 0,
+      propWin: d ? num(d, "propWin", 60) : 60,
       // Layering quirk: collision lives in UnitBalance.slk in the
       // expansion/patch MPQs but in UnitData.slk in the RoC base.
       collision: (b && num(b, "collision", 0)) || (d ? num(d, "collision", 0) : 0),
@@ -1191,6 +1208,7 @@ export function destructibleUnitDef(d: {
     speed: 0,
     turnRate: 0,
     moveHeight: 0,
+    propWin: 60,
     collision: d.radius,
     sightDay: 0,
     sightNight: 0,

@@ -467,6 +467,11 @@ export interface HeroKill {
 
 /** How many hero deaths `SimWorld.heroKills` keeps — far more than a pass can miss. */
 const HERO_KILL_LOG = 32;
+/** How near a rescuer must come to raise EVENT_PLAYER_UNIT_RESCUED when the map set no range of
+ *  its own. No file states the ENGINE's default; 384 is the value the World Editor itself offers
+ *  for "Unit - Set Rescue Range" (`UI\\TriggerData.txt`: `_SetUnitRescueRange_Defaults=_,384`),
+ *  which is the nearest thing to one the install has. */
+const RESCUE_RANGE = 384;
 
 export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "hold" | "attack" | "attacktree" | "attackitem" | "attackground" | "follow" | "harvest" | "return" | "repair" | "cast" | "getitem" | "garrison" | "load" | "unload";
 
@@ -755,6 +760,11 @@ export interface SimCorpse {
   /** Seconds of its death clip the body still has to play before it is a corpse anyone may use
    *  (CorpseKind.fallingLeft). Run down by tickCorpses; 0 for a body that never fell. */
   fallingLeft: number;
+  /** `UnitSuspendDecay` — the body's clock is stopped: it neither rots nor is removed. What
+   *  blizzard.j's CreatePermanentCorpseLocBJ leans on to leave a body on the ground for good. */
+  decaySuspended?: boolean;
+  /** EVENT_PLAYER_UNIT_DECAY has been raised for this body (see tickCorpses). */
+  decayAnnounced?: boolean;
 }
 
 /** An item held in a hero's inventory (one of 6 slots). Its stat bonus / active
@@ -2647,6 +2657,30 @@ export interface SimUnit {
   guardFacing: number; // facing to restore once it has returned home
   aggroRange: number; // acquisition range (per-placed targetAcquisition, else the weapon's)
   canSleep: boolean; // sleeps at night when guarding at home (UnitData `cansleep`)
+  /** `UnitAddSleepPerm` — sleeps when unprovoked AT ANY HOUR, not only at night. The install
+   *  words the pair apart: UnitAddSleepPerm "Make Unit Sleep … when unprovoked", against
+   *  UnitSetCanSleepBJ's "… when unprovoked at night" (UI\TriggerStrings.txt). Optional
+   *  because nothing but a script ever sets it. */
+  sleepAlways?: boolean;
+  /** `UnitIgnoreAlarm` — this unit raises no under-attack warning when it is hit. blizzard.j
+   *  names it for what it is: `UnitGenerateAlarms(u, generate)` is `UnitIgnoreAlarm(u, not
+   *  generate)` (Blizzard.j 3570). */
+  ignoreAlarm?: boolean;
+  /** `UnitSetUsesAltIcon` — draws the "special minimap icon" (SimWorld.altMinimapIcon) on the
+   *  minimap in place of its dot. */
+  altIcon?: boolean;
+  /** `UnitShareVision` — players this one unit lends its sight to, whatever the alliance says
+   *  (game/viewpoint.ts revealsFor). */
+  visionSharedWith?: number[];
+  /** `SetUnitRescuable` — players for whom this unit's rescuable flag was set or cleared BY HAND,
+   *  overriding its owner's ALLIANCE_RESCUABLE toward them (see tickRescue). */
+  rescueFor?: Array<{ player: number; flag: boolean }>;
+  /** `SetUnitRescueRange` — how near a rescuer must come; undefined = MiscGame's default. */
+  rescueRange?: number;
+  /** `SetUnitPropWindow` — the propulsion window, RADIANS. Undefined = the type's `propWin`. */
+  propWindow?: number;
+  /** Players a rescue event has already been raised for (tickRescue). */
+  rescueRaised?: number[];
   asleep: boolean; // currently asleep (won't auto-acquire; wakes on damage/proximity/camp)
   /** Under the Dreadlord's SLEEP (a `sleep` buff — `AUsl`/`ACsl`, and Dark Conversion's
    *  `ANdc`), derived in recomputeStats. A different thing from `asleep`, which is a CREEP
@@ -4182,6 +4216,11 @@ export class SimWorld {
   captureSellUnits = false; // EVENT_(PLAYER_)UNIT_SELL — a unit bought from a shop (269/286)
   captureSummons = false; // EVENT_(PLAYER_)UNIT_SUMMON — a unit spawned a summoned unit (47/84)
   captureLoads = false; // EVENT_UNIT_LOADED (88) / EVENT_PLAYER_UNIT_LOADED (51)
+  /** `SetAltMinimapIcon` — the ONE "special minimap icon" every `altIcon` unit wears; "" until a
+   *  script names one (the game has no default worth inventing). */
+  altMinimapIcon = "";
+  captureDecays = false; // EVENT_PLAYER_UNIT_DECAY (21)
+  captureRescues = false; // EVENT_PLAYER_UNIT_RESCUED (19) / EVENT_UNIT_RESCUED (63)
   private deathEvents: Array<{ victim: EventUnitInfo; killer: EventUnitInfo | null }> = [];
   /** The last `HERO_KILL_LOG` hero deaths, oldest first, each numbered — read, never drained, by
    *  the Computer+ hero AI (src/ai/plus/candy/). See the push in `kill`. */
@@ -4199,6 +4238,8 @@ export class SimWorld {
   private heroEvents: HeroEvent[] = [];
   private itemEvents: ItemEvent[] = [];
   private loadEvents: LoadEvent[] = [];
+  private decayEvents: EventUnitInfo[] = [];
+  private rescueEvents: Array<{ unit: EventUnitInfo; rescuer: EventUnitInfo }> = [];
   private removals: number[] = []; // units removed WITHOUT a death animation (cancels)
   private felled: SimTree[] = [];
   private depleted: SimMine[] = [];
@@ -4297,6 +4338,10 @@ export class SimWorld {
    * ATTACK is the ATTACKER'S OWN grant and nobody else's, because the matrix is directed.
    */
   passivePlayers: (ownerA: number, ownerB: number) => boolean | null = () => null;
+  /** Does player `owner` grant `player` ALLIANCE_RESCUABLE — may `player`'s units rescue
+   *  `owner`'s by walking up to them? Injected by rts from the alliance matrix (as
+   *  `passivePlayers` is); false with no matrix. See tickRescue. */
+  rescuablePlayers: (owner: number, player: number) => boolean = () => false;
   /** Live fogged-attacker reveals, keyed `attackerId:victimTeam` so a unit shooting two
    *  sides at once gives itself away to each, and each fresh blow re-stamps the entry. */
   private attackReveals = new Map<string, AttackReveal>();
@@ -8048,7 +8093,7 @@ export class SimWorld {
       const gold = Math.min(mine.gold, rules.gold);
       mine.gold -= gold;
       // The mine gives up the whole take; upkeep keeps back its share of what is banked.
-      const banked = Math.floor(gold * this.upkeepShare(u.owner));
+      const banked = this.afterTax(u.owner, "gold", Math.floor(gold * this.upkeepShare(u.owner)));
       this.stashOf(u.owner).gold += banked;
       this.stats.mined(u.owner, banked, gold - banked); // the score screen's columns (matchStats.ts)
       // Paid where the gold is dug — the crewed mine IS the drop-off for both races that work
@@ -20349,6 +20394,17 @@ export class SimWorld {
         continue;
       }
       if (c.fallingLeft > 0) c.fallingLeft = Math.max(0, c.fallingLeft - dt);
+      // EVENT_PLAYER_UNIT_DECAY — "a unit decays" is the moment its death clip has played out
+      // and the body starts to rot, which is the GUI's own word for it ("Unit - Decays").
+      // A body made by CreateCorpse has no unit behind it (deadId 0) and raises nothing.
+      if (!c.decayAnnounced && c.fallingLeft <= 0 && !c.raised) {
+        c.decayAnnounced = true;
+        if (this.captureDecays && c.deadId) {
+          const owner = c.owner >= 0 ? c.owner : neutralSlot(PlayerSlot.NeutralHostile);
+          this.decayEvents.push({ id: c.deadId, typeId: c.unitId, owner, x: c.x, y: c.y, facing: c.facing });
+        }
+      }
+      if (c.decaySuspended) continue; // UnitSuspendDecay (SimCorpse.decaySuspended)
       c.decayLeft -= dt;
       if (c.decayLeft <= 0) this.corpses.delete(c.id);
     }
@@ -20357,6 +20413,220 @@ export class SimWorld {
   /** Run down each fallen hero's body clock (FallenHero.bodyLeft) — what the altar's revive
    *  button waits on. The record itself is NOT dropped when it hits zero: the hero stays on
    *  the roster until it is revived or the match ends. */
+  /**
+   * EVENT_PLAYER_UNIT_RESCUED — a rescuable unit has had one of its rescuer's units walk up to it.
+   *
+   * The ENGINE's whole share of rescuing is this event; what a rescue DOES is blizzard.j's
+   * (`TriggerActionUnitRescuedBJ` → `RescueUnitBJ`: the Rescue sound, `SetUnitOwner` to the
+   * rescuer's owner, a minimap ping), registered for every player by `TryInitRescuableTriggersBJ`
+   * the moment any slot is MAP_CONTROL_RESCUABLE or any unit is made rescuable. Who may rescue is
+   * the owner's ALLIANCE_RESCUABLE grant (`rescuablePlayers`), overridden per unit by
+   * `SetUnitRescuable` (SimUnit.rescueFor). The event names the rescued unit (GetTriggerUnit) and
+   * the unit that reached it (GetRescuer); it is raised ONCE per unit and player, since nothing
+   * obliges a map to take the unit over and a standing rescuer must not raise it every tick.
+   */
+  private tickRescue(): void {
+    for (const u of this.units.values()) {
+      if (u.hp <= 0 || u.hidden || u.owner < 0) continue;
+      let rescuers: number[] | null = null;
+      for (let p = 0; p < 28; p++) {
+        if (p === u.owner) continue;
+        const own = u.rescueFor?.find((r) => r.player === p);
+        if (own ? own.flag : this.rescuablePlayers(u.owner, p)) (rescuers ??= []).push(p);
+      }
+      if (!rescuers) continue;
+      // How near is "reached"? RESCUE_RANGE (the editor's own default, measured body to body)
+      // unless `SetUnitRescueRange` named one for this unit.
+      const range = u.rescueRange ?? RESCUE_RANGE;
+      for (const v of this.units.values()) {
+        if (v.hp <= 0 || v.hidden || v.building || !rescuers.includes(v.owner)) continue;
+        if (u.rescueRaised?.includes(v.owner)) continue;
+        if (Math.hypot(v.x - u.x, v.y - u.y) - v.radius - u.radius > range) continue;
+        (u.rescueRaised ??= []).push(v.owner);
+        this.rescueEvents.push({ unit: eventInfo(u), rescuer: eventInfo(v) });
+      }
+    }
+  }
+  /** Rescues since the last drain (`captureRescues`). */
+  drainRescueEvents(): Array<{ unit: EventUnitInfo; rescuer: EventUnitInfo }> {
+    if (!this.rescueEvents.length) return this.rescueEvents;
+    const out = this.rescueEvents;
+    this.rescueEvents = [];
+    return out;
+  }
+  /** Decays since the last drain (`captureDecays`) — the unit whose body began to rot. */
+  drainDecayEvents(): EventUnitInfo[] {
+    if (!this.decayEvents.length) return this.decayEvents;
+    const out = this.decayEvents;
+    this.decayEvents = [];
+    return out;
+  }
+
+  /** `UnitSuspendDecay` — stop (or restart) the clock on a dead unit's body. */
+  suspendDecay(deadId: number, suspend: boolean): void {
+    for (const c of this.corpses.values()) if (c.deadId === deadId) c.decaySuspended = suspend;
+  }
+
+  /** `SetUnitRescuable(u, player, flag)` — this unit, for this player, whatever the alliance says. */
+  setUnitRescuable(id: number, player: number, flag: boolean): void {
+    const u = this.units.get(id);
+    if (!u) return;
+    const list = (u.rescueFor ??= []);
+    const at = list.findIndex((r) => r.player === player);
+    if (at >= 0) list[at].flag = flag;
+    else list.push({ player, flag });
+    // Made rescuable again: a later approach is news again.
+    if (flag && u.rescueRaised) u.rescueRaised = u.rescueRaised.filter((p) => p !== player);
+  }
+
+  /** `UnitShareVision(u, player, share)`. */
+  shareUnitVision(id: number, player: number, share: boolean): void {
+    const u = this.units.get(id);
+    if (!u) return;
+    const list = (u.visionSharedWith ??= []).filter((p) => p !== player);
+    if (share) list.push(player);
+    u.visionSharedWith = list.length ? list : undefined;
+  }
+
+  /**
+   * `UnitSetConstructionProgress(u, percent)` — move a rising structure's clock to this share
+   * of its build. Its hit points move with the clock exactly as hammering would move them
+   * (addConstructionHp: construction ADDS the ramp's delta, so a site hurt on the way up stays
+   * hurt), and 100 finishes it on the spot. A finished building ignores it, as there is no
+   * construction left to set.
+   */
+  setConstructionProgress(id: number, percent: number): void {
+    const u = this.units.get(id);
+    const b = u?.building;
+    if (!u || !b || b.constructionLeft <= 0) return;
+    const prevLeft = b.constructionLeft;
+    const frac = Math.min(1, Math.max(0, percent / 100));
+    b.constructionLeft = b.buildTimeTotal * (1 - frac);
+    if (b.constructionLeft < prevLeft) this.addConstructionHp(u, b, prevLeft);
+    if (b.constructionLeft <= 0) {
+      b.constructionLeft = 0;
+      this.finishConstruction(u, b);
+    }
+  }
+
+  /** `UnitSetUpgradeProgress(u, percent)` — the same for a building part-way through UPGRADING
+   *  into another (a Town Hall into a Keep): the head `upgrade` job's clock. */
+  setUpgradeProgress(id: number, percent: number): void {
+    const job = this.units.get(id)?.building?.queue[0];
+    if (!job || job.kind !== "upgrade") return;
+    const frac = Math.min(1, Math.max(0, percent / 100));
+    // A job that runs out now finishes on the next tick through the ordinary path.
+    job.timeLeft = Math.max(1e-6, job.buildTime * (1 - frac));
+  }
+
+  /** `UnitIgnoreAlarm(u, flag)` — see SimUnit.ignoreAlarm. Answers whether the unit was there
+   *  to be told; no source says what the game's boolean means, so that reading is OURS. */
+  setIgnoreAlarm(id: number, flag: boolean): boolean {
+    const u = this.units.get(id);
+    if (!u) return false;
+    u.ignoreAlarm = flag || undefined;
+    return true;
+  }
+
+  /** `UnitAddSleepPerm(u, add)` — see SimUnit.sleepAlways. Taking it away wakes a unit that was
+   *  only asleep on its strength (a day sleeper with no nocturnal sleep of its own). */
+  setSleepAlways(id: number, add: boolean): void {
+    const u = this.units.get(id);
+    if (!u) return;
+    u.sleepAlways = add || undefined;
+    if (!add && u.asleep && (this.isDay || !u.canSleep)) u.asleep = false;
+  }
+
+  /** `SetUnitRescueRange(u, range)` — see tickRescue. */
+  setRescueRange(id: number, range: number): void {
+    const u = this.units.get(id);
+    if (u) u.rescueRange = Math.max(0, range);
+  }
+
+  /** `SetUnitPropWindow(u, radians)` — stored and read back (SimUnit.propWindow). The sim turns
+   *  a unit on the spot before it walks and has no propulsion-window rule to feed it to yet. */
+  setPropWindow(id: number, radians: number): void {
+    const u = this.units.get(id);
+    if (u) u.propWindow = Math.max(0, radians);
+  }
+
+  /** `BlzUnitCancelTimedLife(u)` — "Removes a unit's timed life, therefore killing it. Does
+   *  nothing when used on a regular unit" (jassdoc): the clock runs out NOW, so the unit leaves
+   *  through the same expiry a summon's last second takes. */
+  cancelTimedLife(id: number): void {
+    const u = this.units.get(id);
+    if (!u || u.hp <= 0 || u.summonLeft <= 0) return;
+    u.summonLeft = 1e-6;
+    u.timedLifePaused = false;
+  }
+
+  /** `BlzUnitInterruptAttack(u)` — the swing in progress is dropped before it lands; the unit
+   *  keeps its order and target and simply winds up again ("Interrupts unit's current attack
+   *  being casted" — jassdoc). */
+  interruptAttack(id: number): void {
+    const u = this.units.get(id);
+    if (u && u.swingLeft >= 0) this.cancelSwing(u);
+  }
+
+  /**
+   * `AddItemToAllStock` / `AddUnitToAllStock` — the ware goes on the shelf of EVERY building that
+   * sells that kind of thing ("Adds an item … to all shops and marketplaces" — jassdoc), and
+   * `Remove…FromAllStock` takes it off every shelf. A shop is asked the way a purchase asks it
+   * (`isShopUnit`), plus the one shop that is empty by design until a script stocks it: the
+   * Marketplace, which Blizzard.j itself finds by name (`GroupEnumUnitsOfType(g, "marketplace")`).
+   */
+  addToAllStock(wareId: string, kind: "item" | "unit", count: number, max: number): void {
+    for (const u of this.units.values()) {
+      if (u.hp <= 0 || !u.building) continue;
+      if (!this.sellsKind(u, kind)) continue;
+      this.addToStock(u.id, wareId, kind, count, max);
+    }
+  }
+  removeFromAllStock(wareId: string): void {
+    for (const u of this.units.values()) u.building?.stock?.delete(wareId);
+  }
+  /** Does this building keep a shelf of `kind` — by data, or by what a script already put there? */
+  private sellsKind(u: SimUnit, kind: "item" | "unit"): boolean {
+    const w = this.shopWares(u.typeId);
+    if ((kind === "item" ? w.items : w.units).length > 0) return true;
+    for (const s of u.building?.stock?.values() ?? []) if (s.kind === kind) return true;
+    return kind === "item" && u.typeId === "nmrk"; // the Marketplace: no Sellitems row at all
+  }
+
+  /**
+   * `SetPlayerTaxRate(source, other, resource, rate)` — `rate` per cent of what `source` GATHERS
+   * of a resource is paid to `other` instead (the GUI's "Player - Set Tax Rate", and the score
+   * screen's "lost to tax" columns). 0 removes the entry. Taken off harvested income only — a
+   * bounty, a refund and a trigger's own `SetPlayerState` are not gathered — and after upkeep,
+   * since upkeep is what the mine keeps back before anything is banked; no file states the
+   * order, so that reading is OURS.
+   */
+  private taxes: Array<{ source: number; other: number; resource: "gold" | "lumber"; rate: number }> = [];
+  setTaxRate(source: number, other: number, resource: "gold" | "lumber", rate: number): void {
+    this.taxes = this.taxes.filter((t) => !(t.source === source && t.other === other && t.resource === resource));
+    if (rate > 0) this.taxes.push({ source, other, resource, rate: Math.min(100, rate) });
+  }
+  /** Pay `owner`'s taxes on `amount` of gathered income; answers what the owner keeps. */
+  private afterTax(owner: number, resource: "gold" | "lumber", amount: number): number {
+    if (!this.taxes.length || amount <= 0) return amount;
+    let kept = amount;
+    for (const t of this.taxes) {
+      if (t.source !== owner || t.resource !== resource) continue;
+      const paid = Math.min(kept, Math.floor((amount * t.rate) / 100));
+      if (paid <= 0) continue;
+      kept -= paid;
+      this.stashOf(t.other)[resource] += paid;
+    }
+    return kept;
+  }
+
+  /** `SetPlayerUnitsOwner(p, newOwner)` — every unit of one player handed to another. */
+  unitsOwnedBy(player: number): number[] {
+    const out: number[] = [];
+    for (const u of this.units.values()) if (u.owner === player) out.push(u.id);
+    return out;
+  }
+
   private tickFallenHeroes(dt: number): void {
     for (const f of this.fallen.values()) if (f.bodyLeft > 0) f.bodyLeft = Math.max(0, f.bodyLeft - dt);
   }
@@ -21669,6 +21939,7 @@ export class SimWorld {
     this.tickWards(); // Stasis Trap proximity stun (the Healing Ward is an aura — see AURA_BUFFS)
     this.tickDevour(dt); // Kodo digests any swallowed unit
     this.tickCorpses(dt); // decay flesh→bone→gone
+    if (this.captureRescues) this.tickRescue();
     this.tickFallenHeroes(dt); // …and a hero's body, which dissipates instead (issue #126)
     simProfile.end("sim.world.spells");
     simProfile.begin("sim.world.post");
@@ -24912,8 +25183,9 @@ export class SimWorld {
     // every interval, for as long as it is left alone in the tree. That is why night elf
     // lumber has no round trip to optimise and why a wisp on a tree is worth what it is.
     if (w.deliversInPlace) {
-      this.stashOf(u.owner).lumber += w.lumberPerChop;
-      this.stats.harvested(u.owner, w.lumberPerChop);
+      const kept = this.afterTax(u.owner, "lumber", w.lumberPerChop);
+      this.stashOf(u.owner).lumber += kept;
+      this.stats.harvested(u.owner, kept);
       // The credit floats on the TREE, because for a Wisp the tree is the whole delivery
       // (see docs/night-elf.md) — there is no hall for it to arrive at later.
       this.floatCredit("lumber", w.lumberPerChop, u.owner, tree);
@@ -25025,8 +25297,8 @@ export class SimWorld {
     // what the player is told is what the player got.
     const factor = this.harvestBonus.get(u.owner) ?? 1;
     // …less upkeep: a ten-gold load at Low Upkeep banks seven, at High four.
-    const gold = Math.floor(w.carryGold * factor * this.upkeepShare(u.owner));
-    const lumber = Math.floor(w.carryLumber * factor);
+    const gold = this.afterTax(u.owner, "gold", Math.floor(w.carryGold * factor * this.upkeepShare(u.owner)));
+    const lumber = this.afterTax(u.owner, "lumber", Math.floor(w.carryLumber * factor));
     stash.gold += gold;
     stash.lumber += lumber;
     // The score screen's Gold Mined / Lumber Harvested, and what upkeep kept back (matchStats.ts).
@@ -26330,6 +26602,7 @@ export class SimWorld {
   private noteAttacked(target: SimUnit, attackerId: number): void {
     const src = attackerId ? this.units.get(attackerId) : undefined;
     if (!src || !this.hostile(src, target)) return; // friendly fire is not an invasion
+    if (target.ignoreAlarm) return; // UnitIgnoreAlarm (SimUnit.ignoreAlarm)
     // One clock per player per kind — computed rather than a string, since this runs on
     // every hostile blow that lands anywhere on the map.
     const key = target.owner * 2 + (target.building ? 1 : 0);
@@ -29738,8 +30011,9 @@ export class SimWorld {
     //     fight the moment it engages or is engaged;
     //   • a foundation laid nearby (`notifyCreepsOfPlacement`) or a neutral shop used
     //     under its nose (`notifyCreepsOfShopUse`).
-    if (u.canSleep && !u.returning) {
-      if (this.isDay || this.hidesAtNight(u)) u.asleep = false;
+    if ((u.canSleep || u.sleepAlways) && !u.returning) {
+      // A `UnitAddSleepPerm` sleeper is not woken by the dawn (SimUnit.sleepAlways).
+      if ((this.isDay && !u.sleepAlways) || this.hidesAtNight(u)) u.asleep = false;
       // …and only once the CAMP is quiet (campQuiet), not merely once this creep has nobody.
       else if (!u.asleep && u.order === "idle" && atHome && this.campQuiet(u)) u.asleep = true;
     } else if (!u.canSleep) {

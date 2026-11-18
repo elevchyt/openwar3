@@ -5,6 +5,7 @@ import { MAIN_HALL_CHAINS } from "../data/races";
 import { AttackType, MoveType } from "../data/enums";
 import { MELEE } from "../data/gameplayConstants";
 import { fogStateOf, type FogState } from "../sim/vision";
+import { PathingFlag } from "../sim/pathing";
 import type { FogArea } from "./fog";
 import { neutralSlot, PlayerSlot, PrimaryAttribute } from "../data/enums";
 import type { UnitDef } from "../data/units";
@@ -356,6 +357,79 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     removeFromStock: (shopId, wareId) => void sim.removeFromStock(shopId, wareId),
     setTypeSlots: (shopId, kind, slots) => void sim.setTypeSlots(shopId, kind, slots),
     setAllTypeSlots: (kind, slots) => void sim.setAllTypeSlots(kind, slots),
+    // …and the four that name no shop: every building that sells that kind of ware.
+    addToAllStock: (wareId, kind, count, max) => sim.addToAllStock(wareId, kind, count, max),
+    removeFromAllStock: (wareId) => sim.removeFromAllStock(wareId),
+
+    // --- issue #313: the world half of the natives that had no implementation ---------------
+    shareUnitVision: (id, player, share) => sim.shareUnitVision(id, player, share),
+    suspendDecay: (id, suspend) => sim.suspendDecay(id, suspend),
+    setConstructionProgress: (id, percent) => sim.setConstructionProgress(id, percent),
+    setUpgradeProgress: (id, percent) => sim.setUpgradeProgress(id, percent),
+    setUnitIgnoreAlarm: (id, flag) => sim.setIgnoreAlarm(id, flag),
+    unitIgnoresAlarm: (id) => sim.units.get(id)?.ignoreAlarm ?? false,
+    setUnitSleepPerm: (id, add) => sim.setSleepAlways(id, add),
+    unitSleepPerm: (id) => sim.units.get(id)?.sleepAlways ?? false,
+    setUnitRescuable: (id, player, flag) => sim.setUnitRescuable(id, player, flag),
+    setUnitRescueRange: (id, range) => sim.setRescueRange(id, range),
+    setUnitPropWindow: (id, radians) => sim.setPropWindow(id, radians),
+    // A script's own window, else undefined — the native then answers the TYPE's (rosterHooks).
+    getUnitPropWindow: (id) => sim.units.get(id)?.propWindow,
+    // The pathing radius: what the unit takes up on the ground, not its click volume.
+    unitCollisionSize: (id) => sim.units.get(id)?.radius,
+    // Locust is the one thing that makes a live unit unselectable (SimUnit.locust).
+    isUnitSelectable: (id) => {
+      const u = sim.units.get(id);
+      return !!u && !u.locust && !u.hidden;
+    },
+    cancelTimedLife: (id) => sim.cancelTimedLife(id),
+    interruptAttack: (id) => sim.interruptAttack(id),
+    setUnitAltIcon: (id, flag) => {
+      const u = sim.units.get(id);
+      if (u) u.altIcon = flag || undefined;
+    },
+    unitsOwnedBy: (player) => sim.unitsOwnedBy(player),
+    setAltMinimapIcon: (path) => void (sim.altMinimapIcon = path),
+    // PLAYER_STATE_RESOURCE_GOLD (1) / _LUMBER (2) are the two resources a tax can name.
+    setPlayerTaxRate: (source, other, resource, rate) => {
+      if (resource === 1 || resource === 2) sim.setTaxRate(source, other, resource === 1 ? "gold" : "lumber", rate);
+    },
+    // GetPlayerScore — the columns the score screen itself counts (sim/matchStats.ts), by
+    // common.j's PLAYER_SCORE_* index. A column we keep no figure for answers undefined (→ 0).
+    playerScore: (player, which) => {
+      if (!sim.stats.has(player)) return 0;
+      const t = sim.stats.of(player);
+      switch (which) {
+        case 0: return t.unitsProduced; // UNITS_TRAINED
+        case 1: return t.unitsKilled;
+        case 2: return t.buildingsProduced; // STRUCT_BUILT
+        case 3: return t.buildingsRazed;
+        case 6: return t.largestArmy; // FOOD_MAXUSED
+        case 7: return t.heroesKilled;
+        case 8: return t.itemsObtained;
+        case 9: return t.mercenariesHired;
+        case 10: return t.goldMined; // GOLD_MINED_TOTAL
+        case 12: return t.upkeepLost; // GOLD_LOST_UPKEEP
+        case 16: return t.lumberHarvested; // LUMBER_TOTAL
+        default: return undefined;
+      }
+    },
+    // SetTerrainPathable. common.j's pathingtype indices: 1 WALKABILITY, 2 FLYABILITY,
+    // 3 BUILDABILITY, 6 FLOATABILITY, 7 AMPHIBIOUSPATHING (walk and float), 0 ANY (all of them).
+    // PEONHARVESTPATHING (4) and BLIGHTPATHING (5) have no bit of their own in the grid — blight
+    // is its own table (sim/blight.ts) — and are left alone rather than guessed onto another.
+    setTerrainPathable: (x, y, pathingType, pathable) => {
+      const flags: Partial<Record<number, PathingFlag[]>> = {
+        0: [PathingFlag.Unwalkable, PathingFlag.Unflyable, PathingFlag.Unbuildable, PathingFlag.NoWater],
+        1: [PathingFlag.Unwalkable],
+        2: [PathingFlag.Unflyable],
+        3: [PathingFlag.Unbuildable],
+        6: [PathingFlag.NoWater],
+        7: [PathingFlag.Unwalkable, PathingFlag.NoWater],
+      };
+      const [cx, cy] = sim.grid.worldToCell(x, y);
+      for (const f of flags[pathingType] ?? []) sim.grid.setTerrainFlag(cx, cy, f, !pathable);
+    },
   };
 }
 
@@ -690,6 +764,8 @@ export function rosterHooks(
     // GetUnitDefault… — the TYPE's row, by type id (a dying unit is already out of `sim.units`).
     // Turn speed is UnitData `turnRate`, the same 0..1 scale SetUnitTurnSpeed writes; fly
     // height is UnitData `moveHeight`.
+    // GetUnitDefaultPropWindow — UnitData `propWin`, in the file's own DEGREES.
+    unitTypePropWindow: (typeId) => registry.get(typeId)?.propWin,
     unitTypeDefault: (typeId, field) => {
       const def = registry.get(typeId);
       if (!def) return undefined;

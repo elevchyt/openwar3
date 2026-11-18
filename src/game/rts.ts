@@ -845,6 +845,9 @@ export class RtsController {
    *  inventory entry and the ground item share it). Presentation, so it lives here beside the
    *  slot view that reads it rather than in the sim; a new map is a new controller. */
   private itemTooltips = new Map<number, string>();
+  /** …and the rest of one item's own words and icon (`BlzSetItemTooltip` / `…Description` /
+   *  `…IconPath`), keyed on the item's entity id the same way. */
+  private itemTextEdits = new Map<number, Partial<Record<"name" | "tooltip" | "description" | "icon", string>>>();
   // Multi-unit selection: `selected` holds the whole group, `primary` is the
   // leader that drives the HUD (portrait, info panel, command card).
   private selected = new Set<number>();
@@ -1027,6 +1030,8 @@ export class RtsController {
     // different question with a different answer: the matrix is directed, and a campaign that
     // wants one side to hold its fire writes one direction only. See SimWorld.hostile.
     this.sim.passivePlayers = (a, b) => this.alliances.get(a, b, AllianceType.Passive);
+    // …and who may RESCUE whose units is the owner's RESCUABLE grant (SimWorld.tickRescue).
+    this.sim.rescuablePlayers = (owner, player) => this.alliances.get(owner, player, AllianceType.Rescuable);
     this.authority = new Authority(this.sim, registry, abilities, tech, upgrades);
     // Upkeep taxes mined gold by the FOOD a player uses, which the authority derives.
     this.sim.foodUsedOf = (player) => this.authority.foodFor(player).used;
@@ -5142,6 +5147,41 @@ export class RtsController {
     return false;
   }
 
+  /**
+   * JASS SetUnitAnimationByIndex — the model's Nth sequence, as the MDX lists them. Carried
+   * through the same door as a named clip (the hold, the queue reset, the wait for a body still
+   * loading), spelled `#<index>` — a form no sequence NAME can take.
+   */
+  setUnitAnimationByIndex(simId: number, index: number): void {
+    if (index >= 0) this.setUnitAnimation(simId, `#${Math.floor(index)}`);
+  }
+
+  /**
+   * JASS SetUnitAnimationWithRarity — the named clip, choosing between a model's common variant
+   * and its RARE one (an MDX sequence's `Rarity` > 0: the idle a unit only sometimes plays).
+   * RARITY_FREQUENT takes the common one, RARITY_RARE the rare one; a model with only one kind
+   * plays what it has. Spelled `~rare~name` / `~freq~name` for the same reason as the index.
+   */
+  setUnitAnimationWithRarity(simId: number, animation: string, rare: boolean): void {
+    if (animation) this.setUnitAnimation(simId, `~${rare ? "rare" : "freq"}~${animation}`);
+  }
+
+  /** Which sequence a script's clip spelling names (see the two setters above), or -1. */
+  private scriptClipSeq(e: Entry, animation: string): number {
+    const seqs = e.unit.instance.model?.sequences as Array<{ rarity?: number }> | undefined;
+    const byIndex = /^#(\d+)$/.exec(animation);
+    if (byIndex) return seqs && seqs[+byIndex[1]] ? +byIndex[1] : -1;
+    const byRarity = /^~(rare|freq)~(.*)$/.exec(animation);
+    // A named clip may exist several times (Stand, Stand - 2): take the first match…
+    const want = (byRarity ? byRarity[2] : animation).toLowerCase();
+    const first = e.anims.seqNames.findIndex((n) => n.toLowerCase().startsWith(want));
+    if (!byRarity || first < 0) return first;
+    // …or, asked for a rarity, the first match of that kind.
+    const rare = byRarity[1] === "rare";
+    const pick = e.anims.seqNames.findIndex((n, i) => n.toLowerCase().startsWith(want) && ((seqs?.[i]?.rarity ?? 0) > 0) === rare);
+    return pick >= 0 ? pick : first;
+  }
+
   /** setUnitAnimation's body, on an entry that exists. True when a clip was put on. */
   private playScriptClip(e: Entry, animation: string): boolean {
     if (!animation) {
@@ -5157,9 +5197,7 @@ export class RtsController {
       }
       return false;
     }
-    // A named clip may exist several times (Stand, Stand - 2): take the first match.
-    const want = animation.toLowerCase();
-    const seq = e.anims.seqNames.findIndex((n) => n.toLowerCase().startsWith(want));
+    const seq = this.scriptClipSeq(e, animation);
     if (seq < 0) return false; // this model has no such clip — leave it alone (WC3 no-ops too)
     e.unit.instance.setSequence(seq);
     e.unit.instance.setSequenceLoopMode(SequenceLoopMode.ModelDefined);
@@ -8127,7 +8165,7 @@ export class RtsController {
         itemId: held.itemId,
         disabled,
         patronView,
-        icon: def?.icon ?? "",
+        icon: this.itemTextEdits.get(held.id)?.icon ?? def?.icon ?? "", // BlzSetItemIconPath
         name: def?.name ?? held.itemId,
         // The item's own Ubertip, with its <ID,Field> value references filled in — the
         // same text the HUD shows for the item lying on the ground.
@@ -10129,6 +10167,87 @@ export class RtsController {
       // …and ONE item's long description, which is not the type's: two Claws of Attack can say
       // different things. Keyed on the item's entity id, like `SetItemDroppable`'s override.
       setItemExtendedTooltip: (itemId, text) => void this.itemTooltips.set(itemId, text),
+      // The rest of one item's words and its icon (BlzGet/SetItem…, issue #313). The Ubertip
+      // is the same store `BlzSetItemExtendedTooltip` writes, so the two spellings agree.
+      itemText: (itemId, field) => {
+        if (field === "ubertip" && this.itemTooltips.has(itemId)) return this.itemTooltips.get(itemId);
+        const own = field === "ubertip" ? undefined : this.itemTextEdits.get(itemId)?.[field];
+        if (own !== undefined) return own;
+        const typeId = this.sim.itemSnapshot(itemId)?.typeId;
+        const def = typeId ? this.items.get(typeId) : undefined;
+        if (!def) return undefined;
+        switch (field) {
+          case "name": return def.name;
+          case "tooltip": return def.tip;
+          case "description": return def.summary; // ItemStrings "Description", the one-liner
+          case "ubertip": return def.description;
+          case "icon": return def.icon;
+        }
+      },
+      setItemText: (itemId, field, text) => {
+        if (field === "ubertip") return void this.itemTooltips.set(itemId, text);
+        const own = this.itemTextEdits.get(itemId) ?? {};
+        own[field] = text;
+        this.itemTextEdits.set(itemId, own);
+      },
+      // An ability's ART by `effecttype` (common.j 871–877): the field, and the `index`th entry
+      // of it. Only Targetart is a real list in our rows; the others have one model each.
+      abilityArt: (abilId, effectType, index) => {
+        const def = this.abilities.get(abilId);
+        if (!def) return "";
+        const lists: string[][] = [
+          [def.effectArt], def.targetArts.length ? def.targetArts : [def.targetArt], [def.casterArt],
+          [def.specialArt], [def.areaArt], [def.missileArt], def.lightning,
+        ];
+        return lists[effectType]?.[Math.max(0, index)] ?? "";
+      },
+      // …and its SOUND label by `soundtype` (0 EFFECT, 1 EFFECT_LOOPED).
+      abilitySound: (abilId, soundType) => {
+        const def = this.abilities.get(abilId);
+        // The row's own label, else its effect object's (Blizzard's wave and bed are on `XHbz`).
+        return def ? (soundType === 1 ? def.effectSoundLooped || def.fxLoopSound : def.effectSound || def.fxSound) : "";
+      },
+      // The three FACES of an ability's button (natives/abilityInfo.ts). The "activated" face
+      // is the row's `Un*` columns — the twin a toggled ability shows — and has one tooltip for
+      // every rank, as the learn-skill page has, so the rank is read for the plain face only.
+      abilityFace: (abilId, face, field, rank) => {
+        const def = this.abilities.get(abilId);
+        if (!def) return undefined;
+        if (face === "activated") {
+          return field === "tip" ? def.unTip : field === "ubertip" ? def.unUberTip : field === "icon" ? def.unIcon
+            : field === "x" ? def.unButtonX : def.unButtonY;
+        }
+        if (face === "research") {
+          return field === "tip" ? def.researchTip : field === "ubertip" ? def.researchUberTip : field === "icon" ? def.icon
+            : field === "x" ? def.learnX : def.learnY;
+        }
+        return field === "tip" ? def.tips[rank] : field === "ubertip" ? def.uberTips[rank] : field === "icon" ? def.icon
+          : field === "x" ? def.buttonX : def.buttonY;
+      },
+      setAbilityFace: (abilId, face, field, _rank, value) => {
+        const def = this.abilities.get(abilId);
+        if (!def) return;
+        const clone = { ...def };
+        const text = String(value), cell = Number(value);
+        if (face === "activated") {
+          if (field === "tip") clone.unTip = text;
+          else if (field === "ubertip") clone.unUberTip = text;
+          else if (field === "icon") clone.unIcon = text;
+          else if (field === "x") clone.unButtonX = cell;
+          else clone.unButtonY = cell;
+        } else if (face === "research") {
+          if (field === "tip") clone.researchTip = text;
+          else if (field === "ubertip") clone.researchUberTip = text;
+          else if (field === "x") clone.learnX = cell;
+          else if (field === "y") clone.learnY = cell;
+        } else if (field === "x") clone.buttonX = cell;
+        else if (field === "y") clone.buttonY = cell;
+        else return; // the plain face's words and icon are BlzSetAbilityTooltip/Icon's (above)
+        this.abilities.setCustom(abilId, clone);
+        this.abilityEdits.set(abilId, clone); // kept for a saved game, as the tooltips are
+      },
+      // IssueBuildOrder — through the build command's own gates (Authority.issueBuildOrder).
+      issueBuildOrder: (peonId, typeId, x, y) => this.authority.issueBuildOrder(peonId, typeId, x, y),
       // ReviveHero — the controller's, because a revival needs a body spawned and, for a hero
       // queued at an altar, the player's own cancel command (reviveHeroByScript).
       reviveHero: (heroId, x, y, eyeCandy) => this.reviveHeroByScript(heroId, x, y, eyeCandy),

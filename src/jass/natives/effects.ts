@@ -120,9 +120,11 @@ export function registerEffectNatives(rt: Runtime): void {
   // call these were written for a client where it works (Test of Faith sets X, then Y, then Z
   // on the same effect every tick), so each setter here moves only its own axis.
   //
-  // Not here: BlzSetSpecialEffectTimeScale/Time and BlzPlaySpecialEffectWithTimeScale. Their
-  // documentation does not settle whether normal speed is 1.0 or 100.0, and no map in the corpus
-  // calls any of them — a guessed scale would be exactly the invented number CLAUDE.md forbids.
+  // Not here: BlzSetSpecialEffectTimeScale and BlzSetSpecialEffectTime. Their documentation
+  // does not settle whether normal speed is 1.0 or 100.0 (jassdoc: "if you see the animation
+  // speed at 100.0 it will go at 100% speed"), and no map in the corpus calls either — a guessed
+  // scale would be exactly the invented number CLAUDE.md forbids. For the same reason
+  // BlzPlaySpecialEffectWithTimeScale (below) plays its clip and leaves the speed alone.
   const fx = (c: NativeCtx, v: JassValue | undefined): number | undefined => c.rt.data<EffectObj>(v ?? JNULL)?.engineId;
   const onFx = (name: string, fn: (c: NativeCtx, id: number, a: JassValue[]) => void): void =>
     def(rt, name, (c, a) => {
@@ -168,6 +170,11 @@ export function registerEffectNatives(rt: Runtime): void {
 
   // --- …its animation: a clip by NAME, qualified by sub-animation tags ---
   onFx("BlzPlaySpecialEffect", (c, id, a) => {
+    const word = ANIM_WORDS[c.rt.enumIndex(a[1] ?? JNULL)];
+    if (word) c.rt.hooks?.playSpecialEffect?.(id, word);
+  });
+  // The clip is the certain half of this one; the timeScale is not applied (see above).
+  onFx("BlzPlaySpecialEffectWithTimeScale", (c, id, a) => {
     const word = ANIM_WORDS[c.rt.enumIndex(a[1] ?? JNULL)];
     if (word) c.rt.hooks?.playSpecialEffect?.(id, word);
   });

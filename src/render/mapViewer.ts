@@ -1735,6 +1735,12 @@ export class MapViewerScene {
   private userUi = true;
   /** EnableUserControl — false while a cinematic owns the mouse, keyboard and camera. */
   private userControl = true;
+  /** `EnableSelect(false, …)` / `EnableDragSelect(false, …)` — a script has taken the click or
+   *  the drag box away from the player. Reset with the rest of the script's UI state. */
+  private scriptSelect = true;
+  private scriptDragSelect = true;
+  /** `DoNotSaveReplay` — the map asked that this match leave no replay file. */
+  private replayForbidden = false;
   /** SetGameSpeed / GetGameSpeed — the common.j gamespeed index. 2 = MAP_SPEED_NORMAL. */
   private gameSpeed = 2;
   /** The PLAYER's Game Speed (src/data/gameSpeed.ts) — a different thing from the script's
@@ -4028,6 +4034,9 @@ export class MapViewerScene {
     const ticks = this.simTick - this.replayTick0;
     // A match that never began (left at the loading screen) is nothing to watch.
     if (ticks <= 0) return;
+    // …and one whose map called DoNotSaveReplay is not to be kept. A LAN host still owes its
+    // peers the file it alone recorded (docs/replays.md), so only a local match honours it.
+    if (this.replayForbidden && !networked) return;
     rec.end(this.replayEnding(ticks));
     const sink = replaySink();
     if (!sink) return;
@@ -5217,6 +5226,8 @@ export class MapViewerScene {
       getDefaultDifficulty: () => this.defaultDifficulty,
       // --- animation (7.17) — a model's, not the world's, so it stays with the renderer ---
       setUnitAnimation: (id, animation) => this.rts?.setUnitAnimation(id, animation),
+      setUnitAnimationByIndex: (id, index) => this.rts?.setUnitAnimationByIndex(id, index),
+      setUnitAnimationWithRarity: (id, animation, rare) => this.rts?.setUnitAnimationWithRarity(id, animation, rare),
       queueUnitAnimation: (id, animation) => this.rts?.queueUnitAnimation(id, animation),
       addUnitAnimationProperties: (id, props, add) => this.rts?.addUnitAnimationProperties(id, props, add),
       // --- items (7.18) ---
@@ -5250,7 +5261,92 @@ export class MapViewerScene {
       chooseRandomCreep: (level) => this.mapScript?.interp.rt.random
         ? this.registry.chooseRandomCreep(level, this.mapScript.interp.rt.random)?.id ?? ""
         : "",
+      chooseRandomNPBuilding: () => this.mapScript?.interp.rt.random
+        ? this.registry.chooseRandomNPBuilding(this.mapScript.interp.rt.random)?.id ?? ""
+        : "",
+
+      // --- issue #313: the screen's half of the natives that had no implementation --------
+      // EnableSelect / EnableDragSelect / EnablePreSelect. `state` is honoured where the click
+      // and the drag are decided (the pointer-up handler); the `ui` half — whether the green
+      // circle, the box or the hover ring is DRAWN while the action stays allowed — is not
+      // modelled, and neither is preselection's own `state`, which jassdoc lists as unknown.
+      enableSelection: (kind, state) => {
+        if (kind === "select") {
+          this.scriptSelect = state;
+          // "If false, deselects any currently selected units" (jassdoc).
+          if (!state) this.rts?.clearSelection();
+        } else if (kind === "drag") this.scriptDragSelect = state;
+      },
+      // ForceUIKey / ForceUICancel — a key the HUD hears exactly as it hears the keyboard's,
+      // dispatched the way the gamepad's buttons are (ui/gamepad.ts tapKey).
+      forceUiKey: (key) => {
+        const target = document.activeElement ?? document.body;
+        const code = key === "Escape" ? "Escape" : /^[0-9]$/.test(key) ? `Digit${key}` : `Key${key}`;
+        const init = { key: key === "Escape" ? key : key.toLowerCase(), code, bubbles: true, cancelable: true, composed: true };
+        target.dispatchEvent(new KeyboardEvent("keydown", init));
+        target.dispatchEvent(new KeyboardEvent("keyup", init));
+      },
+      // Cheat — "only if the game is single player", which is what `cheatsAllowed` already says.
+      cheat: (code) => void this.typedCheat(code),
+      // DoNotSaveReplay — this match's recording is dropped when it closes (closeReplay).
+      doNotSaveReplay: () => {
+        this.replayForbidden = true;
+      },
+      // The destructable a sim unit stands in for (GetOrderTargetDestructable and its spell twin).
+      destructableOfUnit: (unitId) => {
+        for (const [doo, sim] of this.destSimByDoo) if (sim === unitId) return doo;
+        return 0;
+      },
+      setDoodadAnimation: (area, doodadId, nearestOnly, animation, animRandom) =>
+        this.setDoodadAnimation(area, doodadId, nearestOnly, animation, animRandom),
     };
+  }
+
+  /**
+   * `SetDoodadAnimation` / `SetDoodadAnimationRect` — play a clip on the map's own doodads of
+   * one type inside a circle or a rect (the GUI's "Doodad - Play Animation For Doodads In
+   * Circle / Region"). The viewer keeps every placed doodad with its table row and its model
+   * instance, so this is a walk over that list: the row's id against the type asked for, the
+   * instance's position against the area, then the first sequence whose name starts with the
+   * clip — or, with `animRandom`, any one of them. "show" and "hide" are not clips: they are the
+   * two special names the native takes to draw or stop drawing the doodad (jassdoc).
+   * `nearestOnly` narrows a circle to the single doodad closest to its centre.
+   *
+   * Purely the picture — a doodad has no state in the sim — so the random pick is the
+   * renderer's own and never touches the match's seeded stream.
+   */
+  private setDoodadAnimation(
+    area: { x: number; y: number; radius: number } | { minx: number; miny: number; maxx: number; maxy: number },
+    doodadId: string, nearestOnly: boolean, animation: string, animRandom: boolean,
+  ): void {
+    type Placed = { row?: { string(key: string): string | undefined }; instance: { localLocation: Float32Array; hide(): void; show(): void; model?: { sequences?: Array<{ name: string }> }; setSequence(i: number): void; setSequenceLoopMode(m: number): void } };
+    const doodads = this.viewer.map?.doodads as unknown as Placed[] | undefined;
+    if (!doodads || !animation) return;
+    const circle = "radius" in area ? area : null;
+    let hits: Array<{ d: Placed; dist: number }> = [];
+    for (const d of doodads) {
+      const id = d.row?.string("doodID") ?? d.row?.string("DestructableID") ?? "";
+      if (doodadId && id !== doodadId) continue;
+      const [x, y] = d.instance.localLocation;
+      if (circle) {
+        const dist = Math.hypot(x - circle.x, y - circle.y);
+        if (dist <= circle.radius) hits.push({ d, dist });
+      } else if ("minx" in area && x >= area.minx && x <= area.maxx && y >= area.miny && y <= area.maxy) {
+        hits.push({ d, dist: 0 });
+      }
+    }
+    if (nearestOnly && hits.length > 1) hits = [hits.reduce((a, b) => (b.dist < a.dist ? b : a))];
+    const want = animation.trim().toLowerCase();
+    for (const { d } of hits) {
+      if (want === "hide") { d.instance.hide(); continue; }
+      if (want === "show") { d.instance.show(); continue; }
+      const seqs = d.instance.model?.sequences ?? [];
+      const matches: number[] = [];
+      seqs.forEach((s, i) => { if (s.name.toLowerCase().startsWith(want)) matches.push(i); });
+      if (!matches.length) continue;
+      d.instance.setSequence(animRandom ? matches[Math.floor(Math.random() * matches.length)] : matches[0]);
+      d.instance.setSequenceLoopMode(0); // obey the clip's own MDX looping flag (ModelDefined)
+    }
   }
 
 
@@ -5632,6 +5728,12 @@ export class MapViewerScene {
     // LOADED — 51 player / 88 unit. A campaign harbour scene is the case: the ship leaves the
     // moment its passenger is aboard, and it is a unit-scoped registration on the PASSENGER.
     sw.captureLoads = any("playerUnitEvent", 51) || any("unitEvent", 88);
+    // DECAY — 21 player / 54 unit: a dead unit's body has begun to rot (SimWorld.tickCorpses).
+    sw.captureDecays = any("playerUnitEvent", 21) || any("unitEvent", 54);
+    // RESCUED — 19 player / 63 unit. Blizzard.j registers it for every player the moment a slot
+    // is Rescuable or a unit is made so (TryInitRescuableTriggersBJ), and that registration is
+    // what switches the proximity test on at all (SimWorld.tickRescue).
+    sw.captureRescues = any("playerUnitEvent", 19) || any("unitEvent", 63);
     // SELECTED / DESELECTED — 24/25 player, 57/58 unit. Not a sim capture: a selection is
     // not world state, so the RTS diffs its own (see RtsController.drainSelectionEvents) and
     // this flag only decides whether we bother asking.
@@ -5711,6 +5813,11 @@ export class MapViewerScene {
       // A unit that just boarded a transport / burrow (EVENT_UNIT_LOADED).
       const loads = sw.drainLoadEvents();
       if (loads.length) engine.interp.pumpLoadEvents(loads);
+      // Bodies that began to rot, and rescuable units somebody walked up to (issue #313).
+      const decays = sw.drainDecayEvents();
+      if (decays.length) engine.interp.pumpDecayEvents(decays);
+      const rescues = sw.drainRescueEvents();
+      if (rescues.length) engine.interp.pumpRescueEvents(rescues);
       // What the player selected or deselected this frame. The RTS owns the selection, so
       // this drain is off the controller rather than the world (the one non-sim event kind).
       // Drained every tick even when nothing listens — it is the drain that advances the
@@ -5794,6 +5901,9 @@ export class MapViewerScene {
     this.interfaceShown = true;
     this.userUi = true;
     this.userControl = true;
+    this.scriptSelect = true;
+    this.scriptDragSelect = true;
+    this.replayForbidden = false;
     this.originHidden = false; // a map's BlzHideOriginFrames is that map's
     document.body.classList.remove("cine-on", "dialog-on");
     this.gameSpeed = 2; // MAP_SPEED_NORMAL
@@ -19815,14 +19925,19 @@ export class MapViewerScene {
         // A drag cancelled out from under us (e.g. by a right-click) consumes this
         // left-up without selecting anything.
         if (!this.rts || !wasDragging) return;
+        // A script that called EnableSelect(false, …) has taken selection away altogether.
+        if (!this.scriptSelect) return;
         // Box vs click is decided by where the button came UP, not by whether the
         // cursor ever twitched: a fast click that slides past the threshold and
         // back is still a click, and a drag that returns to its origin encloses
         // nothing worth boxing.
         if (Math.hypot(e.offsetX - this.downX, e.offsetY - this.downY) > DRAG_SLOP) {
           // A left-drag is a rectangle selection of the player's own units
-          // (Shift held → add the boxed units to the current selection).
-          this.rts.selectBox(this.downX, this.downY, e.offsetX, e.offsetY, e.shiftKey);
+          // (Shift held → add the boxed units to the current selection). With the drag
+          // disabled by EnableDragSelect(false, …) "only the first unit in the rectangle will
+          // be selected (closest to the point where you first clicked the mouse)" (jassdoc).
+          if (this.scriptDragSelect) this.rts.selectBox(this.downX, this.downY, e.offsetX, e.offsetY, e.shiftKey);
+          else this.rts.selectAt(this.downX, this.downY, { additive: e.shiftKey, sameType: false });
         } else {
           // Modifiers: Shift = add/remove from group; Ctrl or a double-click =
           // select all on-screen units of the same type.

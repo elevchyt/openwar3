@@ -162,7 +162,7 @@ export const ICON_NEUTRAL_BUILDING = "UI\\MiniMap\\MiniMap-NeutralBuilding.blp";
  * unexplored mine on the WIRE is a separate job; see docs/multiplayer.md item 4.
  */
 export function minimapIcons(
-  world: MinimapWorld & { readonly mines: ReadonlyMap<number, { x: number; y: number }> },
+  world: MinimapWorld & { readonly mines: ReadonlyMap<number, { x: number; y: number }>; readonly altMinimapIcon?: string },
   registry: { get(typeId: string): { minimapIcon?: boolean } | undefined },
   vp: Viewpoint,
 ): Array<{ x: number; y: number; icon: string }> {
@@ -171,6 +171,14 @@ export function minimapIcons(
     if (vp.hasExplored(m)) out.push({ x: m.x, y: m.y, icon: ICON_GOLD_MINE });
   }
   for (const u of world.units.values()) {
+    // The "special minimap icon" a script switched on for this unit (`UnitSetUsesAltIcon`), in
+    // the art `SetAltMinimapIcon` named — a unit, so it is drawn where the unit can be SEEN
+    // rather than where the ground was once explored. Nothing is drawn until a script names
+    // the art: the game ships no default icon worth inventing a path for.
+    if (u.altIcon) {
+      if (world.altMinimapIcon && !hiddenFor(vp, u)) out.push({ x: u.x, y: u.y, icon: world.altMinimapIcon });
+      continue;
+    }
     if (!u.neutralPassive || u.building == null) continue;
     if (!registry.get(u.typeId)?.minimapIcon) continue;
     if (!vp.hasExplored(u)) continue;

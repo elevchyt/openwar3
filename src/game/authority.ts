@@ -377,6 +377,19 @@ export class Authority {
     return this.objectOrder(player, shopId, intToRawcode(orderId));
   }
 
+  /**
+   * `IssueBuildOrder` / `IssueBuildOrderById` — a script tells a worker to put up a structure.
+   * Through the `build` command's own gates (it is a worker, it builds that, the tech is met,
+   * the price is there and is taken), so a trigger founds nothing a click could not. Dispatched
+   * for the worker's OWNER, as an object order is; not a command, for the reasons
+   * `issueUnitOrder` gives. Placement validity is the caller's to have asked, as it is for a
+   * computer player's build.
+   */
+  issueBuildOrder(peonId: number, typeId: string, x: number, y: number): boolean {
+    const u = this.sim.units.get(peonId);
+    return !!u && this.dispatch(u.owner, { c: "build", unitId: peonId, defId: typeId, x, y, queued: false });
+  }
+
   /** An order whose id is an OBJECT's rawcode, given to `unitId` for `player`: train or hire
    *  the unit type, research the upgrade, else sell the item. */
   private objectOrder(player: number, unitId: number, code: string): boolean {
