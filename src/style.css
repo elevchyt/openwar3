@@ -4414,7 +4414,7 @@ body.in-game .fdf-screen.fdf-ingame {
    settings cog in the glue label gold over the plain glue face, white under the pointer as a glue
    label is (FontHighlightColor), sunk with the face while held, grey when disabled. */
 .ow3-hk-cog {
-  position: absolute; left: 50%; top: 50%; width: 62%; height: 72%;
+  position: absolute; left: 50%; top: 50%; width: 52%; height: 60%;
   transform: translate(-50%, -50%); pointer-events: none; z-index: 2;
   color: #fcd312; filter: drop-shadow(1px 1px 0 rgba(0, 0, 0, 0.9));
 }
