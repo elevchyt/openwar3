@@ -26,7 +26,12 @@ export const PLATFORMS: ReadonlyArray<{ id: Platform; label: string; format: str
  *  `build` block (AppImage, nsis, dmg). The `.blockmap` and `latest-*.yml` files beside them
  *  are the updater's, never a download (`.exe.blockmap` does not end in `.exe`). */
 const MATCHERS: Record<Platform, (name: string) => boolean> = {
-  linux: (n) => /\.AppImage$/i.test(n),
+  // The x86-64 AppImage only. A release also carries `OpenWar3-<v>-i386.AppImage` (docs/linux.md),
+  // and GitHub lists assets by name, where `-` sorts before `.` — so a bare `.AppImage$` handed
+  // every 64-bit player the 32-bit Electron 18 build. A browser cannot say reliably whether the
+  // OS under it is 32- or 64-bit, and no Linux Mint since 20 is 32-bit, so the default is the x64
+  // build and the i386 one stays on the releases page for whoever needs it.
+  linux: (n) => /\.AppImage$/i.test(n) && !/-(i386|ia32|x86|armv7l|arm64|aarch64)\.AppImage$/i.test(n),
   windows: (n) => /\.exe$/i.test(n),
   macos: (n) => /\.dmg$/i.test(n),
 };

@@ -60,6 +60,11 @@ export function Downloads({ release }: { release: LatestRelease | null }) {
                         <br />
                         32- and 64-bit; installs into your Warcraft III folder.
                       </>
+                    ) : p.id === "linux" ? (
+                      <>
+                        <br />
+                        64-bit. A 32-bit (i386) build is on the releases page.
+                      </>
                     ) : null}
                   </>
                 ) : (
