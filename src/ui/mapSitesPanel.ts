@@ -1,5 +1,5 @@
 import {
-  ArrowLeft, ArrowRight, Check, Download, ExternalLink, FileUp, House, RotateCw, Search,
+  ArrowLeft, ArrowRight, Check, Download, ExternalLink, FileDown, FileUp, House, RotateCw, Search,
   createElement as lucideIcon, type IconNode,
 } from "lucide";
 import type { DataSource } from "../vfs/types";
@@ -49,16 +49,13 @@ const DIALOG_FDF = "UI\\FrameDef\\Glue\\DialogWar3.fdf";
 
 const TITLE = "Download Maps";
 
-/** The entry's glyph: a map SCROLL with a down-arrow on it — ours, picked by the developer out of
- *  six drawn candidates (tray, cloud, folded map, map + arrow, globe + arrow, scroll), as the one
- *  that says "maps" in the game's own idiom and still reads as a download. Stroked in
- *  `currentColor`, so the button's colour is its idle/hover state (style.css). */
-const SITES_GLYPH =
-  '<svg class="ow3-sites-glyph" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor"' +
-  ' stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">' +
-  '<path d="M18 16V5a2 2 0 0 0-2-2H4.5"/>' +
-  '<path d="M8 21h12a2 2 0 0 0 2-2v-.5a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v.5a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2h4"/>' +
-  '<path d="M12 6.5v6.5"/><path d="M9.5 10.5 12 13l2.5-2.5"/></svg>';
+/** The entry's glyph: Lucide's `file-down` (the developer's pick, replacing a hand-drawn map
+ *  scroll). Stroked in `currentColor`, so the button's colour is its idle/hover state (style.css). */
+function sitesGlyph(): SVGElement {
+  const svg = lucideIcon(FileDown, { "stroke-width": 2.1, "aria-hidden": "true" });
+  svg.classList.add("ow3-sites-glyph");
+  return svg;
+}
 
 // --- the entry point ---------------------------------------------------------------------
 
@@ -74,7 +71,7 @@ export class MapSitesEntry {
     el.className = "ow3-sites-entry";
     el.addEventListener("pointerdown", (e) => e.stopPropagation());
     el.addEventListener("click", () => this.open());
-    el.insertAdjacentHTML("beforeend", SITES_GLYPH);
+    el.append(sitesGlyph());
     setGameTip(el, TITLE);
     this.el = el;
     // A site view hands its maps back whenever they finish — the dialog may be closed by then.
@@ -518,7 +515,8 @@ export async function showMapSitesDialog(opts: {
     close();
   };
   window.addEventListener("keydown", onKey, true);
-  scrim.addEventListener("mousedown", (e) => { if (e.target === scrim) close(); });
+  // No close on a click at the scrim: a modal leaves through Done or Escape, never through a
+  // stray click on the background (or on a gap between the dialog's own frames).
   wireDrop(scrim, opts.arrive, say);
 
   try {

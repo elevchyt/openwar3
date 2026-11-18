@@ -97,8 +97,8 @@ export async function showJoinAddressDialog(opts: {
     close();
   };
   window.addEventListener("keydown", onKey, true);
-  // A click on the scrim itself — outside the box — closes it, the way a modal is expected to.
-  scrim.addEventListener("mousedown", (e) => { if (e.target === scrim) close(); });
+  // A click on the scrim — outside the box — does NOT close it: a modal leaves through its own
+  // buttons or Escape, never through a stray click on the background.
 
   const paint = (): void => {
     const s = screen;

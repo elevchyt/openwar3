@@ -4398,11 +4398,11 @@ body.in-game .fdf-screen.fdf-ingame {
   background: none;
   color: #9c8a4a;
 }
-/* Set a little right of the button's centre: centred, the scroll's left curl all but touched the
-   separator (the button's own border-left). The box's right padding takes the difference. */
+/* Lucide's file-down, centred in the button (the old hand-drawn scroll sat 0.14em right of
+   centre to keep its left curl off the separator; this glyph is symmetric). */
 .ow3-sites-glyph {
   position: absolute;
-  left: calc(50% + 0.14em);
+  left: 50%;
   top: 50%;
   width: 1.1em;
   height: 1.1em;

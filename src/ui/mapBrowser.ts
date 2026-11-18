@@ -238,7 +238,17 @@ export class MapBrowser {
     // A list the search box has narrowed was narrowed before this map existed: ask it again, so
     // the map the player went and got for that search is among its answers.
     if (this.filter && this.finder.query) this.filter = this.search(this.finder.query).map((x) => x.path);
-    if (e) await this.jumpTo(e);
+    if (!e) return;
+    // The folder was just struck off as read, and `jumpTo` only reads a folder it WALKS INTO —
+    // so when the new map lands in the folder already open (Maps\Download, the usual case), the
+    // list sat on its "working" ring for ever, waiting for a read nothing would start. Read it
+    // here: its old maps are cached, so this is the one new file.
+    if (e.folder === this.cwd) {
+      this.onChange(); // the ring, while the new map is read
+      await this.readFolder(e.folder);
+      if (!this.alive) return;
+    }
+    await this.jumpTo(e);
   }
 
   /** Hand over the screen's FDF library, for the strings the list shows. */
