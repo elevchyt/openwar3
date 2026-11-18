@@ -7084,7 +7084,7 @@ export class MapViewerScene {
   /** Reconcile the looping bed of every running channelled field against last frame:
    *  start one for each new field, stop the ones whose field is gone. Keyed by code +
    *  position so two simultaneous Blizzards each howl at their own spot. */
-  private updateFieldLoops(fields: Array<{ code: string; x: number; y: number; loopSound: string; shake: boolean }>): void {
+  private updateFieldLoops(fields: Array<{ code: string; x: number; y: number; loopSound: string; shake: boolean; casterId?: number; follow?: boolean }>): void {
     const live = new Set<string>();
     // Earthquake is the one thing in the game that moves the CAMERA as a gameplay effect,
     // and Blizzard.j says how: `CameraSetEQNoiseForPlayer` → `CameraSetTargetNoiseEx(…,
@@ -7105,12 +7105,15 @@ export class MapViewerScene {
       if (!this.pointVisible(f.x, f.y)) continue;
       const wav = this.sounds?.abilityLoopPath(f.loopSound) ?? "";
       if (!wav) continue;
-      const key = `${f.code}|${Math.round(f.x)}|${Math.round(f.y)}`;
+      // A field that RIDES its caster (Locust Swarm) is keyed on him and its bed carried
+      // along: keyed on the spot, every step he took was a new field and the loop restarted.
+      const key = f.follow ? `${f.code}|u${f.casterId}` : `${f.code}|${Math.round(f.x)}|${Math.round(f.y)}`;
       live.add(key);
+      const at = { x: f.x, y: f.y, z: this.rts!.groundHeightAt(f.x, f.y) };
       if (!this.fieldLoops.has(key)) {
         this.fieldLoops.add(key);
-        this.sounds?.setPathLoop(key, wav, true, { x: f.x, y: f.y, z: this.rts!.groundHeightAt(f.x, f.y) });
-      }
+        this.sounds?.setPathLoop(key, wav, true, at);
+      } else if (f.follow) this.sounds?.movePathLoop(key, at);
     }
     for (const key of this.fieldLoops) {
       if (live.has(key)) continue;
@@ -10337,7 +10340,7 @@ export class MapViewerScene {
       // (rts.playImpacts gates the shooter's own gunshot by the same test). The MODEL is
       // still created — a missile is the one effect that travels, so it is hidden and shown
       // per frame as it crosses the fog line rather than being dropped at birth.
-      if (this.pointVisible(p.x, p.y)) this.sounds?.playMissile(p.art, "launch", { x: p.x, y: p.y, z: this.rts!.groundHeightAt(p.x, p.y) + p.z }); // fire/whoosh/gunshot as it launches
+      if (this.pointVisible(p.x, p.y) && this.rts!.swarmSoundDue(p.art, "launch")) this.sounds?.playMissile(p.art, "launch", { x: p.x, y: p.y, z: this.rts!.groundHeightAt(p.x, p.y) + p.z }); // fire/whoosh/gunshot as it launches
       this.projectileLoading.add(p.id);
       void this.loadProjectile(p.id, p.art);
     }
@@ -16451,7 +16454,7 @@ export class MapViewerScene {
       // AoI filter has already dropped the missiles this client has no business hearing, so
       // this is belt and braces — but a client's own grid is the one that must answer here,
       // exactly as it does for the flight itself (updateProjectiles).
-      if (this.pointVisible(p.x, p.y)) this.sounds?.playMissile(p.art, "launch", { x: p.x, y: p.y, z: this.rts!.groundHeightAt(p.x, p.y) + p.z });
+      if (this.pointVisible(p.x, p.y) && this.rts!.swarmSoundDue(p.art, "launch")) this.sounds?.playMissile(p.art, "launch", { x: p.x, y: p.y, z: this.rts!.groundHeightAt(p.x, p.y) + p.z });
       this.projectileLoading.add(p.id);
       void this.loadProjectile(p.id, p.art);
     }
@@ -16552,7 +16555,8 @@ export class MapViewerScene {
       const d = this.registry.get(s.unitId);
       if (!d) continue;
       const summonLeft = s.summonLeft;
-      const [sx, sy] = this.summonSpot(s.x, s.y, s.facing, d.collision || 16, s.atPoint, summonClaimed);
+      // A LOCUST comes out of the Crypt Lord himself: no fan, no free cell (SummonRequest.swarm).
+      const [sx, sy] = s.swarm ? [s.x, s.y] : this.summonSpot(s.x, s.y, s.facing, d.collision || 16, s.atPoint, summonClaimed);
       // The summon burst belongs on the SPOT the unit lands on, not on the caster —
       // three wolves fan out around the Far Seer, and each arrives in its own.
       if (s.summonArt) world.emitEffectAt(s.summonArt, sx, sy, true); // the model carries its own SND event
@@ -16574,7 +16578,7 @@ export class MapViewerScene {
       // any unit and would have played whatever that unit's model happened to key.
       // It is the Birth clip's event and not "any" A event (playModelBirthSound): the Tornado's
       // model keys its Birth AND its Death, and landed to the sound of dying half the time.
-      else if (!s.illusion && this.pointVisible(sx, sy)) this.sounds?.playModelBirthSound(d.model, { x: sx, y: sy, z: this.rts!.groundHeightAt(sx, sy) });
+      else if (!s.illusion && !s.swarm && this.pointVisible(sx, sy)) this.sounds?.playModelBirthSound(d.model, { x: sx, y: sy, z: this.rts!.groundHeightAt(sx, sy) });
       {
         // Made on THIS step (spawnUnitNow); its Birth clip, and the spawn lock that clip times,
         // wait for the body (`summonBirth`).
@@ -16591,6 +16595,12 @@ export class MapViewerScene {
         // Beetle has no clock, and Abolish Magic still kills it.
         if (su && s.summoned) su.isSummon = true;
         if (su && s.sourceId) su.summonedBy = s.sourceId; // whose cap it counts under (summonCapMake)
+        // …and a swarm's locust is enrolled in it — which may take it straight back off the
+        // field, if the swarm ended on the step it was let out (SimWorld.joinSwarm).
+        if (su && s.swarm) {
+          world.joinSwarm(su, s.sourceId);
+          if (!world.units.has(simId)) continue;
+        }
         // A RAISED body is a shell, not the unit that fell: "the raised units keep their
         // attacks but lose all abilities and spells" (Animate Dead). It walks and swings and
         // nothing else — no autocast, no casting, no Web, no Burrow.

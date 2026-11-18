@@ -800,6 +800,64 @@ export interface ClaimedCorpse {
   owner: number;
 }
 
+/**
+ * One LOCUST of a Locust Swarm (`AUls`, SimUnit.swarm) — what the body knows about its errand.
+ * `stored` is the life it is carrying home: `Uls4` "Damage Return Factor" of every point its
+ * bites actually took, turned in to the Crypt Lord once it passes `Uls5` "Damage Return
+ * Threshold" (or when the swarm is called home, whatever it holds by then).
+ */
+export interface LocustBody {
+  casterId: number;
+  stored: number;
+  /** Flying home to hand `stored` over. */
+  returning: boolean;
+  /** The swarm has ended: this trip home is the last, and the body leaves at the end of it. */
+  final: boolean;
+  /** Seconds until it picks its next spot to buzz off to (see tickLocustSwarms). */
+  wanderT: number;
+  /** Seconds until its heading is refreshed against a caster or a victim that is walking. */
+  steerT: number;
+}
+
+/** A running Locust Swarm: the release schedule and the roll of bodies it has out. */
+interface LocustSwarm {
+  casterId: number;
+  code: string;
+  unitId: string;
+  owner: number;
+  team: number;
+  /** Locusts still inside the Crypt Lord, and the clock to the next one out (`Uls1`/`Uls2`). */
+  toRelease: number;
+  releaseT: number;
+  interval: number;
+  /** Seconds the swarm has left; at zero everything still out is called home. */
+  left: number;
+  /** Seconds since the recall — a body that cannot get home by RECALL_GRACE is taken off. */
+  recallT: number;
+  perTarget: number; // Uls3 "Max Swarm Units Per Target"
+  factor: number; // Uls4 "Damage Return Factor"
+  threshold: number; // Uls5 "Damage Return Threshold"
+  area: number;
+  flags: string[];
+  members: number[];
+}
+
+// How a locust MOVES is in no table: the ability's columns give the count, the release clock,
+// the per-target cap and the return, and `uloc` gives the body. The rest is observed —
+// Liquipedia's Crypt Lord page ("the swarm follows the Crypt Lord", "all remaining locusts
+// return" at the end) and r/WC3 "A closer look at Locust Swarm" (critter-like wandering
+// between bites, which is why the spell never reaches its paper damage). So these four are
+// OURS, tuned to look like that, and not the game's:
+/** How far from the Crypt Lord an idle locust buzzes. Well inside `Area1` (800). */
+const LOCUST_WANDER_RADIUS = 300;
+/** Seconds a locust keeps one heading before it picks another (rolled between the two). */
+const LOCUST_WANDER_MIN = 0.5;
+const LOCUST_WANDER_MAX = 1.1;
+/** How often a locust re-aims at a caster that is walking. */
+const LOCUST_STEER = 0.25;
+/** A recalled locust that has not reached the Crypt Lord by now is simply taken off. */
+const LOCUST_RECALL_GRACE = 8;
+
 export interface SummonRequest {
   unitId: string;
   x: number;
@@ -817,6 +875,9 @@ export interface SummonRequest {
    *  `summonLeft` alone said it was not, so a beetle shrugged off the dispel that kills one. */
   summoned?: boolean;
   sourceId: number; // the caster
+  /** A LOCUST of `sourceId`'s Locust Swarm: it comes out of the Crypt Lord exactly where he
+   *  stands (no summonSpot fan) and is enrolled in his swarm (SimWorld.joinSwarm). */
+  swarm?: boolean;
   summonArt: string; // the burst it materializes in
   unsummonArt: string; // the burst that replaces it when it leaves
   /** (x, y) is a point the player TARGETED (a ward, an infernal, a raised corpse) and the
@@ -1527,7 +1588,10 @@ export interface Alert {
 }
 
 /** A running spell field as the renderer sees it (SimWorld.activeSpellFields). */
-export interface SpellFieldView { code: string; x: number; y: number; loopSound: string; shake: boolean; casterId: number; casterArt: string; centerArt?: string }
+export interface SpellFieldView { code: string; x: number; y: number; loopSound: string; shake: boolean; casterId: number; casterArt: string; centerArt?: string;
+  /** The field rides its caster (Bladestorm, Locust Swarm), so its looping bed is keyed on HIM
+   *  and carried along — keyed on the spot, it restarted every step he took. */
+  follow?: boolean }
 /** A teleport being channelled, as the renderer sees it (SimWorld.activeTeleports). */
 export interface TeleportView {
   casterId: number;
@@ -1954,6 +2018,9 @@ export interface SimUnit {
    * `OfPlayer` does). Seeded from the type's abilList and kept in step by add/removeAbility.
    */
   locust: boolean;
+  /** A LOCUST of a Locust Swarm (`AUls`): its errand, run by tickLocustSwarms rather than by
+   *  auto-acquisition. Null on everything else. */
+  swarm: LocustBody | null;
   /** How many times this unit has been TELEPORTED (`teleportUnit` — Blink, Mass Teleport, a
    *  Way Gate, the staves, a script's `SetUnitPosition`). A counter and not a flag because
    *  the only thing that ever asks is an in-flight missile comparing the count it recorded at
@@ -10020,6 +10087,7 @@ export class SimWorld {
       | "vanished"
       | "hidden"
       | "locust"
+      | "swarm"
       | "teleports"
       | "isIllusion"
       | "illusionOf"
@@ -10325,6 +10393,7 @@ export class SimWorld {
       hidden: false,
       // The TYPE's own Locust, or one handed to it in its starting abilities (SimUnit.locust).
       locust: !!this.unitReg?.get(unit.typeId)?.abilities.includes("Aloc") || (opts?.abilities ?? []).some((a) => a.code === "Aloc"),
+      swarm: null,
       teleports: 0,
       isIllusion: false,
       illusionOf: 0,
@@ -19686,6 +19755,192 @@ export class SimWorld {
     return out;
   }
 
+  /** The Locust Swarms in the air right now (LocustSwarm). */
+  private locustSwarms: LocustSwarm[] = [];
+
+  /**
+   * Locust Swarm (`AUls`) is cast: the Crypt Lord starts letting locusts out, one every
+   * `Uls2` seconds until `Uls1` of them are in the air (20 at 0.2 — four seconds to empty
+   * him). A second cast while one is running replaces it (the 180 s cooldown against a 30 s
+   * duration means only a script's cooldown reset ever gets here).
+   */
+  private startLocustSwarm(caster: SimUnit, def: AbilityDef, lvl: AbilityLevel): void {
+    for (const old of this.locustSwarms) if (old.casterId === caster.id) this.endLocustSwarm(old, false);
+    this.locustSwarms = this.locustSwarms.filter((s) => s.casterId !== caster.id);
+    this.locustSwarms.push({
+      casterId: caster.id, code: def.code, unitId: lvl.summon || "uloc", owner: caster.owner, team: caster.team,
+      toRelease: Math.max(1, Math.round(this.dataOf(lvl, 0, 20))), releaseT: 0,
+      interval: Math.max(0, this.dataOf(lvl, 1, 0.2)),
+      left: lvl.heroDuration || lvl.duration || 30, recallT: 0,
+      perTarget: Math.max(1, Math.round(this.dataOf(lvl, 2, 7))),
+      factor: this.dataOf(lvl, 3, 0.75), threshold: this.dataOf(lvl, 4, 20),
+      area: lvl.area || 800, flags: def.targetFlags ?? [], members: [],
+    });
+  }
+
+  /** The renderer has made a swarm's locust (SummonRequest.swarm): enrol it. A body whose swarm
+   *  ended in the step between the request and the spawn has nobody to belong to and goes. */
+  joinSwarm(u: SimUnit, casterId: number): void {
+    const s = this.locustSwarms.find((x) => x.casterId === casterId);
+    if (!s || s.left <= 0) {
+      this.removeUnit(u.id);
+      return;
+    }
+    u.swarm = { casterId, stored: 0, returning: false, final: false, wanderT: 0, steerT: 0 };
+    s.members.push(u.id);
+  }
+
+  /** Take a swarm's bodies off the field: KILLED when the Crypt Lord died under them (they
+   *  drop where they are, each with its own Death clip), simply removed otherwise. */
+  private endLocustSwarm(s: LocustSwarm, slain: boolean): void {
+    for (const id of s.members) {
+      const u = this.units.get(id);
+      if (!u || u.hp <= 0) continue;
+      if (slain) this.kill(u);
+      else this.removeUnit(id);
+    }
+    s.members = [];
+    s.toRelease = 0;
+  }
+
+  /**
+   * Run every Locust Swarm for one step. The swarm is TWENTY UNITS and this is the whole of
+   * what makes them a swarm rather than twenty summons standing in a row (which is what they
+   * were: `uloc` has a Walk clip and a Death clip and nothing else — it is not a model that
+   * was ever meant to be seen standing still):
+   *
+   *  · RELEASE — one body out of the Crypt Lord every `Uls2` s.
+   *  · BITE — each idle locust is handed an enemy within `Area1` of the CRYPT LORD (the swarm
+   *    is his and goes where he goes), never more than `Uls3` (7) on one victim, and attacks it
+   *    with `uloc`'s own weapon. A victim that leaves the area, dies or goes untouchable is
+   *    let go.
+   *  · WANDER — with nothing to bite it never hovers: it flies to a fresh spot near him every
+   *    second or so (LOCUST_WANDER_*).
+   *  · CARRY — a locust holding `Uls5` (20) or more flies home, heals him by what it holds and
+   *    goes back out.
+   *  · RECALL — when the duration runs out every locust flies home, turns in whatever it has
+   *    and is gone. If he DIES, they die with him on the spot.
+   */
+  private tickLocustSwarms(dt: number): void {
+    if (!this.locustSwarms.length) return;
+    for (let i = this.locustSwarms.length - 1; i >= 0; i--) {
+      const s = this.locustSwarms[i];
+      const caster = this.units.get(s.casterId);
+      if (!caster || caster.hp <= 0) {
+        this.endLocustSwarm(s, true);
+        this.locustSwarms.splice(i, 1);
+        continue;
+      }
+      // An off-field Crypt Lord (in a Zeppelin, burrowed into a carrier) releases nothing and
+      // his swarm waits around the spot he left from; the clock runs all the same.
+      const away = isOffField(caster);
+      s.left -= dt;
+      if (s.left > 0 && s.toRelease > 0 && !away) {
+        s.releaseT -= dt;
+        while (s.releaseT <= 0 && s.toRelease > 0) {
+          s.releaseT += Math.max(s.interval, 1e-3);
+          s.toRelease--;
+          const facing = this.rng() * Math.PI * 2;
+          this.summonRequests.push({
+            unitId: s.unitId, x: caster.x, y: caster.y, facing, owner: s.owner, team: s.team,
+            summonLeft: 0, sourceId: s.casterId, swarm: true, summonArt: "", unsummonArt: "", atPoint: true,
+          });
+        }
+      }
+      if (s.left <= 0) {
+        s.toRelease = 0;
+        s.recallT += dt;
+      }
+      // How many locusts are on each victim already (the Uls3 cap), counted once per swarm.
+      const load = new Map<number, number>();
+      const live: number[] = [];
+      for (const id of s.members) {
+        const u = this.units.get(id);
+        if (!u || u.hp <= 0 || !u.swarm) continue;
+        live.push(id);
+        if (!u.swarm.returning && u.order === "attack" && u.targetId !== null) load.set(u.targetId, (load.get(u.targetId) ?? 0) + 1);
+      }
+      s.members = live;
+      let prey: SimUnit[] | null = null; // the victims in the area, found once and only if asked for
+      for (const id of live) {
+        const u = this.units.get(id)!;
+        const b = u.swarm!;
+        if (s.left <= 0 && !b.final) {
+          b.returning = true;
+          b.final = true;
+          b.steerT = 0;
+        }
+        if (b.final && s.recallT > LOCUST_RECALL_GRACE) {
+          this.removeUnit(id);
+          continue;
+        }
+        if (u.spawning > 0 || u.stunned || u.paused) continue;
+        if (!b.returning && b.stored >= s.threshold && u.swingLeft < 0) {
+          b.returning = true;
+          b.steerT = 0;
+        }
+        if (b.returning) {
+          const dx = caster.x - u.x;
+          const dy = caster.y - u.y;
+          if (dx * dx + dy * dy <= (caster.radius + 40) * (caster.radius + 40)) {
+            // Home: hand it over. Capped at his full life like any heal; a locust that comes
+            // back to a healthy Crypt Lord has still spent the trip.
+            if (b.stored > 0 && !away) caster.hp = Math.min(caster.maxHp, caster.hp + b.stored);
+            b.stored = 0;
+            b.returning = false;
+            if (b.final) this.removeUnit(id);
+            else b.wanderT = 0;
+            continue;
+          }
+          b.steerT -= dt;
+          if (b.steerT <= 0 || u.order !== "move") {
+            b.steerT = LOCUST_STEER;
+            this.issueMove(id, caster.x, caster.y);
+          }
+          continue;
+        }
+        // Out biting. Keep the victim it has while that victim is still the swarm's to bite…
+        const cur = u.order === "attack" && u.targetId !== null ? this.units.get(u.targetId) : undefined;
+        if (cur) {
+          if (this.locustPrey(s, caster, u, cur)) continue;
+          if (u.swingLeft >= 0) continue; // a bite already thrown lands (tickAttack's own rule)
+          load.set(cur.id, Math.max(0, (load.get(cur.id) ?? 1) - 1));
+        }
+        // …else take the nearest one that still has room on it.
+        prey ??= this.unitsInAreaInternal(caster.x, caster.y, s.area).filter((t) => this.locustPrey(s, caster, u, t));
+        let best: SimUnit | null = null;
+        let bestD = Infinity;
+        for (const t of prey) {
+          if ((load.get(t.id) ?? 0) >= s.perTarget || t.hp <= 0) continue;
+          const d = (t.x - u.x) * (t.x - u.x) + (t.y - u.y) * (t.y - u.y);
+          if (d < bestD) { bestD = d; best = t; }
+        }
+        if (best && this.issueAttack(id, best.id)) {
+          load.set(best.id, (load.get(best.id) ?? 0) + 1);
+          continue;
+        }
+        // Nothing to bite: buzz about him. Never left idle — a locust has no Stand clip.
+        b.wanderT -= dt;
+        if (b.wanderT <= 0 || u.order !== "move") {
+          b.wanderT = LOCUST_WANDER_MIN + this.rng() * (LOCUST_WANDER_MAX - LOCUST_WANDER_MIN);
+          const ang = this.rng() * Math.PI * 2;
+          const r = LOCUST_WANDER_RADIUS * Math.sqrt(this.rng());
+          this.issueMove(id, caster.x + Math.cos(ang) * r, caster.y + Math.sin(ang) * r);
+        }
+      }
+      if (s.left <= 0 && !s.members.length) this.locustSwarms.splice(i, 1);
+    }
+  }
+
+  /** May this swarm's locust `u` bite `t`? An enemy the ability's Targets Allowed admits,
+   *  inside `Area1` of the Crypt Lord, that the locust's weapon reaches and its owner can see. */
+  private locustPrey(s: LocustSwarm, caster: SimUnit, u: SimUnit, t: SimUnit): boolean {
+    if (t.hp <= 0 || t.invulnerable || isOffField(t)) return false;
+    const reach = s.area + t.radius;
+    if ((t.x - caster.x) * (t.x - caster.x) + (t.y - caster.y) * (t.y - caster.y) > reach * reach) return false;
+    return this.areaEffectAffects(s.casterId, s.team, s.flags, t) && this.hostile(u, t) && this.canAttack(u, t) && this.canSee(caster, t);
+  }
+
   private tickSpellFields(dt: number): void {
     for (let i = this.spellFields.length - 1; i >= 0; i--) {
       const f = this.spellFields[i];
@@ -20358,6 +20613,7 @@ export class SimWorld {
       this.recomputeStats(t); // `invulnerable` and friends are derived off the buffs
     },
     missileBack: (from, to, def) => this.spawnVisualMissile(from, to, def),
+    startLocustSwarm: (caster, def, lvl) => this.startLocustSwarm(caster, def, lvl),
     requestSummon: (unitId, x, y, facing, owner, team, dur, src, art, atPoint, bound, cloakAfter) => {
       this.summonRequests.push({ unitId, x, y, facing, owner, team, summonLeft: dur, summoned: true, sourceId: src, summonArt: art?.summon ?? "", unsummonArt: art?.unsummon ?? "", atPoint: !!atPoint, bound: !!bound, cloakAfter });
     },
@@ -21006,7 +21262,7 @@ export class SimWorld {
    *  ends — whether it exhausted its waves or the caster was interrupted. */
   activeSpellFields(): SpellFieldView[] {
     if (this.clientLive) return this.clientLive.fields; // a client: the host's list (setClientLiveViews)
-    return this.spellFields.map((f) => ({ code: f.code, x: f.x, y: f.y, loopSound: f.loopSound ?? "", shake: f.shake ?? false, casterId: f.casterId, casterArt: f.casterArt ?? "", ...(f.centerArt ? { centerArt: f.centerArt } : {}) }));
+    return this.spellFields.map((f) => ({ code: f.code, x: f.x, y: f.y, loopSound: f.loopSound ?? "", shake: f.shake ?? false, casterId: f.casterId, casterArt: f.casterArt ?? "", ...(f.centerArt ? { centerArt: f.centerArt } : {}), ...(f.followCaster ? { follow: true } : {}) }));
   }
 
   /** Play a one-shot effect model at a point. For the spawn paths the renderer owns:
@@ -21395,6 +21651,7 @@ export class SimWorld {
     simProfile.end("sim.world.projectiles");
     simProfile.begin("sim.world.spells");
     this.tickSpellFields(dt); // Blizzard-style repeating area effects
+    this.tickLocustSwarms(dt); // …and the Locust Swarms: release, bite, carry home
     this.tickDrains(); // a broken Drain channel takes its buffs and its beam down with it
     this.tickPossessions(dt); // …and a Possession that survived its 4.5s changes hands
     this.tickConversions(dt); // …and a Dark Conversion's villager waking up a zombie
@@ -26115,6 +26372,17 @@ export class SimWorld {
    *  WC3 ability damage ignores the armor value and plays its own effects. Returns
    *  the HP removed (0 if the target was invulnerable). */
   private landDamage(target: SimUnit, amount: number, attackerId: number, recordHit: boolean, weaponSound = "", raised: DamageBlow | null = null): number {
+    const dealt = this.landDamageInner(target, amount, attackerId, recordHit, weaponSound, raised);
+    // A LOCUST's bite: `Uls4` of what it actually took (after armour — the reason a swarm on
+    // heavy armour brings so little home) goes into what it is carrying (LocustBody.stored).
+    if (dealt > 0 && attackerId) {
+      const body = this.units.get(attackerId)?.swarm;
+      if (body) body.stored += dealt * (this.locustSwarms.find((s) => s.casterId === body.casterId)?.factor ?? 0);
+    }
+    return dealt;
+  }
+
+  private landDamageInner(target: SimUnit, amount: number, attackerId: number, recordHit: boolean, weaponSound = "", raised: DamageBlow | null = null): number {
     if (target.invulnerable) return 0; // Divine Shield / Avatar: immune to damage
     if (this.godProtected(target)) return 0; // `whosyourdaddy`: the cheater's units take nothing
     // The script's DAMAGING event, for a blow that did not come through a path which already
@@ -29291,6 +29559,7 @@ export class SimWorld {
    *  an un-triggered neutral-hostile creep camp: you only pull a camp by attacking
    *  it or walking into its own aggro range, never by an idle unit noticing it. */
   private acquireTarget(u: SimUnit, range: number, strikeOnly = false, airOnly = false): SimUnit | null {
+    if (u.swarm) return null; // a locust bites what its swarm hands it (tickLocustSwarms)
     // A Gargoyle on PRIORITIZE takes the nearest enemy FLYER in reach before anything on the
     // ground (prioritizesAir) — and whatever it would have taken anyway when there is none.
     if (!airOnly && this.prioritizesAir(u)) {
@@ -29347,6 +29616,7 @@ export class SimWorld {
    *  when the enemy is being focused down and isn't hitting back, and it still can't pull a
    *  peaceful/un-aggroed creep camp (no ally is attacking those). */
   private assistTarget(u: SimUnit, range: number): SimUnit | null {
+    if (u.swarm) return null; // …and answers nobody's fight but the swarm's
     let best: SimUnit | null = null;
     let bestGap = range;
     for (const ally of this.units.values()) {

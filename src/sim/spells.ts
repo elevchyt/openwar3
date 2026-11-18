@@ -216,6 +216,8 @@ export interface SpellApi {
   emitSplat(splatId: string, x: number, y: number): void;
   /** Register a repeating area effect (Blizzard waves, Rain of Fire, …). */
   addSpellField(f: SpellFieldInit): void;
+  /** Start a Locust Swarm around `caster` (SimWorld.tickLocustSwarms). */
+  startLocustSwarm(caster: SimUnit, def: AbilityDef, lvl: AbilityLevel): void;
   /** Drain up to `amount` mana from a unit; returns the mana actually removed
    *  (Mana Burn deals damage equal to what it burned). */
   burnMana(target: SimUnit, amount: number): number;
@@ -2906,22 +2908,23 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // column here at all. Modelling it as a nameless damage field (what this was) is why it
   // had "no particles": the locusts ARE the particles.
   //
-  // The field it still registers deals nothing — it is there to hold the swarm's own
-  // `Effectsoundlooped = LocustSwarmLoop` for the duration and to be torn down with it.
-  // NOT YET MODELLED: the DataD/DataE return that heals the Crypt Lord off their bites.
+  //
+  // …and twenty units that stand where they were summoned are not a swarm either. What they
+  // DO — come out one at a time, bite what is near the Crypt Lord (no more than DataC to a
+  // victim), carry DataD of each bite home once they hold DataE, and all fly home at the end —
+  // is SimWorld.tickLocustSwarms; this only starts it.
+  //
+  // The field it registers deals nothing: it holds the swarm's own `Effectsoundlooped =
+  // LocustSwarmLoop` for the duration, RIDING the Crypt Lord (the swarm goes where he goes,
+  // and it stops with him if he dies).
   AUls: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
     const total = lvl.heroDuration || lvl.duration || 30;
-    const unit = lvl.summon || "uloc";
-    const count = Math.max(1, d(lvl, 0, 20));
-    for (let i = 0; i < count; i++) {
-      const facing = caster.facing + (i / count) * Math.PI * 2;
-      api.requestSummon(unit, caster.x, caster.y, facing, caster.owner, caster.team, total, caster.id, summonArt(def), false);
-    }
+    api.startLocustSwarm(caster, def, lvl);
     api.addSpellField({
       code: def.code, x: caster.x, y: caster.y, area: lvl.area || 800,
       damagePerWave: 0, waves: Math.max(1, Math.round(total)), interval: 1,
-      casterId: caster.id, art: "", loopSound: fieldLoop(def),
+      casterId: caster.id, art: "", loopSound: fieldLoop(def), followCaster: true,
     });
   },
 

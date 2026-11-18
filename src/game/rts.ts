@@ -800,6 +800,9 @@ function inventoryAbilities(innate: ReadonlyArray<{ id: string; code: string; da
   return innate.filter((a) => a.code === "AInv").map((a) => ({ id: a.id, slots: inventoryCapacity(a.data[0]) }));
 }
 
+/** The least time between two of a Locust Swarm's bite noises (RtsController.swarmSoundDue). Ours. */
+const SWARM_SOUND_GAP_MS = 280;
+
 export class RtsController {
   private sim: SimWorld;
   private entries: Entry[] = [];
@@ -2785,7 +2788,7 @@ export class RtsController {
       // which the hit carries (SimWorld.hits), and only failing that the def's one art: a
       // two-slot unit throws two different missiles (the Chimaera's acid and lightning).
       const art = h.missileArt || this.defOf(h.attackerId)?.missileArt;
-      if (art) this.sounds.playMissile(art, "impact", at); // ranged
+      if (art && this.swarmSoundDue(art, "impact")) this.sounds.playMissile(art, "impact", at); // ranged
     }
     for (const workerId of this.sim.drainChops()) {
       const def = this.defOf(workerId);
@@ -11172,6 +11175,40 @@ export class RtsController {
    */
   private isLocust(e: Entry): boolean {
     return !!this.sim.units.get(e.simId)?.locust || !!this.registry.get(e.typeId)?.abilities.includes("Aloc");
+  }
+
+  /** The missile arts thrown by LOCUST unit types (`Aloc` in the abilList — in the stock game
+   *  exactly `uloc`'s LocustMissile), lowercased and without extension. Built on first ask. */
+  private swarmArts: Set<string> | null = null;
+  /** When each swarm missile's launch / impact noise was last let through (swarmSoundDue). */
+  private readonly swarmSoundAt = new Map<string, number>();
+
+  /**
+   * May a LOCUST's missile make its noise now? A Locust Swarm is twenty units biting about once
+   * a second each, and the game's own data gives every bite two sounds (LocustMissile.mdx keys
+   * `MLSL`/`MLSH`, which AnimLookups maps to the Banshee's launch and hit). Asked for twenty
+   * times a second, each request cut the copy already playing and started it again — a
+   * stutter, not a swarm. So the swarm's bites are heard as a patter: one launch and one hit
+   * per SWARM_SOUND_GAP, whoever threw them. The gap is OURS — the engine's own voice limits
+   * are what do this in the game, and no file states them.
+   *
+   * Keyed on the ART rather than on the thrower, because a missile's spawn record does not say
+   * who threw it and a LAN client's copy says even less; true for anything that is not a
+   * locust's missile.
+   */
+  swarmSoundDue(art: string, kind: "launch" | "impact"): boolean {
+    const norm = (a: string): string => a.toLowerCase().replace(/\.(mdl|mdx)$/, "");
+    if (!this.swarmArts) {
+      this.swarmArts = new Set();
+      for (const d of this.registry.all()) if (d.missileArt && d.abilities.includes("Aloc")) this.swarmArts.add(norm(d.missileArt));
+    }
+    const key = norm(art);
+    if (!this.swarmArts.has(key)) return true;
+    const now = performance.now();
+    const last = this.swarmSoundAt.get(key + kind) ?? -Infinity;
+    if (now - last < SWARM_SOUND_GAP_MS) return false;
+    this.swarmSoundAt.set(key + kind, now);
+    return true;
   }
 
   /**
