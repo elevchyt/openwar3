@@ -10022,10 +10022,12 @@ export class MapViewerScene {
   /** Position/scale/colour the flat selection + hover rings each frame, plus
    *  the transient yellow harvest-order flashes. */
   private updateSelectionCircles(dt: number): void {
-    // "Aiming mode": a spell or an aimed ITEM is armed for targeting. While
-    // aiming, the persistent selection/preview rings under the army are suppressed so
-    // the ground isn't cluttered (issue #20). What replaces them depends on the aim:
-    //   • point-AoE (ubersplat): the splat + green rings on the units it would hit;
+    // "Aiming mode": a spell or an aimed ITEM is armed for targeting. The SELECTION rings
+    // under the army STAY — the caster and the army it leads are still selected, and WC3 keeps
+    // their circles through an aim (an Ensnare or an Impale used to blank them, issue #20's
+    // decluttering taken back out). Only the drag-box preview is dropped, since an armed
+    // click cannot start a marquee. What the aim adds on top depends on its shape:
+    //   • point-AoE (ubersplat): the splat + the green tint on the units it would hit;
     //     the hover ring is hidden (the green target rings are the indicator).
     //   • single-target: the normal hover ring stays on whatever unit the cursor is
     //     over — allegiance-coloured, NOT green — so the player still sees their target.
@@ -10037,7 +10039,7 @@ export class MapViewerScene {
     // The ring keys painted this frame; anything in ringKeys that isn't refreshed here
     // is a stale ring (deselected unit / expired flash) and gets removed at the end.
     const live = new Set<string>();
-    const rings = aiming ? [] : (this.rts?.selectionRings() ?? []);
+    const rings = this.rts?.selectionRings() ?? [];
     for (let i = 0; i < rings.length; i++) this.addRing(`sel-${i}`, rings[i], null, false, live);
     // Live drag-box preview: full-green rings on the units the marquee currently
     // covers, so the player sees the pick before releasing the mouse.
