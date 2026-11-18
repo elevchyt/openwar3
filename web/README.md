@@ -49,6 +49,10 @@ Blizzard assets, and the typeface (**OpenWar3 Sans**, an OFL subset of Nowar San
 
 ## Adding feature footage
 
+A new or replaced screenshot in `public/media/` wants `pnpm media` afterwards: it cuts the
+480/960 px copies (`<name>@<w>.avif`) the cards pick from with `srcset`, so an old CPU never
+decodes a 1600×900 AVIF for a 400 px card, and regenerates `lib/mediaVariants.ts`.
+
 Put clips in `public/media/` and change the card's `media` in `app/page.tsx`:
 
 ```ts

@@ -1,4 +1,4 @@
-import Image from "next/image";
+import { MEDIA_VARIANTS } from "@/lib/mediaVariants";
 import type { ReactNode } from "react";
 import { PlayIcon } from "./Icons";
 
@@ -44,16 +44,20 @@ export function FeatureCard({ title, children, media }: { title: string; childre
 }
 
 // An AVIF is already the format the optimizer would transcode to, so it is served as it was encoded
-// (web/public/media/) rather than re-encoded to WebP on the way out.
+// (web/public/media/) rather than re-encoded to WebP on the way out — but at the size the card
+// draws it: a screenshot carries smaller copies beside it (scripts/media-variants.mjs, `pnpm media`)
+// and the browser picks one off `srcset`. AVIF decoding is what made the page crawl on an old
+// Core 2 Duo laptop, and a 1600×900 shot in a 400 px card was ten times the pixels it needed.
+// A plain <img>: next/image builds no `srcset` for an unoptimized source.
+const SIZES = "(max-width: 720px) 100vw, (max-width: 1100px) 50vw, 400px";
+
 function FeatureImage({ src, alt }: { src: string; alt: string }) {
+  const v = MEDIA_VARIANTS[src];
+  const srcSet = v
+    ? [...v.widths.map((w) => `${src.replace(/\.avif$/, `@${w}.avif`)} ${w}w`), `${src} ${v.width}w`].join(", ")
+    : undefined;
   return (
-    <Image
-      src={src}
-      alt={alt}
-      draggable={false}
-      fill
-      unoptimized={src.endsWith(".avif")}
-      sizes="(max-width: 720px) 100vw, (max-width: 1100px) 50vw, 400px"
-    />
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={src} srcSet={srcSet} sizes={srcSet ? SIZES : undefined} alt={alt} draggable={false} loading="lazy" decoding="async" />
   );
 }

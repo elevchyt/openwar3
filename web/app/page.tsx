@@ -120,7 +120,8 @@ export default async function Home() {
       <main id="top">
         <section className="hero">
           <div className="hero__backdrop" aria-hidden>
-            <Image src="/media/game2.avif" alt="" draggable={false} fill priority sizes="100vw" />
+            {/* drawn blurred at 30 % under a vignette, so two thirds of the viewport's width is plenty */}
+            <Image src="/media/game2.avif" alt="" draggable={false} fill priority sizes="(max-width: 720px) 100vw, 66vw" />
           </div>
           <div className="hero__content">
             <h1 className="sr-only">OpenWar3</h1>
