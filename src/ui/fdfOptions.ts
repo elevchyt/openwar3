@@ -21,6 +21,7 @@ import { nativeVsync, relaunchNative, setNativeVsync } from "../assets/nativeIns
 import { showGlueDialog } from "./glueDialog";
 import { showHotkeyEditor } from "./hotkeyEditor";
 import { setGameTip } from "./gameTip";
+import { Settings, createElement as lucideIcon } from "lucide";
 import { bindGamepadButton, gamepadButtonPressed } from "./gamepad";
 import { bindVoiceRow, voiceDownloadPressed } from "./voiceOptions";
 
@@ -272,7 +273,16 @@ export async function mountOptions(
     if (el) el.hidden = working.hotkeys !== "custom";
     // An icon says nothing by itself, so it names what it opens in the game's own tooltip slab.
     const btn = s.frame("HotkeyEditorButton");
-    if (btn) setGameTip(btn, "Hotkey Editor");
+    if (btn) {
+      setGameTip(btn, "Hotkey Editor");
+      // Lucide's `settings` cog (lucide.dev, ISC) over the button's plain glue face
+      // (OptionsMenu.fdf) — once per build, and a build makes a new button.
+      if (!btn.querySelector(".ow3-hk-cog")) {
+        const cog = lucideIcon(Settings, { "stroke-width": 2.25, "aria-hidden": "true" });
+        cog.classList.add("ow3-hk-cog");
+        btn.append(cog);
+      }
+    }
   }
 
   /**

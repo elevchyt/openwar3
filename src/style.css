@@ -4410,6 +4410,17 @@ body.in-game .fdf-screen.fdf-ingame {
 }
 .ow3-sites-entry:hover,
 .ow3-sites-entry.pad-hover { color: #fcd312; }
+/* The hotkey editor's button beside "Hotkeys:" (OptionsMenu.fdf, ui/fdfOptions.ts): Lucide's
+   settings cog in the glue label gold over the plain glue face, white under the pointer as a glue
+   label is (FontHighlightColor), sunk with the face while held, grey when disabled. */
+.ow3-hk-cog {
+  position: absolute; left: 50%; top: 50%; width: 62%; height: 72%;
+  transform: translate(-50%, -50%); pointer-events: none; z-index: 2;
+  color: #fcd312; filter: drop-shadow(1px 1px 0 rgba(0, 0, 0, 0.9));
+}
+.fdf-button:hover > .ow3-hk-cog, .fdf-button.pad-hover > .ow3-hk-cog { color: #fff; }
+:where(:root:not(.ow3-alt-press)) .fdf-button:active > .ow3-hk-cog { transform: translate(calc(-50% - 1px), calc(-50% + 1px)); }
+.fdf-button.fdf-disabled > .ow3-hk-cog { color: #808080; }
 /* The dialog itself is glue frames (MapSitesDialog.fdf: bordered glue buttons, the edit box, the
    glue scroll bar); what is left for CSS is what the panel puts INTO those frames. */
 /* A Lucide icon on a glue button (ui/mapSitesPanel.ts `iconInto`): sized off the label's own type
