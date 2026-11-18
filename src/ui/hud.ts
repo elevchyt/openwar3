@@ -474,8 +474,12 @@ export interface HudDriver {
   /** Which page of the card is up — "root", or a submenu (the build list, the hero's skill
    *  page). The gamepad's selector starts over when it turns (issue #162). */
   cardPage(): string;
-  /** Run a command-card button by id. */
-  runCommand(id: string): void;
+  /** Run a command-card button by id. `clicked`: the card already played the button's click
+   *  at the PRESS (`commandClick`), so the release must not play it a second time. */
+  runCommand(id: string, clicked?: boolean): void;
+  /** The command card's button click — UISounds.slk `InterfaceClick`, Sound\Interface\MouseClick1.wav —
+   *  played the moment a mouse button goes DOWN on a command button, whatever the button is. */
+  commandClick(): void;
   /** The primary selected hero's 6 inventory slots (null = empty; [] = no inventory). */
   inventory(): Array<HudInvSlot | null>;
   /** Left-click / numpad an inventory slot: use it (or arm its drop/give targeting). */
@@ -3884,8 +3888,12 @@ export class GameHud {
       const inert = c.passive || c.disabled;
       onPress(
         btn,
-        inert ? null : () => this.driver.runCommand(c.id),
-        inert || !c.altId ? null : () => this.driver.runCommand(c.altId!),
+        inert ? null : () => this.driver.runCommand(c.id, true),
+        inert || !c.altId ? null : () => this.driver.runCommand(c.altId!, true),
+        // EVERY button clicks the moment it is pressed — a passive and a greyed one included, which
+        // take no order but are still a button the player pressed (the developer's rule). Played on
+        // the PRESS rather than the release that fires the order, so the release passes `clicked`.
+        () => this.driver.commandClick(),
       );
       btn.oncontextmenu = (e) => e.preventDefault();
       btn.onpointerenter = () => {
@@ -5368,15 +5376,18 @@ function onPress(
   el: HTMLElement,
   fn: ((e: PointerEvent) => void) | null,
   alt: ((e: PointerEvent) => void) | null = null,
+  down: (() => void) | null = null,
 ): void {
   if (!fn && !alt) {
-    el.onpointerdown = null;
     el.onpointerup = null;
     if (pressedEl === el) setPressed(null); // the slot's command went away mid-hold
+    // An inert button takes no press, but may still answer one (`down` — the command card's click).
+    el.onpointerdown = down ? (e) => { if (e.button === 0) down(); } : null;
     return;
   }
   const forButton = (b: number): ((e: PointerEvent) => void) | null => (b === 0 ? fn : b === 2 ? alt : null);
   el.onpointerdown = (e) => {
+    if (e.button === 0 || forButton(e.button)) down?.();
     if (!forButton(e.button)) return; // a button with no meaning here takes no press
     e.preventDefault();
     pressedButton = e.button;

@@ -11530,7 +11530,8 @@ export class MapViewerScene {
       },
       commandCard: () => this.commandCard(),
       cardPage: () => this.cardPage,
-      runCommand: (id) => this.runCommand(id),
+      runCommand: (id, clicked) => this.runCommand(id, clicked),
+      commandClick: () => this.commandClick(),
       unloadCargo: (hostId, passengerId) => !!this.rts?.unloadCargo(hostId, passengerId),
       inventory: () =>
         (this.rts?.inventorySlots() ?? []).map((s) =>
@@ -14982,10 +14983,21 @@ export class MapViewerScene {
     }
   }
 
-  private runCommand(id: string): void {
+  /** The command card's button click: UISounds.slk `InterfaceClick` = Sound\Interface\MouseClick1.wav,
+   *  a UI sound on this client alone (no position). Played for EVERY press of a command — the
+   *  button being pressed, not the order being confirmed on the map — so a Move, a Hold Position,
+   *  a spell that then waits for its target, a passive and a greyed button all click alike. */
+  private commandClick(): void {
+    this.sounds?.unlock(); // the press is the gesture that may open the audio context — unlock FIRST
+    this.sounds?.playUi("InterfaceClick");
+  }
+
+  /** `clicked`: the card already played the click at the mouse PRESS (HudDriver.commandClick). */
+  private runCommand(id: string, clicked = false): void {
     const rts = this.rts;
     if (!rts) return;
     const sent = rts.sendSeq;
+    if (!clicked) this.commandClick(); // a hotkey, the gamepad, a spoken command
     this.pressCommand(id);
     // A press that went to the host: draw the card NOW, off the prediction the command just
     // made, and hold it until the host has heard us (see heldCard). Drawn here rather than next
@@ -14995,9 +15007,7 @@ export class MapViewerScene {
 
   private pressCommand(id: string): void {
     if (!this.rts) return;
-    if (id === "noop") return;
-    this.sounds?.playUi("InterfaceClick"); // WC3 command-card button click
-    this.sounds?.unlock(); // keyboard hotkeys are a gesture too
+    if (id === "noop") return; // its click was played by runCommand / the card, like every other press
     if (id === "move" || id === "attack" || id === "attackground" || id === "patrol" || id === "rally" || id === "repair") {
       this.rts.orderMode = id;
       this.hud?.setArmed(true);
