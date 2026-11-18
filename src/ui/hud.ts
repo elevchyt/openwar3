@@ -3224,6 +3224,25 @@ export class GameHud {
     return bar;
   }
 
+  /**
+   * `SetReservedLocalHeroButtons(n)` — leave the top `n` places of the hero bar EMPTY, so the
+   * player's own heroes start below them (a map that draws something of its own in that corner,
+   * or keeps the first places for heroes an ally shares). The places are spacers the size of a
+   * slot, put in ahead of the real ones: the heroes keep their order, their F-keys and their
+   * click indices, and simply hang lower. Capped at the bar's own seven.
+   */
+  setReservedHeroSlots(count: number): void {
+    const bar = this.heroSlots[0]?.slot.parentElement;
+    if (!bar) return;
+    for (const old of bar.querySelectorAll(".hud-hero-reserved")) old.remove();
+    const n = Math.max(0, Math.min(HERO_BAR.max, Math.floor(count)));
+    for (let i = 0; i < n; i++) {
+      const spacer = document.createElement("div");
+      spacer.className = "hud-hero-reserved";
+      bar.prepend(spacer);
+    }
+  }
+
   /** Push the current heroes onto the bar's slots. Called every frame: seven slots of
    *  bar widths is cheaper than working out whether anything moved. */
   private refreshHeroBar(): void {

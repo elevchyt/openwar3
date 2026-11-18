@@ -2249,6 +2249,20 @@ Things the install settles that are easy to get backwards:
   (`RescueUnitBJ`). The default range is not in any data file — 384 is the value the World Editor
   offers for "Set Rescue Range" (`UI\TriggerData.txt`), which is the nearest thing the install has.
 
+Four of them are the SCREEN's, and each has one place it lands:
+
+- **`DisplayLoadDialog`** opens the F10 menu already on its Load Game face (`EscMenu.showLoad`) —
+  what Blizzard.j's defeat dialog calls for its Load button. Nothing happens where Load Game is
+  greyed anyway (no save store, multiplayer, a replay window): "Singleplayer only" (jassdoc).
+- **`DisableRestartMission`** greys the End Game panel's **Restart Mission** — which is therefore
+  a LIVE button now, where it used to be greyed for good: in single player it plays the map
+  again from the top through the same door the defeat dialog's Restart uses (`RestartGame`).
+  "This button is only enabled in singleplayer" (jassdoc), and never in a replay. It restarts at
+  once: the FDF ships a confirmation panel for Exit Program and none for this.
+- **`SetPlayerOnScoreScreen(p, false)`** drops that player's row from the score table.
+- **`SetReservedLocalHeroButtons(n)`** leaves the top `n` places of the hero bar empty; the
+  heroes keep their order, F-keys and click indices and hang lower.
+
 What is still NOT behaviour, so nobody mistakes a `✓` for it:
 
 - **Bone look-at and clip blending** (`SetUnitLookAt`, `ResetUnitLookAt`, `SetUnitBlendTime`) —
@@ -2266,9 +2280,6 @@ What is still NOT behaviour, so nobody mistakes a `✓` for it:
 - **`TriggerExecuteWait`** runs the callee as `TriggerExecute` does and does not park the caller.
 - **`EnableSelect`/`EnableDragSelect`'s `ui` flag** (draw the indicator or not) and `EnablePreSelect`
   are not modelled; the `state` half of the first two is.
-- **Hooks with no host yet** (the native is registered and calls a hook nothing implements):
-  `DisplayLoadDialog`, `SetPlayerOnScoreScreen`, `DisableRestartMission`,
-  `SetReservedLocalHeroButtons`.
 - **`BlzSetSpecialEffectTimeScale` / `BlzSetSpecialEffectTime`** stay unimplemented on purpose —
   their documentation does not settle whether normal speed is 1.0 or 100.0 (natives/effects.ts);
   `BlzPlaySpecialEffectWithTimeScale` plays its clip and leaves the speed alone.

@@ -1741,6 +1741,10 @@ export class MapViewerScene {
   private scriptDragSelect = true;
   /** `DoNotSaveReplay` — the map asked that this match leave no replay file. */
   private replayForbidden = false;
+  /** `DisableRestartMission(true)` — the map took the F10 menu's Restart Mission away. */
+  private restartDisabled = false;
+  /** `SetPlayerOnScoreScreen(p, false)` — players the map keeps OFF the score screen. */
+  private offScoreScreen = new Set<number>();
   /** SetGameSpeed / GetGameSpeed — the common.j gamespeed index. 2 = MAP_SPEED_NORMAL. */
   private gameSpeed = 2;
   /** The PLAYER's Game Speed (src/data/gameSpeed.ts) — a different thing from the script's
@@ -5299,6 +5303,22 @@ export class MapViewerScene {
       },
       setDoodadAnimation: (area, doodadId, nearestOnly, animation, animRandom) =>
         this.setDoodadAnimation(area, doodadId, nearestOnly, animation, animRandom),
+      // DisplayLoadDialog — the F10 menu, already on its Load Game face. "Singleplayer only …
+      // nothing will happen" otherwise (jassdoc), which is where Load Game is greyed anyway.
+      displayLoadDialog: () => {
+        if (this.gameMenu?.showLoad()) this.syncPanelPause();
+      },
+      // DisableRestartMission(flag) — TRUE greys the menu's Restart Mission (`canRestart`).
+      disableRestartMission: (flag) => {
+        this.restartDisabled = flag;
+      },
+      // SetPlayerOnScoreScreen(p, flag) — whether the player has a row (`scoreTable`).
+      setPlayerOnScoreScreen: (player, flag) => {
+        if (flag) this.offScoreScreen.delete(player);
+        else this.offScoreScreen.add(player);
+      },
+      // SetReservedLocalHeroButtons(n) — n empty places at the top of the hero bar.
+      setReservedHeroButtons: (count) => this.hud?.setReservedHeroSlots(count),
     };
   }
 
@@ -5904,6 +5924,9 @@ export class MapViewerScene {
     this.scriptSelect = true;
     this.scriptDragSelect = true;
     this.replayForbidden = false;
+    this.restartDisabled = false;
+    this.offScoreScreen.clear();
+    this.hud?.setReservedHeroSlots(0);
     this.originHidden = false; // a map's BlzHideOriginFrames is that map's
     document.body.classList.remove("cine-on", "dialog-on");
     this.gameSpeed = 2; // MAP_SPEED_NORMAL
@@ -11816,6 +11839,16 @@ export class MapViewerScene {
         this.gameMenu?.hide();
         this.onLoadGame?.(name);
       },
+      // Restart Mission: the same map again, from the top, on the difficulty it is being played
+      // at — the door the defeat dialog's Restart already leaves through (`RestartGame`). "Only
+      // enabled in singleplayer" (jassdoc), never in a replay, and not where the map called
+      // DisableRestartMission.
+      onRestart: () => {
+        this.gameMenu?.hide();
+        this.scriptPaused = false;
+        this.onRestart?.(this.gameDifficulty);
+      },
+      canRestart: () => !!this.onRestart && !this.multiplayerMatch && !this.replayPlayback && !this.restartDisabled,
     });
     this.allies?.dispose();
     this.allies = new AllianceDialogOverlay(ui, this.vfs, SKIN_SECTION[this.localRace], {
@@ -12727,7 +12760,8 @@ export class MapViewerScene {
     if (!rts || (rts.frozenClient && !anyway)) return null;
     // `PLAYER_GAME_RESULT_VICTORY` = 0 (Scripts\common.j) — see `playerGameOver`.
     const PLAYER_GAME_RESULT_VICTORY = 0;
-    const rows: ScoreRow[] = this.scoreSeats.map((seat) => rts.scoreRowFor({
+    // A player the map took off the score screen (SetPlayerOnScoreScreen) has no row.
+    const rows: ScoreRow[] = this.scoreSeats.filter((seat) => !this.offScoreScreen.has(seat.id)).map((seat) => rts.scoreRowFor({
       player: seat.id,
       name: this.playerLabel(seat.id),
       race: this.matchRaces.get(seat.id) ?? "human",

@@ -1941,6 +1941,14 @@ body.hud-widget-skinned .obs-sel-bar .obs-bar-fill.progress { background: var(--
 /* …and the box the skill-point effect is placed against: it hangs off the SLOT rather than
    off the portrait, because it draws behind the portrait (see `.hud-herolevel-fx`). */
 .hud-hero-slot { width: var(--hero-slot); position: relative; }
+/* A place a script RESERVED at the top of the bar (SetReservedLocalHeroButtons): nothing drawn,
+   exactly one slot tall — the portrait, the gap under it and the bars — so the heroes below
+   keep the bar's own pitch. */
+.hud-hero-reserved {
+  width: var(--hero-slot);
+  height: calc(var(--hero-btn) + var(--hero-bar-gap) + var(--hero-bars));
+  flex: none;
+}
 /* The art is the hero's `BTN*.blp` and NOTHING else, filling the button edge to edge — the
    same rule the idle-worker button follows, and for the same reason: a command button in WC3
    carries its frame IN the texture. BTNHeroArchMage.blp is a 64x64 portrait already inside a

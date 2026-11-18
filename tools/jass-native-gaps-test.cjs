@@ -92,6 +92,10 @@ const hooks = {
   chooseRandomNPBuilding: () => 'ntav',
   setAltMinimapIcon: (path) => log('altIcon', path),
   setUnitAltIcon: (id, flag) => log('usesAltIcon', id, flag),
+  displayLoadDialog: () => log('loadDialog'),
+  disableRestartMission: (flag) => log('restartOff', flag),
+  setPlayerOnScoreScreen: (p, flag) => log('scoreRow', p, flag),
+  setReservedHeroButtons: (n) => log('reserved', n),
 };
 
 const SRC = `
@@ -237,6 +241,13 @@ function Ui takes nothing returns nothing
     call DoNotSaveReplay()
     call SetDoodadAnimationBJ("death", 'D00A', 512.0, Location(1.0, 2.0))
 endfunction
+function Screen takes nothing returns nothing
+    call DisplayLoadDialog()
+    call DisableRestartMission(true)
+    call SetPlayerOnScoreScreenBJ(false, Player(3))
+    call SetReservedLocalHeroButtons(2)
+    call SetReservedLocalHeroButtons(-4)
+endfunction
 function Region takes nothing returns string
     local string s = ""
     set rg = CreateRegion()
@@ -374,6 +385,9 @@ check('selection, forced keys (letters and digits only, first character), cheat,
   ['key', 'B'], ['key', 'Escape'], ['cheat', 'whosyourdaddy'], ['noReplay'],
   ['doodad', { x: 1, y: 2, radius: 512 }, 'D00A', false, 'death', false],
 ]);
+run('Screen');
+check('the four that are the screen\'s: load dialog, Restart Mission, a score row (the BJ puts the flag first), reserved hero buttons (never negative)', take(),
+  [['loadDialog'], ['restartOff', true], ['scoreRow', 3, false], ['reserved', 2], ['reserved', 0]]);
 check('settings nothing else consumes are stored and read back', run('Stored').s, 'density,gametype,button,prio');
 check('TriggerWaitOnSleeps is per trigger', run('Waits').b, true);
 check('ChooseRandomNPBuildingBJ', run('NpBuilding').n, rawcodeToInt('ntav'));
@@ -384,7 +398,7 @@ console.log('\nwith no engine attached every one of them still runs');
   const bare = buildInterpreter([common, COMPAT_PRELUDE, blizzard, SRC], { hooks: {} });
   bare.callFunction('InitBlizzard', []);
   let threw = '';
-  for (const fn of ['Make', 'Anims', 'World', 'Alarms', 'PropDefault', 'PropSet', 'Build', 'Instant', 'HandOver', 'Stock', 'Terrain', 'Names', 'Art', 'SpellFx', 'Faces', 'ItemWords', 'Dec', 'Tax', 'Score', 'Ui', 'Stored', 'NpBuilding', 'Internals']) {
+  for (const fn of ['Make', 'Anims', 'World', 'Alarms', 'PropDefault', 'PropSet', 'Build', 'Instant', 'HandOver', 'Stock', 'Terrain', 'Names', 'Art', 'SpellFx', 'Faces', 'ItemWords', 'Dec', 'Tax', 'Score', 'Ui', 'Screen', 'Stored', 'NpBuilding', 'Internals']) {
     try { bare.callFunction(fn, []); } catch (err) { threw += `${fn}: ${err.message}; `; }
   }
   check('no throw', threw, '');

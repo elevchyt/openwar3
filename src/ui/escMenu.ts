@@ -23,7 +23,8 @@
 // the hotkey letters come with them ("Pause Ga|Cffffffffm|Re" — the M is the accelerator,
 // and `ControlShortcutKey "M"` in the FDF is what binds it).
 //
-// Restart is DISABLED, not hidden: WC3 greys what can't be used and the FDF ships the greyed
+// Restart is DISABLED, not hidden, where it cannot be used (a multiplayer game, a replay, a map
+// that called `DisableRestartMission`): WC3 greys what can't be used and the FDF ships the greyed
 // face for exactly that (ControlDisabledBackdrop). Save Game and Load Game (issue #159,
 // docs/save-games.md) open FOUR more panels on the same stack, out of the game's own
 // `UI\FrameDef\UI\EscMenuSaveGamePanel.fdf`: one file that is the Save panel and the Load panel
@@ -162,6 +163,11 @@ export interface EscMenuActions {
   onSaveGame?(name: string): Promise<void>;
   /** Load the named save — the match on screen ends and that one takes its place. */
   onLoadGame?(name: string): void;
+  /** "Restart Mission" — play this map again from the top. Absent, or `canRestart` false,
+   *  greys the button: it is "only enabled in singleplayer", and a script may take it away
+   *  (`DisableRestartMission`). */
+  onRestart?(): void;
+  canRestart?(): boolean;
 }
 
 export class EscMenu {
@@ -231,16 +237,34 @@ export class EscMenu {
     return this.shown;
   }
 
-  show(): void {
+  show(panel: PanelId = "main"): void {
     if (this.shown) return;
     this.shown = true;
-    this.panel = "main";
+    this.panel = panel;
     // A setting changed from the glue Options screen since the last visit is what these panels
     // should show, so the store is re-read rather than remembered from last time.
     this.options.reload();
     document.body.classList.add("game-menu-open"); // HUD hotkeys check this and stand down
     window.addEventListener("keydown", this.onEscape, true);
     void this.build();
+  }
+
+  /**
+   * `DisplayLoadDialog` — "Opens the 'Load game' menu where you can load a previous save"
+   * (jassdoc), which is what Blizzard.j's defeat dialog calls for its Load button
+   * (CustomDefeatLoadBJ). The menu comes up already on its Load face; Cancel steps back to the
+   * main panel as it does when the player walked there. False — and nothing shown — where Load
+   * Game is greyed anyway (no save store, a multiplayer game, a replay window).
+   */
+  showLoad(): boolean {
+    if (!this.actions.saves?.() || !this.actions.onLoadGame) return false;
+    // Opened ON the panel rather than opened and then switched: a build is already under way
+    // by the time `show` returns, and a second one asked for behind it is dropped.
+    this.saveName = "";
+    if (this.shown) this.go("load");
+    else this.show("load");
+    void this.listSaves();
+    return true;
   }
 
   hide(): void {
@@ -587,6 +611,7 @@ export class EscMenu {
       // the game, and then closes the program (`onExitProgram` — in a browser, which cannot
       // close a tab it did not open, the nearest honest thing is leaving the match).
       QuitButton: () => this.actions.onEndGame(),
+      RestartButton: () => { if (this.actions.canRestart?.()) this.actions.onRestart?.(); },
       ExitButton: () => this.go("confirmquit"),
       PreviousButton: () => this.go("main"),
       // --- ConfirmQuitPanel
@@ -629,8 +654,9 @@ export class EscMenu {
   /** Fill the panel's contents and grey what we can't do yet. Runs on every build —
    *  including the rebuild a RESIZE triggers, which is why it can't be done inline. */
   private onBuild(screen: FdfScreen): void {
-    // No way to restart a match from inside it; Save and Load are live where they can be used.
-    screen.setEnabled("RestartButton", false);
+    // Restart Mission is live where a match can be played again (single player) and a script
+    // has not taken it away; Save and Load are live where they can be used.
+    screen.setEnabled("RestartButton", !!this.actions.onRestart && (this.actions.canRestart?.() ?? false));
     const sink = this.actions.saves?.() ?? null;
     screen.setEnabled("SaveGameButton", !!sink && !!this.actions.onSaveGame && !this.actions.saveRefusal?.());
     screen.setEnabled("LoadGameButton", !!sink && !!this.actions.onLoadGame);
