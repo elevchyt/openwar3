@@ -493,6 +493,63 @@ console.log("attack-move picks the army over the workers over the buildings");
   }
 }
 
+// ── An ATTACK-MOVE does not chase: a target that steps out of reach yields to a nearer one ──
+// Pull a wounded unit back and the army that was A-moved turns on the next closest enemy
+// instead of walking after it. Ranged units showed it worst, because `acquire` outruns the
+// weapon (Units\UnitWeapons.slk: an Archer's is 800 against a 500 bow), so the chase ran 300
+// units — INTO the enemies it should have been shooting from where it stood.
+console.log("attack-move: a retreating target is let go for the next closest");
+{
+  const BOW = () => ({ ...WEAPON(), ranged: true, range: 500, baseRange: 500, acquire: 800, missileSpeed: 900 });
+  for (const [label, weapon, nearX, otherX, otherY] of [
+    ["an Archer", BOW, 1400, 1450, 600],
+    ["a Footman", WEAPON, 1100, 1100, 580],
+  ]) {
+    const w = new SimWorld(grid(), 1);
+    const u = addUnit(w, 1, 0, 1000, 500, { weapons: [weapon()] });
+    const runner = addUnit(w, 2, 1, nearX, 500, { weapons: [] });
+    const other = addUnit(w, 3, 1, otherX, otherY, { weapons: [] });
+    w.issueOrder(1, { kind: "attackmove", x: 2800, y: 500 });
+    run(w, 2);
+    check(`${label} engaged the nearest enemy (targetId ${u.targetId})`, u.targetId === runner.id);
+    const x0 = u.x;
+    w.issueMove(runner.id, 2800, 500);
+    run(w, 4);
+    check(`${label} turned on the enemy still in reach (targetId ${u.targetId})`, u.targetId === other.id);
+    check(`…without walking after the one that left (moved ${(u.x - x0).toFixed(0)})`, Math.abs(u.x - x0) < 32);
+    check(`…and the order is still an attack-move (${u.order})`, u.order === "attackmove");
+  }
+  {
+    // Nothing else to fight: the runner IS still the nearest enemy, so it is followed until it
+    // is past acquisition range, and then the walk to the destination resumes.
+    const w = new SimWorld(grid(), 1);
+    const u = addUnit(w, 1, 0, 1000, 500, { weapons: [BOW()] });
+    const runner = addUnit(w, 2, 1, 1400, 500, { weapons: [], speed: 400 });
+    w.issueOrder(1, { kind: "attackmove", x: 2800, y: 2400 });
+    run(w, 2);
+    w.issueMove(runner.id, 2800, 500);
+    run(w, 1.2);
+    check(`a lone target is still followed inside acquisition range (targetId ${u.targetId})`, u.targetId === runner.id);
+    run(w, 6);
+    check(`…and let go past it, the walk resumed (targetId ${u.targetId}, y ${u.y.toFixed(0)})`,
+      u.targetId === null && u.y > 900);
+  }
+  {
+    // Two enemies at about the same distance do not trade the unit back and forth.
+    const w = new SimWorld(grid(), 1);
+    const u = addUnit(w, 1, 0, 300, 500);
+    addUnit(w, 2, 1, 900, 460, { weapons: [] });
+    addUnit(w, 3, 1, 900, 545, { weapons: [] });
+    w.issueOrder(1, { kind: "attackmove", x: 2800, y: 500 });
+    let switches = 0, last = null;
+    for (let i = 0; i < 4 / SIM_DT; i++) {
+      w.tick(SIM_DT);
+      if (u.targetId !== null && u.targetId !== last) { if (last !== null) switches++; last = u.targetId; }
+    }
+    check(`an approach between two equidistant enemies settles on one (${switches} switches)`, switches <= 1);
+  }
+}
+
 // ── A surround slot is a place the unit can STRIKE from ────────────────────────────────
 // assignAttackSlot laid its rings out `spacing` apart (56 for a Footman) while the strike
 // band engage() plants in is only range + ATTACK_LEASH — so every ring past the first was

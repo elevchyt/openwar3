@@ -2873,6 +2873,10 @@ const FOLLOW_GAP = 64; // edge-to-edge distance a follower keeps behind its lead
 const FOLLOW_LEASH = 48;
 const FOLLOW_SLOT_ARRIVE = 24; // how close a fanned follower parks to its formation slot
 const ACQUIRE_PERIOD = 0.5; // seconds between idle auto-acquire scans
+// How often an attack-moving unit whose target has stepped OUT OF REACH asks whether a nearer
+// enemy is worth turning on instead (tickAttackMove). Ours, and the same 0.2 s tickAttack's
+// in-strike-range switch runs on — the two are one rule for the two orders.
+const ATTACK_MOVE_RETARGET = 0.2;
 /** Top rung of an attack-move's target ladder (`attackMoveTier`): the enemy ARMY — anything
  *  that is neither a structure nor one of `lowPriorityTarget`'s workers and wards. Named
  *  because two places ask "is what we are holding already the best kind of target?". */
@@ -22403,16 +22407,48 @@ export class SimWorld {
       // decided once, the whole squad spends the battle chewing a Farm. Only ever an
       // UPGRADE (strictly higher tier), so nothing switches away from a fight, and it runs
       // on the same throttle as the scan below — no extra pass over the world.
-      if (t && this.attackMoveTier(t) < ARMY_TIER) {
-        u.acquireT -= dt;
-        if (u.acquireT <= 0) {
-          u.acquireT = ACQUIRE_PERIOD;
-          const better = this.attackMoveTarget(u, acq);
-          if (better && this.attackMoveTier(better) > this.attackMoveTier(t)) {
-            t = better;
-            u.stallT = 0; // new enemy, new approach window (see attackMoveStalled)
-            u.attackStalls = 0;
+      //
+      // …and holding something that is OUT OF REACH, which is the other half of the same
+      // re-ask and the one a ranged unit shows most. An attack-move does not pick a victim,
+      // so it does not owe one a chase: pull a wounded unit back out of the fight and the
+      // army that was A-moved turns on the next closest enemy instead of walking after it,
+      // past (and for an Archer, INTO) everything else that is standing there. The numbers
+      // are why ranged units showed it worst — `acquire` is 800 on an Archer whose bow is
+      // 500, 600 against a Rifleman's 400 (Units\UnitWeapons.slk), so a target that stepped
+      // back out of the weapon was followed for three hundred units before the leash let it
+      // go, every shot of that walk not fired. tickAttack has always had this for a fight a
+      // unit picked up standing still (its "hit the one that's right here" switch, on the
+      // same 0.2 s clock); attack-move calls engage() itself and never did.
+      //
+      // NEARER BY A MARGIN, never merely nearer: two enemies at about the same distance must
+      // not trade the unit back and forth, and ATTACK_LEASH is the hysteresis the strike band
+      // already uses. The ladder still holds — nothing here steps DOWN a tier, so a soldier
+      // falling back is still preferred to the Farm beside the unit.
+      if (t) {
+        const tw = this.weaponVs(u, t);
+        const curGap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+        const outOfReach = !tw || curGap > tw.range + ATTACK_LEASH || this.cliffApart(u, t, tw);
+        const curTier = this.attackMoveTier(t);
+        if (curTier < ARMY_TIER || outOfReach) {
+          u.acquireT -= dt;
+          if (u.acquireT <= 0) {
+            u.acquireT = outOfReach ? ATTACK_MOVE_RETARGET : ACQUIRE_PERIOD;
+            const better = this.attackMoveTarget(u, acq);
+            if (better && better !== t) {
+              const tier = this.attackMoveTier(better);
+              const gap = Math.hypot(better.x - u.x, better.y - u.y) - u.radius - better.radius;
+              if (tier > curTier || (outOfReach && tier === curTier && gap < curGap - ATTACK_LEASH)) {
+                t = better;
+                u.stallT = 0; // new enemy, new approach window (see attackMoveStalled)
+                u.attackStalls = 0;
+              }
+            }
           }
+        } else {
+          // In reach of the army: nothing to re-ask. Leave the clock run out, so the step the
+          // target leaves the weapon is the step the question is put — on whatever was left of
+          // a half-second scan timer an Archer had walked 135 units after it before asking.
+          u.acquireT = 0;
         }
       }
       if (!t) {
