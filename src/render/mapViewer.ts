@@ -183,7 +183,7 @@ import { MultiboardOverlay } from "../ui/multiboard";
 import { TimerDialogOverlay } from "../ui/timerDialog";
 import { SuspendDialogOverlay, type SuspendRow } from "../ui/suspendDialog";
 import { CinematicPanelOverlay } from "../ui/cinematicPanel";
-import { ScriptCamera, type CameraState } from "./scriptCamera";
+import { ScriptCamera, farPlane, type CameraState } from "./scriptCamera";
 import { AutoCamera } from "../game/autoCamera";
 import { BOUNTY_TEXT_STYLE, CombatTextTags, GOLD_TEXT_STYLE, LUMBER_TEXT_STYLE, MISS_TEXT_STYLE, TextTagOverlay, XP_TEXT_STYLE, type CombatTextStyle, type TextTagContext } from "./textTags";
 import { FdfLibrary } from "../ui/fdf/library";
@@ -18890,7 +18890,7 @@ export class MapViewerScene {
     const fov = cine ? 2 * Math.atan(Math.tan(this.fov / 2) / CINE_STRIP) : this.fov;
     // The NEAR plane is the game's own 100 (CAMERA.NEARZ has why it matters): a cinematic's
     // camera object may sit inside a doodad the real client never draws from there.
-    scene.camera.perspective(fov, this.aspect(), CAMERA.NEARZ, this.farZ > 0 ? this.farZ : this.distance * 8);
+    scene.camera.perspective(fov, this.aspect(), CAMERA.NEARZ, farPlane(this.farZ, this.distance));
     scene.camera.moveToAndFace(eye, this.target, this.upVector(eye));
     if (cine) cinematicLens(scene.camera);
     this.sky?.follow(scene.camera); // the sky surrounds the EYE (render/sky.ts)
@@ -19193,7 +19193,7 @@ export class MapViewerScene {
       this.target[1] - sy * cp * this.distance,
       this.target[2] + sp * this.distance,
     ];
-    const far = this.farZ > 0 ? this.farZ : this.distance * 8;
+    const far = farPlane(this.farZ, this.distance);
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const s of [-1, 1]) {
       for (const v of [-1, 1]) {

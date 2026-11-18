@@ -52,6 +52,15 @@ const FIELD_KEYS: FieldKey[] = [
   "zOffset", // 6 CAMERA_FIELD_ZOFFSET
 ];
 const FIELD_ROTATION = 5;
+const FIELD_FARZ = 1;
+
+/** How far the game camera draws when no camera setup has set CAMERA_FIELD_FARZ (farZ 0):
+ *  8× the focus distance — the rule the renderer has always used (MapViewerScene), kept in one
+ *  place so a far-plane blend toward or away from "the game camera" meets the same plane. */
+export const FARZ_PER_DISTANCE = 8;
+export function farPlane(farZ: number, distance: number): number {
+  return farZ > 0 ? farZ : distance * FARZ_PER_DISTANCE;
+}
 
 /** The fields that are ANGLES ON A CIRCLE, and so must blend along the SHORTEST arc.
  *
@@ -231,9 +240,24 @@ export class ScriptCamera {
    *  `unitPos` resolves the followed unit (SetCameraTargetController); returning null means it
    *  died, and the camera simply stops following — it does not snap anywhere. */
   update(dt: number, cam: CameraState, unitPos: (simId: number) => { x: number; y: number } | null): void {
+    // FIELD_KEYS order puts DISTANCE first, so a far-plane blend below reads the distance of
+    // THIS frame.
     for (const [field, tw] of [...this.tweens]) {
       const key = FIELD_KEYS[field];
-      cam[key] = step(tw, dt);
+      if (field === FIELD_FARZ && (tw.from <= 0 || tw.to <= 0)) {
+        // FARZ 0 is not a distance, it is "the game camera's own rule" (farPlane). Blending
+        // the NUMBER toward it pulled the far plane in to the lens: every chapter that ends a
+        // cinematic with ResetToGameCamera(2.00) off a 2500 shot (Human01's Close_Arthas)
+        // spent two seconds eating the world from the horizon inward into black. So the blend
+        // runs between the two planes actually DRAWN, and lands on 0 to hand the rule back.
+        step(tw, dt); // advance the clock; the value is computed between the drawn planes
+        const derived = farPlane(0, cam.distance);
+        const from = tw.from > 0 ? tw.from : derived;
+        const to = tw.to > 0 ? tw.to : derived;
+        cam.farZ = tw.t >= tw.dur ? tw.to : from + (to - from) * ease(tw);
+      } else {
+        cam[key] = step(tw, dt);
+      }
       if (tw.t >= tw.dur) this.tweens.delete(field);
     }
 
@@ -305,7 +329,12 @@ function step(tw: Tween, dt: number): number {
     tw.t = tw.dur;
     return tw.to;
   }
+  return tw.from + (tw.to - tw.from) * ease(tw);
+}
+
+/** A tween's smoothstep progress, 0…1. WC3 eases a camera blend in and out. */
+function ease(tw: Tween): number {
+  if (tw.dur <= 0) return 1;
   const x = tw.t / tw.dur;
-  const s = x * x * (3 - 2 * x);
-  return tw.from + (tw.to - tw.from) * s;
+  return x * x * (3 - 2 * x);
 }
