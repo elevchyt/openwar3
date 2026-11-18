@@ -1,5 +1,5 @@
 import {
-  ArrowLeft, ArrowRight, Check, Download, ExternalLink, FileDown, FileUp, House, RotateCw, Search,
+  ArrowLeft, ArrowRight, Check, Download, ExternalLink, FileUp, Globe, House, RotateCw, Search,
   createElement as lucideIcon, type IconNode,
 } from "lucide";
 import type { DataSource } from "../vfs/types";
@@ -10,7 +10,7 @@ import { MAP_SITES_DIALOG_OVERRIDE, OW3_STRINGS } from "../overrides";
 import { setGameTip } from "./gameTip";
 import { mountWorking } from "./workingIndicator";
 import {
-  MAP_SITES, askToKeep, canSearchInGame, downloadEpicWar, epicWarThumb, importMapFiles,
+  MAP_SITES, SHOWN_SITES, askToKeep, canSearchInGame, downloadEpicWar, epicWarThumb, importMapFiles,
   onSiteDownload, onSiteProgress, openMapSite, searchEpicWar, siteById, siteView,
   type ArrivedMap, type EpicWarMap, type MapSiteId, type SiteViewBridge, type SiteViewState, type ViewRect,
 } from "./mapSites";
@@ -49,10 +49,10 @@ const DIALOG_FDF = "UI\\FrameDef\\Glue\\DialogWar3.fdf";
 
 const TITLE = "Download Maps";
 
-/** The entry's glyph: Lucide's `file-down` (the developer's pick, replacing a hand-drawn map
- *  scroll). Stroked in `currentColor`, so the button's colour is its idle/hover state (style.css). */
+/** The entry's glyph: Lucide's `globe` (the developer's pick, after a hand-drawn map scroll and
+ *  then `file-down`). Stroked in `currentColor`, so the button's colour is its idle/hover state (style.css). */
 function sitesGlyph(): SVGElement {
-  const svg = lucideIcon(FileDown, { "stroke-width": 2.1, "aria-hidden": "true" });
+  const svg = lucideIcon(Globe, { "stroke-width": 2.1, "aria-hidden": "true" });
   svg.classList.add("ow3-sites-glyph");
   return svg;
 }
@@ -280,6 +280,9 @@ export async function showMapSitesDialog(opts: {
     // alone barely reads across a row of three.
     for (const site of MAP_SITES) {
       const tab = s.frame(TAB_FRAME[site.id]);
+      // A PARKED site (mapSites.ts) keeps its frame in the FDF, so the tabs to its right keep
+      // their anchors; it is just not drawn and cannot be pressed.
+      if (tab && site.parked) tab.style.visibility = "hidden";
       tab?.classList.add("ow3-sites-tab");
       tab?.classList.toggle("fdf-latched", site.id === model.tab);
     }
@@ -397,7 +400,7 @@ export async function showMapSitesDialog(opts: {
     relayout();
     if (pageFor(id) === "MapSitesPageSearch") requestAnimationFrame(() => searchInput()?.focus());
   };
-  for (const site of MAP_SITES) handlers[TAB_FRAME[site.id]] = () => selectTab(site.id);
+  for (const site of SHOWN_SITES) handlers[TAB_FRAME[site.id]] = () => selectTab(site.id);
 
   const runSearch = (): void => {
     window.clearTimeout(searchTimer);

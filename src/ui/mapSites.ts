@@ -36,6 +36,9 @@ export interface MapSite {
   /** The site's own search, when its address is known (only EpicWar's is: `/maps/?n=`, read off
    *  its own filter form). */
   searchUrl?: (q: string) => string;
+  /** Why this site's tab is HIDDEN for now — set, the dialog leaves its tab out and nothing
+   *  else changes (the desktop shell's view code is kept, so bringing it back is deleting this). */
+  parked?: string;
 }
 
 export const MAP_SITES: readonly MapSite[] = [
@@ -51,14 +54,19 @@ export const MAP_SITES: readonly MapSite[] = [
     name: "Hive Workshop",
     blurb: "The largest modding community — reviewed and approved maps.",
     home: "https://www.hiveworkshop.com/repositories/maps.564/",
+    parked: "the desktop app's view shows the Cloudflare check pass and then no page (2026-11-18). The sites themselves load in a bare Electron 44 view, so the fault is in how the game lays the view over the dialog.",
   },
   {
     id: "wc3maps",
     name: "wc3maps",
     blurb: "An archive of every map played on Battle.net, with its statistics.",
     home: "https://wc3maps.com/",
+    parked: "the desktop app's view shows the Cloudflare check pass and then no page (2026-11-18). The sites themselves load in a bare Electron 44 view, so the fault is in how the game lays the view over the dialog.",
   },
 ];
+
+/** The sites the dialog offers a tab for — every one that is not `parked`. */
+export const SHOWN_SITES: readonly MapSite[] = MAP_SITES.filter((s) => !s.parked);
 
 export const siteById = (id: MapSiteId): MapSite => MAP_SITES.find((s) => s.id === id)!;
 
