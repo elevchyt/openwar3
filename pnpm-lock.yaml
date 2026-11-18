@@ -9,7 +9,7 @@ patchedDependencies:
     hash: 8949c3f6bad2f86f49a7d5fb2ec7f2ae67217e3183f01ad50bcdd7e6d18b59f3
     path: patches/fengari@0.1.5.patch
   mdx-m3-viewer@5.12.0:
-    hash: dee761b249b87a8fa3609effd467ff10f1ccb0b4a421fbc29b7e1062ded5c0a1
+    hash: ce01e78b8872649a4a8de2a88e0402d4075cbd4965f96e8ac7a805a78ff203e8
     path: patches/mdx-m3-viewer@5.12.0.patch
 
 importers:
@@ -58,7 +58,7 @@ importers:
         version: 9.1.7
       mdx-m3-viewer:
         specifier: ^5.12.0
-        version: 5.12.0(patch_hash=dee761b249b87a8fa3609effd467ff10f1ccb0b4a421fbc29b7e1062ded5c0a1)
+        version: 5.12.0(patch_hash=ce01e78b8872649a4a8de2a88e0402d4075cbd4965f96e8ac7a805a78ff203e8)
       pako:
         specifier: ^3.0.1
         version: 3.0.1
@@ -3212,7 +3212,7 @@ snapshots:
 
   math-intrinsics@1.1.0: {}
 
-  mdx-m3-viewer@5.12.0(patch_hash=dee761b249b87a8fa3609effd467ff10f1ccb0b4a421fbc29b7e1062ded5c0a1):
+  mdx-m3-viewer@5.12.0(patch_hash=ce01e78b8872649a4a8de2a88e0402d4075cbd4965f96e8ac7a805a78ff203e8):
     dependencies:
       fengari: 0.1.5(patch_hash=8949c3f6bad2f86f49a7d5fb2ec7f2ae67217e3183f01ad50bcdd7e6d18b59f3)
       gl-matrix: 3.3.0

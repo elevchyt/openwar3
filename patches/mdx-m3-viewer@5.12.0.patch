@@ -4269,7 +4269,7 @@ index 797d91b4335ebc7297fff0e109c98443bd35487c..66ee7f84ff8738975cd9397a03854f18
    v_texture = a_instanceTexture;
    v_position = a_position + vec3(a_instancePosition.xy, a_instancePosition.z + height * 128.0);
 diff --git a/dist/cjs/viewer/handlers/w3x/shaders/ground.frag.js b/dist/cjs/viewer/handlers/w3x/shaders/ground.frag.js
-index 70449d8d52f46ac83662d302c94dcee8e29147e7..2937a00fba90d58c7ddbc23bda774d13327aef38 100644
+index 70449d8d52f46ac83662d302c94dcee8e29147e7..1d52176a424a55e65c036f4a2d24cc67f3e89954 100644
 --- a/dist/cjs/viewer/handlers/w3x/shaders/ground.frag.js
 +++ b/dist/cjs/viewer/handlers/w3x/shaders/ground.frag.js
 @@ -6,11 +6,36 @@ ${precision_glsl_1.default}
@@ -4310,11 +4310,65 @@ index 70449d8d52f46ac83662d302c94dcee8e29147e7..2937a00fba90d58c7ddbc23bda774d13
  
  vec4 sample(float tileset, vec2 uv) {
    // 1.0 - 1.0 == 0.0 is not always true.
-@@ -70,9 +95,16 @@ void main() {
-     color = blend(color, v_tilesets[3], v_uv[3]);
+@@ -47,6 +72,16 @@ vec4 sample(float tileset, vec2 uv) {
+   } else if (i == 14) {
+     return texture2D(u_tilesets[14], uv);
+   }
++
++  return vec4(0.0); // OpenWar3: a slot this pass does not bind (see main) — never undefined
++}
++
++// OpenWar3: is this slot one of THIS pass's tiles? A map may name more ground tiles than one
++// pass can bind (15 samplers; the blight texture is one more), and map.js then draws the ground
++// a second time with u_baseTileset 15 — where a cell's lower tiles come out at zero or below and
++// its higher ones at 16+ on the first pass. Each pass draws only its own slots.
++bool inPass(float tileset) {
++  return tileset > 0.5 && tileset < 15.5;
+ }
+ 
+ vec4 blend(vec4 color, float tileset, vec2 uv) {
+@@ -56,23 +91,46 @@ vec4 blend(vec4 color, float tileset, vec2 uv) {
+ }
+ 
+ void main() {
+-  vec4 color = sample(v_tilesets[0], v_uv[0]);
++  // OpenWar3: the layers are composited with their OWN coverage rather than written opaque, so
++  // the second pass (tiles 15+, see inPass) lays its slots OVER the first pass's instead of
++  // replacing the whole cell with whatever an unbound sampler returns — the stock shader
++  // started every cell from sample(v_tilesets[0]) whichever pass it was in. A cell whose base
++  // tile is in this pass is opaque exactly as before (the base slot is a full variant).
++  vec3 rgb = vec3(0.0); // premultiplied
++  float alpha = 0.0;
+ 
+-  if (v_tilesets[1] > 0.5) {
+-    color = blend(color, v_tilesets[1], v_uv[1]);
++  if (inPass(v_tilesets[0])) {
++    rgb = sample(v_tilesets[0], v_uv[0]).rgb;
++    alpha = 1.0;
+   }
+ 
+-  if (v_tilesets[2] > 0.5) {
+-    color = blend(color, v_tilesets[2], v_uv[2]);
++  for (int k = 1; k < 4; k++) {
++    float tileset = k == 1 ? v_tilesets[1] : k == 2 ? v_tilesets[2] : v_tilesets[3];
++
++    if (inPass(tileset)) {
++      vec4 texel = sample(tileset, k == 1 ? v_uv[1] : k == 2 ? v_uv[2] : v_uv[3]);
++
++      rgb = texel.rgb * texel.a + rgb * (1.0 - texel.a);
++      alpha = texel.a + alpha * (1.0 - texel.a);
++    }
+   }
+ 
+-  if (v_tilesets[3] > 0.5) {
+-    color = blend(color, v_tilesets[3], v_uv[3]);
++  if (alpha < 0.004) {
++    discard;
    }
  
 -  //color *= clamp(dot(v_normal, lightDirection) + 0.45, 0.0, 1.0);
++  vec4 color = vec4(rgb / alpha, alpha);
++
 +  // OpenWar3: WC3's fixed-function lighting — ambient + diffuse*N·L, clamped per
 +  // channel, modulating the texel. At noon that saturates to white (the ground reads
 +  // as its raw texture); at midnight Lordaeron's sun sinks to (0.80, 0.53, 0.31),
@@ -4325,15 +4379,29 @@ index 70449d8d52f46ac83662d302c94dcee8e29147e7..2937a00fba90d58c7ddbc23bda774d13
 +  }
  
 -  gl_FragColor = vec4(color.rgb, 1.0);
-+  gl_FragColor = vec4(applyDistFog(color.rgb), 1.0);
++  gl_FragColor = vec4(applyDistFog(color.rgb), color.a);
  }
  `;
  exports.default = shader;
 diff --git a/dist/cjs/viewer/handlers/w3x/shaders/ground.vert.js b/dist/cjs/viewer/handlers/w3x/shaders/ground.vert.js
-index 26a5b4c8758bfb80c62f458fbc4a85293c18060b..04cc367537276e961570be1c828496246a7f53db 100644
+index 26a5b4c8758bfb80c62f458fbc4a85293c18060b..9730aacef01488b6ae521e889addc11d39e01831 100644
 --- a/dist/cjs/viewer/handlers/w3x/shaders/ground.vert.js
 +++ b/dist/cjs/viewer/handlers/w3x/shaders/ground.vert.js
-@@ -16,6 +16,7 @@ attribute vec4 a_variations;
+@@ -5,7 +5,12 @@ uniform mat4 u_VP;
+ uniform sampler2D u_heightMap;
+ uniform vec2 u_size;
+ uniform vec2 u_offset;
+-uniform bool u_extended[14];
++// OpenWar3: FIFTEEN, one per sampler the ground pass binds (ground.frag's u_tilesets[15], and
++// map.js sets u_extended[0..14]). The stock 14 left the 15th tile of a busy map reading past the
++// end of the array — ANGLE clamps that to [13] — so a 512×256 tile in that slot was drawn as a
++// 256×256 one, its UVs wrapped into the transparent transition cut-outs on the left half, and
++// those drew as hard-edged black squares (Sunhoof Mesa's Dalaran Grass, 1 339 corners of it).
++uniform bool u_extended[15];
+ uniform float u_baseTileset;
+ 
+ attribute vec2 a_position;
+@@ -16,6 +21,7 @@ attribute vec4 a_variations;
  varying vec4 v_tilesets;
  varying vec2 v_uv[4];
  varying vec3 v_normal;
@@ -4341,7 +4409,35 @@ index 26a5b4c8758bfb80c62f458fbc4a85293c18060b..04cc367537276e961570be1c82849624
  
  vec2 getCell(float variation) {
    if (variation < 16.0) {
-@@ -51,16 +52,21 @@ void main() {
+@@ -36,31 +42,45 @@ vec2 getUV(vec2 position, bool extended, float variation) {
+   return clamp((cell + uv) * cellSize, cell * cellSize + pixelSize, (cell + 1.0) * cellSize - pixelSize); 
+ }
+ 
++// OpenWar3: the slot's own flag, or false for a slot this pass does not draw. On the SECOND
++// pass (u_baseTileset 15) a cell's lower tiles come out at zero or below, and indexing the array
++// with them read out of bounds; ground.frag skips those slots anyway.
++bool extendedAt(float tileset) {
++  int i = int(tileset + 0.5) - 1;
++  if (i < 0 || i > 14) return false;
++  return u_extended[i];
++}
++
+ void main() {
+   vec4 textures = a_textures - u_baseTileset;
+   
+   if (textures[0] > 0.0 || textures[1] > 0.0 || textures[2] > 0.0 || textures[3] > 0.0) {
+     v_tilesets = textures;
+ 
+-    v_uv[0] = getUV(a_position, u_extended[int(textures[0]) - 1], a_variations[0]);
+-    v_uv[1] = getUV(a_position, u_extended[int(textures[1]) - 1], a_variations[1]);
+-    v_uv[2] = getUV(a_position, u_extended[int(textures[2]) - 1], a_variations[2]);
+-    v_uv[3] = getUV(a_position, u_extended[int(textures[3]) - 1], a_variations[3]);
++    v_uv[0] = getUV(a_position, extendedAt(textures[0]), a_variations[0]);
++    v_uv[1] = getUV(a_position, extendedAt(textures[1]), a_variations[1]);
++    v_uv[2] = getUV(a_position, extendedAt(textures[2]), a_variations[2]);
++    v_uv[3] = getUV(a_position, extendedAt(textures[3]), a_variations[3]);
+ 
+     vec2 corner = vec2(mod(a_InstanceID, u_size.x), floor(a_InstanceID / u_size.x));
      vec2 base = corner + a_position;
      float height = texture2D(u_heightMap, base / u_size).a;
  

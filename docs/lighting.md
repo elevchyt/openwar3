@@ -58,6 +58,21 @@ sitting in open ground with nothing above them, that assumption is what broke.
 Unshadowed cells are dropped from the mesh — most of them are — with a one-cell dilation so
 the bilinear filter still has real texels to blend toward at a shadow's edge.
 
+### Hard black squares that are not shadows
+
+Hard-edged black squares on the ground (or green blocks that don't blend) are **not** this
+layer. Switch it off (`terrainShadows.strength = 0`) and they stay. They come from the viewer's
+GROUND shader on a map with fifteen or more ground tiles. One pass binds 15 samplers
+(`u_tilesets[15]`), but the stock vertex shader declared `u_extended[14]`, so the 15th tile's
+"is this a 512×256 texture" flag read past the end of the array (ANGLE clamps that to [13]). A
+512-wide tile in that slot was then cut as a 256-wide one, its UVs wrapped into the transparent
+transition cut-outs, and those drew opaque black. (2)SunhoofMesa_v1.4_ATR's Dalaran Grass covers
+1,339 corners that way. The SECOND pass (tiles 15+ and blight, `u_baseTileset` 15) had a related
+fault: it started every cell from slot 0 whichever pass owned it, so it painted over the first
+pass's ground with whatever an unbound sampler returned. Both are fixed in the viewer patch
+(`ground.vert` `extendedAt`, `ground.frag` `inPass`). Each pass now composites only its own slots
+by their coverage, and a cell whose base tile is in the pass is opaque exactly as before.
+
 ## Cliffs and ramps: who shades a tile with no ground
 
 A cliff or ramp tile has **no ground** — the viewer draws a `Cliffs\`/`CliffTrans\` model in
