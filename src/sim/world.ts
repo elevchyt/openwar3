@@ -3259,6 +3259,12 @@ const DAMAGE_POINT_FLOOR = 0.02; // a swing always lands 0.02s before it may sta
  *  the fall — the buff simply holds the unit on the ground — so this is only long enough to SEE
  *  it come down rather than blink there. */
 const NET_DROP_TIME = 0.4;
+/** How long a unit takes between the ground and the air when NOTHING says how long: a type swap
+ *  whose row carries no "Altitude Adjustment Duration" (`Eme3`) — the Archer climbing onto her
+ *  Hippogryph (`Acoi`), the rider stepping off it (`Adec`), a script's or a spell's plain
+ *  transform. OURS, and the same length as the net's fall for the same reason: just long enough
+ *  to SEE the body travel the 240 units rather than blink across them. */
+const ALTITUDE_BLEND_TIME = 0.4;
 /** The buff group Spirit Link's `[Bspl]` buff wears (spells.ts Aspl) — and so the link itself:
  *  a member whose buff is gone is out of the link (see the tick's linkT clause). */
 export const SPIRIT_LINK_GROUP = "spiritlink";
@@ -8895,7 +8901,9 @@ export class SimWorld {
     const height = flies ? Math.max(0, def.moveHeight) : 0;
     const secs = lvl?.summon ? this.dataOf(lvl, 2, 0) : 0; // Eme3 — "Altitude Adjustment Duration"
     const climb = Math.abs(height - u.flyHeight);
-    const rate = secs > 0 ? climb / secs : Infinity;
+    // No duration stated is still not a snap (ALTITUDE_BLEND_TIME) — and no DISTANCE is: with
+    // nothing to climb the rate is left unbounded, so tickAltitude closes the booking at once.
+    const rate = climb > 0 ? climb / (secs > 0 ? secs : ALTITUDE_BLEND_TIME) : Infinity;
     if (flies) {
       u.altitudeShift = { to: height, rate, wait: true };
       if (u.morphT <= 0) this.tickAltitude(u, 0);
@@ -20924,10 +20932,20 @@ export class SimWorld {
     }
   }
   /** JASS SetUnitFlyHeight — the sim altitude (missiles launch/land here); the render
-   *  lift is kept in step by RtsController.setUnitFlyHeight. */
-  setUnitFlyHeight(id: number, height: number): void {
+   *  lift is kept in step by RtsController.setUnitFlyHeight.
+   *
+   *  `rate` is the native's third argument, in world units a second: 0 is "at once" (which is
+   *  how every Blizzard.j caller that wants a snap writes it) and anything above it is a climb
+   *  or a fall flown by the same per-tick booking a morph's and a net's are (`tickAltitude`). */
+  setUnitFlyHeight(id: number, height: number, rate = 0): void {
     const u = this.units.get(id);
-    if (u) u.flyHeight = height;
+    if (!u) return;
+    if (rate > 0 && Number.isFinite(rate) && height !== u.flyHeight) {
+      u.altitudeShift = { to: height, rate, wait: false };
+      return;
+    }
+    u.altitudeShift = null; // a snap replaces whatever climb was in flight
+    u.flyHeight = height;
   }
   /** JASS PauseUnit — freeze/unfreeze; halts movement immediately on pause. */
   pauseUnit(id: number, flag: boolean): void {

@@ -688,7 +688,7 @@ export interface EngineHooks {
   isUnitPaused?(unitId: number): boolean; // IsUnitPaused
   setUnitScale?(unitId: number, scale: number): void; // SetUnitScale (render)
   setUnitVertexColor?(unitId: number, r: number, g: number, b: number, a: number): void; // SetUnitVertexColor (0–1)
-  setUnitFlyHeight?(unitId: number, height: number): void; // SetUnitFlyHeight
+  setUnitFlyHeight?(unitId: number, height: number, rate?: number): void; // SetUnitFlyHeight
   getUnitFlyHeight?(unitId: number): number | undefined; // GetUnitFlyHeight
   setUnitMoveSpeed?(unitId: number, speed: number): void; // SetUnitMoveSpeed
   getUnitMoveSpeed?(unitId: number): number | undefined; // GetUnitMoveSpeed

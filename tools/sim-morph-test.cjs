@@ -446,6 +446,30 @@ function druid(id, typeId = "edoc") {
   // Permanent: the Destroyer still lists Aave, but there is no way back.
   check("a Destroyer cannot become a statue again", [world.castUseError(u.id, "Aave"), world.morphToggle(u, ABILS.Aave), u.typeId], [world.constructor.SILENT_REFUSAL, false, "ubsp"]);
   world.foodRoom = undefined;
+
+  // A type swap that states NO duration (a dismount, a script's transform) is still flown, over
+  // the sim's own ALTITUDE_BLEND_TIME of 0.4 s, rather than written in one tick.
+  world.morphUnit(u, "uobs");
+  world.shiftAltitude(u, undefined);
+  check("an unstated landing is a walker at once, but not on the ground at once", [u.flying, u.flyHeight], [false, 240]);
+  world.tickAltitude(u, 0.2);
+  check("…half way down in half of the blend", Math.round(u.flyHeight), 120);
+  world.tickAltitude(u, 0.25);
+  check("…and down", [u.flyHeight, u.altitudeShift], [0, null]);
+  world.morphUnit(u, "ubsp");
+  world.shiftAltitude(u, undefined);
+  check("an unstated take-off leaves the ground from the ground", [u.flying, u.flyHeight], [true, 0]);
+  world.tickAltitude(u, 0.2);
+  check("…and climbs", Math.round(u.flyHeight), 120);
+  world.tickAltitude(u, 0.25);
+  check("…to its type's height", [u.flyHeight, u.altitudeShift], [240, null]);
+
+  // SetUnitFlyHeight's third argument is a RATE, in world units a second; 0 is "at once".
+  world.setUnitFlyHeight(u.id, 40, 100);
+  world.tickAltitude(u, 1);
+  check("a script's fly height with a rate is travelled", u.flyHeight, 140);
+  world.setUnitFlyHeight(u.id, 300, 0);
+  check("…and without one is written", [u.flyHeight, u.altitudeShift], [300, null]);
 }
 
 // --- a hero in a form is still the hero -------------------------------------------------

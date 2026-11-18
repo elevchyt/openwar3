@@ -293,9 +293,9 @@ export function registerWorldNatives(rt: Runtime): void {
     return JNULL;
   });
   def(rt, "SetUnitFlyHeight", (c, a) => {
-    // takes unit, real newHeight, real rate — we apply instantly (rate ignored).
+    // takes unit, real newHeight, real rate — the rate is world units a second, 0 for "at once".
     const u = unit(c, a[0]);
-    if (u && u.simId >= 0) c.rt.hooks?.setUnitFlyHeight?.(u.simId, asNum(a[1]));
+    if (u && u.simId >= 0) c.rt.hooks?.setUnitFlyHeight?.(u.simId, asNum(a[1]), asNum(a[2]));
     return JNULL;
   });
   def(rt, "SetUnitMoveSpeed", (c, a) => {

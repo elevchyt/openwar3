@@ -4995,9 +4995,13 @@ export class RtsController {
   }
   /** JASS SetUnitFlyHeight (render half) — the Z lift the render loop adds; the sim
    *  altitude is set alongside in SimWorld.setUnitFlyHeight. */
-  setUnitFlyHeight(simId: number, height: number): void {
+  setUnitFlyHeight(simId: number, height: number, rate = 0): void {
     const e = this.byId.get(simId);
-    if (e) e.moveHeight = height > 0 ? height : 0;
+    if (!e) return;
+    // With a RATE the height is travelled, not written: the sim flies it (its `altitudeShift`)
+    // and the model follows the sim from here on, as it does for a morph (Entry.liftFromSim).
+    if (rate > 0 && Number.isFinite(rate)) e.liftFromSim = true;
+    else e.moveHeight = height > 0 ? height : 0;
   }
   /** JASS SetUnitTimeScale — a trigger override on the model's animation playback rate.
    *  It does not replace the engine's own attack/walk re-rating but multiplies on top of

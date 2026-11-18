@@ -5085,9 +5085,9 @@ export class MapViewerScene {
       setUnitVertexColor: (id, r, g, b, a) => this.rts?.setUnitVertexColor(id, r, g, b, a),
       // Fly height lives in two places: the sim (missile launch/land Z) and the render lift.
       // DUAL-WRITER, same shape as setUnitOwner above — `world` writes the sim, this adds the lift.
-      setUnitFlyHeight: (id, height) => {
-        world.setUnitFlyHeight?.(id, height);
-        this.rts?.setUnitFlyHeight(id, height);
+      setUnitFlyHeight: (id, height, rate) => {
+        world.setUnitFlyHeight?.(id, height, rate);
+        this.rts?.setUnitFlyHeight(id, height, rate);
       },
       setUnitTimeScale: (id, scale) => this.rts?.setUnitTimeScale(id, scale),
       selectedUnits: (player) => (player === this.localPlayer ? this.rts?.selectedUnitIds() ?? [] : []),

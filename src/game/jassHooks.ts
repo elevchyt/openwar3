@@ -85,7 +85,7 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     // A headless host spreads this table and declares nothing over it: it gets the world write
     // and there is no model to re-tint, which is the correct behaviour rather than a gap.
     setUnitOwner: (id, player) => sim.setUnitOwner(id, player, teamOf(player)),
-    setUnitFlyHeight: (id, height) => sim.setUnitFlyHeight(id, height),
+    setUnitFlyHeight: (id, height, rate) => sim.setUnitFlyHeight(id, height, rate),
     // --- unit lifecycle (7.7) ----------------------------------------------------------------
     //
     // Both are one line into the sim, which is the finding: the list had `removeUnit` filed as
