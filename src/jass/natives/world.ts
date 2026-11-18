@@ -20,7 +20,7 @@ const unit = (ctx: NativeCtx, v: JassValue): JassUnit | undefined => ctx.rt.data
 
 /** Create a unit and hand back a `unit` handle. player is a handle, typeId an int
  *  rawcode; we convert it to the 4-char string the engine bridge expects. */
-function createUnit(ctx: NativeCtx, playerV: JassValue, typeInt: number, x: number, y: number, facing: number): JassValue {
+export function createUnit(ctx: NativeCtx, playerV: JassValue, typeInt: number, x: number, y: number, facing: number): JassValue {
   const rt = ctx.rt;
   const playerIdx = rt.data<JassPlayer>(playerV)?.index ?? asInt(playerV);
   const typeId = intToRawcode(typeInt);
@@ -435,7 +435,7 @@ export function registerWorldNatives(rt: Runtime): void {
   // UnitIsSleepingBJ/UnitWakeUpBJ wrap them one for one). "This affects nocturnal sleep, not
   // magical sleep" (UI\TriggerStrings.txt [UnitWakeUpBJHint]) — a Sleep spell's victim is a buff,
   // and `UnitIsSleeping` is the same `SimUnit.asleep` that IsUnitType(u, UNIT_TYPE_SLEEPING) reads.
-  // The …Perm pair (sleep by DAY too, "when unprovoked") has no sim rule behind it yet.
+  // The …Perm pair (sleep by DAY too, "when unprovoked") is natives/unitExtras.ts.
   def(rt, "UnitAddSleep", (c, a) => {
     const u = unit(c, a[0]);
     if (u && u.simId >= 0) c.rt.hooks?.setUnitCanSleep?.(u.simId, a[1]?.k === "bool" && a[1].b);

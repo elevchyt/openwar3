@@ -18,6 +18,7 @@ import { playerStateHolds, ThreadAbort, unitStateHolds, type BoolExpr, type Nati
 import { asNum, jBool, jHandle, jInt, JNULL, jReal, type JassValue } from "../values";
 import { ATTACK_TYPES } from "../../data/unitFieldCodes";
 import type { AttackType } from "../../data/enums";
+import { destructableForUnit } from "./destructables";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -138,6 +139,14 @@ export function registerEventNatives(rt: Runtime): void {
     // no filter, and that wrapper is what the campaign scripts actually call.
     TriggerRegisterUnitInRange: "unitInRange",
     TriggerRegisterUnitEvent: "unitEvent",
+    // TriggerRegisterFilterUnitEvent(trigger, unit, unitevent, boolexpr filter) — the same
+    // registration with a filter on the end, which the dispatcher asks about the triggering
+    // unit (Interpreter.dispatchToRegs).
+    TriggerRegisterFilterUnitEvent: "unitEvent",
+    // TriggerRegisterPlayerAllianceChange(trigger, player, alliancetype) — raised by the write
+    // (natives/vision.ts SetPlayerAlliance). Blizzard.j registers it for every player on
+    // ALLIANCE_PASSIVE and re-checks for victors when one changes (9617).
+    TriggerRegisterPlayerAllianceChange: "playerAllianceChange",
     TriggerRegisterPlayerUnitEvent: "playerUnitEvent",
     TriggerRegisterPlayerEvent: "playerEvent",
     TriggerRegisterDeathEvent: "unitDeath",
@@ -327,6 +336,12 @@ export function registerEventNatives(rt: Runtime): void {
     return u.k === "handle" ? u : resp(c, "OrderTargetItem");
   });
   def(rt, "GetOrderTargetItem", (c) => resp(c, "OrderTargetItem"));
+  // …and the destructable, when the order was aimed at one. A gate or a crate fights as a sim
+  // unit (docs/selection.md), so an order at one arrives as a UNIT target; this hands back the
+  // destructable that unit stands in for, and null for an ordinary unit. A TREE is not a unit in
+  // the sim and an order at one carries only its position, so it answers null.
+  def(rt, "GetOrderTargetDestructable", (c) => destructableForUnit(c, resp(c, "OrderTargetUnit")));
+  def(rt, "GetSpellTargetDestructable", (c) => destructableForUnit(c, resp(c, "SpellTargetUnit")));
   def(rt, "GetOrderTargetUnit", (c) => resp(c, "OrderTargetUnit"));
   def(rt, "GetOrderedUnit", (c) => resp(c, "OrderedUnit"));
 

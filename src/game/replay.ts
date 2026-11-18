@@ -151,6 +151,8 @@ export type ReplayEvent =
   | { k: "frame"; t: number; ph: Phase; p: number; frame: number; ev: number }
   /** `left`: raised by a LAN seat going (`seatLeft`), which also marks the slot LEFT. */
   | { k: "pev"; t: number; ph: Phase; p: number; ev: number; left?: boolean }
+  /** A key the map's script was listening for (BlzTriggerRegisterPlayerKeyEvent). */
+  | { k: "key"; t: number; ph: Phase; p: number; key: number; meta: number; down: boolean }
   | { k: "cheat"; t: number; ph: Phase; p: number; kind: string }
   | { k: "cheatsel"; t: number; ph: Phase; kind: string; ids: number[] }
   /** A summon's SPAWN LOCK, which the sim reads off its model when the body arrives — a fact

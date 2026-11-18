@@ -83,7 +83,17 @@ export function registerVisionNatives(rt: Runtime): void {
   // the BJ that fronts it, SetPlayerAllianceBJ, is (source, SETTING, VALUE, other). The
   // BJ is blizzard.j's, so it re-orders for us; only the native's order matters here.
   def(rt, "SetPlayerAlliance", (c, a) => {
-    c.rt.hooks?.setPlayerAlliance?.(playerIndex(c, a[0]), playerIndex(c, a[1]), c.rt.enumIndex(a[2]), truthy(a[3]));
+    const source = playerIndex(c, a[0]), other = playerIndex(c, a[1]), type = c.rt.enumIndex(a[2]), value = truthy(a[3]);
+    const was = c.rt.hooks?.getPlayerAlliance?.(source, other, type);
+    c.rt.hooks?.setPlayerAlliance?.(source, other, type, value);
+    // EVENT_PLAYER_ALLIANCE_CHANGED (TriggerRegisterPlayerAllianceChange): raised for the player
+    // whose settings moved, on a write that CHANGED one. Blizzard.j's melee library registers it
+    // for every player on ALLIANCE_PASSIVE and runs MeleeCheckForLosersAndVictors off it (9617),
+    // which is how unallying your last ally mid-game is noticed at once and not two seconds on.
+    if (was !== undefined && was !== value) {
+      c.fireEvent?.("playerAllianceChange", new Map([["TriggerPlayer", c.rt.playerHandle(source)]]),
+        (p) => c.rt.data<{ index: number }>(p[0] ?? JNULL)?.index === source && c.rt.enumIndex(p[1] ?? JNULL) === type);
+    }
     return JNULL;
   });
   def(rt, "GetPlayerAlliance", (c, a) =>

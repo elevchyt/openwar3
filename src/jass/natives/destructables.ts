@@ -61,6 +61,17 @@ function handleFor(c: NativeCtx, mapId: number, fallback: Omit<JassDestructable,
   return jHandle(d.handleId, "destructable");
 }
 
+/** The `destructable` a unit handle stands in for (a gate, a crate — the sim fights those as
+ *  units), or null when the value is not a unit or is an ordinary one. */
+export function destructableForUnit(c: NativeCtx, unitV: JassValue): JassValue {
+  const u = unitV.k === "handle" ? c.rt.data<{ simId?: number }>(unitV) : undefined;
+  if (!u || u.simId === undefined || u.simId < 0) return JNULL;
+  const mapId = c.rt.hooks?.destructableOfUnit?.(u.simId) ?? 0;
+  const snap = mapId > 0 ? c.rt.hooks?.destructableInfo?.(mapId) ?? null : null;
+  if (!snap) return JNULL;
+  return handleFor(c, mapId, { mapId, typeId: snap.typeId, x: snap.x, y: snap.y, life: snap.life, maxLife: snap.maxLife });
+}
+
 export function registerDestructableNatives(rt: Runtime): void {
   // --- create / remove ------------------------------------------------------
   const create = (c: NativeCtx, typeInt: number, x: number, y: number, dead: boolean): JassValue => {

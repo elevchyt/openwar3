@@ -32,6 +32,8 @@ export interface TriggerObj {
    *  often something was offered and declined. `ResetTrigger` zeroes both. */
   evals: number;
   execs: number;
+  /** `TriggerWaitOnSleeps` — see natives/gameExtras.ts. */
+  waitOnSleeps?: boolean;
 }
 
 /** A `boolexpr` — a condition wrapping a `code` (function ref), from Condition()/
@@ -325,6 +327,9 @@ export interface RectObj {
 export interface RegionObj {
   handleId: number;
   rects: number[]; // rect handle ids
+  /** Cells taken back OUT of the region (`RegionClearCell`), as bounds: a point inside one is
+   *  not in the region whatever rect covers it. Absent until a script clears one. */
+  holes?: Array<{ minx: number; miny: number; maxx: number; maxy: number }>;
 }
 
 /** A JASS `timerdialog` (CreateTimerDialog) — 7.21.
@@ -732,6 +737,8 @@ export interface EngineHooks {
   /** The sim unit standing in for a map destructable (a gate, a crate, a barricade), or 0 when
    *  it has none (a tree, a bridge, a dead one). */
   destructableUnit?(id: number): number;
+  /** …and the other way round: the map destructable a sim unit stands in for, or 0. */
+  destructableOfUnit?(unitId: number): number;
   /** IssueNeutral*OrderById — an order to a neutral building on `player`'s behalf (a purchase:
    *  `orderId` is the ware's rawcode). True when the sale went through. */
   issueNeutralOrder?(player: number, shopId: number, orderId: number, kind: "immediate" | "point" | "target"): boolean;
@@ -1458,6 +1465,119 @@ export interface EngineHooks {
   /** UnitAddIndicator / AddIndicator — blink a ring around a unit, in `r,g,b` (0–255) at `a`.
    *  blizzard.j's TransmissionFromUnitWithNameBJ calls it, WHITE, on whoever is speaking. */
   unitAddIndicator?(unitId: number, r: number, g: number, b: number, a: number): void;
+
+  // --- issue #313: the natives common.j declares that had no implementation ---------------
+  /** SetUnitAnimationByIndex — the model's Nth sequence, as the MDX lists them. */
+  setUnitAnimationByIndex?(unitId: number, index: number): void;
+  /** SetUnitAnimationWithRarity — the named clip, taking the RARE variant (true) or the common
+   *  one (false) where the model has both. */
+  setUnitAnimationWithRarity?(unitId: number, animation: string, rare: boolean): void;
+  /** UnitShareVision — this ONE unit's sight lent to (or taken back from) a player. */
+  shareUnitVision?(unitId: number, player: number, share: boolean): void;
+  /** UnitSuspendDecay — stop / restart the clock on a dead unit's body. */
+  suspendDecay?(unitId: number, suspend: boolean): void;
+  /** UnitSetConstructionProgress / UnitSetUpgradeProgress — 0..100. */
+  setConstructionProgress?(unitId: number, percent: number): void;
+  setUpgradeProgress?(unitId: number, percent: number): void;
+  /** UnitIgnoreAlarm / UnitIgnoreAlarmToggled — no "under attack" warning for this unit. */
+  setUnitIgnoreAlarm?(unitId: number, flag: boolean): boolean;
+  unitIgnoresAlarm?(unitId: number): boolean;
+  /** UnitAddSleepPerm / UnitCanSleepPerm — sleeps when unprovoked at ANY hour. */
+  setUnitSleepPerm?(unitId: number, add: boolean): void;
+  unitSleepPerm?(unitId: number): boolean;
+  /** SetUnitRescuable / SetUnitRescueRange. */
+  setUnitRescuable?(unitId: number, player: number, flag: boolean): void;
+  setUnitRescueRange?(unitId: number, range: number): void;
+  /** Set/GetUnitPropWindow — RADIANS; the getter answers the type's own window when no script
+   *  has set one. undefined when the unit is gone. */
+  setUnitPropWindow?(unitId: number, radians: number): void;
+  getUnitPropWindow?(unitId: number): number | undefined;
+  /** GetUnitDefaultPropWindow — UnitData `propWin`, DEGREES, by type. */
+  unitTypePropWindow?(typeId: string): number | undefined;
+  /** BlzGetUnitCollisionSize — the unit's pathing radius. */
+  unitCollisionSize?(unitId: number): number | undefined;
+  /** BlzIsUnitSelectable — false for a unit a click cannot pick (Locust). */
+  isUnitSelectable?(unitId: number): boolean;
+  /** BlzUnitCancelTimedLife / BlzUnitInterruptAttack. */
+  cancelTimedLife?(unitId: number): void;
+  interruptAttack?(unitId: number): void;
+  /** UnitSetUsesAltIcon / SetAltMinimapIcon — the "special minimap icon". */
+  setUnitAltIcon?(unitId: number, flag: boolean): void;
+  setAltMinimapIcon?(path: string): void;
+  /** IssueBuildOrder(ById) — a worker told to put up a structure of this type at (x, y),
+   *  through the same gates a player's placement passes. */
+  issueBuildOrder?(peonId: number, typeId: string, x: number, y: number): boolean;
+  /** The sim ids of every unit a player owns (SetPlayerUnitsOwner). */
+  unitsOwnedBy?(player: number): number[];
+  /** Add…ToAllStock / Remove…FromAllStock — every shop that sells that kind of ware. */
+  addToAllStock?(wareId: string, kind: "item" | "unit", count: number, max: number): void;
+  removeFromAllStock?(wareId: string): void;
+  /** ChooseRandomNPBuilding — a random neutral-passive building type ("" when none). */
+  chooseRandomNPBuilding?(): string;
+  /** SetTerrainPathable — `pathingType` is the common.j ConvertPathingType index, `pathable`
+   *  the native's own flag (TRUE opens the cell). */
+  setTerrainPathable?(x: number, y: number, pathingType: number, pathable: boolean): void;
+  /** GetAbilityEffectById — one of an ability's models by `effecttype` index (0 EFFECT, 1 TARGET,
+   *  2 CASTER, 3 SPECIAL, 4 AREA_EFFECT, 5 MISSILE, 6 LIGHTNING) and position in that field's
+   *  list. "" when the row names none. */
+  abilityArt?(abilityId: string, effectType: number, index: number): string;
+  /** GetAbilitySoundById — `soundtype` 0 EFFECT, 1 EFFECT_LOOPED: the sound LABEL the row names. */
+  abilitySound?(abilityId: string, soundType: number): string;
+  /** The Blz ability button natives: which of an ability's three faces (the button itself, its
+   *  "turn off" twin, the learn-skill page) and which of its fields. Levels are 0-based ranks. */
+  abilityFace?(abilityId: string, face: "normal" | "activated" | "research", field: "tip" | "ubertip" | "icon" | "x" | "y", rank: number): string | number | undefined;
+  setAbilityFace?(abilityId: string, face: "normal" | "activated" | "research", field: "tip" | "ubertip" | "icon" | "x" | "y", rank: number, value: string | number): void;
+  /** BlzGet/SetItem… — ONE item's own words and art (its entity, not its type). */
+  itemText?(itemId: number, field: "name" | "tooltip" | "description" | "ubertip" | "icon"): string | undefined;
+  setItemText?(itemId: number, field: "name" | "tooltip" | "description" | "ubertip" | "icon", text: string): void;
+  /** SetDoodadAnimation(Rect) — play a clip on the doodads of one type (0 = any) inside a circle
+   *  or a rect. `nearestOnly` narrows a circle to the closest one. */
+  setDoodadAnimation?(area: { x: number; y: number; radius: number } | { minx: number; miny: number; maxx: number; maxy: number }, doodadId: string, nearestOnly: boolean, animation: string, animRandom: boolean): void;
+  /** EnableSelect / EnableDragSelect / EnablePreSelect — `state` is whether the player may do
+   *  it at all, `ui` whether its indicator (circle, box, hover ring) is drawn. */
+  enableSelection?(kind: "select" | "drag" | "preselect", state: boolean, ui: boolean): void;
+  /** ForceUIKey / ForceUICancel — a key press on the local player's behalf ("Escape" for cancel). */
+  forceUiKey?(key: string): void;
+  /** Cheat — a single-player cheat code, as if typed. */
+  cheat?(code: string): void;
+  /** DoNotSaveReplay — this match leaves no replay file. */
+  doNotSaveReplay?(): void;
+  /** DisplayLoadDialog — put up the Load Game screen. */
+  displayLoadDialog?(): void;
+  /** SetPlayerOnScoreScreen — whether a player has a row on the score screen. */
+  setPlayerOnScoreScreen?(player: number, flag: boolean): void;
+  /** GetPlayerScore — one column of the live score table (`playerscore` index). */
+  playerScore?(player: number, which: number): number | undefined;
+  /** SetPlayerTaxRate — `rate` per cent of what `source` earns of a resource goes to `other`. */
+  setPlayerTaxRate?(source: number, other: number, resource: number, rate: number): void;
+  /** DisableRestartMission — grey the defeat dialog's Restart button. */
+  disableRestartMission?(flag: boolean): void;
+  /** SetReservedLocalHeroButtons — leave this many hero-icon slots empty at the top of the stack. */
+  setReservedHeroButtons?(count: number): void;
+
+  // --- the natives of 1.31 → 3.0 (natives/later.ts) ----------------------------------------
+  /** BlzQueue…OrderById — the order goes BEHIND what the unit is doing. False when it could
+   *  not be queued (an ability's order behind another order, a full queue). */
+  queueUnitOrder?(unitId: number, orderId: number, order: string, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number): boolean;
+  /** BlzGetUnitOrderCount — the order under way plus the ones queued behind it. */
+  unitOrderCount?(unitId: number): number;
+  /** BlzUnitClearOrders(u, onlyQueued) / BlzUnitForceStopOrder — drop the queue, and (unless
+   *  `onlyQueued`) stop what the unit is doing as well. */
+  clearUnitOrders?(unitId: number, onlyQueued: boolean): void;
+  /** BlzGetUnitAnimationDuration(ByIndex) — seconds of the clip by name or by sequence index. */
+  unitAnimationDuration?(unitId: number, animation: string | number): number;
+  /** BlzDisplayChatMessage — a chat line shown as said by `player`. */
+  displayChatMessage?(player: number, recipient: number, message: string): void;
+  /** BlzGetLocalClientWidth/Height, BlzIsLocalClientActive, BlzGetLocale. */
+  clientSize?(): { width: number; height: number };
+  clientActive?(): boolean;
+  localeName?(): string;
+  /** BlzGetMouseFocusUnit — the sim id of the unit under the pointer, 0 for none. */
+  mouseFocusUnit?(): number;
+  /** BlzGetNumDoodads / BlzGetDoodad… — the map's placed doodads, by index. */
+  doodadCount?(): number;
+  doodadInfo?(index: number): { x: number; y: number; z: number; scale: number; yaw: number; id: string; variation: number } | undefined;
+  setSingleDoodadAnimation?(index: number, animation: string, animRandom: boolean): void;
 }
 
 /** One camera move: the fields to blend and (optionally) where to pan the focus.

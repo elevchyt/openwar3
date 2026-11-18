@@ -1114,6 +1114,52 @@ corpus uses it), and a file whose sector table is itself corrupt (that file thro
 every other file are unaffected). After this patch changes, the dev server must be restarted with
 `node_modules/.vite` deleted, like any viewer-patch change.
 
+### The natives of 1.31, Reforged and 3.0 — declared, and answered three ways
+
+A map built for a later client calls natives a 1.30.4 `common.j` has never declared. Measured
+against jassdoc's annotated `common.j` (github.com/lep/jassdoc, through patch 3.0 — the database
+wc3jass.com serves), **331** natives had no answer here. 329 have one now; the two left are
+`BlzSetSpecialEffectTimeScale` / `BlzSetSpecialEffectTime`, declined where they are registered
+(natives/effects.ts) because their documentation does not settle the scale.
+
+- **Declared** by `src/compat/preludeLater.ts` — the second half of the prelude, OUR file under
+  the prelude's own rule: it names the API (318 natives, 16 handle types, 318 constants of the
+  enum types and events those natives take) and carries no Blizzard code. An `oskeytype` is the
+  Windows virtual-key code and an event id is what `GetTriggerEventId` compares, so those keep
+  the later game's numbers; nothing else has to.
+- **Answered** by `src/jass/natives/later.ts`, and the frame API's share by `src/compat/frames.ts`.
+  `tools/jass-later-natives-test.cjs` asserts every native the prelude declares is implemented.
+
+Each registration states which of three things it is:
+
+| kind | what it means | examples |
+| --- | --- | --- |
+| BEHAVIOUR | the engine has the thing | `BlzQueue…OrderById` (the shift-queue, for a script), `BlzGetUnitAbilityCooldownPercent` and its setters, `BlzUnitHeal`, `BlzPauseUnitEx` (counted), `BlzTriggerRegisterPlayerKeyEvent`, `BlzSendSyncData`, `BlzGetNumDoodads` / `BlzGetDoodadX…`, the 28 `BlzCreate…Destructable…` creators, `BlzIsTerrainPathableEx`, `BlzBitAnd/Or/Xor`, `MathRound`, the pixel ↔ frame conversions, `BlzFrameSetParent` / `GetChild` / `AddText` |
+| STORED | a setting nothing here consumes; the getter answers the setter | HUD scale, camera type and label, the two new handicaps, hero glow, the frame properties the drawing does not read yet (`FrameObj.extra`) |
+| ABSENT | a SYSTEM this engine does not have | Reforged HD skins (a unit's "skin" is its type), facial animation, HD water and the fog styles, and the 3.0 equipment / bag / loadout inventory — nothing is ever equipped, every equip is refused, the "extended" inventory is the six slots |
+
+Things that are easy to get wrong:
+
+- **The keyboard is a script INPUT.** `Interpreter.firePlayerKey` is tapped like a dialog click, so
+  a replay carries it (`key` in game/replay.ts). The host listens only while a key event is
+  registered. The meta set must match EXACTLY — a trigger on plain A does not fire for Shift+A.
+  A LAN client's keys do not reach the host's interpreter yet.
+- **A queued order is "after", never "instead".** The engine's own orders queue; an ABILITY's
+  order has no queued form and is REFUSED when the unit is busy rather than issued in place of
+  the order it was meant to follow.
+- **`BlzIsTerrainPathableEx` reads the way its name does**; the classic `IsTerrainPathable`
+  answers the opposite.
+- **Sync data goes nowhere, on purpose.** The interpreter runs once, on the authority, so
+  `BlzSendSyncData` is delivered to the sender's own registered triggers.
+
+Still not behaviour: minimap icons and command-button effects are real HANDLES that draw nothing;
+the command-button click events and item-stacking events are registered and never raised; item
+fields and ability level-ARRAY fields answer their typed default (no rows in
+`src/compat/blzFields.ts`, and the ~900 field constants a 2.0 `common.j` adds are not declared);
+`BlzGetMouseFocusUnit` and `BlzGetLocale` have no host and answer null / "enUS". Not declared at
+all: `RACE_PREF_FORSAKEN` (docs/patches.md) and `ITEM_TYPE_EQUIPMENT`, whose index is 1.30.4's
+own `ITEM_TYPE_UNKNOWN`.
+
 ## Traps
 
 * **After editing the viewer patch, restart the dev server AND delete `node_modules/.vite`**, or

@@ -182,6 +182,8 @@ export function registerPredicateNatives(rt: Runtime): void {
   const inRegion = (c: NativeCtx, regionV: JassValue, x: number, y: number): boolean => {
     const reg = c.rt.data<RegionObj>(regionV);
     if (!reg) return false;
+    // A cell RegionClearCell took back out is not in the region, whatever rect covers it.
+    if (reg.holes?.some((h) => x >= h.minx && x < h.maxx && y >= h.miny && y < h.maxy)) return false;
     for (const id of reg.rects) {
       const r = c.rt.handles.get(id) as RectObj | undefined;
       if (r && x >= r.minx && x <= r.maxx && y >= r.miny && y <= r.maxy) return true;
