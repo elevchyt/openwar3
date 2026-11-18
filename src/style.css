@@ -2884,14 +2884,18 @@ body.hud-widget-skinned .hud-cargo-slot {
 .hud-cargo-slot.filled:hover .hud-cargo-art,
 .hud-cargo-slot.filled.pad-hover .hud-cargo-art { filter: brightness(1.15); }
 /* The icon sits inside the frame's own gold rim (the art's border is ~4 of 64 texels) and
-   leaves the pocket's bottom fifth to the bar. */
+   leaves the pocket's bottom fifth to the bar. That box is 82% wide and 67% tall, so the icon
+   is CONTAINED in it rather than filling it: a command icon is a square picture, and stretched
+   to the box every Wisp in a mine, Peon in a burrow and passenger in a hold was drawn a fifth
+   too wide. It centres on the pocket, square, at the bar's height. */
 .hud-cargo-art {
   position: absolute;
   left: 9%;
   right: 9%;
   top: 9%;
   bottom: 24%;
-  background-size: 100% 100%;
+  background-size: contain;
+  background-position: center;
   background-repeat: no-repeat;
 }
 /* The second (third, fourth) seat of a wide unit: the same picture, dimmed, and no bar —
