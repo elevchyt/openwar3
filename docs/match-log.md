@@ -22,7 +22,7 @@ File name: `<local date>_<time>_<map>.log`, e.g. `2026-10-25_14-03-22_Echo-Isles
 |---|---|
 | [`src/game/matchLog.ts`](../src/game/matchLog.ts) | the recorder: what it looks at, and the line format |
 | [`electron/logStore.mjs`](../electron/logStore.mjs) | the ONE writer — the size cap, the roll-over, the three-day sweep |
-| [`electron/main.mjs`](../electron/main.mjs) / [`preload.cjs`](../electron/preload.cjs) | the release door: `ow3native.matchLog` → `<userData>/.logs/` |
+| [`electron/main.mjs`](../electron/main.mjs) / [`preload.cjs`](../electron/preload.cjs) | the release door: `ow3native.matchLog` → `<DATA_DIR>/.logs/` |
 | [`tools/vite-plugin-match-log.ts`](../tools/vite-plugin-match-log.ts) | the dev door: `POST /matchlog/*` → the repo's `.logs/` (`apply: "serve"`) |
 | `MapViewerScene.tickMatchLog` / `closeMatchLog` | opens it when the start gate lifts, closes it in `stop` with the score screen |
 | `ComputerPlusAi.logReport` | each Computer+ seat's build, mode, target and scouting, read-only |

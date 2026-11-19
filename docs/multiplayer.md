@@ -281,7 +281,7 @@ That shape is the beacon's too. When it lands, the addresses arrive from the sub
 from a person, and nothing above this line changes.
 
 **The desktop app reads the install natively** (step 2, `pnpm app`). The folder is asked for once
-through the OS dialog and remembered by the shell — Electron's `userData`, not the page's storage,
+through the OS dialog and remembered by the shell — in the OpenWar3 data folder (`DATA_DIR`), not the page's storage,
 which belongs to an origin and would be lost the day the app is served from a different port — so
 an ordinary launch puts up no gate at all. The bytes reach the page over `ow3-install://`
 (`electron/install.mjs`), which is deliberately **not** a route on the LAN-facing port: a custom

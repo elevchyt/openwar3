@@ -187,7 +187,7 @@ relational** — lives instead in the per-race **profile** `.txt` files, split i
 | Upgrades | `Units\<Race>UpgradeFunc.txt` | `Units\<Race>UpgradeStrings.txt` |
 
 `<Race>` is one of **`Human`, `Orc`, `Undead`, `NightElf`, `Neutral`, `Campaign`** — OpenWar3 loads **all six**
-of each into a single merged `MappedData` (`PROFILE_FILES` in `src/data/techtree.ts`; consumed by
+of each into a single merged `MappedData` (`FUNC_FILES` / `STRING_FILES` in `src/data/techtree.ts`; consumed by
 `src/data/units.ts`, `abilities.ts`, `techtree.ts`). Sections are `[rawcode]` INI blocks.
 
 **Why this matters — the recurring gotcha:** fields you would *expect* in the SLK are often **only** in the

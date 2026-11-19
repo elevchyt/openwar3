@@ -20,7 +20,7 @@
 //   [08:00] STATUS P1 gold=310 lumber=140 food=34/50 tier=2 workers=16 army=24 …
 //
 // It writes nothing itself: the lines go to a SINK — the desktop shell in a release build
-// (`ow3native.matchLog`, electron/main.mjs → `<userData>/.logs/`), the dev server under `pnpm dev`
+// (`ow3native.matchLog`, electron/main.mjs → `<DATA_DIR>/.logs/`), the dev server under `pnpm dev`
 // (tools/vite-plugin-match-log.ts → the repo's `.logs/`), and nowhere at all in a plain web build,
 // which has no disk to write to (`matchLogSink`, src/game/matchLogSink.ts). Both writers are electron/logStore.mjs: about a megabyte per file
 // before it rolls over, and nothing kept past three days.
