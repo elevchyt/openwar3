@@ -5,8 +5,9 @@ engine in TypeScript, and the goal of every change is to be **as close to the or
 possible** — its behaviour, timings, layout, names and feel.
 
 This page is the newcomer's guide. [`CLAUDE.md`](CLAUDE.md) is the long-form standing guidance
-(written for coding agents, but every rule in it applies to people too), and the `docs/` folder
-holds one deep-dive per subsystem — read the matching one before touching that area.
+(written for coding agents, but every rule in it applies to people too), and the
+[`docs/`](docs/README.md) folder holds one deep-dive per subsystem — read the matching one before
+touching that area.
 
 ## Setup
 
