@@ -1,5 +1,5 @@
 // The REPLAY folder's one writer (issue #158, src/game/replay.ts) — used by the desktop shell
-// (`<userData>/replays/`) and by the dev server (the repo's `.replays/`), so the rules live in
+// (`<DATA_DIR>/replays/`) and by the dev server (the repo's `.replays/`), so the rules live in
 // one place, as electron/logStore.mjs does for the match logs.
 //
 // The rules:

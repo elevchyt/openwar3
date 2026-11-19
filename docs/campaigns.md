@@ -86,7 +86,7 @@ Two traps sit under that, and both produce the same "there is no animation" symp
 * **A stalled frame must not fast-forward the clip.** Building the screen blocks the main
   thread, and the first frame afterwards carries the whole stall as its `dt`. Fed straight to
   the animation clock, a 3.3 s hitch advanced the 3.3 s Birth in ONE step. The scene's step is
-  clamped (`MAX_FRAME_MS`).
+  clamped (`MAX_STEP_MS`).
 * **The hand-off to `Stand` is watched, not timed.** With the step clamped, the clip runs behind
   wall time by however long the stall was, so a `setTimeout(birthLength)` cut the arrival short.
   `settleBackdrop` switches on the frame the Birth's last keyframe is reached.
@@ -145,9 +145,10 @@ buried the set only because the lighting underneath it was wrong. One block per 
 
 **It is suppressed by request** (`SCENE_SPRITES` in `src/ui/fdfCampaign.ts` lists the frame among
 the ones this screen does not draw). The reference does wear it, so this is a deliberate
-departure and not a gap; everything needed to bring it back is below, and it is four lines —
-drop `WarCraftIIILogo` from that list, re-add the `sprites` mapping on the mount, and re-apply
-the size and anchor in `buildCampaignRoot`:
+departure and not a gap; what it takes to bring it back is below. The code that drew it is gone
+from `src/`, so the constants in the block are a record of the values it used, not names to look
+up: drop `WarCraftIIILogo` from that list, give the mount a `sprites` mapping again, and apply the size
+and anchor in `buildCampaignRoot`:
 
 ```
 const LOGO_W = 0.2235, LOGO_H = 0.1115;  // the CampaignLogo model's own extent, a 2:1 box
@@ -169,7 +170,7 @@ hands it a MODEL, `war3skins.txt`'s `CampaignLogo`. Two traps live in that one f
    model is a scene with its art somewhere inside a much larger authored extent, and those
    offsets push the extent off the corner so the art lands on it. We draw a flat texture that
    fills its whole box, so honouring them pushes the LOGO off-screen — it must be anchored
-   inside the corner instead (`LOGO_INSET`).
+   inside the corner instead (the `LOGO_INSET` value above).
 
 **Where the rows come from.** TFT's `CampaignMenu.fdf` declares no rows at all: it dropped
 RoC's fourteen hand-authored `MissionNFrame`s for a runtime list (`CampaignListBox.fdf`, whose

@@ -1,7 +1,7 @@
 // The MATCH LOG's writer (src/game/matchLog.ts) — the one piece of it that touches a disk.
 //
 // Two processes own a `.logs/` folder and both use this file: the desktop shell
-// (electron/main.mjs, `<userData>/.logs/` — the player's OpenWar3 data folder) and the dev server
+// (electron/main.mjs, `<DATA_DIR>/.logs/` — the player's OpenWar3 data folder) and the dev server
 // (tools/vite-plugin-match-log.ts, the repo's own `.logs/`, beside the opt-in perf recorder's
 // sessions — docs/perf-logging.md). The page itself cannot write a file, so it hands its lines to
 // whichever of the two is serving it, and the rules about how big and how old are kept HERE, once.

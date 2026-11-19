@@ -13,7 +13,7 @@ import { dirname, join } from "node:path";
 
 let file = null;
 
-/** Point the store at Electron's `userData`. Called once, before `ready` — the vsync switch is read before there is a window. */
+/** Point the store at the OpenWar3 data folder (`DATA_DIR`, see electron/dataDir.mjs). Called once, before `ready` — the vsync switch is read before there is a window. */
 export function useSettingsDir(dir) {
   file = join(dir, "settings.json");
 }
