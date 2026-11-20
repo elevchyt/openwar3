@@ -975,9 +975,10 @@ export class Authority {
       case "sellitem":
         return this.ownedBy(player, cmd.unitId) && this.sim.issueSellItem(cmd.unitId, cmd.slot, cmd.shopId);
       case "giveitem":
-        // BOTH ends are checked: you may not push an item into a unit you don't own.
-        return this.ownedBy(player, cmd.unitId) && this.ownedBy(player, cmd.targetId)
-          && this.sim.issueGiveItem(cmd.unitId, cmd.slot, cmd.targetId);
+        // The GIVER must be the issuer's; the receiver need only be FRIENDLY — an ally's hero
+        // takes an item dropped on it exactly as one of your own does (WC3), and the sim's
+        // `issueGiveItem` is what refuses an enemy.
+        return this.ownedBy(player, cmd.unitId) && this.sim.issueGiveItem(cmd.unitId, cmd.slot, cmd.targetId);
       case "shopbuyer":
         // The SHOP is deliberately not ownership-checked — a neutral Goblin Merchant belongs
         // to nobody, which is the entire point. What must be the issuer's is the unit it

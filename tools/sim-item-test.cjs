@@ -764,5 +764,31 @@ console.log("\na restore with nothing to restore says why, and keeps its charge 
   check("…and so does the hero's own empty mana bar", world.itemUseError(whole.id, 0, 0), null);
 }
 
+// --- handing an item to a FRIENDLY hero (SimWorld.issueGiveItem / transferItem) ------------
+// An item dropped on an ALLY's hero goes into the ally's inventory, as it does for one of your
+// own; with no room there it is set down at the ally's feet. An enemy is never handed one.
+console.log("\nhanding an item to another hero");
+{
+  world = newWorld();
+  const giver = give(unit({ isHero: true, inventory: [null, null] }), "phea");
+  const ally = unit({ owner: 1, team: 0, isHero: true, x: giver.x + 60, inventory: [null, null] });
+  check("an ally's hero is handed the item", world.issueGiveItem(giver.id, 0, ally.id), true);
+  check("…it is in the ally's inventory", ally.inventory[0]?.itemId, "phea");
+  check("…and out of the giver's", giver.inventory[0], null);
+
+  give(giver, "phea");
+  ally.inventory = [{ id: nextId++, itemId: "sreg", charges: 1, cooldownLeft: 0 }, { id: nextId++, itemId: "sreg", charges: 1, cooldownLeft: 0 }];
+  check("a FULL ally is still handed it", world.issueGiveItem(giver.id, 0, ally.id), true);
+  const onGround = [...world.items.values()].find((it) => it.itemId === "phea");
+  check("…and it lands on the ground", !!onGround, true);
+  check(`…at the ally's feet (${onGround && Math.round(Math.hypot(onGround.x - ally.x, onGround.y - ally.y))} away)`, onGround && Math.hypot(onGround.x - ally.x, onGround.y - ally.y) <= 32, true); // snapped to the item grid (snapItemPos)
+  check("…not in the giver's pack", giver.inventory[0], null);
+
+  give(giver, "phea");
+  const enemy = unit({ owner: 2, team: 1, isHero: true, x: giver.x - 60, inventory: [null, null] });
+  check("an enemy hero is refused", world.issueGiveItem(giver.id, 0, enemy.id), false);
+  check("…and the giver keeps it", giver.inventory[0]?.itemId, "phea");
+}
+
 console.log(failed ? `\nitems: ${failed} check(s) FAILED` : "\nitems: all checks passed");
 process.exit(failed ? 1 : 0);

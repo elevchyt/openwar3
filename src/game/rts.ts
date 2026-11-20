@@ -7603,7 +7603,9 @@ export class RtsController {
       // falls through to the ordinary drop rather than sending a sale that must be refused.
       if (to && picked !== null && picked !== id && this.sim.canPawnAt(to) && this.sim.shopServes(picked, this.localPlayer)) {
         this.execute(this.localPlayer, { c: "sellitem", unitId: id, slot: armed.slot, shopId: picked });
-      } else if (to && picked !== null && picked !== id && this.controls(picked) && to.inventory.length) {
+      } else if (to && picked !== null && picked !== id && to.inventory.length && (this.controls(picked) || this.sim.allied(this.sim.units.get(id)!, to))) {
+        // Your own hero or an ALLY's: either takes the item (or, full up, has it set down at
+        // its feet — SimWorld.transferItem). An enemy hero is just ground to drop it on.
         this.execute(this.localPlayer, { c: "giveitem", unitId: id, slot: armed.slot, targetId: picked });
       } else {
         const hit = this.groundHitAt(cssX, cssY);

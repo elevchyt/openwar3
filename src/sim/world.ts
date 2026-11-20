@@ -27777,6 +27777,10 @@ export class SimWorld {
     const u = this.units.get(fromId);
     const to = this.units.get(toId);
     if (!u || !to || !u.inventory[slot] || !to.inventory.length || this.castLocked(u) || this.itemsLocked(u)) return false;
+    // Any FRIENDLY body with pockets may be handed an item, not only the giver's own: in WC3 an
+    // item dropped on an ally's hero goes into the ally's inventory, or — with no room there —
+    // onto the ground at the ally's feet (transferItem). Only an enemy is refused.
+    if (to.owner !== u.owner && !this.allied(u, to)) return false;
     u.pendingGive = { toId, slot };
     u.pendingUse = null;
     u.getItemId = 0;

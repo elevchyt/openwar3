@@ -209,5 +209,25 @@ console.log("the AUTHORITY refuses an order naming an off-field unit (a client's
     [true, ["harvest"], true, "idle"]);
 }
 
+console.log("the AUTHORITY lets an item be handed to an ALLY's hero, never to an enemy's");
+{
+  const { Authority } = require(join(REPO, ".sim-build", "src", "game", "authority.js"));
+  const stub = { get: () => undefined };
+  const auth = new Authority(world, stub, stub, stub, stub);
+  const pack = () => [{ id: 9001, itemId: "phea", charges: 1, cooldownLeft: 0 }, null];
+  const giver = unit({ x: 400, y: 1600, prevX: 400, prevY: 1600, inventory: pack() });
+  // Out of reach on purpose: the command's verdict is what is under test, and the giver
+  // simply sets off to walk the item over (tickGetItem hands it across on arrival).
+  const ally = unit({ owner: 1, team: 0, x: 1000, y: 1600, prevX: 1000, prevY: 1600, inventory: [null, null] });
+  const enemy = unit({ owner: 2, team: 1, x: 1000, y: 1900, prevX: 1000, prevY: 1900, inventory: [null, null] });
+  check("handing to an ally's hero is accepted", auth.execute(0, { c: "giveitem", unitId: giver.id, slot: 0, targetId: ally.id }), true);
+  check("…and the giver is on its way to them", giver.pendingGive?.toId, ally.id);
+  giver.pendingGive = null;
+  check("handing to an enemy's hero is refused", auth.execute(0, { c: "giveitem", unitId: giver.id, slot: 0, targetId: enemy.id }), false);
+  check("…and sends nobody anywhere", giver.pendingGive, null);
+  check("giving away an ally's item is still refused (the GIVER must be yours)",
+    auth.execute(0, { c: "giveitem", unitId: ally.id, slot: 0, targetId: giver.id }), false);
+}
+
 console.log(failed === 0 ? "\norder funnel: all checks passed" : `\norder funnel: ${failed} check(s) failed`);
 process.exit(failed === 0 ? 0 : 1);
