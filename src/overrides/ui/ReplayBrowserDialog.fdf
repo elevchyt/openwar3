@@ -1,0 +1,165 @@
+// OpenWar3's own glue dialog — replays from the replay collection (src/ui/replayBrowser.ts).
+//
+// **Why it exists.** Every multiplayer match's replay goes to OpenWar3's collection
+// (docs/replays.md "The collection"); this is the way BACK: the View Replay screen's globe opens
+// it, the player filters what is there, and one click brings a replay down onto their own list.
+//
+// **Why a file of ours.** No FrameDef in the install describes it and `UI\FrameDef\` is the
+// player's (src/overrides/README.md). It is the Download Maps dialog's chrome
+// (MapSitesDialog.fdf), which is the Join Server dialog's: the Battle.net dialogue box, a gold
+// title, and Done with `DialogButtonOK`'s own geometry. Every control in it is a glue control
+// out of StandardTemplates.fdf — the bordered glue button, the edit box and its backdrop, the
+// popup menu.
+//
+// **Its shape is a TABLE** (the developer's pick out of three: a search bar over two-line rows,
+// this, and filters down the side): a filter over each thing a replay is found by — the map, a
+// player, a race, the OpenWar3 version — and one row a replay under five column heads. The list
+// is PAGED rather than scrolled (`RBPrev` / `RBNext`), nine rows a page, so a page is exactly
+// what fits. Every size is ours, on the game's own 0.8 × 0.6 screen.
+
+Frame "DIALOG" "ReplayBrowserDialog" {
+    Height 0.5,
+    Width 0.7,
+
+    DialogBackdrop "ReplayBrowserBackdrop",
+    Frame "BACKDROP" "ReplayBrowserBackdrop" {
+        BackdropTileBackground,
+        BackdropBackground  "UI\Widgets\BattleNet\bnet-dialoguebox-background.blp",
+        BackdropCornerFlags "UL|UR|BL|BR|T|L|B|R",
+        BackdropCornerSize  0.064,
+        BackdropBackgroundSize  0.128,
+        BackdropBackgroundInsets 0.01 0.01 0.01 0.01,
+        BackdropEdgeFile  "UI\Widgets\BattleNet\bnet-dialoguebox-border.blp",
+    }
+
+    Frame "TEXT" "ReplayBrowserTitle" INHERITS "StandardTitleTextTemplate" {
+        Width 0.6,
+        Height 0.02,
+        SetPoint TOPLEFT, "ReplayBrowserDialog", TOPLEFT, 0.04, -0.028,
+        FontColor 0.99 0.827 0.0705 1.0,
+        FontJustificationH JUSTIFYLEFT,
+    }
+
+    // --- the filters: map, player, race, version ---------------------------------------
+    Frame "EDITBOX" "RBMapBox" INHERITS WITHCHILDREN "StandardEditBoxTemplate" {
+        Width 0.2,
+        Height 0.034,
+        SetPoint TOPLEFT, "ReplayBrowserDialog", TOPLEFT, 0.04, -0.052,
+    }
+    Frame "EDITBOX" "RBPlayerBox" INHERITS WITHCHILDREN "StandardEditBoxTemplate" {
+        Width 0.2,
+        Height 0.034,
+        SetPoint LEFT, "RBMapBox", RIGHT, 0.003, 0.0,
+    }
+    Frame "POPUPMENU" "RBRaceMenu" INHERITS WITHCHILDREN "StandardPopupMenuTemplate" {
+        Width 0.104,
+        SetPoint LEFT, "RBPlayerBox", RIGHT, 0.006, 0.0,
+        PopupMenuFrame "RBRaceMenuMenu",
+        Frame "MENU" "RBRaceMenuMenu" INHERITS WITHCHILDREN "StandardPopupMenuMenuTemplate" {
+            UseActiveContext,
+        }
+    }
+    Frame "POPUPMENU" "RBVersionMenu" INHERITS WITHCHILDREN "StandardPopupMenuTemplate" {
+        Width 0.103,
+        SetPoint LEFT, "RBRaceMenu", RIGHT, 0.004, 0.0,
+        PopupMenuFrame "RBVersionMenuMenu",
+        Frame "MENU" "RBVersionMenuMenu" INHERITS WITHCHILDREN "StandardPopupMenuMenuTemplate" {
+            UseActiveContext,
+        }
+    }
+
+    // --- the table -----------------------------------------------------------------------
+    Frame "BACKDROP" "RBResultsBackdrop" INHERITS "StandardEditBoxBackdropTemplate" {
+        Width 0.62,
+        Height 0.316,
+        SetPoint TOPLEFT, "ReplayBrowserDialog", TOPLEFT, 0.04, -0.089,
+    }
+    // The column heads, filled by the panel with the same columns a row's body has.
+    Frame "FRAME" "RBHead" {
+        Width 0.566,
+        Height 0.018,
+        SetPoint TOPLEFT, "RBResultsBackdrop", TOPLEFT, 0.01, -0.005,
+    }
+    // The rows: nine of `RBRow`, stamped by the panel.
+    Frame "FRAME" "RBResults" {
+        Width 0.608,
+        Height 0.288,
+        SetPoint TOPLEFT, "RBResultsBackdrop", TOPLEFT, 0.006, -0.024,
+    }
+    // What the table says when it has no rows: "nothing matches", an error.
+    Frame "TEXT" "RBNote" INHERITS "StandardInfoTextTemplate" {
+        Width 0.5,
+        Height 0.05,
+        SetPoint CENTER, "RBResultsBackdrop", CENTER, 0.0, 0.0,
+        FontColor 0.6 0.6 0.6 1.0,
+    }
+
+    // --- the foot: status left, the pager right, Done in the middle ------------------------
+    Frame "TEXT" "RBStatus" INHERITS "StandardSmallTextTemplate" {
+        Width 0.62,
+        Height 0.016,
+        SetPoint TOPLEFT, "ReplayBrowserDialog", TOPLEFT, 0.04, -0.41,
+        FontColor 0.7 0.7 0.7 1.0,
+    }
+
+    Frame "GLUETEXTBUTTON" "RBPrev" INHERITS WITHCHILDREN "StandardBorderedButtonTemplate" {
+        Width 0.034,
+        Height 0.03,
+        SetPoint BOTTOMRIGHT, "ReplayBrowserDialog", BOTTOMRIGHT, -0.142, 0.034,
+        ButtonText "RBPrevText",
+        Frame "TEXT" "RBPrevText" INHERITS "StandardButtonTextTemplate" {
+        }
+    }
+    Frame "TEXT" "RBPageText" INHERITS "StandardSmallTextTemplate" {
+        Width 0.064,
+        Height 0.03,
+        SetPoint LEFT, "RBPrev", RIGHT, 0.0, 0.0,
+        FontColor 0.85 0.85 0.85 1.0,
+        FontJustificationH JUSTIFYCENTER,
+        FontJustificationV JUSTIFYMIDDLE,
+    }
+    Frame "GLUETEXTBUTTON" "RBNext" INHERITS WITHCHILDREN "StandardBorderedButtonTemplate" {
+        Width 0.034,
+        Height 0.03,
+        SetPoint LEFT, "RBPageText", RIGHT, 0.0, 0.0,
+        ButtonText "RBNextText",
+        Frame "TEXT" "RBNextText" INHERITS "StandardButtonTextTemplate" {
+        }
+    }
+
+    // Done — `DialogButtonOK`'s own geometry (DialogWar3.fdf), as on the Download Maps dialog.
+    Frame "BACKDROP" "RBDoneBackdrop" INHERITS "StandardMenuSingleButtonBaseBackdrop" {
+        SetPoint BOTTOM, "ReplayBrowserDialog", BOTTOM, -0.015, 0.008,
+
+        Frame "GLUETEXTBUTTON" "RBDoneButton" INHERITS WITHCHILDREN "StandardButtonTemplate" {
+            Width 0.159,
+            SetPoint TOPRIGHT, "RBDoneBackdrop", TOPRIGHT, -0.032, -0.015625,
+
+            ButtonText "RBDoneButtonText",
+            Frame "TEXT" "RBDoneButtonText" INHERITS "StandardButtonTextTemplate" {
+            }
+        }
+    }
+}
+
+// One replay — STAMPED per row by the panel (`cloneNamespaced`), never mounted itself: a body the
+// panel fills (the map, the players and their races, the length, the version, the day) and the
+// Download button, its icon alone.
+Frame "FRAME" "RBRow" {
+    Width 0.608,
+    Height 0.032,
+
+    Frame "FRAME" "RBRowBody" {
+        Width 0.566,
+        Height 0.028,
+        SetPoint LEFT, "RBRow", LEFT, 0.004, 0.0,
+    }
+    Frame "GLUETEXTBUTTON" "RBRowGet" INHERITS WITHCHILDREN "StandardBorderedButtonTemplate" {
+        Width 0.028,
+        Height 0.025,
+        SetPoint RIGHT, "RBRow", RIGHT, -0.004, 0.0,
+        ButtonText "RBRowGetText",
+        Frame "TEXT" "RBRowGetText" INHERITS "StandardButtonTextTemplate" {
+        }
+    }
+}

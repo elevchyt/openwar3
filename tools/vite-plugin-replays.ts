@@ -10,6 +10,7 @@ import { createReplayStore } from "../electron/replayStore.mjs";
  *
  *   POST /replays/last?keep=N   <bytes>   → { name }   writes LastReplay.o3r (and Autosaved/N)
  *   POST /replays/keep?name=N             → { name }   copies LastReplay to N.o3r
+ *   POST /replays/add?name=N    <bytes>   → { name }   keeps a downloaded replay as N.o3r
  *   GET  /replays/list                    → [{ name, size, mtime }]
  *   GET  /replays/file?name=N             → <bytes>
  *   POST /replays/delete?name=N           → { ok }     deletes N
@@ -39,6 +40,17 @@ export function replays(): Plugin {
         }
         if (req.method === "POST" && url.pathname === "/delete") return json(200, { ok: store.remove(url.searchParams.get("name") ?? "") });
         if (req.method === "POST" && url.pathname === "/keep") return json(200, { name: store.keepLast(url.searchParams.get("name") ?? "") });
+        if (req.method === "POST" && url.pathname === "/add") {
+          const chunks: Buffer[] = [];
+          let size = 0;
+          req.on("data", (c: Buffer) => {
+            size += c.length;
+            if (size > 64 * 1024 * 1024) req.destroy();
+            else chunks.push(c);
+          });
+          req.on("end", () => json(200, { name: store.add(url.searchParams.get("name") ?? "", Buffer.concat(chunks)) }));
+          return;
+        }
         if (req.method === "POST" && url.pathname === "/last") {
           const chunks: Buffer[] = [];
           let size = 0;

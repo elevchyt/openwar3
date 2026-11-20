@@ -17,6 +17,7 @@ import type { ReplayFileInfo, ReplaySink } from "../game/replaySink";
 import { OW3_STRINGS, VIEW_REPLAY_OVERRIDE } from "../overrides";
 import { PLAYER_COLORS } from "./hud";
 import { setGameTip } from "./gameTip";
+import { dressReplayBrowserButton, showReplayBrowser } from "./replayBrowser";
 
 // The View Replay screen, built from the game's own UI\FrameDef\Glue\ViewReplayScreen.fdf:
 // the replay list down the left, the map of the highlighted replay top-right, and
@@ -137,6 +138,8 @@ export function mountViewReplayScreen(
   let screen: FdfScreen | null = null;
   /** A download is under way: the list still browses, but nothing else is started. */
   let busy = false;
+  /** The Download Replays dialog is up. */
+  let browsing = false;
   /** Which `readHeaders` pass is current — a folder change starts a new one. */
   let reading = 0;
   const bundles = new Map<string, Promise<{ size: number; usable: boolean } | null>>();
@@ -165,9 +168,14 @@ export function mountViewReplayScreen(
     handlers: {
       CancelButton: h.onCancel,
       OKButton: () => watch(),
+      ReplayOnlineButton: () => openBrowser(),
     },
     onBuild: (s) => {
       screen = s;
+      // The way to the replay collection (ui/replayBrowser.ts): the globe button the override
+      // hangs beside the title.
+      const online = s.frame("ReplayOnlineButton");
+      if (online) dressReplayBrowserButton(online);
       paint();
       void sink?.list().then((all) => {
         files = all.filter((f) => f.name.toLowerCase().endsWith(REPLAY_EXT));
@@ -175,6 +183,41 @@ export function mountViewReplayScreen(
       });
     },
   });
+
+  /**
+   * The Download Replays dialog. A replay it brings down is kept in the replay folder's top level
+   * (`ReplaySink.add`, never over a file already there) and the list goes to it — out of the
+   * `Autosaved` folder if that is where the player was. A build with no replay folder (a plain
+   * web page) hands the file to the browser instead: there is no list here for it to join.
+   */
+  function openBrowser(): void {
+    if (browsing) return;
+    browsing = true;
+    void showReplayBrowser({
+      container,
+      vfs,
+      onClosed: () => { browsing = false; },
+      keep: async (name, bytes) => {
+        if (!sink?.add) {
+          const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/octet-stream" }));
+          Object.assign(document.createElement("a"), { href: url, download: name }).click();
+          setTimeout(() => URL.revokeObjectURL(url), 10_000);
+          return name;
+        }
+        const kept = await sink.add(name, bytes);
+        if (!kept) return null;
+        files = (await sink.list()).filter((f) => f.name.toLowerCase().endsWith(REPLAY_EXT));
+        cwd = "";
+        picked = kept;
+        paint();
+        screen?.list("ListBoxWar3")?.reveal(kept);
+        return kept;
+      },
+    }).catch((err) => {
+      browsing = false;
+      console.error("[replays] the replay browser failed to open", err);
+    });
+  }
 
   /** Does this build simulate the way the one that recorded `header` did? The same release does;
    *  so does a different one with the same SIM FINGERPRINT (tools/sim-fingerprint.mjs) — most
@@ -340,6 +383,9 @@ export function mountViewReplayScreen(
       rows.push({
         value: f.name,
         label: `${leafName(f.name)}${other}`,
+        // The name is the player's and the version is what says whether it can be watched: both
+        // are shown whole, on a second line when the row is too narrow for them.
+        wrap: true,
         // Only the HIGHLIGHTED row carries the trash can: a column of them down a whole folder
         // would invite a delete by a stray click on a row nobody meant to pick.
         action: f.name === picked && !busy

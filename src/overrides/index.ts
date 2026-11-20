@@ -7,6 +7,7 @@ import globalStringsFdf from "./ui/GlobalStrings.fdf?raw";
 import gameChatroomFdf from "./ui/GameChatroom.fdf?raw";
 import joinAddressDialogFdf from "./ui/JoinAddressDialog.fdf?raw";
 import mapSitesDialogFdf from "./ui/MapSitesDialog.fdf?raw";
+import replayBrowserDialogFdf from "./ui/ReplayBrowserDialog.fdf?raw";
 import hotkeyEditorFdf from "./ui/HotkeyEditor.fdf?raw";
 import localMultiplayerCreateFdf from "./ui/LocalMultiplayerCreate.fdf?raw";
 import localMultiplayerJoinFdf from "./ui/LocalMultiplayerJoin.fdf?raw";
@@ -362,6 +363,15 @@ export const MAP_SITES_DIALOG_OVERRIDE: FdfOverride = {
 };
 
 /**
+ * The View Replay screen's Download Replays dialog (ui/replayBrowser.ts) — the Download Maps
+ * dialog's chrome around the replay collection's list. A root of its own, like that one.
+ */
+export const REPLAY_BROWSER_DIALOG_OVERRIDE: FdfOverride = {
+  id: "ow3-replay-browser-dialog",
+  source: replayBrowserDialogFdf,
+};
+
+/**
  * The hotkey editor (issue #156) — like the Join Server dialog, a root of its own layered onto
  * `DialogWar3.fdf` only to share a library with the glue templates. See `ui/HotkeyEditor.fdf`.
  */
@@ -378,7 +388,12 @@ export const HOTKEY_EDITOR_OVERRIDE: FdfOverride = {
 export const VIEW_REPLAY_OVERRIDE: FdfOverride = {
   id: "ow3-view-replay",
   source: viewReplayScreenFdf,
-  add: [{ frame: "ReplayPlayersBox", into: "ViewReplayScreen" }],
+  add: [
+    { frame: "ReplayPlayersBox", into: "ViewReplayScreen" },
+    // The replay collection's door, beside the title it hangs off (and in its panel, so it
+    // arrives and leaves with the list).
+    { frame: "ReplayOnlineBackdrop", into: "GameSettingsPanel" },
+  ],
 };
 
 /**

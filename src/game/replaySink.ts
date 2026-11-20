@@ -16,6 +16,10 @@ export interface ReplaySink {
   saveLast(bytes: Uint8Array, keep?: string): Promise<void>;
   /** Keep the last replay under a name; resolves to the name it was kept as, or null. */
   keepLast(name: string): Promise<string | null>;
+  /** Keep a replay that came from the collection (ui/replayBrowser.ts) under a name — never
+   *  over one already there. Resolves to the name it was kept as, or null. Absent on a desktop
+   *  shell older than the dialog. */
+  add?(name: string, bytes: Uint8Array): Promise<string | null>;
   /** Every replay in the folder, newest first. */
   list(): Promise<ReplayFileInfo[]>;
   /** One replay's bytes, or null. */
@@ -46,6 +50,7 @@ export interface WatchVersionRequest {
 interface NativeReplays {
   saveLast(bytes: Uint8Array, keep?: string): Promise<unknown>;
   keepLast(name: string): Promise<string | null>;
+  add?(name: string, bytes: Uint8Array): Promise<string | null>;
   list(): Promise<ReplayFileInfo[]>;
   read(name: string): Promise<Uint8Array | null>;
   remove(name: string): Promise<boolean>;
@@ -66,6 +71,7 @@ export function replaySink(): ReplaySink | null {
         return b ? new Uint8Array(b) : null;
       },
       remove: (name) => native.remove(name),
+      ...(native.add ? { add: (name: string, bytes: Uint8Array) => native.add!(name, bytes) } : {}),
       ...(native.bundleInfo && native.watchVersion ? {
         bundleInfo: (version: string) => native.bundleInfo!(version),
         watchVersion: async (request, onProgress) => void (await native.watchVersion!(request, onProgress)),
@@ -80,6 +86,10 @@ export function replaySink(): ReplaySink | null {
       },
       keepLast: async (name) => {
         const r = await fetch(`/replays/keep?name=${encodeURIComponent(name)}`, { method: "POST" });
+        return r.ok ? ((await r.json()) as { name: string | null }).name : null;
+      },
+      add: async (name, bytes) => {
+        const r = await fetch(`/replays/add?name=${encodeURIComponent(name)}`, { method: "POST", body: bytes as BodyInit });
         return r.ok ? ((await r.json()) as { name: string | null }).name : null;
       },
       list: async () => {

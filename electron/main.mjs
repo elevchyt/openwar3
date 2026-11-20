@@ -459,6 +459,7 @@ app.whenReady().then(async () => {
   // to a name in its one folder.
   ipcMain.handle("ow3:replay-save-last", (_event, bytes, keep) => replayFiles.saveLast(Buffer.from(bytes), keep ? String(keep) : undefined));
   ipcMain.handle("ow3:replay-keep", (_event, name) => replayFiles.keepLast(String(name ?? "")));
+  ipcMain.handle("ow3:replay-add", (_event, name, bytes) => replayFiles.add(String(name ?? ""), Buffer.from(bytes)));
   ipcMain.handle("ow3:replay-list", () => replayFiles.list());
   ipcMain.handle("ow3:replay-read", (_event, name) => replayFiles.read(String(name ?? "")));
   ipcMain.handle("ow3:replay-delete", (_event, name) => replayFiles.remove(String(name ?? "")));

@@ -136,7 +136,7 @@ the host's copy is the match's.
 The replay is POSTed to `https://openwar3-replays-production.up.railway.app/replays` — the
 `openwar3-replays` service in the same Railway project as the three relays, deployed from
 `/replays-server` (its own watch path, so a change to it never redeploys a relay and drops a
-lobby). It files the replay in that project's PRIVATE bucket `replays` (Amsterdam) as
+lobby). It files the replay in that project's private bucket `replays` (Amsterdam) as
 `replays/<day it arrived>/<install id>_<version>_<random>.o3r`, reaching it over the S3 API with
 the bucket's own variables referenced onto the service. The door is anonymous (there is no
 account to sign), so it checks the FILE instead: the `OW3R` magic, a format number that matches
@@ -149,6 +149,35 @@ anything else keeps it queued for the next launch. A dev build (`pnpm dev`) send
 locally with `node replays-server/server.mjs` (without the bucket variables it answers 503 after
 the checks). Railway bills the bucket by storage alone ($0.015/GB-month; S3 calls and bucket
 egress are free); the service's upload traffic to the bucket is ordinary service egress.
+
+### Getting them back: Download Replays
+
+The same door hands the collection back out, to the View Replay screen's globe button (beside
+the title — the glue's tiny socket and an iconic button, built as the Options screen's hotkey
+editor button is, `src/overrides/ui/ViewReplayScreen.fdf`) and the **Download Replays** dialog it
+opens ([`src/ui/replayBrowser.ts`](../src/ui/replayBrowser.ts), `ReplayBrowserDialog.fdf`): a
+table with a filter over each thing a replay is found by — map, player, race, OpenWar3 version —
+nine rows a page, prev/next. One click on a row downloads the replay into the replay folder's top
+level (`ReplaySink.add`, never over a file already there; named `<map> <date> <time>`) and the
+View Replay list goes to it.
+
+- `GET /replays?map=&player=&race=&version=&page=&size=` → `{ rows, total, versions }`, newest
+  first. A row is what the replay's own `HEAD` says (map, each seat's name, race, team, colour,
+  the version) plus the length off `ENDS`. `race` is one of the four or `random` — a seat whose
+  lobby said Random, which the recorder keeps as `config.slots[].random` beside the rolled race —
+  and beside `player` it is about THAT player's seat. The dialog shows a rolled race as its symbol
+  with a die in front ("Random — rolled Orc").
+- `GET /replays/<id>` → the file.
+
+The list is an INDEX held in memory and saved to the bucket as one object (`index/v1.json`): a
+restart reads that and then only the replays it has not seen. The bucket itself stays private,
+and two things never leave through the door: the bucket KEY (it carries the uploader's install
+id; a row's `id` is a hash of it) and the per-seat anonymous ids, which are taken out of the
+`HEAD` of every copy handed out (`forDownload`). Everything else in a replay — the names the
+players typed, their chat — is what a replay is. A dev build reads the real collection (browsing
+adds nothing to it); `VITE_REPLAY_BROWSE_URL` names another door, and
+`LOCAL_DIR=<folder> node replays-server/server.mjs` stands a folder in for the bucket, which is
+how both directions are tested without it.
 
 ## The state track
 

@@ -13,6 +13,8 @@ export interface ReplayStore {
   saveLast(bytes: Uint8Array, autosaveName?: string): string;
   /** Copy the last replay to a name; answers the name it was kept as, or null. */
   keepLast(name: string): string | null;
+  /** Keep a replay from elsewhere under a name (never over one already there). */
+  add(name: string, bytes: Uint8Array): string | null;
   /** Every replay in the folder and in `Autosaved/` (named `Autosaved/<file>`), newest first. */
   list(): Array<{ name: string; size: number; mtime: number }>;
   /** One replay's bytes, or null. */

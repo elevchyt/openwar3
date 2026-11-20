@@ -4503,6 +4503,37 @@ body.in-game .fdf-screen.fdf-ingame {
 .fdf-button.ow3-sites-done .fdf-btn-text span { color: #7fd46a !important; }
 .ow3-sites-dropping [data-frame="MapSitesDialog"] { outline: 2px dashed #fcd312; outline-offset: -0.6em; }
 
+/* --- Download Replays (ui/replayBrowser.ts, ReplayBrowserDialog.fdf) ----------------------
+   The dialog is glue frames; this is what the panel puts INTO its table. Sizes are em off a type
+   size the panel sets from the screen's own scale. A row's body and the column heads share one
+   set of columns: map | players | length | version | played. */
+.ow3-rb-body { display: flex; align-items: center; gap: 0.9em; color: #fff; line-height: 1.2; pointer-events: auto; }
+/* Names and the version are never cut short: a long map name or a crowded match WRAPS. */
+.ow3-rb .ow3-sites-row span { white-space: normal; overflow: visible; }
+.ow3-rb-map { flex: 0 0 24%; min-width: 0; overflow-wrap: anywhere; }
+.ow3-rb-matchup { flex: 1 1 0; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 0.15em 0.6em; font-size: 0.88em; line-height: 1.1; color: #d8d8d8; }
+.ow3-rb-team { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.15em 0.8em; min-width: 0; }
+.ow3-rb-vs { color: #8a7a44; font-size: 0.85em; }
+.ow3-rb-seat { display: inline-flex; align-items: center; gap: 0.35em; min-width: 0; }
+.ow3-rb-swatch { width: 0.6em; height: 0.6em; flex: 0 0 auto; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7); }
+.ow3-rb-name { overflow-wrap: anywhere; }
+.ow3-rb-cpu { color: #9a9a9a; }
+/* A seat's race: the symbol of the race it played, a die in front of it when it was rolled. */
+.ow3-rb-race { display: inline-flex; align-items: center; gap: 0.1em; flex: 0 0 auto; }
+.ow3-rb-race img { width: 1.3em; height: 1.3em; display: block; object-fit: contain; }
+.ow3-rb-die { width: 0.95em; height: 0.95em; color: #c8b068; flex: 0 0 auto; }
+.ow3-rb-len { flex: 0 0 3.2em; text-align: right; color: #9a9a9a; }
+.ow3-rb .ow3-rb-version { flex: 0 0 3.6em; text-align: right; color: #c8b068; white-space: nowrap; }
+.ow3-rb .ow3-rb-date { flex: 0 0 4em; text-align: right; color: #9a9a9a; white-space: nowrap; }
+.ow3-rb-head { font-size: 0.9em; border-bottom: 1px solid rgba(110, 90, 44, 0.5); box-sizing: border-box; }
+.ow3-rb-head > * { color: #fcd312 !important; font-size: 1em !important; }
+
+/* A list row whose label WRAPS (ListItem.wrap) rather than ending in an ellipsis; a coloured run
+   inside the label — the replay list's version note — stays whole and drops to the next line. */
+.fdf-list-row.wrap { white-space: normal; overflow: visible; text-overflow: clip; align-items: flex-start; }
+.fdf-list-row.wrap > span { min-width: 0; overflow-wrap: anywhere; }
+.fdf-list-row.wrap > span span { white-space: nowrap; }
+
 /* The list's scrollbar is the FDF's own (ui/fdf/widgets.ts draws its four pieces from the
    SCROLLBAR frame's art), so the browser's must go. */
 .fdf-list-rows { scrollbar-width: none; }

@@ -97,6 +97,8 @@ contextBridge.exposeInMainWorld("ow3native", {
   replays: {
     saveLast: (bytes, keep) => ipcRenderer.invoke("ow3:replay-save-last", bytes, keep ? String(keep) : undefined),
     keepLast: (name) => ipcRenderer.invoke("ow3:replay-keep", String(name ?? "")),
+    /** Keep a replay downloaded from the collection under a name; resolves to the name kept. */
+    add: (name, bytes) => ipcRenderer.invoke("ow3:replay-add", String(name ?? ""), bytes),
     list: () => ipcRenderer.invoke("ow3:replay-list"),
     read: (name) => ipcRenderer.invoke("ow3:replay-read", String(name ?? "")),
     remove: (name) => ipcRenderer.invoke("ow3:replay-delete", String(name ?? "")),

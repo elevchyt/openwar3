@@ -25,6 +25,10 @@ export interface Option {
 export interface ListItem {
   value: string;
   label: string;
+  /** A label too long for the row WRAPS onto further lines instead of being cut short with an
+   *  ellipsis — for a list whose rows are named by the player (the replay list). A coloured run
+   *  inside it (a version note) stays in one piece. */
+  wrap?: boolean;
   /** Optional leading icon (a decoded BLP canvas), e.g. the folder / player-count badge. */
   icon?: HTMLCanvasElement | null;
   /**
@@ -602,6 +606,7 @@ export function buildList(el: HTMLElement, f: FdfFrame, scale: number, bar?: Scr
       row.className = "fdf-list-row";
       if (it.value === value) row.classList.add("selected");
       if (it.disabled) row.classList.add("disabled");
+      if (it.wrap) row.classList.add("wrap");
       if (it.title) setGameTip(row, it.title);
       if (it.icon) {
         const icon = document.createElement("img");

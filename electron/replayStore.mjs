@@ -62,6 +62,19 @@ export function createReplayStore(dir, opts = {}) {
       copyFileSync(from, join(dir, safe));
       return safe;
     },
+    /** Keep a replay that came from somewhere else — the collection (src/ui/replayBrowser.ts) —
+     *  under a name. A name already taken is not overwritten: it gets " (2)", " (3)"… Returns the
+     *  name it was kept as, or null. */
+    add(name, bytes) {
+      const safe = safeReplayName(name);
+      if (!safe || safe === LAST_REPLAY) return null;
+      ensure();
+      const stem = safe.slice(0, -REPLAY_EXT.length);
+      let kept = safe;
+      for (let n = 2; existsSync(join(dir, kept)); n++) kept = `${stem} (${n})${REPLAY_EXT}`;
+      writeFileSync(join(dir, kept), bytes);
+      return kept;
+    },
     /** Every replay in the folder, newest first. */
     list() {
       ensure();
