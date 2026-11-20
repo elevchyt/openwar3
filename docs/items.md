@@ -530,6 +530,18 @@ still keep an item in the body (`SimWorld.dropInventory`, issue #231): an undrop
 by the hint above, and an ILLUSION drops nothing, because its inventory is a picture of the
 original's items by id.
 
+## Loot does not stack
+
+A NEW ground item comes to rest on its snapped cell unless another item already lies within 48
+units of it, and then on the nearest walkable cell, ring by ring out to four, that has nothing
+that close (`SimWorld.freeItemSpot`, both numbers ours). That is the one place it is done
+because a map's loot reaches the ground through `CreateItem` at the dying unit's `GetUnitX/Y`
+(the editor's generated `ItemTable…_DropItems`, Blizzard.j's `UnitDropItem`), so three tomes
+off one creep used to be one model. A dead carrier's inventory and the sim's own drop table
+fan out around the corpse already, and now also step clear of each other. With nowhere free
+in reach the item lies where it was asked to; `SetItemPosition` never moves — a script that
+PLACES an item gets it exactly there.
+
 ## An item on the ground can be broken
 
 An item is a WIDGET (common.j: `item extends widget`, beside `unit` and `destructable`), and

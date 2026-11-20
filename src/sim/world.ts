@@ -465,6 +465,13 @@ export interface HeroKill {
   killerOwner: number;
 }
 
+/** Closest two NEW ground items may come to rest (world units) — about the width of a tome's
+ *  or a potion's model, so two drops read as two things on the grass. OURS: nothing in the
+ *  install states it; see `freeItemSpot`. */
+const ITEM_SPACING = 48;
+/** How many cell rings (`PATHING_CELL` each) `freeItemSpot` looks out for a free spot before it
+ *  gives up and lets the item stack. OURS. */
+const ITEM_SPREAD_RINGS = 4;
 /** How many hero deaths `SimWorld.heroKills` keeps — far more than a pass can miss. */
 const HERO_KILL_LOG = 32;
 /** How near a rescuer must come to raise EVENT_PLAYER_UNIT_RESCUED when the map set no range of
@@ -27508,7 +27515,7 @@ export class SimWorld {
    *  back on the ground AS ITSELF: identity survives the move, so a JASS `item` handle
    *  taken before the drop still refers to it (7.18). */
   private spawnGroundItem(itemId: string, x: number, y: number, charges: number, reuseId = 0): SimItem {
-    const [sx, sy] = this.snapItemPos(x, y);
+    const [sx, sy] = this.freeItemSpot(x, y);
     const maxHp = Math.max(1, this.itemReg?.get(itemId)?.maxHp ?? 75); // ItemData "HP" — the loader's own default
     const it: SimItem = { id: reuseId || this.nextItemId++, itemId, x: sx, y: sy, charges, hp: maxHp, maxHp };
     this.items.set(it.id, it);
@@ -27561,6 +27568,44 @@ export class SimWorld {
   }
 
   /** Snap a world point to the centre of its pathing-grid cell. */
+  /** Where a NEW ground item comes to rest: the snapped cell at (x,y) unless another item
+   *  already lies there, else the nearest walkable cell, ring by ring, with nothing lying
+   *  within `ITEM_SPACING` of it. This is what keeps loot from stacking into one model: a
+   *  map's own drop tables (the editor's `ItemTable…_DropItems`) and Blizzard.j's
+   *  `UnitDropItem` all `CreateItem` at the dying unit's `GetUnitX/Y`, so three tomes off one
+   *  creep arrived on one spot. Bounded, and "only if possible" — with nowhere free in reach
+   *  (a crowded shop floor, a cliff edge) the item lies where it was asked to. `SetItemPosition`
+   *  does not come through here: a script that PLACES an item gets it exactly there. */
+  private freeItemSpot(x: number, y: number): [number, number] {
+    const [sx, sy] = this.snapItemPos(x, y);
+    const free = (px: number, py: number): boolean => {
+      for (const it of this.items.values()) {
+        const dx = it.x - px, dy = it.y - py;
+        if (dx * dx + dy * dy < ITEM_SPACING * ITEM_SPACING) return false;
+      }
+      return true;
+    };
+    if (free(sx, sy)) return [sx, sy];
+    for (let r = 1; r <= ITEM_SPREAD_RINGS; r++) {
+      let best: [number, number] | null = null;
+      let bestD = Infinity;
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // the ring, not the disc
+          const px = sx + dx * PATHING_CELL, py = sy + dy * PATHING_CELL;
+          const d = dx * dx + dy * dy;
+          if (d >= bestD) continue;
+          const [cx, cy] = this.grid.worldToCell(px, py);
+          if (!this.grid.walkable(cx, cy) || !free(px, py)) continue;
+          best = [px, py];
+          bestD = d;
+        }
+      }
+      if (best) return best;
+    }
+    return [sx, sy];
+  }
+
   private snapItemPos(x: number, y: number): [number, number] {
     const [ox, oy] = this.grid.origin;
     return [

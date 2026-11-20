@@ -790,5 +790,20 @@ console.log("\nhanding an item to another hero");
   check("…and the giver keeps it", giver.inventory[0]?.itemId, "phea");
 }
 
+console.log("\nthree items made on one spot (a creep's drop table) come to rest apart  (freeItemSpot)");
+{
+  const ids = [0, 1, 2].map(() => world.createItem("phea", 1000, 1000));
+  const spots = ids.map((id) => world.items.get(id));
+  check("all three are on the ground", spots.every(Boolean), true);
+  let closest = Infinity;
+  for (let i = 0; i < spots.length; i++)
+    for (let j = i + 1; j < spots.length; j++) closest = Math.min(closest, Math.hypot(spots[i].x - spots[j].x, spots[i].y - spots[j].y));
+  check(`…no two closer than 48 (${Math.round(closest)})`, closest >= 48, true);
+  check("…and none far from where they were made", spots.every((it) => Math.hypot(it.x - 1000, it.y - 1000) <= 4 * 32 * Math.SQRT2), true);
+  world.setItemPosition(ids[1], spots[0].x, spots[0].y);
+  check("SetItemPosition still places an item EXACTLY, on top of another or not", [world.items.get(ids[1]).x, world.items.get(ids[1]).y].join(), [spots[0].x, spots[0].y].join());
+  for (const id of ids) world.removeItemById(id);
+}
+
 console.log(failed ? `\nitems: ${failed} check(s) FAILED` : "\nitems: all checks passed");
 process.exit(failed ? 1 : 0);
