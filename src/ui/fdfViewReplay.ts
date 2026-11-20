@@ -379,7 +379,7 @@ export function mountViewReplayScreen(
       // A replay from an OpenWar3 that simulates differently says which, in grey after its
       // name: it is the one that needs that version's files to be watched exactly.
       const header = headers.get(f.name);
-      const other = header && !sameSim(header) ? `  |cff808080OpenWar3 ${header.version}|r` : "";
+      const other = header && !sameSim(header) ? `  |cff808080${header.version}|r` : "";
       rows.push({
         value: f.name,
         label: `${leafName(f.name)}${other}`,

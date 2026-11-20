@@ -31,23 +31,25 @@ Frame "FRAME" "ReplayPlayersBox" {
 }
 
 // The REPLAY COLLECTION's door (src/ui/replayBrowser.ts) — an icon button right of the "View
-// Replay" title that opens the Download Replays dialog.
+// Replay" title that opens the Download Replays dialog. (It was tried in the list panel's top
+// right corner and came back: beside the title is the developer's placement.)
 //
-// Built exactly as the Options screen's hotkey-editor button is (OptionsMenu.fdf
-// `HotkeyEditorBackdrop`), which is how the Single Player menu builds the lens beside the profile
-// name: the glue's TINY socket (`StandardMenuTinyButtonBaseBackdrop`, 0.11 x 0.055) holding a
-// 0.03 x 0.026 `StandardIconicButtonTemplate` 0.009 in from its right and 0.014 down, in the
-// `GlueScreen-Button2` border (up, down, disabled). The socket's texture is transparent for its
-// left ~40%, so its frame starts well left of the ornament it shows — hence the negative offset.
+// The BUTTON is the Options screen's hotkey-editor button (OptionsMenu.fdf `HotkeyEditorButton`):
+// a 0.03 x 0.026 `StandardIconicButtonTemplate` in the `GlueScreen-Button2` border (up, down,
+// disabled). That one sits in the glue's tiny socket (`StandardMenuTinyButtonBaseBackdrop`); this
+// one does NOT — the developer's call, the socket's ornament was too much furniture beside a
+// title — so its holder is a bare frame the button's own size.
 // Its face is the plain glue button field with Lucide's `globe` drawn over it by the screen
 // (`dressReplayBrowserButton`), the Download Maps entry's own glyph.
-Frame "BACKDROP" "ReplayOnlineBackdrop" INHERITS "StandardMenuTinyButtonBaseBackdrop" {
-    SetPoint LEFT, "ViewReplayTitle", RIGHT, -0.043, 0.0,
+Frame "FRAME" "ReplayOnlineBackdrop" {
+    Width 0.03,
+    Height 0.026,
+    SetPoint LEFT, "ViewReplayTitle", RIGHT, 0.008, 0.0,
 
     Frame "GLUEBUTTON" "ReplayOnlineButton" INHERITS WITHCHILDREN "StandardIconicButtonTemplate" {
         Width 0.03,
         Height 0.026,
-        SetPoint TOPRIGHT, "ReplayOnlineBackdrop", TOPRIGHT, -0.009, -0.014,
+        SetPoint TOPRIGHT, "ReplayOnlineBackdrop", TOPRIGHT, 0.0, 0.0,
 
         ControlBackdrop "ReplayOnlineButtonBackdrop",
         Frame "BACKDROP" "ReplayOnlineButtonBackdrop" {
