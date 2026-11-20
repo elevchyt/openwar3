@@ -254,5 +254,21 @@ function fighter(over = {}) {
   check("a hidden one does", u.swingLeft > 0, true);
 }
 
+// "Attack Slam" is the BACKSTAB's strike, not invisibility's: a hero hidden by a Cloak of
+// Shadows' meld or a Sorceress's Invisibility swings his plain attack, since the blow carries
+// nothing extra. Only Wind Walk's buff states Backstab Damage (`value`, AOwk DataC).
+{
+  const t = fighter({ id: 99, team: 1, x: 60, y: 0, order: "idle", targetId: null, swingLeft: -1, arrowShot: null });
+  const melded = fighter({ id: 7, order: "attack", swingLeft: -1, cooldownLeft: 0, cloaked: true, invisible: true,
+    buffs: [{ kind: "invisible", group: "meld", timeLeft: Infinity, sourceId: 7, delay: 0, meld: true }] });
+  world.engage(melded, t);
+  check("a melded hero's swing begins", melded.swingLeft > 0, true);
+  check("…with his plain attack, not the slam", melded.swingSlam, false);
+  const wk = fighter({ id: 8, order: "attack", swingLeft: -1, cooldownLeft: 0, cloaked: true, invisible: true,
+    buffs: [{ kind: "invisible", group: "windwalk", timeLeft: 20, sourceId: 8, delay: 0, value: 40 }] });
+  world.engage(wk, t);
+  check("a Wind Walker's backstab swing is the slam", wk.swingSlam, true);
+}
+
 console.log(`\n${failed ? `${failed} FAILED` : "all passed"}`);
 process.exit(failed ? 1 : 0);

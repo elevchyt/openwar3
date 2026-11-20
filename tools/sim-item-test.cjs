@@ -790,6 +790,25 @@ console.log("\nhanding an item to another hero");
   check("…and the giver keeps it", giver.inventory[0]?.itemId, "phea");
 }
 
+console.log("\nputting Immolation OUT is the free half of a toggle, not a cast  (castImmediate)");
+{
+  world = newWorld();
+  const im = ability("AEim", "AEim", { isItem: false, isHero: true, levelData: [lvl({ cost: 25, data: D(10, 7, 10) })] });
+  ABILITIES.set("AEim", im);
+  const hero = unit({ isHero: true, mana: 200, abilities: [{ id: "AEim", code: "AEim", level: 1, cooldownLeft: 0 }] });
+  const meld = () => hero.buffs.filter((b) => b.kind === "invisible").length;
+  world.castImmediate(hero, hero.abilities[0], im, im.levelData[0]);
+  check("lit", hero.immolation, "AEim");
+  hero.buffs.push({ kind: "invisible", group: "meld", timeLeft: Infinity, sourceId: hero.id, delay: 0, meld: true });
+  world.recomputeStats(hero);
+  world.castImmediate(hero, hero.abilities[0], im, im.levelData[0]);
+  check("…doused", hero.immolation, "");
+  check("…and the Cloak of Shadows' meld is still on him", meld(), 1);
+  world.castImmediate(hero, hero.abilities[0], im, im.levelData[0]);
+  check("lighting it again IS a cast, and gives him away", meld(), 0);
+  ABILITIES.delete("AEim");
+}
+
 console.log("\nthree items made on one spot (a creep's drop table) come to rest apart  (freeItemSpot)");
 {
   const ids = [0, 1, 2].map(() => world.createItem("phea", 1000, 1000));

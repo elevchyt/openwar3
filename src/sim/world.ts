@@ -16769,7 +16769,10 @@ export class SimWorld {
     };
     this.noteSpell(u, pc, "channel");
     this.noteSpell(u, pc, "cast");
-    this.breakInvisibility(u); // casting reveals, the same as for a wound-up spell
+    // Casting reveals, the same as for a wound-up spell — but putting Immolation OUT is the
+    // free half of a toggle (`Unorder=unimmolation`, castCostOf), not a spell, and a Demon
+    // Hunter melded under a Cloak of Shadows who douses his flames stays hidden.
+    if (!(def.code === "AEim" && u.immolation)) this.breakInvisibility(u);
     this.castFires.push({ casterId: u.id, code: def.code, abilityId: ab.id }); // sound only — no castStarts, so no clip to hold
     this.noteSpell(u, pc, "effect");
     this.resolveCast(u, def, pc);
@@ -22956,8 +22959,14 @@ export class SimWorld {
     // (tickSwing) and that blow carries the Backstab Damage, so a swing begun while the unit
     // is FADED is the backstab swing. `invisible`, not `cloaked` — a swing begun inside the
     // Transition Time earns nothing (breakInvisibility asks the buff's own `delay`), and a
-    // strike that pays no bonus must not be dressed up as the one that does.
-    u.swingSlam = u.swingCrit || (u.swingBash && !w.ranged) || u.invisible;
+    // strike that pays no bonus must not be dressed up as the one that does — which is also
+    // why it asks for the BONUS and not merely for invisibility: a hero faded by a Cloak of
+    // Shadows' meld or a Sorceress's Invisibility has no Backstab Damage to deliver (only
+    // `AOwk`'s DataC puts a `value` on the buff, the same number breakInvisibility pays out),
+    // and swung at an enemy from under one the Blademaster struck his "Attack Slam" for a
+    // blow that did nothing extra.
+    const backstab = u.invisible && u.buffs.some((b) => b.kind === "invisible" && b.delay <= 0 && b.value > 0);
+    u.swingSlam = u.swingCrit || (u.swingBash && !w.ranged) || backstab;
     // …and a blow an ABILITY strikes shows the model's spell swing: the Chimaera breathes its
     // Corrosive Breath at a building with "attack spell", and the lightning at everything else
     // with its plain "Attack" (Chimaera.mdx authors exactly those two).
