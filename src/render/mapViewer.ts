@@ -875,6 +875,9 @@ interface HideableWidget {
     /** The viewer's own "is this being drawn" flag — `hide()` clears it, `show()` sets it.
      *  Read by the fog sweep so it only ever re-shows what IT hid (fogSpawnedInstances). */
     rendered?: boolean;
+    /** The node this instance hangs off, when it is attached to another model (a buff's art on
+     *  its holder's bone): its own `localLocation` is then relative to this, not to the world. */
+    parent?: { worldLocation?: ArrayLike<number> } | null;
     // A placed doodad is a full MDX instance/model, but War3MapViewer renders it through a
     // STATIC batched path: its animation never advances and Widget.update resets any sequence
     // we set, so we can't play the tree's clips on it directly (see treeActor). We only read
@@ -18638,7 +18641,16 @@ export class MapViewerScene {
         // world: a right-click into the black mask still gets its arrows, and hiding them
         // here cut the clip off after one frame.
         if (this.orderArrows.some((a) => a.inst === inst)) continue;
-        const loc = inst.localLocation;
+        // WHERE it is in the world. An instance hung off another model's attachment node — every
+        // buff's art, a script's AddSpecialEffectTarget, an orb on a weapon bone — keeps its
+        // `localLocation` RELATIVE TO THAT NODE, i.e. at about (0, 0). Read as a world point
+        // that is the middle of the map, so the sweep hid Immolation's flames and WarChasers'
+        // spawn flourish one frame after they appeared whenever the map's centre was still
+        // unexplored — every map started with normal fog, which a `?dev` boot is not (its
+        // `fog` defaults to explored, which is why it never showed there). Hidden, the model
+        // also stopped animating, so a buff's Birth never ended and it never settled either.
+        // The node it rides is where it really stands.
+        const loc = inst.parent?.worldLocation ?? inst.localLocation;
         if (!loc) continue;
         if (vision.bestStateAt(loc[0], loc[1], 0) === FogState.Unexplored) {
           // `rendered` is the viewer's own "is this drawn" flag (hide() clears it). Recording
