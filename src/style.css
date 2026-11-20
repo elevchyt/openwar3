@@ -4533,6 +4533,8 @@ body.in-game .fdf-screen.fdf-ingame {
 .fdf-list-row.wrap { white-space: normal; overflow: visible; text-overflow: clip; align-items: flex-start; }
 .fdf-list-row.wrap > span { min-width: 0; overflow-wrap: anywhere; }
 .fdf-list-row.wrap > span span { white-space: nowrap; }
+/* …and the row's control (the trash can) sits at the middle of however many lines that makes. */
+.fdf-list-row.wrap > .fdf-list-action { align-self: center; }
 
 /* The list's scrollbar is the FDF's own (ui/fdf/widgets.ts draws its four pieces from the
    SCROLLBAR frame's art), so the browser's must go. */
