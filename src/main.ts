@@ -422,12 +422,15 @@ function optionsScreen(vfs: DataSource): { chrome: "Options"; mount: () => Promi
  *  are nowhere near the LAN screens. */
 let lan: { lobby: LanLobby; connected: Promise<void>; stopListening: () => void } | null = null;
 
-// The desktop window closing (Alt+F4, the X, Exit Program) is a CHOSEN departure: say `leave`
+// The desktop window closing (Alt+F4, Ctrl+F4, the X, Exit Program) is a CHOSEN departure: say `leave`
 // on the way out, or the room hears a dropped connection and stops behind "Waiting for
 // players..." for a player who is not coming back (docs/multiplayer.md "A player who drops").
 // The match's wire if there is one, else the LAN screens'; then a beat for the frame to leave
 // before the shell is told it may close the window.
 onShellClosing(async () => {
+  // The match's replay first — it is written to disk, and a LAN host's peers are handed it over
+  // the wire this then closes (MapViewerScene.closeForShutdown).
+  await mapScene?.closeForShutdown().catch((err) => console.warn("[replay] not saved on exit:", err));
   const wire = matchLink?.channel ?? lan?.lobby;
   if (!wire) return;
   wire.close?.();

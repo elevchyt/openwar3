@@ -336,8 +336,11 @@ function createWindow(url) {
   return win;
 }
 
-/** How long a window close waits for the page to say goodbye to its game (ours). */
-const CLOSE_GRACE_MS = 1000;
+/** How long a window close waits for the page to say goodbye to its game (ours). The page
+ *  answers the moment it is done, so this is only ever reached by a page that is hung — and the
+ *  goodbye now includes writing the match's replay (MapViewerScene.closeForShutdown), which on
+ *  a long game is encoding and an IPC write, so a second was too tight. */
+const CLOSE_GRACE_MS = 5000;
 /** A quit is under way (`before-quit`); see the window's `closed` handler. */
 let quitting = false;
 

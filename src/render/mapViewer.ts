@@ -4069,6 +4069,23 @@ export class MapViewerScene {
     lastReplay = { sink, written, suggested: suggestedName(rec.header.map.name) };
   }
 
+  /**
+   * The desktop window is closing — Exit Program, Alt+F4, Ctrl+F4, the title bar's X — and the
+   * page goes with it, so nothing after this runs: no `stop()`, no score screen. A match that
+   * leaves by the menu closes its recording in `stop()`; one that leaves by the WINDOW has to
+   * close it here, and WAIT for the file, or the player who has "Autosave Replays" ticked
+   * (options.ts `autosaveReplay`) finds no replay of the game they just quit — nor a
+   * `LastReplay`. A LAN host hands its peers the file first, as its `leave` would, while the
+   * wire is still up (main.ts `onShellClosing` closes it after this). The shell holds the close
+   * for this (electron/main.mjs `CLOSE_GRACE_MS`).
+   */
+  async closeForShutdown(): Promise<void> {
+    if (this.rts?.hostsLanMatch) await this.shareReplay();
+    const had = this.replayRecorder !== null;
+    this.closeReplay();
+    if (had) await lastReplay?.written;
+  }
+
   /** How the match stands, as a replay's ending: the steps played and each seat's result. */
   private replayEnding(ticks: number): ReplayEnding {
     const table = this.scoreTable();
