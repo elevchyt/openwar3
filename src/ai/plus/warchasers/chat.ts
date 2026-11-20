@@ -467,7 +467,7 @@ export function healSoonLines(seconds: number): readonly string[] {
 }
 /** …it cannot, and why. */
 export const HEAL_COOLDOWN_LINES = ["my heal is on cooldown, sorry", "heal on cd"] as const;
-export const HEAL_OOM_LINES = ["no mana for a heal", "im oom, cant heal"] as const;
+export const HEAL_OOM_LINES = ["no mana for a heal", "im out of mana, cant heal"] as const;
 export const HEAL_CANT_LINES = ["my heal cant target you", "cant heal you with that"] as const;
 export const NO_HEAL_LINES = ["i dont have a heal"] as const;
 export const FULL_HP_LINES = ["youre at full hp"] as const;
