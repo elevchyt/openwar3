@@ -608,7 +608,7 @@ console.log("a crowd on one enemy closes without wiggling");
   check(`no slot lies outside the strike band (${outOfBand} did)`, outOfBand === 0);
 }
 
-// ── A melee blow does not cross a cliff (SimWorld.cliffApart) ─────────────────────────────
+// ── A melee blow does not cross a cliff (SimWorld.meleeApart) ─────────────────────────────
 // Two melee units a swing apart, one a cliff level above the other: they trade no blows. The
 // same pair on one level fights, and a RANGED unit shoots up the cliff as before. The grid has
 // no cliff pathing here on purpose — only the levels differ — so nothing but the rule stops it.
@@ -645,6 +645,53 @@ console.log("a melee blow does not cross a cliff");
   ranged.issueOrder(1, { kind: "attack", targetId: shotAt.id, force: false });
   run(ranged, 4);
   check("a ranged unit still shoots up the cliff", shotAt.hp < shotAt.maxHp);
+}
+
+// ── …nor a closed gate (SimWorld.wallApart) ───────────────────────────────────────────────
+// (4)WarChasers' rooms are shut by gates, and the monsters behind one were trading blows with
+// the heroes in front of it. A one-cell wall the whole height of the map stands for the closed
+// gate: on one level, a swing apart, the melee pair strikes nothing. Knock a hole in the wall
+// (the gate OPENS — its stamp comes off) and the same pair fights; a ranged unit shoots across
+// the closed one as before.
+console.log("a melee blow does not cross a closed gate");
+{
+  // STAMPED, as a gate's footprint is (stampFootprints) — so it can come off again.
+  const wall = () => {
+    const g = grid();
+    for (let cy = 0; cy < H; cy++) g.block(18, cy); // x 576..607
+    return g;
+  };
+  const shut = new SimWorld(wall(), 1);
+  const a = addUnit(shut, 1, 0, 550, 500);
+  const b = addUnit(shut, 2, 1, 634, 500);
+  shut.issueOrder(1, { kind: "attack", targetId: b.id, force: false });
+  shut.issueOrder(2, { kind: "attack", targetId: a.id, force: false });
+  run(shut, 6);
+  check(`no blow through the closed gate (hp ${b.hp}/${b.maxHp})`, b.hp === b.maxHp);
+  check(`…either way (hp ${a.hp}/${a.maxHp})`, a.hp === a.maxHp);
+
+  const auto = new SimWorld(wall(), 1);
+  addUnit(auto, 1, 0, 550, 500, { speed: 0 });
+  const across = addUnit(auto, 2, 1, 634, 500, { speed: 0, weapons: [] });
+  run(auto, 4);
+  check(`nor does an idle one acquire through it (hp ${across.hp}/${across.maxHp})`, across.hp === across.maxHp);
+
+  const open = new SimWorld(wall(), 1);
+  for (let cy = 14; cy <= 17; cy++) open.grid.unblock(18, cy); // the gate swings open at y 448..575
+  addUnit(open, 1, 0, 550, 500);
+  const through = addUnit(open, 2, 1, 634, 500, { speed: 0 });
+  open.issueOrder(1, { kind: "attack", targetId: through.id, force: false });
+  run(open, 4);
+  check(`with the gate open the pair fights (hp ${through.hp}/${through.maxHp})`, through.hp < through.maxHp);
+
+  const ranged = new SimWorld(wall(), 1);
+  const bow = WEAPON();
+  Object.assign(bow, { ranged: true, range: 500, baseRange: 500, missileSpeed: 0, weaponType: "instant" });
+  addUnit(ranged, 1, 0, 400, 500, { weapons: [bow] });
+  const shotAt = addUnit(ranged, 2, 1, 640, 500, { speed: 0 });
+  ranged.issueOrder(1, { kind: "attack", targetId: shotAt.id, force: false });
+  run(ranged, 4);
+  check("a ranged unit still shoots over the closed gate", shotAt.hp < shotAt.maxHp);
 }
 
 // ── A netted unit fights what is beside it ──────────────────────────────────────────────

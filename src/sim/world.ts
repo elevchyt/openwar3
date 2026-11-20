@@ -3345,7 +3345,7 @@ function snapPool(v: number): number {
 // Attribute → stat conversions (MiscGame Str/Int/Agi bonuses; Liquipedia: Hero).
 const HP_PER_STR = (): number => gameNum("StrHitPointBonus");
 const MANA_PER_INT = (): number => gameNum("IntManaBonus");
-/** One cliff layer in world units (world/terrain.ts `CELL`) — see SimWorld.cliffApart. */
+/** One cliff layer in world units (world/terrain.ts `CELL`) — see SimWorld.meleeApart. */
 const CLIFF_STEP = 128;
 const ARMOR_PER_AGI = (): number => gameNum("AgiDefenseBonus");
 const REGEN_PER_STR = (): number => gameNum("StrRegenBonus"); // hp/sec per Strength point
@@ -11949,7 +11949,7 @@ export class SimWorld {
    *  sim is measured. False when nothing in the loadout may strike it at all. */
   private inWeaponRange(u: SimUnit, t: SimUnit): boolean {
     const w = this.weaponVs(u, t);
-    if (!w || this.cliffApart(u, t, w)) return false;
+    if (!w || this.meleeApart(u, t, w)) return false;
     return Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius <= w.range;
   }
 
@@ -14123,7 +14123,7 @@ export class SimWorld {
    * The terrain's CLIFF LEVEL at a point, in world units (layer × 128, ramps interpolated) — the
    * same sampler the fog's line of sight is cast over (heightmap.ts makeCliffLevelSampler), so
    * rolling ground height is not a level. Null in a headless world with no terrain, where
-   * `cliffApart` is never true.
+   * `meleeApart` asks only about walls.
    */
   private cliffLevelAt: ((x: number, y: number) => number) | null = null;
 
@@ -14139,9 +14139,36 @@ export class SimWorld {
    * so two bodies on the same ramp still fight. A ranged weapon, a flyer on either end and a
    * world with no terrain are all untouched.
    */
-  private cliffApart(u: SimUnit, t: SimUnit, w: SimWeapon | null | undefined = this.weaponVs(u, t)): boolean {
-    if (!this.cliffLevelAt || !w || w.ranged || u.flying || t.flying) return false;
-    return Math.abs(this.cliffLevelAt(u.x, u.y) - this.cliffLevelAt(t.x, t.y)) > CLIFF_STEP / 2;
+  private meleeApart(u: SimUnit, t: SimUnit, w: SimWeapon | null | undefined = this.weaponVs(u, t)): boolean {
+    if (!w || w.ranged || u.flying || t.flying) return false;
+    if (this.cliffLevelAt && Math.abs(this.cliffLevelAt(u.x, u.y) - this.cliffLevelAt(t.x, t.y)) > CLIFF_STEP / 2) return true;
+    return this.wallApart(u, t);
+  }
+
+  /**
+   * …nor a WALL. Two ground bodies a swing apart with a closed gate between them stand on
+   * opposite sides of a line nothing can walk across, and the blow does not cross it any more
+   * than a walker does (the developer's rule, 2026-11-20 — on (4)WarChasers, whose every room
+   * is a closed `LTg1`/`LTg3`/`Dofw` gate the monsters behind it were being hit through, and
+   * hitting back). The question is the pathing grid's own: the two bodies' cells in DIFFERENT
+   * regions (`PathingGrid.regionAt`, the static connectivity — units are not in it, so a crowd
+   * never reads as a wall) means there is no ground between them to swing across. Opening the
+   * gate unstamps it and the regions merge on the next question.
+   *
+   * Asked only where BOTH bodies stand on a cell they could walk on. A target that stands on
+   * blocked ground — a building, a tree, a GATE itself — has no region of its own, and
+   * borrowing a neighbour's (`regionNear`) could pick the far side of the very wall being
+   * hit; with nothing to compare the answer is "not apart", which is the old behaviour.
+   */
+  private wallApart(u: SimUnit, t: SimUnit): boolean {
+    if (u.building || t.building) return false;
+    const domain = pathDomain(u);
+    const [ux, uy] = this.grid.worldToCell(u.x, u.y);
+    const [tx, ty] = this.grid.worldToCell(t.x, t.y);
+    const a = this.grid.regionAt(ux, uy, domain);
+    if (a < 0) return false;
+    const b = this.grid.regionAt(tx, ty, domain);
+    return b >= 0 && a !== b;
   }
 
   /** Whether `u` has any weapon that may strike `t`. Every automatic target scan asks this, so
@@ -17277,7 +17304,7 @@ export class SimWorld {
       if (!ow) return false;
       const gap = Math.hypot(o.x - u.x, o.y - u.y) - u.radius - o.radius;
       const dz = this.deadZone(ow);
-      return gap <= (ow.ranged ? ow.range : ow.range + ATTACK_LEASH) && !(dz > 0 && gap < dz) && !this.cliffApart(u, o, ow);
+      return gap <= (ow.ranged ? ow.range : ow.range + ATTACK_LEASH) && !(dz > 0 && gap < dz) && !this.meleeApart(u, o, ow);
     };
     const last = u.swingTargetId ? this.units.get(u.swingTargetId) : undefined;
     if (last && last !== t && last.hp > 0 && !isOffField(last) && this.hostile(u, last) && !last.invulnerable && !last.invisible
@@ -22361,7 +22388,7 @@ export class SimWorld {
     if (u.gaveUp) {
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
       const band = w.ranged ? w.range : w.range + ATTACK_LEASH;
-      if (gap <= band && !this.cliffApart(u, t, w)) {
+      if (gap <= band && !this.meleeApart(u, t, w)) {
         u.gaveUp = false; // it wandered into reach — fight
       } else if (Math.abs(gap - u.gaveUpGap) > ATTACK_LEASH) {
         // The target moved relative to us since we settled to wait — the fight has
@@ -22410,12 +22437,12 @@ export class SimWorld {
         // target": the tank stepped out of the strike band, and the unit that had just walked
         // back into the camp was the one right here (issue #171, `creepHoldsFocus`).
         const focused = u.isCreep && this.creepHoldsFocus(u, t);
-        if ((curGap > strike && !focused) || this.cliffApart(u, t, w)) {
+        if ((curGap > strike && !focused) || this.meleeApart(u, t, w)) {
           // A creep asks the same tier-ordered question it asks everywhere else: the enemy
           // that is RIGHT HERE is worth turning on, but not when the thing right here is the
           // Peasant or the Serpent Ward standing in front of the army (see threatTier).
           const near = u.isCreep ? this.bestCreepTarget(u, strike) : this.acquireTarget(u, strike, true);
-          if (near && near.id !== t.id && !this.cliffApart(u, near)) {
+          if (near && near.id !== t.id && !this.meleeApart(u, near)) {
             this.issueAttack(u.id, near.id);
             t = near;
             w = this.weaponVs(u, t) ?? w; // the new target may want the other slot
@@ -22437,7 +22464,7 @@ export class SimWorld {
     if (u.swingLeft < 0 && this.pinned(u)) {
       const strike = w.ranged ? w.range : w.range + ATTACK_LEASH;
       const curGap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-      if (curGap > strike || this.cliffApart(u, t, w)) {
+      if (curGap > strike || this.meleeApart(u, t, w)) {
         const standIn = this.netStandIn(u, t);
         if (standIn) {
           this.engage(u, standIn, true); // noChase — the net holds it anyway
@@ -22484,7 +22511,7 @@ export class SimWorld {
     // uses, ranged and melee alike: weapon range while there is still road to walk,
     // range + leash once the approach has run out or the fight has already started.
     const band = u.inCombat || !u.moving ? w.range + ATTACK_LEASH : w.range;
-    if (gap <= band && !this.cliffApart(u, t, w)) {
+    if (gap <= band && !this.meleeApart(u, t, w)) {
       u.stallT = 0;
       u.attackStalls = 0; // in the fight — clear the stall streak
       return;
@@ -22697,10 +22724,11 @@ export class SimWorld {
     if (u.flying) return true;
     const reach = this.weaponVs(u, t)?.range ?? 0; // the range of the slot THIS target calls for
     const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-    // Across a cliff a melee unit is only "able to reach" a target by WALKING to its level, so
-    // the probe below — which ends wherever the path runs out, at the foot of the cliff, and
-    // calls that close enough — cannot vouch for it; only the region labels can.
-    const cliff = this.cliffApart(u, t);
+    // Across a cliff — or a closed gate — a melee unit is only "able to reach" a target by
+    // WALKING round, so the probe below — which ends wherever the path runs out, at the foot of
+    // the cliff or the face of the gate, and calls that close enough — cannot vouch for it;
+    // only the region labels can.
+    const cliff = this.meleeApart(u, t);
     if (gap <= reach && !cliff) return true;
     const start = this.grid.footprintAnchor(u.x, u.y, u.footprint);
     const goal = this.grid.footprintAnchor(t.x, t.y, u.footprint);
@@ -22804,7 +22832,7 @@ export class SimWorld {
     // has started, where it is re-chase hysteresis. The wide reach is honest either way:
     // range + leash is what tickSwing actually connects a hit from.
     const chaseGap = u.inCombat || !u.moving ? w.range + ATTACK_LEASH : w.range;
-    if (gap > chaseGap || this.cliffApart(u, t, w)) {
+    if (gap > chaseGap || this.meleeApart(u, t, w)) {
       // The target has walked out of reach, but the AI's blow is still following through:
       // it stands the backswing out, and only then gives chase (see holdsBackswing).
       if (this.holdsBackswing(u)) {
@@ -22989,7 +23017,7 @@ export class SimWorld {
       if (t) {
         const tw = this.weaponVs(u, t);
         const curGap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-        const outOfReach = !tw || curGap > tw.range + ATTACK_LEASH || this.cliffApart(u, t, tw);
+        const outOfReach = !tw || curGap > tw.range + ATTACK_LEASH || this.meleeApart(u, t, tw);
         const curTier = this.attackMoveTier(t);
         if (curTier < ARMY_TIER || outOfReach) {
           u.acquireT -= dt;
@@ -23081,7 +23109,7 @@ export class SimWorld {
     const w = this.weaponVs(u, t);
     if (!w) return true;
     const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-    if (gap <= w.range + ATTACK_LEASH && !this.cliffApart(u, t, w)) {
+    if (gap <= w.range + ATTACK_LEASH && !this.meleeApart(u, t, w)) {
       u.stallT = 0; // in the fight — nothing to watch
       u.attackStalls = 0;
       return false;
@@ -23627,7 +23655,7 @@ export class SimWorld {
       // target turned and ran — the animation played, the cooldown was spent, and nothing
       // happened — which is a fraction of the ground WC3 actually allows.
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-      if (gap <= w.range + w.rangeBuffer && !this.cliffApart(u, t, w)) this.dealDamage(u, t, w, backstab);
+      if (gap <= w.range + w.rangeBuffer && !this.meleeApart(u, t, w)) this.dealDamage(u, t, w, backstab);
     }
   }
 
@@ -26376,20 +26404,20 @@ export class SimWorld {
    * units to charge up the hill to the same level as the enemy." Read as:
    *
    *  - **a LEVEL, not a height.** "The same level as the enemy" is a cliff level, so this asks
-   *    the sampler the fog's line of sight and `cliffApart` already ask — rolling ground is not
+   *    the sampler the fog's line of sight and `meleeApart` already ask — rolling ground is not
    *    high ground (hiveworkshop "About high ground advantage" 255594, the same thread
-   *    heightmap.ts makeCliffLevelSampler cites) — and by `cliffApart`'s own measure (more than half a level, so two bodies
+   *    heightmap.ts makeCliffLevelSampler cites) — and by `meleeApart`'s own measure (more than half a level, so two bodies
    *    on one ramp are level with each other). Warsmash compares raw terrain height instead
    *    (CUnitDefaultAccuracyCheckListener); the page's wording is why we do not.
    *  - **RANGED weapons only**, every delivery of them: `ranged` is the weapon's own class
    *    (enums.ts isRangedWeapon — the missile family, artillery and the Rifleman's `instant`).
-   *    A melee blow cannot cross a cliff at all (`cliffApart`).
+   *    A melee blow cannot cross a cliff at all (`meleeApart`).
    *  - **a BUILDING is not exempt at either end.** The same paragraph is about exactly that:
    *    "enemy players might build towers at the top of their ramps" — a tower up there is
    *    missed like anything else, and one at the foot of a cliff misses shooting up it.
    *  - **a FLYER at either end is.** No source we could reach states it (the Hive threads are
    *    behind a bot wall); it follows from the rule being about the ground a unit STANDS on,
-   *    which is `cliffApart`'s reading too. OURS until a source says otherwise.
+   *    which is `meleeApart`'s reading too. OURS until a source says otherwise.
    *
    * The comment's other half — "if target is moving" — is the artillery shell that lands where
    * its target no longer is, which needs no roll here: a shell is thrown at the GROUND and is
@@ -29843,7 +29871,7 @@ export class SimWorld {
     const cloaked = u.cloaked;
     let t = !cloaked && u.targetId !== null ? this.units.get(u.targetId) : undefined;
     if (t && !this.canAttack(u, t)) t = undefined; // nothing in hand for it (air/ground/structure)
-    if (t && (!this.hostile(u, t) || t.invulnerable || Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > reach || this.cliffApart(u, t))) t = undefined;
+    if (t && (!this.hostile(u, t) || t.invulnerable || Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > reach || this.meleeApart(u, t))) t = undefined;
     if (!t && !cloaked) {
       u.acquireT -= dt;
       if (u.acquireT <= 0) {
@@ -29892,8 +29920,8 @@ export class SimWorld {
       if (!this.canAttack(u, t)) continue; // a Footman never turns on the Gryphon overhead
       if (!this.canSee(u, t)) continue; // out of sight (fog, night, or a treeline) → don't aggro
       // A unit that may not step toward what it picks (Hold Position, pinned) takes only what it
-      // can strike from where it stands — never a target on the ledge above it (cliffApart).
-      if (strikeOnly && this.cliffApart(u, t)) continue;
+      // can strike from where it stands — never a target on the ledge above it (meleeApart).
+      if (strikeOnly && this.meleeApart(u, t)) continue;
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
       if (dz > 0 && gap < dz) continue;
       bestGap = gap;

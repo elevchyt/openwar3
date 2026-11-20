@@ -121,7 +121,7 @@ its banks, so the terrain's own cliff level happened to be right from end to end
 are not: Prologue02's `LT05` at `(5440, -4224)` joins two banks on cliff layer **5** over water
 cut down to layer **4**, and read off the terrain alone a unit crossing dropped a level the
 moment it left the bank — blind to the bank it was walking toward (you cannot see up a cliff)
-and out of reach of a melee unit standing on it (`SimWorld.cliffApart`). So the field that is
+and out of reach of a melee unit standing on it (`SimWorld.meleeApart`). So the field that is
 installed is `WalkableSurfaces.levelAt`: the terrain's cliff level, RAISED where a deck is the
 floor to the level of the ground that deck LANDS on (the commonest level among the points
 where the deck is within 40 units of the terrain; a platform touching nothing is whole levels

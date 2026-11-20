@@ -25,6 +25,7 @@ const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { SPELL_HANDLERS, invisTransition } = require(join(REPO, ".sim-build", "src", "sim", "spells.js"));
 const { SimWorld } = require(join(REPO, ".sim-build", "src", "sim", "world.js"));
+const { PathingGrid } = require(join(REPO, ".sim-build", "src", "sim", "pathing.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -125,7 +126,8 @@ function cast(code, d, target) {
 
 // --- the break, and what it is worth (world.ts) -----------------------------------------
 
-const world = new SimWorld({ width: 8, height: 8, cell: 128, blocked: new Uint8Array(64) }, 1);
+// A real (empty) grid: the melee checks ask it which region each body stands in.
+const world = new SimWorld(new PathingGrid({ width: 8, height: 8, flags: new Uint8Array(64) }, [0, 0]), 1);
 
 function walking(delay) {
   const u = {

@@ -93,7 +93,7 @@ high ground". The condition is the official basics page's
 ([combat.shtml](https://classic.battle.net/war3/basics/combat.shtml), "High Ground"): "Ranged
 units (Missile) will miss a lot (25% chance to miss) when trying to shoot up to higher ground …
 charge up the hill to the same level as the enemy." So it is a CLIFF LEVEL (the sampler the fog
-and `cliffApart` use — rolling ground is not high ground; more than half a level, so one ramp is
+and `meleeApart` use — rolling ground is not high ground; more than half a level, so one ramp is
 one level), any RANGED weapon, and a building is exempt at neither end (the same paragraph is
 about towers at the top of a ramp). A flyer at either end is exempt — that one is OURS: no source
 we could reach states it. For a shell it is the GROUND aimed at that is measured, so Attack Ground

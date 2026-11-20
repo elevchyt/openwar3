@@ -2148,7 +2148,7 @@ export class RtsController {
    *  (see hiveworkshop "About high ground advantage" #255594). */
   initVisionBlockers(cliffHeightAt: HeightSampler): void {
     this.viewpoints.initBlockers(cliffHeightAt);
-    // …and the same levels decide whether a MELEE blow can reach (SimWorld.cliffApart).
+    // …and the same levels decide whether a MELEE blow can reach (SimWorld.meleeApart).
     this.sim.setCliffLevelField(cliffHeightAt);
   }
 
