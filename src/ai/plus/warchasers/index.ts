@@ -19,7 +19,7 @@ import {
 } from "./heal";
 import { ANKH_VALUE, isAnkh, wantsItem, worstSlot, type ItemEye } from "./items";
 import {
-  DUNGEON, FOUNTAIN, KEYS, PICKS, PICK_AISLE_X, PICK_OF, SHOPS, SKILLS, TANK, TANK_ENTER, TANK_LEAVE, WISP,
+  BARRICADES, DUNGEON, FOUNTAIN, KEYS, PICKS, PICK_AISLE_X, PICK_OF, SHOPS, SKILLS, TANK, TANK_ENTER, TANK_LEAVE, WISP,
   centre, dist, type HeroPick, type Pt, type Role,
 } from "./map";
 import { warChasersProfile, type WarChasersProfile } from "./profile";
@@ -170,6 +170,10 @@ const LEADER_FIGHT = 850;
 const SELF_FIGHT = 550;
 /** How far from the leader a target may drag it before it lets go (an `attack` order doubles it). */
 const LEASH = 1150;
+/** How far from itself it looks for a barricade to break when what it wants is walled off. OURS. */
+const BREAK_REACH = 900;
+/** How far out of the straight line to the goal a barricade may lie and still be "in the way". OURS. */
+const BREAK_DETOUR = 500;
 /** How long an order from the party overrides its own decision to rest. */
 const OBEY_HOLD = 45;
 /** How long "attack" stays aggressive before it settles back into following. */
@@ -785,8 +789,38 @@ export class WarChasersAi {
     // …and a leader goes in without the beat: it was told to be the first thing the monster sees.
     if (!answering && !leading && b.clock - b.fightSince < P.react) return true;
     if (this.kitePass(b, body, leader, s, t, answering)) return true;
-    this.attack(b, body, t);
+    // Walled off from it by a barricade: break the barricade, or the hero walks up to the wood
+    // and stands there for the rest of the fight while the monster on the far side lives.
+    const wall = this.barricadeToward(body, t);
+    this.attack(b, body, wall ?? t);
     return true;
+  }
+
+  /**
+   * The BARRICADE (map.ts `BARRICADES`) to break on the way to `goal`, or null when the hero can
+   * already reach it (or there is no barricade worth breaking). Asked only when the ground between
+   * them is closed — `canReachUnit` is the grid's region labels, which a destructible's stamp splits
+   * and its death joins again — and answered with the nearest barricade the hero CAN reach that lies
+   * roughly on the way (`BREAK_DETOUR`): a plug is two rows deep, so its near row is what is struck
+   * first and the far row becomes reachable as it falls. A barricade is neutral passive, so nothing
+   * ever acquires one by itself (rts.ts `addDestructible`); this is the order a person would give.
+   */
+  private barricadeToward(body: SimUnit, goal: SimUnit): SimUnit | null {
+    if (body.flying) return null;
+    const w = this.host.world;
+    if (w.canReachUnit(body.id, goal.id)) return null;
+    const direct = dist(body, goal);
+    let best: SimUnit | null = null;
+    let bestD = Infinity;
+    for (const u of this.units()) {
+      if (!BARRICADES.has(u.typeId)) continue;
+      const d = dist(body, u);
+      if (d > BREAK_REACH || d >= bestD || d + dist(u, goal) > direct + BREAK_DETOUR) continue;
+      if (!w.canReachUnit(body.id, u.id)) continue;
+      best = u;
+      bestD = d;
+    }
+    return best;
   }
 
   /**
@@ -1054,6 +1088,12 @@ export class WarChasersAi {
       return void this.move(b, body, c.x, c.y);
     }
     const d = dist(leader, body);
+    // The leader on the far side of a barricade (a person who walked round by another way, or
+    // slipped through a gap a hero's body does not fit): break through to them.
+    if (d > P_ + 160) {
+      const wall = this.barricadeToward(body, leader);
+      if (wall) return void this.attack(b, body, wall);
+    }
     if (d > 2200 && !this.host.world.canWalkTo(body.id, leader.x, leader.y)) {
       const gate = this.gateTowards(body, leader);
       if (gate) return void this.move(b, body, gate.x, gate.y);

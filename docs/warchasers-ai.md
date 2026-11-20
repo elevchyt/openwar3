@@ -41,6 +41,11 @@ every map fact is cited in `map.ts` against the trigger, rect or object it came 
 - **Waygates** (`nwgt`) are placed and pointed by `CreateNeutralPassiveBuildings`; the sim teleports
   whatever walks in.
 - **Fountains of Health** (`nfoh`) are the places to heal.
+- **Barricades** (`LTba`, 33 records in five plugs) close corridors and NOTHING opens them — no
+  trigger names one, so they are broken. A barricade is neutral passive and never auto-acquired,
+  so a hero whose fight target or leader is walled off (`canReachUnit`, the grid's regions) attacks
+  the nearest reachable barricade on the way instead (`barricadeToward`): the near row of a plug
+  first, the far row as the near one falls. Gates are a lever's, not this.
 
 ## How it plays (`index.ts`)
 

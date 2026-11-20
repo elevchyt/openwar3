@@ -140,3 +140,13 @@ export const SHOPS: ReadonlySet<string> = new Set(["nC04", "nC16"]);
 
 /** `nfoh` Fountain of Health — the map's three places to heal (`CreateNeutralPassiveBuildings`). */
 export const FOUNTAIN = "nfoh";
+
+/**
+ * The BARRICADES (`LTba`, DestructableData "Barricade": targType `debris`, 50 hit points) — the
+ * map's 33 `war3map.doo` records, laid in five plugs across corridors around (-6900, -730),
+ * (-5120, -220), (-6850, 1600), (-4640, 7300) and (-4600, 6336). Nothing opens them: no trigger in
+ * `war3map.j` names one, so the only way past is to break them, and a party member stood facing one
+ * with its target on the far side is a party member that has stopped playing (`barricadeToward`).
+ * Gates are NOT here — a gate is a lever's to open (`LTg1`/`LTg3`, docs/warchasers-ai.md).
+ */
+export const BARRICADES: ReadonlySet<string> = new Set(["LTba"]);

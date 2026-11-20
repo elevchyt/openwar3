@@ -185,7 +185,7 @@ check("heals in the bank", heal.healsInBank({ mana: 260 }, { lvl: { cost: 65 } }
   const optimus = (o = {}) => unit({ owner: PERSON, typeId: "HC07", isHero: true, hp: 1000, maxHp: 1000, x: 300, ...o });
 
   /** One WarChasers match on a stub world: `ticks` seconds of passes, and the commands and lines it produced. */
-  function match(units, { difficulty = ids.MELEE_INSANE, seconds = 1, before, each, lines = [] } = {}) {
+  function match(units, { difficulty = ids.MELEE_INSANE, seconds = 1, before, each, lines = [], reach = () => true } = {}) {
     const cmds = [];
     const said = [];
     const world = {
@@ -195,6 +195,7 @@ check("heals in the bank", heal.healsInBank({ mana: 260 }, { lvl: { cost: 65 } }
       techMeets: () => true,
       targsAdmit: () => true,
       canWalkTo: () => true,
+      canReachUnit: (a, b) => reach(world.units.get(a), world.units.get(b)),
       castUseError: (id, code) => {
         const u = world.units.get(id);
         const ab = u?.abilities.find((a) => a.code === code);
@@ -313,6 +314,32 @@ check("heals in the bank", heal.healsInBank({ mana: 260 }, { lvl: { cost: 65 } }
     const o = optimus({ hp: 600, race: "undead" });
     const r = match([s, o], { lines: ["heal me"], seconds: 1 });
     check("an undead hero asking a Holy Light is told it cannot", r.said.some((l) => /cant/.test(l.text)), true);
+  }
+  {
+    // A BARRICADE plug (map.ts BARRICADES) between the hero and a ghoul hitting the person: two rows
+    // of `LTba` at x 200 and 264, the ghoul beyond them. Only the near row is reachable until it falls.
+    const s = snake({ x: 0, weapon: { range: 100, acquire: 500, cooldown: 1.5 } });
+    const o = optimus({ x: 500 });
+    const near = unit({ owner: 15, typeId: "LTba", neutralPassive: true, hp: 50, maxHp: 50, x: 200, y: 0 });
+    const far = unit({ owner: 15, typeId: "LTba", neutralPassive: true, hp: 50, maxHp: 50, x: 264, y: 0 });
+    const aside = unit({ owner: 15, typeId: "LTba", neutralPassive: true, hp: 50, maxHp: 50, x: -100, y: -800 });
+    const ghoul = unit({ x: 420, targetId: o.id, order: "attack" });
+    const beyond = (u) => u.x > 150 && (near.hp > 0 || u === far ? true : u.x > 300);
+    const reach = (a, t) => !(a.x < 150 && beyond(t) && t !== near);
+    const atk = (r) => r.cmds.filter((c) => c.c === "order" && c.order.kind === "attack").map((c) => c.order.targetId);
+    const r = match([s, o, near, far, aside, ghoul], { seconds: 1, reach });
+    check("walled off from the ghoul, it breaks the near barricade", atk(r)[0], near.id);
+    check("…never the one off to the side", atk(r).includes(aside.id), false);
+    const s2 = snake({ x: 0 });
+    const o2 = optimus({ x: 500 });
+    const g2 = unit({ x: 420, targetId: o2.id, order: "attack" });
+    const b2 = unit({ owner: 15, typeId: "LTba", neutralPassive: true, hp: 50, maxHp: 50, x: 200, y: 0 });
+    check("…and with the way open it goes for the ghoul itself", atk(match([s2, o2, b2, g2], { seconds: 1 }))[0], g2.id);
+    const s3 = snake({ x: 0 });
+    const o3 = optimus({ x: 900 });
+    const b3 = unit({ owner: 15, typeId: "LTba", neutralPassive: true, hp: 50, maxHp: 50, x: 200, y: 0 });
+    const r3 = match([s3, o3, b3], { seconds: 1, reach: (a, t) => !(t === o3) });
+    check("the LEADER walled off: it breaks through to them", atk(r3)[0], b3.id);
   }
   {
     // KITING: a Beast Knight with its Water Elemental beside the Ghoul that is on him.
