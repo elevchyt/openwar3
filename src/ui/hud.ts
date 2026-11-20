@@ -221,7 +221,9 @@ export interface HudSelection {
   builderId: number; // the worker hidden INSIDE this structure while it goes up (0 = none)
   builderIcon: string; // that worker's icon (BLP path) — the button under the building's icon
   isMine: boolean; // selected gold mine
-  goldRemaining: number; // gold left in the selected mine
+  /** Gold left in the selected mine — the mine itself (`isMine`), or the one an Entangled /
+   *  Haunted Gold Mine stands on. -1 for anything that holds no mine. */
+  goldRemaining: number;
   isItem: boolean; // selected ground item (show name + description instead of stats)
   description: string; // item description (shown when isItem)
   isSummon: boolean; // temporary summon — show the "Summoned Unit" timer bar
@@ -1450,6 +1452,9 @@ export class GameHud {
   private xpText!: HTMLDivElement; // "Level N  into/span" or "Summoned Unit (Ns)" — inside the bar
   private selStats!: HTMLDivElement;
   private attackStat!: StatBlock;
+  /** The mine's "Gold:" row — `infocard-gold.blp` over COLON_GOLD, a Damage/Armor-shaped
+   *  block shown only for a gold mine (and an Entangled / Haunted one with nobody inside). */
+  private goldStat!: StatBlock;
   private armorStat!: StatBlock;
   private attrIconEl!: HTMLDivElement; // single icon (the hero's primary attribute)
   private attrLines!: HTMLDivElement;
@@ -3471,11 +3476,13 @@ export class GameHud {
     // Left column: Damage + Armor blocks (icon + "Label:" over the value). Right
     // column: ONE primary-attribute icon beside the three attribute value lines. The labels
     // are written per frame (refreshPanelLabels): the string table loads after the HUD.
+    this.goldStat = makeStatBlock();
+    this.goldStat.row.hidden = true;
     this.attackStat = makeStatBlock();
     this.armorStat = makeStatBlock();
     const leftCol = document.createElement("div");
     leftCol.className = "hud-stat-col";
-    leftCol.append(this.attackStat.row, this.armorStat.row);
+    leftCol.append(this.goldStat.row, this.attackStat.row, this.armorStat.row);
     this.attrIconEl = document.createElement("div");
     this.attrIconEl.className = "hud-stat-icon hud-attr-primary-icon";
     this.attrLines = document.createElement("div");
@@ -4165,6 +4172,7 @@ export class GameHud {
       const word = this.driver.uiString(key, fallback);
       if (el.textContent !== word) el.textContent = word;
     };
+    put(this.goldStat.label, "COLON_GOLD", "Gold:");
     put(this.attackStat.label, "COLON_DAMAGE", "Damage:");
     put(this.armorStat.label, "COLON_ARMOR", "Armor:");
     put(this.selStatusLabel, "COLON_STATUS", "Status:");
@@ -4232,13 +4240,24 @@ export class GameHud {
         this.attrIconEl.hidden = true;
         this.attrLines.hidden = true;
       } else if (sel.isMine) {
-        // Gold mine: show its remaining gold, no progress/combat stats.
+        // Gold mine: the real console's two stat blocks — "Gold:" over the figure beside
+        // `infocard-gold.blp`, then "Armor:" over the red INVULNERABLE beside the mine's own
+        // armour art (`ngol` defType = fort; the BOXLESS twin, nothing researches a mine's
+        // armour). The developer's reference shot of 1.30.4's panel. No damage, no attributes.
         this.progressWrap.hidden = true;
-        this.selStats.hidden = true;
+        this.selStats.hidden = false;
         this.selSub.textContent = "";
-        this.selCarry.hidden = false;
-        // `InfoPanelStrings.fdf` COLON_GOLD "Gold:", then the figure.
-        this.selCarry.textContent = `${this.driver.uiString("COLON_GOLD", "Gold:")} ${sel.goldRemaining}`;
+        this.xpBar.hidden = true;
+        this.selCarry.hidden = true;
+        this.attackStat.row.hidden = true;
+        this.attrIconEl.hidden = true;
+        this.attrLines.hidden = true;
+        this.renderGoldStat(sel.goldRemaining);
+        this.armorStat.row.hidden = false;
+        this.setIcon(this.armorStat.icon, infocard("armor", sel.armorType, true));
+        this.armorStat.level.textContent = "";
+        this.armorStat.value.innerHTML = this.armorValueHtml(sel);
+        this.renderStatus([]);
       } else if (sel.cargo.length > 0) {
         // A hold with somebody INSIDE: the cargo panel takes the place of the stat lines —
         // the name, then one gold pocket per seat with the passengers' icons and health in
@@ -4250,6 +4269,12 @@ export class GameHud {
         this.selCarry.hidden = true;
         this.attrIconEl.hidden = true;
         this.attrLines.hidden = true;
+        // An Entangled Gold Mine with Wisps inside still says how much gold is left — on the
+        // sub-line under its name, in the info panel's gold, "Gold:12450" (the reference shot
+        // of the real client), with the crew's pockets taking the stat blocks' place.
+        if (sel.goldRemaining >= 0) {
+          this.selSub.innerHTML = `<span class="hud-sel-mine-gold">${escapeHtml(this.driver.uiString("COLON_GOLD", "Gold:"))}${sel.goldRemaining}</span>`;
+        }
         this.renderCargo(sel);
       } else if (constructing || training) {
         // Progress display replaces the stat lines.
@@ -4408,15 +4433,11 @@ export class GameHud {
         this.armorStat.row.hidden = false;
         this.setIcon(this.armorStat.icon, infocard("armor", sel.armorType, !armorBox));
         this.armorStat.level.textContent = armorBox ? String(sel.armorUpgrade) : "";
-        // Invulnerable REPLACES the armour value rather than sitting under it (issue #26 got
-        // this half right). The game keeps it in the same string table as the panel's other
-        // values — `UI\FrameDef\InfoPanelStrings.fdf` INVULNERABLE, "|Cffff0000Invulnerable|R"
-        // — a value-shaped string carrying its own colour, which is what a field gets
-        // substituted with. A number is also the wrong thing to print: an immune unit's armour
-        // does not reduce anything, because nothing is being reduced.
-        this.armorStat.value.innerHTML = sel.invulnerable
-          ? `<span class="hud-stat-invuln">${wc3ToHtml(this.driver.uiString("INVULNERABLE", "|Cffff0000Invulnerable|R"))}</span>`
-          : `${sel.armor}${bonusHtml(sel.armorBonus)}`;
+        this.armorStat.value.innerHTML = this.armorValueHtml(sel); // Invulnerable replaces the value
+        // An Entangled / Haunted Gold Mine with nobody inside reads as the mine it stands on:
+        // its Gold row above its own Armor (the cargo branch above takes over once a Wisp is in).
+        if (sel.goldRemaining >= 0) this.renderGoldStat(sel.goldRemaining);
+        else this.goldStat.row.hidden = true;
         // Hero attributes: ONE primary-attribute icon beside the three value lines.
         if (sel.isHero) {
           this.attrIconEl.hidden = false;
@@ -4557,6 +4578,28 @@ export class GameHud {
    * The pockets are rebuilt only when the HOLD changes (a Zeppelin's 8 against a ship's 10);
    * every frame otherwise just repaints them, the way the inventory and the group grid are.
    */
+  /** The "Gold:" stat block — `UI\Widgets\Console\Human\infocard-gold.blp` (no corner box:
+   *  there is no upgrade level to print), COLON_GOLD, and the gold left. */
+  private renderGoldStat(gold: number): void {
+    this.goldStat.row.hidden = false;
+    this.setIcon(this.goldStat.icon, "UI\\Widgets\\Console\\Human\\infocard-gold.blp");
+    this.goldStat.level.textContent = "";
+    const v = String(gold);
+    if (this.goldStat.value.textContent !== v) this.goldStat.value.textContent = v;
+  }
+
+  /** The Armor block's value. Invulnerable REPLACES the armour value rather than sitting under
+   *  it (issue #26 got this half right). The game keeps it in the same string table as the
+   *  panel's other values — `UI\FrameDef\InfoPanelStrings.fdf` INVULNERABLE,
+   *  "|Cffff0000Invulnerable|R" — a value-shaped string carrying its own colour, which is what a
+   *  field gets substituted with. A number is also the wrong thing to print: an immune unit's
+   *  armour does not reduce anything, because nothing is being reduced. */
+  private armorValueHtml(sel: HudSelection): string {
+    return sel.invulnerable
+      ? `<span class="hud-stat-invuln">${wc3ToHtml(this.driver.uiString("INVULNERABLE", "|Cffff0000Invulnerable|R"))}</span>`
+      : `${sel.armor}${bonusHtml(sel.armorBonus)}`;
+  }
+
   private renderCargo(sel: HudSelection): void {
     this.cargoGrid.hidden = false;
     const seats = Math.max(sel.cargoSlots, sel.cargo.reduce((n, c) => n + c.size, 0));

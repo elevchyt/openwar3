@@ -2690,6 +2690,9 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
    which is a duller, browner gold than anything the game draws. */
 .hud-stat-label { font-size: var(--hud-stat-font); color: #fcd312; }
 .hud-stat-value { font-size: var(--hud-stat-font); color: #fff; } /* SimpleInfoPanelValueTextTemplate: white */
+/* An occupied Entangled Gold Mine's "Gold:12450" under its name — the info panel's label gold
+   (SimpleInfoPanelLabelTextTemplate), the reference shot of the real client. */
+.hud-sel-mine-gold { font-size: var(--hud-stat-font); color: #fcd312; }
 /* The "+4" is the VALUE it is attached to, in another colour — same font, same size, same
    weight, so it reads as part of "2 +4" rather than as a badge stuck on the end. It already
    inherited the size; it was the bold that made it look like a different typeface. Nothing in

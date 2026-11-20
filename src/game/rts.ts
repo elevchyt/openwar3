@@ -8451,7 +8451,7 @@ export class RtsController {
       model: def?.model ?? "", isWorker: false, isBuilding: false,
       underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0, queueOwned: false,
       queue: [], icon: def?.icon ?? "", builderId: 0, builderIcon: "", carryGold: 0, carryLumber: 0,
-      isMine: false, goldRemaining: 0,
+      isMine: false, goldRemaining: -1,
       // The info panel prints the item's short `Description`, not the Ubertip a shop button raises.
       isItem: true, description: def ? this.tipText(def.summary) : "",
       isSummon: false, summonLabel: "", isRaised: false, summonSecondsLeft: 0, summonFrac: 0, timedFormLabel: "", timedFormSecondsLeft: 0, timedFormFrac: 0, hexLabel: "", hexSecondsLeft: 0, hexFrac: 0, buffs: [], cargo: [], cargoSlots: 0, cargoDevour: false,
@@ -8465,6 +8465,16 @@ export class RtsController {
     return resolveTipRefs(text, { abilities: this.abilities, items: this.items, units: this.registry, upgrades: this.upgrades });
   }
 
+  /** The gold left in the mine a unit HOLDS — an Entangled Gold Mine (`SimUnit.mineId`) or a
+   *  Haunted one (the mine's `entangledBy`, which both kinds set) — or -1 for every other unit. */
+  private heldMineGold(id: number): number {
+    const mid = this.sim.units.get(id)?.mineId ?? 0;
+    const own = mid ? this.sim.mines.get(mid) : undefined;
+    if (own) return own.gold;
+    for (const m of this.sim.mines.values()) if (m.entangledBy === id) return m.gold;
+    return -1;
+  }
+
   /** Selection info for a gold mine (name + remaining gold + its model). */
   private mineInfo(mineId: number): SelectionInfo | null {
     const m = this.sim.mines.get(mineId);
@@ -8474,7 +8484,8 @@ export class RtsController {
       id: -1000 - mineId, // synthetic, negative — never clashes with a unit id
       typeId: "ngol", race: "", name: def?.name || "Gold Mine", owner: -1,
       hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, armorBonus: 0, invulnerable: true, damageMin: 0, damageMax: 0, damageBonus: 0,
-      attackType: AttackType.None, armorType: ArmorType.Unknown, attackUpgrade: -1, armorUpgrade: -1, attackUpgradeName: "", armorUpgradeName: "", armorTotal: 0, attackRange: 0, attackCooldown: 0, moveSpeed: 0, isHero: false, isIllusion: false, altModel: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
+      // `[ngol] defType = fort` (UnitBalance.slk): the panel's Armor row wears the stone art.
+      attackType: AttackType.None, armorType: def?.armorType ?? ArmorType.Fort, attackUpgrade: -1, armorUpgrade: -1, attackUpgradeName: "", armorUpgradeName: "", armorTotal: 0, attackRange: 0, attackCooldown: 0, moveSpeed: 0, isHero: false, isIllusion: false, altModel: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
       agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: PrimaryAttribute.None,
       model: def?.model ?? "", isWorker: false, isBuilding: false,
       underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0, queueOwned: false,
@@ -8742,7 +8753,9 @@ export class RtsController {
       carryGold: u.worker?.carryGold ?? 0,
       carryLumber: u.worker?.carryLumber ?? 0,
       isMine: false,
-      goldRemaining: 0,
+      // An Entangled / Haunted Gold Mine is a UNIT standing on a SimMine, and its panel reads
+      // that mine's gold the way the plain mine's does (-1 = holds no mine).
+      goldRemaining: this.heldMineGold(id),
       isItem: false,
       description: "",
       // The "Summoned Unit" timer bar. A Mirror Image illusion is a summon and shows one —
