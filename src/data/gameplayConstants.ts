@@ -22,7 +22,7 @@ import { ArmorType, AttackType } from "./enums";
 // govern exist, so a stray constant never reads as "implemented" when it isn't:
 //   • ability-system toggles — the ~20 `CanDeactivate*`, the `Illusions*` block,
 //     `MagicImmunesResist*`, the `Drain*`/`*Cluster`/`Morph*` behaviour flags;
-//   • misc combat flags — `DefendDeflection`, `RelativeUpgradeCost`.
+//   • misc combat flags — `DefendDeflection`.
 // Everything the sim, renderer, or HUD reads should live here rather than as a
 // literal in place.
 
@@ -168,6 +168,14 @@ export const MISC_GAME = {
   ItemSaleAggroRange: 0,
   UnitSaleAggroRange: 600,
   AbilSaleAggroRange: 0,
+
+  // --- upgrade pricing ---------------------------------------------------------
+  /** "Relative Upgrade Costs": how the price of a unit something UPGRADES INTO is written down.
+   *  0 on the melee tables — a Keep's row is the whole 705/415 and the upgrade is charged the
+   *  DIFFERENCE over the Town Hall's 385/205. 1 on the custom tables (MISC_GAME_CUSTOM), whose
+   *  rows already ARE the difference: `Custom_V1` says hkee = 320/210 and keeps the whole in
+   *  `goldRep`. Read through `upgradeCost()` below, never subtracted in place. */
+  RelativeUpgradeCost: 0,
 
   // --- dispels ---------------------------------------------------------------
   /**
@@ -389,6 +397,9 @@ export const MISC_GAME_CUSTOM = {
   // Boots of Speed STACK on a custom map (both custom copies say 1 against the melee files' 0),
   // so a chapter's hero with two pairs really is +120 (SimWorld.itemBonuses).
   MoveSpeedBonusesStack: 1,
+  // An upgraded unit's row is ALREADY what the upgrade costs on a custom map (Halls of the
+  // Dead 320/210, a Destroyer 100/50), so nothing is subtracted from it — upgradeCost().
+  RelativeUpgradeCost: 1,
 } as const;
 
 /** The engine's food ceiling for the edition the client is on — 100, or Reign of Chaos's 90. */
@@ -1116,6 +1127,22 @@ function expandLevelTable(
  * set of constants they read, which is why one function serves both.
  */
 export type ReviveMode = "altar" | "tavern";
+
+/**
+ * What it costs to turn `from` into `to` — a hall's next tier, a Scout Tower's Guard Tower, an
+ * Obsidian Statue's Destroyer. THE one place that knows, because the two data sets write the
+ * same price down two ways round (`RelativeUpgradeCost` above): the melee tables state `to`'s
+ * WHOLE price and the upgrade is the difference, the custom tables state the difference
+ * itself. Subtracting unconditionally priced Halls of the Dead on a scenario map at
+ * 320 − 255 = 65 gold — the Necropolis taken off twice.
+ */
+export function upgradeCost(
+  from: { goldCost: number; lumberCost: number } | undefined,
+  to: { goldCost: number; lumberCost: number },
+): { gold: number; lumber: number } {
+  if (Number(miscGame("RelativeUpgradeCost")) !== 0 || !from) return { gold: to.goldCost, lumber: to.lumberCost };
+  return { gold: Math.max(0, to.goldCost - from.goldCost), lumber: Math.max(0, to.lumberCost - from.lumberCost) };
+}
 
 export function heroReviveCost(
   mode: ReviveMode,

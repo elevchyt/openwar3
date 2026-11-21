@@ -79,7 +79,7 @@ import { isDesktopApp } from "../assets/nativeInstall";
 import { loadCommandStrings, disabledIconPath, isButtonIcon, MISSING_ICON_URL, iconFileCandidates, type CommandStrings } from "../data/commandStrings";
 import { resolveTipRefs } from "../data/tipRefs";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
-import { CAMERA, FOG_OF_WAR, PLACEMENT, MELEE, MINIMAP, MISC_DATA, TEXT_TAG, heroReviveCost, mapMiscEpoch, miscKeyIsRead, setMapMiscOverlay, type ReviveMode } from "../data/gameplayConstants";
+import { CAMERA, FOG_OF_WAR, PLACEMENT, MELEE, MINIMAP, MISC_DATA, TEXT_TAG, heroReviveCost, upgradeCost, mapMiscEpoch, miscKeyIsRead, setMapMiscOverlay, type ReviveMode } from "../data/gameplayConstants";
 import { DayNightCycle, type DayNightLight } from "./dayNight";
 import { fogForZoom, makeFog, type DistFog } from "./fog";
 import { TimeIndicatorClock, timeIndicatorPath } from "./timeIndicator";
@@ -6642,11 +6642,7 @@ export class MapViewerScene {
     const from = this.registry.get(lvl.dataStr[0] ?? "");
     const to = this.registry.get(lvl.summon || lvl.dataStr[1] || "");
     if (!from || !to) return null;
-    return {
-      gold: Math.max(0, to.goldCost - from.goldCost),
-      lumber: Math.max(0, to.lumberCost - from.lumberCost),
-      food: Math.max(0, to.foodUsed - from.foodUsed),
-    };
+    return { ...upgradeCost(from, to), food: Math.max(0, to.foodUsed - from.foodUsed) };
   }
 
   private async remodelUnit(simId: number, toTypeId: string): Promise<void> {
@@ -14057,7 +14053,8 @@ export class MapViewerScene {
    *  replaces (WC3), never less than zero. */
   private upgradeCost(fromTypeId: string | undefined, to: UnitDef): [number, number] {
     const from = fromTypeId ? this.registry.get(fromTypeId) : undefined;
-    return [Math.max(0, to.goldCost - (from?.goldCost ?? 0)), Math.max(0, to.lumberCost - (from?.lumberCost ?? 0))];
+    const c = upgradeCost(from, to); // the difference, or the row itself on a custom map's tables
+    return [c.gold, c.lumber];
   }
 
   /** Items a shop sells. The Arcane Vault uses `Makeitems`, the neutral shops `Sellitems` —

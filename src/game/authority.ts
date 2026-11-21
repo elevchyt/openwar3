@@ -8,7 +8,7 @@ import type { TechRegistry } from "../data/techtree";
 import type { UpgradeRegistry } from "../data/upgrades";
 import type { Command } from "./commands";
 import { ApmMeter } from "./apm";
-import { engineFoodCeiling, gameNum, heroReviveCost, type ReviveMode } from "../data/gameplayConstants";
+import { engineFoodCeiling, gameNum, heroReviveCost, upgradeCost, type ReviveMode } from "../data/gameplayConstants";
 
 // The authority half of the bridge (docs/multiplayer.md Phase B): the questions whose
 // answers are THE GAME'S, not one machine's view of it — who owns what, what a player can
@@ -144,10 +144,7 @@ export class Authority {
         const to = this.registry.get(job.unitId);
         if (!to) return none;
         const from = this.registry.get(building.typeId);
-        return {
-          gold: Math.max(0, to.goldCost - (from?.goldCost ?? 0)),
-          lumber: Math.max(0, to.lumberCost - (from?.lumberCost ?? 0)),
-        };
+        return upgradeCost(from, to);
       }
       case "unit": {
         if (job.free) return none;
@@ -1284,8 +1281,8 @@ export class Authority {
         // of the new one (WC3): a Stronghold (700/375) over a Great Hall (385/185) is
         // 315/190. Both halves of that subtraction are read here, from the registry.
         const from = this.registry.get(b.typeId);
-        const gold = Math.max(0, to.goldCost - (from?.goldCost ?? 0));
-        const lumber = Math.max(0, to.lumberCost - (from?.lumberCost ?? 0));
+        // (or, on a custom map's tables, the row as written — upgradeCost knows which).
+        const { gold, lumber } = upgradeCost(from, to);
         const stash = this.sim.stashOf(player);
         if (stash.gold < gold || stash.lumber < lumber) return false;
         stash.gold -= gold;

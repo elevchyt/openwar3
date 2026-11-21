@@ -44,6 +44,7 @@ import {
   upkeepBands,
   xpToReachLevel,
   type ReviveMode,
+  upgradeCost,
 } from "../data/gameplayConstants";
 import { perfNow, simProfile } from "./profile";
 import { flyHeight, type MissileFlight } from "./missile";
@@ -9014,11 +9015,9 @@ export class SimWorld {
     const from = this.unitReg?.get(lvl.dataStr[0] ?? "");
     const to = this.unitReg?.get(altFormOf(lvl));
     if (!from || !to) return null;
-    return {
-      gold: Math.max(0, to.goldCost - from.goldCost),
-      lumber: Math.max(0, to.lumberCost - from.lumberCost),
-      food: Math.max(0, to.foodUsed - from.foodUsed),
-    };
+    // Food is always the difference (a Destroyer's `fused` is 5 in every data set); gold and
+    // lumber are whichever way round this data set writes an upgrade (upgradeCost).
+    return { ...upgradeCost(from, to), food: Math.max(0, to.foodUsed - from.foodUsed) };
   }
 
   /** Why `owner` cannot pay for a morph right now — the same three [Errors] lines, in the same
@@ -10594,6 +10593,16 @@ export class SimWorld {
     // routing and movement reads as a wall. (The wisp-in-a-tree case unsettles by hand for
     // exactly this reason; it no longer has to.)
     if (!this.claimsCells(u) || u.hasReservation) return;
+    // A PLANTED ANCIENT is the one building that gets this far — it can walk, so it carries a
+    // walker's footprint (every other structure has none and left on the line above) — and a
+    // building stands exactly where it was put. Its ground is its STAMP, laid on the build
+    // grid at the site; the snap below is a walker's (a different grid), and its "the tile is
+    // taken, take the nearest free one" would carry the body off the site altogether while
+    // the stamp, the click volume and the ground texture all stayed behind. That is what an
+    // Ancient raised (or planted) on a spot anything was standing on did: the tree stood a
+    // footprint away from its own roots' mark. Whoever is in the way is the one that moves
+    // (pushOutOfFootprint), never the building.
+    if (u.building && !u.uprooted) snap = false;
     const n = u.footprint;
     let sx = u.x;
     let sy = u.y;
@@ -14944,9 +14953,7 @@ export class SimWorld {
       // walk left it in is handed to the settle below and interpolated across the transition,
       // which is also what closes the last stride onto the site.
       u.desiredFacing = u.builtFacing;
-      this.settle(u); // stamp its cells and snap onto the grid
-      // …and settle() may have nudged it off the site to a free tile; the gesture ends wherever
-      // the unit actually is, so read the destination back rather than assuming the site.
+      this.settle(u); // take its cells where it stands — a planted Ancient is never moved off its site
       planted = { x0, y0, f0, x1: u.x, y1: u.y };
       // …and a Tree of Life that plants within reach of a free mine takes it, as a freshly
       // grown one does (autoEntangle) — "built or ROOTED near the mine, automatically

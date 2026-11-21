@@ -211,6 +211,10 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   // without the lobby (a 2v2 on Lost Temple: whether the match is decided when one side is
   // gone). Seats past the list keep the map's own team.
   const teams = (params.get("teams") ?? "").split(",").filter((t) => t.trim() !== "").map(Number);
+  // `?close=1,2` — the lobby's Closed, seat by seat. A scenario map does something of its own
+  // with an EMPTY seat ((4)Monolith puts a Tavern on its mine), and a boot that could only fill
+  // every seat could not reach any of it.
+  const closed = new Set((params.get("close") ?? "").split(",").filter((t) => t.trim() !== "").map(Number));
   // `?randomhero` — Advanced Options → Random Hero, as the lobby states it to the map script
   // (`MeleeConfig.mapFlags`, issue #296): every seat starts with a rolled hero beside its hall.
   const randomHero = params.has("randomhero");
@@ -218,6 +222,8 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
     const seated = meleeConfigFor(info, player, seed, fog, race, aiRace, ai, aiPlus);
     const base: MeleeConfig = { ...seated, mapFlags: mapFlagsOf({ randomHero }, fog) };
     const cfg = observe ? observeConfig(base, ai, aiPlus) : base;
+    // An empty seat is simply not in the config — what the lobby's own `toConfig` does.
+    if (closed.size) cfg.slots = cfg.slots.filter((sl) => !closed.has(sl.id));
     if (!teams.length) return cfg;
     return { ...cfg, slots: cfg.slots.map((s, i) => (i < teams.length && Number.isFinite(teams[i]) ? { ...s, team: teams[i] } : s)) };
   };

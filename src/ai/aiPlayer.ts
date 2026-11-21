@@ -8,7 +8,7 @@ import type { UpgradeRegistry } from "../data/upgrades";
 import { HALL_MINE_DISTANCE, isOffField, type SimMine, type SimTree, type SimUnit, type SimWorld } from "../sim/world";
 import { footprintBuildable, footprintCellsAt, footprintRadius, type Footprint } from "../sim/destructibles";
 import { PATHING_CELL } from "../sim/pathing";
-import { heroReviveCost } from "../data/gameplayConstants";
+import { heroReviveCost, upgradeCost } from "../data/gameplayConstants";
 import { isRoc } from "../data/edition";
 import {
   BUILD_EXPAND, BUILD_UNIT, BUILD_UPGRADE, ELF_MINE, MELEE_INSANE, MELEE_NEWBIE, TOWN_COUNT_EQUIVALENTS,
@@ -1305,10 +1305,7 @@ export class AiPlayer {
       for (const b of this.upgradeSources(id, town)) {
         const from = this.host.registry.get(b.typeId);
         if (!from) break;
-        return {
-          gold: Math.max(0, def.goldCost - from.goldCost),
-          lumber: Math.max(0, def.lumberCost - from.lumberCost),
-        };
+        return upgradeCost(from, def);
       }
     }
     return { gold: def.goldCost, lumber: def.lumberCost };
