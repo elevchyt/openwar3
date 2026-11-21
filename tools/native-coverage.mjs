@@ -56,7 +56,15 @@ function readFromArchive(archive, name) {
 }
 
 // --- the native surface, from common.j -------------------------------------
-const commonJ = readFileSync(join(WC3_DIR, 'ExtractedData', 'merged', 'Scripts', 'common.j'), 'latin1');
+// The same hint and exit code the JASS tests give (tools/jass-install-scripts.cjs) — inlined
+// rather than required, because that helper only knows the repo's own `Warcraft III/` and this
+// tool takes `--wc3-dir`.
+const COMMON_J = join(WC3_DIR, 'ExtractedData', 'merged', 'Scripts', 'common.j');
+if (!existsSync(COMMON_J)) {
+  console.error(`Run \`pnpm data:extract\` first — this report reads the install's own common.j (looked for ${COMMON_J}).`);
+  process.exit(2);
+}
+const commonJ = readFileSync(COMMON_J, 'latin1');
 const NATIVE_RE = /^\s*(?:constant\s+)?native\s+([A-Za-z_]\w*)\b/gm;
 const allNatives = new Set();
 for (const m of commonJ.matchAll(NATIVE_RE)) allNatives.add(m[1]);
