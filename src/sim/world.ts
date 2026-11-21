@@ -4466,6 +4466,13 @@ export class SimWorld {
   // --- corpses (persist + decay; targetable by corpse-consuming spells) ---
   readonly corpses = new Map<number, SimCorpse>();
   private nextCorpseId = 1;
+  /**
+   * How long a dead unit that left NO corpse is still in the game (see `unitLeftGame`): sim
+   * seconds at which its body is gone, or -1 for a HERO, which never leaves (it is revivable,
+   * by an altar or by `ReviveHero`). A unit that left a corpse is not here — the corpse is its
+   * body, for as long as it lies there.
+   */
+  private bodyUntil = new Map<number, number>();
   // --- items on the ground (dropped / creep-dropped; pickable) -------------
   readonly items = new Map<number, SimItem>();
   private nextItemId = 1;
@@ -20587,6 +20594,31 @@ export class SimWorld {
     this.nextCorpseId++;
   }
 
+  /**
+   * Has this unit LEFT THE GAME — for a script, the difference between a unit that is dead and
+   * one that is no longer there at all? `killUnit` drops a unit from `units` the moment it dies,
+   * but WC3 keeps a dead unit (it is still a widget, still in every group it was in — which is
+   * why GUI code filters on `IsUnitAliveBJ`) until its BODY is gone: the corpse decayed
+   * (`BoneDecayTime`) or was used up by a spell, the death clip of a body that left no corpse
+   * played out, or never for a hero. `RemoveUnit` is the other way out, and the script marks
+   * that one itself (JassUnit.removed).
+   *
+   * Angel Arena Allstars refills each of its square camps on a timer while
+   * `CountUnitsInGroup(FR[i]) < 5`, and a group counted its dead for ever, so a camp killed once
+   * was never seen again. False for an id that is still in the world.
+   */
+  unitLeftGame(id: number): boolean {
+    if (this.units.has(id)) return false;
+    const until = this.bodyUntil.get(id);
+    if (until !== undefined) {
+      if (until < 0 || until > this.elapsed) return false;
+      this.bodyUntil.delete(id); // gone for good — nothing needs the entry again
+      return true;
+    }
+    for (const c of this.corpses.values()) if (c.deadId === id && !c.raised) return false;
+    return true;
+  }
+
   private tickCorpses(dt: number): void {
     for (const c of this.corpses.values()) {
       if (c.eatenBy) {
@@ -27659,11 +27691,20 @@ export class SimWorld {
     // …and a body TRANSMUTE melted goes the same way, minus the burst: it turned into the coins
     // transmuteInternal puts where it stood (issue #204).
     const melted = this.meltId === u.id;
+    const corpseBefore = this.nextCorpseId; // did spawnCorpse below lay one? (unitLeftGame)
     if ((u.explodes || melted || (this.splatterId === u.id && !u.building)) && !u.isHero) {
       this.explodedDeaths.add(u.id);
       const art = melted ? "" : this.unitReg?.get(u.typeId)?.specialArt;
       if (art) this.spellEffects.push({ art, x: u.x, y: u.y, targetId: 0, z: 0 });
     } else this.spawnCorpse(u); // leave a decaying corpse (targetable by corpse spells)
+    // …and how long this unit is still IN THE GAME for a script (unitLeftGame). A hero never
+    // leaves; a body that burst leaves at once; one that left no corpse (a flyer, a machine, a
+    // summon, a building) once its death clip has played; a corpse speaks for itself.
+    if (u.isHero) this.bodyUntil.set(u.id, -1);
+    else if (this.explodedDeaths.has(u.id)) this.bodyUntil.set(u.id, this.elapsed);
+    else if (this.nextCorpseId === corpseBefore) {
+      this.bodyUntil.set(u.id, this.elapsed + Math.max(0, this.unitReg?.get(u.typeId)?.deathTime ?? 0));
+    }
     // A hero has fallen, and the whole army is told. Raised HERE rather than off the death
     // event stream because that one only runs when a script is listening (captureDeaths) —
     // and a melee match, which is exactly where this line matters, listens to nothing.

@@ -96,6 +96,8 @@ const EXPECTED = [
   "waygateActivate", "waygateDestination", "waygateIsActive", "waygateSetDestination",
   // ShowUnit / IsUnitHidden — a WORLD flag (SimUnit.hidden): off the field for every seat.
   "hideUnit", "isUnitHidden",
+  // A dead unit whose BODY is gone has left the game, and its groups (SimWorld.unitLeftGame).
+  "unitLeftGame",
   // SetUnitUseFood — the unit's own `foodFree` (jass-unit-defaults-test.cjs).
   "setUnitUseFood", "getUnitUsesFood",
   // The nocturnal-sleep natives — `canSleep`/`asleep`, through SimWorld.setCanSleep/wakeUnit.
@@ -202,6 +204,26 @@ check("a non-mine handle has no resource", hooks.getResourceAmount(3), 0);
 check("createBlightedGoldMine returns a script handle", hooks.createBlightedGoldMine(0, 1510, 1710, 0), mineHandle);
 check("…which resolves back to that mine", hooks.getResourceAmount(hooks.createBlightedGoldMine(0, 1510, 1710, 0)), 500);
 check("…and -1 when nothing is in range", hooks.createBlightedGoldMine(0, 90000, 90000, 0), -1);
+
+// unitLeftGame — when a DEAD unit leaves its groups (natives/groups.ts outOfGame). A corpse is
+// the unit's body for as long as it lies there; a hero never leaves; a body that left no corpse
+// leaves once its death clip has played. Angel Arena Allstars' square camps refill only once
+// `CountUnitsInGroup` stops counting their dead.
+console.log("\nunitLeftGame: dead is not gone until the body is");
+check("a unit in the world has not left", hooks.unitLeftGame(3), false);
+check("a mine handle never has (RemoveUnit says when)", hooks.unitLeftGame(mineHandle), false);
+world.corpses.set(990001, { id: 990001, deadId: 777, raised: false, x: 0, y: 0 });
+check("a dead unit whose corpse still lies there has not left", hooks.unitLeftGame(777), false);
+world.corpses.get(990001).raised = true;
+check("…and has once the corpse is used up", hooks.unitLeftGame(777), true);
+world.corpses.delete(990001);
+world.bodyUntil.set(778, -1);
+check("a dead HERO never leaves", hooks.unitLeftGame(778), false);
+world.bodyUntil.set(779, world.elapsed + 5);
+check("a corpse-less body is still there while it falls", hooks.unitLeftGame(779), false);
+world.bodyUntil.set(779, world.elapsed - 0.01);
+check("…and gone after", hooks.unitLeftGame(779), true);
+world.bodyUntil.delete(778);
 
 // RemoveUnit on a mine handle takes the MINE off the map — through the mine table, never
 // sim.removeUnit, since a mine is not a sim unit. A map may clear a mine for good: Monolith's

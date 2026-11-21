@@ -682,6 +682,9 @@ export interface EngineHooks {
    *  hard — it is what keeps the villages and the prisoners alive until you arrive. */
   setPlayerNeutral?(player: number, neutral: boolean): void;
   removeUnit?(unitId: number): void; // RemoveUnit — no death/corpse
+  /** The unit has left the GAME, not merely died: its body is gone (SimWorld.unitLeftGame). A
+   *  group drops it then, as it drops one RemoveUnit took (natives/groups.ts liveMembers). */
+  unitLeftGame?(unitId: number): boolean;
   killUnit?(unitId: number): void; // KillUnit — death animation + corpse
   hideUnit?(unitId: number, hidden: boolean): void; // ShowUnit(u, show) — hidden = !show
   isUnitHidden?(unitId: number): boolean; // IsUnitHidden

@@ -46,8 +46,8 @@ const group = (c: NativeCtx, v: JassValue): GroupObj | undefined => c.rt.data<Gr
 const unit = (c: NativeCtx, v: JassValue): JassUnit | undefined => c.rt.data<JassUnit>(v);
 
 /**
- * A group's LIVE members, with anything `RemoveUnit` took out of the world dropped from the
- * set for good.
+ * A group's LIVE members, with anything that has left the world — `RemoveUnit`, or a dead
+ * unit whose body is gone (`outOfGame` below) — dropped from the set for good.
  *
  * WC3 draws a line our set did not: a unit that DIES stays in every group it was in (which is
  * why so much GUI code filters on `IsUnitAliveBJ`), but a unit that is REMOVED is gone from the
@@ -69,10 +69,25 @@ const unit = (c: NativeCtx, v: JassValue): JassUnit | undefined => c.rt.data<Jas
 function liveMembers(c: NativeCtx, g: GroupObj): number[] {
   const out: number[] = [];
   for (const hid of [...g.units]) {
-    if ((c.rt.handles.get(hid) as JassUnit | undefined)?.removed) g.units.delete(hid);
+    if (outOfGame(c, c.rt.handles.get(hid) as JassUnit | undefined)) g.units.delete(hid);
     else out.push(hid);
   }
   return out;
+}
+
+/**
+ * Gone from the world, and so from every group: taken out by `RemoveUnit`, or DEAD AND GONE —
+ * its corpse decayed or was used up, or a body that left none finished falling
+ * (SimWorld.unitLeftGame). A unit that has merely died is still a member until then.
+ *
+ * The second half is what refills Angel Arena Allstars' square camps: `BR4` tops each camp's
+ * group up to five on a timer, `if CountUnitsInGroup(FR[i])<5`, and with the dead counted for
+ * ever a camp killed once never came back while the forest's camps (another system) did.
+ */
+function outOfGame(c: NativeCtx, u: JassUnit | undefined): boolean {
+  if (!u) return false;
+  if (u.removed) return true;
+  return u.simId >= 0 && (c.rt.hooks?.unitLeftGame?.(u.simId) ?? false);
 }
 const playerIndex = (c: NativeCtx, v: JassValue): number => c.rt.data<JassPlayer>(v)?.index ?? asInt(v);
 
@@ -143,7 +158,7 @@ export function registerGroupNatives(rt: Runtime): void {
     return JNULL;
   });
   def(rt, "IsUnitInGroup", (c, a) => jBool(
-    a[0].k === "handle" && !unit(c, a[0])?.removed && (group(c, a[1])?.units.has(a[0].h) ?? false),
+    a[0].k === "handle" && !outOfGame(c, unit(c, a[0])) && (group(c, a[1])?.units.has(a[0].h) ?? false),
   ));
 
   // --- enumeration: fill a group from the live sim ---

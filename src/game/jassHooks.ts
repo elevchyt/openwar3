@@ -124,6 +124,8 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
       }
       sim.removeUnit(id);
     },
+    // A gold mine is never "dead" to a script until RemoveUnit says so (removeMine above).
+    unitLeftGame: (id) => !mineForScript(sim, id) && sim.unitLeftGame(id),
     // --- gold mines, which are units only to a script (see MINE_ID_BASE) --------------------
     //
     // Position reads fall back to the mine table because `MeleeGetProjectedLoc` measures the
