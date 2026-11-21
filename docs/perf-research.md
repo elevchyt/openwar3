@@ -41,6 +41,8 @@ Read [`docs/video-options.md`](video-options.md) for what the mode IS and
 | 17 | Sight footprints also shared by POSITION, LRU-capped (`SightStamps.shareCells`) | **exact** | fight: casts 3–5× fewer, fog rebuild −47% (~3% of CPU) | landed |
 | 18 | A* heap: typed arrays + hole sifts (same pop order) | exact | nothing — 1174 vs 1179 ms, identical paths | **not taken** |
 | 19 | Shared poses are opt-in PER VIEWER — only the match world shares | fix (review) | the menu backdrop animates at full rate again | landed |
+| 20 | **Jam re-plans capped at 2,048 expansions** (`JamReplan`) | **gameplay** (a search that would have arrived between 2,048 and 8,192 now waits instead) | fight: A* expansions **−43%** (12.5M → 7.1M), headless step −20%; damage dealt and units engaged unchanged | landed |
+| 21 | Chase tolerance scales with distance (`ChaseDrift`) | **gameplay** fix (followers stuck at an obstacle) | six followers behind a wall: last arrives 44 s, was 77 s; detours asked 201 → 17 | landed |
 
 **Rows 6, 7, 8 and 12 are the point of this file.** All three are exact, all three were found while
 chasing the low-performance frame, and all three help full quality as much as they help the mode —
@@ -230,8 +232,23 @@ Roughly in value order, with the kind marked, because that is what decides where
     the same pop order; the digest of all 700 paths was identical — it measured 1,179 ms against
     1,174. The cost is the comparisons (data-dependent branches over a big heap), not the swaps,
     and any other queue breaks (f, h) ties differently and so changes paths. Reverted.
-  - *Ask for fewer searches* — the real lever, and a GAMEPLAY decision rather than an exact one,
-    so it is written down here rather than made. Counted over 20 s of the fight (1,217 searches,
+  - *Ask for fewer searches* — the real lever, and a GAMEPLAY decision rather than an exact one.
+    **Started (row 20), with a harness that makes the decision measurable:**
+    `tools/sim-path-budget.cjs` runs three seeded 180-unit fights headless, attributes every
+    `findPath` to the SimWorld method that asked for it (plan / repair / escalate, expansions,
+    arrived or not) and prints what the fight ACHIEVED beside it — damage dealt, units that got a
+    swing in, when. A change has to move the first table without moving the second.
+    What it showed: `checkStuck`'s go-round-the-crowd re-plan was 40% of all expansions and
+    `repathPoll`'s fallback plan another 19%, and in both the cost is the searches that do NOT
+    arrive (5,100 and 8,193 expansions each, against ~1,050 and ~775 for the ones that do).
+    *Tried first and rejected:* mending the queued route (`repairPath`) in `checkStuck` instead
+    of planning. Expansions fell only 16% (the mends multiply) and the fights dealt ~8% less
+    damage in all three seeds — the full plan with bodies as walls is what walks a back-rank
+    soldier round the melee to the flank, and a mend keeps it queued behind its own line.
+    *Landed:* the plan stays, capped at 2,048 (`JamReplan.expansions`; 8,192 is the rule as it
+    was). 4,096 / 3,072 / 2,048 / 1,024 gave 8.9M / 8.1M / 7.1M / 6.5M expansions against 12.5M;
+    damage and engagement are flat down to 2,048 and begin to slip at 1,024.
+    The original counts, for the two wastes still open: Counted over 20 s of the fight (1,217 searches,
     1.79M expansions): `checkStuck` re-planning a unit jostled in the crowd, 126 searches that
     ARRIVE at ~3,300 expansions each (412k — the single largest line: a route that still exists,
     rebuilt because the unit was shoved); escalated jobs that exhaust a whole region without

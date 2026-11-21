@@ -2980,6 +2980,22 @@ const ATTACK_HOLD_MAX = 4.0;
 // nearest enemy we can reach. Automatic (non-ordered) targeting is unchanged.
 const ORDERED_COMMIT_TIME = 2.0;
 const CHASE_REPATH = 128; // repath when the target strays this far from the path goal
+/**
+ * …and, from FAR away, a share of the distance still to go instead (SimWorld.chasePoint): the
+ * chase is re-planned when the target has strayed `far` × (how far off it is) from where the
+ * route was aimed, never less than CHASE_REPATH.
+ *
+ * A flat 128 is right beside the target and wrong across the map, and the case that showed it
+ * is a unit rallied onto a hero: the hero walks 128 units every 0.4 s, so the follower threw
+ * its route away that often — and a follower with a treeline in the way only HAS a route for
+ * as long as its detour search's answer is left alone. Each re-plan is the 700-cell chase
+ * search, which comes back short and aims the unit at the trees again until the one detour
+ * slot gets round to it; six followers behind a wall asked for 201 detours and walked up and
+ * down in front of it, the last arriving 40 s after the first. Six thousand units out, where
+ * the hero is by the time the route is walked matters far less than having one. Ours (the
+ * game states no such number); `far: 0` is the rule as it was.
+ */
+export const ChaseDrift = { far: 0.25 };
 const FOLLOW_GAP = 64; // edge-to-edge distance a follower keeps behind its leader
 // Hysteresis for follow (mirrors ATTACK_LEASH): once caught up and parked, the
 // leader must drift this much FURTHER than FOLLOW_GAP before the follower gives
@@ -3184,6 +3200,19 @@ export const PathSlicing = {
    *  slice·rate/(slice+rate) expansions a step on detours. Live-tunable so a match can A/B it. */
   expansionsPerStep: LONG_SEARCH_EXPANSIONS_PER_STEP,
 };
+/**
+ * What a re-plan from INSIDE A JAM may spend (SimWorld.checkStuck's go-round-the-crowd search and
+ * repathPoll's fallback plan). Both used the floor, 8,192.
+ *
+ * Measured over three 180-unit fights (tools/sim-path-budget.cjs): a jam re-plan that ARRIVES
+ * costs ~1,050 expansions, and one that does not spends ~5,100–8,193 finding that out — and
+ * the ones that did not arrive were 60% of every A* cell the fight expanded. A search that has
+ * not found the way round a crowd in a few thousand cells is not going to: the crowd is the
+ * wall, and what it hands back at any budget is the same best-effort walk up to it. So the cap
+ * is sized to keep the arrivals and stop paying for the rest. Ours — nothing in the game
+ * states it — and `expansions` is live so a match can A/B it (PATH_FLOOR_EXPANSIONS = before).
+ */
+export const JamReplan = { expansions: 2048 };
 /** How short of its goal a route may stop, with only bodies in between, and still not be worth an
  *  escalated search (SimWorld.onlyBodiesBetween). Ours: four cells is two bodies' width, and it
  *  took two thirds of the detour search's expansions off a twelve-player match while every
@@ -22296,7 +22325,7 @@ export class SimWorld {
     // so try a fresh route around them first (avoidMovers — go round the crowd rather than
     // grind into it). Two attempts; a unit that is genuinely hemmed in should stop probing
     // and wait, not re-flood A* every window.
-    if (u.stuckRetries < 2 && this.pathTo(u, tx, ty, undefined, true)) {
+    if (u.stuckRetries < 2 && this.pathTo(u, tx, ty, JamReplan.expansions, true)) {
       u.stuckRetries++;
       return;
     }
@@ -25028,14 +25057,15 @@ export class SimWorld {
    *  and committed-to-a-hold both count as success: nothing is wrong in either case. */
   private chasePoint(u: SimUnit, x: number, y: number): boolean {
     if (u.repathT > 0) return true;
-    if (u.moving && Math.hypot(x - u.chaseX, y - u.chaseY) < CHASE_REPATH) return true;
+    const drift = Math.max(CHASE_REPATH, ChaseDrift.far * Math.hypot(x - u.x, y - u.y));
+    if (u.moving && Math.hypot(x - u.chaseX, y - u.chaseY) < drift) return true;
     // A detour already being paid for toward about here: wait for it. A unit that has walked
     // its short route into the trees is standing still, so the rule above lets it re-plan
     // every step — and each re-plan at a leader or a target that had drifted a few units threw
     // the job away before it could land. A unit rallied onto a hero across a treeline, ordered
     // while the slot was busy, lost its detour 661 times in 90 s and never got round.
     const job = this.pathJob;
-    if (job && job.unitId === u.id && Math.hypot(x - job.tx, y - job.ty) < CHASE_REPATH) return true;
+    if (job && job.unitId === u.id && Math.hypot(x - job.tx, y - job.ty) < drift) return true;
     // Chasing (an attack target or a follow leader) is LOCAL — the thing is within
     // acquisition/leader range, a couple of dozen cells off. Cap the search low so a
     // blocked/unreachable chase gives up after a small local flood instead of the full
@@ -30846,7 +30876,7 @@ export class SimWorld {
       // escalated, for the reason above. A plan that comes back short walks the unit up to
       // the crowd, where the blocked branch waits it out and, failing that, checkStuck parks
       // it; resumeRoute's re-plan after the wait is the one that may still pay for a detour.
-      this.pathTo(u, u.chaseX, u.chaseY, PATH_FLOOR_EXPANSIONS);
+      this.pathTo(u, u.chaseX, u.chaseY, JamReplan.expansions);
     } finally {
       simProfile.end("sim.world.move.walk.reroute");
     }
