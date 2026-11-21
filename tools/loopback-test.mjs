@@ -13,7 +13,7 @@
 //
 // Run: pnpm loopback:test
 import { join } from "node:path";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { LoopbackRelay, tick } from "./loopback.mjs";
 import { PROTOCOL_VERSION as RELAY_PROTOCOL } from "../server/rooms.mjs";
 
@@ -28,7 +28,10 @@ const CLIENT_PROTOCOL = (() => {
 })();
 
 // The command router is TypeScript, compiled by `tsc -p tools/tsconfig.sim.json` into
-// .sim-build alongside the sim. `pnpm sim:test` runs that build; run it before this file.
+// .sim-build alongside the sim. `pnpm relay:test` runs that compile first (it needs no game
+// data); run it, or `pnpm sim:test`, before this file. The package is `"type": "module"`, so the
+// CommonJS output needs its own marker — the .cjs tests write the same one.
+writeFileSync(join(process.cwd(), ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { CommandRouter, commandMessage, accepted } = await import(
   "file://" + join(process.cwd(), ".sim-build", "src", "net", "commandLink.js")
 );

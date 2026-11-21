@@ -12,10 +12,12 @@
 
 <!-- Tick what you ran. Not having a Warcraft III install is fine — just say so. -->
 
+- [ ] `pnpm test` (runs everything below your checkout can run, and says what it skipped)
 - [ ] `pnpm typecheck`
 - [ ] `pnpm cycles`
 - [ ] `pnpm sim:test` / `pnpm jass:test` (need a 1.30.4 install + `pnpm data:extract`)
-- [ ] `pnpm relay:test` / `pnpm app:test`
+- [ ] `pnpm relay:test`
+- [ ] `pnpm app:test` (needs `pnpm build` first)
 - [ ] Played it in the running game
 
 ## Screenshots

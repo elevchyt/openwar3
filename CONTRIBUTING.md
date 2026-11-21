@@ -55,13 +55,25 @@ install at runtime and never committed, uploaded or bundled.
 
 ## Before you open a pull request
 
-Run these — they need no game install (CI runs the first two on every pull request,
-`.github/workflows/ci.yml`):
+The one command is `pnpm test`: it runs every check below that your checkout can run, and skips
+the rest with a line saying what each one is waiting for.
+
+```bash
+pnpm test
+```
+
+The suites it runs, if you want one on its own. These need no game install (CI runs the first two
+on every pull request, `.github/workflows/ci.yml`):
 
 ```bash
 pnpm typecheck   # tsc over the app and the Node/tooling config
 pnpm cycles      # fails on any import cycle
-pnpm relay:test  # multiplayer relay server + loopback
+pnpm relay:test  # multiplayer relay server + loopback (compiles .sim-build/ first)
+```
+
+This one needs no install either, but it tests the BUILT desktop app, so run `pnpm build` first:
+
+```bash
 pnpm app:test    # desktop shell's local server + LAN beacon
 ```
 
@@ -86,7 +98,9 @@ a maintainer's next commit catches the table up. `HUSKY=0 git commit …` skips 
 | Check | Needs the install? |
 | --- | --- |
 | `pnpm typecheck`, `pnpm cycles`, `pnpm build` | No |
-| `pnpm relay:test`, `pnpm app:test` | No |
+| `pnpm test` | No — it skips whatever your checkout cannot run, and says why |
+| `pnpm relay:test` | No |
+| `pnpm app:test` | No — but it needs `dist/`, so run `pnpm build` first |
 | `pnpm sim:test` | **Yes** — many of its tests read the real tables, models and maps |
 | `pnpm jass:test` | **Yes** — the tests run the install's own `common.j` / `Blizzard.j` |
 | `pnpm data:verify`, `pnpm casc:test`, `pnpm campaign:test`, `pnpm map:compat:test`, `pnpm patches:check` | **Yes** |
