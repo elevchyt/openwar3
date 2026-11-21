@@ -7251,7 +7251,9 @@ export class RtsController {
   selectionCanMove(): boolean {
     for (const id of this.selected) {
       const u = this.sim.units.get(id);
-      if (!u || u.building || u.baseSpeed <= 0) continue;
+      // An UPROOTED Ancient keeps its `building` record while it walks (its queue is halted,
+      // not cancelled), and is a walker all the same: WC3 gives it Move, Hold Position and Patrol.
+      if (!u || (u.building && !u.uprooted) || u.baseSpeed <= 0) continue;
       if (this.registry.get(u.typeId)?.moveType !== MoveType.None) return true;
     }
     return false;
