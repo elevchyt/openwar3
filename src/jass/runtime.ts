@@ -686,7 +686,7 @@ export interface EngineHooks {
   hideUnit?(unitId: number, hidden: boolean): void; // ShowUnit(u, show) — hidden = !show
   isUnitHidden?(unitId: number): boolean; // IsUnitHidden
   // --- unit-mutation effects (7.7 cont. — a trigger visibly moves/alters a unit) ---
-  setUnitPosition?(unitId: number, x: number, y: number): void; // SetUnitPosition/X/Y/Loc (teleport)
+  setUnitPosition?(unitId: number, x: number, y: number, pathed: boolean): void; // SetUnitPosition/Loc (pathed: true) · SetUnitX/Y (false) — SimWorld.setUnitPosition
   setUnitFacing?(unitId: number, facingRad: number, instant: boolean): void; // SetUnitFacing[Timed]
   setUnitOwner?(unitId: number, player: number, changeColor: boolean): void; // SetUnitOwner
   pauseUnit?(unitId: number, flag: boolean): void; // PauseUnit

@@ -181,7 +181,7 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
       return state === 0 ? u.hp : state === 1 ? u.maxHp : state === 2 ? u.mana : state === 3 ? u.maxMana : 0;
     },
     // --- unit-mutation effects (7.7 cont.) — a trigger visibly moves/alters a unit ---
-    setUnitPosition: (id, x, y) => sim.setUnitPosition(id, x, y),
+    setUnitPosition: (id, x, y, pathed) => sim.setUnitPosition(id, x, y, pathed),
     setUnitFacing: (id, rad, instant) => sim.setUnitFacing(id, rad, instant),
     pauseUnit: (id, flag) => sim.pauseUnit(id, flag),
     isUnitPaused: (id) => sim.isUnitPaused(id),

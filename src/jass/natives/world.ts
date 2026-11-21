@@ -207,18 +207,21 @@ export function registerWorldNatives(rt: Runtime): void {
     u.simId >= 0 ? c.rt.hooks?.getUnitX?.(u.simId) ?? u.x : u.x,
     u.simId >= 0 ? c.rt.hooks?.getUnitY?.(u.simId) ?? u.y : u.y,
   ];
-  const move = (c: NativeCtx, u: JassUnit, x: number, y: number): void => {
+  // `pathed` is the difference between the two families (jassbot): SetUnitX/Y "ignores all
+  // pathing" and keeps the unit's orders; SetUnitPosition[Loc] respects the terrain and issues
+  // a "stop". Neither snaps to the pathing grid — SimWorld.setUnitPosition says why.
+  const move = (c: NativeCtx, u: JassUnit, x: number, y: number, pathed: boolean): void => {
     u.x = x;
     u.y = y;
-    if (u.simId >= 0) c.rt.hooks?.setUnitPosition?.(u.simId, x, y);
+    if (u.simId >= 0) c.rt.hooks?.setUnitPosition?.(u.simId, x, y, pathed);
   };
-  def(rt, "SetUnitX", (c, a) => (unit(c, a[0]) && move(c, unit(c, a[0])!, asNum(a[1]), posOf(c, unit(c, a[0])!)[1]), JNULL));
-  def(rt, "SetUnitY", (c, a) => (unit(c, a[0]) && move(c, unit(c, a[0])!, posOf(c, unit(c, a[0])!)[0], asNum(a[1])), JNULL));
-  def(rt, "SetUnitPosition", (c, a) => (unit(c, a[0]) && move(c, unit(c, a[0])!, asNum(a[1]), asNum(a[2])), JNULL));
+  def(rt, "SetUnitX", (c, a) => (unit(c, a[0]) && move(c, unit(c, a[0])!, asNum(a[1]), posOf(c, unit(c, a[0])!)[1], false), JNULL));
+  def(rt, "SetUnitY", (c, a) => (unit(c, a[0]) && move(c, unit(c, a[0])!, posOf(c, unit(c, a[0])!)[0], asNum(a[1]), false), JNULL));
+  def(rt, "SetUnitPosition", (c, a) => (unit(c, a[0]) && move(c, unit(c, a[0])!, asNum(a[1]), asNum(a[2]), true), JNULL));
   def(rt, "SetUnitPositionLoc", (c, a) => {
     const u = unit(c, a[0]);
     const loc = c.rt.data<{ x: number; y: number }>(a[1]);
-    if (u && loc) move(c, u, loc.x, loc.y);
+    if (u && loc) move(c, u, loc.x, loc.y, true);
     return JNULL;
   });
   const face = (c: NativeCtx, u: JassUnit, deg: number, instant: boolean): void => {

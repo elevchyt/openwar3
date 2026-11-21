@@ -17098,9 +17098,9 @@ export class MapViewerScene {
       this.drawOwed++;
       const lastStep = !(this.simAccum - SIM_DT >= SIM_DT && steps + 1 < maxSteps)
         || performance.now() + 2 * this.stepCost >= budgetEnd;
-      this.rts?.tick(SIM_DT, lastStep ? this.drawOwed : 0); // sim runs in seconds; advance, then sync before render
+      // The step only; the drawing half waits for the map script below (RtsController.syncDrawn).
+      this.rts?.tick(SIM_DT, 0); // sim runs in seconds
       this.stepStage = "post";
-      if (lastStep) this.drawOwed = 0;
       // Engine combat text ages on the SIM clock, like a script's text tags do inside the
       // interpreter — so the F10 menu freezes a crit number in place instead of running it
       // out while the game is stopped. Both machines do this: a frozen client is fed the
@@ -17134,6 +17134,15 @@ export class MapViewerScene {
       perfLog.begin("script");
       if (!this.rts?.frozenClient) this.pumpMapScript(SIM_DT); // Phase 7: the map's timers + enter/leave-region triggers
       perfLog.end("script");
+      // …and only NOW the frame's picture: every model placed where the step AND the script
+      // that ran on it left its unit, so a unit a trigger moves is drawn where the camera that
+      // follows it already is (RtsController.syncDrawn). Billed to `sim`, where it always was.
+      if (lastStep) {
+        perfLog.begin("sim");
+        this.rts?.syncDrawn(SIM_DT, this.drawOwed);
+        perfLog.end("sim");
+        this.drawOwed = 0;
+      }
       this.replayInject(Phase.Post);
       this.simTick++;
       this.stepStage = null;

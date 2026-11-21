@@ -21536,10 +21536,120 @@ export class SimWorld {
   // a unit from a trigger action (SetUnitPosition/Facing/Owner/MoveSpeed/…). The
   // render-only properties (scale, vertex colour, fly height) live on RtsController.
 
-  /** JASS SetUnitPosition / SetUnitX / SetUnitY — teleport with pathing re-settle. */
-  setUnitPosition(id: number, x: number, y: number): void {
+  /**
+   * JASS SetUnitX / SetUnitY (`pathed` false) and SetUnitPosition[Loc] (`pathed` true) — a
+   * TRIGGER puts a unit somewhere, and it stands EXACTLY there. Jassbot's notes are the whole
+   * contract: SetUnitX "is a low level call and ignores all pathing" and "does not cancel orders
+   * of the unit", while SetUnitPosition "sets new unit location, respecting pathing rules like
+   * terrain" and "cancels the orders of the unit by issuing order "stop" … to force-teleport the
+   * unit to a valid pathing position".
+   *
+   * Neither is a GRID move. Both used to go through `teleportUnit`, whose snap to a 32-unit cell
+   * centre is right for a Blink settling and wrong for a script that moves a unit itself every
+   * tick: Azeroth Grand Prix drives its carts with nothing else — `SetUnitPositionLoc` every
+   * 0.05 s, the next speed read back as the distance actually covered — and the snap held every
+   * cart to 32 units a tick (half its top speed), turned a curve into a staircase the script
+   * read as SLIDING (a third of top speed), and left a cart at rest unable to start at all: a
+   * first tick of 2.3 units rounds back onto the cell it stood on.
+   */
+  setUnitPosition(id: number, x: number, y: number, pathed = true): void {
     const u = this.units.get(id);
-    if (u) this.teleportUnit(u, x, y);
+    if (!u) return;
+    if (pathed) {
+      this.clearQueue(id);
+      this.stop(id);
+    }
+    this.scriptPlace(u, x, y, pathed);
+  }
+
+  /** setUnitPosition's move: `teleportUnit`'s bookkeeping without its grid snap. A pathed move
+   *  keeps the point when the body may stand there and only otherwise falls back on the nearest
+   *  spot that fits (the snap teleportUnit always takes); a ghost (`SetUnitPathing` off) refuses
+   *  nothing, exactly as everywhere else. The body is then settled WHERE IT STANDS. */
+  private scriptPlace(u: SimUnit, x: number, y: number, pathed: boolean): void {
+    u.teleports++; // a missile in the air at it is disjointed, as by any teleport (missileDisjointed)
+    this.teleportedFrom.set(u.id, { x: u.x, y: u.y });
+    this.popFromMine(u);
+    this.unsettle(u);
+    this.releaseClaim(u);
+    if (pathed && this.grid) {
+      const domain = pathDomain(u);
+      if (!u.flying && domain !== "ghost" && !this.spotHolds(x, y, u.footprint, domain)) {
+        // The NEAREST spot it may stand on, not the nearest cell's centre: a one-cell body is
+        // set on the closest point of the closest free cell. Azeroth Grand Prix's cart driven
+        // into the track's edge then scrapes along it; set on a centre it was thrown up to a
+        // whole cell BACKWARDS, which the script reads as reversing (its speed is the distance
+        // covered), and it bounced off the wall over and over.
+        const edge = u.footprint <= 1 ? this.nearestPointOnFreeCell(x, y, domain, 12) : null;
+        if (edge) [x, y] = edge;
+        else {
+          const [cx, cy] = this.grid.footprintAnchor(x, y, u.footprint);
+          const spot = this.grid.nearestFit(cx, cy, u.footprint, 12, undefined, domain) ?? this.grid.nearestWalkable(cx, cy, 12, domain);
+          if (spot) [x, y] = this.grid.footprintCenter(spot[0], spot[1], u.footprint);
+        }
+      } else if (u.flying && !this.grid.playableAt(x, y)) {
+        // A flyer is never set down off the map's edge (issue #117), as in teleportUnit.
+        const [cx, cy] = this.grid.worldToCell(x, y);
+        const spot = this.grid.nearestPlayable(cx, cy, 12);
+        if (spot) [x, y] = this.grid.cellToWorld(spot[0], spot[1]);
+      }
+    }
+    u.x = x;
+    u.y = y;
+    u.prevX = x;
+    u.prevY = y;
+    u.path = [];
+    u.waypoint = 0;
+    u.moving = false;
+    if (!u.flying) this.settle(u, false);
+  }
+
+  /** The point nearest (x, y) that lies inside a walkable cell nobody holds, searched ring by
+   *  ring out to `maxR` cells. A ring's cells are not all equally near — its corners are √2 out
+   *  — so the next ring is weighed too before the best is taken. Null when none is in reach. */
+  private nearestPointOnFreeCell(x: number, y: number, domain: PathDomain, maxR: number): [number, number] | null {
+    const [ox, oy] = this.grid.origin;
+    const [cx0, cy0] = this.grid.worldToCell(x, y);
+    // A hair inside the cell, so the point is in it and not on the line it shares with the wall.
+    const IN = 0.01;
+    let best: [number, number] | null = null;
+    let bestD = Infinity;
+    let foundAt = -1;
+    for (let r = 0; r <= maxR && (foundAt < 0 || r <= foundAt + 1); r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // ring only
+          const cx = cx0 + dx;
+          const cy = cy0 + dy;
+          if (!this.grid.inBounds(cx, cy) || !this.grid.walkable(cx, cy, domain) || this.grid.isOccupied(cx, cy)) continue;
+          const lx = ox + cx * PATHING_CELL;
+          const ly = oy + cy * PATHING_CELL;
+          const px = Math.min(Math.max(x, lx + IN), lx + PATHING_CELL - IN);
+          const py = Math.min(Math.max(y, ly + IN), ly + PATHING_CELL - IN);
+          const d = Math.hypot(px - x, py - y);
+          if (d < bestD) {
+            bestD = d;
+            best = [px, py];
+            if (foundAt < 0) foundAt = r;
+          }
+        }
+      }
+    }
+    return best;
+  }
+
+  /** May a body of this footprint stand with its centre at exactly (x, y)? Every cell under it
+   *  walkable in its domain and held by nobody — the cells `settle(u, false)` would reserve. */
+  private spotHolds(x: number, y: number, n: number, domain: PathDomain): boolean {
+    if (n <= 1) {
+      const [cx, cy] = this.grid.worldToCell(x, y);
+      return this.grid.walkable(cx, cy, domain) && !this.grid.isOccupied(cx, cy);
+    }
+    const [cx0, cy0] = this.grid.footprintOrigin(x, y, n);
+    for (let cy = cy0; cy < cy0 + n; cy++)
+      for (let cx = cx0; cx < cx0 + n; cx++)
+        if (!this.grid.walkable(cx, cy, domain) || this.grid.isOccupied(cx, cy)) return false;
+    return true;
   }
   /** JASS SetUnitFacing[Timed] — instant sets both facing + target so it doesn't turn
    *  back; timed sets only the target so it rotates there at the unit's turn rate. */

@@ -5586,6 +5586,19 @@ export class RtsController {
   }
 
   /**
+   * The drawing half of `drawSteps` steps, owed by a caller that stepped with `tick(dt, 0)` so
+   * that something it runs AFTER the world's step lands in the same picture. The scene does
+   * that for the MAP SCRIPT, which is pumped after `tick`: a trigger that moves a unit every
+   * timer tick (Azeroth Grand Prix's carts, `SetUnitPositionLoc` every 0.05 s) otherwise moved
+   * the sim AFTER the models had been placed, so the camera — which follows the SIM position —
+   * stood one cell ahead of a cart drawn where it had been, one frame in three: the cart
+   * lurched back and forth twenty times a second.
+   */
+  syncDrawn(dt: number, drawSteps: number): void {
+    if (drawSteps > 0 && !this.worldHeld) this.syncEntries(dt * drawSteps, drawSteps);
+  }
+
+  /**
    * The DRAWING half of a step: every model put where its unit stands, every clip picked, the
    * health bars and the hover slab. None of it is simulation — nothing here writes a sim record —
    * so it is owed once per FRAME, not once per step.

@@ -345,7 +345,7 @@ export class ScriptCaptain {
     for (const id of this.members) {
       const u = this.alive(id);
       if (!u) continue;
-      if (hooks?.setUnitPosition) hooks.setUnitPosition(u.id, x, y);
+      if (hooks?.setUnitPosition) hooks.setUnitPosition(u.id, x, y, true);
       else this.move(u, x, y);
     }
   }

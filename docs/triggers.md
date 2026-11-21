@@ -489,8 +489,14 @@ Each is a tiny bridge method; the sim already had most of the primitives (`telep
 `facing`/`speed`). Built:
 
 - **`src/jass/natives/world.ts`** — the effect natives, all routed through `EngineHooks`:
-  - **Movement:** `SetUnitX`/`SetUnitY`/`SetUnitPosition`/`SetUnitPositionLoc` → `SimWorld.setUnitPosition` (the existing
-    `teleportUnit`: instant relocate + pathing re-settle). `SetUnitFacing` (instant) / `SetUnitFacingTimed` (turns at the
+  - **Movement:** `SetUnitX`/`SetUnitY`/`SetUnitPosition`/`SetUnitPositionLoc` → `SimWorld.setUnitPosition`, and the unit
+    stands EXACTLY at the point — never on a 32-unit cell centre, which is `teleportUnit`'s snap for a Blink and was what
+    held Azeroth Grand Prix's carts (driven by nothing but `SetUnitPositionLoc` every 0.05 s, their speed read back off the
+    distance covered) to half speed and stranded them at rest. Jassbot draws the line between the two families:
+    `SetUnitX/Y` "ignores all pathing" and keeps the unit's orders; `SetUnitPosition[Loc]` respects the terrain (a refused
+    point falls to the NEAREST legal point — a cart driven into a wall scrapes along it) and issues a `stop`. The frame's
+    model sync runs AFTER the script pump (`RtsController.syncDrawn`), or a unit a trigger moves is drawn a step behind the
+    camera that follows it. `tools/sim-script-move-test.cjs`. `SetUnitFacing` (instant) / `SetUnitFacingTimed` (turns at the
     unit's turn rate) → `setUnitFacing`. JASS angles are **degrees**; the sim is radians (converted at the boundary).
   - **Ownership:** `SetUnitOwner` → `setUnitOwner` (owner **+ team**, so allegiance/vision follow) and, when `changeColor`,
     re-tints the team-coloured model parts. It also fires **`EVENT_PLAYER_UNIT_CHANGE_OWNER`** (id 270) synchronously via a
