@@ -2,10 +2,11 @@
 // tried before the load gate puts up the folder picker (src/ui/gate.ts), which stays the
 // fallback for everything this cannot find.
 //
-// **The strongest clue is where WE are.** The Windows installer (build/installer.nsh) will only
-// install into a 1.30.4 folder and puts the app in an `OpenWar3` folder INSIDE it, so a packaged
-// Windows app's own executable sits at `<Warcraft III>\OpenWar3\OpenWar3.exe` and the install is
-// its grandparent. The same holds for an AppImage a player drops into (or beside) their game
+// **The first clue is where WE are.** The Windows installer used to install only into a 1.30.4
+// folder, putting the app in an `OpenWar3` folder INSIDE it, so such an install's executable sits
+// at `<Warcraft III>\OpenWar3\OpenWar3.exe` and the game is its grandparent. Today's installer
+// takes a folder of its own (packaging/windows-installer.nsh), but an update keeps the old place,
+// and a player may still choose it — as they may drop an AppImage into (or beside) their game
 // folder, which is why this is not a Windows-only rule.
 //
 // After that come the places Blizzard's own installers wrote the folder down. None of them is

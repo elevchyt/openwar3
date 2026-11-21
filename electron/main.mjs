@@ -398,8 +398,8 @@ const currentInstall = () => {
 app.whenReady().then(async () => {
 
   // Nothing remembered, or what was remembered is gone or patched: look for the install before
-  // the page asks (electron/locate.mjs). The Windows installer put this app INSIDE the player's
-  // Warcraft III folder, so on a fresh install this finds it without a single click. What it
+  // the page asks (electron/locate.mjs): beside the app, then where Blizzard's installers wrote
+  // it down, so a player with the game installed usually never sees the picker. What it
   // finds is remembered exactly as a picked folder is, and what it cannot find is left to the
   // gate's folder picker — the fallback, never replaced.
   if (!currentInstall().valid) {

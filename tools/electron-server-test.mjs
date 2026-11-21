@@ -88,11 +88,11 @@ try {
     const downgrades = /DOWNGRADE_VERSIONS[^=]*=\s*\[([^\]]*)\]/.exec(ts)?.[1].match(/"[^"]+"/g)?.map((v) => v.slice(1, -1)).join(",");
     ok("…and turns back the same builds", downgrades === DOWNGRADE_VERSIONS.join(","),
        `install.mjs ${DOWNGRADE_VERSIONS}, version.ts ${downgrades}`);
-    // The Windows installer asks the same question before it will install anywhere
+    // The Windows installer names the same version on its welcome page
     // (packaging/windows-installer.nsh), in NSIS, where it cannot import either file.
     const nsh = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "packaging", "windows-installer.nsh"), "utf8");
     const installer = /!define OW3_REQUIRED_VERSION "([^"]+)"/.exec(nsh)?.[1];
-    ok("…and so does the Windows installer", installer === REQUIRED_VERSION, `windows-installer.nsh ${installer}`);
+    ok("…and so does the Windows installer's welcome page", installer === REQUIRED_VERSION, `windows-installer.nsh ${installer}`);
 
     const tmp = join(process.env.TMPDIR ?? "/tmp", `ow3-version-test-${process.pid}`);
     const build = (version) => {

@@ -294,10 +294,11 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   ([`packaging/windows-installer.nsh`](packaging/windows-installer.nsh)), the `win`/`nsis` build
   blocks or [`electron/locate.mjs`](electron/locate.mjs). ONE installer carries the 64- and the
   32-bit app, which is why the Windows build is pinned to **Electron 43** (`-c.electronVersion`
-  in `dist:win`/`release:win`) — 44 publishes no `win32-ia32`. The installer asks for the
-  WARCRAFT III folder and installs into `<it>\OpenWar3`, and electron-builder's uninstaller is
-  `RMDir /r $INSTDIR`, so `$INSTDIR` is kept off the game folder by three guards (after the
-  directory page, in `.onInit` for silent installs, and in the uninstaller) — never remove one.
+  in `dist:win`/`release:win`) — 44 publishes no `win32-ia32`. The installer does NOT ask for
+  Warcraft III (it installs into its own `Program Files\OpenWar3`; the app finds or asks for the
+  game at first launch, so a player with no copy can still install and download one), and
+  electron-builder's uninstaller is `RMDir /r $INSTDIR`, so the uninstaller refuses a folder that
+  is a Warcraft III install (`customRemoveFiles`) — never remove that guard.
 - **Linux 32-bit:** read [`docs/linux.md`](docs/linux.md) before touching `electron/legacy/`,
   `tools/build-legacy-main.mjs` or the `linux32` scripts. Electron stopped publishing
   `linux-ia32` after **18.3.15**, so the i386 AppImage is that Electron (Chromium 100, Node 16)

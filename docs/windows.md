@@ -37,16 +37,44 @@ renderer bundle is the same either way.
 A 32-bit renderer cannot have the 4 GiB V8 heap the 64-bit one is given, so `electron/main.mjs`
 states 1536 MiB for `ia32` instead.
 
-## The installer asks for the Warcraft III folder, and installs INSIDE it
+## The installer takes a folder of its own
 
-`packaging/windows-installer.nsh` is an `include` into electron-builder's assisted installer. The
-directory page is relabelled to ask for the **Warcraft III folder**, pre-filled with the first
-1.30.4 install it can find, and the app lands in `<Warcraft III>\OpenWar3\`. What counts as the
-folder is the same rule the app asks at every launch (`electron/install.mjs` `looksLikeInstall`):
-a `Data` folder and a `.build.info` whose version row says 1.30.4. `pnpm app:test` checks the
-installer's `OW3_REQUIRED_VERSION` against `install.mjs` and `src/vfs/version.ts`.
+`packaging/windows-installer.nsh` is an `include` into electron-builder's assisted installer. It
+adds a welcome page and one uninstaller guard, and nothing else: the directory page is
+electron-builder's own, pre-filled with `Program Files\OpenWar3` (or the last install's folder on
+a reinstall), and the installer never asks whether Warcraft III is there.
 
-Where it looks, in order — the same list `electron/locate.mjs` asks at launch:
+It used to. The directory page was relabelled to ask for the **Warcraft III folder**, refused
+anything that was not a 1.30.4 install, and put the app in `<Warcraft III>\OpenWar3\`. That
+locked out every player without a copy of the game — exactly the player the load gate's
+"Download game files" is for — and bought nothing the app does not already do itself: the game is
+found or picked at FIRST LAUNCH (next section), so the installer has no reason to know where it
+is. The welcome page still names the version (`OW3_REQUIRED_VERSION`, which `pnpm app:test`
+checks against `electron/install.mjs` and `src/vfs/version.ts`).
+
+`perMachine` is on: an install from before this change is machine-wide, and an update has to find
+it where it is (electron-builder reads `InstallLocation` from HKLM), which also means an old
+`<Warcraft III>\OpenWar3\` install keeps updating in place.
+
+### The trap: the uninstaller removes `$INSTDIR` whole
+
+electron-builder's uninstaller is `RMDir /r $INSTDIR`. The template appends `\OpenWar3` to a
+chosen folder only when the path does not already *contain* "OpenWar3", so a Warcraft III folder
+under `D:\OpenWar3 stuff\` could be installed into directly, and older installs sit inside a game
+folder by design. `customRemoveFiles` therefore never removes a folder holding `.build.info` or
+`Warcraft III.exe`, whatever put it in the registry — keep it.
+
+## The app finds the game at first launch
+
+The app never shows the folder picker when it can find the game. Before the window opens,
+`electron/main.mjs` asks `detectInstall` whenever nothing valid is remembered, and remembers what
+it finds exactly as a picked folder is remembered. The first place it looks is the executable's
+own grandparent (`<Warcraft III>\OpenWar3\OpenWar3.exe` — where the old installer put the app,
+and where a player may still choose to), then the registry list below through `reg.exe` (no native
+module, which would have to be built for both architectures), then the launcher's default
+folders. The same "beside the app" look works for an AppImage dropped into a game folder, where it
+is the AppImage FILE's folder (`APPIMAGE`) and not its mount that counts. Nothing found means the
+load gate's folder picker (and its "Download game files"), unchanged.
 
 | Where | Written by |
 |---|---|
@@ -55,38 +83,8 @@ Where it looks, in order — the same list `electron/locate.mjs` asks at launch:
 | `HKLM\SOFTWARE\(WOW6432Node\)Microsoft\Windows\CurrentVersion\Uninstall\Warcraft III` → `InstallLocation` | the launcher's uninstall entry |
 | `Program Files (x86)\Warcraft III`, `Program Files\Warcraft III` | the launcher's default |
 
-None of these is trusted: each candidate goes through the version check, so a stale value is just
-the next row.
-
-`perMachine` is on. Program Files needs elevation anyway, and it is what removes the
-per-user/all-users page — the directory page's labels and its leave check are defined inside
-`customWelcomePage`, which only reaches the directory page if nothing sits between them.
-
-### The trap: the uninstaller removes `$INSTDIR` whole
-
-electron-builder's uninstaller is `RMDir /r $INSTDIR`. Installing the app *into* a game folder
-makes that line the one that could delete somebody's Warcraft III, so `$INSTDIR` is kept off the
-game folder three times over, and each guard covers a path the others do not:
-
-1. **After the directory page** (`ow3InstallInsideWarcraft`, an invisible custom page): the
-   template only appends `\OpenWar3` when the path does not already *contain* "OpenWar3", so a
-   game folder under `D:\OpenWar3 stuff\` would otherwise be installed into directly. A
-   directory page's own leave function cannot fix this — `$INSTDIR` is re-read from the text box
-   after it — but a later page's can.
-2. **In `.onInit`** (`customInit`): a silent install (`/S /D=…`) is shown no page at all.
-3. **In the uninstaller** (`customRemoveFiles`): a folder holding `.build.info` or
-   `Warcraft III.exe` is never removed, whatever put it in the registry.
-
-## The app finds the game from where it sits
-
-On a fresh install the app never shows the folder picker. Before the window opens,
-`electron/main.mjs` asks `detectInstall` whenever nothing valid is remembered, and remembers what
-it finds exactly as a picked folder is remembered. The first place it looks is the executable's
-own grandparent (`<Warcraft III>\OpenWar3\OpenWar3.exe`) — the installer guaranteed that is the
-game — and then the registry list above through `reg.exe` (no native module, which would have to be
-built for both architectures). The same "beside the app" look works for an AppImage dropped into a
-game folder, where it is the AppImage FILE's folder (`APPIMAGE`) and not its mount that counts.
-Nothing found means the load gate's folder picker, unchanged — it is the fallback, not replaced.
+None of these is trusted: each candidate goes through the same 1.30.4 check the picker asks
+(`electron/install.mjs` `looksLikeInstall`), so a stale value is just the next row.
 
 ## Unsigned
 
