@@ -39,6 +39,15 @@ export interface SharedReplay {
   seats: SharedSeat[];
 }
 
+/** What makes a collection row the SAME match as a replay already in the player's folder: when
+ *  it was recorded (to the millisecond) and on which map — both straight out of the replay's own
+ *  HEAD, as the collection reads them (replays-server/server.mjs `describe`, which keeps 32 and
+ *  80 characters of them). Not the file name: the player may have renamed it, and their OWN
+ *  autosaved match is in the collection under another. */
+export function replayIdentity(recordedAt: string, mapName: string): string {
+  return `${String(recordedAt ?? "").slice(0, 32)}|${String(mapName ?? "").slice(0, 80)}`;
+}
+
 export interface ReplayQuery {
   player: string;
   map: string;

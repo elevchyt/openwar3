@@ -18,6 +18,7 @@ import { OW3_STRINGS, VIEW_REPLAY_OVERRIDE } from "../overrides";
 import { PLAYER_COLORS } from "./hud";
 import { setGameTip } from "./gameTip";
 import { dressReplayBrowserButton, showReplayBrowser } from "./replayBrowser";
+import { replayIdentity } from "./replayCatalog";
 
 // The View Replay screen, built from the game's own UI\FrameDef\Glue\ViewReplayScreen.fdf:
 // the replay list down the left, the map of the highlighted replay top-right, and
@@ -197,6 +198,16 @@ export function mountViewReplayScreen(
       container,
       vfs,
       onClosed: () => { browsing = false; },
+      owned: async () => {
+        // Every replay in the folder, `Autosaved` included — headers read once per visit.
+        const all = sink ? (await sink.list()).filter((f) => f.name.toLowerCase().endsWith(REPLAY_EXT)) : [];
+        const ids = new Set<string>();
+        for (const f of all) {
+          const header = await headerOf(f.name);
+          if (header) ids.add(replayIdentity(header.recordedAt, header.map.name));
+        }
+        return ids;
+      },
       keep: async (name, bytes) => {
         if (!sink?.add) {
           const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/octet-stream" }));
@@ -423,11 +434,7 @@ export function mountViewReplayScreen(
       s.setEnabled("OKButton", false);
       return;
     }
-    if (!headers.has(name)) {
-      const bytes = await sink?.read(name).catch(() => null);
-      const header = bytes ? await readReplayHeader(bytes).then((r) => r.header).catch(() => null) : null;
-      headers.set(name, header);
-    }
+    await headerOf(name);
     if (picked !== name) return;
     const header = headers.get(name) ?? null;
     const path = mapPathOf(header);
@@ -545,6 +552,16 @@ export function mountViewReplayScreen(
     headers.delete(name);
     if (picked === name) picked = null;
     paint();
+  }
+
+  /** A replay's header, read once per visit. */
+  async function headerOf(name: string): Promise<ReplayHeader | null> {
+    if (!headers.has(name)) {
+      const bytes = await sink?.read(name).catch(() => null);
+      const header = bytes ? await readReplayHeader(bytes).then((r) => r.header).catch(() => null) : null;
+      headers.set(name, header);
+    }
+    return headers.get(name) ?? null;
   }
 
   /** Read the headers of the folder on show, a few at a time, so the rows can say which replays

@@ -11,7 +11,7 @@ import { blpToCanvas } from "../render/blputil";
 import { setGameTip } from "./gameTip";
 import { mountWorking } from "./workingIndicator";
 import { PLAYER_COLORS } from "./hud";
-import { collectionCatalog, type CatalogRace, type ReplayCatalog, type SharedReplay, type SharedSeat } from "./replayCatalog";
+import { collectionCatalog, replayIdentity, type CatalogRace, type ReplayCatalog, type SharedReplay, type SharedSeat } from "./replayCatalog";
 
 // The View Replay screen's way to the REPLAY COLLECTION (replays-server/, docs/replays.md "The
 // collection"): a globe button beside the screen's title, and the "Download Replays" dialog it
@@ -91,6 +91,8 @@ interface Model {
   loading: boolean;
   note: string;
   got: Map<string, RowState>;
+  /** `replayIdentity` of every replay already in the player's folder, once it has been read. */
+  owned: Set<string>;
   status: string;
 }
 
@@ -117,6 +119,9 @@ export async function showReplayBrowser(opts: {
   /** Keep a downloaded replay; resolves to the name it is listed under, or null when it could
    *  not be kept. */
   keep: (name: string, bytes: Uint8Array) => Promise<string | null>;
+  /** The `replayIdentity` of every replay the player already has, so a row for one of them
+   *  arrives already ticked. Absent where there is no replay folder (a plain web page). */
+  owned?: () => Promise<Set<string>>;
   onClosed?: () => void;
 }): Promise<{ close(): void }> {
   const catalog = opts.catalog ?? collectionCatalog();
@@ -126,7 +131,7 @@ export async function showReplayBrowser(opts: {
 
   const model: Model = {
     player: "", map: "", race: "", version: "", page: 0, rows: [], total: 0, versions: [],
-    loading: true, note: "", got: new Map(), status: "",
+    loading: true, note: "", got: new Map(), owned: new Set(), status: "",
   };
   // Both are read by the renderer on every build, so a row's handler is put here BEFORE the
   // relayout that draws it (ui/fdf/render.ts `wireButton`).
@@ -231,7 +236,10 @@ export async function showReplayBrowser(opts: {
     return root;
   };
 
-  const rowState = (r: SharedReplay): RowState => model.got.get(r.id) ?? { done: false, busy: false };
+  /** A row's button: what the player did with it in this dialog, else whether the replay is
+   *  already in their folder — kept from another visit, or their own match they shared. */
+  const rowState = (r: SharedReplay): RowState =>
+    model.got.get(r.id) ?? { done: model.owned.has(replayIdentity(r.recordedAt, r.map)), busy: false };
 
   // --- a row's pieces ---
   const el = (tag: string, cls: string, text?: string): HTMLElement => {
@@ -492,5 +500,14 @@ export async function showReplayBrowser(opts: {
     throw err;
   }
   query();
+  // The folder is read beside the first page: the rows already drawn are ticked in place.
+  opts.owned?.().then(
+    (owned) => {
+      if (!open) return;
+      model.owned = owned;
+      if (screen) model.rows.forEach((r, i) => paintGet(screen!, r, i));
+    },
+    (err) => console.warn("[replays] could not read the replay folder", err),
+  );
   return { close };
 }
