@@ -3227,6 +3227,19 @@ export const RepairBudget = { expansions: PATH_REPAIR_EXPANSIONS };
  *  treeline and forest test still walks round — those gaps are terrain, and never pass the line
  *  test however short they are. */
 const BODY_GAP_CELLS = 4;
+/** The camp scan's short cut (SimWorld.campHasFighter). On, unless a test or a live A/B turns it
+ *  off to compare a camp's behaviour against the plain walk over every unit. */
+export const CampFighters = { enabled: true };
+
+/** The aura pass's cells (SimWorld.auraCells). On, unless a test or a live A/B turns it off to
+ *  compare the pass against the plain walk over every unit. OURS: a cell is 512 world units —
+ *  about half the common 900 aura radius, so a circle touches a dozen cells — and a circle
+ *  spanning more than 16 of them a side is walked outright. */
+export const AuraCells = { enabled: true };
+const AURA_CELL = 512;
+const AURA_MAX_SPAN = 16;
+const AURA_CELL_LIMIT = 1 << 20; // cells either side of the origin a key can hold
+
 /** The collision pass's spatial grid (SimWorld.resolveCollisions). On, unless a test or a live A/B
  *  turns it off to run the all-pairs loop it replaced — it changes what the pass COSTS and never
  *  what it does (tools/sim-collision-grid-test.cjs). */
@@ -5297,15 +5310,26 @@ export class SimWorld {
    *  carrying `Aneu` — gating adoption on the button left every purchase there refused with
    *  "A valid patron must be nearby." while a hero stood at the counter. */
   private tickShopBuyers(): void {
+    // Who could be a patron of ANY shop is not a question about the shop, so it is asked once a
+    // step and not once per shop: the walk below was every shop over every unit in the world
+    // (35 shops over 950 units on Angel Arena Allstars, 0.45 ms a step) to pass over all but the
+    // handful that carry an inventory. Listed in the units' own order, so the FIRST patron a
+    // shop meets is the one it met before; and nothing in this pass changes who is one.
+    let patrons: SimUnit[] | null = null;
     for (const shop of this.units.values()) {
       if (shop.hp <= 0 || !this.isShopUnit(shop.id)) continue;
       if (!this.shopSelectsUser(shop.id) && !this.shopSellsItems(shop)) continue;
+      if (patrons === null) {
+        patrons = [];
+        for (const u of this.units.values()) if (this.isPatron(u)) patrons.push(u);
+      }
+      if (patrons.length === 0) return;
       // Which players have a unit here at all — no patrons, nothing to adopt. A HERO at the
       // counter outranks a mere carrier (`heroAt`): see `shopBuyerPicked`.
       const first = new Map<number, SimUnit>();
       const heroAt = new Map<number, SimUnit>();
-      for (const u of this.units.values()) {
-        if (!this.isPatron(u) || (first.has(u.owner) && (!u.isHero || heroAt.has(u.owner)))) continue;
+      for (const u of patrons) {
+        if (first.has(u.owner) && (!u.isHero || heroAt.has(u.owner))) continue;
         if (!this.inShopRange(shop, u)) continue;
         if (!first.has(u.owner)) first.set(u.owner, u);
         if (u.isHero && !heroAt.has(u.owner)) heroAt.set(u.owner, u);
@@ -12072,6 +12096,7 @@ export class SimWorld {
       return true;
     }
     u.order = "attack";
+    this.attackers.add(u.id); // the one place an attack order is given — see campHasFighter
     u.targetId = targetId;
     u.attackTeleId = targetId; // where the target stands NOW is where it was told to go (issue #173)
     u.attackTeleports = t.teleports;
@@ -15958,9 +15983,11 @@ export class SimWorld {
    *  when a unit leaves the aura). Non-stacking auras keep the strongest. */
   private applyAuras(): void {
     if (!this.abilities) return;
+    let celled = false; // the cells are filled on the first aura that wants them, if any does
     for (const src of this.units.values()) {
       if (src.hp <= 0) continue;
       if (src.devouredBy > 0) continue; // a meal in a Kodo's belly is no aura's source (castLocked)
+      if (!src.abilities.length && !src.inventory.length) continue; // nothing to broadcast with
       for (const ab of this.auraSources(src)) {
         const make = AURA_BUFFS[ab.code];
         if (!make) continue;
@@ -15999,7 +16026,14 @@ export class SimWorld {
         // lower-cased copy of the flag list per aura per step is pure garbage.
         const { hostileAura, alliedAura } = this.auraSide(ab.id, def.targetFlags);
         const r2 = radius * radius;
-        for (const t of this.units.values()) {
+        // Only the units standing in the cells the circle touches are asked at all (auraNear):
+        // the walk used to be every aura over every unit in the world, sixty times a second.
+        if (!celled && AuraCells.enabled) {
+          this.fillAuraCells();
+          celled = true;
+        }
+        const near = celled ? this.auraNear(src, radius) : null;
+        for (const t of near ?? this.units.values()) {
           if (t.building || t.hp <= 0) continue;
           // IN RANGE FIRST. `targetError`/`targetAllowed` walk a flag list and ask half a dozen
           // questions about the unit; being inside the circle is two subtractions and a
@@ -16034,6 +16068,66 @@ export class SimWorld {
         }
       }
     }
+  }
+
+  /**
+   * The world's aura TARGETS bucketed by where they stand, for one `applyAuras` pass.
+   *
+   * An aura's circle holds a handful of units and the pass asked all of them: every source over
+   * every unit, each step (0.75 ms of an 8 ms step on Angel Arena Allstars' 950 units). The
+   * cells only narrow WHO IS ASKED — the exact squared-distance test still runs on every unit
+   * handed back, so a unit is buffed if and only if it was before. The order the targets come
+   * in is the cells' and not the units', which cannot matter: one source's effect on one target
+   * reads and writes that target alone, and the order of the SOURCES — which is what decides
+   * whose aura a target ends up holding — is untouched.
+   *
+   * Three cases go around the cells because the plain walk treats them specially and so must
+   * this: a unit with no position (NaN fails `>` and so was always "in range" — `auraLoose`,
+   * handed to every source), a source with none, and a circle wider than `AURA_MAX_SPAN`
+   * cells, which is a map-wide aura and cheaper to walk outright (`auraNear` answers null).
+   * Nothing in the pass moves a unit, kills one or makes one, so the fill holds for all of it.
+   */
+  private readonly auraCells = new Map<number, SimUnit[]>();
+  private readonly auraLoose: SimUnit[] = [];
+  private readonly auraScratch: SimUnit[] = [];
+  private fillAuraCells(): void {
+    for (const cell of this.auraCells.values()) cell.length = 0;
+    this.auraLoose.length = 0;
+    for (const t of this.units.values()) {
+      if (t.building || t.hp <= 0) continue; // never a target (the walk's own first test)
+      const cx = Math.floor(t.x / AURA_CELL);
+      const cy = Math.floor(t.y / AURA_CELL);
+      // `!(… < …)` so that NaN lands here too.
+      if (!(Math.abs(cx) < AURA_CELL_LIMIT) || !(Math.abs(cy) < AURA_CELL_LIMIT)) {
+        this.auraLoose.push(t);
+        continue;
+      }
+      const key = (cx + AURA_CELL_LIMIT) * (2 * AURA_CELL_LIMIT) + cy + AURA_CELL_LIMIT;
+      const cell = this.auraCells.get(key);
+      if (cell) cell.push(t);
+      else this.auraCells.set(key, [t]);
+    }
+  }
+
+  /** Every possible target within `radius` of `src`, and some beyond it — or null for "ask
+   *  everybody" (see `auraCells`). The list is a scratch buffer, good until the next call. */
+  private auraNear(src: SimUnit, radius: number): SimUnit[] | null {
+    const x0 = Math.floor((src.x - radius) / AURA_CELL);
+    const x1 = Math.floor((src.x + radius) / AURA_CELL);
+    const y0 = Math.floor((src.y - radius) / AURA_CELL);
+    const y1 = Math.floor((src.y + radius) / AURA_CELL);
+    if (!(x1 - x0 < AURA_MAX_SPAN) || !(y1 - y0 < AURA_MAX_SPAN)) return null; // huge, or NaN
+    if (!(Math.abs(x0) < AURA_CELL_LIMIT - AURA_MAX_SPAN) || !(Math.abs(y0) < AURA_CELL_LIMIT - AURA_MAX_SPAN)) return null;
+    const out = this.auraScratch;
+    out.length = 0;
+    for (const t of this.auraLoose) out.push(t);
+    for (let cx = x0; cx <= x1; cx++) {
+      for (let cy = y0; cy <= y1; cy++) {
+        const cell = this.auraCells.get((cx + AURA_CELL_LIMIT) * (2 * AURA_CELL_LIMIT) + cy + AURA_CELL_LIMIT);
+        if (cell) for (const t of cell) out.push(t);
+      }
+    }
+    return out;
   }
 
   /** A MELEE attacker in the auras' sense: armed, and with no ENABLED weapon that is ranged.
@@ -22133,6 +22227,7 @@ export class SimWorld {
   }
 
   tick(dt: number): void {
+    this.attackersTracked = true; // a world that steps issues its own orders (campHasFighter)
     this.elapsed += dt;
     this.stats.tick(dt, this.foodUsedOf); // the score screen's Largest Army sample
     if (this.dawnDusk && !this.timeOfDaySuspended && !this.eclipse) {
@@ -31057,6 +31152,9 @@ export class SimWorld {
    * (`tickAutoMeld` asks `creepInFight`) and stood invisible at its post while the camp died.
    */
   private campFightAnchor(u: SimUnit, atHome = false): SimUnit | null {
+    // Nobody in this camp holds an attack order, so the walk below would find nobody: the
+    // answer for every creep of a resting camp, which is nearly every creep on the map.
+    if (CampFighters.enabled && this.attackersTracked && !this.campHasFighter(u)) return null;
     for (const c of this.units.values()) {
       if (c === u || !c.isCreep || c.hp <= 0 || c.returning) continue;
       if (c.order !== "attack" || c.targetId === null) continue;
@@ -31070,6 +31168,41 @@ export class SimWorld {
       if (t && this.hostile(u, t) && this.canAttack(u, t) && !this.fleesTower(u, t)) return c;
     }
     return null;
+  }
+
+  /**
+   * Every unit that MAY hold an attack order, by id: a superset, kept so that "is anybody in
+   * this camp fighting" need not walk the world to learn that nobody is.
+   *
+   * `campFightAnchor` is asked for every creep on every step — three or four times over, by the
+   * leash, the autocast gate, the meld and the acquire pass — and each ask walked every unit.
+   * On Angel Arena Allstars that is 660 creeps over 950 units at 60 steps a second, to answer
+   * "no" for a map that is standing still: 0.7 ms of an 8 ms step, profiled.
+   *
+   * It stays EXACT because it only ever answers the negative. `issueAttack` is the one place in
+   * the sim that writes `order = "attack"` and it adds the unit here; nothing takes a unit out
+   * except this walk, and only once it is seen NOT to hold the order (or to be gone) — so a
+   * unit holding one is always in the set, and "no member passes the anchor's own cheap tests"
+   * means the full walk would pass over every unit too. When a member does pass, the full walk
+   * runs as before and picks its anchor in the units' own order.
+   *
+   * `attackersTracked` is what says the set can be trusted: a world that STEPS. A LAN client's
+   * world never steps — its orders are written straight off a snapshot (snapshotApply) — so
+   * there the walk is always the full one.
+   */
+  private attackers = new Set<number>();
+  private attackersTracked = false;
+  private campHasFighter(u: SimUnit): boolean {
+    for (const id of this.attackers) {
+      const c = this.units.get(id);
+      if (!c || c.order !== "attack") {
+        this.attackers.delete(id); // deleting the entry a Set walk stands on is safe
+        continue;
+      }
+      if (c === u || !c.isCreep || c.hp <= 0 || c.returning || c.targetId === null) continue;
+      if (this.sameCamp(c, u)) return true;
+    }
+    return false;
   }
 
   /** The enemy a live camp-mate of `u` is fighting — see `campFightAnchor`. */

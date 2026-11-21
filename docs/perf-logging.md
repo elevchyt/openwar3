@@ -172,6 +172,22 @@ under the sim at all, and `TargetFlagCache.enabled` turns it off so the claim ca
 and the question is asked thousands of times a second, so anything derived from it belongs beside
 it and not inside the loop.
 
+**A QUESTION WHOSE ANSWER IS "NO" SHOULD NOT WALK THE WORLD TO SAY SO.** Angel Arena Allstars
+stands 950 units on the map, 660 of them creeps at their posts, and its sim step was 8 ms with
+almost nothing happening. Three passes each asked every unit in the world, for every unit, every
+step: is a camp-mate of mine fighting (`campFightAnchor`, asked three or four times per creep),
+is this unit inside that aura's circle (`applyAuras`), could this unit be that shop's patron
+(`tickShopBuyers`, 35 shops). Each now narrows who is ASKED and leaves the question alone:
+`campHasFighter` keeps the set of units that may hold an attack order (`issueAttack` is the one
+place the sim writes one) and only ever answers the negative; `auraCells` buckets the targets by
+where they stand and the exact distance test still runs on whatever comes back; the patrons are
+listed once a step, in the units' own order. Toggled live in one match, interleaved:
+**5.07 → 4.00 ms a step (−21%)** for the first two, the shop pass on top of that.
+`tools/sim-scan-shortcuts-test.cjs` runs one raid across 36 camps with the short cuts on and off
+and demands the same world on every step; `CampFighters.enabled` / `AuraCells.enabled` are the
+switches. What is LEFT in that step is `recomputeStats` — every unit's stats rebuilt every step,
+a third of it — and that one is not a scan.
+
 **THE SAME ANSWER, UPLOADED AGAIN.** Every MDX instance owns a bone-matrix texture and re-sent it
 to the GPU every frame — one `bindTexture` plus one `texSubImage2D` apiece, and the cost is almost
 entirely the CALL rather than the bytes: ~2 µs an instance whether it carries three bones or two
