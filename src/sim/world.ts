@@ -3209,10 +3209,16 @@ export const PathSlicing = {
  * the ones that did not arrive were 60% of every A* cell the fight expanded. A search that has
  * not found the way round a crowd in a few thousand cells is not going to: the crowd is the
  * wall, and what it hands back at any budget is the same best-effort walk up to it. So the cap
- * is sized to keep the arrivals and stop paying for the rest. Ours — nothing in the game
+ * is sized to keep the arrivals and stop paying for the rest (retryFreedGoal takes the same cap,
+ * and may still escalate). Ours — nothing in the game
  * states it — and `expansions` is live so a match can A/B it (PATH_FLOOR_EXPANSIONS = before).
  */
 export const JamReplan = { expansions: 2048 };
+/** What a MEND may spend (repairPath) — PATH_REPAIR_EXPANSIONS, as a live knob. Lowering it was
+ *  measured and NOT taken: at 512 the fights spend 16% fewer expansions, but a mend that works
+ *  costs up to 2,027 here (p99 1,544) and 300–3,000 at a real choke, and engagement slipped in
+ *  every arm tried (docs/perf-research.md row 22). */
+export const RepairBudget = { expansions: PATH_REPAIR_EXPANSIONS };
 /** How short of its goal a route may stop, with only bodies in between, and still not be worth an
  *  escalated search (SimWorld.onlyBodiesBetween). Ours: four cells is two bodies' width, and it
  *  took two thirds of the detour search's expansions off a twelve-player match while every
@@ -31627,7 +31633,7 @@ export class SimWorld {
       blocked = pred;
       simProfile.tally("pathSearches");
       const searchAt = perfNow();
-      cells = findPath(this.grid, start, goal, pred, PATH_REPAIR_EXPANSIONS, domain, undefined, n);
+      cells = findPath(this.grid, start, goal, pred, RepairBudget.expansions, domain, undefined, n);
       simProfile.tally("pathExpansions", pathExpansionsSpent());
       simProfile.gauge("pathSearch", perfNow() - searchAt);
       const end = cells && cells.length > 1 ? cells[cells.length - 1] : null;
@@ -31883,7 +31889,11 @@ export class SimWorld {
       }
     }
     u.stuckRetries++;
-    return this.pathTo(u, u.chaseX, u.chaseY);
+    // At the jam's cap (JamReplan): the cell came free, but this is still a plan from the edge
+    // of a crowd, and the ones that do not arrive spent the whole floor saying so (58 of 130
+    // in tools/sim-path-budget.cjs, 8,193 each, against 720 for the ones that did). It may
+    // still ESCALATE — a route that stopped short at TREES comes through here too.
+    return this.pathTo(u, u.chaseX, u.chaseY, JamReplan.expansions, false, undefined, true);
   }
 
   /** WC3-style clearance test for pathfinding: the mover's own n×n cell footprint

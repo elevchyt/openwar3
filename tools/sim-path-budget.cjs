@@ -25,6 +25,7 @@ const STEPS = 20 * 60; // the profile's own window: 20 s of the fight
 /** Path machinery: a search inside one of these belongs to whoever called IT. */
 const MACHINERY = new Set(["pathTo", "repairPath", "escalate", "pumpPathJob", "requestLongPath", "airPath", "tick", "tickMovement", "constructor"]);
 const stack = [];
+const arrivedRepairs = []; // what a mend that WORKED cost — the number a cap on it has to clear
 let tally = new Map();
 function wrapAll() {
   const proto = SimWorld.prototype;
@@ -46,6 +47,7 @@ function wrapAll() {
     const via = stack.includes("repairPath") ? "repair" : stack.includes("escalate") || stack.includes("pumpPathJob") ? "escalate" : "plan";
     const key = `${who} · ${via}`;
     const row = tally.get(key) ?? { n: 0, exp: 0, arrived: 0, arrivedExp: 0 };
+    if (via === "repair" && pathfind.pathArrived()) arrivedRepairs.push(pathfind.pathExpansionsSpent());
     const spent = pathfind.pathExpansionsSpent();
     row.n++; row.exp += spent;
     if (pathfind.pathArrived()) { row.arrived++; row.arrivedExp += spent; }
@@ -175,6 +177,11 @@ for (const [k, v] of rows) {
   console.log(k.padEnd(34) + String(v.n).padStart(9) + String(v.exp).padStart(12) + `  ${((100 * v.exp) / E).toFixed(1).padStart(5)}%` + `  ${String(v.arrived).padStart(7)}` + `  ${Math.round(v.exp / v.n)}`.padStart(13) + `${v.arrived ? Math.round(v.arrivedExp / v.arrived) : "-"}`.padStart(13) + `${v.n > v.arrived ? Math.round((v.exp - v.arrivedExp) / (v.n - v.arrived)) : "-"}`.padStart(12));
 }
 console.log("TOTAL".padEnd(34) + String(N).padStart(9) + String(E).padStart(12));
+{
+  const a = arrivedRepairs.sort((x, y) => x - y);
+  const q = (p) => a[Math.min(a.length - 1, Math.floor(a.length * p))];
+  if (a.length) console.log(`\nrepairs that arrived: ${a.length}, expansions p50 ${q(0.5)} p90 ${q(0.9)} p99 ${q(0.99)} max ${a[a.length - 1]}`);
+}
 console.log("\noutcome per fight (must not get worse):");
 for (const o of outcomes) {
   console.log(`  alive ${o.alive}  damage ${o.damage}  fought ${o.fought}/180  first swing median ${o.medianFirstSwing}s p90 ${o.p90FirstSwing}s  wall ${o.ms.toFixed(0)}ms`);

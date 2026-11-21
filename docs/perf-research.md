@@ -43,6 +43,9 @@ Read [`docs/video-options.md`](video-options.md) for what the mode IS and
 | 19 | Shared poses are opt-in PER VIEWER — only the match world shares | fix (review) | the menu backdrop animates at full rate again | landed |
 | 20 | **Jam re-plans capped at 2,048 expansions** (`JamReplan`) | **gameplay** (a search that would have arrived between 2,048 and 8,192 now waits instead) | fight: A* expansions **−43%** (12.5M → 7.1M), headless step −20%; damage dealt and units engaged unchanged | landed |
 | 21 | Chase tolerance scales with distance (`ChaseDrift`) | **gameplay** fix (followers stuck at an obstacle) | six followers behind a wall: last arrives 44 s, was 77 s; detours asked 201 → 17 | landed |
+| 22 | `retryFreedGoal` takes the jam cap too (may still escalate) | **gameplay** (as row 20) | a further −4.4% expansions (7.10M → 6.79M); outcome flat | landed |
+| 23 | A back-off after a failed MEND (wait doubling per failure in a row) | gameplay | nothing — 2 searches saved of 3,160: a failed mend is followed by progress or a new route, almost never by another | **not taken** |
+| 24 | A lower cap on the mend itself (2,048 → 1,024 / 512 / 256) | gameplay | −11% / −16% / −24% expansions, but units engaged slipped in every arm (495 → 479 / 485 / 469 of 540) and a mend that WORKS costs up to 2,027 here (p99 1,544), 300–3,000 at a real choke | **not taken**, knob kept (`RepairBudget`) |
 
 **Rows 6, 7, 8 and 12 are the point of this file.** All three are exact, all three were found while
 chasing the low-performance frame, and all three help full quality as much as they help the mode —
@@ -248,7 +251,13 @@ Roughly in value order, with the kind marked, because that is what decides where
     *Landed:* the plan stays, capped at 2,048 (`JamReplan.expansions`; 8,192 is the rule as it
     was). 4,096 / 3,072 / 2,048 / 1,024 gave 8.9M / 8.1M / 7.1M / 6.5M expansions against 12.5M;
     damage and engagement are flat down to 2,048 and begin to slip at 1,024.
-    The original counts, for the two wastes still open: Counted over 20 s of the fight (1,217 searches,
+    *After rows 20 and 22* the fight spends 6.79M expansions and what is left has no single
+    owner: `checkStuck`'s capped plan 25%, the attack-move chase 24% (its 700-cell cap is
+    already the chase's own), mends 28% (rows 23–24: neither a back-off nor a lower cap pays),
+    the order's own first plan 13%. **The harness is an OPEN FIELD with tree clumps** — it has
+    no choke, so it cannot see the exhausted-region searches the live profile counted below,
+    and a change aimed at those needs a second scenario (a bridge) before it can be judged.
+    The original counts, for the wastes it cannot see: Counted over 20 s of the fight (1,217 searches,
     1.79M expansions): `checkStuck` re-planning a unit jostled in the crowd, 126 searches that
     ARRIVE at ~3,300 expansions each (412k — the single largest line: a route that still exists,
     rebuilt because the unit was shoved); escalated jobs that exhaust a whole region without
