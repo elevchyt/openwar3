@@ -37,7 +37,7 @@ carry a `SpellFilterValue` — see below — but as a READOUT, not a control.)
 | **Resolution** | The size of the buffer the world is drawn into. |
 | **Low Performance Mode** | Ours. One switch: every row below it at its cheapest rung. |
 | **Model Detail** | *Nothing* — see below. |
-| **Animation Quality** | Strides the map's widget stand-scan (1 / 2 / 4 frames). |
+| **Animation Quality** | Strides the map's widget stand-scan (1 / 2 / 4 frames); **Low** also SHARES animation (30 Hz poses — see Low Performance Mode). |
 | **Texture Quality** | Drops 0 / 1 / 2 mip levels off the top of every BLP as it uploads. |
 | **Particles** | Scales emission ×1 / ×0.5 / ×0.25 on top of the viewer's `SETTING_PARTICLES_HIGH`. |
 | **Lights** | Caps the glue scene's uploaded omni lights at 8 / 4 / 0. |
@@ -167,8 +167,13 @@ and know which way each one is cheaper.
 
 ### The shared pose cache — what the mode is actually for
 
-The rungs below are the small half of this mode. The large half is one change that has no row on
-the panel at all, and it comes straight off the profile: at 257 units and 6× CPU throttle the
+**It is Animation Quality's Low rung** (`SHARED_POSES` in videoQuality.ts). It began as the mode's
+alone, with no row of its own; it was moved onto the row whose name already says what it costs,
+so a player can have it without the rest of the mode and High stays the exact, every-frame
+animation the game draws. The mode still gets it, by forcing Animation Quality to Low.
+
+The other rungs are the small half of this mode. The large half is this one change, and it
+comes straight off the profile: at 257 units and 6× CPU throttle the
 frame's biggest phase is `anim` (45 ms of 93), and inside it the **MDX node walk is ~41% of all
 CPU** — `recalculateTransformation`, `updateNodes` and the gl-matrix calls they make — against
 **~7% for the drawing** (`render` plus every GL call). Skinning is already on the GPU via the bone
@@ -342,7 +347,7 @@ What it forces is `LOW_PERF_FORCED` in [`src/render/videoQuality.ts`](../src/ren
 | Row | Forced to |
 |---|---|
 | Model Detail | Low *(no backend — see below)* |
-| Animation Quality | Low (widget scan strided 4) |
+| Animation Quality | Low (widget scan strided 4, and the shared pose cache below) |
 | Texture Quality | Low (2 mips dropped; reaches the NEXT map) |
 | Particles | Low (×0.25) |
 | Lights | Low (no omni lights) |
@@ -437,7 +442,9 @@ level down blends further across their borders; promoting a coarse level to leve
 drop. Nothing is lost by it: the memory is in the hundreds of unit and doodad skins, and those
 are square.
 
-**Animation Quality cannot touch the skeletons, and that is not an oversight.** The expensive
+**Animation Quality cannot STRIDE the skeletons, and that is not an oversight.** (Its Low rung
+reaches them a different way — by SHARING them, a cache rather than a skip; see Low Performance
+Mode.) The expensive
 half of animating a model is the node walk and the per-instance bone-texture upload — and the sim
 moves a unit by writing its position onto the instance, with the bone matrices carrying that to
 the screen. An instance whose animation is skipped is an instance that **stops moving**. So what

@@ -240,7 +240,9 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   per cent as it stands: it composes the rungs this panel already had, and the renderer work the
   issue actually asks for lands BEHIND the flag, which is why `VideoSettings.lowPerf` is carried
   beside the rungs it forces. The FIRST of that work is the **shared pose cache**
-  (`VideoBridge.sharedPoses`, the cache at the top of the patch's `mdx/modelinstance.js`):
+  (`VideoBridge.sharedPoses`, the cache at the top of the patch's `mdx/modelinstance.js`) —
+  since moved onto **Animation Quality: Low** (`SHARED_POSES`), which the mode forces, so a
+  player can have it alone and High stays exact, every-frame animation:
   profiled, the MDX NODE WALK is ~41% of all CPU and the DRAWING is ~7%, so a second renderer is
   aimed at the wrong number — and 317 visible instances were found holding **60** distinct
   `(model, sequence, 1/30 s)` poses, so the pose is sampled once and replayed (SightStamps'

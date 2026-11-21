@@ -67,15 +67,16 @@ export interface VideoBridge {
   /** Mipmap levels to drop from the top of a BLP's chain as it is uploaded. 0 = full size. */
   textureMipDrop: number;
   /**
-   * Low Performance Mode's animation path: may an MDX instance take a pose another instance of
-   * the same model already sampled, at the same clip and the same 1/30 s of it?
+   * Animation Quality's LOW rung (`SHARED_POSES`): may an MDX instance take a pose another
+   * instance of the same model already sampled, at the same clip and the same 1/30 s of it?
    *
-   * This is the largest thing the mode does, and the only one that is not a rung of the panel —
-   * see `LOW_PERF_FORCED` for why it is here rather than there. Profiled at 257 units and 6x CPU
+   * The largest thing Low Performance Mode does — it reaches it by forcing this row to Low — and
+   * the one rung on the panel that takes work off the CPU in a big fight. Profiled at 257 units and 6x CPU
    * throttle, the MDX node walk is ~41% of all CPU against ~7% for the drawing, and 317 visible
    * instances were holding 60 distinct poses. The cache and the reasoning live at the top of
    * `viewer/handlers/mdx/modelinstance.js` in the patch; what it costs is animation time
-   * quantized to 30 Hz, which is why it is off at full quality.
+   * quantized to 30 Hz, which is why High and Medium leave it off: they animate every frame,
+   * as the game does.
    */
   sharedPoses: boolean;
   /**
@@ -95,9 +96,9 @@ const bridge = (): VideoBridge => {
 };
 
 /**
- * The shared pose bucket, in ms of animation time — Low Performance Mode's one animation dial.
+ * The shared pose bucket, in ms of animation time — Animation Quality: Low's one dial.
  *
- * OURS, and it is the trade the mode makes: clips step at this rate rather than per frame. 1000/30
+ * OURS, and it is the trade that rung makes: clips step at this rate rather than per frame. 1000/30
  * is where it sits because MDX tracks are authored at about that, so the stepping is hard to see;
  * a coarser bucket samples fewer poses AND puts more instances in each one, so it pays twice.
  * Measured interleaved at 287 units and 6× throttle, 15 Hz was worth ~4% of the frame — see
@@ -175,6 +176,20 @@ const PARTICLE_SCALE: Record<Quality, number> = { high: 1, medium: 0.5, low: 0.2
  * decimating the skeletons themselves needs the moved-instance problem solved first.
  */
 const ANIM_STRIDE: Record<Quality, number> = { high: 1, medium: 2, low: 4 };
+
+/**
+ * Whether a rung SHARES animation (`VideoBridge.sharedPoses`) — Low only. OURS.
+ *
+ * This is the rung that does reach the skeletons, and the moved-instance problem above is why it
+ * is a CACHE rather than a stride: a unit whose pose comes from the cache still composes its own
+ * position every frame, so nothing stops moving. What it gives up is time: each clip is sampled
+ * on a 1/30 s grid (`POSE_BUCKET_MS`) and replayed to every instance of the model at the same
+ * point of it, so animation steps at 30 Hz instead of every frame — 1.8–3.1× off a 259-unit
+ * frame at 6× CPU throttle (docs/video-options.md). That is what "Animation Quality: Low"
+ * should mean, and it used to be Low Performance Mode's alone; the mode still gets it, by
+ * forcing this row to Low. High and Medium are exact.
+ */
+const SHARED_POSES: Record<Quality, boolean> = { high: false, medium: false, low: true };
 
 /**
  * Point lights uploaded to the shader. OURS.
@@ -358,10 +373,10 @@ export function applyVideoOptions(options: Options): void {
   const b = bridge();
   b.particleScale = PARTICLE_SCALE[current.particles];
   b.textureMipDrop = MIP_DROP[current.textureQuality];
-  // The mode's own switch rather than a rung's: the pose cache is what Low Performance Mode is
-  // actually FOR (see `VideoBridge.sharedPoses`), and it is live — a tick takes effect on the
-  // next frame, and unticking has every instance sampling for itself again.
-  b.sharedPoses = current.lowPerf;
+  // Animation Quality: Low shares poses (SHARED_POSES) — which Low Performance Mode reaches by
+  // forcing that row. Live: a change takes effect on the next frame, and leaving Low has every
+  // instance sampling for itself again.
+  b.sharedPoses = SHARED_POSES[current.animQuality];
   b.poseBucket = POSE_BUCKET_MS;
   applyGamma(current.gamma);
   // "4:3 Menus" is a layout switch rather than a renderer one, but it is a Video row and so it

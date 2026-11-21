@@ -170,6 +170,13 @@ console.log("\nthe video applier turns the panel's words into the renderer's num
   applyVideoOptions({ ...defaultOptions(), animQuality: "low", lights: "low" });
   check("low anim scans a quarter as often", animStride(), 4);
   check("low lights uploads no points", maxOmniLights(), 0);
+  // …and Low is the rung that SHARES animation (30 Hz poses, `sharedPoses`), on its own — the
+  // whole of Low Performance Mode is no longer needed for it. High and Medium stay exact.
+  check("low anim shares poses without the mode", [bridge().sharedPoses, lowPerfMode()], [true, false]);
+  applyVideoOptions({ ...defaultOptions(), animQuality: "medium" });
+  check("medium anim animates every frame", bridge().sharedPoses, false);
+  applyVideoOptions(defaultOptions());
+  check("…and so does high, the default", bridge().sharedPoses, false);
 
   // A store written by an older build, or edited by hand, must not put a junk string into a
   // renderer ladder — every rung is looked up by key and an unknown one is not a rung.
@@ -261,6 +268,7 @@ console.log("\nLow Performance Mode forces every rung but the pixels and the bri
   check("unit shadows off", v.unitShadows, false);
   check("occlusion off", v.occlusion, false);
   check("the viewer sees the low rungs too", [bridge().particleScale, bridge().textureMipDrop], [0.25, 2]);
+  check("…and the mode shares poses, through its forced Animation Quality", bridge().sharedPoses, true);
   check("…and so do the two ladders", [animStride(), maxOmniLights()], [4, 0]);
   // Antialiasing is a CHECKBOX the mode turns off (LOW_PERF_OFF), read when a match makes its
   // world context — and it is ON for everybody else, because that is what WebGL always drew.
@@ -287,6 +295,7 @@ console.log("\nLow Performance Mode forces every rung but the pixels and the bri
   check("unticking restores every stored rung", [back.particles, back.lights, back.unitShadows, back.occlusion],
     ["high", "high", true, true]);
   check("…and the mode is off again", lowPerfMode(), false);
+  check("…and the stored High animates every frame again", bridge().sharedPoses, false);
   check("…and the stored antialiasing is back", antialiasing(), true);
   applyVideoOptions({ ...defaultOptions(), antialias: false });
   check("antialiasing is the player's to turn off without the mode", antialiasing(), false);
