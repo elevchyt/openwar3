@@ -516,6 +516,9 @@ export interface HostSources {
   /** The observer lane (`WorldSnapshot.watched`) for this recipient, or null when the
    *  recipient is a player — a player is told nobody else's bank. Optional for the stub reason. */
   watchedFor?(player: number): WatchedPlayer[] | null;
+  /** The ally lane (`WorldSnapshot.allies`) for this recipient — its team-mates' banks — or
+   *  null when it has none. Optional for the stub reason. */
+  alliesFor?(player: number): Array<{ player: number; gold: number; lumber: number }> | null;
 }
 
 /** How often the host emits. 20 Hz.
@@ -1025,6 +1028,8 @@ export class MatchLink {
       const snap = snapshotFor(world, viewer, player, time, sources.ghostsFor(player), sources.commandsApplied(), sources.creepCampsFor?.(player) ?? []);
       const watched = sources.watchedFor?.(player);
       if (watched) snap.watched = watched;
+      const allies = sources.alliesFor?.(player);
+      if (allies) snap.allies = allies;
       snap.ack = this.heard.get(peer) ?? 0;
       // Fx ride DUE broadcasts only: an expedited or rejoin catch-up send would otherwise
       // replay the same burst again at the next cadence. Filtered per recipient by

@@ -160,9 +160,12 @@ export interface HudInvSlot {
    *  DIS* twin (the same texture swap the command card makes). Nothing in it may be pressed,
    *  dragged or moved until the carrier can act again. */
   disabled: boolean;
-  /** A SHOP is selected and this is its patron's pocket (the unit of ours that takes
-   *  delivery there). Always `disabled` as well; the tooltip is the item's NAME alone, as the
-   *  real client's is, and the pocket takes no press, drag or move. */
+  /** A pocket to LOOK at: a shop's patron's (the unit of ours that takes delivery there) while
+   *  the SHOP is selected, or somebody else's hero's — an ally's or an enemy's. Always
+   *  `disabled` as well, and the pocket takes no press, drag or move. The tooltip is the
+   *  item's name and, for a foreign hero's, its description (`desc`; a patron's is empty) —
+   *  never a hotkey, a price or a use hint, which are all things only the carrier's owner
+   *  can act on. */
   patronView?: boolean;
 }
 
@@ -214,6 +217,9 @@ export interface HudSelection {
   secondsLeft: number; // seconds left on the active job (for the progress label)
   queueLength: number;
   queueOwned: boolean; // the local player's own queue (an ally's is shown, not cancellable)
+  /** A team-mate's building: its owner's name, bank and food, drawn where a hero's
+   *  attributes go and INSTEAD of the queue (`SimpleInfoPanelIconAlly`). Null/absent otherwise. */
+  ally?: { name: string; gold: number; lumber: number; foodUsed: number; foodMax: number } | null;
   /** The queue, head first: each job's icon, name and `BuildJob` kind (unit / research /
    *  upgrade / revive — which verb the observer's readout words it with). */
   queue: Array<{ icon: string; name: string; kind: string; desc: string }>;
@@ -774,6 +780,14 @@ const GLYPH_RIM_PAD = MARKER_OUTLINE + 1; // slack around a cached silhouette, s
 const ACTIVE_BUTTON = "UI\\Widgets\\Console\\Human\\CommandButton\\human-activebutton.blp";
 const TOOLTIP_BORDER = "UI\\Widgets\\ToolTips\\Human\\human-tooltip-border.blp";
 const TOOLTIP_BACKGROUND = "UI\\Widgets\\ToolTips\\Human\\human-tooltip-background.blp";
+/** `war3skins.txt` [Default] GoldIcon / LumberIcon / SupplyIcon — the three textures
+ *  `SimpleInfoPanelIconAlly` names for a team-mate's resources (and the resource bar's own). */
+const ALLY_RESOURCE_ICON = {
+  gold: "UI\\Feedback\\Resources\\ResourceGold.blp",
+  lumber: "UI\\Feedback\\Resources\\ResourceLumber.blp",
+  supply: "UI\\Feedback\\Resources\\ResourceSupply.blp",
+} as const;
+
 const TOOLTIP_COST_ICON = {
   gold: "UI\\Widgets\\ToolTips\\Human\\ToolTipGoldIcon.blp",
   lumber: "UI\\Widgets\\ToolTips\\Human\\ToolTipLumberIcon.blp",
@@ -1458,6 +1472,10 @@ export class GameHud {
   private armorStat!: StatBlock;
   private attrIconEl!: HTMLDivElement; // single icon (the hero's primary attribute)
   private attrLines!: HTMLDivElement;
+  private allyBox!: HTMLDivElement; // a team-mate's building: its owner's resources
+  private allyTitle!: HTMLDivElement;
+  private allyRows: Partial<Record<"gold" | "lumber" | "supply", { icon: HTMLDivElement; value: HTMLSpanElement }>> = {};
+  private allyUpkeep!: HTMLDivElement;
   private strLine!: HTMLDivElement;
   private agiLine!: HTMLDivElement;
   private intLine!: HTMLDivElement;
@@ -3493,7 +3511,29 @@ export class GameHud {
     this.attrLines.append(this.strLine, this.agiLine, this.intLine);
     const rightCol = document.createElement("div");
     rightCol.className = "hud-attr-col";
-    rightCol.append(this.attrIconEl, this.attrLines);
+    // A team-mate's building: `SimpleInfoPanel.fdf` SimpleInfoPanelIconAlly — the owner over
+    // three icon+value rows (GoldIcon / LumberIcon / SupplyIcon, the resource bar's own art)
+    // and the upkeep band. It takes the attributes' place; the two never show together.
+    this.allyBox = document.createElement("div");
+    this.allyBox.className = "hud-ally-res";
+    this.allyBox.hidden = true;
+    this.allyTitle = document.createElement("div");
+    this.allyTitle.className = "hud-stat-label";
+    this.allyBox.appendChild(this.allyTitle);
+    for (const kind of ["gold", "lumber", "supply"] as const) {
+      const row = document.createElement("div");
+      row.className = "hud-ally-row";
+      const icon = document.createElement("div");
+      icon.className = "hud-ally-icon";
+      const value = document.createElement("span");
+      row.append(icon, value);
+      this.allyBox.appendChild(row);
+      this.allyRows[kind] = { icon, value };
+    }
+    this.allyUpkeep = document.createElement("div");
+    this.allyUpkeep.className = "hud-ally-upkeep";
+    this.allyBox.appendChild(this.allyUpkeep);
+    rightCol.append(this.attrIconEl, this.attrLines, this.allyBox);
     this.bindStatTooltip(this.attackStat.icon, "attack");
     this.bindStatTooltip(this.armorStat.icon, "armor");
     this.bindStatTooltip(this.attrIconEl, "attributes");
@@ -3675,9 +3715,11 @@ export class GameHud {
       return;
     }
     // A shop's patron's pocket: the name and nothing else — no hotkey, no price, no sell or
-    // use hint and no description. The pocket is not ours to press from here.
+    // use hint and no description. The pocket is not ours to press from here. Another
+    // player's hero's is the same slab with what the item DOES under the name.
     if (s.patronView) {
-      this.setTooltip(`<div class="hud-tooltip-title">${wc3ToHtml(s.name)}</div>`);
+      const what = s.desc ? `<div class="hud-tooltip-desc">${wc3ToHtml(s.desc)}</div>` : "";
+      this.setTooltip(`<div class="hud-tooltip-title">${wc3ToHtml(s.name)}</div>${what}`);
       return;
     }
     // "%s (…NumPad %u…)" — fill the file's own two slots, in its own order. Under GRID hotkeys
@@ -3701,6 +3743,34 @@ export class GameHud {
     const cost = sale ? `<div class="hud-tooltip-cost">${sale}</div>` : "";
     // The client's order: name, price, the sell hint, the use hint, and then what it does.
     this.setTooltip(`<div class="hud-tooltip-title">${title}</div>${cost}${pawn}${use}${desc}`);
+  }
+
+  /**
+   * A team-mate's resources beside their building (`SimpleInfoPanelIconAlly`).
+   *
+   * The title is the owner's NAME alone. The FDF's default text for that string is
+   * `ALLY_RESOURCES` ("Resources (%s)"), but the engine writes the name over it — the
+   * developer's shots of the real client read "Computer (Normal)" and nothing else. The
+   * upkeep line is the resource bar's own `UPKEEP_*` string for the OWNER's food, colour code
+   * and all, and the food figure turns red over the cap exactly as ours does.
+   */
+  private renderAlly(a: NonNullable<HudSelection["ally"]>): void {
+    this.allyBox.hidden = false;
+    this.allyTitle.textContent = a.name;
+    const set = (kind: "gold" | "lumber" | "supply", html: string): void => {
+      const row = this.allyRows[kind];
+      if (!row) return;
+      const url = this.driver.blpUrl(ALLY_RESOURCE_ICON[kind]);
+      const bg = url ? `url(${url})` : "";
+      if (row.icon.style.backgroundImage !== bg) row.icon.style.backgroundImage = bg;
+      if (row.value.innerHTML !== html) row.value.innerHTML = html;
+    };
+    set("gold", String(a.gold));
+    set("lumber", String(a.lumber));
+    set("supply", a.foodUsed > a.foodMax ? wc3ToHtml(`|cffff0000${a.foodUsed}/${a.foodMax}|r`) : `${a.foodUsed}/${a.foodMax}`);
+    const band = upkeepBand(a.foodUsed);
+    const upkeep = wc3ToHtml(this.driver.uiString(UPKEEP_KEY[band], UPKEEP_FALLBACK[band]));
+    if (this.allyUpkeep.innerHTML !== upkeep) this.allyUpkeep.innerHTML = upkeep;
   }
 
   /** Rebuild the hero inventory slots from the driver's current inventory. Cheap
@@ -4222,8 +4292,13 @@ export class GameHud {
       this.cargoGrid.hidden = true; // only the cargo branch shows it
       this.cargoMeal = null; // …and only it names a meal (refreshMealTooltip runs after this pass)
       this.xpBar.hidden = true; // only the hero-stats branch below re-shows it
-      const constructing = sel.underConstruction;
-      const training = sel.isBuilding && !constructing && sel.queueLength > 0;
+      // A team-mate's building shows NEITHER its scaffolding clock nor its queue: the real
+      // panel keeps the building's own stat blocks and prints the owner's resources beside
+      // them (the developer's reference shots — an allied Altar of Elders still going up reads
+      // Armor on the left and "Computer (Normal)" 140 / 60 / 7/10 / No Upkeep on the right).
+      const constructing = sel.underConstruction && !sel.ally;
+      const training = sel.isBuilding && !constructing && sel.queueLength > 0 && !sel.ally;
+      this.allyBox.hidden = true; // only the stats branch below re-shows it
       // A team-mate's building shows its queue too, but no slot in it is ours to cancel: no
       // click, no hand cursor and no "Cancel" at the pointer — only the job's own name slab.
       const cancellable = training && sel.queueOwned;
@@ -4453,6 +4528,7 @@ export class GameHud {
           this.attrIconEl.hidden = true;
           this.attrLines.hidden = true;
         }
+        if (sel.ally) this.renderAlly(sel.ally);
         this.renderStatus(sel.buffs);
         this.selCarry.textContent =
           sel.carryGold > 0 ? `Carrying ${sel.carryGold} gold` : sel.carryLumber > 0 ? `Carrying ${sel.carryLumber} lumber` : "";

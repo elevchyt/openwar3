@@ -216,6 +216,9 @@ export interface SelectionInfo {
   /** The local player OWNS it, so its production queue is theirs to cancel. A team-mate's
    *  building shows its queue (readsSideOf) but every slot in it is somebody else's. */
   queueOwned: boolean;
+  /** A TEAM-MATE's building (never our own, never an enemy's): its owner's name, bank and
+   *  food, for the panel's `SimpleInfoPanelIconAlly` block. See `allyPanelOf`. */
+  ally?: { name: string; gold: number; lumber: number; foodUsed: number; foodMax: number } | null;
   queue: Array<{ icon: string; name: string; kind: string; desc: string }>; // the queue, head first (HudSelection.queue)
   icon: string; // the selected thing's own command-card icon (BLP path)
   /** The worker HIDDEN inside this structure while it goes up — an Orc peon, and only an Orc
@@ -1868,6 +1871,42 @@ export class RtsController {
   /** A LAN watcher's copy of the host's observer lane, by player (null on the host and on a
    *  player's client — they read their own world). */
   private watchedLane: Map<number, WatchedPlayer> | null = null;
+
+  /** A LAN player's copy of its TEAM-MATES' banks (`WorldSnapshot.allies`), by player — null
+   *  on the host, which reads the real ledgers. */
+  private allyLane: Map<number, { gold: number; lumber: number }> | null = null;
+
+  /** The ally lane for one recipient (`HostSources.alliesFor`): the bank of every player on
+   *  its side. A watcher is told everybody's already (`watchedFor`). */
+  private alliesFor(recipient: number): Array<{ player: number; gold: number; lumber: number }> | null {
+    if (this.observerSeats.has(recipient)) return null;
+    const out: Array<{ player: number; gold: number; lumber: number }> = [];
+    for (const player of this.observedPlayers) {
+      if (player === recipient || !this.playersAreCoAllied(player, recipient)) continue;
+      const stash = this.authority.stashFor(player);
+      out.push({ player, gold: stash.gold, lumber: stash.lumber });
+    }
+    return out.length ? out : null;
+  }
+
+  /**
+   * What the info panel prints beside a TEAM-MATE's building: whose it is, and that player's
+   * gold, lumber, food and — derived from the food, as our own is — upkeep. The real client
+   * shows this INSTEAD of the building's queue (`SimpleInfoPanel.fdf`
+   * `SimpleInfoPanelIconAlly`, beside the building's own Damage/Armor blocks); the queue of a
+   * building is its owner's business, the bank of an ally is the team's.
+   *
+   * Null for our own building (it shows its queue), for an enemy's or a neutral's (their bank
+   * is scouting information), for one we command through shared control, and for a watcher,
+   * who has the observer HUD's scoreboard for this.
+   */
+  private allyPanelOf(id: number, owner: number): { name: string; gold: number; lumber: number; foodUsed: number; foodMax: number } | null {
+    if (owner < 0 || owner === this.localPlayer || this.observing) return null;
+    if (this.controls(id) || !this.localAlly(owner)) return null;
+    const stash = this.allyLane?.get(owner) ?? this.authority.stashFor(owner);
+    const food = this.authority.foodFor(owner); // derived from the units, so a client has it too
+    return { name: this.playerLabel(owner), gold: Math.floor(stash.gold), lumber: Math.floor(stash.lumber), foodUsed: food.used, foodMax: food.made };
+  }
 
   setObservedPlayers(players: readonly number[]): void {
     this.observedPlayers = [...players];
@@ -8163,9 +8202,18 @@ export class RtsController {
       }
     }
     if (!u || !u.inventory.length) return [];
+    // SOMEBODY ELSE's hero — a team-mate's or an enemy's. Its pockets are shown the way a
+    // shop's patron's are and for the same reason (they belong to a unit we do not command):
+    // the DIS* twin, no press, no drag, no move, no cooldown sweep. Unlike the patron's they
+    // keep the item's own Ubertip, so a hover still says what the thing does.
+    // `Units\MiscGame.txt` names the switch for the enemy half — `DisplayEnemyInventory`, 1 in
+    // The Frozen Throne and 0 in Reign of Chaos, where an opponent's hero shows no pockets at
+    // all. (Widened for the reason `DisplayBuildingStatus` is, below.)
+    const foreign = !patronView && !this.controls(u.id);
+    if (foreign && !this.localAlly(u.owner) && gameNum("DisplayEnemyInventory") === 0) return [];
     // Stunned or asleep, the whole row is unavailable — the sim's own lock (itemsLocked), read
     // once for the six, so the buttons wear their DIS* art exactly as the command card's do.
-    const disabled = patronView || this.sim.itemsLockedFor(u.id);
+    const disabled = patronView || foreign || this.sim.itemsLockedFor(u.id);
     return u.inventory.map((held) => {
       if (!held) return null;
       const def = this.items.get(held.itemId);
@@ -8173,6 +8221,14 @@ export class RtsController {
       if (patronView) {
         return {
           itemId: held.itemId, disabled, patronView, icon: def?.icon ?? "", name: def?.name ?? held.itemId, desc: "",
+          charges: held.charges, cooldownLeft: 0, cooldownFrac: 0, usable: false, pawnable: false, sellGold: 0, sellLumber: 0,
+        };
+      }
+      if (foreign) {
+        return {
+          itemId: held.itemId, disabled, patronView: true,
+          icon: this.itemTextEdits.get(held.id)?.icon ?? def?.icon ?? "", name: def?.name ?? held.itemId,
+          desc: def ? this.tipText(this.itemTooltips.get(held.id) ?? def.description) : "",
           charges: held.charges, cooldownLeft: 0, cooldownFrac: 0, usable: false, pawnable: false, sellGold: 0, sellLumber: 0,
         };
       }
@@ -8735,6 +8791,7 @@ export class RtsController {
       secondsLeft: !status ? 0 : b && b.constructionLeft > 0 ? b.constructionLeft : q.length ? q[0].timeLeft : 0,
       queueLength: status ? q.length : 0,
       queueOwned: u.owner === this.localPlayer,
+      ally: b ? this.allyPanelOf(id, u.owner) : null,
       // A queue slot may hold a unit, a research or a structure upgrade — pull each one's icon
       // from the registry that owns it. Research uses the icon of the LEVEL being researched
       // (Steel Forged Swords has its own art), which is why the level rides on the job.
@@ -9563,6 +9620,8 @@ export class RtsController {
     // A watcher's lane (issue #168): kept as sent, read by `observerView` — it describes other
     // players' ledgers, which this client's own ledgers are not the place for.
     if (snap.watched) this.watchedLane = new Map(snap.watched.map((w) => [w.player, w]));
+    // …and a player's team-mates' banks, for an allied building's panel (allyPanelOf).
+    if (snap.allies) this.allyLane = new Map(snap.allies.map((a) => [a.player, a]));
     // An older host stamps no count: treat everything sent as heard, so nothing is ever held.
     this.commandsAcked = snap.ack ?? this.commandsSent;
     const res = applyWorldSnapshot(this.sim, snap, (s) => {
@@ -10019,6 +10078,7 @@ export class RtsController {
           };
         },
         watchedFor: (p) => this.watchedFor(p),
+        alliesFor: (p) => this.alliesFor(p),
       }, this.matchTime);
     } else if (link.latest()) {
       // Client: compare the authority's newest view against our own, for OUR seat — while that

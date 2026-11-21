@@ -2719,6 +2719,17 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
 /* Three stacked blocks, spaced by the same gap that separates the Damage and Armor rows
    opposite them (.hud-stat-col) and set on the same tight leading (.hud-stat-text). */
 .hud-attr-lines { display: flex; flex-direction: column; gap: clamp(2px, 1cqw, 8px); line-height: 1.15; }
+/* A team-mate's building: the owner's resources where a hero's attributes go
+   (`SimpleInfoPanel.fdf` SimpleInfoPanelIconAlly). Sized off the same scale as everything else
+   here, in the FDF's own proportions against the 0.032 stat icon at 17cqw: the title 0.009
+   down to the first icon, each ResourceIconTemplate 0.014 square and stacked with no gap, the
+   value 0.005 to its right in ResourceTextTemplate's 0.0085 (a hair under the panel's 0.009),
+   and the upkeep line 0.005 under the food row, left-aligned with the VALUES, not the icons. */
+.hud-ally-res { display: flex; flex-direction: column; line-height: 1.15; --ally-icon: clamp(15px, 7.4cqw, 35px); --ally-gap: clamp(5px, 2.7cqw, 13px); }
+.hud-ally-res .hud-stat-label { white-space: nowrap; }
+.hud-ally-row { display: flex; align-items: center; gap: var(--ally-gap); color: #fff; font-size: calc(var(--hud-stat-font) * 0.944); white-space: nowrap; }
+.hud-ally-icon { flex: none; width: var(--ally-icon); height: var(--ally-icon); background-size: 100% 100%; background-repeat: no-repeat; }
+.hud-ally-upkeep { margin-top: clamp(1px, 0.6cqw, 4px); margin-left: calc(var(--ally-icon) + var(--ally-gap)); font-size: var(--hud-stat-font); white-space: nowrap; }
 /* All three attributes are drawn ALIKE — one gold name, one white value, one weight. Which is
    the hero's primary is already said by the icon beside them (the panel shows the primary
    attribute's icon and no other), so the lines themselves would be saying it a second time.

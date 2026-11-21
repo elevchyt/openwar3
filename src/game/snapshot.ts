@@ -630,6 +630,13 @@ export interface WorldSnapshot {
    *  somebody who is not in the match. Food is absent on purpose: it is DERIVED from the units
    *  (`Authority.foodFor`), and an observer's payload already carries every unit live. */
   watched?: WatchedPlayer[];
+  /** Only in a PLAYER's payload: the gold and lumber of every player on the recipient's SIDE,
+   *  which the info panel prints beside a team-mate's building (`SimpleInfoPanelIconAlly`).
+   *  The reason `stash` gives for sending nobody else's — a bank is scouting information —
+   *  is about OPPONENTS; the real client shows an ally's openly. Food is derived from the
+   *  units, as on the watcher's lane. Optional: an older host sends none and the panel reads
+   *  the client's own (stale) ledger. */
+  allies?: Array<{ player: number; gold: number; lumber: number }>;
   /**
    * How many commands the host had RECEIVED from this recipient when it built the payload —
    * refused ones included, since a refusal is an answer too (`MatchLink.heard`).
