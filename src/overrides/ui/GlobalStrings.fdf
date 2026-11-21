@@ -77,14 +77,6 @@ StringList {
     VSYNC                       "Vertical Sync",
     VSYNC_RESTART               "OpenWar3 must restart to change Vertical Sync. Restart now?",
 
-    // ...and the row directly under "Resolution:" (issue #161): one switch for every rung on
-    // this panel that costs something, at its cheapest, for a machine that cannot afford them.
-    // The game has no such row -- its panel is nine independent settings and nothing that says
-    // "all of it, as cheap as it goes" -- so the string is ours. Punctuated like the panel's
-    // other checkbox rows (AUTOSAVE_REPLAY, and our own VSYNC) rather than like its labels: the
-    // answer is a tick, not a value, so it takes no colon.
-    LOW_PERFORMANCE_MODE        "Low Performance Mode",
-
     // ...and the row beside "Vertical Sync": the menus drawn in a 4:3 box with black bars at the
     // sides, as 1.30.4 itself draws them on a wide screen (docs/video-options.md). The game's
     // table has COLON_FIXED_ASPECT_RATIO ("Fixed Aspect Ratio:") for a row its own FDF commented

@@ -186,18 +186,6 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   // The buffer the world is drawn into (see RESOLUTIONS). 1920x1080 is the default and is what
   // OpenWar3 has always rendered at, so a player who never opens this screen sees no change.
   { key: "resolution", frame: "ResolutionMenu", kind: "choice", panel: "video", def: "1920x1080", choices: RESOLUTIONS },
-  // "Low Performance Mode" (issue #161) — one switch that puts every rung BELOW it at its
-  // cheapest, for a machine that cannot afford them. Not a WC3 row: the 2003 panel is nine
-  // independent settings and has nothing that says "all of it, as cheap as it goes", so the frame
-  // comes from `src/overrides/ui/OptionsMenu.fdf` (and its in-game twin from
-  // `EscMenuOptionsPanel.fdf`) and the label from our GlobalStrings layer.
-  //
-  // It sits directly under "Resolution:" because Resolution is exactly what it does NOT touch:
-  // the pixels are the player's to choose (issue #161 asks for that in as many words), and so is
-  // the Gamma slider above it. What it forces, and what forcing means, is `LOW_PERF_FORCED` in
-  // render/videoQuality.ts — the values under it are left ALONE in the store, so unticking gives
-  // the player their own seven choices back. Off by default: nobody's current look changes.
-  { key: "lowPerf", frame: "LowPerfCheckBox", kind: "bool", panel: "video", def: false },
   // No LOD models to swap to: an MDX carries one mesh, and WC3's lower rungs picked a simpler
   // one. Faking it by thinning the map's doodads would change what the map LOOKS like rather
   // than how much it costs to draw, which is not what the row says.
@@ -233,9 +221,9 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   // a page asks otherwise, which is what OpenWar3 always drew with — so ON by default and nobody's
   // picture changes. It is a WebGL CONTEXT attribute, fixed when the context is made, so it takes
   // effect from the next match (every match gets a fresh canvas — main.ts `freshMapCanvas`), and
-  // the menus' own 3D backdrop is not under it. Low Performance Mode turns it off
-  // (`LOW_PERF_OFF`, render/videoQuality.ts): on Intel HD Graphics the multisampled buffer is a
-  // large share of what a frame costs. A frame of ours on the "Vertical Sync" row, after "4:3 Menus".
+  // the menus' own 3D backdrop is not under it. Off in `LOWEST_VIDEO`: on Intel HD Graphics the
+  // multisampled buffer is a large share of what a frame costs. A frame of ours on the
+  // "Vertical Sync" row, after "4:3 Menus".
   { key: "antialias", frame: "AntialiasCheckBox", kind: "bool", panel: "video", def: true },
 
   // --- Sound (all live-applied through applyAudioOptions) ---
@@ -299,6 +287,15 @@ export function loadOptions(): Options {
       // stale store can't push a string into a boolean and corrupt the screen.
       if (v !== undefined && typeof v === typeof d.def) base[d.key] = v;
     }
+    // "Low Performance Mode" was a checkbox that FORCED the rows below it at apply time and left
+    // the stored ones alone. It is gone (every thing it did is a row of its own now — see
+    // LOWEST_VIDEO), so a player who had it ticked gets what it was drawing: the rows written
+    // down at their lowest, once, and the dead key dropped. Resolution stays theirs, as the
+    // mode always left it.
+    if ((saved as { lowPerf?: unknown }).lowPerf === true) {
+      Object.assign(base, LOWEST_VIDEO);
+      saveOptions(base);
+    }
   } catch {
     /* unreadable store — the defaults stand */
   }
@@ -306,20 +303,55 @@ export function loadOptions(): Options {
 }
 
 /**
- * The `?lowperf` LAUNCH FLAG (issue #161), which asks for the mode "selectable in options and via
- * launch flag".
+ * Every Video row that costs something, at its cheapest — what the weak-graphics prompt
+ * (ui/weakGpu.ts), the `?lowperf` launch flag and a store from the old "Low Performance Mode"
+ * all write. Not a mode: these are ordinary values in the store, each row shows its own and
+ * each can be raised again one at a time.
+ *
+ * Three rows are deliberately NOT here. **Resolution** is the one rung that changes how many
+ * pixels are drawn, so it is lowered separately and only where the caller says so
+ * (`withLowestVideo`); **Gamma** is the brightness of the picture, not a cheaper drawing of it;
+ * and **Vertical Sync** / **4:3 Menus** cost nothing worth trading.
+ */
+export const LOWEST_VIDEO: Readonly<Options> = {
+  modelDetail: "low",
+  animQuality: "low", // …which is also the shared pose cache, the largest saving of all (render/videoQuality.ts SHARED_POSES)
+  textureQuality: "low",
+  particles: "low",
+  lights: "low",
+  shadows: "off",
+  occlusion: "off",
+  antialias: false,
+};
+
+/** The resolution `withLowestVideo` lowers to — 2.25× fewer pixels than the default 1080p. */
+export const LOW_RESOLUTION = "1280x720";
+
+/** `o` with every row of `LOWEST_VIDEO`, and its Resolution LOWERED to `LOW_RESOLUTION` —
+ *  never raised: a player who already picked a smaller rung keeps theirs. A new object. */
+export function withLowestVideo(o: Options): Options {
+  const next: Options = { ...o, ...LOWEST_VIDEO };
+  const height = (v: unknown): number => Number(/x(\d+)$/.exec(String(v))?.[1] ?? 1080);
+  if (height(next.resolution) > height(LOW_RESOLUTION)) next.resolution = LOW_RESOLUTION;
+  return next;
+}
+
+/**
+ * The `?lowperf` LAUNCH FLAG (issue #161: "selectable in options and via launch flag"). It used to
+ * tick Low Performance Mode; it now starts the session on `withLowestVideo` — the same thing the
+ * weak-graphics prompt's Yes writes — over whatever is stored.
  *
  * Applied here rather than at boot so that every reader agrees: the applier main.ts calls before
  * the first texture is uploaded, the glue Options screen, and the F10 panel all go through
- * `loadOptions`. The box then shows TICKED, which is true, and pressing OK persists it like any
- * other choice.
+ * `loadOptions`. The rows then SHOW those values, which is true, and pressing OK persists them
+ * like any other choice.
  *
  * Not DEV-gated, unlike `?dev` — this one is for the machine that needs it. `location` is guarded
  * because this module is required from Node by `tools/sim-options-test.cjs`.
  */
 function lowPerfFlag(o: Options): Options {
   try {
-    if (typeof location !== "undefined" && new URLSearchParams(location.search).has("lowperf")) o.lowPerf = true;
+    if (typeof location !== "undefined" && new URLSearchParams(location.search).has("lowperf")) return withLowestVideo(o);
   } catch {
     /* no URL to read — the stored value stands */
   }

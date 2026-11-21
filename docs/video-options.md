@@ -35,9 +35,8 @@ carry a `SpellFilterValue` — see below — but as a READOUT, not a control.)
 |---|---|
 | **Gamma** | An SVG `feComponentTransfer type="gamma"` over `#map`. Installed only off the middle. |
 | **Resolution** | The size of the buffer the world is drawn into. |
-| **Low Performance Mode** | Ours. One switch: every row below it at its cheapest rung. |
 | **Model Detail** | *Nothing* — see below. |
-| **Animation Quality** | Strides the map's widget stand-scan (1 / 2 / 4 frames); **Low** also SHARES animation (30 Hz poses — see Low Performance Mode). |
+| **Animation Quality** | Strides the map's widget stand-scan (1 / 2 / 4 frames); **Low** also SHARES animation (30 Hz poses — see below). |
 | **Texture Quality** | Drops 0 / 1 / 2 mip levels off the top of every BLP as it uploads. |
 | **Particles** | Scales emission ×1 / ×0.5 / ×0.25 on top of the viewer's `SETTING_PARTICLES_HIGH`. |
 | **Lights** | Caps the glue scene's uploaded omni lights at 8 / 4 / 0. |
@@ -137,8 +136,8 @@ It is a context ATTRIBUTE, fixed when the context is made, so `loadMap` makes th
 itself, with `antialiasing()`, before the viewer asks for one (a canvas hands back the context it
 already has and ignores the second call's attributes). Every match gets a fresh canvas
 (main.ts `freshMapCanvas`), which is why a change lands on the NEXT match and needs no relaunch;
-the menus' own 3D backdrop is not under it. Low Performance Mode turns it off and both screens
-grey the box (`LOW_PERF_OFF`): on integrated graphics the multisampled buffer is a large share of
+the menus' own 3D backdrop is not under it. The lowest-settings preset clears it
+(`LOWEST_VIDEO`): on integrated graphics the multisampled buffer is a large share of
 the frame, its resolve and its bandwidth coming out of the same system RAM the CPU reads from.
 
 The panel had no height left for a row, so it takes a third place on the "Vertical Sync" row,
@@ -150,30 +149,38 @@ ran its label into the right rail on a 4:3 screen.
 
 `src/ui/weakGpu.ts`. A machine whose WebGL renderer string names integrated or software graphics
 (Intel HD / UHD and pre-Xe Iris, Mali / Adreno / PowerVR, SwiftShader / llvmpipe / Basic Render)
-is asked ONCE, in the menus' own message box over the main menu, whether to turn on Low
-Performance Mode and draw at 1280 × 720. Asked, never applied: the picture is the player's. Yes
-ticks the mode and LOWERS the resolution (never raises one the player already picked); either
-answer is remembered against the renderer string (`openwar3.weakGpuAsked`), so the same GPU is
-never asked again and a different one is. A player already in the mode is not asked. The message
-is two sentences because DialogWar3.fdf's box is 0.2 tall and a third ran under the Yes/No pair.
+is asked ONCE, in the menus' own message box over the main menu, whether to set every video
+option to its lowest and draw at 1280 × 720. Asked, never applied: the picture is the player's.
+Yes writes `withLowestVideo` (src/data/options.ts) — the preset below — and LOWERS the resolution
+(never raises one the player already picked).
+
+**Once, not every launch.** Either answer, Escape included, is remembered against the chip's NAME
+(`weakGpuName` → `openwar3.weakGpuAsked`), never the raw renderer string: on Windows Chromium's
+string can carry the device id and the driver version, so every driver update would have asked
+again. A machine with no working storage is not asked at all (a question it cannot remember would
+be asked every launch), and a player already at the preset is not asked either. The message is
+two sentences because DialogWar3.fdf's box is 0.2 tall and a third ran under the Yes/No pair.
 `?dev&weakgpu=<renderer string>` stands in for the real GPU on a dev server.
 
-## Low Performance Mode (issue #161)
+## Low Performance Mode — removed — and the lowest-settings preset (issue #161)
 
-The row directly under Resolution, and the only one on this panel that is about the other rows.
-It is **ours** — the 2003 panel is nine independent settings and has nothing that says "all of
-it, as cheap as it goes" — and a machine that needs it should not have to find seven dropdowns
-and know which way each one is cheaper.
+There USED to be a "Low Performance Mode" checkbox under Resolution: one switch that FORCED every
+costly row to its cheapest at apply time, plus the shared animation below, which had no row of its
+own. Once the shared animation moved onto **Animation Quality: Low** and Antialiasing became a box
+of its own, everything the mode did was an ordinary row, and a switch that greys seven rows to
+show values they could simply HOLD was one control too many. So it went, and what replaced it is
+a PRESET — `LOWEST_VIDEO` / `withLowestVideo` in src/data/options.ts — written into the store as
+ordinary values by three doors: the weak-graphics prompt's Yes, the `?lowperf` launch flag (issue
+#161 asks for one), and a store from when the box existed (`loadOptions` migrates a stored
+`lowPerf: true` ONCE into the rows it was drawing, resolution untouched, and drops the key).
 
-### The shared pose cache — what the mode is actually for
+### The shared pose cache — Animation Quality: Low
 
-**It is Animation Quality's Low rung** (`SHARED_POSES` in videoQuality.ts). It began as the mode's
-alone, with no row of its own; it was moved onto the row whose name already says what it costs,
-so a player can have it without the rest of the mode and High stays the exact, every-frame
-animation the game draws. The mode still gets it, by forcing Animation Quality to Low.
+`SHARED_POSES` in videoQuality.ts. It began as the mode's alone; it now lives on the row whose
+name already says what it costs, so High stays the exact, every-frame animation the game draws.
 
-The other rungs are the small half of this mode. The large half is this one change, and it
-comes straight off the profile: at 257 units and 6× CPU throttle the
+The other rows of the preset are the small half of what it is worth. The large half is this one
+change, and it comes straight off the profile: at 257 units and 6× CPU throttle the
 frame's biggest phase is `anim` (45 ms of 93), and inside it the **MDX node walk is ~41% of all
 CPU** — `recalculateTransformation`, `updateNodes` and the gl-matrix calls they make — against
 **~7% for the drawing** (`render` plus every GL call). Skinning is already on the GPU via the bone
@@ -231,7 +238,7 @@ Three things still belong to the instance and are done for it:
   runtime (`inst.setParent(node)`), and a cached list would leave that model at the world origin.
 - **The click ray** (`src/render/modelCollision.ts`) composes the same product for the two or
   three collision shapes it tests, or a click lands on a body standing at the origin.
-- **The flip itself.** Turning the mode on or off changes what the matrices MEAN, so the instance
+- **The flip itself.** Entering or leaving Animation Quality: Low changes what the matrices MEAN, so the instance
   forces a full pass on that frame and re-uploads its own texture.
 
 **BILLBOARDED nodes are redone per instance rather than shut out.** A billboarded node faces the
@@ -340,66 +347,32 @@ doodad) is forced at all. So there was little to skip.
 It was reverted rather than kept: the viewer patch is load-bearing, and a hunk that buys nothing
 is a hunk somebody has to reason about later.
 
-### The rungs
+### The preset
 
-What it forces is `LOW_PERF_FORCED` in [`src/render/videoQuality.ts`](../src/render/videoQuality.ts):
+`LOWEST_VIDEO` in [`src/data/options.ts`](../src/data/options.ts):
 
-| Row | Forced to |
+| Row | Set to |
 |---|---|
 | Model Detail | Low *(no backend — see below)* |
-| Animation Quality | Low (widget scan strided 4, and the shared pose cache below) |
+| Animation Quality | Low (widget scan strided 4, and the shared pose cache above) |
 | Texture Quality | Low (2 mips dropped; reaches the NEXT map) |
 | Particles | Low (×0.25) |
 | Lights | Low (no omni lights) |
 | Unit Shadows | Off |
 | Occlusion | Off *(no backend)* |
-| Antialiasing | Off (`LOW_PERF_OFF`, the checkbox rows' list beside the table) |
+| Antialiasing | Off (from the next match) |
+| Resolution | LOWERED to 1280 × 720 by `withLowestVideo` — the prompt and the flag; never raised |
 
-**Two rows are deliberately not in that table.** **Resolution** is the one rung that changes how
-many pixels are drawn, and so the one a weak GPU cares most about — which is exactly why it stays
-the player's: how sharp the world is against how smooth it runs is the trade only they can make,
-and issue #161 asks for it in as many words. **Gamma** is the brightness of the picture rather
-than a cheaper drawing of the same one; a full-screen filter pass is not free, but a player on a
-dim panel needs it wherever they set it.
+**Gamma, Vertical Sync and 4:3 Menus are not in it.** Gamma is the brightness of the picture
+rather than a cheaper drawing of the same one, and a player on a dim panel needs it wherever they
+set it; the other two cost nothing worth trading.
 
-**It is forced at APPLY time and never written to the store.** `applyVideoOptions` lays the table
-over the options it is handed; the player's own seven values sit untouched in localStorage, so
-unticking the box gives every one of them back with nothing having to be remembered. That is also
-why `VideoSettings` carries `lowPerf` beside the rungs it forces: the mode is a fact of its own,
-not something to infer from a rung the player might equally have chosen by hand.
+**They are ordinary values.** Each row shows what it holds and each can be raised again one at a
+time — nothing greys, nothing is forced at apply time, and there is no mode to tick back off.
 
-**Both screens grey the rows it owns AND show the rung it puts them at.** Half of that rule is not
-enough: a live dropdown over a setting the applier overrides is a control that does nothing, and a
-dead one still reading "High" while the renderer draws Low is the panel lying about the game. The
-forced label is painted onto the WIDGET only — the working copy keeps the player's value. On the
-in-game panel the same applies to its four pulldowns, and its three read-only rows (Model Detail,
-Animation Quality, Texture Quality) print the forced rung for the same reason: a readout says what
-the renderer is doing.
-
-The row is on the **in-game panel** too, where it closes the panel rather than sitting under
-Resolution — that file's Video panel puts its pulldowns first and its read-only values after, so
-"under Resolution" there would drop a live control into a block of readouts. It has to be
-reachable there at all because the two panels are one store: a mode turned on from the menus would
-otherwise be unreachable until the match ended.
-
-**Launch flag.** `?lowperf` turns it on for the session, applied inside `loadOptions` so that the
-boot applier, the glue screen and the F10 panel all agree. The box then shows ticked, which is
-true, and OK persists it like any other choice. Not DEV-gated, unlike `?dev`: this one is for the
-machine that needs it.
-
-**Where the row sits, and what it cost to put there.** The shipped 1.30.4 file has a checkbox row
-commented out in exactly this slot — `FixedAspectRatioCheckboxLabel` / `FixedAspectRatioCheckBox`,
-"Disabled for 1.29, needs some work" — and left behind both its anchors and the two re-anchorings
-Model Detail wears when a row stands between it and Resolution. What is ours is the arrangement
-(box then label, like the panel's other four checkbox rows) and the SPACING: the game paid 0.0105
-for this insertion, and at that price the panel overran, because this panel carries a row the 2003
-one never did ("Vertical Sync") and the last row landed on the frame's bottom rail. The box tucks
-into the 0.042 of empty label column the pulldowns' own chrome already leaves, the row costs
-**0.005**, and both of this panel's checkbox rows tuck **0.0115** under their labels so the last
-row lands where it always did. Measured in the running screen at 16:9 and at 4:3.
-
-**What it is worth, measured.** Echo Isles, 6× CPU throttle in headless Chrome, interleaved
-off/on/off/on, median frame time:
+**What it is worth, measured** (when it was still the mode — the same rows and the same
+animation path). Echo Isles, 6× CPU throttle in headless Chrome, interleaved off/on/off/on,
+median frame time:
 
 | Scene | Off | On | |
 |---|---|---|---|
@@ -414,12 +387,13 @@ idle bookkeeping and one shadow pass, and the texture rung does not reach a map 
 loaded. The 259-unit row says it sharply — with the CPU throttled 6×, taking the unit and building
 shadow passes away is worth under a millisecond of a 40 ms frame, so that is not where a weak
 machine's time goes. Everything below the second row is the animation path, and that is where
-this mode's value is: the pose cache first, then the shared skeleton, which is what turns a
+the value is: the pose cache first, then the shared skeleton, which is what turns a
 weak-machine frame from 63 ms into 29. **The substance of issue #161 is still the renderer work behind the flag**
 — particles and ribbons off rather than quartered, the fog overlay and the baked shadow layer
 taking terrain-cull's runs (docs/terrain-culling.md), skinning off the main thread, single-pass
-terrain, batching by texture — each of which the issue gates on its own Step 0 profile. The flag
-is where they land; `VideoSettings.lowPerf` is what they ask.
+terrain, batching by texture — each of which the issue gates on its own Step 0 profile. Each
+should land as a rung of the row it belongs to (Particles: Low drawing none, say), not as a
+switch over the panel.
 
 ## The two rows with no backend, and why they stay that way
 
@@ -443,8 +417,8 @@ drop. Nothing is lost by it: the memory is in the hundreds of unit and doodad sk
 are square.
 
 **Animation Quality cannot STRIDE the skeletons, and that is not an oversight.** (Its Low rung
-reaches them a different way — by SHARING them, a cache rather than a skip; see Low Performance
-Mode.) The expensive
+reaches them a different way — by SHARING them, a cache rather than a skip; see the shared pose
+cache.) The expensive
 half of animating a model is the node walk and the per-instance bone-texture upload — and the sim
 moves a unit by writing its position onto the instance, with the bone matrices carrying that to
 the screen. An instance whose animation is skipped is an instance that **stops moving**. So what
@@ -575,9 +549,9 @@ black is behind it, and it has to be the canvas's because its `hidden` is what s
 
 `tools/sim-options-test.cjs` (run by `pnpm sim:test`) pins the applier: every rung's number,
 including that an unknown value from an older or hand-edited store falls back to the default
-rather than putting a junk string into a ladder — and, for Low Performance Mode, that it forces
-every row in its table, leaves resolution and gamma alone, does not touch the options it is handed
-(so unticking restores them), and names only keys the Video panel has with values those rows
-actually offer. Everything else here is visible, so screenshot
+rather than putting a junk string into a ladder — and, for the lowest-settings preset, that it
+sets every row in its table, lowers but never raises the resolution, leaves gamma alone, names
+only keys the Video panel has with values those rows actually offer, reaches both `?lowperf`
+doors, and migrates an old ticked Low Performance box once. Everything else here is visible, so screenshot
 it — `?dev&map=EchoIsles&ai=easy` with the options seeded into `localStorage` before the boot
 navigation is the whole test.

@@ -222,27 +222,27 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   at 300 fps (`src/render/frameCap.ts`), and in a browser tab the box is greyed.
   **ANTIALIASING** (ours, on by default, the third box on that row) is a WebGL CONTEXT attribute,
   so `loadMap` makes the world's context itself before the viewer asks (whose `{ alpha: false }`
-  left WebGL's default — multisampled — on every machine); it lands on the next match, and Low
-  Performance Mode turns it off (`LOW_PERF_OFF`). The Resolution rung is a CEILING: never more
-  lines than the stage has device pixels. A machine on integrated or software graphics is asked
-  ONCE at the main menu whether to turn the mode on at 1280×720 (`src/ui/weakGpu.ts`) — found on
-  an Intel HD 520 laptop that drew 1080p multisampled and shrank it onto a 768-line panel.
+  left WebGL's default — multisampled — on every machine); it lands on the next match. The
+  Resolution rung is a CEILING: never more lines than the stage has device pixels. A machine on
+  integrated or software graphics is asked ONCE at the main menu — remembered per CHIP NAME,
+  never the raw renderer string, which carries the driver version — whether to set every video
+  option to its lowest at 1280×720 (`src/ui/weakGpu.ts`) — found on an Intel HD 520 laptop that
+  drew 1080p multisampled and shrank it onto a 768-line panel.
   **4:3 MENUS** (ours, off by default, sharing the Vertical Sync row) boxes the GLUE screens, the
   loading screen and the score screen to 4:3 on black, which is what 1.30.4 itself does for its
   menus on a wide screen (checked under Wine at 1920×1080); the match is untouched. `windowAspect()` reads the box, so every `widescreen()`
   correction drops to its 4:3 value by itself.
-  **LOW PERFORMANCE MODE** (issue #161, the row under Resolution, also `?lowperf`) is ONE SWITCH
-  over the rows below it — `LOW_PERF_FORCED` — and is FORCED AT APPLY TIME, never written to the
-  store, which is the whole of why unticking it gives the player their seven values back.
-  Resolution and Gamma are deliberately NOT in it (the pixels and the brightness are the
-  player's), both screens GREY the rows it owns *and* show them the rung it forces (a dead
-  dropdown still reading "High" is the panel lying about the game), and it is worth only a few
-  per cent as it stands: it composes the rungs this panel already had, and the renderer work the
-  issue actually asks for lands BEHIND the flag, which is why `VideoSettings.lowPerf` is carried
-  beside the rungs it forces. The FIRST of that work is the **shared pose cache**
-  (`VideoBridge.sharedPoses`, the cache at the top of the patch's `mdx/modelinstance.js`) —
-  since moved onto **Animation Quality: Low** (`SHARED_POSES`), which the mode forces, so a
-  player can have it alone and High stays exact, every-frame animation:
+  **THERE IS NO LOW PERFORMANCE MODE** any more (issue #161): it was a checkbox that FORCED
+  the costly rows at apply time, and once its one unique trick moved onto a row of its own it was
+  a switch over values the rows could simply hold. What replaced it is a PRESET of ordinary
+  values — `LOWEST_VIDEO` / `withLowestVideo` in `src/data/options.ts` — written by the weak-GPU
+  prompt's Yes, by the `?lowperf` launch flag, and ONCE by `loadOptions` over a store that still
+  says `lowPerf: true` (resolution untouched, the key dropped). Gamma, Vertical Sync and 4:3 Menus
+  are not in it. A future cheaper rendering path lands as a RUNG of its own row, not as a switch
+  over the panel. That row's big trick is the **shared pose cache**
+  (`VideoBridge.sharedPoses`, the cache at the top of the patch's `mdx/modelinstance.js`), which
+  is **Animation Quality: Low** (`SHARED_POSES`) — High and Medium stay exact, every-frame
+  animation:
   profiled, the MDX NODE WALK is ~41% of all CPU and the DRAWING is ~7%, so a second renderer is
   aimed at the wrong number — and 317 visible instances were found holding **60** distinct
   `(model, sequence, 1/30 s)` poses, so the pose is sampled once and replayed (SightStamps'

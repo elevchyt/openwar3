@@ -31,10 +31,10 @@ global.window = global.window || {};
 
 const {
   OPTION_DEFS, defaultOptions, loadOptions, saveOptions, applyAudioOptions, sliderGain,
+  LOWEST_VIDEO, LOW_RESOLUTION, withLowestVideo,
 } = require(join(REPO, ".sim-build", "src", "data", "options.js"));
 const {
-  applyVideoOptions, videoSettings, animStride, maxOmniLights, renderSize, renderScale, antialiasing, LOW_PERF_OFF,
-  lowPerfMode, LOW_PERF_FORCED,
+  applyVideoOptions, videoSettings, animStride, maxOmniLights, renderSize, renderScale, antialiasing,
 } = require(join(REPO, ".sim-build", "src", "render", "videoQuality.js"));
 const {
   applyHealthBarOptions, healthBarsAlways, healthBarStyle,
@@ -170,9 +170,9 @@ console.log("\nthe video applier turns the panel's words into the renderer's num
   applyVideoOptions({ ...defaultOptions(), animQuality: "low", lights: "low" });
   check("low anim scans a quarter as often", animStride(), 4);
   check("low lights uploads no points", maxOmniLights(), 0);
-  // …and Low is the rung that SHARES animation (30 Hz poses, `sharedPoses`), on its own — the
-  // whole of Low Performance Mode is no longer needed for it. High and Medium stay exact.
-  check("low anim shares poses without the mode", [bridge().sharedPoses, lowPerfMode()], [true, false]);
+  // …and Low is the rung that SHARES animation (30 Hz poses, `sharedPoses`). High and Medium
+  // stay exact.
+  check("low anim shares poses", bridge().sharedPoses, true);
   applyVideoOptions({ ...defaultOptions(), animQuality: "medium" });
   check("medium anim animates every frame", bridge().sharedPoses, false);
   applyVideoOptions(defaultOptions());
@@ -243,64 +243,40 @@ console.log("\nResolution picks the size of the buffer the world is drawn into")
   check("…and so does a store that predates it", renderSize(), { width: 1920, height: 1080 });
 }
 
-console.log("\nLow Performance Mode forces every rung but the pixels and the brightness (issue #161)");
+console.log("\nthe lowest-settings preset: the weak-GPU prompt, ?lowperf, and an old Low Performance store");
 {
   const bridge = () => globalThis.__OW3_VIDEO__;
 
-  // Off by default — nobody's current picture changes.
+  // Antialiasing is the player's box and ON by default — what WebGL always drew with.
   applyVideoOptions(defaultOptions());
-  check("off by default", [defaultOptions().lowPerf, lowPerfMode()], [false, false]);
+  check("antialiasing is on by default", antialiasing(), true);
+  applyVideoOptions({ ...defaultOptions(), antialias: false });
+  check("…and the box turns it off", antialiasing(), false);
 
-  // …and ON it is every rung at its cheapest, whatever the seven stored values say. The store
-  // here is the OPPOSITE of what the mode wants, so anything that reached the renderer unforced
-  // would show up.
-  const maxed = {
-    ...defaultOptions(),
-    lowPerf: true,
-    modelDetail: "high", animQuality: "high", textureQuality: "high",
-    particles: "high", lights: "high", shadows: "on", occlusion: "on",
-  };
-  applyVideoOptions(maxed);
+  // The preset is every costly row at its cheapest, as ordinary values the rows then show.
+  const lowest = withLowestVideo(defaultOptions());
+  applyVideoOptions(lowest);
   const v = videoSettings();
-  check("the mode is carried, not just its rungs", lowPerfMode(), true);
   check("every quality rung is low", [v.modelDetail, v.animQuality, v.textureQuality, v.particles, v.lights],
     ["low", "low", "low", "low", "low"]);
-  check("unit shadows off", v.unitShadows, false);
-  check("occlusion off", v.occlusion, false);
-  check("the viewer sees the low rungs too", [bridge().particleScale, bridge().textureMipDrop], [0.25, 2]);
-  check("…and the mode shares poses, through its forced Animation Quality", bridge().sharedPoses, true);
+  check("unit shadows and occlusion off", [v.unitShadows, v.occlusion], [false, false]);
+  check("antialiasing off", antialiasing(), false);
+  check("the viewer sees the low rungs", [bridge().particleScale, bridge().textureMipDrop, bridge().sharedPoses], [0.25, 2, true]);
   check("…and so do the two ladders", [animStride(), maxOmniLights()], [4, 0]);
-  // Antialiasing is a CHECKBOX the mode turns off (LOW_PERF_OFF), read when a match makes its
-  // world context — and it is ON for everybody else, because that is what WebGL always drew.
-  check("antialiasing is off under the mode", [v.antialias, antialiasing()], [false, false]);
-  check("…and it is a video bool row", LOW_PERF_OFF.map((k) => {
+  check("resolution is LOWERED to 1280x720", lowest.resolution, LOW_RESOLUTION);
+  check("…never raised past a smaller pick", withLowestVideo({ ...defaultOptions(), resolution: "800x450" }).resolution, "800x450");
+  check("gamma, vsync and 4:3 menus are the player's", [lowest.gamma, lowest.vsync, lowest.menus43], [50, true, false]);
+  check("the options handed in are not mutated", defaultOptions().particles, "high");
+
+  // Every key the preset names has to BE a video row, holding a value that row OFFERS — or the
+  // panel would show a rung it has no entry for and the applier would quietly fall back.
+  const offers = (k, val) => {
     const d = OPTION_DEFS.find((o) => o.key === k);
-    return d && d.panel === "video" && d.kind === "bool";
-  }), [true]);
-
-  // The two rows NOT in the table. Resolution is the one rung that changes how many pixels are
-  // drawn and is the player's to trade; gamma is the brightness of the picture, not a cheaper
-  // drawing of it (render/videoQuality.ts LOW_PERF_FORCED says so at length).
-  applyVideoOptions({ ...maxed, resolution: "2560x1440", gamma: 80 });
-  check("resolution is untouched by the mode", renderSize(), { width: 2560, height: 1440 });
-  check("…and so is gamma", videoSettings().gamma, 80);
-  check("neither is in the forced table", [LOW_PERF_FORCED.resolution, LOW_PERF_FORCED.gamma], [undefined, undefined]);
-
-  // THE POINT OF FORCING AT APPLY TIME: the store is never rewritten, so unticking the box gives
-  // the player back the seven values they chose. A mode that wrote its rungs into the options
-  // would have eaten them.
-  check("the options handed in are not mutated", [maxed.particles, maxed.shadows], ["high", "on"]);
-  applyVideoOptions({ ...maxed, lowPerf: false });
-  const back = videoSettings();
-  check("unticking restores every stored rung", [back.particles, back.lights, back.unitShadows, back.occlusion],
-    ["high", "high", true, true]);
-  check("…and the mode is off again", lowPerfMode(), false);
-  check("…and the stored High animates every frame again", bridge().sharedPoses, false);
-  check("…and the stored antialiasing is back", antialiasing(), true);
-  applyVideoOptions({ ...defaultOptions(), antialias: false });
-  check("antialiasing is the player's to turn off without the mode", antialiasing(), false);
-  applyVideoOptions(defaultOptions());
-  check("…and on by default", antialiasing(), true);
+    if (!d || d.panel !== "video") return false;
+    return d.kind === "bool" ? typeof val === "boolean" : (d.choices ?? []).some((c) => c.value === val);
+  };
+  check("every preset value is one its row offers", Object.entries(LOWEST_VIDEO).filter(([k, val]) => !offers(k, val)).map(([k]) => k), []);
+  check("there is no Low Performance row any more", OPTION_DEFS.some((d) => d.key === "lowPerf"), false);
 
   // The LAUNCH FLAG, at both doors: an empty store and a full one. `?lowperf` reaching only the
   // second is the bug this pins — a fresh profile has no stored options, which is exactly the
@@ -311,24 +287,28 @@ console.log("\nLow Performance Mode forces every rung but the pixels and the bri
     global.location = { search };
     try { return fn(); } finally { if (had) global.location = prev; else delete global.location; }
   };
+  const pick = (o) => [o.animQuality, o.antialias, o.resolution];
   store.clear();
-  check("the flag reaches an EMPTY store", withSearch("?dev&lowperf", () => loadOptions().lowPerf), true);
-  saveOptions({ ...defaultOptions(), lowPerf: false });
-  check("…and a stored one", withSearch("?lowperf", () => loadOptions().lowPerf), true);
-  check("…and without it the store stands", withSearch("?dev", () => loadOptions().lowPerf), false);
-  store.clear();
+  check("the flag reaches an EMPTY store", withSearch("?dev&lowperf", () => pick(loadOptions())), ["low", false, LOW_RESOLUTION]);
+  saveOptions(defaultOptions());
+  check("…and a stored one", withSearch("?lowperf", () => pick(loadOptions())), ["low", false, LOW_RESOLUTION]);
+  check("…and without it the store stands", withSearch("?dev", () => pick(loadOptions())), ["high", true, "1920x1080"]);
 
-  // Every key the table names has to BE a video row, or the Options screens would grey a row that
-  // does not exist and the applier would force a setting nothing reads.
-  const videoKeys = OPTION_DEFS.filter((d) => d.panel === "video").map((d) => d.key);
-  check("every forced key is a video row", Object.keys(LOW_PERF_FORCED).filter((k) => !videoKeys.includes(k)), []);
-  // …and each forced value has to be one that row OFFERS, or the greyed pulldown would show a
-  // rung it has no entry for and the applier's own fallback would quietly ignore it.
-  const notOffered = Object.entries(LOW_PERF_FORCED).filter(([k, val]) => {
-    const def = OPTION_DEFS.find((d) => d.key === k);
-    return !(def?.choices ?? []).some((c) => c.value === val);
-  });
-  check("every forced value is one the row offers", notOffered.map(([k]) => k), []);
+  // A store from when "Low Performance Mode" was a checkbox: it FORCED the rows at apply time and
+  // left the stored ones High, so read plainly it would hand that player back the full picture.
+  // It is migrated ONCE into the values it was drawing — resolution untouched, as the mode left it.
+  store.clear();
+  store.set("openwar3.options", JSON.stringify({ ...defaultOptions(), lowPerf: true, resolution: "1600x900" }));
+  const migrated = loadOptions();
+  check("an old ticked box becomes the lowest rows", [migrated.particles, migrated.shadows, migrated.animQuality, migrated.antialias],
+    ["low", "off", "low", false]);
+  check("…keeping the player's resolution", migrated.resolution, "1600x900");
+  check("…and the dead key is gone from the store", JSON.parse(store.get("openwar3.options")).lowPerf, undefined);
+  check("…so raising a row afterwards sticks", (() => {
+    saveOptions({ ...loadOptions(), particles: "high" });
+    return loadOptions().particles;
+  })(), "high");
+  store.clear();
 }
 
 console.log("\nthe Gameplay panel's two health-bar rows (issue #141)");

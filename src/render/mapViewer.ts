@@ -2176,13 +2176,12 @@ export class MapViewerScene {
     // asks with `{ alpha: false }` alone — and WebGL's default for `antialias` is TRUE, so every
     // match was multisampled whatever the machine. A canvas hands back the context it already
     // has (the attributes of a second `getContext` are ignored), so the viewer's own call gets
-    // this one. Options → Video → Antialiasing, off under Low Performance Mode (videoQuality.ts
-    // `LOW_PERF_OFF`); a fresh canvas per match (main.ts `freshMapCanvas`) is what lets a change
+    // this one. Options → Video → Antialiasing; a fresh canvas per match (main.ts `freshMapCanvas`) is what lets a change
     // land on the next one.
     canvas.getContext("webgl", { alpha: false, antialias: antialiasing() });
     const viewer = new ViewerClass(canvas, solver, false);
     viewer.terrainModelExists = (path) => vfs.exists(path);
-    // Low Performance Mode's shared poses are for THIS viewer — the world, where a crowd of one
+    // Animation Quality: Low's shared poses are for THIS viewer — the world, where a crowd of one
     // model stands at the same point of the same clip. Every other viewer on the page (the menu's
     // backdrop, the loading screen, the portraits, the HUD's clock) keeps sampling for itself at
     // full rate: it has nothing to share with, and a 30 Hz pose on the menu read as judder. See

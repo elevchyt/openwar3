@@ -106,8 +106,8 @@ export const OW3_STRINGS: FdfOverride = { id: "ow3-strings", source: globalStrin
  * Options → Gameplay: out with the Game Port and the Chat Support gateway, in with the
  * Computer+ default (issue #124), the "Healthbars:" pulldown (issue #141) and the "Hotkeys:"
  * one (issue #142) — which also retires four of the game's own checkbox rows and re-orders
- * what is left — and, on the Video panel, the "Low Performance Mode" (issue #161) and "Vertical
- * Sync" checkboxes. See `ui/OptionsMenu.fdf` for the panel this adds up to, and
+ * what is left — and, on the Video panel, the "Vertical Sync", "4:3 Menus" and "Antialiasing"
+ * checkboxes. See `ui/OptionsMenu.fdf` for the panel this adds up to, and
  * src/data/options.ts for why each retired row goes.
  */
 export const OPTIONS_MENU_OVERRIDE: FdfOverride = {
@@ -141,19 +141,6 @@ export const OPTIONS_MENU_OVERRIDE: FdfOverride = {
     // …and "Always show Health Bars" follows the Computer+ box that follows it, one
     // checkbox-gap down — the same -0.005 it already carried, so no dy.
     { from: "CustomKeysCheckBox", to: "ComputerPlusDefaultCheckBox", only: ["HealthBarsCheckBox"] },
-    // The VIDEO panel's turn (issue #161): "Low Performance Mode" is SPLICED IN between
-    // "Resolution:" and "Model Detail:", so the Model Detail row moves down by the 0.005 that
-    // row costs — and with it the whole rest of the panel, because every row under Model Detail
-    // hangs off Model Detail. `from` and `to` are the same frame, which makes each of these a
-    // pure OFFSET rather than a re-anchoring (the LAN game list's pair does the same): the row
-    // keeps measuring from the Resolution row it already measured from, one row lower. Both are
-    // narrowed with `only`, because Resolution's own label and backdrop are still standing and
-    // still hold the pulldown between them. The 0.005 is what the row costs after the box is
-    // tucked into the empty label column the pulldowns' chrome already leaves — the game's own
-    // 0.0105 for this insertion pushed the panel's last row onto its bottom rail, this panel
-    // being a row fuller than the 2003 one. See src/overrides/ui/OptionsMenu.fdf.
-    { from: "ResolutionLabel", to: "ResolutionLabel", dy: -0.005, only: ["ModelDetailLabel"] },
-    { from: "ResolutionBackdrop", to: "ResolutionBackdrop", dy: -0.005, only: ["ModelDetailBackdrop"] },
     // The SOUND panel's: "Environmental Effects" hung off the retired "Sound Provider:" label,
     // so it takes that label's own anchor — the Subtitles box — and closes up to the -0.005
     // every other checkbox on the panel sits under the one above it (-0.03 + 0.025): with the
@@ -179,11 +166,8 @@ export const OPTIONS_MENU_OVERRIDE: FdfOverride = {
     { frame: "VoiceControlCheckBox", into: "GameplayPanel" },
     { frame: "VoiceControlLabel", into: "GameplayPanel" },
     { frame: "GamepadButton", into: "GameplayPanel" }, // Detect / Unpair Gamepad, issue #162
-    // Options → Video: "Low Performance Mode" under "Resolution:" (issue #161), and "Vertical
-    // Sync" under the game's last row (Occlusion). Box before label in each pair — a label
-    // anchors to the box beside it.
-    { frame: "LowPerfCheckBox", into: "VideoPanel" },
-    { frame: "LowPerfLabel", into: "VideoPanel" },
+    // Options → Video: "Vertical Sync" under the game's last row (Occlusion). Box before label in
+    // each pair — a label anchors to the box beside it.
     { frame: "VsyncCheckBox", into: "VideoPanel" },
     { frame: "VsyncLabel", into: "VideoPanel" },
     // …and "4:3 Menus" on the Vertical Sync row, in the pulldown column.
@@ -254,10 +238,6 @@ export const ESC_OPTIONS_OVERRIDE: FdfOverride = {
     { frame: "VoiceControlLabel", into: "GameplayPanel" },
     { frame: "VoiceDownloadButton", into: "GameplayPanel" },
     { frame: "GamepadButton", into: "GameplayPanel" }, // Detect / Unpair Gamepad, issue #162
-    // …and the Video panel's "Low Performance Mode" (issue #161), which on THIS panel closes the
-    // panel rather than sitting under Resolution — that file says why.
-    { frame: "LowPerfCheckBox", into: "VideoPanel" },
-    { frame: "LowPerfLabel", into: "VideoPanel" },
   ],
 };
 

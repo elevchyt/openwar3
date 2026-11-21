@@ -1,5 +1,5 @@
 import { showGlueDialog } from "./glueDialog";
-import { loadOptions, saveOptions } from "../data/options";
+import { loadOptions, saveOptions, withLowestVideo, type Options } from "../data/options";
 import { applyVideoOptions } from "../render/videoQuality";
 import type { DataSource } from "../vfs/types";
 
@@ -8,25 +8,28 @@ import type { DataSource } from "../vfs/types";
 //
 // Found on a friend's laptop: an i5-6300U on Intel HD Graphics 520 played whole games at ~25 fps
 // at the start of a 1v1 and 5–10 with an army out, on the default settings — 1920×1080,
-// multisampled, every rung High — while Low Performance Mode and a smaller Resolution sat two
-// clicks away on a screen nobody opens before they play. Nothing in 1.30.4 looks at the machine
+// multisampled, every rung High — while the Video panel's lower rungs and a smaller Resolution
+// sat on a screen nobody opens before they play. Nothing in 1.30.4 looks at the machine
 // it runs on (its rungs were the player's to find), so this question is OURS, and so are the
 // list and the answer below.
 //
-// It is ASKED, never applied. The player may like the picture as it is, and both settings live
-// on the Video panel where they can be put back; what this changes is that the first player on
+// It is ASKED, never applied. The player may like the picture as it is, and every value it
+// writes is an ordinary row of the Video panel that can be raised again one at a time; what this changes is that the first player on
 // such a machine hears about them before their first match rather than after it. Asked in the
 // menus' own message box (ui/glueDialog.ts) once the main menu is up — the moment the update
 // prompt also waits for (ui/updatePrompt.ts), for the same reason: a player looking at the main
 // menu is the person to ask.
 
-/** localStorage: the GPU name the question was last answered on. A different GPU — a new
- *  machine, a dock with a real graphics card — asks again; the same one never does. */
+/**
+ * localStorage: the GPU the question was last answered on — by its NAME (`weakGpuName`), never
+ * the raw renderer string. ASKED ONCE, NOT EVERY LAUNCH: on Windows Chromium's renderer string
+ * can carry the device id and the DRIVER VERSION ("…Direct3D11 vs_5_0 ps_5_0, D3D11-31.0.101…"),
+ * so keyed on the whole string every driver update would have asked again. Keyed on the chip, a
+ * different machine asks and the same one never does — whichever way it was answered, Escape
+ * (No) included.
+ */
 const ASKED_KEY = "openwar3.weakGpuAsked";
 
-/** The rung "Yes" draws the world at: 2.25× fewer pixels than the default, and the rung the
- *  Video doc measured as a third off a GPU-bound frame (docs/video-options.md). */
-const PROMPT_RESOLUTION = "1280x720";
 
 /**
  * The player-facing name of a GPU the game will struggle on, or null for one it will not.
@@ -59,24 +62,27 @@ export function weakGpuName(renderer: string | null): string | null {
 /**
  * Ask the question if this machine wants it and has not answered it yet. Called once the main
  * menu is up (main.ts `showMenu`). Either answer is remembered against the GPU's name; "Yes"
- * ticks Low Performance Mode and lowers Resolution to 1280 × 720 (never RAISES it — a player
- * who already picked a smaller rung keeps theirs), saves both and applies them on the spot.
+ * writes `withLowestVideo` (data/options.ts) — every Video row that costs something at its
+ * cheapest, Animation Quality: Low's shared animation and Antialiasing off among them, and
+ * Resolution LOWERED to 1280 × 720 (never raised: a smaller rung the player picked stays) —
+ * saves it and applies it on the spot. A player already there is not asked.
  */
 export async function maybeAskWeakGpu(container: HTMLElement, vfs: DataSource, renderer: string | null): Promise<void> {
   const name = weakGpuName(renderer);
   if (!name || !renderer) return;
-  const opts = loadOptions();
-  if (opts.lowPerf === true) return; // already where the question would put it
+  if (atLowest(loadOptions())) return; // already where the question would put it
   try {
-    if (localStorage.getItem(ASKED_KEY) === renderer) return;
+    if (localStorage.getItem(ASKED_KEY) === name) return;
   } catch {
-    // no storage: ask every launch rather than never — the answer is one click
+    // No storage to remember the answer in, so NOT asked at all: a question that cannot be
+    // remembered is a question asked every launch, and that is the one thing this must not be.
+    return;
   }
   const remember = (): void => {
     try {
-      localStorage.setItem(ASKED_KEY, renderer);
+      localStorage.setItem(ASKED_KEY, name);
     } catch {
-      /* see above */
+      /* the read above worked, so this one will; nothing to do if it does not */
     }
   };
   await showGlueDialog({
@@ -88,22 +94,25 @@ export async function maybeAskWeakGpu(container: HTMLElement, vfs: DataSource, r
     // Options > Video") ran under the Yes/No pair — the two rows it names are on that screen.
     text:
       `Your GPU, |cffffcc00${name}|r, may struggle to run OpenWar3 smoothly.|n|n` +
-      `Turn on Low Performance Mode and draw the world at 1280 x 720?`,
+      `Set every video option to its lowest and draw the world at 1280 x 720?`,
     buttons: "yesno",
     // Ours, not the game's: a question about the machine, not about the menu behind it — the
     // update prompt's rule.
     dimmed: true,
     onConfirm: () => {
       remember();
-      const next = loadOptions();
-      next.lowPerf = true;
-      const height = (v: unknown): number => Number(/x(\d+)$/.exec(String(v))?.[1] ?? 1080);
-      if (height(next.resolution) > height(PROMPT_RESOLUTION)) next.resolution = PROMPT_RESOLUTION;
+      const next = withLowestVideo(loadOptions());
       saveOptions(next);
       applyVideoOptions(next);
     },
     onCancel: remember,
   });
+}
+
+/** Whether `o` is already everything Yes would write — nothing left to offer. */
+function atLowest(o: Options): boolean {
+  const lowest = withLowestVideo(o);
+  return Object.keys(lowest).every((k) => lowest[k] === o[k]);
 }
 
 /** The renderer string to judge, with a DEV-ONLY stand-in: `?dev&weakgpu=<renderer>` pretends

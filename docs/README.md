@@ -34,7 +34,7 @@ Their entries below say so.
 - [`campaigns.md`](campaigns.md) — the TFT campaign screen and what it takes to start a chapter.
 - [`score-screen.md`](score-screen.md) — the score screen shown after a finished match.
 - [`tooltips.md`](tooltips.md) — the command card's tooltip and the in-world hover slab.
-- [`video-options.md`](video-options.md) — what each row of the Video panel does, including Low Performance Mode.
+- [`video-options.md`](video-options.md) — what each row of the Video panel does, the lowest-settings preset and the weak-GPU prompt.
 - [`observer-hud.md`](observer-hud.md) — the HUD a watcher gets instead of a player's console.
 
 ## Simulation and mechanics

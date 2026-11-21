@@ -46,7 +46,7 @@ export interface CollisionHost {
   nodes?: ArrayLike<{ worldMatrix: ArrayLike<number> }>;
   model: { collisionShapes?: ArrayLike<CollisionShapeNode> };
   /**
-   * Low Performance Mode's shared skeleton (issue #161, docs/video-options.md). While it is on,
+   * Animation Quality: Low's shared skeleton (issue #161, docs/video-options.md). While it is on,
    * an instance may be wearing a pose a whole bucket of its own kind shares — so the matrices in
    * `nodes` above are NOT this body's, and the ones that are live in `ow3SharedBones`, in the
    * INSTANCE's own space. A click has to compose the same thing the vertex shader does
@@ -105,7 +105,7 @@ export function modelPickVolumes(inst: CollisionHost, out: PickVolume[]): number
   const shapes = inst.model.collisionShapes;
   const nodes = inst.nodes;
   if (!shapes || !nodes) return 0;
-  // Low Performance Mode's shared skeleton (see `CollisionHost`): the shape's matrix is the
+  // Animation Quality: Low's shared skeleton (see `CollisionHost`): the shape's matrix is the
   // bucket's pose, and this body's own matrix has to be multiplied back in — the same product
   // the vertex shader forms, done here for two shapes rather than for every vertex.
   const shared = inst.ow3LocalPose === true && inst.ow3SharedBones ? inst.ow3SharedBones : null;

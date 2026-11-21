@@ -46,10 +46,6 @@ export interface VideoSettings {
   /** "Antialiasing" — multisample the match's world canvas. A WebGL CONTEXT attribute, so it is
    *  read when a match makes its context (`antialiasing`) and a change lands on the next one. */
   antialias: boolean;
-  /** "Low Performance Mode" — every rung above is already the one this mode forces (see
-   *  `LOW_PERF_FORCED`). Carried so the renderer can ask the MODE rather than infer it from a
-   *  rung a player might equally have chosen by hand. */
-  lowPerf: boolean;
 }
 
 /**
@@ -70,8 +66,7 @@ export interface VideoBridge {
    * Animation Quality's LOW rung (`SHARED_POSES`): may an MDX instance take a pose another
    * instance of the same model already sampled, at the same clip and the same 1/30 s of it?
    *
-   * The largest thing Low Performance Mode does — it reaches it by forcing this row to Low — and
-   * the one rung on the panel that takes work off the CPU in a big fight. Profiled at 257 units and 6x CPU
+   * The one rung on the panel that takes real work off the CPU in a big fight. Profiled at 257 units and 6x CPU
    * throttle, the MDX node walk is ~41% of all CPU against ~7% for the drawing, and 317 visible
    * instances were holding 60 distinct poses. The cache and the reasoning live at the top of
    * `viewer/handlers/mdx/modelinstance.js` in the patch; what it costs is animation time
@@ -122,7 +117,6 @@ const DEFAULTS: VideoSettings = {
   occlusion: true,
   gamma: 50,
   antialias: true,
-  lowPerf: false,
 };
 
 let current: VideoSettings = { ...DEFAULTS };
@@ -186,8 +180,8 @@ const ANIM_STRIDE: Record<Quality, number> = { high: 1, medium: 2, low: 4 };
  * on a 1/30 s grid (`POSE_BUCKET_MS`) and replayed to every instance of the model at the same
  * point of it, so animation steps at 30 Hz instead of every frame — 1.8–3.1× off a 259-unit
  * frame at 6× CPU throttle (docs/video-options.md). That is what "Animation Quality: Low"
- * should mean, and it used to be Low Performance Mode's alone; the mode still gets it, by
- * forcing this row to Low. High and Medium are exact.
+ * should mean (it began as the switch of a "Low Performance Mode" that is gone). High and Medium
+ * are exact.
  */
 const SHARED_POSES: Record<Quality, boolean> = { high: false, medium: false, low: true };
 
@@ -203,64 +197,10 @@ const SHARED_POSES: Record<Quality, boolean> = { high: false, medium: false, low
  */
 const MAX_LIGHTS: Record<Quality, number> = { high: 8, medium: 4, low: 0 };
 
-/**
- * What "Low Performance Mode" means (issue #161) — the Video panel's own rows, at the cheapest
- * rung each one has.
- *
- * It is ONE SWITCH over the settings this panel already has, not a second renderer: a machine
- * that needs it should not have to find seven dropdowns and know which way is cheaper. The
- * renderer work issue #161 also asks for — particles off rather than quartered, the fog and
- * shadow layers taking terrain-cull's runs, skinning off the main thread, single-pass terrain —
- * is behind this flag when it lands, which is why `VideoSettings.lowPerf` is carried separately
- * from the rungs it forces.
- *
- * TWO ROWS ARE DELIBERATELY NOT HERE.
- *
- *   · **Resolution.** It is the one rung that changes how many PIXELS are drawn and so the one a
- *     weak GPU cares most about (see `renderSize`) — which is exactly why it stays the player's:
- *     how sharp the world is against how smooth it runs is the trade only they can make. Issue
- *     #161 asks for it in as many words ("keep the one chosen by the player").
- *   · **Gamma.** A non-default gamma is a full-screen filter pass per frame, so there is a case
- *     for forcing it to 50 — but it is the BRIGHTNESS of the picture, not a cheaper drawing of
- *     the same one, and a player on a dim panel needs it wherever they set it. Left live.
- *
- * FORCED AT APPLY TIME, NEVER WRITTEN TO THE STORE. `applyVideoOptions` lays this over the
- * options it is handed; the player's own seven values sit untouched underneath, so unticking the
- * box gives every one of them back. The two Options screens grey these rows while the mode is on
- * and show the forced rung in them, so what the panel says and what the renderer does agree.
- */
-export const LOW_PERF_FORCED: Readonly<Record<string, string>> = {
-  modelDetail: "low",
-  animQuality: "low",
-  textureQuality: "low",
-  particles: "low",
-  lights: "low",
-  shadows: "off",
-  occlusion: "off",
-};
-
-/**
- * The CHECKBOX rows Low Performance Mode turns off, beside the pulldowns `LOW_PERF_FORCED` sets.
- * A separate list because a box's value is a boolean, not a rung's name, and both Options
- * screens grey it and show it unticked while the mode is on — the same two halves, for the same
- * reason (ui/fdfOptions.ts `syncVideoRows`).
- *
- *   · **Antialiasing.** On integrated graphics the multisampled buffer is a large part of the
- *     frame: every pixel of it is resolved and its bandwidth comes out of the same system RAM the
- *     CPU is reading from. It is the one fill-rate cost this mode CAN take, since Resolution is
- *     the player's.
- */
-export const LOW_PERF_OFF: readonly string[] = ["antialias"];
-
 /** Whether the NEXT world context a match makes is multisampled (`VideoSettings.antialias`).
  *  Asked once per match, as its canvas gets its context (render/mapViewer.ts). */
 export function antialiasing(): boolean {
   return current.antialias;
-}
-
-/** True while the mode is on — used by both Options screens to grey the rows it forces. */
-export function lowPerfMode(): boolean {
-  return current.lowPerf;
 }
 
 const quality = (v: unknown, fallback: Quality): Quality =>
@@ -350,38 +290,31 @@ export function maxOmniLights(): number {
  * loader as textures arrive, and `particles` by the emitters as they emit.
  */
 export function applyVideoOptions(options: Options): void {
-  // Low Performance Mode lays its rungs OVER the stored ones (LOW_PERF_FORCED) — the store keeps
-  // the player's own choices, so unticking the box restores them without anything having to be
-  // remembered. Resolution and gamma are read from `options` either way: they are not in the table.
-  const lowPerf = options.lowPerf === true;
-  const opts = lowPerf ? { ...options, ...LOW_PERF_FORCED } : options;
-  const [renderWidth, renderHeight] = resolution(opts.resolution);
+  const [renderWidth, renderHeight] = resolution(options.resolution);
   current = {
     renderWidth,
     renderHeight,
-    modelDetail: quality(opts.modelDetail, DEFAULTS.modelDetail),
-    animQuality: quality(opts.animQuality, DEFAULTS.animQuality),
-    textureQuality: quality(opts.textureQuality, DEFAULTS.textureQuality),
-    particles: quality(opts.particles, DEFAULTS.particles),
-    lights: quality(opts.lights, DEFAULTS.lights),
-    unitShadows: opts.shadows !== "off",
-    occlusion: opts.occlusion !== "off",
-    gamma: typeof opts.gamma === "number" ? opts.gamma : DEFAULTS.gamma,
-    antialias: !lowPerf && opts.antialias !== false,
-    lowPerf,
+    modelDetail: quality(options.modelDetail, DEFAULTS.modelDetail),
+    animQuality: quality(options.animQuality, DEFAULTS.animQuality),
+    textureQuality: quality(options.textureQuality, DEFAULTS.textureQuality),
+    particles: quality(options.particles, DEFAULTS.particles),
+    lights: quality(options.lights, DEFAULTS.lights),
+    unitShadows: options.shadows !== "off",
+    occlusion: options.occlusion !== "off",
+    gamma: typeof options.gamma === "number" ? options.gamma : DEFAULTS.gamma,
+    antialias: options.antialias !== false,
   };
   const b = bridge();
   b.particleScale = PARTICLE_SCALE[current.particles];
   b.textureMipDrop = MIP_DROP[current.textureQuality];
-  // Animation Quality: Low shares poses (SHARED_POSES) — which Low Performance Mode reaches by
-  // forcing that row. Live: a change takes effect on the next frame, and leaving Low has every
-  // instance sampling for itself again.
+  // Animation Quality: Low shares poses (SHARED_POSES). Live: a change takes effect on the next
+  // frame, and leaving Low has every instance sampling for itself again.
   b.sharedPoses = SHARED_POSES[current.animQuality];
   b.poseBucket = POSE_BUCKET_MS;
   applyGamma(current.gamma);
   // "4:3 Menus" is a layout switch rather than a renderer one, but it is a Video row and so it
-  // arrives here, live, with the rest (ui/widescreen.ts). Not part of Low Performance Mode: the
-  // shape of the menus is the player's, like the resolution.
+  // arrives here, live, with the rest (ui/widescreen.ts). Not in `LOWEST_VIDEO` (data/options.ts):
+  // the shape of the menus is the player's, like the resolution.
   setFixedMenuAspect(options.menus43 === true);
 }
 
