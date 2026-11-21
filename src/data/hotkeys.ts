@@ -54,10 +54,6 @@ export const GRID_INVENTORY_CODES: readonly string[] = ["KeyT", "KeyY", "KeyG", 
 const letterOf = (code: string): string => code.slice(-1);
 
 let mode: HotkeyMode = "legacy";
-/** True for the length of a match on a map that is played by LETTER (`wantsClassicKeys`):
- *  Grid stands down to Legacy there whatever the Gameplay row says. Match-scoped and never
- *  written into the options — the player's choice comes back on the next map. */
-let classicForMap = false;
 /** Options → Gameplay → "Show hotkeys on command buttons". */
 let printed = true;
 
@@ -74,44 +70,16 @@ export function hotkeysOnButtons(): boolean {
   return printed;
 }
 
-/** Which scheme the keyboard is on right now — the option, unless the map overrides it. */
+/** Which scheme the keyboard is on right now. */
 export function hotkeyMode(): HotkeyMode {
-  return classicForMap && mode === "grid" ? "legacy" : mode;
-}
-
-/**
- * The scripts that are played by LETTER rather than by card slot, so Grid would break them.
- *
- * Blizzard's own Azeroth Grand Prix ("(8)AzerothGrandPrix.w3x", Maps\FrozenThrone\Scenario)
- * prints its controls in its own words — `GetGameTip` in its war3map.j: "Arrow keys - Drive your
- * cart", "'A' 'S' 'D' 'F' - Use items", "'W' - Fire machine gun", "'Q' - Honk" — and those
- * letters are the `Hotkey` columns of the cart's abilities, not their places on the card. Under
- * Grid the W key pressed whatever sat in the card's second slot, and the cart could not be driven
- * as the map tells you to. Asked of the script's GLOBALS rather than the file name, the same way
- * Extreme Candy War and WarChasers are recognised (ai/plus/candy/map.ts `isCandyWarScript`): these
- * four triggers are the map's cart picker and its driving, and a script with all of them is this one.
- */
-export const CLASSIC_KEY_SCRIPTS: ReadonlyArray<readonly string[]> = [
-  ["gg_trg_Pick_Cart", "gg_trg_Move_Cart", "gg_trg_Turning_Left", "gg_trg_Acceleration"],
-];
-
-/** Is the running script one of `CLASSIC_KEY_SCRIPTS`? */
-export function wantsClassicKeys(globals: { has(name: string): boolean }): boolean {
-  return CLASSIC_KEY_SCRIPTS.some((markers) => markers.every((g) => globals.has(g)));
-}
-
-/** Set (or clear) the map's Classic-keys override — cleared at every match start, set by
- *  `startCustom` once the script has shown which map it is. The Custom rung is untouched: it
- *  already presses buttons by the letter written on them. */
-export function setClassicKeysForMap(on: boolean): void {
-  classicForMap = on;
+  return mode;
 }
 
 /** True while the card is keyed by PLACE. `custom` answers FALSE on purpose: it presses buttons
  *  by the letter written on them like `legacy` does — the player's file changed which letter
  *  that is, not how the key is found (customKeys.ts). */
 export function gridHotkeys(): boolean {
-  return hotkeyMode() === "grid";
+  return mode === "grid";
 }
 
 /** The card slot this physical key presses, or -1 for a key that is not one of the twelve. */

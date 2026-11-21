@@ -102,7 +102,7 @@ import { diffDumps, stateDump, stateHash } from "../game/replayHash";
 import { STATE_EVERY, StateTracker } from "../game/replayState";
 import { InputTracker, isInputSample, type InputSample } from "../game/inputTrack";
 import { commandSource, cursorPermille, selectionSource, watchInputSource } from "../ui/inputSource";
-import { hotkeyMode, setClassicKeysForMap, wantsClassicKeys } from "../data/hotkeys";
+import { hotkeyMode } from "../data/hotkeys";
 import { replaySink, type ReplaySink } from "../game/replaySink";
 import { ReplayUploader, installId } from "../game/replayUpload";
 import { autosaveReplay } from "../data/options";
@@ -3037,9 +3037,6 @@ export class MapViewerScene {
     // The seed actually used is kept: a replay must roll with it, not with "roll one".
     const seed = config.seed ?? randomSeed();
     this.rts!.setSeed(seed);
-    // A map that is played by letter (Azeroth Grand Prix) puts Grid back to Legacy for its
-    // match only (data/hotkeys.ts `wantsClassicKeys`); every match starts on the player's own.
-    setClassicKeysForMap(false);
     // …and from here the world does not STEP until the loading screen lifts (`holdAtStart`).
     // Setup is seconds of the map's art streaming in, and the frame loop used to keep stepping
     // through it — so how many steps the match had taken before its first real one depended on
@@ -4744,9 +4741,6 @@ export class MapViewerScene {
     // computer seat gets Computer+, whatever the Advanced Options switch says: the classic AI is a
     // melee build order and has nothing to play on a lane map.
     const scriptGlobals = this.mapScript?.interp.rt.globals;
-    // A map whose own tips name LETTERS ("'W' - Fire machine gun") is played on Classic keys
-    // whatever the Hotkeys row says — Grid would put W on a card slot (data/hotkeys.ts).
-    if (scriptGlobals && wantsClassicKeys(scriptGlobals)) setClassicKeysForMap(true);
     if (scriptGlobals && isCandyWarScript(scriptGlobals)) {
       const seats = config.slots
         .filter((s) => s.controller === "computer" && CANDY_HERO_SEATS.has(s.id))
@@ -18160,7 +18154,6 @@ export class MapViewerScene {
   dispose(): void {
     this.disposed = true;
     setGamepadHost(null); // the pad's match actions die with the match
-    setClassicKeysForMap(false); // …and so does a map's Classic-keys override (data/hotkeys.ts)
     this.stop();
     // The listeners first: they are the only leak that would keep FIRING — every keydown
     // handler a dead match left on `window` still answers keys typed at the main menu.
