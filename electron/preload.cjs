@@ -49,11 +49,21 @@ contextBridge.exposeInMainWorld("ow3native", {
    *  having to do it by hand. */
   relaunch: () => ipcRenderer.invoke("ow3:relaunch"),
   /** The no-WebGL screen (src/ui/noWebgl.ts). `report` writes what the page found beside what
-   *  the shell knows about the GPU into `.logs/` and resolves to `{ file, softwareGl }`;
+   *  the shell knows about the GPU into `.logs/` and resolves to `{ file, softwareGl, renderer,
+   *  experimentalFailed }`;
    *  `setSoftware` saves the software-rendering launch switch for the next launch. */
   gpu: {
     report: (probe) => ipcRenderer.invoke("ow3:gpu-report", String(probe ?? "")),
     setSoftware: (on) => ipcRenderer.invoke("ow3:software-gl-set", on === true),
+  },
+  /** Options → Video → "Renderer", which the SHELL keeps because every rung is a launch switch
+   *  (electron/main.mjs RENDERER). `get` resolves to `{ saved, running, experimentalFailed }`;
+   *  `set` saves a rung for the next launch; `ok` says this launch reached the menu drawing,
+   *  which is what keeps an Experimental choice for the launch after. */
+  renderer: {
+    get: () => ipcRenderer.invoke("ow3:renderer-get"),
+    set: (rung) => ipcRenderer.invoke("ow3:renderer-set", String(rung)),
+    ok: () => ipcRenderer.invoke("ow3:renderer-ok"),
   },
   /** `{ path, valid }` — the remembered folder, and whether it is still an install. A folder
    *  that has been moved or deleted is reported rather than silently re-asked for, so the

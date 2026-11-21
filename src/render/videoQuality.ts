@@ -334,13 +334,13 @@ const GAMMA_HOST = "ow3-gamma-host";
  * knob. What it has is an SVG `feComponentTransfer` with `type="gamma"`, which is the same curve
  * exactly — `out = in^exponent` per channel — applied as a compositing pass over one element.
  *
- * So this is a DEVIATION and worth naming: the curve is the real one, the reach is not. It is
- * hung on the world canvas (`#map`, via a custom property so the canvas `freshMapCanvas`
- * swaps in inherits it) and not on the whole page, for two reasons. A `filter` on an ancestor
- * of the HUD would make that element the containing block for every fixed thing under it, which
- * is the trap `#ui`'s own transform already documents in ui/stage.ts; and the glue screens carry
- * an authored colour grade of their own on `#menubg` (menuScene.ts), which this would fight.
- * Brightening the world is what the slider is for — seeing into a dark corner of the map.
+ * It is hung on the ROOT element (`html`, through a custom property — style.css), so it reaches
+ * everything a hardware ramp reaches: the menus, the HUD and the world. It used to be on the
+ * world canvas alone, which left the slider doing nothing the player could SEE while they dragged
+ * it — the Options screen is a menu, and there was no world under it. The worry that kept it off
+ * the page — a `filter` makes its element the containing block of every fixed descendant, the
+ * trap `#ui`'s transform documents in ui/stage.ts — does not apply to the root, which CSS Filter
+ * Effects 1 exempts by name.
  *
  * The mapping is OURS, and doubles either way from the middle: 50 → 1.0 (untouched), 100 → 0.5
  * (brighter), 0 → 2.0 (darker). At exactly 50 nothing is installed at all — a full-screen filter

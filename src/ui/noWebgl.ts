@@ -11,8 +11,9 @@ import { bindHotkeys, createGlueButton, createPanel } from "@openwar3/ui/dom";
 // gate's own layout classes; and like the gate's, every word on it is OURS — the game has no
 // string for this, because the game's renderer is Direct3D and either starts or does not.
 //
-// The desktop app can do something about it: the shell can let Chromium fall back to software
-// rendering (electron/main.mjs SOFTWARE_GL), and this screen is where the player turns that on.
+// The desktop app can do something about it: the shell can launch Chromium on software rendering
+// (electron/main.mjs RENDERER, Options → Video → "Renderer"), and this screen is where a player
+// who cannot reach that menu turns it on — including one whose Experimental renderer failed.
 // It is the player's call rather than automatic because it is SLOW — a match on a Core 2 Duo runs
 // at a few frames a second — and a player should know that before they meet it. Either way a
 // report is written to `.logs/` (`ow3:gpu-report`), which is what gets the driver looked at.
@@ -61,6 +62,14 @@ export function mountNoWebgl(root: HTMLElement, probe: WebglProbe): void {
     // there is nothing left to offer: Chromium could not start even SwiftShader.
     void reportGpu(describeProbe(probe)).then((r) => {
       if (!r) return;
+      // Options → Video → "Renderer" (electron/main.mjs RENDERER). Experimental is the GPU
+      // Chromium refuses, used anyway — so when it is what failed, say so, and offer Software
+      // all the same: the player never has to find settings.json to get the game running again.
+      if (r.renderer === "experimental") {
+        advice.textContent = "The Experimental renderer uses a graphics card the browser engine does not trust, and on this computer it did not give the game what it needs. Software rendering draws the game on the processor instead. It works on any computer, but it is slow — expect the menus to be usable and a match to run at only a few frames a second.";
+      } else if (r.experimentalFailed) {
+        advice.textContent = "The Experimental renderer did not start last time, so this launch went back to the default one, which this computer's driver does not support either. Software rendering draws the game on the processor instead. It works on any computer, but it is slow — expect the menus to be usable and a match to run at only a few frames a second.";
+      }
       if (r.softwareGl) {
         advice.textContent = "Software rendering is already on, and it could not start either. Updating the graphics driver is the remaining fix.";
         action.hidden = true;

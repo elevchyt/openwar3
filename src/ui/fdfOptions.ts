@@ -17,7 +17,7 @@ import { applyHealthBarOptions } from "../render/worldOverlays";
 import { applyHotkeyOptions } from "../data/hotkeys";
 import { applyScrollOptions } from "../render/scrollOptions";
 import { applyVoiceOptions } from "../voice/control";
-import { nativeVsync, relaunchNative, setNativeVsync } from "../assets/nativeInstall";
+import { nativeRenderer, nativeVsync, relaunchNative, setNativeRenderer, setNativeVsync, type Renderer } from "../assets/nativeInstall";
 import { showGlueDialog } from "./glueDialog";
 import { showHotkeyEditor } from "./hotkeyEditor";
 import { setGameTip } from "./gameTip";
@@ -95,6 +95,10 @@ export async function mountOptions(
   // to make, and the box is shown ticked and greyed (see `bindOne`).
   const shellVsync = await nativeVsync();
   if (shellVsync !== null) committed.vsync = shellVsync;
+  // "Renderer" is the shell's too, and for the same reason. The SAVED rung is what the row shows:
+  // the one this launch runs differs only until the relaunch that applies it.
+  const shellRenderer = await nativeRenderer();
+  if (shellRenderer !== null) committed.renderer = shellRenderer.saved;
   // The screen edits this copy; OK commits it, Cancel discards it. So a player who fiddles
   // and cancels is exactly where they started, audio included.
   const working: Options = { ...committed };
@@ -144,7 +148,9 @@ export async function mountOptions(
       SoundButton: () => void showPanel("sound"),
       OKButton: () => {
         saveOptions(working);
-        if (shellVsync !== null && working.vsync !== committed.vsync) void commitVsync(working.vsync === true);
+        const vsyncChanged = shellVsync !== null && working.vsync !== committed.vsync;
+        const rendererChanged = shellRenderer !== null && working.renderer !== committed.renderer;
+        if (vsyncChanged || rendererChanged) void commitShell(vsyncChanged, rendererChanged);
         else h.onClose();
       },
       // The hotkey editor (issue #156) — its own modal over this screen, saving its own file.
@@ -160,7 +166,7 @@ export async function mountOptions(
   });
 
   /**
-   * Hand a changed "Vertical Sync" to the shell and offer to apply it NOW.
+   * Hand a changed "Vertical Sync" and/or "Renderer" to the shell and offer to apply them NOW.
    *
    * It is a Chromium launch switch (electron/main.mjs), and nothing in Electron changes it on a
    * running window — the GPU process reads it once, and restarting that process loses every WebGL
@@ -169,14 +175,17 @@ export async function mountOptions(
    * Saved to the shell BEFORE asking, so both answers leave it saved. The Options screen is only
    * reachable from the menus, so a relaunch never costs a match.
    */
-  async function commitVsync(on: boolean): Promise<void> {
+  async function commitShell(vsync: boolean, renderer: boolean): Promise<void> {
     screen.setInteractive(false);
-    await setNativeVsync(on);
+    if (vsync) await setNativeVsync(working.vsync === true);
+    if (renderer) await setNativeRenderer(str(working.renderer, "webgl") as Renderer);
+    // One restart applies both, so one question asks it.
+    const key = vsync && renderer ? "RESTART_BOTH" : renderer ? "RENDERER_RESTART" : "VSYNC_RESTART";
     try {
       await showGlueDialog({
         container,
         vfs,
-        text: lib?.string("VSYNC_RESTART") ?? "VSYNC_RESTART",
+        text: lib?.string(key) ?? key,
         buttons: "yesno",
         onConfirm: () => relaunchNative(),
         onCancel: () => h.onClose(),
@@ -300,6 +309,13 @@ export async function mountOptions(
       const c = s.popup(d.frame);
       if (!c) return;
       const choices = d.choices ?? [];
+      if (d.key === "renderer" && shellRenderer === null) {
+        // A browser tab draws with whatever GPU the BROWSER picked, and no page can relaunch it.
+        c.setOptions(choices.map((ch) => ({ value: ch.value, label: lib?.string(ch.label) ?? ch.label })));
+        c.value = "webgl";
+        c.setEnabled(false);
+        return;
+      }
       if (choices.length) {
         c.setOptions(choices.map((ch) => ({ value: ch.value, label: lib?.string(ch.label) ?? ch.label })));
         c.value = str(working[d.key], String(d.def));

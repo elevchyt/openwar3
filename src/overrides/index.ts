@@ -110,6 +110,10 @@ export const OW3_STRINGS: FdfOverride = { id: "ow3-strings", source: globalStrin
  * checkboxes. See `ui/OptionsMenu.fdf` for the panel this adds up to, and
  * src/data/options.ts for why each retired row goes.
  */
+/** The Video panel's pulldown rows under "Resolution:", top to bottom — the game's own frames
+ *  (`<name>Label` / `<name>Backdrop`), which the Renderer row's `repoint`s close up. */
+const VIDEO_PULLDOWNS = ["ModelDetail", "AnimQuality", "TextureQuality", "Particles", "Lights", "Shadows", "Occlusion"];
+
 export const OPTIONS_MENU_OVERRIDE: FdfOverride = {
   id: "ow3-options-menu",
   source: optionsMenuFdf,
@@ -147,6 +151,21 @@ export const OPTIONS_MENU_OVERRIDE: FdfOverride = {
     // pulldown gone there is no second group for a wider gap to set apart. "3D Positional
     // Audio" follows it, as it always did.
     { from: "ProviderLabel", to: "SubtitlesCheckBox", dy: 0.025, only: ["EnviroCheckBox"] },
+    // The VIDEO panel's: "Renderer:" is spliced in above "Resolution:" (see ui/OptionsMenu.fdf
+    // for where the height comes from). Resolution follows it at the tighter pulldown pitch
+    // (-0.04 under Gamma + 0.01625 = -0.02375), Model Detail closes the retired Fixed Aspect
+    // Ratio slack (-0.042 → -0.02375, -0.002 → +0.01625), and every step under it is 0.0025
+    // tighter — label and box alike, so each row's box stays on its label.
+    { from: "GammaLabel", to: "RendererLabel", dy: 0.01625, only: ["ResolutionLabel"] },
+    { from: "ResolutionLabel", to: "ResolutionLabel", dy: 0.01825, only: ["ModelDetailLabel"] },
+    { from: "ResolutionBackdrop", to: "ResolutionBackdrop", dy: 0.01825, only: ["ModelDetailBackdrop"] },
+    ...VIDEO_PULLDOWNS.slice(1).flatMap((row, i) => {
+      const above = VIDEO_PULLDOWNS[i];
+      return [
+        { from: `${above}Label`, to: `${above}Label`, dy: 0.0025, only: [`${row}Label`] },
+        { from: `${above}Backdrop`, to: `${above}Backdrop`, dy: 0.0025, only: [`${row}Backdrop`] },
+      ];
+    }),
   ],
   add: [
     { frame: "ComputerPlusDefaultCheckBox", into: "GameplayPanel" },
@@ -168,6 +187,8 @@ export const OPTIONS_MENU_OVERRIDE: FdfOverride = {
     { frame: "GamepadButton", into: "GameplayPanel" }, // Detect / Unpair Gamepad, issue #162
     // Options → Video: "Vertical Sync" under the game's last row (Occlusion). Box before label in
     // each pair — a label anchors to the box beside it.
+    { frame: "RendererLabel", into: "VideoPanel" }, // "Renderer:", above Resolution
+    { frame: "RendererBackdrop", into: "VideoPanel" },
     { frame: "VsyncCheckBox", into: "VideoPanel" },
     { frame: "VsyncLabel", into: "VideoPanel" },
     // …and "4:3 Menus" on the Vertical Sync row, in the pulldown column.

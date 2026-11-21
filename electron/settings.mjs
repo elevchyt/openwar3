@@ -5,9 +5,11 @@
 // Deliberately tiny and deliberately not a settings SYSTEM: the game's own options already have
 // a home (src/data/options.ts, in the page's storage where the game can read them). This is only
 // for what the SHELL needs to know before there is a page at all, which today is three things —
-// where the player's Warcraft III folder is, whether to launch Chromium with vsync, and whether
-// to let WebGL fall back to software rendering (electron/main.mjs; both launch switches, so the
-// page's own store is read too late for them).
+// where the player's Warcraft III folder is, whether to launch Chromium with vsync, and which
+// RENDERER to launch it with (`"renderer": "webgl" | "software" | "experimental"`, electron/main.mjs;
+// both launch switches, so the page's own store is read too late for them). The renderer is the
+// one a player may have to edit BY HAND, when the rung they picked leaves no window to change it
+// in — so it is always written out by name.
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";

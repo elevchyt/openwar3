@@ -111,10 +111,15 @@ html, body {
    aspect anywhere else. */
 #map {
   background: #000;
-  /* Options -> Video -> Gamma (render/videoQuality.ts). The property is set on :root and only
-     while the slider is off its middle, so at the default this is `none` and the compositor has
-     no extra pass to make. It lives here rather than on the element because a match REPLACES
-     this canvas when it ends (main.ts freshMapCanvas) — an inline style would go with it. */
+}
+
+/* Options -> Video -> Gamma (render/videoQuality.ts): the WHOLE picture, menus, HUD and world
+   alike, as the game's hardware ramp is. On the ROOT element because that is the one element a
+   `filter` does not turn into the containing block of everything fixed under it (CSS Filter
+   Effects 1, "unless the element it applies to is document root element"). The property is set
+   only while the slider is off its middle, so at the default this is `none` and the compositor
+   has no extra pass to make. */
+html {
   filter: var(--ow3-gamma, none);
 }
 

@@ -42,7 +42,7 @@ import { OFFICIAL_SERVERS } from "./net/officialServer";
 import { observerSlots } from "./net/lobbySetup";
 import type { AdvancedOptions } from "./net/advancedOptions";
 import { WebSocketTransport } from "./net/transport";
-import { onServersFound, onShellClosing } from "./assets/nativeInstall";
+import { confirmNativeRenderer, onServersFound, onShellClosing } from "./assets/nativeInstall";
 import { watchForUpdates } from "./ui/updatePrompt";
 import { gpuToJudge, maybeAskWeakGpu } from "./ui/weakGpu";
 import { startGamepad } from "./ui/gamepad";
@@ -1653,7 +1653,12 @@ function showMenu(load: GateLoad): void {
     glue.setScene(menuScene);
     // …and once it is up, the one-time "your graphics may struggle" question for a machine on
     // integrated or software graphics (src/ui/weakGpu.ts).
-    void showMainMenu(load.vfs).then(() => maybeAskWeakGpu(ui, load.vfs, gpuToJudge(webgl.renderer)));
+    void showMainMenu(load.vfs).then(() => {
+      // The menu is up and its world is drawing, so this launch's renderer WORKS — which is what
+      // keeps an Experimental one chosen for the next launch (electron/main.mjs RENDERER).
+      confirmNativeRenderer();
+      return maybeAskWeakGpu(ui, load.vfs, gpuToJudge(webgl.renderer));
+    });
     // The desktop app asked GitHub for a newer version seconds after launch; this is the first
     // moment there is a screen worth interrupting, and the game's own message box to do it in
     // (src/ui/updatePrompt.ts). A no-op in a browser, which updates by being reloaded.

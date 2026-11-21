@@ -71,6 +71,17 @@ StringList {
     DOWNLOADING_VOICE_CONTROL   "Downloading Voice Control",
     VOICE_CONTROL_TITLE         "Voice Control",
 
+    // Options, Video panel, above "Resolution:": the desktop app's renderer, three Chromium LAUNCH
+    // switches (electron/main.mjs RENDERER). The game has no such row -- its renderer is
+    // Direct3D. OK asks RENDERER_RESTART in the menus' Yes/No box, and Yes relaunches the game; a
+    // change to Vertical Sync at the same time is the same restart, so it asks RESTART_BOTH.
+    COLON_RENDERER              "Renderer:",
+    RENDERER_WEBGL              "WebGL",
+    RENDERER_SOFTWARE           "Software",
+    RENDERER_EXPERIMENTAL       "Experimental",
+    RENDERER_RESTART            "OpenWar3 must restart to change the Renderer. Restart now?",
+    RESTART_BOTH                "OpenWar3 must restart to change the Renderer and Vertical Sync. Restart now?",
+
     // Options, Video panel, under "Occlusion:": the desktop app's vsync switch. The game has no
     // such row. It is a Chromium LAUNCH switch there (electron/main.mjs), so OK asks the second
     // string -- in the menus' own Yes/No box -- and Yes relaunches the game to apply it.

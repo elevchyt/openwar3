@@ -42,6 +42,12 @@ interface NativeBridge {
     report(probe: string): Promise<GpuReport>;
     setSoftware(on: boolean): Promise<void>;
   };
+  /** Options → Video → "Renderer" (electron/main.mjs RENDERER). Absent on an older shell. */
+  renderer?: {
+    get(): Promise<RendererState>;
+    set(rung: Renderer): Promise<void>;
+    ok(): Promise<void>;
+  };
   /** The window is closing; the shell waits for `fn` before it does. Absent on an older shell. */
   onClosing?(fn: () => Promise<void> | void): void;
   /** Write the install's CustomKeys.txt (issue #156). Absent on a shell older than the editor. */
@@ -96,11 +102,35 @@ export const setNativeVsync = async (on: boolean): Promise<void> => { await brid
 export const relaunchNative = (): void => void bridge()?.relaunch?.();
 
 /** What the shell did with a GPU report: the `.logs/` file it wrote (null if it could not), and
- *  whether software rendering was already on for THIS launch. */
+ *  whether software rendering was already on for THIS launch. `renderer` and `experimentalFailed`
+ *  are absent from a shell older than the Renderer row. */
 export interface GpuReport {
   file: string | null;
   softwareGl: boolean;
+  renderer?: Renderer;
+  experimentalFailed?: boolean;
 }
+
+/** Options → Video → "Renderer": the three launch switches the desktop shell knows
+ *  (electron/main.mjs RENDERER, which says what each one does). */
+export type Renderer = "webgl" | "software" | "experimental";
+/** The rung the shell has SAVED (the next launch's), the one this launch is RUNNING, and whether
+ *  this launch is webgl only because an Experimental one never reached the menu. */
+export interface RendererState {
+  saved: Renderer;
+  running: Renderer;
+  experimentalFailed: boolean;
+}
+
+/** The shell's renderer, or null in a browser (whose GPU is the browser's) or an older shell. */
+export const nativeRenderer = async (): Promise<RendererState | null> => {
+  const r = bridge()?.renderer;
+  return r ? r.get().catch(() => null) : null;
+};
+/** Save a renderer for the next launch; `relaunchNative` applies it. */
+export const setNativeRenderer = async (rung: Renderer): Promise<void> => { await bridge()?.renderer?.set(rung); };
+/** This launch reached the main menu drawing — what keeps an Experimental renderer chosen. */
+export const confirmNativeRenderer = (): void => void bridge()?.renderer?.ok().catch(() => {});
 
 /** Write the GPU report (electron/main.mjs `ow3:gpu-report`). Null in a browser, or on a shell
  *  older than the no-WebGL screen. */

@@ -221,6 +221,16 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   `settings.json` owns it and OK offers to RELAUNCH the game to apply it (nothing in Electron
   changes it on a running window); with it off the page caps itself
   at 300 fps (`src/render/frameCap.ts`), and in a browser tab the box is greyed.
+  **RENDERER** (ours, the row ABOVE Resolution) is the same kind of launch switch: WebGL
+  (default), Software (`disable-gpu` + `enable-unsafe-swiftshader` — SwiftShader FORCED) and
+  Experimental (`ignore-gpu-blocklist` — the GPU Chromium refuses, e.g. a GM45 on Mesa crocus),
+  kept by the shell as `"renderer"` in `settings.json`, written there by name so a player can fix
+  it by hand. An Experimental launch is on TRIAL until the main menu is up (`ow3:renderer-ok`);
+  one that never got there sends the next launch back to WebGL, and a failed probe under it gets
+  the no-WebGL screen's Software button — the game can always be got running without the file.
+  **GAMMA** is a filter on the ROOT element (style.css), the one element CSS exempts from the
+  fixed-containing-block trap, so it brightens the menus and the HUD as the hardware ramp did —
+  on `#map` alone the slider looked dead on the Options screen.
   **ANTIALIASING** (ours, on by default, the third box on that row) is a WebGL CONTEXT attribute,
   so `loadMap` makes the world's context itself before the viewer asks (whose `{ alpha: false }`
   left WebGL's default — multisampled — on every machine); it lands on the next match. The
@@ -287,8 +297,8 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   asks once at boot for what mdx-m3-viewer throws without (WebGL **1**, `OES_texture_float`,
   `ANGLE_instanced_arrays`, vertex texture fetch — WebGL 2 is not needed, a match was played
   with it off) and [`src/ui/noWebgl.ts`](src/ui/noWebgl.ts) replaces every boot when it fails:
-  in the desktop app it writes a GPU report to `.logs/` and offers to relaunch with the shell's
-  `softwareGl` setting (`enable-unsafe-swiftshader`, which only PERMITS the fallback). Reproduce
+  in the desktop app it writes a GPU report to `.logs/` and offers to relaunch on the shell's
+  Software renderer (Options → Video → Renderer; `docs/video-options.md` "Renderer"). Reproduce
   with Chrome's `--disable-3d-apis`, or the desktop app headless with `--ozone-platform=headless
   --disable-gpu` and a scratch `XDG_CONFIG_HOME`.
 - **Windows:** read [`docs/windows.md`](docs/windows.md) before touching the NSIS include

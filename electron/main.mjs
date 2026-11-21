@@ -148,18 +148,57 @@ if (!VSYNC) {
 /** The page's cap with vsync off; with it on the display's refresh is the cap and there is none. */
 const MAX_FPS = VSYNC ? 0 : 300;
 
-// SOFTWARE RENDERING — the player's choice, made on the no-WebGL screen (src/ui/noWebgl.ts) and
-// kept here for the same reason vsync is: it is a launch switch. Since Chromium 139 a GPU the
-// browser will not use leaves the page with NO WebGL at all rather than quietly falling back to
-// SwiftShader (blink-dev "Intent to Remove: SwiftShader Fallback"), and Electron 44 is Chromium
-// 152 — so on a machine like a 2008 ThinkPad's GM45 the menu came up with no 3D and a match was a
-// black screen. `enable-unsafe-swiftshader` only PERMITS that fallback: a GPU that works is still
-// the one used, so the setting can stay on after the driver is fixed. It is opt-in rather than
-// always on because the fallback also reaches the map sites' web views (electron/mapSitesView.mjs),
-// which are other people's pages — the "unsafe" is about running untrusted WebGL in software.
-// OURS, not the game's.
-const SOFTWARE_GL = readSettings().softwareGl === true;
-if (SOFTWARE_GL) app.commandLine.appendSwitch("enable-unsafe-swiftshader");
+// THE RENDERER — the player's choice, Options → Video → "Renderer" (src/data/options.ts), and
+// kept here for the same reason vsync is: every rung is a Chromium LAUNCH switch. It is also the
+// one option a player may have to change WITHOUT the game, because the wrong rung can leave no
+// window to change it in — so it is written into settings.json by name on every launch
+// (`"renderer": "webgl" | "software" | "experimental"`), where a player can find and edit it.
+//
+//  · webgl — Chromium's own choice: the GPU when it trusts the driver, and since Chromium 139
+//    NOTHING when it does not (blink-dev "Intent to Remove: SwiftShader Fallback"; Electron 44 is
+//    Chromium 152). That is what left a 2008 ThinkPad's GM45 with a menu with no 3D and a black
+//    match, and why the two rungs below exist.
+//  · software — SwiftShader, Chromium's CPU rasteriser, FORCED: `disable-gpu` takes the GPU out
+//    and `enable-unsafe-swiftshader` permits the fallback the page then lands on (checked against
+//    Chrome 158: on a working GPU that pair reports "SwiftShader driver", and `disable-gpu` alone
+//    leaves no WebGL at all). It runs on any machine and slowly — a match on a Core 2 Duo is a
+//    few frames a second. Opt-in rather than always permitted because the fallback also reaches
+//    the map sites' web views (electron/mapSitesView.mjs), which are other people's pages — the
+//    "unsafe" is about running untrusted WebGL in software.
+//  · experimental — the GPU Chromium REFUSES, used anyway (`ignore-gpu-blocklist`): on the GM45
+//    that is Mesa's crocus driver. Chromium blocklists such a driver for crashes and rendering
+//    bugs, so it may not come up. If it does not, the page's probe fails and the no-WebGL screen
+//    offers Software (src/ui/noWebgl.ts); and if it takes the whole launch down with it, the
+//    launch was never CONFIRMED (`rendererTrial` below), so the next one quietly goes back to
+//    webgl and the screen says why. Either way the game can always be got running again without
+//    opening this file.
+//
+// OURS, not the game's: 1.30.4's renderer is Direct3D and either starts or does not.
+const RENDERERS = ["webgl", "software", "experimental"];
+/** What THIS launch draws with, and whether an unconfirmed Experimental launch was just undone. */
+const { RENDERER, EXPERIMENTAL_FAILED } = (() => {
+  const saved = readSettings();
+  // A store from before the dropdown has only the no-WebGL screen's `softwareGl` switch.
+  let renderer = RENDERERS.includes(saved.renderer) ? saved.renderer : saved.softwareGl === true ? "software" : "webgl";
+  let failed = false;
+  // The previous Experimental launch never reached the menu (`ow3:renderer-ok`): a GPU process
+  // that hung, a driver that crashed the window, a player who gave up on a black screen. Not
+  // again — this launch is webgl, and the file says so.
+  if (renderer === "experimental" && saved.rendererTrial === true) {
+    renderer = "webgl";
+    failed = true;
+  }
+  // `softwareGl: undefined` drops the old key: the store merges, and JSON leaves undefined out.
+  const next = { renderer, rendererTrial: renderer === "experimental", softwareGl: undefined };
+  if (saved.renderer !== next.renderer || saved.rendererTrial !== next.rendererTrial || "softwareGl" in saved) writeSettings(next);
+  return { RENDERER: renderer, EXPERIMENTAL_FAILED: failed };
+})();
+if (RENDERER === "software") {
+  app.commandLine.appendSwitch("disable-gpu");
+  app.commandLine.appendSwitch("enable-unsafe-swiftshader");
+} else if (RENDERER === "experimental") {
+  app.commandLine.appendSwitch("ignore-gpu-blocklist");
+}
 
 // Every time the GPU process went down this run. Chromium gives up on the GPU after it crashes a
 // few times, which is the OTHER way a page ends up with no WebGL, and only the main process hears
@@ -533,7 +572,7 @@ app.whenReady().then(async () => {
     const lines = [
       `OpenWar3 ${app.getVersion()} — no usable WebGL`,
       `Electron ${process.versions.electron}, Chromium ${process.versions.chrome}, ${process.platform} ${process.arch}`,
-      `Software rendering (enable-unsafe-swiftshader): ${SOFTWARE_GL ? "on" : "off"}`,
+      `Renderer: ${RENDERER}${EXPERIMENTAL_FAILED ? " (Experimental was chosen, but its last launch never reached the menu)" : ""}`,
       `The page found: ${String(probe ?? "")}`,
       `GPU process exits this run: ${gpuExits.length ? gpuExits.join("; ") : "none"}`,
       `Feature status: ${JSON.stringify(app.getGPUFeatureStatus(), null, 2)}`,
@@ -545,9 +584,26 @@ app.whenReady().then(async () => {
       matchLogs.append(log.id, lines.join("\n"));
       matchLogs.end(log.id);
     }
-    return { file: log?.file ?? null, softwareGl: SOFTWARE_GL };
+    return { file: log?.file ?? null, softwareGl: RENDERER === "software", renderer: RENDERER, experimentalFailed: EXPERIMENTAL_FAILED };
   });
-  ipcMain.handle("ow3:software-gl-set", (_event, on) => { writeSettings({ softwareGl: on === true }); });
+  // The no-WebGL screen's "Restart with Software Rendering" — and, from an older page, its old
+  // name for the same thing.
+  ipcMain.handle("ow3:software-gl-set", (_event, on) => { writeSettings({ renderer: on === true ? "software" : "webgl", rendererTrial: false }); });
+  // Options → Video → "Renderer" (see RENDERER above). `get` is the SAVED rung and what this
+  // launch is actually drawing with — they differ after a change that has not been relaunched
+  // yet, and after an Experimental launch that was undone. `set` saves a rung for the next launch.
+  ipcMain.handle("ow3:renderer-get", () => {
+    const saved = readSettings().renderer;
+    return { saved: RENDERERS.includes(saved) ? saved : RENDERER, running: RENDERER, experimentalFailed: EXPERIMENTAL_FAILED };
+  });
+  ipcMain.handle("ow3:renderer-set", (_event, rung) => {
+    if (RENDERERS.includes(rung)) writeSettings({ renderer: rung, rendererTrial: false });
+  });
+  // The page reached the main menu with the world drawing: this launch's renderer WORKS. Only
+  // Experimental is on trial (RENDERER above); it is cleared here, so the next launch keeps it.
+  ipcMain.handle("ow3:renderer-ok", () => {
+    if (RENDERER === "experimental" && readSettings().rendererTrial === true) writeSettings({ rendererTrial: false });
+  });
   ipcMain.handle("ow3:relaunch", () => {
     app.relaunch(process.env.APPIMAGE ? { execPath: process.env.APPIMAGE, args: process.argv.slice(1) } : {});
     app.quit();

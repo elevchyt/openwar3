@@ -33,7 +33,8 @@ carry a `SpellFilterValue` — see below — but as a READOUT, not a control.)
 
 | Row | Backend |
 |---|---|
-| **Gamma** | An SVG `feComponentTransfer type="gamma"` over `#map`. Installed only off the middle. |
+| **Gamma** | An SVG `feComponentTransfer type="gamma"` over the whole page (`html`). Installed only off the middle. |
+| **Renderer** | Ours. Which Chromium launch switches the desktop app starts with — see "Renderer" below. |
 | **Resolution** | The size of the buffer the world is drawn into. |
 | **Model Detail** | *Nothing* — see below. |
 | **Animation Quality** | Strides the map's widget stand-scan (1 / 2 / 4 frames); **Low** also SHARES animation (30 Hz poses — see below). |
@@ -389,10 +390,11 @@ shadow passes away is worth under a millisecond of a 40 ms frame, so that is not
 machine's time goes. Everything below the second row is the animation path, and that is where
 the value is: the pose cache first, then the shared skeleton, which is what turns a
 weak-machine frame from 63 ms into 29. **The substance of issue #161 is still the renderer work behind the flag**
-— particles and ribbons off rather than quartered, the fog overlay and the baked shadow layer
+— cheaper particles and ribbons (never none: Particles: Low still draws them, at lower
+quality — the developer's rule), the fog overlay and the baked shadow layer
 taking terrain-cull's runs (docs/terrain-culling.md), skinning off the main thread, single-pass
 terrain, batching by texture — each of which the issue gates on its own Step 0 profile. Each
-should land as a rung of the row it belongs to (Particles: Low drawing none, say), not as a
+should land as a rung of the row it belongs to (a cheaper Particles: Low, say), not as a
 switch over the panel.
 
 ## The two rows with no backend, and why they stay that way
@@ -440,6 +442,50 @@ server and delete `node_modules/.vite`, or Vite serves the pre-patch bundle (CLA
 — the Options screen applies the working copy on every change, so the scene behind the panel
 follows the dropdown. **Texture Quality is read as a texture uploads**, so it reaches the next
 map rather than the one on screen.
+
+## Gamma reaches the whole screen
+
+WC3's gamma is a HARDWARE ramp, so it lifts the menus, the console and the world alike. Ours
+was hung on the world canvas (`#map`) alone, which made the slider look dead: the Options screen
+is a menu, there is no world under it, and nothing on screen moved as it was dragged. It now
+sits on the ROOT element (`html { filter: var(--ow3-gamma, none) }` in style.css). That is the
+one element a `filter` does not turn into the containing block of everything fixed under it —
+CSS Filter Effects 1 exempts "the document root element" by name — so the trap that kept it off
+the page (ui/stage.ts) does not apply; checked in a match, the HUD box is unmoved at 1600×900.
+It is still installed only off the middle, so the default costs no pass.
+
+## Renderer (desktop app only)
+
+The row above Resolution, **"Renderer:"**, is OURS — 1.30.4 draws with Direct3D and either
+starts or does not. Each rung is a set of Chromium LAUNCH switches, so like Vertical Sync the
+SHELL keeps it in `settings.json` (`electron/main.mjs` `RENDERER`), OK offers to relaunch (one
+question when Vertical Sync changed too, `RESTART_BOTH`), and a browser tab shows the row greyed
+at WebGL.
+
+| Rung | Switches | What it is |
+|---|---|---|
+| **WebGL** (default) | none | Chromium's choice: the GPU it trusts, or since Chromium 139 NO WebGL at all. |
+| **Software** | `disable-gpu` + `enable-unsafe-swiftshader` | SwiftShader, FORCED — every pixel on the CPU. Works anywhere, a few fps in a match on a Core 2 Duo. |
+| **Experimental** | `ignore-gpu-blocklist` | The GPU Chromium refuses (the T500's GM45 on Mesa crocus), used anyway. |
+
+The Software pair was checked against Chrome 158 on a working GPU: the two together report
+"SwiftShader driver", `disable-gpu` alone leaves no WebGL, and `enable-unsafe-swiftshader` alone
+only PERMITS the fallback (the old no-WebGL screen's `softwareGl` switch, which a store still
+carrying it is migrated from).
+
+**A player must always be able to get the game running again without hunting for a file**, and
+Experimental is the rung that can take the window down. Two doors cover it:
+
+- the probe fails (a missing feature, or a GPU process Chromium gave up on): the no-WebGL screen
+  says the Experimental renderer failed and offers **Restart with Software Rendering**;
+- the launch never reaches the menu at all (a hang, a crash, a black screen the player quits):
+  every Experimental launch is written down as on TRIAL (`rendererTrial`) and cleared only when
+  the main menu is up and drawing (`ow3:renderer-ok`, main.ts `showMenu`). A launch that finds
+  the trial still open goes back to WebGL, writes that into the file, and tells the no-WebGL
+  screen so it can say why.
+
+And the file is the last resort: `renderer` is written into `settings.json` BY NAME on every
+launch (`"webgl"`, `"software"` or `"experimental"`), so it is there to edit by hand.
 
 ## Vertical Sync, and the 300 fps cap (desktop app only)
 

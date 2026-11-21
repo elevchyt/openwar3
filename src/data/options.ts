@@ -97,6 +97,15 @@ const ON_OFF = [
  *    Health Bars"). The colour follows the Ally Color Mode, because it is the same question
  *    the body itself is painted by — see render/worldOverlays.ts.
  */
+/** What the "Renderer:" pulldown offers — the desktop shell's three launch switches
+ *  (electron/main.mjs RENDERER). Order is the developer's: the default first, then the safe
+ *  fallback, then the gamble. */
+const RENDERERS = [
+  { value: "webgl", label: "RENDERER_WEBGL" },
+  { value: "software", label: "RENDERER_SOFTWARE" },
+  { value: "experimental", label: "RENDERER_EXPERIMENTAL" },
+];
+
 const HEALTH_BAR_STYLES = [
   { value: "default", label: "DEFAULT_HEALTHBARS" },
   { value: "team", label: "TEAM_COLORED_HEALTHBARS" },
@@ -183,6 +192,14 @@ export const OPTION_DEFS: readonly OptionDef[] = [
 
   // --- Video (applied through render/videoQuality.ts, which documents what each rung does) ---
   { key: "gamma", frame: "GammaSlider", kind: "range", panel: "video", def: 50 },
+  // "Renderer:" — not a WC3 row (1.30.4 draws with Direct3D and either starts or does not), so it
+  // is ours, on a frame of ours directly ABOVE "Resolution:" (src/overrides/ui/OptionsMenu.fdf).
+  // It means something only in the DESKTOP app, where each rung is a Chromium launch switch the
+  // shell keeps in its own settings.json (electron/main.mjs RENDERER, which says what each does):
+  // ui/fdfOptions.ts reads the shell's saved rung over this one, hands a change to it on OK and
+  // offers to relaunch, and greys the row in a browser tab, whose GPU is the browser's. Never in
+  // `LOWEST_VIDEO`: a preset may not take a machine off its GPU.
+  { key: "renderer", frame: "RendererMenu", kind: "choice", panel: "video", def: "webgl", choices: RENDERERS },
   // The buffer the world is drawn into (see RESOLUTIONS). 1920x1080 is the default and is what
   // OpenWar3 has always rendered at, so a player who never opens this screen sees no change.
   { key: "resolution", frame: "ResolutionMenu", kind: "choice", panel: "video", def: "1920x1080", choices: RESOLUTIONS },

@@ -171,6 +171,42 @@ Frame "TEXT" "ComputerPlusDefaultLabel" INHERITS "StandardInfoTextTemplate" {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Video panel: "Renderer:", a pulldown row ABOVE "Resolution:" (the developer's placement). Which
+// of the desktop shell's three Chromium launch switches the game starts with — WebGL, Software,
+// Experimental (electron/main.mjs RENDERER, src/data/options.ts). 1.30.4 draws with Direct3D and
+// has no such row, so it is ours.
+//
+// The panel had no height to give a row (see "4:3 Menus" below), so the room is found in three
+// places and the rows under it end where they did (within 0.0005):
+//   · the row takes Resolution's own slot, and Resolution follows it at the pulldown pitch;
+//   · the file's retired "Fixed Aspect Ratio" row left Resolution → Model Detail 0.042 apart
+//     against 0.02625 for every other pair — that slack is closed;
+//   · every pulldown-to-pulldown step is 0.0025 tighter: labels -0.02375 rather than -0.02625,
+//     backdrops +0.01625 rather than +0.01375 (the two are one measurement, as the Gameplay
+//     panel's comment on "Hotkeys:" says: a 0.053 backdrop less 0.01625 is the 0.03675 that a
+//     0.013 label plus 0.02375 also comes to), and the Gamma slider gives 0.004 more.
+// The re-anchoring of the game's own rows is the manifest's `repoint` (src/overrides/index.ts).
+Frame "TEXT" "RendererLabel" INHERITS "StandardInfoTextTemplate" {
+    SetPoint TOPLEFT, "GammaLabel", BOTTOMLEFT, 0.0, -0.036,
+    Text "COLON_RENDERER",
+}
+
+// Hung off Resolution's box rather than off its own label, so it lines up with the column
+// whatever width "Renderer:" prints at — Resolution's box is the one placed off a label's RIGHT
+// edge (+0.0675), and every box under it follows it.
+Frame "BACKDROP" "RendererBackdrop" INHERITS "OptionsPopupMenuBackdropTemplate" {
+    SetPoint BOTTOMLEFT, "ResolutionBackdrop", TOPLEFT, 0.0, -0.01625,
+
+    Frame "POPUPMENU" "RendererMenu" INHERITS WITHCHILDREN "OptionsPopupMenuTemplate" {
+        SetPoint TOPLEFT, "RendererBackdrop", TOPLEFT, 0.012, -0.013,
+
+        PopupMenuFrame "RendererPopupMenuMenu",
+        Frame "MENU" "RendererPopupMenuMenu" INHERITS WITHCHILDREN "StandardPopupMenuMenuTemplate" {
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Video panel: "Vertical Sync", a checkbox row under the game's last row, "Occlusion:". 1.30.4's
 // panel has no frame-rate or vsync control, so the row is ours; in the desktop app it is a
 // Chromium LAUNCH switch, applied by the relaunch OK offers (electron/main.mjs,
