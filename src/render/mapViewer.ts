@@ -4569,13 +4569,11 @@ export class MapViewerScene {
       made.push(simId);
       const u = world.units.get(simId);
       // Nobody is left standing INSIDE a structure: a building set down on a unit pushes it
-      // out, and a unit made on a building's footprint steps out of it — the displacement WC3
-      // gives a unit created on blocked ground (createScriptUnit), which spawnUnit skips.
+      // out. A UNIT made on a building's footprint, or on top of another unit, needs nothing
+      // here — the sim sets every new body down on the nearest spot it can stand on
+      // (SimWorld.settle → wayOutOfWall), and its watchdog moves anything still wedged
+      // (unstickPass), wherever the unit came from.
       if (def.isBuilding) world.pushOutOfFootprint(simId);
-      else if (u && !u.flying && world.grid) {
-        const [ux, uy] = world.grid.footprintAnchor(u.x, u.y, u.footprint);
-        if (!world.grid.footprintClear(ux, uy, u.footprint)) world.setUnitPosition(simId, u.x, u.y);
-      }
       if (!u?.isHero) continue;
       world.setHeroLevel(simId, req.level);
       if (!req.learnAll) continue;

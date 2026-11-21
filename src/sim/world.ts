@@ -1950,6 +1950,10 @@ export interface SimUnit {
   resX: number; // origin cell of the current reservation
   resY: number;
   hasReservation: boolean;
+  /** Seconds this STANDING body has been wedged — its own spot inside blocked ground, or its
+   *  reserved block shared with another body's — as `unstickPass` last measured it. Reaching
+   *  UNSTICK_AFTER moves it to the nearest spot it can stand on (`unwedge`). */
+  wedgedT: number;
   // The cell block a MOVING unit holds (see PathingGrid.claim). A walker owns the block it
   // stands on and may only advance once it owns the next one, so it never interpolates
   // toward a tile it will not be allowed to reach and then get shoved back out of it
@@ -3103,6 +3107,29 @@ export function pathDomain(u: SimUnit): PathDomain {
 export function ghosting(u: SimUnit): boolean {
   return u.noCollision || u.pathingOff || u.windWalk || u.locust; // a Locust body collides with nothing (SimUnit.locust)
 }
+// Nobody stays STUCK inside something (unstickPass / unwedge). WC3 never leaves a body standing
+// in a wall or inside another body: a unit created or revived on blocked ground comes out
+// beside it, and two made on one point come out side by side — the displacement
+// RtsController.createScriptUnit already applies to `CreateUnit`. Every way in that knows it
+// is placing goes through `settle`, which now finds that point by itself; this is the
+// BACKSTOP for whatever does not — a structure set down over a crowd, a stale reservation, a
+// script that pins a unit somewhere a second path then releases. Found on Angel Arena
+// Allstars, whose `B24` revives each fallen hero at the centre of ONE rect per team
+// (`ReviveHero(YX[i], GetRectCenterX(JK), GetRectCenterY(JK), true)`) — a point that is blocked
+// ground — so a team's dead came back as one pile inside a wall, and none of them could leave.
+// The numbers are OURS (no file states a recovery time): a body is measured twice a second and
+// must stay wedged a whole second before it is moved, so a unit only PASSING through a bad
+// spot (a script's knockback slides it a cell every 0.02 s) is never caught mid-slide.
+const UNSTICK_PERIOD = 0.5;
+const UNSTICK_AFTER = 1.0;
+/** How far (in pathing cells, a ring at a time) the way out is looked for. 12 cells is 384
+ *  world units — teleportUnit's own reach for the same "nearest fit" question. */
+const UNSTICK_REACH = 12;
+/** The orders a body may be moved out of a wedge under — the ones that are only STANDING
+ *  somewhere. Everything else (harvest, repair, cast, garrison, load…) is a job the spot is
+ *  part of; see unstickPass. */
+const UNSTICK_ORDERS: ReadonlySet<SimOrder> = new Set<SimOrder>(["idle", "hold", "move", "attack", "attackmove", "patrol", "follow"]);
+
 // Proactive reroute poll (issue #6). A unit's path is computed once, but other
 // units may stop and reserve cells across it while it travels. Rather than let a
 // unit grind into that crowd until checkStuck() fires (0.5 s of no progress),
@@ -10197,6 +10224,7 @@ export class SimWorld {
       | "wokenAt"
       | "returnBestDist"
       | "returnStuckT"
+      | "wedgedT"
       | "inventory"
       | "getItemId"
       | "pendingGive"
@@ -10505,6 +10533,7 @@ export class SimWorld {
       wokenAt: -Infinity,
       returnBestDist: 0,
       returnStuckT: 0,
+      wedgedT: 0,
       // The slots are the type's INVENTORY abilities' "Item Capacity" (`AInv` DataA — 6 for a
       // hero, 4 for the Pack Mule `Apak`, 2 for the racial backpacks), opened by `openBackpacks`
       // once each one's `Requires` is met — recomputeStats below is the first time it asks. A
@@ -10579,7 +10608,7 @@ export class SimWorld {
         let [ccx0, ccy0] = this.grid.footprintOrigin(u.x, u.y, n);
         if (!this.blockFree(ccx0, ccy0, n)) {
           const [ssx, ssy] = this.grid.snapForFootprint(u.x, u.y, n);
-          const free = this.nearestFreeBlock(ssx, ssy, n, 6, false);
+          const free = this.nearestFreeBlock(ssx, ssy, n, 6, false) ?? this.wayOutOfWall(u);
           if (free) {
             u.x = free[0];
             u.y = free[1];
@@ -10598,7 +10627,11 @@ export class SimWorld {
       [sx, sy] = this.grid.snapForFootprint(u.x, u.y, n);
       let [cx0, cy0] = this.grid.footprintOrigin(sx, sy, n);
       if (!this.blockFree(cx0, cy0, n)) {
-        const free = this.nearestFreeBlock(sx, sy, n);
+        // Nearest free tile a straight walk away; then one AROUND the bodies in the way (a
+        // terrain-only line, the combat branch's own de-conflict — a crowd that has no free
+        // tile walkable through it is still a crowd, and stacking in it is the one thing a
+        // body may not do); then, for a body that is standing INSIDE a wall, the way out.
+        const free = this.nearestFreeBlock(sx, sy, n) ?? this.nearestFreeBlock(sx, sy, n, 6, false) ?? this.wayOutOfWall(u);
         if (free) {
           [sx, sy] = free;
           [cx0, cy0] = this.grid.footprintOrigin(sx, sy, n);
@@ -10619,6 +10652,102 @@ export class SimWorld {
     u.resY = cy0;
     u.hasReservation = true;
   }
+
+  /** Is the spot this body stands on — its own CENTRE cell — ground it may not stand on? The
+   *  centre and not the block, because a body standing beside a tree or a cliff edge can have
+   *  a cell of an unsnapped block in it legitimately; a centre in the wall is a body inside it
+   *  (a structure set down on it, a revival on a statue's footprint). Asked in the body's own
+   *  domain, so a ship is not "in a wall" for being at sea. */
+  private inWall(u: SimUnit): boolean {
+    const [cx, cy] = this.grid.worldToCell(u.x, u.y);
+    return !this.grid.walkable(cx, cy, pathDomain(u));
+  }
+
+  /** For a body standing INSIDE a wall (inWall): the nearest spot its footprint fits, free of
+   *  every other body, with no straight-line test — the line from inside a wall crosses the
+   *  wall by definition, which is why nearestFreeBlock can never answer this one and the body
+   *  used to settle where it stood, with nowhere it could step. Null for a body on open ground
+   *  (that one is in a crowd, not a wall, and the line-tested searches are the right ones). */
+  private wayOutOfWall(u: SimUnit): [number, number] | null {
+    if (!this.inWall(u)) return null;
+    const n = u.footprint;
+    const [ax, ay] = this.grid.footprintAnchor(u.x, u.y, n);
+    const fit = this.grid.nearestFit(ax, ay, n, UNSTICK_REACH, undefined, pathDomain(u));
+    return fit ? this.grid.footprintCenter(fit[0], fit[1], n) : null;
+  }
+
+  /** Is this standing body WEDGED — inside a wall, or holding a block another body holds too?
+   *  The second is read off the reservation COUNTS (PathingGrid.reservationCount): every
+   *  stopped body adds one to each cell of its block, so a cell at two is two bodies in one
+   *  place, and nothing has to be measured against anybody. */
+  private wedged(u: SimUnit): boolean {
+    if (this.inWall(u)) return true;
+    if (!u.hasReservation) return false;
+    const n = u.footprint;
+    for (let y = u.resY; y < u.resY + n; y++)
+      for (let x = u.resX; x < u.resX + n; x++) if (this.grid.reservationCount(x, y) > 1) return true;
+    return false;
+  }
+
+  /** Set a wedged body down on the nearest spot it can stand on: around whoever it is inside
+   *  of if it stands on open ground (a terrain-only line, so never through a wall), else out
+   *  of the wall it is in. A SHUFFLE, not a teleport — `teleports` is untouched, so a missile
+   *  already flying at it still lands (missileDisjointed is for Blink, not for this) — and it
+   *  keeps its order. False when there is nowhere within UNSTICK_REACH; it then keeps its spot. */
+  private unwedge(u: SimUnit): boolean {
+    const n = u.footprint;
+    this.unsettle(u);
+    const [sx, sy] = this.grid.snapForFootprint(u.x, u.y, n);
+    const spot = this.inWall(u) ? this.wayOutOfWall(u) : this.nearestFreeBlock(sx, sy, n, 6, false) ?? this.nearestFitFor(u);
+    if (spot) {
+      u.x = u.prevX = spot[0];
+      u.y = u.prevY = spot[1];
+    }
+    this.settle(u);
+    return spot !== null;
+  }
+
+  /** The unit-blind ring search (PathingGrid.nearestFit) for this body — terrain and every
+   *  other body, no line — for a crowd so packed nearestFreeBlock found no tile in it. */
+  private nearestFitFor(u: SimUnit): [number, number] | null {
+    const n = u.footprint;
+    const [ax, ay] = this.grid.footprintAnchor(u.x, u.y, n);
+    const fit = this.grid.nearestFit(ax, ay, n, UNSTICK_REACH, undefined, pathDomain(u));
+    return fit ? this.grid.footprintCenter(fit[0], fit[1], n) : null;
+  }
+
+  /**
+   * The self-unstick watchdog: every UNSTICK_PERIOD, any body STANDING wedged (see `wedged`)
+   * for UNSTICK_AFTER is moved out (`unwedge`). The backstop behind settle, which places
+   * correctly whatever comes through it — see UNSTICK_PERIOD for why it exists at all.
+   *
+   * Only a body that is simply STANDING: a walker is the movement step's business (it may own
+   * the ground it is on and walk out), and a body at WORK — harvesting, repairing, boarding,
+   * casting — stands where its job put it, which can be a cell of a tree or a mine on purpose
+   * (`settle(u, false)`). Of two bodies wedged in one block it is the NEWER arrival that moves
+   * (the later in `units`' insertion order — a revived hero is re-inserted, so it counts as
+   * new): the due bodies are moved last-first and each is asked again first, so the one that
+   * was standing there is alone by the time its turn comes. Deterministic either way, which is
+   * what keeps the authority and a replay moving the same body.
+   */
+  private unstickPass(dt: number): void {
+    let due: SimUnit[] | null = null;
+    for (const u of this.units.values()) {
+      if (!this.claimsCells(u) || u.building || u.baseSpeed <= 0 || u.moving || u.waitT > 0 || !UNSTICK_ORDERS.has(u.order) || !this.wedged(u)) {
+        u.wedgedT = 0;
+        continue;
+      }
+      u.wedgedT += dt;
+      if (u.wedgedT >= UNSTICK_AFTER) (due ??= []).push(u);
+    }
+    if (!due) return;
+    for (let i = due.length - 1; i >= 0; i--) {
+      const u = due[i];
+      u.wedgedT = 0;
+      if (this.wedged(u)) this.unwedge(u);
+    }
+  }
+  private unstickAcc = 0;
 
   /** True if the n×n reservation block at origin (cx0,cy0) is entirely walkable and held
    *  by nobody — i.e. a unit can settle there without overlapping another's tile. Callers
@@ -10881,7 +11010,7 @@ export class SimWorld {
    * the unit came first and the building was set down on top of it. The same displacement WC3
    * gives a unit CREATED on blocked ground (RtsController.createScriptUnit), taken by the unit
    * the building landed on instead. Asked of the TERRAIN alone (`footprintClear`): a crowd is
-   * not a wall, and the snap (teleportUnit) already steps around the bodies. Flyers, buildings,
+   * not a wall, and the way out (unwedge) already steps around the bodies. Flyers, buildings,
    * hidden bodies (in a mine, a hold, a structure being built) and a unit the script has turned
    * pathing off on stay where they are.
    */
@@ -10896,7 +11025,7 @@ export class SimWorld {
       if (Math.abs(u.x - stamp.x) > halfW + u.radius || Math.abs(u.y - stamp.y) > halfH + u.radius) continue;
       const [cx, cy] = this.grid.footprintAnchor(u.x, u.y, u.footprint);
       if (this.grid.footprintClear(cx, cy, u.footprint)) continue;
-      this.teleportUnit(u, u.x, u.y); // nearestFit from where it stands
+      this.unwedge(u); // the watchdog's own way out — a shuffle, not a teleport
     }
   }
 
@@ -21954,6 +22083,11 @@ export class SimWorld {
     simProfile.end("sim.world.move.walk");
     simProfile.begin("sim.world.move.collide");
     this.resolveCollisions();
+    this.unstickAcc += dt;
+    if (this.unstickAcc >= UNSTICK_PERIOD) {
+      this.unstickAcc -= UNSTICK_PERIOD;
+      this.unstickPass(UNSTICK_PERIOD); // …and nobody is left standing inside anything
+    }
     simProfile.end("sim.world.move.collide");
     this.tickWaygates(); // anything now standing in a gate's box comes out the far end
     simProfile.begin("sim.world.move.air");

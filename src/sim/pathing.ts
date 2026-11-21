@@ -167,6 +167,12 @@ export class PathingGrid {
     }
   }
 
+  /** How many stopped bodies reserve this cell — more than one is two bodies in one place
+   *  (SimWorld.wedged). */
+  reservationCount(cx: number, cy: number): number {
+    return this.reservations !== null && this.inBounds(cx, cy) ? this.reservations[cy * this.width + cx] : 0;
+  }
+
   isReserved(cx: number, cy: number): boolean {
     return this.reservations !== null && this.inBounds(cx, cy) && this.reservations[cy * this.width + cx] > 0;
   }
