@@ -99,7 +99,7 @@ export async function mountLanScreen(
   let serversDialog: JoinAddressDialog | null = null;
 
   // The name you appear as. WC3 remembers this between sessions; so do we.
-  const savedName = localStorage.getItem("openwar3.playerName") || "Player";
+  const savedName = savedPlayerName();
   const playerName = (): string => screen.editBox("PlayerNameEditBox")?.value?.trim() || savedName;
 
   /** Read the map a room is advertising, out of OUR install. */
@@ -168,7 +168,7 @@ export async function mountLanScreen(
     onBuild: (s) => render(s, lobby.snapshot),
   });
 
-  const remember = (): void => localStorage.setItem("openwar3.playerName", playerName());
+  const remember = (): void => writePlayerName(playerName());
 
   /** Join the highlighted game. A map we lack is about to be downloaded and kept, and the
    *  browser grants the right to write it only out of a click — this one (assets/downloadedMaps.ts). */
@@ -326,11 +326,19 @@ export async function mountLanScreen(
   }
 }
 
+/** Where the name is kept. Storage can throw (a private window, site data blocked), and the LAN
+ *  screen must still open then — it just forgets the name, as every other store here does. */
+const PLAYER_NAME_KEY = "openwar3.playerName";
+
 /** The name this machine plays under — what the create screen announces its room as, and what
  *  a joiner appears as in the lobby's rows. Kept in localStorage, as WC3 keeps it between
  *  sessions, so every LAN screen reads the same answer without threading it between them. */
 export function savedPlayerName(): string {
-  return localStorage.getItem("openwar3.playerName") || "Player";
+  try { return localStorage.getItem(PLAYER_NAME_KEY) || "Player"; } catch { return "Player"; }
+}
+
+function writePlayerName(name: string): void {
+  try { localStorage.setItem(PLAYER_NAME_KEY, name); } catch { /* no storage: no memory */ }
 }
 
 /**
