@@ -12,6 +12,9 @@
 //   * colour and alpha are 0–255, and "does nothing if any single parameter is invalid";
 //   * ColorByPlayer takes the player's COLOUR, which SetPlayerColor can move off their slot;
 //   * the animation and its tags cross as WORDS, read off the install's own common.j constants;
+//   * the time scale is a MULTIPLIER (1 normal, 0 holds, negative runs back to the clip's start)
+//     and the time a playhead in SECONDS that "can't be a negative value" — why not jassdoc's
+//     100 = normal is in src/render/specialFxClock.ts, whose rules are checked here too;
 //   * GetLocationZ asks the surface (it used to answer 0 — blizzard.j's AddLightningLoc passes
 //     it as an absolute height, so every GUI bolt on raised ground was underground).
 //
@@ -58,6 +61,8 @@ const hooks = {
   setSpecialEffectTeamColor: rec('team'),
   playSpecialEffect: rec('play'),
   specialEffectSubAnim: rec('tag'),
+  setSpecialEffectTimeScale: rec('speed'),
+  setSpecialEffectTime: rec('seek'),
   specialEffectPosition: (id) => (id === 4 ? { x: 11, y: 22, z: 33 } : null),
   surfaceZ: (x, y) => x + y,
   unitZ: (id) => (id === 9 ? 640 : 0),
@@ -103,9 +108,20 @@ function Anims takes nothing returns nothing
     call BlzPlaySpecialEffect(e, ANIM_TYPE_STAND)
     call BlzPlaySpecialEffect(e, ANIM_TYPE_PORTRAIT)
 endfunction
+function Speeds takes nothing returns nothing
+    call BlzSetSpecialEffectTimeScale(e, 0.5)
+    call BlzSetSpecialEffectTimeScale(e, 0.0)
+    call BlzSetSpecialEffectTimeScale(e, -1.0)
+    call BlzSetSpecialEffectTime(e, 0.51)
+    call BlzSetSpecialEffectTime(e, -3.0)
+    call BlzPlaySpecialEffectWithTimeScale(e, ANIM_TYPE_DEATH, 2.0)
+endfunction
 function Nulls takes nothing returns nothing
     call BlzSetSpecialEffectScale(null, 2.0)
     call BlzPlaySpecialEffect(null, ANIM_TYPE_STAND)
+    call BlzSetSpecialEffectTimeScale(null, 2.0)
+    call BlzSetSpecialEffectTime(null, 1.0)
+    call BlzPlaySpecialEffectWithTimeScale(null, ANIM_TYPE_STAND, 2.0)
 endfunction
 function EX takes nothing returns real
     return BlzGetLocalSpecialEffectX(e)
@@ -171,6 +187,31 @@ check('remove', J(calls[2]), J(['tag', 4, 'second', false]));
 check('clear', J(calls[3]), J(['tag', 4, null, false]));
 check('ANIM_TYPE_STAND plays "stand"', J(calls[4]), J(['play', 4, 'stand']));
 check('ANIM_TYPE_PORTRAIT plays "portrait"', J(calls[5]), J(['play', 4, 'portrait']));
+
+console.log('\n--- speed and playhead ---');
+calls.length = 0;
+call('Speeds');
+check('TimeScale 0.5 reaches the engine as 0.5 — a multiplier, not a percent', J(calls[0]), J(['speed', 4, 0.5]));
+check('TimeScale 0 holds the frame', J(calls[1]), J(['speed', 4, 0]));
+check('a negative TimeScale crosses as it is (it runs the clip backwards)', J(calls[2]), J(['speed', 4, -1]));
+check('Time is seconds into the clip', J(calls[3]), J(['seek', 4, 0.51]));
+check('a negative Time is the clip\'s start ("can\'t be a negative value")', J(calls[4]), J(['seek', 4, 0]));
+check('PlayWithTimeScale plays the clip...', J(calls[5]), J(['play', 4, 'death']));
+check('...then sets the same speed TimeScale does', J(calls[6]), J(['speed', 4, 2]));
+
+const clock = require(join(REPO, '.jass-build', 'src', 'render', 'specialFxClock.js'));
+const iv = [1000, 2000]; // a one-second clip at model frames 1000–2000
+check('a scale of 1 ages the effect in real time', clock.ageAfter(0.25, 0.1, 1, false).toFixed(3), '0.350');
+check('a scale of 0.5 ages it at half speed', clock.ageAfter(0.25, 0.1, 0.5, false).toFixed(3), '0.300');
+check('a scale of 0 holds it', clock.ageAfter(0.25, 0.1, 0, true), 0.25);
+check('backwards in its Birth rewinds the age...', clock.ageAfter(0.25, 0.1, -1, false).toFixed(3), '0.150');
+check('...but never below 0', clock.ageAfter(0.05, 0.1, -1, false), 0);
+check('backwards in its Stand leaves the age alone (the CLIP rewinds, not the life)', clock.ageAfter(3, 0.1, -1, true), 3);
+check('seek 0.51 s into the clip', clock.seekFrame(iv, 0.51), 1510);
+check('a 0–1 progress-bar percentage on a one-second clip', clock.seekFrame(iv, 0.25), 1250);
+check('past the end holds the last frame', clock.seekFrame(iv, 100), 2000);
+check('a backwards clip runs back at its speed', clock.rewindFrame(1400, 0.1, -2, iv), 1200);
+check('...and stops at its first frame', clock.rewindFrame(1050, 0.1, -1, iv), 1000);
 
 console.log('\n--- a null effect reaches nothing ---');
 calls.length = 0;

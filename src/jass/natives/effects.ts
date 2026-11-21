@@ -122,11 +122,6 @@ export function registerEffectNatives(rt: Runtime): void {
   // call these were written for a client where it works (Test of Faith sets X, then Y, then Z
   // on the same effect every tick), so each setter here moves only its own axis.
   //
-  // Not here: BlzSetSpecialEffectTimeScale and BlzSetSpecialEffectTime. Their documentation
-  // does not settle whether normal speed is 1.0 or 100.0 (jassdoc: "if you see the animation
-  // speed at 100.0 it will go at 100% speed"), and no map in the corpus calls either — a guessed
-  // scale would be exactly the invented number CLAUDE.md forbids. For the same reason
-  // BlzPlaySpecialEffectWithTimeScale (below) plays its clip and leaves the speed alone.
   const fx = (c: NativeCtx, v: JassValue | undefined): number | undefined => c.rt.data<EffectObj>(v ?? JNULL)?.engineId;
   const onFx = (name: string, fn: (c: NativeCtx, id: number, a: JassValue[]) => void): void =>
     def(rt, name, (c, a) => {
@@ -183,10 +178,22 @@ export function registerEffectNatives(rt: Runtime): void {
     const word = ANIM_WORDS[c.rt.enumIndex(a[1] ?? JNULL)];
     if (word) c.rt.hooks?.playSpecialEffect?.(id, word);
   });
-  // The clip is the certain half of this one; the timeScale is not applied (see above).
+  // The speed is a MULTIPLIER — 1.0 normal, 0 holds the frame, negative runs back to the clip's
+  // start — not the 100-based number jassdoc's prose describes. Why: render/specialFxClock.ts
+  // (Blizzard.j's SetUnitTimeScalePercent hands its native `percent * 0.01`, and every map that
+  // calls this one passes 0.5, 1, 2, `1 / duration`).
+  onFx("BlzSetSpecialEffectTimeScale", (c, id, a) => c.rt.hooks?.setSpecialEffectTimeScale?.(id, asNum(a[1])));
+  // SECONDS into the clip the effect is playing; "can't be a negative value" (jassdoc), so a
+  // negative one is the clip's start.
+  onFx("BlzSetSpecialEffectTime", (c, id, a) => c.rt.hooks?.setSpecialEffectTime?.(id, Math.max(0, asNum(a[1]))));
+  // "Plays a specific subanimation (tag) … at a specific timeScale (speed)" (jassdoc): the clip,
+  // then the same speed BlzSetSpecialEffectTimeScale sets — it stays on the effect afterwards,
+  // as that one's does. An animtype with no word (a null) plays nothing and sets no speed.
   onFx("BlzPlaySpecialEffectWithTimeScale", (c, id, a) => {
     const word = ANIM_WORDS[c.rt.enumIndex(a[1] ?? JNULL)];
-    if (word) c.rt.hooks?.playSpecialEffect?.(id, word);
+    if (!word) return;
+    c.rt.hooks?.playSpecialEffect?.(id, word);
+    c.rt.hooks?.setSpecialEffectTimeScale?.(id, asNum(a[2]));
   });
   const tag = (c: NativeCtx, v: JassValue | undefined) => SUBANIM_WORDS[c.rt.enumIndex(v ?? JNULL)];
   onFx("BlzSpecialEffectAddSubAnimation", (c, id, a) => {

@@ -49,3 +49,47 @@ export function specialFxPhaseAt(age: number, clips: SpecialFxClips): SpecialFxP
   if (age < clips.birthSecs) return { kind: "birth", frame: clips.birthStart + age * 1000 };
   return clips.hasStand ? { kind: "stand" } : { kind: "spent" };
 }
+
+// --- BlzSetSpecialEffectTimeScale / BlzSetSpecialEffectTime (1.29) -----------------------------
+//
+// The SCALE is a multiplier: 1.0 is normal speed, 0.5 half, 2.0 double, 0 holds the frame.
+// jassdoc's prose says otherwise ("if you see the animation speed at 100.0 it will go at 100%
+// speed"), and that sentence is why these two natives sat unimplemented. Two things settle it the
+// other way. Blizzard.j's own wrapper for the unit twin, SetUnitTimeScalePercent, hands its native
+// `percentScale * 0.01` — a time-scale NATIVE takes a fraction, and "percent" is the GUI's word.
+// And the maps that call this one are written for a fraction: 0.36, 0.5, 0.6, 0.7, 1, 2, 4 — and
+// progress bars driven at `1 / timeRequired` over a one-second clip, which only works if 1.0 runs
+// that clip in one second (codename-askellon, pqhuy98/Warcraft3, CrazySummoners on GitHub). Read
+// at 100 = normal, every one of those effects would crawl at a hundredth of its speed.
+//
+// What jassdoc's note does say that holds either way: a NEGATIVE scale plays backwards and
+// "resets towards the beginning", but cannot go below it — it stands still at the start.
+//
+// The TIME is a playhead, in SECONDS into the clip the effect is playing — the same maps set 0.2
+// or 0.51 and then freeze with a scale of 0, or drive a bar with `percentage` on a one-second clip
+// — and "can't be a negative value" (jassdoc). Past the end it holds the clip's last frame. That
+// one is OURS — no source says — and it is the reading under which CrazySummoners' channel bar,
+// which opens by setting 100, starts full rather than wherever 100 s would wrap to.
+
+/** The effect's lifecycle age after `dt` real seconds at `timeScale`. The age is what drives the
+ *  Birth (specialFxPhaseAt), so it runs at the effect's speed like the clip does; it never goes
+ *  below 0. Once the effect has settled into its Stand, running backwards rewinds the CLIP, not
+ *  the life — the Stand plays backwards to its start and holds there (clampToClip) — so the age
+ *  does not move, or it would carry a standing effect back into a Birth it already played. */
+export function ageAfter(age: number, dt: number, timeScale: number, standing: boolean): number {
+  if (timeScale < 0 && standing) return age;
+  return Math.max(0, age + dt * timeScale);
+}
+
+/** The model frame (ms) `secs` seconds into the clip spanning `interval`: never before its first
+ *  frame, never past its last. */
+export function seekFrame(interval: ArrayLike<number>, secs: number): number {
+  return Math.min(interval[1], interval[0] + Math.max(0, secs) * 1000);
+}
+
+/** One step of a clip played BACKWARDS (`timeScale` < 0): `dt` real seconds back from `frame`,
+ *  stopping at the clip's first frame. The viewer's own clock only wraps a clip's END, so it is
+ *  never handed a negative scale — the renderer rewinds the frame with this instead. */
+export function rewindFrame(frame: number, dt: number, timeScale: number, interval: ArrayLike<number>): number {
+  return Math.max(interval[0], frame + dt * timeScale * 1000);
+}

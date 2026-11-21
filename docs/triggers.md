@@ -2280,9 +2280,14 @@ What is still NOT behaviour, so nobody mistakes a `✓` for it:
 - **`TriggerExecuteWait`** runs the callee as `TriggerExecute` does and does not park the caller.
 - **`EnableSelect`/`EnableDragSelect`'s `ui` flag** (draw the indicator or not) and `EnablePreSelect`
   are not modelled; the `state` half of the first two is.
-- **`BlzSetSpecialEffectTimeScale` / `BlzSetSpecialEffectTime`** stay unimplemented on purpose —
-  their documentation does not settle whether normal speed is 1.0 or 100.0 (natives/effects.ts);
-  `BlzPlaySpecialEffectWithTimeScale` plays its clip and leaves the speed alone.
+- **An effect's speed is a MULTIPLIER** (`BlzSetSpecialEffectTimeScale`, and the speed
+  `BlzPlaySpecialEffectWithTimeScale` sets): 1.0 normal, 0 holds the frame, a negative one runs
+  the clip back to its start and stops there. jassdoc's prose says 100.0 is normal; Blizzard.j's
+  `SetUnitTimeScalePercent` (`percent * 0.01`) and every map that calls it say otherwise — the
+  evidence is in `src/render/specialFxClock.ts`. `BlzSetSpecialEffectTime` is the playhead, in
+  seconds into the clip playing (the Birth's, through the effect's age), held at the clip's last
+  frame past its end. A held or backwards effect that is destroyed plays its Death at normal
+  speed — ours; no source says.
 - **The special minimap icon and a unit's lent sight are the authority's**: neither rides a LAN
   snapshot yet.
 

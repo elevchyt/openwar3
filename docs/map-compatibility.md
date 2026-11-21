@@ -1118,9 +1118,10 @@ every other file are unaffected). After this patch changes, the dev server must 
 
 A map built for a later client calls natives a 1.30.4 `common.j` has never declared. Measured
 against jassdoc's annotated `common.j` (github.com/lep/jassdoc, through patch 3.0 — the database
-wc3jass.com serves), **331** natives had no answer here. 329 have one now; the two left are
-`BlzSetSpecialEffectTimeScale` / `BlzSetSpecialEffectTime`, declined where they are registered
-(natives/effects.ts) because their documentation does not settle the scale.
+wc3jass.com serves), **331** natives had no answer here, and all of them have one now. The last
+two were `BlzSetSpecialEffectTimeScale` / `BlzSetSpecialEffectTime`, held back because jassdoc's
+prose calls 100.0 normal speed; Blizzard.j's own `SetUnitTimeScalePercent` (`percent * 0.01`) and
+every map that calls them say 1.0, and `src/render/specialFxClock.ts` sets out the evidence.
 
 - **Declared** by `src/compat/preludeLater.ts` — the second half of the prelude, OUR file under
   the prelude's own rule: it names the API (318 natives, 16 handle types, 318 constants of the

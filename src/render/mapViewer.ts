@@ -72,7 +72,7 @@ import { preloadLuaHost } from "../compat/lua/index";
 import { MAP_MISC_FILE, NO_MAP_MISC, parseMapMisc, type MapMisc } from "../data/mapMisc";
 import { loadUberSplatRegistry, type UberSplatDef, type UberSplatRegistry } from "../data/ubersplats";
 import { loadLightningRegistry } from "../data/lightning";
-import { specialFxPhaseAt, type SpecialFxClips } from "./specialFxClock";
+import { ageAfter, rewindFrame, seekFrame, specialFxPhaseAt, type SpecialFxClips } from "./specialFxClock";
 import { pickEffectSequence, yawPitchRollQuat } from "./effectAnim";
 import { loadAbilityRegistry, mdlPath, type AbilityRegistry, type AbilityDef, type BuffFx, isRepairCode, KNOWN_ABILITIES, TREE_UPGRADE_ABILITY, requiredHeroLevel, morphFlags, MORPH_FLAG_PERMANENT, MORPH_FLAG_REQUIRES_PAYMENT, type AbilityLevel, iconAt, isStance } from "../data/abilities";
 import { isDesktopApp } from "../assets/nativeInstall";
@@ -1127,6 +1127,12 @@ interface SpecialFx {
   /** The animation BlzPlaySpecialEffect asked for. From then on the SCRIPT owns the clip and
    *  the Birth → Stand lifecycle stops driving it. null until then. */
   played: string | null;
+  /** BlzSetSpecialEffectTimeScale — a multiplier on BOTH clocks, `age` and the instance's own
+   *  (render/specialFxClock.ts says why 1 and not 100 is normal speed). */
+  timeScale: number;
+  /** A BlzSetSpecialEffectTime that landed while the model was still loading: seconds into its
+   *  clip, applied on arrival. null otherwise. */
+  seek: number | null;
 }
 
 // A Blood Mage's orbiting spheres (issue #37). The Sphere ability (Asph) attaches
@@ -3784,7 +3790,7 @@ export class MapViewerScene {
       specialFx: [...this.specialFx].filter(([, fx]) => !fx.doomed && !fx.spent).map(([id, fx]) => [id, {
         path: fx.path, age: fx.age, hostId: fx.hostId, attach: fx.attach, x: fx.x, y: fx.y, z: fx.z,
         yaw: fx.yaw, pitch: fx.pitch, roll: fx.roll, scale: fx.scale, color: fx.color, teamColor: fx.teamColor,
-        tags: fx.tags, played: fx.played,
+        tags: fx.tags, played: fx.played, timeScale: fx.timeScale,
       }]),
       nextSpecialFxId: this.nextSpecialFxId,
       // Where the camera may go, the map's own fog and the presentation switches a cinematic flips.
@@ -3916,6 +3922,7 @@ export class MapViewerScene {
         hidden: true, hostId: saved.hostId ?? -1, attach: saved.attach ?? [], parented: false, x: saved.x ?? 0, y: saved.y ?? 0, doomed: false,
         z: saved.z ?? null, yaw: saved.yaw ?? 0, pitch: saved.pitch ?? 0, roll: saved.roll ?? 0, scale: saved.scale ?? 1,
         color: saved.color ?? [1, 1, 1, 1], teamColor: saved.teamColor ?? -1, tags: saved.tags ?? [], played: saved.played ?? null,
+        timeScale: saved.timeScale ?? 1, seek: null,
       };
       this.specialFx.set(id, fx);
       void this.loadSpecialFx(id, fx.path, fx);
@@ -9151,6 +9158,7 @@ export class MapViewerScene {
       clips: { hasBirth: false, birthStart: 0, birthSecs: 0, hasStand: false },
       hidden: true, hostId, attach, parented: false, x, y, doomed: false,
       z: null, yaw: 0, pitch: 0, roll: 0, scale: 1, color: [1, 1, 1, 1], teamColor: -1, tags: [], played: null,
+      timeScale: 1, seek: null,
     };
     this.specialFx.set(id, fx);
     void this.loadSpecialFx(id, model, fx);
@@ -9195,6 +9203,7 @@ export class MapViewerScene {
     // Whatever the script already set while the model was loading lands now.
     this.applySpecialFxLook(fx);
     if (fx.played !== null) this.playSpecialFxClip(fx);
+    if (fx.seek !== null) this.seekSpecialFx(fx, fx.seek);
     this.placeSpecialFx(fx); // land it before its first frame is drawn
     // The model may have taken long enough to arrive that the effect is already over, or
     // it may be standing in fog: never show() blind — let the age/fog pass below decide.
@@ -9247,6 +9256,34 @@ export class MapViewerScene {
     if (fx.hostId < 0) inst.setRotation(yawPitchRollQuat(fx.yaw, fx.pitch, fx.roll));
     inst.setVertexColor(fx.color);
     if (fx.teamColor >= 0) inst.setTeamColor(fx.teamColor);
+    // The instance's own clock runs the Stand and any clip the script played; the Birth is
+    // written from `age` instead, which updateSpecialFx scales the same way. A BACKWARDS scale is
+    // not handed to the viewer, whose clock only wraps a clip's end — updateSpecialFx rewinds
+    // the frame itself (rewindFrame), stopping at the clip's start.
+    inst.timeScale = Math.max(0, fx.timeScale);
+  }
+
+  /** BlzSetSpecialEffectTime — the playhead `secs` into the clip the effect is playing. While the
+   *  lifecycle is still in its Birth that clip is driven by `age`, so it is the age that moves
+   *  (and a time past the Birth's end lets it settle, exactly as living that long would); any
+   *  other clip — the Stand, one BlzPlaySpecialEffect picked — is the instance's frame. */
+  private seekSpecialFx(fx: SpecialFx, secs: number): void {
+    const inst = fx.inst;
+    if (!inst) {
+      fx.seek = secs; // still loading — loadSpecialFx applies it on arrival
+      return;
+    }
+    fx.seek = null;
+    if (fx.spent) return;
+    if (!fx.standing) {
+      fx.age = secs;
+      this.updateSpecialFxOne(fx);
+      return;
+    }
+    const iv = inst.model.sequences[inst.sequence]?.interval;
+    if (!iv) return;
+    inst.frame = seekFrame(iv, secs);
+    inst.forced = true; // we moved the clock by hand — re-pose the bones
   }
 
   /** BlzPlaySpecialEffect — the clip named by the animation and the effect's tags
@@ -9317,6 +9354,16 @@ export class MapViewerScene {
         fx.spent = false; // a Birth-only model that had burned out is alive again
         this.playSpecialFxClip(fx);
       },
+      setSpecialEffectTimeScale: (id, timeScale) => {
+        const fx = live(id);
+        if (!fx) return;
+        fx.timeScale = timeScale;
+        this.applySpecialFxLook(fx);
+      },
+      setSpecialEffectTime: (id, secs) => {
+        const fx = live(id);
+        if (fx) this.seekSpecialFx(fx, secs);
+      },
       specialEffectSubAnim: (id, tag, add) => {
         const fx = live(id);
         if (!fx) return;
@@ -9356,7 +9403,15 @@ export class MapViewerScene {
         this.destroySpecialFx(id);
         continue;
       }
-      fx.age += dt;
+      fx.age = ageAfter(fx.age, dt, fx.timeScale, fx.standing);
+      const inst = fx.inst;
+      if (inst && fx.standing && fx.timeScale < 0) {
+        const iv = inst.model.sequences[inst.sequence]?.interval;
+        if (iv) {
+          inst.frame = rewindFrame(inst.frame, dt, fx.timeScale, iv);
+          inst.forced = true; // we moved the clock by hand — re-pose the bones
+        }
+      }
       this.updateSpecialFxOne(fx);
     }
   }
@@ -9442,7 +9497,13 @@ export class MapViewerScene {
     // Nobody is watching one that is fogged or already spent, and a hidden instance is not
     // animated by the scene — so its Death clip would only sit out its deadline unseen.
     if (fx.hidden) fx.inst.detach();
-    else this.fadeOutFx(fx.inst);
+    else {
+      // The Death clip plays at the effect's speed — but a held (0) or backwards one would leave
+      // it frozen, or walking out of its clip, until fadeOutFx's deadline popped it. Those die at
+      // normal speed. OURS: no source says what the engine does there.
+      if (fx.timeScale <= 0) fx.inst.timeScale = 1;
+      this.fadeOutFx(fx.inst);
+    }
   }
 
   // --- Blood Mage orbiting spheres (issue #37) ------------------------------

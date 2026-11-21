@@ -1322,6 +1322,11 @@ export interface EngineHooks {
   /** BlzSpecialEffectAdd/RemoveSubAnimation — one tag ("second", "upgrade"); `tag` null with
    *  `add` false is BlzSpecialEffectClearSubAnimations. */
   specialEffectSubAnim?(id: number, tag: string | null, add: boolean): void;
+  /** BlzSetSpecialEffectTimeScale — a MULTIPLIER on the effect's clock (1 normal, 0 holds,
+   *  negative runs back to the clip's start); see render/specialFxClock.ts for why not 100. */
+  setSpecialEffectTimeScale?(id: number, timeScale: number): void;
+  /** BlzSetSpecialEffectTime — put the playhead `secs` seconds into the clip it is playing. */
+  setSpecialEffectTime?(id: number, secs: number): void;
   /** BlzGetLocalSpecialEffectX/Y/Z — where it stands; all zero for an attached effect. */
   specialEffectPosition?(id: number): { x: number; y: number; z: number } | null;
   /** GetLocationZ — "the current surface elevation … This includes the terrain (hills or
