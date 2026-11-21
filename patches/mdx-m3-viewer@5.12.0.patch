@@ -1486,7 +1486,7 @@ index 5f2c0c2ffbfae107c42070fe99e41669814924ef..3101fe8514c3933b217efeeaa2f1397b
              solverParams.hd = true;
              // mdxHandler.loadEnv(viewer);
 diff --git a/dist/cjs/viewer/handlers/mdx/modelinstance.js b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-index 020a99b949ec1634579d439261027e00b6da23ac..ed846d2d7f9ddbc66028760783d3a2031ee1eabb 100644
+index 020a99b949ec1634579d439261027e00b6da23ac..e58db761fa91346f12c29e6dcbc21100de11c888 100644
 --- a/dist/cjs/viewer/handlers/mdx/modelinstance.js
 +++ b/dist/cjs/viewer/handlers/mdx/modelinstance.js
 @@ -15,12 +15,545 @@ const eventobjectubremitter_1 = require("./eventobjectubremitter");
@@ -2355,7 +2355,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..ed846d2d7f9ddbc66028760783d3a203
      }
      /**
       * If a model has no sequences or is running no sequence, it will only update once since it will never be forced to update.
-@@ -362,24 +1128,155 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -362,24 +1128,192 @@ class MdxModelInstance extends modelinstance_1.default {
              }
          }
      }
@@ -2381,22 +2381,22 @@ index 020a99b949ec1634579d439261027e00b6da23ac..ed846d2d7f9ddbc66028760783d3a203
 +        // to send — the texture was filled once, by whoever composed it (`ow3CaptureSkeleton`).
 +        if (this.ow3SharedTexture) {
 +            return;
-         }
++        }
 +        if (this.boneTexture && (this.ow3BonesDirty || !this.ow3BonesUploaded)) {
 +            // …or from `ow3LocalBones` when this instance wears a shared pose with billboarded
 +            // subtrees of its own in it (ow3FixBillboards).
 +            this.boneTexture.bindAndUpdate(this.ow3LocalBones && this.ow3LocalPose ? this.ow3LocalBones : this.worldMatrices);
 +            this.ow3BonesUploaded = true;
 +            this.ow3BonesDirty = false;
-+        }
-+    }
+         }
+     }
 +    // OpenWar3 (issue #66): a faded instance (vertex-colour alpha < 1 — Wind Walk,
 +    // Banish, SetUnitVertexColor) has no opaque geometry left. Its "opaque" groups
 +    // move to the translucent pass so they blend over a finished depth buffer instead
 +    // of over whatever the opaque pass happened to have drawn so far.
 +    isFaded() {
 +        return this.vertexColor[3] < 1;
-     }
++    }
      renderOpaque() {
          const model = this.model;
 +        if (this.isFaded()) {
@@ -2452,10 +2452,47 @@ index 020a99b949ec1634579d439261027e00b6da23ac..ed846d2d7f9ddbc66028760783d3a203
 +        if (producers.length === 0) {
 +            return;
 +        }
++        // …and of those, only the ones with a KEY inside the clip that is playing. An event
++        // track's value is 1 once the frame has passed a key lying within the sequence's own
++        // interval and 0 otherwise (EventObjectEmitterObject.getValueAtTime), so an emitter with
++        // no key in this clip answers 0 on every frame of it — and asking was most of what an
++        // off-screen frame cost: 870 instances standing about in a Stand clip on Angel Arena
++        // Allstars, each asking its death splat "now?" every frame. Listed once per clip. One
++        // on a global sequence keeps its own clock and is always asked. A silent one is left
++        // at the 0 it would have been handed, so nothing is left over to fire on first sight.
++        let active = this.ow3ActiveProducers;
++        if (active === undefined || this.ow3ActiveSeq !== sequence || this.ow3ActiveOf !== producers) {
++            const interval = this.model.sequences[sequence].interval;
++            active = [];
++            for (const emitter of producers) {
++                const object = emitter.emitterObject;
++                let keyed = object.globalSequence !== -1;
++                if (!keyed) {
++                    for (const t of object.tracks) {
++                        if (t >= interval[0] && t <= interval[1]) {
++                            keyed = true;
++                            break;
++                        }
++                    }
++                }
++                if (keyed) {
++                    active.push(emitter);
++                }
++                else {
++                    emitter.lastValue = 0;
++                }
++            }
++            this.ow3ActiveProducers = active;
++            this.ow3ActiveSeq = sequence;
++            this.ow3ActiveOf = producers;
++        }
++        if (active.length === 0) {
++            return;
++        }
 +        const frame = this.frame;
 +        const counter = this.counter;
 +        let landing = false;
-+        for (const emitter of producers) {
++        for (const emitter of active) {
 +            const object = emitter.emitterObject;
 +            if (!object.ok) {
 +                continue;
@@ -2513,7 +2550,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..ed846d2d7f9ddbc66028760783d3a203
          const model = this.model;
          const sequenceId = this.sequence;
          if (sequenceId !== -1) {
-@@ -405,6 +1302,10 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -405,6 +1339,10 @@ class MdxModelInstance extends modelinstance_1.default {
                  this.sequenceEnded = false;
              }
          }
@@ -2524,7 +2561,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..ed846d2d7f9ddbc66028760783d3a203
          const forced = this.forced;
          if (sequenceId !== -1 || forced) {
              // Update the nodes
-@@ -421,6 +1322,12 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -421,6 +1359,12 @@ class MdxModelInstance extends modelinstance_1.default {
       */
      setTeamColor(id) {
          this.teamColor = id;
@@ -2537,7 +2574,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..ed846d2d7f9ddbc66028760783d3a203
          return this;
      }
      /**
-@@ -436,6 +1343,7 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -436,6 +1380,7 @@ class MdxModelInstance extends modelinstance_1.default {
      setSequence(id) {
          const model = this.model;
          const sequences = model.sequences;
@@ -2545,7 +2582,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..ed846d2d7f9ddbc66028760783d3a203
          this.sequence = id;
          if (id < 0 || id > sequences.length - 1) {
              this.sequence = -1;
-@@ -445,11 +1353,86 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -445,11 +1390,86 @@ class MdxModelInstance extends modelinstance_1.default {
          else {
              this.frame = sequences[id].interval[0];
          }
@@ -2568,8 +2605,8 @@ index 020a99b949ec1634579d439261027e00b6da23ac..ed846d2d7f9ddbc66028760783d3a203
          this.resetAttachments();
          this.forced = true;
 +        this.ow3PoseReset = true; // OpenWar3 (issue #161): a new clip rewrites every local
-         return this;
-     }
++        return this;
++    }
 +    /**
 +     * OpenWar3: set this instance's animation cross-fade duration, in seconds.
 +     * Fed from each unit's UnitUI.slk `blend` value (0.15s for most WC3 units).
@@ -2580,8 +2617,8 @@ index 020a99b949ec1634579d439261027e00b6da23ac..ed846d2d7f9ddbc66028760783d3a203
 +        if (this.blendTime === 0) {
 +            this.blendRemaining = 0;
 +        }
-+        return this;
-+    }
+         return this;
+     }
 +    /**
 +     * OpenWar3: snapshot every node's current local TRS into the flat blend
 +     * buffer, laid out as [loc.x,loc.y,loc.z, rot.x,rot.y,rot.z,rot.w, sc.x,sc.y,sc.z]

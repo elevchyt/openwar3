@@ -116,5 +116,25 @@ console.log("\nthe two switches the cull is inspected with");
   check("…and re-enabling brings the same runs back", pairs(cull), before);
 }
 
+console.log("overlaps: a ground rectangle against the cells that were kept");
+{
+  // What a blob shadow asks before it is tessellated (MapViewerScene.updateShadowBatch).
+  const cull = new TerrainCull(terrain(32));
+  cull.update(box(0, 1000, 0, 1000, -1000, 1000)); // block (0,0): world 0..1024 in both axes
+  check("a rectangle inside the kept block", cull.overlaps(400, 400, 520, 520), true);
+  check("one straddling its edge", cull.overlaps(1000, 500, 1100, 600), true);
+  check("one in the next block along", cull.overlaps(1100, 500, 1200, 600), false);
+  check("one in the next band up", cull.overlaps(400, 1100, 520, 1200), false);
+  check("one off the map altogether", cull.overlaps(-9000, -9000, -8900, -8900), false);
+  cull.holdRuns = true;
+  check("held runs keep every decal, to be looked at", cull.overlaps(1100, 500, 1200, 600), true);
+  cull.holdRuns = false;
+  cull.enabled = false;
+  check("…and so does a cull that is off", cull.overlaps(1100, 500, 1200, 600), true);
+  cull.enabled = true;
+  cull.update(box(100000, 200000, 0, 1000, -1000, 1000));
+  check("nothing kept, nothing overlapped", cull.overlaps(400, 400, 520, 520), false);
+}
+
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
 process.exit(failed ? 1 : 0);

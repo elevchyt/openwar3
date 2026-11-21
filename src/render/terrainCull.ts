@@ -67,6 +67,12 @@ export class TerrainCull {
   private readonly runBuf: Int32Array;
   private runCount = 0;
   private cells = 0;
+  /** Per band of BLOCK rows: the first and last visible block of the last `update`, or -1. What
+   *  `overlaps` reads — the runs themselves are packed and cannot be asked about a place. */
+  private readonly bandFirst: Int32Array;
+  private readonly bandLast: Int32Array;
+  private readonly originX: number;
+  private readonly originY: number;
 
   /**
    * Freeze the runs where they are. Nothing in the game sets this; it is the way to SEE the
@@ -92,6 +98,10 @@ export class TerrainCull {
     this.blockRows = Math.ceil(this.cellRows / BLOCK) || 1;
     this.boxes = new Float32Array(this.blockCols * this.blockRows * 6);
     this.runBuf = new Int32Array(this.cellRows * 2);
+    this.bandFirst = new Int32Array(this.blockRows).fill(-1);
+    this.bandLast = new Int32Array(this.blockRows).fill(-1);
+    this.originX = terrain.centerOffset[0];
+    this.originY = terrain.centerOffset[1];
 
     const [ox, oy] = terrain.centerOffset;
     for (let by = 0; by < this.blockRows; by++) {
@@ -153,6 +163,8 @@ export class TerrainCull {
         if (first < 0) first = bx;
         last = bx;
       }
+      this.bandFirst[by] = first;
+      this.bandLast[by] = last;
       if (first < 0) continue; // this whole band of rows is off screen
       const x0 = first * BLOCK;
       const x1 = Math.min(this.cellCols, (last + 1) * BLOCK); // exclusive
@@ -166,6 +178,30 @@ export class TerrainCull {
     }
     this.runCount = n;
     this.cells = cells;
+  }
+
+  /**
+   * Does this world-space rectangle of GROUND touch a cell the last `update` kept?
+   *
+   * For whatever is drawn ON the terrain and nowhere else — a unit's blob shadow is the case it
+   * was written for: the batch tessellated one for every unit on the map every frame (950 on
+   * Angel Arena Allstars, with 56 bodies on screen, 0.8 ms a frame). A decal on a cell the
+   * ground pass did not draw cannot be seen, and the cull that decided that is conservative, so
+   * this is too. True for everything while the cull is off or its runs are held (`holdRuns`
+   * exists to fly out and LOOK at the hole — the decals should stay behind with the ground).
+   */
+  overlaps(minX: number, minY: number, maxX: number, maxY: number): boolean {
+    if (!this.enabled || this.holdRuns) return true;
+    const span = BLOCK * CELL;
+    const b0 = Math.max(0, Math.floor((minY - this.originY) / span));
+    const b1 = Math.min(this.blockRows - 1, Math.floor((maxY - this.originY) / span));
+    const c0 = Math.floor((minX - this.originX) / span);
+    const c1 = Math.floor((maxX - this.originX) / span);
+    for (let by = b0; by <= b1; by++) {
+      const first = this.bandFirst[by];
+      if (first >= 0 && c1 >= first && c0 <= this.bandLast[by]) return true;
+    }
+    return false;
   }
 
   /** The runs as the patched map reads them: (first instance, count) pairs. */

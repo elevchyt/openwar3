@@ -141,3 +141,22 @@ which is what makes them part of the same A/B.
 - **The cliffs.** `renderCliffs` draws each cliff model's instances, which is real geometry rather
   than a full-map sweep, but nothing tests them against the camera either. They need
   per-instance bounds, not the cell runs — a different shape of problem.
+
+## What else asks the cull: blob shadows
+
+A unit's blob shadow is a decal tessellated over the terrain under it, and the batch was
+rebuilt for EVERY unit on the map every frame — 17,610 vertices on Angel Arena Allstars with 56
+bodies on screen. `TerrainCull.overlaps(minX, minY, maxX, maxY)` answers whether a rectangle of
+ground touches a cell this frame keeps (it reads the per-band first/last block `update` already
+found), and `updateShadowBatch` skips a shadow that does not: 354 vertices, and the held frame
+4.66 → 4.07 ms, interleaved. It is conservative for the reason the cull is — a decal on ground
+that is not drawn cannot be seen — and answers true for everything while the cull is off or its
+runs are held, so flying out to look at the hole still shows the shadows left behind in it.
+The cull is therefore updated BEFORE the shadow batch in the frame. Building shadows are few
+and are not asked.
+
+The same session cut the other camera-independent cost in the viewer patch: an off-screen
+instance (`ow3TickHidden`) asked every event emitter that can produce something "has your key
+come?" on every frame, and 870 instances standing in a Stand clip were asking a death splat
+that has no key in that clip. The emitters with a key inside the playing sequence are now listed
+once per clip; one on a global sequence is always asked.

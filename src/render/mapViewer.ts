@@ -18136,14 +18136,15 @@ export class MapViewerScene {
       // of them and stays on — it is part of how the ground looks, not a shadow the engine
       // casts (docs/lighting.md, render/videoQuality.ts).
       const unitShadows = videoSettings().unitShadows;
-      if (this.shadows && unitShadows) this.updateShadowBatch();
       // Which terrain cells this camera can see (render/terrainCull.ts). Computed once and
       // handed to the map, because the ground and the water are two passes over ONE cell grid
-      // and a frame in which they disagreed would draw a sea with no floor under it.
+      // and a frame in which they disagreed would draw a sea with no floor under it. BEFORE the
+      // shadow batch, which asks it which shadows lie on ground that will be drawn at all.
       if (map && fogScene && this.terrainCull) {
         this.terrainCull.update(fogScene.camera);
         map.ow3Runs = this.terrainCull.runs();
       }
+      if (this.shadows && unitShadows) this.updateShadowBatch();
       if (map && fogScene && map.anyReady) {
         fogScene.startFrame();
         this.sky?.renderBehind(); // FIRST: a sky neither tests nor writes depth (render/sky.ts)
@@ -18633,6 +18634,7 @@ export class MapViewerScene {
     if (!this.shadows || !this.buildingShadows || !world) return;
     this.shadows.beginFrame();
     this.buildingShadows.beginFrame();
+    const cull = this.terrainCull;
     this.addItemShadows(world);
     for (const u of world.units.values()) {
       if (u.hp <= 0) continue; // corpses cast no shadow
@@ -18645,6 +18647,11 @@ export class MapViewerScene {
         continue;
       }
       if (!def.unitShadow || def.shadowW <= 0 || def.shadowH <= 0) continue;
+      // …and only one lying on ground this frame draws (TerrainCull.overlaps): the blob is
+      // tessellated over the terrain under it, and that was being done for every unit on the map.
+      const sx = u.x - def.shadowX;
+      const sy = u.y - def.shadowY;
+      if (cull && !cull.overlaps(sx, sy, sx + def.shadowW, sy + def.shadowH)) continue;
       this.shadows.add(u.x, u.y, def.shadowW, def.shadowH, def.shadowX, def.shadowY, MapViewerScene.SHADOW_DIR + def.unitShadow + ".blp");
     }
   }
