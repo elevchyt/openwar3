@@ -156,7 +156,7 @@ import { perfLog } from "../dev/perfLog";
 declare const __OW3_VERSION__: string;
 declare const __OW3_COMMIT__: string;
 declare const __OW3_SIM_FINGERPRINT__: string;
-import { animStride, renderSize, videoSettings } from "./videoQuality";
+import { animStride, antialiasing, renderSize, videoSettings } from "./videoQuality";
 import { edgeScrollScale, keyScrollScale } from "./scrollOptions";
 import { centreGamepadCursor, gamepadPan, setGamepadHost } from "../ui/gamepad";
 import { TerrainCull } from "./terrainCull";
@@ -2172,6 +2172,14 @@ export class MapViewerScene {
     const mapFiles: MapFileLayer = { archive: null, epoch: 0 };
     const solver = createAssetSolver(vfs, mapFiles, baseUrls, created);
 
+    // The world's WebGL context is made HERE, before the viewer asks for one, because the viewer
+    // asks with `{ alpha: false }` alone — and WebGL's default for `antialias` is TRUE, so every
+    // match was multisampled whatever the machine. A canvas hands back the context it already
+    // has (the attributes of a second `getContext` are ignored), so the viewer's own call gets
+    // this one. Options → Video → Antialiasing, off under Low Performance Mode (videoQuality.ts
+    // `LOW_PERF_OFF`); a fresh canvas per match (main.ts `freshMapCanvas`) is what lets a change
+    // land on the next one.
+    canvas.getContext("webgl", { alpha: false, antialias: antialiasing() });
     const viewer = new ViewerClass(canvas, solver, false);
     viewer.terrainModelExists = (path) => vfs.exists(path);
     // Low Performance Mode's shared poses are for THIS viewer — the world, where a crowd of one

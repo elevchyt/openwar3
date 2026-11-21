@@ -92,6 +92,10 @@ StringList {
     // menus -- so the string is ours, punctuated like the panel's other checkbox rows.
     MENUS_4_3                   "4:3 Menus",
 
+    // ...and the third box on that row: multisampling on the match's world. 1.30.4's panel has
+    // no such row (antialiasing was the graphics driver's business), so the string is ours.
+    ANTIALIASING                "Antialiasing",
+
     // LAN → Create Game, the row under the map list: which relay the game is announced on
     // (src/overrides/ui/LocalMultiplayerCreate.fdf). The game broadcast its LAN games and never
     // had to ask; the nearest thing in its table is Battle.net's COLON_SELECTED_REALM

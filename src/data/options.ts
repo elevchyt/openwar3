@@ -228,6 +228,15 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   // `applyVideoOptions` → `setFixedMenuAspect` (ui/widescreen.ts), which re-lays the screen the
   // player is looking at, so ticking it previews itself like Gamma does.
   { key: "menus43", frame: "Menus43CheckBox", kind: "bool", panel: "video", def: false },
+  // "Antialiasing" — multisampling on the match's world canvas. Ours: 1.30.4's panel has no such
+  // row (its antialiasing was whatever the graphics driver forced), and WebGL turns it ON unless
+  // a page asks otherwise, which is what OpenWar3 always drew with — so ON by default and nobody's
+  // picture changes. It is a WebGL CONTEXT attribute, fixed when the context is made, so it takes
+  // effect from the next match (every match gets a fresh canvas — main.ts `freshMapCanvas`), and
+  // the menus' own 3D backdrop is not under it. Low Performance Mode turns it off
+  // (`LOW_PERF_OFF`, render/videoQuality.ts): on Intel HD Graphics the multisampled buffer is a
+  // large share of what a frame costs. A frame of ours on the "Vertical Sync" row, after "4:3 Menus".
+  { key: "antialias", frame: "AntialiasCheckBox", kind: "bool", panel: "video", def: true },
 
   // --- Sound (all live-applied through applyAudioOptions) ---
   { key: "soundEnabled", frame: "SoundCheckBox", kind: "bool", panel: "sound", def: true },

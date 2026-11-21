@@ -12,7 +12,7 @@ import {
   type Options,
   type OptionDef,
 } from "../data/options";
-import { applyVideoOptions, LOW_PERF_FORCED } from "../render/videoQuality";
+import { applyVideoOptions, LOW_PERF_FORCED, LOW_PERF_OFF } from "../render/videoQuality";
 import { applyHealthBarOptions } from "../render/worldOverlays";
 import { applyHotkeyOptions } from "../data/hotkeys";
 import { applyScrollOptions } from "../render/scrollOptions";
@@ -263,6 +263,14 @@ export async function mountOptions(
       if (!c) continue;
       c.setEnabled(!on);
       c.value = on ? forced : str(working[d.key], String(d.def));
+    }
+    // …and the checkbox rows it turns OFF (LOW_PERF_OFF — Antialiasing), on the same two rules.
+    for (const key of LOW_PERF_OFF) {
+      const d = OPTION_DEFS.find((o) => o.key === key);
+      const c = d && s.checkBox(d.frame);
+      if (!c) continue;
+      c.setEnabled(!on);
+      c.checked = on ? false : bool(working[key]);
     }
   }
 

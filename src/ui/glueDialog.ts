@@ -1,5 +1,6 @@
 import type { DataSource } from "../vfs/types";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
+import { GLUE_DIALOG_OVERRIDE } from "../overrides";
 
 // The menus' own message box — UI\FrameDef\Glue\DialogWar3.fdf (issue #80).
 //
@@ -89,6 +90,9 @@ export async function showGlueDialog(opts: GlueDialogOptions): Promise<GlueDialo
       rootFrame: "DialogWar3",
       centerRoot: true, // the FDF gives the box its own 0.35 × 0.2 and nothing else
       hidden: HIDDEN[opts.buttons],
+      // …and with the icon hidden, the message is centred in the box rather than left where
+      // the icon's room put it (src/overrides/index.ts GLUE_DIALOG_OVERRIDE).
+      overrides: [GLUE_DIALOG_OVERRIDE],
       textOverrides: { DialogText: opts.text },
       handlers: {
         DialogButtonOK: () => answer(opts.onConfirm),

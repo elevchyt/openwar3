@@ -254,6 +254,28 @@ Frame "TEXT" "Menus43Label" INHERITS "StandardInfoTextTemplate" {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Video panel: "Antialiasing", multisampling on the match's world canvas (src/data/options.ts,
+// render/videoQuality.ts). 1.30.4's panel has no such row — its antialiasing was whatever the
+// graphics driver forced — so the row is ours. On by default, which is what WebGL draws with
+// unless asked otherwise; Low Performance Mode turns it off and greys the box.
+//
+// Still no height to give a row, so it takes a THIRD place on the "Vertical Sync" row, after
+// "4:3 Menus" by the same gap that stands between "Vertical Sync" and the 4:3 box (0.035,
+// measured in the running screen: 52 px at 900 tall). Anchored off the 4:3 LABEL rather than at
+// a fixed column, because the panel is narrower at 4:3 than at 16:9 while the row is not: a
+// column one more pulldown-pitch on (0.15) ran the label into the right rail on a 4:3 screen.
+// Measured this way its label ends level with the pulldowns' own right edge at 4:3, and well
+// inside the rail at 16:9.
+Frame "GLUECHECKBOX" "AntialiasCheckBox" INHERITS WITHCHILDREN "StandardCheckBoxTemplate" {
+    SetPoint LEFT, "Menus43Label", RIGHT, 0.035, 0.0,
+}
+
+Frame "TEXT" "AntialiasLabel" INHERITS "StandardInfoTextTemplate" {
+    SetPoint LEFT, "AntialiasCheckBox", RIGHT, 0.01, 0.0,
+    Text "ANTIALIASING",
+}
+
+// ---------------------------------------------------------------------------------------------
 // Gameplay panel: "Detect Gamepad" (issue #162), a button under "Show hotkeys on command
 // buttons" — the panel's last row. Nothing in 1.30.4 knows a controller exists, so the row is
 // ours. Pressing it LISTENS for ten seconds and pairs whichever pad presses a button in that

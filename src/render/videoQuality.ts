@@ -1,5 +1,5 @@
 import type { Options } from "../data/options";
-import { stageAspect } from "../ui/stage";
+import { stageAspect, stageSize } from "../ui/stage";
 import { setFixedMenuAspect } from "../ui/widescreen";
 
 // The Video panel, wired to the engine (issue #81 follow-up).
@@ -43,6 +43,9 @@ export interface VideoSettings {
   occlusion: boolean;
   /** 0–100, 50 = unchanged. */
   gamma: number;
+  /** "Antialiasing" — multisample the match's world canvas. A WebGL CONTEXT attribute, so it is
+   *  read when a match makes its context (`antialiasing`) and a change lands on the next one. */
+  antialias: boolean;
   /** "Low Performance Mode" — every rung above is already the one this mode forces (see
    *  `LOW_PERF_FORCED`). Carried so the renderer can ask the MODE rather than infer it from a
    *  rung a player might equally have chosen by hand. */
@@ -117,6 +120,7 @@ const DEFAULTS: VideoSettings = {
   unitShadows: true,
   occlusion: true,
   gamma: 50,
+  antialias: true,
   lowPerf: false,
 };
 
@@ -220,6 +224,25 @@ export const LOW_PERF_FORCED: Readonly<Record<string, string>> = {
   occlusion: "off",
 };
 
+/**
+ * The CHECKBOX rows Low Performance Mode turns off, beside the pulldowns `LOW_PERF_FORCED` sets.
+ * A separate list because a box's value is a boolean, not a rung's name, and both Options
+ * screens grey it and show it unticked while the mode is on — the same two halves, for the same
+ * reason (ui/fdfOptions.ts `syncVideoRows`).
+ *
+ *   · **Antialiasing.** On integrated graphics the multisampled buffer is a large part of the
+ *     frame: every pixel of it is resolved and its bandwidth comes out of the same system RAM the
+ *     CPU is reading from. It is the one fill-rate cost this mode CAN take, since Resolution is
+ *     the player's.
+ */
+export const LOW_PERF_OFF: readonly string[] = ["antialias"];
+
+/** Whether the NEXT world context a match makes is multisampled (`VideoSettings.antialias`).
+ *  Asked once per match, as its canvas gets its context (render/mapViewer.ts). */
+export function antialiasing(): boolean {
+  return current.antialias;
+}
+
 /** True while the mode is on — used by both Options screens to grey the rows it forces. */
 export function lowPerfMode(): boolean {
   return current.lowPerf;
@@ -262,10 +285,27 @@ function resolution(v: unknown): [number, number] {
  * small screen without being told to, and a second scale on top of that was one authority too
  * many over the same lengths. A rung here changes how many pixels the WORLD is drawn into,
  * and nothing else.
+ *
+ * NEVER MORE PIXELS THAN THE SCREEN SHOWS. The rung is a CEILING: the height is held to the
+ * stage's own height in DEVICE pixels, because a buffer taller than the box it is scaled into
+ * is drawn in full and then thrown away by the downscale. That is exactly the machine this
+ * setting exists for — a 1366×768 laptop on Intel HD Graphics drew the default 1920×1080 world
+ * (2.0× the pixels its panel has, multisampled) and shrank it, for a picture no sharper than
+ * drawing 768 lines in the first place (a friend's i5-6300U / HD 520, 25 fps at the start of a
+ * 1v1). A HiDPI screen is unaffected: its stage is already that many device pixels tall.
  */
 export function renderSize(): { width: number; height: number } {
-  const height = current.renderHeight;
+  const height = Math.min(current.renderHeight, screenHeight());
   return { width: Math.round(height * stageAspect()), height };
+}
+
+/** The stage's height in DEVICE pixels — the most lines a world buffer can usefully hold. No
+ *  window is a headless test, which is told the stage is as tall as any rung. */
+function screenHeight(): number {
+  if (typeof window === "undefined") return Infinity;
+  const { h } = stageSize();
+  if (!(h > 0)) return Infinity; // a window with no size yet (or a test's stub) caps nothing
+  return Math.max(1, Math.round(h * (window.devicePixelRatio || 1)));
 }
 
 /**
@@ -312,6 +352,7 @@ export function applyVideoOptions(options: Options): void {
     unitShadows: opts.shadows !== "off",
     occlusion: opts.occlusion !== "off",
     gamma: typeof opts.gamma === "number" ? opts.gamma : DEFAULTS.gamma,
+    antialias: !lowPerf && opts.antialias !== false,
     lowPerf,
   };
   const b = bridge();

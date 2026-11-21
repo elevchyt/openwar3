@@ -220,6 +220,13 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   `settings.json` owns it and OK offers to RELAUNCH the game to apply it (nothing in Electron
   changes it on a running window); with it off the page caps itself
   at 300 fps (`src/render/frameCap.ts`), and in a browser tab the box is greyed.
+  **ANTIALIASING** (ours, on by default, the third box on that row) is a WebGL CONTEXT attribute,
+  so `loadMap` makes the world's context itself before the viewer asks (whose `{ alpha: false }`
+  left WebGL's default — multisampled — on every machine); it lands on the next match, and Low
+  Performance Mode turns it off (`LOW_PERF_OFF`). The Resolution rung is a CEILING: never more
+  lines than the stage has device pixels. A machine on integrated or software graphics is asked
+  ONCE at the main menu whether to turn the mode on at 1280×720 (`src/ui/weakGpu.ts`) — found on
+  an Intel HD 520 laptop that drew 1080p multisampled and shrank it onto a 768-line panel.
   **4:3 MENUS** (ours, off by default, sharing the Vertical Sync row) boxes the GLUE screens, the
   loading screen and the score screen to 4:3 on black, which is what 1.30.4 itself does for its
   menus on a wide screen (checked under Wine at 1920×1080); the match is untouched. `windowAspect()` reads the box, so every `widescreen()`

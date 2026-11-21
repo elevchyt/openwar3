@@ -44,6 +44,7 @@ carry a `SpellFilterValue` — see below — but as a READOUT, not a control.)
 | **Unit Shadows** | Skips the unit and building shadow passes (and the batch rebuild that feeds them). |
 | **Occlusion** | *Nothing* — see below. |
 | **Vertical Sync** | Ours. A Chromium launch switch in the desktop app — see the last section. |
+| **Antialiasing** | Ours. Multisampling on the match's world context, on by default — see below. |
 
 ## The in-game twin, and its five read-only rows
 
@@ -116,6 +117,46 @@ may simply be wrong: see lighting.md. Only that scene has moved so far.) We leav
 always drawn and our Medium the game's own middle rung. Every other rung in the file is OURS and
 says so at its definition. Nothing in the install describes what a quality setting does — these
 were engine settings, not data — so there is nothing to check them against.
+
+**The rung is a CEILING, never more lines than the screen shows** (`renderSize`). A buffer taller
+than the stage's own height in DEVICE pixels is drawn in full and thrown away by the CSS
+downscale, so the height is held to `stageSize().h × devicePixelRatio`. The case that found it:
+a 1366×768 laptop on Intel HD Graphics 520 drew the default 1920×1080 world (2.0× its panel's
+pixels, multisampled) and shrank it. A HiDPI screen loses nothing — its stage already IS that many
+device pixels — and a headless test, with no window, is told the stage is as tall as any rung.
+
+## Antialiasing
+
+The last box on the "Vertical Sync" row, and ours: 1.30.4's panel has no such row, because its
+antialiasing was whatever the graphics driver forced. **On by default**, because that is what
+OpenWar3 always drew with without saying so — mdx-m3-viewer asks for its context with
+`{ alpha: false }` alone, and WebGL's default for `antialias` is TRUE, so every match was 4×
+multisampled on every machine.
+
+It is a context ATTRIBUTE, fixed when the context is made, so `loadMap` makes the world's context
+itself, with `antialiasing()`, before the viewer asks for one (a canvas hands back the context it
+already has and ignores the second call's attributes). Every match gets a fresh canvas
+(main.ts `freshMapCanvas`), which is why a change lands on the NEXT match and needs no relaunch;
+the menus' own 3D backdrop is not under it. Low Performance Mode turns it off and both screens
+grey the box (`LOW_PERF_OFF`): on integrated graphics the multisampled buffer is a large share of
+the frame, its resolve and its bandwidth coming out of the same system RAM the CPU reads from.
+
+The panel had no height left for a row, so it takes a third place on the "Vertical Sync" row,
+after "4:3 Menus" by the gap that stands between the first two (0.035), anchored off the 4:3
+LABEL: the panel is narrower at 4:3 than at 16:9 while the row is not, and a fixed third column
+ran its label into the right rail on a 4:3 screen.
+
+## The weak-graphics prompt
+
+`src/ui/weakGpu.ts`. A machine whose WebGL renderer string names integrated or software graphics
+(Intel HD / UHD and pre-Xe Iris, Mali / Adreno / PowerVR, SwiftShader / llvmpipe / Basic Render)
+is asked ONCE, in the menus' own message box over the main menu, whether to turn on Low
+Performance Mode and draw at 1280 × 720. Asked, never applied: the picture is the player's. Yes
+ticks the mode and LOWERS the resolution (never raises one the player already picked); either
+answer is remembered against the renderer string (`openwar3.weakGpuAsked`), so the same GPU is
+never asked again and a different one is. A player already in the mode is not asked. The message
+is two sentences because DialogWar3.fdf's box is 0.2 tall and a third ran under the Yes/No pair.
+`?dev&weakgpu=<renderer string>` stands in for the real GPU on a dev server.
 
 ## Low Performance Mode (issue #161)
 
@@ -307,6 +348,7 @@ What it forces is `LOW_PERF_FORCED` in [`src/render/videoQuality.ts`](../src/ren
 | Lights | Low (no omni lights) |
 | Unit Shadows | Off |
 | Occlusion | Off *(no backend)* |
+| Antialiasing | Off (`LOW_PERF_OFF`, the checkbox rows' list beside the table) |
 
 **Two rows are deliberately not in that table.** **Resolution** is the one rung that changes how
 many pixels are drawn, and so the one a weak GPU cares most about — which is exactly why it stays

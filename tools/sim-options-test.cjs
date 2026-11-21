@@ -33,7 +33,7 @@ const {
   OPTION_DEFS, defaultOptions, loadOptions, saveOptions, applyAudioOptions, sliderGain,
 } = require(join(REPO, ".sim-build", "src", "data", "options.js"));
 const {
-  applyVideoOptions, videoSettings, animStride, maxOmniLights, renderSize, renderScale,
+  applyVideoOptions, videoSettings, animStride, maxOmniLights, renderSize, renderScale, antialiasing, LOW_PERF_OFF,
   lowPerfMode, LOW_PERF_FORCED,
 } = require(join(REPO, ".sim-build", "src", "render", "videoQuality.js"));
 const {
@@ -193,7 +193,11 @@ console.log("\nResolution picks the size of the buffer the world is drawn into")
   // stage follows the window between 4:3 and 16:9, and a buffer of any other shape is drawn
   // stretched into it. Past either end the stage stops, and so does the buffer.
   applyVideoOptions(defaultOptions());
-  const windowAt = (innerWidth, innerHeight) => { globalThis.window = { innerWidth, innerHeight }; };
+  // At devicePixelRatio 2, so the stage is taller than the rung and the ceiling below stays out
+  // of it: these four are about the SHAPE of the buffer, not its height.
+  const windowAt = (innerWidth, innerHeight, devicePixelRatio = 2) => {
+    globalThis.window = { innerWidth, innerHeight, devicePixelRatio };
+  };
   windowAt(1024, 768);
   check("a 4:3 window draws the rung's height at 4:3", renderSize(), { width: 1440, height: 1080 });
   windowAt(1440, 900);
@@ -202,6 +206,16 @@ console.log("\nResolution picks the size of the buffer the world is drawn into")
   check("…a 5:4 one is held at 4:3", renderSize(), { width: 1440, height: 1080 });
   windowAt(2560, 1080);
   check("…and an ultrawide one at 16:9", renderSize(), { width: 1920, height: 1080 });
+
+  // The rung is a CEILING: never more lines than the screen shows. A 1366x768 laptop drew the
+  // default 1080 lines and threw half of them away in the downscale.
+  windowAt(1366, 768, 1);
+  check("a 768-line screen draws 768 lines at the default rung", renderSize(), { width: 1365, height: 768 });
+  applyVideoOptions({ ...defaultOptions(), resolution: "1280x720" });
+  check("…and a rung under the screen is drawn as chosen", renderSize(), { width: 1280, height: 720 });
+  applyVideoOptions(defaultOptions());
+  windowAt(1280, 720, 1.5);
+  check("…a 150% scaled laptop counts DEVICE pixels", renderSize(), { width: 1920, height: 1080 });
   delete globalThis.window;
 
   // EVERY rung is NAMED at 16:9 — the widest stage, where the rung is exactly the buffer — so
@@ -248,6 +262,13 @@ console.log("\nLow Performance Mode forces every rung but the pixels and the bri
   check("occlusion off", v.occlusion, false);
   check("the viewer sees the low rungs too", [bridge().particleScale, bridge().textureMipDrop], [0.25, 2]);
   check("…and so do the two ladders", [animStride(), maxOmniLights()], [4, 0]);
+  // Antialiasing is a CHECKBOX the mode turns off (LOW_PERF_OFF), read when a match makes its
+  // world context — and it is ON for everybody else, because that is what WebGL always drew.
+  check("antialiasing is off under the mode", [v.antialias, antialiasing()], [false, false]);
+  check("…and it is a video bool row", LOW_PERF_OFF.map((k) => {
+    const d = OPTION_DEFS.find((o) => o.key === k);
+    return d && d.panel === "video" && d.kind === "bool";
+  }), [true]);
 
   // The two rows NOT in the table. Resolution is the one rung that changes how many pixels are
   // drawn and is the player's to trade; gamma is the brightness of the picture, not a cheaper
@@ -266,6 +287,11 @@ console.log("\nLow Performance Mode forces every rung but the pixels and the bri
   check("unticking restores every stored rung", [back.particles, back.lights, back.unitShadows, back.occlusion],
     ["high", "high", true, true]);
   check("…and the mode is off again", lowPerfMode(), false);
+  check("…and the stored antialiasing is back", antialiasing(), true);
+  applyVideoOptions({ ...defaultOptions(), antialias: false });
+  check("antialiasing is the player's to turn off without the mode", antialiasing(), false);
+  applyVideoOptions(defaultOptions());
+  check("…and on by default", antialiasing(), true);
 
   // The LAUNCH FLAG, at both doors: an empty store and a full one. `?lowperf` reaching only the
   // second is the bug this pins — a fresh profile has no stored options, which is exactly the

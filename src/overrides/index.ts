@@ -81,6 +81,23 @@ export interface FdfOverride {
   readonly resize?: ReadonlyArray<{ frame: string; width?: number; height?: number }>;
 }
 
+/**
+ * The menus' message box (`UI\FrameDef\Glue\DialogWar3.fdf`, ui/glueDialog.ts): the message,
+ * CENTRED in the box.
+ *
+ * The file puts `DialogText` (0.24 wide) 0.08125 in from the left of a 0.35 box, because it
+ * leaves room for `DialogIcon` — a 0.05 square hung off the text's LEFT edge — which leaves
+ * 0.029 on the right. We hide that icon in every dialog (it draws a blank plate with nothing in
+ * it), and with it gone the message sat visibly right of centre: 0.081 of margin on one side and
+ * 0.029 on the other. Centred is (0.35 − 0.24) / 2 = 0.055 in, so the anchor moves 0.02625 left.
+ * A pure offset off the same corner (`from` = `to`), like the LAN list's; no frames of our own.
+ */
+export const GLUE_DIALOG_OVERRIDE: FdfOverride = {
+  id: "ow3-glue-dialog",
+  source: "",
+  repoint: [{ from: "DialogWar3", to: "DialogWar3", dx: -0.02625, only: ["DialogText"] }],
+};
+
 /** Strings the game has no key for. Layered by both screens below — a screen's own override
  *  carries frames, and the labels those frames name live in one place. */
 export const OW3_STRINGS: FdfOverride = { id: "ow3-strings", source: globalStringsFdf };
@@ -172,6 +189,9 @@ export const OPTIONS_MENU_OVERRIDE: FdfOverride = {
     // …and "4:3 Menus" on the Vertical Sync row, in the pulldown column.
     { frame: "Menus43CheckBox", into: "VideoPanel" },
     { frame: "Menus43Label", into: "VideoPanel" },
+    // …and "Antialiasing" after it, on the same row.
+    { frame: "AntialiasCheckBox", into: "VideoPanel" },
+    { frame: "AntialiasLabel", into: "VideoPanel" },
   ],
 };
 
