@@ -520,7 +520,7 @@ function parseLike(raw: string, base: unknown): Shaped | null {
  * must join it) or the test fails.
  */
 export const MISC_UNREAD: ReadonlySet<string> = new Set([
-  "AbilSaleAggroRange", "AgiMoveBonus", "ConstructionLifeDrainRate", "DisplayEnemyInventory",
+  "AbilSaleAggroRange", "AgiMoveBonus", "ConstructionLifeDrainRate",
   "AttackHalfAngle", "BuildingAngle", "BuildingUnblightRadius", "BulletDeathTime", "CancelTime",
   "CloseEnoughRange", "CreepCampPathingCellDistance", "DecayTime", "EffectDeathTime",
   "FogFlashTime", "FollowItemRange", "FollowRange", "GoldMineMaxGold", "GoldMineOwnDuration",
