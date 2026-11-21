@@ -137,19 +137,58 @@ export function createProgressBar(opts: { scale?: number; label?: string } = {})
   label.id = labelId;
   root.append(bar, label);
 
+  // The fill CHASES the number rather than jumping to it, one frame at a time: each frame closes
+  // a fixed share of the gap (a time constant of EASE_TAU), with a floor speed so the last sliver
+  // does not crawl. This is deliberately not a CSS transition — a mount reports many times a
+  // second, and a transition restarted on every report trails the number for as long as the
+  // reports keep coming (e4bad328). A chase is one motion that new reports merely re-aim, so it
+  // is never more than ~EASE_TAU behind. Going BACK (a new stage starting from zero) snaps, as
+  // does a player who asked for reduced motion; the label and aria value are always the number.
+  const EASE_TAU = 0.15; // s
+  const MIN_SPEED = 0.25; // of the bar per second
+  const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let target = 0;
+  let shown = 0;
+  let raf = 0;
+  let last = 0;
+  const draw = (): void => {
+    bar.style.setProperty("--ow3-progress", String(shown));
+    bar.toggleAttribute("data-empty", shown === 0);
+  };
+  const tick = (now: number): void => {
+    const dt = last ? Math.min(0.1, (now - last) / 1000) : 1 / 60;
+    last = now;
+    const gap = target - shown;
+    const step = Math.max(gap * (1 - Math.exp(-dt / EASE_TAU)), MIN_SPEED * dt);
+    shown = step >= gap ? target : shown + step;
+    draw();
+    raf = shown === target ? 0 : requestAnimationFrame(tick);
+    if (!raf) last = 0;
+  };
+
   const api: ProgressBar = {
     root,
     set(fraction) {
       if (fraction === null) {
         bar.classList.add("is-indeterminate");
         bar.removeAttribute("aria-valuenow");
+        // the sweep has no fill; whatever comes next grows from the left cap
+        target = shown = 0;
+        draw();
         return;
       }
       const f = Math.min(1, Math.max(0, fraction));
       bar.classList.remove("is-indeterminate");
-      bar.style.setProperty("--ow3-progress", String(f));
       bar.setAttribute("aria-valuenow", String(Math.round(f * 100)));
-      bar.toggleAttribute("data-empty", f === 0);
+      target = f;
+      if (f <= shown || reduced) {
+        shown = f;
+        if (raf) cancelAnimationFrame(raf);
+        raf = last = 0;
+        draw();
+      } else if (!raf) {
+        raf = requestAnimationFrame(tick);
+      }
     },
     setLabel(text) {
       label.textContent = text;

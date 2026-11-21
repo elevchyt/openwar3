@@ -311,9 +311,11 @@
   );
   opacity: 0.65;
 }
-/* Neither the fill nor the glow EASES to a new value: a mount reports once per read, many times
+/* Neither the fill nor the glow has a CSS transition: a mount reports once per read, many times
    a second, and a transition restarted on every report trails the number it is drawing — the
-   gate's label read 100% over a half-full bar, frozen there by the menu build that follows. */
+   gate's label read 100% over a half-full bar, frozen there by the menu build that follows. The
+   DOM binding eases `--ow3-progress` itself instead, as a chase that each report re-aims
+   (createProgressBar). */
 /* The head sits on the fill's leading edge, `--head` in from the glow box's right side; the tail
    trails back over what is already loaded, as Loading-BarGlow.blp's does. With a fill under it the
    box ENDS at that edge (`--head` 0): anything past it lands on the empty track, where the head's

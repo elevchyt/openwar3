@@ -136,7 +136,16 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
       // A CASC mount reads a few hundred megabytes off disk before the first file can be
       // asked for (vfs/casc.ts), so it reports as it goes rather than sitting mute — and says
       // how far through it is once it knows, which is what the bar draws.
-      const load = await loadProfile(install, DEFAULT_PROFILE, (_msg, fraction) => bar.set(fraction ?? null));
+      // A stage with no size (the content index before it, "Preparing icons…" after it) sweeps
+      // only until the bar has a number: once it has filled, falling back to the sweep emptied
+      // it and refilled it in one jump at the end.
+      let sized = false;
+      const load = await loadProfile(install, DEFAULT_PROFILE, (_msg, fraction) => {
+        if (fraction != null) {
+          sized = true;
+          bar.set(fraction);
+        } else if (!sized) bar.set(null);
+      });
       bar.set(1);
       bar.setLabel("Data successfully loaded");
       // Let the full bar and that line reach the screen and be READ first: building the menu
