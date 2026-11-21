@@ -265,7 +265,7 @@ console.log("\nthe lowest-settings preset: the weak-GPU prompt, ?lowperf, and an
   check("…and so do the two ladders", [animStride(), maxOmniLights()], [4, 0]);
   check("resolution is LOWERED to 1280x720", lowest.resolution, LOW_RESOLUTION);
   check("…never raised past a smaller pick", withLowestVideo({ ...defaultOptions(), resolution: "800x450" }).resolution, "800x450");
-  check("gamma, vsync and 4:3 menus are the player's", [lowest.gamma, lowest.vsync, lowest.menus43], [50, true, false]);
+  check("gamma, vsync and 4:3 menus are the player's", [lowest.gamma, lowest.vsync, lowest.menus43], [46, true, false]);
   check("the options handed in are not mutated", defaultOptions().particles, "high");
 
   // Every key the preset names has to BE a video row, holding a value that row OFFERS — or the

@@ -191,7 +191,12 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   { key: "voiceControl", frame: "VoiceControlCheckBox", kind: "bool", panel: "gameplay", def: false },
 
   // --- Video (applied through render/videoQuality.ts, which documents what each rung does) ---
-  { key: "gamma", frame: "GammaSlider", kind: "range", panel: "video", def: 50 },
+  // Gamma opens at 46 — the developer's pick, read off a screenshot of this panel: the thumb a
+  // little to the RIGHT of the FDF's own "1.0" notch (`GammaNotch`, 0.077 into the 0.260 slider,
+  // i.e. ~30). On OUR curve (render/videoQuality.ts `applyGamma`, 50 = untouched) that is an
+  // exponent of ~1.06. A store from before this default is moved onto it once (`gamma46` in
+  // `loadOptions`).
+  { key: "gamma", frame: "GammaSlider", kind: "range", panel: "video", def: 46 },
   // "Renderer:" — not a WC3 row (1.30.4 draws with Direct3D and either starts or does not), so it
   // is ours, on a frame of ours directly ABOVE "Resolution:" (src/overrides/ui/OptionsMenu.fdf).
   // It means something only in the DESKTOP app, where each rung is a Chromium launch switch the
@@ -298,6 +303,12 @@ export function loadOptions(): Options {
     // `saveOptions`), so there the stale value is dropped and the new default stands. A stored
     // `true` was a choice either way and is kept.
     if (saved.computerPlusOn === undefined && saved.computerPlusDefault === false) delete saved.computerPlusDefault;
+    // Gamma's default moved off the middle (46, see OPTION_DEFS), and the developer asked for it
+    // to be FORCED: OK writes every row, so a stored 50 is what nearly every store says whether or
+    // not its player touched the slider. A store without `gamma46` (the marker the new default
+    // arrived with, written by `saveOptions`) has its gamma dropped once, so the new default
+    // stands; from then on the slider is the player's again.
+    if (saved.gamma46 === undefined) delete saved.gamma;
     for (const d of OPTION_DEFS) {
       const v = saved[d.key];
       // Only accept a stored value of the shape this option expects — a hand-edited or
@@ -381,8 +392,9 @@ export function saveOptions(opts: Options): void {
   const ls = typeof localStorage !== "undefined" ? localStorage : null;
   if (!ls) return;
   try {
-    // `computerPlusOn` marks a store written since Computer+ became the default — see `loadOptions`.
-    ls.setItem(STORAGE_KEY, JSON.stringify({ ...opts, computerPlusOn: true }));
+    // `computerPlusOn` marks a store written since Computer+ became the default, `gamma46` one
+    // written since Gamma's did — see `loadOptions`.
+    ls.setItem(STORAGE_KEY, JSON.stringify({ ...opts, computerPlusOn: true, gamma46: true }));
   } catch {
     /* quota exceeded / storage disabled — settings are best-effort */
   }

@@ -115,7 +115,7 @@ const DEFAULTS: VideoSettings = {
   lights: "high",
   unitShadows: true,
   occlusion: true,
-  gamma: 50,
+  gamma: 46, // the Options default (data/options.ts) — the developer's pick, off the untouched 50
   antialias: true,
 };
 
@@ -344,8 +344,9 @@ const GAMMA_HOST = "ow3-gamma-host";
  *
  * The mapping is OURS, and doubles either way from the middle: 50 → 1.0 (untouched), 100 → 0.5
  * (brighter), 0 → 2.0 (darker). At exactly 50 nothing is installed at all — a full-screen filter
- * pass every frame is precisely what the machine this panel exists for cannot afford, so the
- * default must cost nothing.
+ * pass every frame is what a weak machine can least afford, so a player who wants the picture
+ * untouched pays nothing for it. The DEFAULT is 46 (data/options.ts — the developer's pick, a
+ * little right of the FDF's "1.0" notch), and so does install the pass; 50 is one drag away.
  */
 function applyGamma(v: number): void {
   if (typeof document === "undefined") return; // headless (the options test compiles this file)

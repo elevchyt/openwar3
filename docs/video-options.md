@@ -33,7 +33,7 @@ carry a `SpellFilterValue` — see below — but as a READOUT, not a control.)
 
 | Row | Backend |
 |---|---|
-| **Gamma** | An SVG `feComponentTransfer type="gamma"` over the whole page (`html`). Installed only off the middle. |
+| **Gamma** | An SVG `feComponentTransfer type="gamma"` over the whole page (`html`). Installed only off the middle; the DEFAULT is 46. |
 | **Renderer** | Ours. Which Chromium launch switches the desktop app starts with — see "Renderer" below. |
 | **Resolution** | The size of the buffer the world is drawn into. |
 | **Model Detail** | *Nothing* — see below. |
@@ -452,7 +452,13 @@ sits on the ROOT element (`html { filter: var(--ow3-gamma, none) }` in style.css
 one element a `filter` does not turn into the containing block of everything fixed under it —
 CSS Filter Effects 1 exempts "the document root element" by name — so the trap that kept it off
 the page (ui/stage.ts) does not apply; checked in a match, the HUD box is unmoved at 1600×900.
-It is still installed only off the middle, so the default costs no pass.
+It is still installed only off the middle (50), so a player who wants the picture untouched pays
+no pass for it. The DEFAULT, though, is **46** (exponent ~1.06) — the developer's pick, read off
+a screenshot of the panel: the thumb a little to the right of the FDF's own `GammaNotch` "1.0",
+which 1.30.4 draws 0.077 into the 0.260 slider (~30), not at its middle. It is FORCED once over
+every store written before it (`gamma46` in `loadOptions`, the `computerPlusOn` pattern),
+because OK writes every row and a stored 50 says nothing about whether its player ever touched
+the slider.
 
 ## Renderer (desktop app only)
 
