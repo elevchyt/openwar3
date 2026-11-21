@@ -109,6 +109,12 @@ export class TerrainShadowOverlay {
   private uvBuf: WebGLBuffer;
   private tex: WebGLTexture;
   private vertexCount = 0;
+  /** How many KEPT cells come before each cell of the row-major grid (one past the end
+   *  included). The mesh holds only the shadowed cells, so a run of terrain cells is still a
+   *  contiguous vertex range — this is what finds it (see `render`). */
+  private cellStart: Uint32Array = new Uint32Array(1);
+  /** Vertices drawn last frame — the number that says the cull is biting. */
+  drawnVertices = 0;
   private terrain: TerrainData;
   private mask: TerrainShadowMask;
   strength = DEFAULT_STRENGTH;
@@ -176,9 +182,10 @@ export class TerrainShadowOverlay {
     this.upload(buildMesh(this.terrain, this.mask, noGround));
   }
 
-  private upload({ pos, uv, count }: { pos: Float32Array; uv: Float32Array; count: number }): void {
+  private upload({ pos, uv, count, cellStart }: ShadowMesh): void {
     const gl = this.gl;
     this.vertexCount = count;
+    this.cellStart = cellStart;
     const prevArrayBuf = gl.getParameter(gl.ARRAY_BUFFER_BINDING) as WebGLBuffer | null;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.posBuf);
     gl.bufferData(gl.ARRAY_BUFFER, pos.subarray(0, count * 3), gl.STATIC_DRAW);
@@ -188,9 +195,23 @@ export class TerrainShadowOverlay {
   }
 
   /** Draw the layer. Same GL discipline as the sibling overlays: mdx-m3-viewer keeps a
-   *  JS-side shadow of the pipeline state, so everything we touch is saved and restored. */
-  render(viewProj: Float32Array | Iterable<number>): void {
+   *  JS-side shadow of the pipeline state, so everything we touch is saved and restored.
+   *
+   *  `runs` are the terrain's own (first cell, count) pairs, one per visible cell row
+   *  (render/terrainCull.ts). The mesh is compacted to the shadowed cells but still emitted
+   *  row-major, so a run of cells is the vertex range between two entries of `cellStart`.
+   *  No runs (the cull switched off, or a caller that has none) draws the whole layer. */
+  render(viewProj: Float32Array | Iterable<number>, runs?: Int32Array | null): void {
     if (!this.vertexCount) return;
+    this.drawnVertices = 0;
+    if (runs && runs.length) {
+      // Nothing shadowed in view is the common case over open ground: skip the state
+      // save/restore below as well as the draw.
+      const starts = this.cellStart;
+      let any = false;
+      for (let i = 0; i < runs.length && !any; i += 2) any = starts[runs[i] + runs[i + 1]] > starts[runs[i]];
+      if (!any) return;
+    }
     const gl = this.gl;
     const prevProgram = gl.getParameter(gl.CURRENT_PROGRAM) as WebGLProgram | null;
     const prevArrayBuf = gl.getParameter(gl.ARRAY_BUFFER_BINDING) as WebGLBuffer | null;
@@ -230,7 +251,20 @@ export class TerrainShadowOverlay {
     gl.vertexAttribPointer(this.aPos, 3, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.uvBuf);
     gl.vertexAttribPointer(this.aUv, 2, gl.FLOAT, false, 0, 0);
-    gl.drawArrays(gl.TRIANGLES, 0, this.vertexCount);
+    if (runs && runs.length) {
+      const starts = this.cellStart;
+      for (let i = 0; i < runs.length; i += 2) {
+        const from = starts[runs[i]];
+        const cells = starts[runs[i] + runs[i + 1]] - from;
+        if (cells > 0) {
+          gl.drawArrays(gl.TRIANGLES, from * 6, cells * 6);
+          this.drawnVertices += cells * 6;
+        }
+      }
+    } else {
+      gl.drawArrays(gl.TRIANGLES, 0, this.vertexCount);
+      this.drawnVertices = this.vertexCount;
+    }
 
     gl.bindTexture(gl.TEXTURE_2D, prevTex0);
     gl.activeTexture(prevActiveTex);
@@ -257,13 +291,21 @@ export class TerrainShadowOverlay {
   }
 }
 
+interface ShadowMesh {
+  pos: Float32Array;
+  uv: Float32Array;
+  count: number;
+  /** Kept cells before each grid cell, row-major, length cells + 1. */
+  cellStart: Uint32Array;
+}
+
 /** One quad per shadowed cell, seated on the terrain's own corners — except the cells in
  *  `noGround`, which the cliff shader shades itself (TerrainShadowOverlay.skipCells). */
 function buildMesh(
   terrain: TerrainData,
   mask: TerrainShadowMask,
   noGround: Uint8Array | null,
-): { pos: Float32Array; uv: Float32Array; count: number } {
+): ShadowMesh {
   const { width, height, centerOffset, corners } = terrain;
   const ox = centerOffset[0];
   const oy = centerOffset[1];
@@ -298,8 +340,15 @@ function buildMesh(
   }
   if (noGround) for (let i = 0; i < keep.length; i++) if (noGround[i]) keep[i] = 0;
 
+  // The prefix count doubles as the per-run lookup: the loop below emits kept cells in this
+  // same row-major order, so cell i's quad starts at vertex cellStart[i] * 6.
+  const cellStart = new Uint32Array(keep.length + 1);
   let cells = 0;
-  for (let i = 0; i < keep.length; i++) if (keep[i]) cells++;
+  for (let i = 0; i < keep.length; i++) {
+    cellStart[i] = cells;
+    if (keep[i]) cells++;
+  }
+  cellStart[keep.length] = cells;
   const pos = new Float32Array(cells * 6 * 3);
   const uv = new Float32Array(cells * 6 * 2);
   let pi = 0;
@@ -321,7 +370,7 @@ function buildMesh(
       emit(cx + 1, cy); emit(cx + 1, cy + 1); emit(cx, cy + 1);
     }
   }
-  return { pos, uv, count: cells * 6 };
+  return { pos, uv, count: cells * 6, cellStart };
 }
 
 function compileProgram(gl: GL, vs: string, fs: string): WebGLProgram {

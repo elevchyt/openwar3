@@ -196,8 +196,9 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   exists to take that measurement. On a modern GPU it is worth ~1 %: the frame is CPU-bound
   elsewhere, and this is a change for the machine with no headroom — do not quote a number off the
   dev box as though it were the point. `holdRuns` freezes the runs so you can fly out and SEE the
-  cull. The fog overlay and the baked shadow layer still sweep the whole map and can take the same
-  runs; the cliffs need per-instance bounds instead.
+  cull. The fog overlay and the baked shadow layer take the same runs (the shadow mesh is
+  compacted to shadowed cells, so it finds a run through its `cellStart` prefix table); the
+  cliffs need per-instance bounds instead.
 - **Video options:** read [`docs/video-options.md`](docs/video-options.md) before touching the Video
   panel, [`src/render/videoQuality.ts`](src/render/videoQuality.ts) or anything that wants to be
   cheaper on a weak machine. The panel is the game's own, so its shape is not ours: the labels are

@@ -64,7 +64,7 @@ import { dressAsGameTip } from "../ui/gameTipSkin";
 import { anyModalOpen } from "../ui/modal";
 import { makeVoiceHost } from "../game/voiceActions";
 import { Talkers, VOICE_HUD_MAX, VOICE_KEY_CODE, voiceFromBase64, voiceRecipients, voiceToBase64 } from "../game/voice";
-import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
+import { loadUnitRegistry, slotMissileArt, type UnitRegistry, type UnitDef } from "../data/units";
 import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData, applyMapTechData, heroFoldConstants, makeTrigStr, refoldHeroConstants } from "../data/objectData";
 import { readMapFormat, UNKNOWN_FORMAT, type MapFormatProfile } from "../compat/mapFormat";
 import { readW3i } from "../compat/w3i";
@@ -4443,7 +4443,13 @@ export class MapViewerScene {
    *      textures), and
    *   2. the local player's ROSTER: what their worker builds, what those buildings train and
    *      what they upgrade into — models AND command-card icons. That is the set the opening
-   *      minutes actually touch, and being one race's tech tree it is bounded.
+   *      minutes actually touch, and being one race's tech tree it is bounded,
+   *   3. the roster of every OTHER race in the match (models and missiles, no icons — a card
+   *      is the local player's) — the first enemy Grunt is otherwise drawn the frame its
+   *      geometry parses, WHITE, until its skin has been read and decoded, and
+   *   4. the TEXTURES all of that asked for. A model's load resolves when its geometry is
+   *      parsed; its textures are separate fetches nobody awaits (mdx/model.js), so the
+   *      loader is drained once more at the end or "preloaded" would only mean "started".
    *
    * Portrait busts stay on the idle warmer (`warmPortraits`): they are the heaviest models
    * here and nothing is drawn with one until a unit is CLICKED, so they are not worth holding
@@ -4451,12 +4457,10 @@ export class MapViewerScene {
    */
   async preloadForStart(onProgress: (p: number) => void = () => {}): Promise<void> {
     const t0 = performance.now();
-    // The two halves of this are timed alike, so they take half the span each: measured on
-    // `(2)EchoIsles.w3x`, the whole call is ~0.7 s of which the drain is ~0.25 s — and that is
-    // with a roster the map had already spawned, which is the case that flatters the roster
-    // half. Fixed shares rather than one count across both, because a queued fetch and a
-    // tech-tree entry are not the same unit of work.
-    const DRAIN_SHARE = 0.5;
+    // Fixed shares rather than one count across all three, because a queued fetch, a
+    // tech-tree entry and a texture are not the same unit of work.
+    const DRAIN_SHARE = 0.3;
+    const ROSTER_SHARE = 0.4; // the rest is the textures those models asked for
     // Whatever the script set going — its spawns are still streaming when it returns. Reported
     // per poll rather than as one step at the end, or the bar stands still through it.
     await this.waitForLoader(
@@ -4468,22 +4472,50 @@ export class MapViewerScene {
     // the preload below decodes the units' own icons, and their abilities, their shops'
     // items and the greyed twins follow in the background (see warmIconCache).
     this.prioritizeIcons(roster);
-    let done = 0;
-    await Promise.all(roster.map(async (id) => {
+    for (const id of roster) {
+      const icon = this.registry.get(id)?.icon;
+      if (icon) this.blpIcon(icon); // decodes the BLP into the icon cache, once
+    }
+    // Every other race that is actually PLAYING: a seat's race is set on a custom map too,
+    // where nobody builds a melee tech tree, so a race counts only when its worker is
+    // standing on the field (which is what a melee start puts there).
+    const types = new Set(roster);
+    const fielded = new Set<string>();
+    for (const u of this.rts?.simWorld.units.values() ?? []) fielded.add(u.typeId);
+    for (const race of new Set(this.matchRaces.values())) {
+      if (race === this.localRace) continue;
+      const theirs = this.producibleRoster(race);
+      if (theirs.length && fielded.has(theirs[0])) for (const id of theirs) types.add(id);
+    }
+    // A ranged unit's projectile is a model of its own, first wanted mid-swing.
+    const models = new Set<string>();
+    for (const id of types) {
       const def = this.registry.get(id);
-      if (def?.icon) this.blpIcon(def.icon); // decodes the BLP into the icon cache, once
-      if (def?.model) await this.viewer.load(def.model, this.solver).catch(() => undefined);
-      onProgress(DRAIN_SHARE + ((1 - DRAIN_SHARE) * ++done) / roster.length);
+      if (def?.model) models.add(def.model);
+      for (const w of def?.weapons ?? []) {
+        const art = slotMissileArt(w); // "" for a melee slot, whatever the row declares
+        if (art) models.add(art);
+      }
+    }
+    let done = 0;
+    await Promise.all([...models].map(async (path) => {
+      await this.viewer.load(path, this.solver).catch(() => undefined);
+      onProgress(DRAIN_SHARE + (ROSTER_SHARE * ++done) / models.size);
     }));
+    await this.waitForLoader(
+      () => this.viewer.promiseMap.size === 0, 20000, "the rosters' textures",
+      (p) => onProgress(DRAIN_SHARE + ROSTER_SHARE + (1 - DRAIN_SHARE - ROSTER_SHARE) * p),
+    );
     onProgress(1);
-    console.info(`[openwar3] preloaded ${roster.length} ${this.localRace} unit model(s) + icons in ${Math.round(performance.now() - t0)}ms.`);
+    console.info(`[openwar3] preloaded ${types.size} unit type(s), ${models.size} model(s) (${[...new Set(this.matchRaces.values())].join(", ")}) in ${Math.round(performance.now() - t0)}ms.`);
   }
 
-  /** Everything the local player is likely to MAKE: their worker, what it builds, and what
-   *  each of those buildings trains or upgrades into. The start preload fetches this set and
-   *  the portrait warmer walks it — one definition of "what this player is about to need". */
-  private producibleRoster(): string[] {
-    const workerId = (STARTING_UNITS[this.localRace] ?? []).map((s) => s.id).find((id) => WORKERS[id]);
+  /** Everything a player of `race` is likely to MAKE: their worker (always FIRST), what it
+   *  builds, and what each of those buildings trains or upgrades into. The start preload
+   *  fetches this set for every race in the match and the portrait warmer walks the local
+   *  one — one definition of "what this player is about to need". */
+  private producibleRoster(race: PlayableRace = this.localRace): string[] {
+    const workerId = (STARTING_UNITS[race] ?? []).map((s) => s.id).find((id) => WORKERS[id]);
     const out = new Set<string>();
     if (workerId) out.add(workerId);
     for (const bid of workerId ? this.tech.builds(workerId) : []) {
@@ -17952,7 +17984,8 @@ export class MapViewerScene {
         // from the camera), so it must be laid down first or the unit body would occlude it.
         // The map's baked shadow layer goes down FIRST, under everything: it is part of how
         // the ground looks, so a unit blob and a foundation decal both belong on top of it.
-        if (this.terrainShadows) this.terrainShadows.render(fogScene.camera.viewProjectionMatrix);
+        // It takes the terrain's runs like the veil does (render/terrainCull.ts).
+        if (this.terrainShadows) this.terrainShadows.render(fogScene.camera.viewProjectionMatrix, this.terrainCull?.runs());
         if (this.shadows && unitShadows) this.shadows.render(fogScene.camera.viewProjectionMatrix);
         fogScene.renderOpaque();
         // The fog veil over the sea FLOOR goes down before the sea (FogOverlay.waterCells): the

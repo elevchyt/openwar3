@@ -259,8 +259,9 @@ Roughly in value order, with the kind marked, because that is what decides where
   backdrop moves all 173 of its animated nodes every frame, identically to the flag off, and the
   world still shares and matches the per-instance path (1,084 instance checks, ≤0.00146).
 - **BLP decode off the main thread** (`decodeScan` ~1%, plus the hitch it causes). *Exact.*
-- **The fog overlay and baked shadow layer taking terrain-cull's runs** — named in
-  `docs/terrain-culling.md` and still not done. *Exact.*
+- ~~**The fog overlay and baked shadow layer taking terrain-cull's runs**~~ — **done**. The veil
+  already did; the shadow layer now does too (1,296 of 14,070 vertices at the Echo Isles start
+  camera). *Exact.* See `docs/terrain-culling.md`.
 
 ## The sim's structural options
 

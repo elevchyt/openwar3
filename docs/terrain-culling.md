@@ -115,22 +115,29 @@ rasteriser is not a slow GPU, and at three frames a second it cannot resolve a d
 size. The instance count (12 288 → 704, exact) and the pixel comparison are the measurements that
 hold; a frame-time number for weak hardware has to come off weak hardware.
 
+## The two overlays take the same runs
+
+Both of our own full-map passes ride the terrain's runs, and neither needed a patch:
+
+- **`src/render/fogOverlay.ts`** — the fog-of-war veil, one quad per terrain cell and BLENDED.
+  Its index buffer is row-major over the same cell grid, so a run maps to an index range
+  directly (`first * 6` indices, `count * 6` of them).
+- **`src/render/terrainShadowOverlay.ts`** — the baked `war3map.shd` layer. It already pruned by
+  CONTENT (triangles only for cells the mask shadows, plus a one-cell dilation), so its vertex
+  soup is compacted and a multiply cannot find a cell in it. But the kept cells are still emitted
+  row-major, so a run of cells is still ONE contiguous vertex range: `cellStart` is a prefix
+  count of kept cells over the grid (built with the mesh, rebuilt by `skipCells`), and a run
+  draws `cellStart[first] .. cellStart[first + count]`. A view with no shadowed cell in it
+  returns before the GL state is even saved. Measured on Echo Isles at the start camera:
+  **1 296 of 14 070 vertices** (`drawnVertices`), and the pixel test above reads the same as its
+  control (6 354 px against a 5 616 px noise floor, both concentrated on the animated Town Hall
+  and none of it tile-shaped).
+
+With the cull off (`TerrainCull.enabled = false`) `runs()` is empty and both draw the whole map,
+which is what makes them part of the same A/B.
+
 ## What is NOT culled yet
 
-Three passes still sweep the whole map every frame, and the runs are already computed for them:
-
-- **`src/render/fogOverlay.ts`** — the fog-of-war veil, one indexed triangle per terrain cell over
-  the entire map, and it is BLENDED, so it costs fill as well as vertices. Its index buffer is
-  row-major over the same cell grid, so a run maps to an index range directly
-  (`first * 6` indices, `count * 6` of them).
-- **`src/render/terrainShadowOverlay.ts`** — the baked `war3map.shd` layer. This one already
-  prunes by CONTENT: it builds triangles only for cells the mask actually shadows, plus a
-  one-cell dilation. But that is still every shadowed cell on the map, drawn whatever the camera
-  is doing, and on a forested map that is a large fraction of it. Its vertex soup is compacted to
-  the kept cells, so a cell row is still a contiguous vertex range — just not one a multiply can
-  find. It needs a per-row (start, count) table built alongside the mesh.
 - **The cliffs.** `renderCliffs` draws each cliff model's instances, which is real geometry rather
-  than a full-map sweep, but nothing tests them against the camera either. They would need
-  per-instance bounds, not the cell runs.
-
-The two overlays are ours and need no patch; the cliffs are a different shape of problem.
+  than a full-map sweep, but nothing tests them against the camera either. They need
+  per-instance bounds, not the cell runs — a different shape of problem.
