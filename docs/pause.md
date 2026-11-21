@@ -141,10 +141,20 @@ once at init as `userControlledPlayers == 1`, counting slots that are both `MAP_
 and `PLAYER_SLOT_STATE_PLAYING` — so a skirmish against three computers is single-player.
 `MapViewerScene.singlePlayer` is that same count.
 
-**One caveat**, and it is the one `PauseGame` has always carried: a stopped world does not pump
-the map's script, so a dialog that no click can dismiss and that a `TriggerSleepAction` was
-meant to take down would never come down. Every dialog we put up is dismissed by ANY click (the
-engine's own rule), so the click path is safe; a purely timed one is the shape to watch for.
+**A script's waits outlive its own pause.** jassbot's `TriggerSleepAction` notes say a wait
+keeps counting while the game is paused with `PauseGame` — unlike a timer, which holds — and does
+NOT count while a PLAYER has paused. So while `scriptPaused` is the ONLY thing holding the world
+(no panel or dialog up, no player timeout, no dropped link, not a paused replay), `advanceSim`
+feeds `Interpreter.advanceWaitsOnly` in whole `SIM_DT` quanta: parked threads come nearer their
+wake time, `rt.gameTime` and every timer stay put. Before it, "pause, wait 5 s, unpause" — World
+of Angel Arena's whole `-ar` — was a pause nothing could ever lift. Quanta rather than the frame's
+`dt`, so a thread wakes after the same count on every machine and in a replay.
+
+**One caveat** is left: a stopped world does not pump the rest of the script (timers, events), so
+a dialog that no click can dismiss and that a TIMER was meant to take down would never come down
+— and a script dialog is a panel, which stops the waits too. Every dialog we put up is dismissed
+by ANY click (the engine's own rule), so the click path is safe; a purely timed one is the shape
+to watch for.
 
 ## A stopped world is a still picture
 

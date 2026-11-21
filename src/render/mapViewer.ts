@@ -1649,6 +1649,8 @@ export class MapViewerScene {
    *  loading screen is still holding for "PRESS ANY KEY TO CONTINUE" (see `holdAtStart`). */
   private startHeld = false;
   private simAccum = 0; // unspent real time, in seconds, waiting to become whole sim steps
+  /** The same, for the waits a script's own PauseGame leaves running (see advanceSim). */
+  private scriptPauseAccum = 0;
   private drawOwed = 0; // steps retired since the models were last synced (RtsController.syncEntries)
   /** Ticks elapsed since the match began. THE match clock — the number a multiplayer
    *  command is stamped with and a snapshot is taken at (docs/multiplayer.md). */
@@ -17041,6 +17043,28 @@ export class MapViewerScene {
     const stopped = seeking ? this.panelPaused || this.scriptPaused || this.playerPaused || this.waitPaused : this.paused;
     if (seeking && this.scriptPaused) this.endReplaySeek();
     if (stopped || this.startHeld) {
+      // The script's OWN pause still counts its waits (Interpreter.advanceWaitsOnly — jassbot:
+      // TriggerSleepAction keeps ticking under PauseGame, not under a player's pause), so it is
+      // fed here in whole SIM_DT quanta, exactly as a step would feed it: a thread then wakes
+      // after the same number of quanta on every machine and in a replay, whatever the frame
+      // rate. Only when NOTHING ELSE holds the world — a panel, a player's timeout, a dropped
+      // link, the replay's own Pause and the start gate all stop the waits with everything else.
+      const scriptOnly = this.scriptPaused && !this.startHeld && !seeking && !this.panelPaused
+        && !this.playerPaused && !this.waitPaused && !this.replayPaused && !this.rts?.frozenClient;
+      if (scriptOnly && this.mapScript && this.simLast) {
+        this.scriptPauseAccum += (Math.max(0, now - this.simLast) / 1000) * this.speedRate;
+        let quanta = 0;
+        while (this.scriptPauseAccum >= SIM_DT && quanta++ < MAX_STEPS_PER_FRAME) {
+          this.scriptPauseAccum -= SIM_DT;
+          try {
+            this.mapScript.interp.advanceWaitsOnly(SIM_DT);
+          } catch (e) {
+            console.warn("[jass] wait under PauseGame failed:", e);
+          }
+          if (!this.scriptPaused) break; // the thread lifted it — the next frame steps the world
+        }
+        if (quanta > MAX_STEPS_PER_FRAME) this.scriptPauseAccum = 0;
+      } else this.scriptPauseAccum = 0;
       this.simLast = now;
       this.lastSimStep = 0; // no game time passed, so a camera following a group holds too
       // A world held at the gate still ADOPTS: the loading screen's last stretch is the start

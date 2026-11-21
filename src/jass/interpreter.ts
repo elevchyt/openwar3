@@ -1376,6 +1376,25 @@ export class Interpreter {
     }
   }
 
+  /**
+   * The map's OWN pause (`PauseGame(true)`) stops the world and every timer, but NOT a
+   * `TriggerSleepAction`: jassbot's TriggerSleepAction notes that it keeps counting while the
+   * game is paused with PauseGame (unlike a timer), and does NOT count while a PLAYER has paused.
+   * The frame loop calls this, one SIM_DT at a time, for as long as the script's pause is the
+   * only thing stopping the world. Nothing else moves: `rt.gameTime` stays where it is (a timer
+   * and `PolledWait`, which is a timer underneath, hold), so the sleepers are brought nearer
+   * their wake time instead of the clock being moved past it.
+   *
+   * Without it, "pause the game, wait 5 s, unpause" — World of Angel Arena's whole "-ar" — was
+   * a pause nothing could ever lift: the thread that would lift it waited on a clock the pause
+   * had stopped. Shifting `wakeAt` rather than keeping a second clock keeps a saved game's
+   * threads (written with absolute `wakeAt`s) meaning what they meant.
+   */
+  advanceWaitsOnly(dt: number): void {
+    for (const t of this.threads) if (!t.done) t.wakeAt -= dt;
+    this.pumpThreads();
+  }
+
   /** Resume every thread whose wake time has come (pumped from the sim tick, after the
    *  timers). A thread resumes at most **once per pump**: that's what makes a wait cost
    *  at least a frame, so `loop / TriggerSleepAction(0) / endloop` can't hang the tick. */
