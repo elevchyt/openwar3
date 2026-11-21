@@ -2797,6 +2797,28 @@ export class RtsController {
     if (this.sounds.play(def.soundSet, cat, undefined, this.primary!) && single) this.voiceStreak++;
   }
 
+  /** A left-click that selects something that is NOT yours answers with the interface click —
+   *  UISounds.slk `InterfaceClick` = Sound\Interface\MouseClick1.wav, a UI sound on this client
+   *  alone (no position), the row the command card's press plays. Your own units answer with
+   *  their "What" voice instead (announceSelection), which nobody else's ever does. It sounds
+   *  for: any unit or building of another PLAYER, ally or enemy; and a NEUTRAL building (a
+   *  Tavern, a Goblin Laboratory, a Goblin Merchant, a Marketplace…) — but never a neutral unit
+   *  (a Sheep, a creep), a gold mine, or a fountain (the developer's rule). A gold mine is the
+   *  row carrying `Agld`; the fountains share no ability (nbfl/ndfl carry Avul alone), but every
+   *  one of the five stock rows — nfoh, nmoo, nbfl, nfnp, ndfl — has a UnitUI `unitSound` of
+   *  `FountainOfLife*`, which a map's copy of one keeps. Only the plain click: a selection a
+   *  shift-click refused made no selection and so no sound. */
+  private foreignSelectClick(id: number): void {
+    const u = this.sim.units.get(id);
+    const def = this.registry.get(this.byId.get(id)?.typeId ?? ""); // a destructible has no row: silent
+    if (!this.sounds || !u || !def || u.owner === this.localPlayer) return;
+    if (u.owner < 0) {
+      // NEUTRAL_PASSIVE_OWNER / NEUTRAL_HOSTILE_OWNER: buildings only, mines and fountains aside.
+      if (!u.building || def.abilities.includes("Agld") || /^FountainOfLife/i.test(def.soundSet)) return;
+    }
+    this.sounds.playUi("InterfaceClick");
+  }
+
   /** The def behind a sim unit: the registry's, or — for the map's destructibles, which have
    *  no registry row — the one they were seeded with (see destructibleDefs). */
   private defOf(simId: number): UnitDef | undefined {
@@ -6725,6 +6747,7 @@ export class RtsController {
       this.selectedItem = null;
       this.refocus();
       this.announceSelection();
+      this.foreignSelectClick(id);
       return;
     }
     // No unit under the cursor — a gold mine or a ground item is clickable too.
