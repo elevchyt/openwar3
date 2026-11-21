@@ -15105,10 +15105,13 @@ export class MapViewerScene {
       // cooldown. Only a peer showing the same FACE of a toggle stands in, since the two halves
       // are priced differently (castCostOf).
       const ready = this.readiestPeer(peers, ab.id, def, !!def.unIcon ? reversed : null) ?? { unit: su, ab, lvl };
-      // …and a planted Ancient with anything in its queue cannot pull itself up at all: WC3
-      // greys Uproot out for as long as it is training or researching, because the work would
-      // have nowhere to go. The sim refuses it too (SimWorld.rootRefusal) — this is the half
-      // that SHOWS it, so the button reads as unpressable instead of silently doing nothing.
+      // …and a planted Ancient with anything in its queue cannot pull itself up at all, because
+      // the work would have nowhere to go — and WC3 does not grey Uproot out for it, it takes the
+      // button OFF the card for as long as the Ancient is training, researching or upgrading
+      // (developer's report against the real client). The sim refuses it too
+      // (SimWorld.rootRefusal); the queue test is restated here because that refusal is also
+      // the mid-transition one, which keeps the button on the card, inert.
+      if (ab.code === "Aroo" && !su.uprooted && (su.building?.queue.length ?? 0) > 0) continue;
       const rootBlocked = ab.code === "Aroo" && this.rts.simView.rootRefusal(su) !== null;
       // …and a unit halfway through CHANGING SHAPE presses nothing at all, because it is
       // neither form yet (SimUnit.morphT — `[Abur] Dur1` = 1.45s of Crypt Fiend going into
