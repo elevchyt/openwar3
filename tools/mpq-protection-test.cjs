@@ -12,6 +12,8 @@
 //   7. "MoonLight" layout: the header AFTER the data, every position a wrapping negative offset
 //   8. the archive handed over as a VIEW at an odd byteOffset (a Node Buffer out of the pool)
 //   9. the hash table's empty slots all filled with junk (0xEEEEEEEE), as Bleach vs One Piece does
+//  10. a file imported under a name with a LEADING BACKSLASH (`\\Naruto.mdx`), as Angel Arena
+//      Allstars does — through the engine's own MpqDataSource, which is where it was lost
 //
 // Run: pnpm sim:test (or node tools/mpq-protection-test.cjs)
 const mpqMod = require("mdx-m3-viewer/dist/cjs/parsers/mpq");
@@ -223,6 +225,32 @@ console.log("\n9. every empty hash slot filled with junk (Bleach vs One Piece)")
   const b = new Archive();
   b.load(rewrite(clean, h, hdr, hash, blockWords(a)), true);
   check("…and a missing name is simply missing", b.get("war3mapUnits.doo") === null);
+}
+
+console.log("\n10. a name with a leading backslash (Angel Arena Allstars)");
+{
+  // An MPQ name is hashed whole, so `\\Naruto.mdx` is NOT `Naruto.mdx`. The source must ask for
+  // the name as written before it falls back on the stripped one.
+  const { join } = require("node:path");
+  const fs = require("node:fs");
+  const REPO = join(__dirname, "..");
+  fs.writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
+  const { MpqDataSource } = require(join(REPO, ".sim-build", "src", "vfs", "mpq.js"));
+  const a = new Archive();
+  const led = Uint8Array.from({ length: 300 }, (_, i) => (i * 3) & 0xff);
+  const both = Uint8Array.from({ length: 200 }, (_, i) => (i * 5) & 0xff);
+  a.set("\\Naruto.mdx", led);
+  a.set("\\Twin.blp", both);
+  a.set("Twin.blp", FILES.get("FullScreen.blp"));
+  a.set("war3map.j", FILES.get("war3map.j"));
+  const src = new MpqDataSource("test", a.save());
+  const same = (got, want) => !!got && got.length === want.length && got.every((v, i) => v === want[i]);
+  check("\\Naruto.mdx exists by the name as written", src.exists("\\Naruto.mdx"));
+  check("…and reads back", same(src.rawBytes("\\Naruto.mdx"), led));
+  check("…with a forward slash too", same(src.rawBytes("/Naruto.mdx"), led));
+  check("the bare name is a different entry, and is not there", !src.exists("Naruto.mdx") && src.rawBytes("Naruto.mdx") === null);
+  check("two entries one backslash apart each answer to their own name", same(src.rawBytes("\\Twin.blp"), both) && same(src.rawBytes("Twin.blp"), FILES.get("FullScreen.blp")));
+  check("a stray leading slash still finds an ordinary file", same(src.rawBytes("\\war3map.j"), FILES.get("war3map.j")) && src.exists("/war3map.j"));
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall MPQ protection checks passed");

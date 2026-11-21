@@ -1094,7 +1094,7 @@ What is NOT ours to fix: Neliel's and Grimmjow's models and icons (`!Neliel!.mdl
 A protector damages the ARCHIVE as well as the script, in ways Storm (the game's reader) shrugs off.
 The reader is mdx-m3-viewer's, patched (`dist/cjs/parsers/mpq/{archive,hashtable,blocktable,file}.js`
 in `patches/mdx-m3-viewer@5.12.0.patch`), and `tools/mpq-protection-test.cjs` builds each trick by
-hand and asserts every real file still reads back — the unpatched reader fails 7 of its 9 cases:
+hand and asserts every real file still reads back — the unpatched reader fails 7 of its first 9 cases:
 
 - **Tables that run past EOF** (or claim 2^28 entries): read for the whole entries the file holds,
   padded to the stated size with EMPTY slots / blocks that do not exist, so the hash mask is the
@@ -1108,6 +1108,12 @@ hand and asserts every real file still reads back — the unpatched reader fails
 - **Junk-filled empty slots** (Bleach vs One Piece fills all 173 with `0xEEEEEEEE` so a probe never
   ends early) were always fine: the lookup scans the whole table.
 - The header is read through a `DataView`, so a buffer that is a view at an odd offset works.
+- **A name with a leading backslash** is not a protector's trick but reads like one: an MPQ has no
+  folders, a file is found by the hash of its WHOLE name, so `\Naruto.mdx` and `Naruto.mdx` are two
+  entries. Angel Arena Allstars imports 66 files that way (its `UnitUI.slk` `file` is `\Naruto`), and
+  `MpqDataSource` used to strip the backslash and find none of them — heroes with no body, effects
+  and kill-streak sounds that never played. It asks for the name as written first (`nameOf`,
+  `src/vfs/mpq.ts`) and for the stripped form only when the archive has no such entry (case 10).
 
 Not handled: **bzip2**-compressed files (Storm decodes them; the reader throws — no protector in the
 corpus uses it), and a file whose sector table is itself corrupt (that file throws; the archive and
