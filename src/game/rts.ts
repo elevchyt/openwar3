@@ -721,6 +721,10 @@ const NEUTRAL_PASSIVE_TEAM = -2;
  *  nobody on its own, grey on the minimap, and never counted as a player's unit. */
 const NEUTRAL_HOSTILE_OWNER = -1;
 const NEUTRAL_HOSTILE_TEAM = -1;
+/** The UnitUI `unitSound` sets of the neutral buildings whose selection makes no interface
+ *  click (RtsController.foreignSelectClick): every fountain's `FountainOfLife`,
+ *  `FountainOfLifeBlood`, `FountainOfLifeDefiled`, and the Way Gate's `Waygate`. */
+const NEUTRAL_SILENT_SOUNDSET = /^(FountainOfLife|Waygate$)/i;
 
 /** One icon in the multi-selection grid. */
 export interface SelIcon {
@@ -2803,18 +2807,20 @@ export class RtsController {
    *  their "What" voice instead (announceSelection), which nobody else's ever does. It sounds
    *  for: any unit or building of another PLAYER, ally or enemy; and a NEUTRAL building (a
    *  Tavern, a Goblin Laboratory, a Goblin Merchant, a Marketplace…) — but never a neutral unit
-   *  (a Sheep, a creep), a gold mine, or a fountain (the developer's rule). A gold mine is the
-   *  row carrying `Agld`; the fountains share no ability (nbfl/ndfl carry Avul alone), but every
-   *  one of the five stock rows — nfoh, nmoo, nbfl, nfnp, ndfl — has a UnitUI `unitSound` of
-   *  `FountainOfLife*`, which a map's copy of one keeps. Only the plain click: a selection a
+   *  (a Sheep, a creep), a gold mine, a fountain or a Way Gate (the developer's rule). A gold
+   *  mine is the row carrying `Agld`; the fountains share no ability (nbfl/ndfl carry Avul
+   *  alone), but every one of the five stock rows — nfoh, nmoo, nbfl, nfnp, ndfl — has a UnitUI
+   *  `unitSound` of `FountainOfLife*`, and the Way Gate (nwgt) one of its own, `Waygate`, which
+   *  a map's copy of either keeps (NEUTRAL_SILENT_SOUNDSET). Only the plain click: a selection a
    *  shift-click refused made no selection and so no sound. */
   private foreignSelectClick(id: number): void {
     const u = this.sim.units.get(id);
     const def = this.registry.get(this.byId.get(id)?.typeId ?? ""); // a destructible has no row: silent
     if (!this.sounds || !u || !def || u.owner === this.localPlayer) return;
     if (u.owner < 0) {
-      // NEUTRAL_PASSIVE_OWNER / NEUTRAL_HOSTILE_OWNER: buildings only, mines and fountains aside.
-      if (!u.building || def.abilities.includes("Agld") || /^FountainOfLife/i.test(def.soundSet)) return;
+      // NEUTRAL_PASSIVE_OWNER / NEUTRAL_HOSTILE_OWNER: buildings only, mines, fountains and
+      // Way Gates aside.
+      if (!u.building || def.abilities.includes("Agld") || NEUTRAL_SILENT_SOUNDSET.test(def.soundSet)) return;
     }
     this.sounds.playUi("InterfaceClick");
   }
