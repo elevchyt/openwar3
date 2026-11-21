@@ -925,9 +925,9 @@ export class Authority {
         // Unqueued it still goes STRAIGHT to the sim, and deliberately: `issueOrder` clears the
         // unit's queue, and an immediate ability (Uproot, Avatar, Divine Shield) is not an order
         // at all — pressing one must not throw away what the unit was told to do next.
-        if (cmd.queued) return this.applyOrder(player, cmd.unitId, { kind: "cast", code: cmd.code, targetId: cmd.targetId, x: cmd.x, y: cmd.y }, true);
+        if (cmd.queued) return this.applyOrder(player, cmd.unitId, { kind: "cast", code: cmd.code, targetId: cmd.targetId, x: cmd.x, y: cmd.y, itemId: cmd.itemId }, true);
         else {
-          const ok = this.sim.issueCast(cmd.unitId, cmd.code, cmd.targetId, cmd.x, cmd.y);
+          const ok = this.sim.issueCast(cmd.unitId, cmd.code, cmd.targetId, cmd.x, cmd.y, false, cmd.itemId ?? 0);
           if (ok) this.noteCastOrder(cmd.unitId, cmd.code, cmd.targetId, cmd.x, cmd.y);
           // An unqueued cast REPLACES what the unit was told to do next, exactly as an unqueued
           // move does — but only when it actually became the unit's order. That test is what

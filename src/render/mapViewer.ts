@@ -29,13 +29,13 @@ import { externalResolver, externalsFor, type SaveRegistries } from "../game/sav
 import type { SaveFile, SavedScene } from "../game/save/saveFile";
 import { saveFileName, saveSink } from "../game/save/saveSink";
 import { mintedOrders, restoreMintedOrders } from "../jass/orders";
-import { jStr, JNULL } from "../jass/values";
+import { jStr, JNULL, type JassValue } from "../jass/values";
 import { learnOrderStrings } from "../jass/orders";
 import { localizedHotkey } from "../jass/natives/text";
 import { setWidePlayerTable } from "../data/enums";
 import { ScriptFrameOverlay } from "../ui/scriptFrames";
 import { EVENT_PLAYER_END_CINEMATIC, EVENT_PLAYER_LEAVE } from "../jass/interpreter";
-import { MAP_CONTROL, type CinematicScene, type DestructableSnapshot, type DialogObj, type EngineHooks, type RectObj, type Runtime } from "../jass/runtime";
+import { MAP_CONTROL, type CinematicScene, type DestructableSnapshot, type DialogObj, type EngineHooks, type JassUnit, type RectObj, type Runtime } from "../jass/runtime";
 import { makeHeightSampler, makeWaterSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type HeightSampler, type FootprintMaxSampler } from "../game/heightmap";
 import MdlxModel from "mdx-m3-viewer/dist/cjs/parsers/mdlx/model";
 import { WalkableSurfaces, type WalkableGeoset } from "./walkableHeight";
@@ -145,6 +145,8 @@ import { patchLevel } from "../patches";
 import { AI_SCRIPT_FOR } from "../ai";
 import { HERO_SEATS as CANDY_HERO_SEATS, isCandyWarScript } from "../ai/plus/candy/map";
 import { HERO_SEATS as WARCHASERS_HERO_SEATS, isWarChasersScript } from "../ai/plus/warchasers/map";
+import { RACER_SEATS as GRAND_PRIX_SEATS, isGrandPrixScript } from "../ai/plus/grandprix/map";
+import type { GrandPrixPort } from "../ai/plus/grandprix";
 import { playerLabels } from "../ui/playerSlots";
 import { ModelViewerScene } from "./modelViewer";
 import { animPropsFor, buildAnimSet } from "./unitAnims";
@@ -4760,6 +4762,15 @@ export class MapViewerScene {
         .filter((s) => s.controller === "computer" && WARCHASERS_HERO_SEATS.has(s.id))
         .map((s) => ({ player: s.id, difficulty: s.aiDifficulty ?? MELEE_AI_NORMAL })));
     }
+    // COMPUTER+ ON AZEROTH GRAND PRIX (src/ai/plus/grandprix/, docs/grand-prix-ai.md) — the same
+    // seam again. The lobby's computers in the map's eight racer seats drive a cart, with the
+    // arrow keys and the cart's own buttons; `grandPrixPort` is their keyboard and their view of
+    // the board, both of which are the script's and so this scene's to hand over.
+    if (scriptGlobals && isGrandPrixScript(scriptGlobals)) {
+      this.rts.startGrandPrixAI(config.slots
+        .filter((s) => s.controller === "computer" && GRAND_PRIX_SEATS.has(s.id))
+        .map((s) => ({ player: s.id, difficulty: s.aiDifficulty ?? MELEE_AI_NORMAL })), this.grandPrixPort());
+    }
     if (save) await this.applySave(save);
     this.rts.holdWorld(false); // the map has had its say — let the world run
     console.info(`[openwar3] Custom map: ${seeds.length} pre-placed player unit(s) seeded owned (issue #33)${dummies ? `, plus ${dummies} model-less dummy unit(s)` : ""}.`);
@@ -5073,9 +5084,12 @@ export class MapViewerScene {
       saveGame: (name) => void (this.pendingScriptSave = name),
       loadGame: (name) => void (this.pendingScriptLoad = name),
       saveGameExists: (name) => this.knownSaves.has(saveFileName(name).toLowerCase()),
-      // EnableUserUI hides EVERYTHING, interface and all — blizzard.j calls it before each
-      // cinematic fade (the filter covers the world, not the UI, so the UI has to go). It is
-      // a different switch from ShowInterface's letterbox, and the HUD needs both to be on.
+      // EnableUserUI takes the player's HANDS off the interface, not the interface off the
+      // screen: blizzard.j calls it around every cinematic fade (CinematicFadeCommonBJ /
+      // FinishCinematicFadeBJ), and a fade used in the middle of play — Angel Arena Allstars'
+      // First Blood "POW!" — is drawn over the world with the console still standing under
+      // the player's dead mouse. It used to hide the whole HUD, so every such flash blinked
+      // the console out and back. What hides the console is ShowInterface's letterbox.
       enableUserUi: (flag) => {
         this.userUi = flag;
         this.syncHudVisible();
@@ -5451,6 +5465,54 @@ export class MapViewerScene {
     const ev = base + (down ? 0 : 1);
     if (interp.playerEventAnswered(this.localPlayer, ev)) interp.firePlayerEvent(this.localPlayer, ev);
   }
+  /**
+   * A COMPUTER racer's doors onto Azeroth Grand Prix's script (src/ai/plus/grandprix/,
+   * docs/grand-prix-ai.md): its arrow keys, the lap dialog, and what a racer reads off the board.
+   *
+   * The keys are `scriptArrow`'s own — the same `EVENT_PLAYER_ARROW_*`, raised for the computer's
+   * seat through the same `firePlayerEvent`, under the same "only if a switched-on trigger is
+   * listening" rule — so the map moves a computer's cart by exactly the path it moves a person's,
+   * and the replay recorder hears a computer's keys as it hears anybody's (`inputTap`). A dialog
+   * click is the local player's click (`onDialogButton`): closed for that seat, then raised. The
+   * reads are script globals, looked up live: an AI must never hold a JASS value across a step.
+   */
+  private grandPrixPort(): GrandPrixPort {
+    const rt = (): Runtime | undefined => this.mapScript?.interp.rt;
+    const value = (name: string, index?: number): JassValue | undefined =>
+      index === undefined ? rt()?.globals.get(name) : rt()?.globalArrays.get(name)?.get(index);
+    return {
+      num: (name, index) => {
+        const v = value(name, index);
+        return v && (v.k === "int" || v.k === "real") ? v.n : null;
+      },
+      unit: (name, index) => {
+        const v = value(name, index);
+        const u = v?.k === "handle" ? rt()?.data<JassUnit>(v) : undefined;
+        return u && !u.removed && u.simId > 0 ? u.simId : 0;
+      },
+      point: (name, index) => {
+        const v = value(name, index);
+        const p = v?.k === "handle" ? rt()?.data<{ x?: unknown; y?: unknown }>(v) : undefined;
+        return p && typeof p.x === "number" && typeof p.y === "number" ? { x: p.x, y: p.y } : null;
+      },
+      arrow: (player, ev) => {
+        const interp = this.mapScript?.interp;
+        if (interp && !this.replayPlayback && interp.playerEventAnswered(player, ev)) interp.firePlayerEvent(player, ev);
+      },
+      dialog: (player) => {
+        const d = rt()?.dialogs.find((x) => x.visibleFor.has(player));
+        return d ? { id: d.handleId, buttons: d.buttons.map((b) => ({ id: b.handleId, text: b.text })) } : null;
+      },
+      clickDialog: (player, dialogId, buttonId) => {
+        const interp = this.mapScript?.interp;
+        const d = interp?.rt.dialogs.find((x) => x.handleId === dialogId);
+        if (!interp || !d || this.replayPlayback) return;
+        d.visibleFor.delete(player);
+        d.revision++;
+        interp.fireDialogClick(buttonId, dialogId, player);
+      },
+    };
+  }
   /** common.j's `EVENT_PLAYER_ARROW_<KEY>_DOWN`; the matching `_UP` is the next number. */
   private static readonly ARROW_EVENTS: Readonly<Record<string, number>> = {
     ArrowLeft: 261, ArrowRight: 263, ArrowDown: 265, ArrowUp: 267,
@@ -5824,6 +5886,18 @@ export class MapViewerScene {
           if (!opts.melee && isCandyWarScript(e.interp.rt.globals)) {
             for (const s of lobby.slots) {
               if (s.controller === MAP_CONTROL_FOR.computer && CANDY_HERO_SEATS.has(s.index)) s.controller = MAP_CONTROL_FOR.user;
+            }
+          }
+          // …and COMPUTER+ SEATS ON AZEROTH GRAND PRIX, for the same reason stated harder: every
+          // loop in that script — `InitializePlayer`'s places, `StartPickingCart`, `SortPlace`,
+          // `RefreshPlayerCheckPoints`, `Lightning`'s targets — walks the eight racers asking
+          // `GetPlayerController(…) == MAP_CONTROL_USER`. A computer seat is not given a picker or
+          // a cart, is not on the board and is not in the race. Computer+ drives the seat with the
+          // arrow keys a person drives it with (src/ai/plus/grandprix/), so the script is told what
+          // it would be told about a person and its own init does the rest.
+          if (!opts.melee && isGrandPrixScript(e.interp.rt.globals)) {
+            for (const s of lobby.slots) {
+              if (s.controller === MAP_CONTROL_FOR.computer && GRAND_PRIX_SEATS.has(s.index)) s.controller = MAP_CONTROL_FOR.user;
             }
           }
         },
@@ -10921,7 +10995,7 @@ export class MapViewerScene {
       tech: this.tech,
       upgrades: this.upgrades,
       items: this.items,
-      canAct: () => !!this.hud?.acceptsInput() && !this.hardPaused && this.userControl,
+      canAct: () => !!this.hud?.acceptsInput() && !this.hardPaused && this.userControl && this.userUi,
       card: () => this.commandCard(),
       press: (id) => this.runCommand(id),
       cursor: () => ({ x: this.lastMouse.x, y: this.lastMouse.y }),
@@ -11760,7 +11834,7 @@ export class MapViewerScene {
         this.target[1] = wy;
       },
       minimapClick: (wx, wy, right, queued) => {
-        if (!this.userControl) return "ignored"; // a cinematic owns the mouse — no orders
+        if (!this.userControl || !this.userUi) return "ignored"; // a cinematic (or a fade) owns the mouse — no orders
         if (this.placement) {
           // Building placement can't be aimed at the minimap; a right-click cancels it
           // (as it does in the world), a left-click is simply not a command.
@@ -11801,7 +11875,7 @@ export class MapViewerScene {
       setResources: (next) => this.consoleUi?.update(next),
       dayNight: () => this.rts?.timeOfDay() ?? { hour: MELEE.MELEE_STARTING_TOD, isDay: true },
       mountClock: (slot) => this.mountClock(slot),
-      controlEnabled: () => this.userControl,
+      controlEnabled: () => this.userControl && this.userUi,
       selectionIcons: () => this.rts?.selectionIcons() ?? [],
       selectGridUnit: (simId) => this.rts?.selectGridUnit(simId),
       selectGridType: (simId) => this.rts?.selectGridType(simId),
@@ -11891,6 +11965,13 @@ export class MapViewerScene {
         // A shop's patron's pockets, shown while the SHOP is selected (rts.inventorySlots): to
         // be looked at, never pressed — not even the click sound.
         if (this.rts?.inventorySlots()[slot]?.patronView) return;
+        // A unit-target spell that takes ITEMS, armed and put down on a pocket: the item in it
+        // is the target (rts.castAtInventorySlot) — Angel Arena Allstars' "Send Item".
+        if (this.rts?.castAtInventorySlot(slot)) {
+          this.sounds?.playUi("InterfaceClick");
+          this.hud?.setArmed(false);
+          return;
+        }
         // A press on something that can be USED — a potion, a scroll, a wand, a rod — is a
         // command-card press in every respect and sounds like one: `InterfaceClick`
         // (UISounds.slk: `Sound\Interface\MouseClick1.wav`), the same row runCommand plays.
@@ -13634,11 +13715,11 @@ export class MapViewerScene {
     }
   }
 
-  /** The HUD is on screen only when the interface (ShowInterface) AND the UI (EnableUserUI)
-   *  are both on. Two natives, two different jobs — the letterbox hides the console for the
-   *  duration of a cinematic; EnableUserUI hides everything for the duration of a fade. */
+  /** The HUD is on screen while the interface (ShowInterface) is. EnableUserUI is the other
+   *  native and a different job: it leaves the console where it is and stops it answering
+   *  (`userUi`, read beside `userControl` wherever input is taken). */
   private syncHudVisible(): void {
-    const on = this.interfaceShown && this.userUi;
+    const on = this.interfaceShown;
     // A map's `BlzHideOriginFrames(true)` takes the HUD's sockets away (the command card, the
     // portrait, the minimap, the hero bar, the inventory) and the system buttons with them,
     // while the console ART and the resource bar stay — a third owner beside the letterbox and
@@ -15781,8 +15862,10 @@ export class MapViewerScene {
       case "herodeath":
         sound = own ? "HeroDies" : "AllyHeroDies";
         if (!own) {
-          key = "Herodies"; // "%s has fallen in battle." — one slot, so it is the hero, not the class
-          args.push(name(a.hero?.typeId, a.hero?.properName));
+          // An ALLY's hero is HEARD and not read, like an ally's raid above: the data carries
+          // `Herodies` ("%s has fallen in battle."), but the real client does not print it
+          // (the developer's ruling, off the game) — the race's `AllyHeroDies` voice is the
+          // whole of it, and a map that wants words says its own ("Bolt was defeated by Chen").
         } else if (a.killer) {
           key = "Herokilledhero"; // "%s was defeated by %s." — a hero taken by another hero is a duel
           args.push(name(a.hero?.typeId, a.hero?.properName), name(a.killer.typeId, a.killer.properName));
@@ -17782,7 +17865,7 @@ export class MapViewerScene {
           // and the sphere belong to the caster, the warn art to the ground it is aimed at.
           const caster = world.units.get(c.casterId);
           const casterSeen = !caster || this.pointVisible(caster.x, caster.y);
-          if (casterSeen) this.rts!.playCastAnim(c.casterId, c.code, c.hold, c.loop);
+          if (casterSeen) this.rts!.playCastAnim(c.casterId, c.code, c.hold, c.loop, c.abilityId);
           // A delayed-strike spell drops its "beware" art as the wind-up STARTS, and the
           // sound rides that model: FlameStrikeTarget.mdx fires its SND…AHFT event at frame
           // 0 of its birth clip, so Flame Strike's rising howl begins with the cast point's

@@ -64,6 +64,8 @@ export interface SpellEvent {
   target: UnitSnapshot | null;
   x: number;
   y: number;
+  /** GetSpellTargetItem — an item-aimed cast's item (SimWorld.castItemTarget). */
+  item?: { id: number; typeId: string; charges: number; x: number; y: number } | null;
 }
 /** A construction milestone (7.17): the structure + which phase. */
 export interface ConstructEvent {
@@ -1982,6 +1984,7 @@ export class Interpreter {
         ["SpellAbilityUnit", caster],
         ["SpellAbilityId", jInt(rawcodeToInt(e.abilityId))],
         ["SpellTargetUnit", target],
+        ["SpellTargetItem", e.item ? this.rt.itemForSim(e.item) : JNULL],
         ["SpellTargetX", jReal(e.x)],
         ["SpellTargetY", jReal(e.y)],
       ]);

@@ -33,7 +33,7 @@ export type Command =
    *  set for unit- and point-target spells respectively (the ability's own data says which).
    *  `queued` (Shift) appends it to the unit's order queue instead of casting now — WC3 chains
    *  casts like any other order, and an Ancient told to eat four trees eats four trees. */
-  | { c: "cast"; unitId: number; code: string; targetId: number; x: number; y: number; queued: boolean }
+  | { c: "cast"; unitId: number; code: string; targetId: number; x: number; y: number; queued: boolean; /** an ITEM target, for a spell whose Targets Allowed names `item` (SimWorld.castItemTarget) */ itemId?: number }
   /** Load a worker into a burrow / transport. */
   | { c: "garrison"; unitId: number; buildingId: number }
   /** Send a unit to drink from a Moon Well (or an Obsidian Statue) — the ordinary right-click

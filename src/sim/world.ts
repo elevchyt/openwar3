@@ -53,6 +53,8 @@ import { SPELL_HANDLERS, ITEM_INVULN_GROUP, AURA_BUFFS, SELF_INVIS_GROUP, BLADES
 /** The buff group a Tornado's toss is applied under — both halves, so the invulnerability's wipe
  *  spares the stun it came with (clearStatusForInvulnerable). See tickTornado. */
 const TORNADO_SPIN_GROUP = "tornadoSpin";
+/** The buff group a Channel's (`ANcl`) own `Casterart` is worn under while it channels. */
+const CHANNEL_ART_GROUP = "channelArt";
 /** The buff group a carried Cloak of Flames' `BIcf` fire is worn under — see tickCarriedItems. */
 const CLOAK_GROUP = "cloakOfFlames";
 
@@ -719,6 +721,9 @@ export interface PendingCast {
   abilityId: string; // the SimAbility on the caster (for cooldown/mana)
   rank: number; // ability level being cast
   targetId: number; // unit target (0 = none)
+  /** An ITEM target (0/absent = none) — a spell whose Targets Allowed names `item`, aimed at
+   *  one on the ground or in the caster's own pockets (see SimWorld.castItemTarget). */
+  itemId?: number;
   x: number; // point target
   y: number;
   range: number; // cast range (hull-to-hull); 0 = self/no-target
@@ -1390,7 +1395,7 @@ export type QueuedOrder =
   // past three trees to eat the one clicked most recently. `targetId` 0 with x/y for a point
   // spell, a unit id for a targeted one, both empty for a self cast — the same three shapes
   // `issueCast` already takes.
-  | { kind: "cast"; code: string; targetId: number; x: number; y: number }
+  | { kind: "cast"; code: string; targetId: number; x: number; y: number; itemId?: number }
   // Go and take that gold mine — the whole night elf expansion in one right-click. An
   // uprooted Tree of Life walks to a spot beside the mine that its own footprint fits on,
   // PLANTS itself there, and casts Entangle (`Aent`) once its roots are down. Three acts, one
@@ -1569,6 +1574,8 @@ export interface SpellEvent {
   abilityId: string;
   phase: SpellPhase;
   target: EventUnitInfo | null; // unit target (null for point/no-target casts)
+  /** GetSpellTargetItem — the item an item-aimed cast named (SimWorld.castItemTarget). */
+  item?: { id: number; typeId: string; charges: number; x: number; y: number } | null;
   x: number; // target point (the unit's position for a unit target)
   y: number;
 }
@@ -1695,11 +1702,6 @@ export interface WaygateState {
   destX: number;
   destY: number;
   active: boolean;
-  /** Units currently standing in the gate's box. A gate fires on a unit ENTERING it —
-   *  the rising edge — not on one merely standing in it, so this is the "was already
-   *  inside" baseline the next tick is diffed against. See tickWaygates for why a gate
-   *  that fires on occupancy instead of entry makes a pair of gates ping-pong forever. */
-  inside: Set<number>;
 }
 
 export interface SimUnit {
@@ -2186,7 +2188,7 @@ export interface SimUnit {
    *  it is aiming at (`gx`/`gy`, which is what `chaseX`/`chaseY` hold meanwhile) and the goal
    *  the order named, re-pathed at the moment the gate throws it out the far end. Set and
    *  cleared by `pathTo` alone (SimWorld.gateHop); absent for every walk that needs no gate. */
-  viaGate?: { gateId: number; gx: number; gy: number; tx: number; ty: number; hx: number; hy: number } | null;
+  viaGate?: { gateId: number; gx: number; gy: number; tx: number; ty: number; hx: number; hy: number; asked?: boolean } | null;
   silenced: boolean; // derived from buffs (cannot cast spells)
   /** Derived from a `hex` buff (Hex, Polymorph): a critter — no attack, no spells, walks at
    *  HEX_MOVE_SPEED. */
@@ -5212,6 +5214,16 @@ export class SimWorld {
    *  without every removal path in the sim having to know shops exist. */
   private shopBuyers = new Map<number, Map<number, number>>();
 
+  /** The nominations a PLAYER made by hand (`shop:player`), as against the ones a shop adopted
+   *  by itself. The difference matters for exactly one case: a non-hero carrier. The default
+   *  patron is the HERO — the ability is "Select Hero", and a pack mule is something you pick
+   *  on purpose — so a carrier the shop merely adopted yields the counter to a hero who walks
+   *  up, and one the player chose does not. Angel Arena Allstars is the map that needs it:
+   *  every player's "Item Stock" barrel (`h01B`, an `AInv` inventory) stands in the base for
+   *  the whole game, well inside the base shops' reach, so as the first carrier to arrive it
+   *  took delivery of everything the hero bought there. (Observed behaviour, no data field.) */
+  private shopBuyerPicked = new Set<string>();
+
   /** Nominate `unitId` as `player`'s purchaser at `shop` (WC3's "Select Hero"/"Select Unit",
    *  the `neutralinteract` order). Refuses anything that isn't a valid patron right now.
    *  Passing 0 clears the nomination and hands the shop back to the default rule. */
@@ -5220,6 +5232,7 @@ export class SimWorld {
     if (!shop || !this.canUseShop(shopId, player) || !this.shopSelectsUser(shopId)) return false; // …and not an enemy's
     if (unitId === 0) {
       this.shopBuyers.get(shopId)?.delete(player);
+      this.shopBuyerPicked.delete(`${shopId}:${player}`);
       return true;
     }
     const u = this.units.get(unitId);
@@ -5228,6 +5241,7 @@ export class SimWorld {
     let per = this.shopBuyers.get(shopId);
     if (!per) this.shopBuyers.set(shopId, (per = new Map()));
     per.set(player, unitId);
+    this.shopBuyerPicked.add(`${shopId}:${player}`);
     return true;
   }
 
@@ -5254,6 +5268,7 @@ export class SimWorld {
     const u = this.units.get(nominated);
     if (u && u.owner === player && this.isPatron(u) && this.inShopRange(shop, u)) return u;
     this.shopBuyers.get(shopId)?.delete(player); // stale — dead, gone, or walked away
+    this.shopBuyerPicked.delete(`${shopId}:${player}`);
     return null;
   }
 
@@ -5285,20 +5300,29 @@ export class SimWorld {
     for (const shop of this.units.values()) {
       if (shop.hp <= 0 || !this.isShopUnit(shop.id)) continue;
       if (!this.shopSelectsUser(shop.id) && !this.shopSellsItems(shop)) continue;
-      // Which players have a unit here at all — no patrons, nothing to adopt.
-      const seen = new Set<number>();
+      // Which players have a unit here at all — no patrons, nothing to adopt. A HERO at the
+      // counter outranks a mere carrier (`heroAt`): see `shopBuyerPicked`.
+      const first = new Map<number, SimUnit>();
+      const heroAt = new Map<number, SimUnit>();
       for (const u of this.units.values()) {
-        if (seen.has(u.owner) || !this.isPatron(u)) continue;
+        if (!this.isPatron(u) || (first.has(u.owner) && (!u.isHero || heroAt.has(u.owner)))) continue;
         if (!this.inShopRange(shop, u)) continue;
-        seen.add(u.owner);
+        if (!first.has(u.owner)) first.set(u.owner, u);
+        if (u.isHero && !heroAt.has(u.owner)) heroAt.set(u.owner, u);
+      }
+      for (const [owner, u] of first) {
         // …but only for a player this shop actually serves. An enemy hero walking past your
         // Arcane Vault is not its customer, and adopting one is what put their team's arrow
         // over their own head at your counter.
-        if (!this.canUseShop(shop.id, u.owner)) continue;
-        if (this.shopBuyer(shop.id, u.owner)) continue; // already has a valid one — leave it
+        if (!this.canUseShop(shop.id, owner)) continue;
+        const hero = heroAt.get(owner);
+        const now = this.shopBuyer(shop.id, owner);
+        // Already has a valid one — leave it, unless it is a carrier the shop took by itself
+        // and a hero has since walked up.
+        if (now && (now.isHero || !hero || this.shopBuyerPicked.has(`${shop.id}:${owner}`))) continue;
         let per = this.shopBuyers.get(shop.id);
         if (!per) this.shopBuyers.set(shop.id, (per = new Map()));
-        per.set(u.owner, u.id);
+        per.set(owner, (hero ?? u).id);
       }
     }
   }
@@ -5352,7 +5376,8 @@ export class SimWorld {
       if (rule.needsInventory && !this.isPatron(u)) continue;
       if (!this.inShopRange(shop, u)) continue;
       const d = Math.hypot(u.x - shop.x, u.y - shop.y);
-      if (d < bestD) (bestD = d), (best = u);
+      // A hero before a carrier, then the nearer (see shopBuyerPicked).
+      if (best && best.isHero !== u.isHero ? u.isHero : d < bestD) (bestD = d), (best = u);
     }
     return best;
   }
@@ -11211,7 +11236,9 @@ export class SimWorld {
   private noteSpell(u: SimUnit, pc: PendingCast, phase: SpellPhase): void {
     if (!this.captureSpells) return;
     const t = pc.targetId ? this.units.get(pc.targetId) : undefined;
-    this.spellEvents.push({ caster: eventInfo(u), abilityId: pc.abilityId, phase, target: t ? eventInfo(t) : null, x: pc.x, y: pc.y });
+    const it = pc.itemId ? this.castItemTarget(u, pc.itemId) : null;
+    const item = it ? { id: it.id, typeId: it.itemId, charges: it.charges, x: it.x, y: it.y } : null;
+    this.spellEvents.push({ caster: eventInfo(u), abilityId: pc.abilityId, phase, target: t ? eventInfo(t) : null, item, x: pc.x, y: pc.y });
   }
   /** Spell events since the last drain (`captureSpells`). */
   drainSpellEvents(): SpellEvent[] {
@@ -11420,6 +11447,8 @@ export class SimWorld {
     if (!u || this.castLocked(u)) return false;
     if (!this.canPursue(u)) return false; // a building goes nowhere — and must not sit on a "move" order
     const target = targetId ? this.units.get(targetId) : undefined;
+    // A move ONTO a working Way Gate is the order to go through it (askGate).
+    if (target && target.id !== id && target.waygate?.active && this.askGate(u, target)) return true;
     const approach = target && target.id !== id ? this.approachExtent(target) : undefined;
     this.clearGuardPost(u);
     u.order = "move";
@@ -12247,6 +12276,8 @@ export class SimWorld {
     const u = this.units.get(id);
     const t = this.units.get(targetId);
     if (!u || !t || u === t || u.speed <= 0 || this.castLocked(u)) return false;
+    // "Follow" a working Way Gate — a script's `smart`/`move` order on one — is to use it.
+    if (t.waygate?.active && this.askGate(u, t)) return true;
     this.clearGuardPost(u);
     u.order = "follow";
     u.targetId = targetId;
@@ -13153,6 +13184,7 @@ export class SimWorld {
       // renderer holds the swing clip on this flag) — the Stop-cancel of the game.
       u0.swingFollowThrough = false;
       u0.returnDepotId = 0; // a depot the player picked belongs to the order that picked it
+      u0.viaGate = null; // …and so does a Way Gate it was sent into (the new order re-plans its own)
     }
     switch (o.kind) {
       case "move": return this.issueMove(id, o.x, o.y, o.targetId);
@@ -13171,7 +13203,7 @@ export class SimWorld {
       case "repair": return this.issueRepair(id, o.buildingId, o.hpPerSec, o.goldPerHp, o.lumberPerHp);
       case "buildnew": this.issueBuildNew(id, o.defId, o.x, o.y, o.gold, o.lumber, o.paid); return true;
       case "drink": return this.issueDrink(id, o.wellId);
-      case "cast": return this.issueCast(id, o.code, o.targetId, o.x, o.y);
+      case "cast": return this.issueCast(id, o.code, o.targetId, o.x, o.y, false, o.itemId ?? 0);
       case "rootat": return this.issueRootAt(id, o.x, o.y);
       case "entangleat": return this.issueEntangleAt(id, o.mineId, o.adjacent);
     }
@@ -16634,7 +16666,7 @@ export class SimWorld {
    *  says "Not enough mana." the instant you click, it doesn't walk the caster into range
    *  first and then quietly give up. tickCast still re-checks both, because the walk takes
    *  time and a cheaper spell may drain the mana in the meantime. */
-  castError(unitId: number, code: string, targetId = 0, x = 0, y = 0): string | null {
+  castError(unitId: number, code: string, targetId = 0, x = 0, y = 0, itemId = 0): string | null {
     const use = this.castUseError(unitId, code);
     if (use !== null) return use;
     const u = this.units.get(unitId)!;
@@ -16657,15 +16689,41 @@ export class SimWorld {
       return this.corpseRefusal(u, def, lvl, x, y) ?? this.treeRefusal(def, lvl, x, y);
     }
     if (def.target !== "unit") return null;
+    // An ITEM aimed at: legal only for a row whose Targets Allowed names `item`, and then only
+    // one on the ground or in the caster's own pockets (castItemTarget).
+    if (itemId) return this.aimsAtItems(def) && this.castItemTarget(u, itemId) ? null : "Targetunit";
     const t = this.units.get(targetId);
-    if (!t) return "Targetunit"; // "Must target a unit with this action." — clicked bare ground
+    // "Must target an item." / "Must target a unit with this action." — clicked bare ground
+    if (!t) return this.aimsAtItems(def, true) ? "Targetitem" : "Targetunit";
+    if (this.aimsAtItems(def, true)) return "Targetitem"; // a unit, for a spell that takes items alone
     return this.targetError(u, t, def.targetFlags, code);
+  }
+
+  /** Does this row's Targets Allowed name `item` — and, with `only`, nothing else of a KIND?
+   *  `[AIco]`-style rows aside, the stock game aims almost nothing at an item; a MAP does, and
+   *  builds it on Channel: Angel Arena Allstars' "Send Item" (`A0AQ`/`A05A`, `ANcl` with
+   *  `targs1 = item`) is pressed on the Item Stock barrel and aimed at one of the items in its
+   *  pockets, and the map's own trigger moves what `GetSpellTargetItem` names. */
+  aimsAtItems(def: AbilityDef, only = false): boolean {
+    if (!def.targetFlags.includes("item")) return false;
+    return !only || def.targetFlags.every((f) => f === "item");
+  }
+
+  /** The item an item-aimed cast by `u` may name: one lying on the GROUND, or one in the
+   *  caster's OWN inventory (the click on its pocket — the game lets a unit-target spell be
+   *  aimed at an inventory button). Somebody else's pockets are not reachable. Positioned
+   *  where it IS: a carried item is at the caster, so no walk is needed to "reach" it. */
+  castItemTarget(u: SimUnit, itemId: number): { id: number; itemId: string; charges: number; x: number; y: number } | null {
+    const ground = this.items.get(itemId);
+    if (ground) return ground;
+    const held = u.inventory.find((h) => h?.id === itemId);
+    return held ? { id: held.id, itemId: held.itemId, charges: held.charges, x: u.x, y: u.y } : null;
   }
 
   /** Order a unit to cast an ability. `code` is the ability's base code; targetId
    *  (unit) / x,y (point) depend on the ability's target type. Returns false if
    *  the cast can't be started (unknown/unlearned ability, wrong target, dead). */
-  issueCast(unitId: number, code: string, targetId = 0, x = 0, y = 0, auto = false): boolean {
+  issueCast(unitId: number, code: string, targetId = 0, x = 0, y = 0, auto = false, itemId = 0): boolean {
     const u = this.units.get(unitId);
     if (!u || u.stunned || u.silenced || !this.abilities) return false;
     // An illusion is a picture of a caster, not a caster: it has the abilities on its sheet
@@ -16764,8 +16822,12 @@ export class SimWorld {
     // speaks to the local player's click. A trigger's IssuePointOrder, an order off the wire
     // and an autocast all arrive here.
     if (def.target === "point" && !this.inPlayableArea(x, y)) return false;
-    const t = def.target === "unit" ? this.units.get(targetId) : undefined;
-    if (def.target === "unit" && (!t || !this.castableTarget(u, t, def.targetFlags, code))) return false;
+    // An ITEM target stands in for the unit one (castItemTarget): the cast is then aimed like
+    // a point — at where the item lies, or at the caster's own feet for one it carries.
+    const aimedItem = itemId && def.target === "unit" && this.aimsAtItems(def) ? this.castItemTarget(u, itemId) : null;
+    if (itemId && !aimedItem) return false;
+    const t = def.target === "unit" && !aimedItem ? this.units.get(targetId) : undefined;
+    if (def.target === "unit" && !aimedItem && (!t || this.aimsAtItems(def, true) || !this.castableTarget(u, t, def.targetFlags, code))) return false;
     // An attack modifier aimed by hand: not a cast at all, but an ATTACK carrying one
     // enhanced shot (see isArrowOrb). Checked after the target test so it inherits the
     // same data-driven rules — Searing Arrows may be aimed at a building, Cold Arrows may not.
@@ -16820,9 +16882,10 @@ export class SimWorld {
       code,
       abilityId: ab.id,
       rank: ab.level,
-      targetId: def.target === "unit" ? targetId : 0,
-      x: def.target === "point" ? x : meal ? mealX : (t?.x ?? u.x),
-      y: def.target === "point" ? y : meal ? mealY : (t?.y ?? u.y),
+      targetId: def.target === "unit" && !aimedItem ? targetId : 0,
+      itemId: aimedItem ? aimedItem.id : 0,
+      x: def.target === "point" ? x : meal ? mealX : (aimedItem?.x ?? t?.x ?? u.x),
+      y: def.target === "point" ? y : meal ? mealY : (aimedItem?.y ?? t?.y ?? u.y),
       range: meal ? corpseReach(code, lvl) : def.target === "none" ? 0 : lvl.castRange + this.aimedBlockRadius(code, u, x, y),
       castLeft: -1,
       started: false,
@@ -16993,6 +17056,16 @@ export class SimWorld {
       ty = t.y;
       pc.x = tx;
       pc.y = ty;
+    }
+    // …and so does an ITEM target that is gone — picked up by somebody, sold, destroyed.
+    if (pc.itemId && !pc.fired) {
+      const it = this.castItemTarget(u, pc.itemId);
+      if (!it) {
+        this.stop(u.id);
+        return;
+      }
+      tx = pc.x = it.x;
+      ty = pc.y = it.y;
     }
 
     // --- phase 3: post-effect. Either CHANNEL (locked, a new order stops it and
@@ -17183,6 +17256,17 @@ export class SimWorld {
     this.noteSpell(u, pc, "effect"); // EVENT_(PLAYER_)UNIT_SPELL_EFFECT — the spell goes off
     this.resolveCast(u, def, pc);
     pc.channelLeft = this.channelDuration(def, pc.rank);
+    // A CHANNEL (`ANcl`) has no handler — the map's triggers are the spell — so its own row's
+    // `Casterart` is nobody else's to draw. Worn for exactly as long as the caster channels
+    // (Birth, Stand, and its Death when the channel ends or is broken — clearCast), the way a
+    // buff's art is: Angel Arena Allstars' "Return" (`A0A5`, a 15 s follow-through) stands a
+    // `MassTeleportTo.mdl` on the Item Stock barrel until the hero is brought home. With no
+    // follow-through it is a one-shot on the caster.
+    if (pc.code === "ANcl" && def.casterArt) {
+      if (pc.channelLeft > 0) {
+        this.applyBuffInternal(u, { kind: "mark", group: CHANNEL_ART_GROUP, timeLeft: pc.channelLeft, sourceId: u.id, value: 0, art: def.casterArt, fx: [{ path: def.casterArt, attach: def.casterAttach.length ? def.casterAttach : ["origin"] }], buffId: "" });
+      } else this.spellEffects.push({ art: def.casterArt, x: u.x, y: u.y, targetId: u.id, z: 0, attach: def.casterAttach });
+    }
     // No channel → play the cast backswing recovery (0 = none). A channel holds
     // instead; there's no backswing after one.
     pc.backLeft = pc.channelLeft > 0 || NO_WINDUP.has(pc.code) || this.isFormToggle(def) ? 0 : u.castBackswing;
@@ -17209,6 +17293,7 @@ export class SimWorld {
     this.noteSpell(u, pc, "finish");
     this.noteSpell(u, pc, "endcast");
     pc.ended = true;
+    if (pc.code === "ANcl") u.buffs = u.buffs.filter((b) => b.group !== CHANNEL_ART_GROUP);
     if (pc.resume?.kind === "attackmove") this.issueAttackMove(u.id, pc.resume.x, pc.resume.y);
     else if (pc.resume?.kind === "follow") this.issueFollow(u.id, pc.resume.id);
     else if (pc.resume?.kind === "hold") this.issueHold(u.id); // back to the line he was told to hold
@@ -17227,6 +17312,8 @@ export class SimWorld {
     const pc = u.pendingCast;
     if (!pc) return;
     u.pendingCast = null;
+    // The art a Channel wore for its follow-through goes with the cast, finished or broken.
+    if (pc.code === "ANcl" && u.buffs.some((b) => b.group === CHANNEL_ART_GROUP)) u.buffs = u.buffs.filter((b) => b.group !== CHANNEL_ART_GROUP);
     if (pc.started && !pc.ended) this.noteSpell(u, pc, "endcast");
   }
 
@@ -21387,66 +21474,90 @@ export class SimWorld {
   private static readonly WAYGATE_HALF_W = 400 / 2;
   private static readonly WAYGATE_HALF_H = 400 / 2;
 
-  /** A gate teleports a unit that **ENTERS** its box — the rising edge — not one that
-   *  merely stands in it. That distinction is the whole behaviour, and getting it wrong is
-   *  not subtle: a gate's destination is its PARTNER gate, so a unit spat out at the far
-   *  end lands inside the partner's box. Fire on occupancy and the partner immediately
-   *  throws it back, the first gate throws it forward again, and the traveller ping-pongs
-   *  between the two forever (measured live on (4)CentaurGrove — the footman bounced
-   *  SW↔NE every tick and never arrived).
+  /** A gate teleports a unit that was SENT INTO it, and nobody else (the developer's ruling,
+   *  off the game): a right-click on the gate (`issueMove`/`issueFollow` with the gate as the
+   *  target — `asked`), or a walk whose goal lies on ground only the gate leads to (gateHop).
+   *  Both leave the same mark on the unit, `viaGate`, and that mark is the whole test — a unit
+   *  merely crossing the 400×400 box on its way somewhere else carries none and walks on, and
+   *  one standing in the box is taken the moment it is told to use the gate.
    *
-   *  So each gate keeps the set of units already inside it, exactly as the enter-region
-   *  pump keeps its baseline (7.4b): a unit deposited inside a gate is seeded as
-   *  already-there and is only teleported once it leaves and walks back in. Runs after
-   *  movement, so a unit ordered onto a gate crosses the instant it arrives. */
+   *  It used to fire on ENTRY (the rising edge of "in the box"), which teleported every army
+   *  whose road happened to pass a gate. The mark also retires the occupancy baseline that
+   *  rule needed: a traveller lands inside the PARTNER gate's box with its mark already
+   *  spent, so a pair of gates cannot ping-pong it. Runs after movement, so a unit ordered
+   *  onto a gate crosses the instant it arrives. */
   private tickWaygates(): void {
-    let gates: SimUnit[] | null = null;
-    for (const g of this.units.values()) {
-      if (!g.waygate?.active) continue;
-      (gates ??= []).push(g);
-    }
-    if (!gates) return; // the overwhelmingly common case: no gates on this map
-
-    // 1. Who has just ENTERED each gate (in its box now, wasn't last tick)?
-    const moved = new Set<number>();
-    for (const g of gates) {
-      for (const u of this.units.values()) {
-        if (!this.inWaygate(u, g)) continue;
-        // Already standing in it is no entry — unless this is the gate the unit is WALKING
-        // THROUGH (gateHop): one that came out here and was sent straight back has no edge
-        // left to cross, and would otherwise stand on the gate for ever.
-        if (g.waygate!.inside.has(u.id) && u.viaGate?.gateId !== g.id) continue;
-        if (moved.has(u.id)) continue; // one gate per unit per tick
-        // The traveller is marked at BOTH ends with the one model: it leaves out of a
-        // `MassTeleportTarget.mdx` where it stepped in and materializes out of another where
-        // it lands. `Awrp` has no Func row and so names no art of its own; this is the
-        // teleport burst the game's other unit-moving teleports leave on each body they move
-        // (Mass Teleport / Town Portal's `Specialart`, castMassTeleport). Arrival is emitted
-        // AFTER `teleportUnit`, at the position it settled on; both silent, as an arrival is.
-        const fromX = u.x;
-        const fromY = u.y;
-        this.teleportUnit(u, g.waygate!.destX, g.waygate!.destY);
-        if (!u.hidden) {
-          this.emitEffectAt(WAYGATE_TRAVEL_ART, fromX, fromY, false, "birth");
-          this.emitEffectAt(WAYGATE_TRAVEL_ART, u.x, u.y, false, "birth");
-        }
-        // A unit that walked in ON ITS WAY somewhere (gateHop) carries on to where it was going:
-        // teleportUnit has just dropped its route, and the order it is under is unchanged.
-        const via = u.viaGate;
+    if (!this.waygatesSeen) return; // the overwhelmingly common case: no gates on this map
+    for (const u of this.units.values()) {
+      const via = u.viaGate;
+      if (!via) continue;
+      const g = this.units.get(via.gateId);
+      if (!g || g.hp <= 0 || !g.waygate?.active) {
+        // The gate went away (or was switched off) under a unit walking to it. A right-click
+        // on it is now a plain walk-up; a through-route keeps walking and re-plans by itself.
         u.viaGate = null;
-        if (via && via.gateId === g.id && u.order !== "idle" && u.hp > 0) {
-          this.pathTo(u, via.tx, via.ty, undefined, false, via.hx > 0 ? { hx: via.hx, hy: via.hy } : undefined);
-        }
-        moved.add(u.id);
+        continue;
       }
+      if (this.inWaygate(u, g)) this.takeGate(u, g);
     }
-    // 2. Re-baseline every gate from the FINAL positions. This is what seeds an arriving
-    //    unit into the destination gate's `inside` set, so that gate does not fire on it.
-    for (const g of gates) {
-      const inside = g.waygate!.inside;
-      inside.clear();
-      for (const u of this.units.values()) if (this.inWaygate(u, g)) inside.add(u.id);
+  }
+
+  /** Put `u` through gate `g`. The traveller is marked at BOTH ends with the one model: it
+   *  leaves out of a `MassTeleportTarget.mdx` where it stepped in and materializes out of
+   *  another where it lands. `Awrp` has no Func row and so names no art of its own; this is
+   *  the teleport burst the game's other unit-moving teleports leave on each body they move
+   *  (Mass Teleport / Town Portal's `Specialart`, castMassTeleport). Arrival is emitted AFTER
+   *  `teleportUnit`, at the position it settled on; both silent, as an arrival is. */
+  private takeGate(u: SimUnit, g: SimUnit): void {
+    const via = u.viaGate;
+    const fromX = u.x;
+    const fromY = u.y;
+    this.teleportUnit(u, g.waygate!.destX, g.waygate!.destY);
+    if (!u.hidden) {
+      this.emitEffectAt(WAYGATE_TRAVEL_ART, fromX, fromY, false, "birth");
+      this.emitEffectAt(WAYGATE_TRAVEL_ART, u.x, u.y, false, "birth");
     }
+    u.viaGate = null;
+    if (!via || via.gateId !== g.id || u.hp <= 0) return;
+    if (via.asked) {
+      // The gate WAS the order: it is done, and the unit stands where it came out.
+      if (u.order === "move") this.endWalk(u);
+    } else if (u.order !== "idle") {
+      // A unit that walked in ON ITS WAY somewhere (gateHop) carries on to where it was going:
+      // teleportUnit has just dropped its route, and the order it is under is unchanged.
+      this.pathTo(u, via.tx, via.ty, undefined, false, via.hx > 0 ? { hx: via.hx, hy: via.hy } : undefined);
+    }
+  }
+
+  /** A right-click on an ACTIVE Way Gate — the one way a player uses one. The unit walks into
+   *  the gate's box and is taken (tickWaygates); one already standing in it goes at once,
+   *  which is how a unit parked on a gate uses it. False when `g` is no working gate, or the
+   *  unit is one a gate never takes (inWaygate), and the caller's ordinary order stands. */
+  private askGate(u: SimUnit, g: SimUnit): boolean {
+    if (!g.waygate?.active || g.hp <= 0 || u === g || u.building || u.neutralPassive || u.speed <= 0) return false;
+    if (this.castLocked(u) || !this.canPursue(u)) return false;
+    this.clearGuardPost(u);
+    u.order = "move";
+    u.targetId = null;
+    u.inCombat = false;
+    u.noCollision = false;
+    this.cancelSwing(u);
+    this.detachBuilder(u.id);
+    u.stuckT = 0;
+    u.stuckRetries = 0;
+    u.waitT = 0;
+    u.viaGate = { gateId: g.id, gx: g.x, gy: g.y, tx: g.x, ty: g.y, hx: 0, hy: 0, asked: true };
+    if (this.inWaygate(u, g)) {
+      this.takeGate(u, g);
+      return true;
+    }
+    // pathTo keeps a `viaGate` whose gate is the goal, and a flyer (which pathing never
+    // routes through a gate) flies into the box like anybody else.
+    if (!this.pathTo(u, g.x, g.y, undefined, false)) {
+      this.endWalk(u);
+      return false;
+    }
+    return true;
   }
 
   /** Is `u` standing in gate `g`'s teleport box? A gate never swallows itself, another
@@ -21526,14 +21637,12 @@ export class SimWorld {
 
   /** JASS WaygateSetDestination / WaygateActivate — configure a gate. Both natives
    *  work on a unit that isn't a Way Gate (WC3 lets you make anything a gate), so we
-   *  don't gate on the type; a unit with no `waygate` record simply isn't one yet.
-   *  Reconfiguring keeps the occupancy baseline — retargeting a gate must not make it
-   *  re-fire on whoever happens to be standing in it. */
+   *  don't gate on the type; a unit with no `waygate` record simply isn't one yet. */
   private waygateOf(id: number): WaygateState | null {
     const u = this.units.get(id);
     if (!u) return null;
     this.waygatesSeen = true;
-    return (u.waygate ??= { destX: 0, destY: 0, active: false, inside: new Set() });
+    return (u.waygate ??= { destX: 0, destY: 0, active: false });
   }
   setWaygateDestination(id: number, x: number, y: number): void {
     const w = this.waygateOf(id);
@@ -21545,13 +21654,6 @@ export class SimWorld {
     const g = this.units.get(id);
     const w = this.waygateOf(id);
     if (!g || !w) return;
-    // Switching a gate ON seeds its occupancy baseline from whoever is already standing
-    // in it, so it does not fire on them — a unit inside at activation has not *entered*.
-    // Same silent-baseline rule the enter-region pump uses when a trigger is registered.
-    if (active && !w.active) {
-      w.inside.clear();
-      for (const u of this.units.values()) if (this.inWaygate(u, g)) w.inside.add(u.id);
-    }
     w.active = active;
   }
   /** WaygateGetDestinationX/Y — 0 on a unit that is not a gate, as the engine reports. */

@@ -38,6 +38,7 @@ import { PlusCaster } from "../../ai/plus/casting";
 import { EnemyMemory } from "../../ai/plus/counter";
 import { CandyWarAi } from "../../ai/plus/candy/index";
 import { WarChasersAi } from "../../ai/plus/warchasers/index";
+import { GrandPrixAi } from "../../ai/plus/grandprix/index";
 
 let done = false;
 
@@ -119,4 +120,7 @@ export function registerSaveClasses(): void {
   registerSaveClass("ai.EnemyMemory", EnemyMemory);
   registerSaveClass("ai.CandyWarAi", CandyWarAi);
   registerSaveClass("ai.WarChasersAi", WarChasersAi);
+  // The racing line and each seat's speed limit down it are CACHES of map data, found again on
+  // the first look after a load; `port` is the scene's closures onto the script, handed in afresh.
+  registerSaveClass("ai.GrandPrixAi", GrandPrixAi, ["route", "routeTried", "plans", "port"]);
 }

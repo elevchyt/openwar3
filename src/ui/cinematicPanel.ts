@@ -43,6 +43,7 @@ import { type FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, OPAQUE_BACKDROP, type FdfScreen } from "./fdf/render";
 import { fitBox } from "./fdf/layout";
 import { stageSize } from "./stage";
+import { blpToDataUrl } from "../render/blputil";
 
 const CINEMATIC_FDF = "UI\\FrameDef\\UI\\CinematicPanel.fdf";
 
@@ -209,9 +210,53 @@ export class CinematicPanelOverlay {
     const g = Math.round(lerp(filter.start.g, filter.end.g));
     const b = Math.round(lerp(filter.start.b, filter.end.b));
     const a = lerp(filter.start.a, filter.end.a) / 255;
+    const st = this.filterEl.style;
+    st.mixBlendMode = BLEND_CSS[filter.blendMode] ?? "normal";
+    // The quad is TEXTURED: what is drawn is the texture × this colour, with the texture's own
+    // alpha as its shape. For the two masks nearly every fade names that changes nothing we
+    // could see (`Black_mask`/`White_mask` are 16×16 and opaque), but the others are PICTURES —
+    // `SpecialPowMask.blp` is a white "POW!" burst on a clear field, 512×512 — and drawn as a
+    // flat wash Angel Arena Allstars' First Blood was a red screen with no POW in it.
+    const tex = this.filterTexture(filter.texture);
+    if (tex === undefined && !/(black|white)_mask\.blp$/i.test(filter.texture)) {
+      this.filterEl.hidden = true; // still loading a picture: no flat stand-in flashed for it
+      return;
+    }
     this.filterEl.hidden = false;
-    this.filterEl.style.background = `rgba(${r}, ${g}, ${b}, ${a})`;
-    this.filterEl.style.mixBlendMode = BLEND_CSS[filter.blendMode] ?? "normal";
+    if (tex) {
+      const url = `url("${tex}")`;
+      st.background = "";
+      st.backgroundColor = `rgb(${r}, ${g}, ${b})`;
+      st.backgroundImage = url;
+      st.backgroundSize = "100% 100%";
+      st.backgroundBlendMode = "multiply";
+      st.setProperty("mask-image", url);
+      st.setProperty("-webkit-mask-image", url);
+      st.setProperty("mask-size", "100% 100%");
+      st.setProperty("-webkit-mask-size", "100% 100%");
+      st.opacity = String(a);
+    } else {
+      st.backgroundImage = "";
+      st.removeProperty("mask-image");
+      st.removeProperty("-webkit-mask-image");
+      st.opacity = "";
+      st.background = `rgba(${r}, ${g}, ${b}, ${a})`;
+    }
+  }
+
+  /** A filter texture as a data URL: `undefined` while it is being read, `null` when there is
+   *  none to read (no name, a file the install and the map both lack), else the picture. */
+  private filterTextures = new Map<string, string | null | undefined>();
+  private filterTexture(path: string): string | null | undefined {
+    if (!path) return null;
+    const key = path.toLowerCase();
+    if (this.filterTextures.has(key)) return this.filterTextures.get(key);
+    this.filterTextures.set(key, undefined);
+    void this.vfs.read(path).then(
+      (bytes) => this.filterTextures.set(key, blpToDataUrl(bytes)),
+      () => this.filterTextures.set(key, null),
+    );
+    return undefined;
   }
 
   /** What the panel should be showing right now — the bars plus this line of subtitle. */

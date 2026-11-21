@@ -560,6 +560,27 @@ be attacked and broken; carried, it cannot be struck at all.
 - It is full again whenever it is set down, `SetItemInvulnerable` refuses every strike, and
   `GetWidgetLife`/`SetWidgetLife` read and write it (`ItemSnapshot.life`, `setItemLife`).
 
+## A hero outranks a carrier at the counter
+
+A shop's default buyer is the first unit with an inventory to come into its reach, and it is
+sticky (`tickShopBuyers`). One exception: a NON-hero carrier the shop adopted by itself yields to
+a hero of the same player who walks up. A carrier the player PICKED (Select Hero / Select Unit)
+is remembered as a pick (`shopBuyerPicked`) and is never displaced. Angel Arena Allstars is the
+map that needs it — each player's "Item Stock" barrel (`h01B`, an `AInv` inventory) stands inside
+six base shops' reach all game and took delivery of everything the hero bought there. The rule is
+observed behaviour, not a data field. `unitSalePatron` prefers a hero the same way.
+
+## A spell aimed at an ITEM
+
+A unit-target ability whose Targets Allowed names `item` may be aimed at an item: one on the
+ground, or one in the caster's OWN pockets (the targeting cursor put down on an inventory button).
+The command carries `itemId` beside `targetId` (item ids are their own id space), the cast is
+then walked and timed like a point cast at where the item is (`SimWorld.castItemTarget`), and the
+spell events answer `GetSpellTargetItem`. A row that names `item` and no other kind refuses a
+unit or bare ground with [Errors] `Targetitem`, "Must target an item." Allstars' "Send Item"
+(`A0AQ`/`A05A`, Channel with `targs1 = item`) is the spell this exists for; its trigger moves
+what `GetSpellTargetItem` names.
+
 ## Two things still open
 
 **`AIrb` Rune of Rebirth.** Its row carries nothing at all — no duration, no data, one buff

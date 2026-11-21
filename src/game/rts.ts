@@ -66,6 +66,7 @@ import { CreepCaster } from "../ai/creeps";
 import { ComputerPlusAi, type ConcedeReading, type PlusHost, type PlusLogReading } from "../ai/plus";
 import { CandyWarAi, type CandyHost } from "../ai/plus/candy";
 import { WarChasersAi } from "../ai/plus/warchasers";
+import { GrandPrixAi, type GrandPrixPort } from "../ai/plus/grandprix";
 import { type TechRegistry } from "../data/techtree";
 import { type UpgradeRegistry } from "../data/upgrades";
 import type { SoundBoard, SoundCategory } from "../audio/sounds";
@@ -1217,6 +1218,7 @@ export class RtsController {
     this.plusHost = host;
     this.candyWar = null;
     this.warChasers = null;
+    this.grandPrix = null;
   }
 
   /** The lobby's answer for each computer seat — where it starts, how hard it plays, and which
@@ -1405,6 +1407,8 @@ export class RtsController {
   private candyWar: CandyWarAi | null = null;
   /** Computer+ on WarChasers (src/ai/plus/warchasers/) — null on every other map. */
   private warChasers: WarChasersAi | null = null;
+  /** Computer+ on Azeroth Grand Prix (src/ai/plus/grandprix/) — null on every other map. */
+  private grandPrix: GrandPrixAi | null = null;
   /** Selections a COMPUTER made this step (`selectForAi`), raised with the local player's own in
    *  `drainSelectionEvents`. */
   private aiSelections: SelectionEvent[] = [];
@@ -1445,6 +1449,24 @@ export class RtsController {
   startWarChasersAI(seats: ReadonlyArray<{ player: number; difficulty: number }>): void {
     if (!this.plusHost || !seats.length) return;
     const ai = (this.warChasers ??= new WarChasersAi(this.plusHost));
+    for (const s of seats) ai.add(s.player, s.difficulty, this.meleeSeed);
+  }
+
+  /**
+   * Seat Computer+ on AZEROTH GRAND PRIX's racer seats (src/ai/plus/grandprix/, docs/grand-prix-ai.md).
+   *
+   * The same seam as `startCandyWarAI`: a scenario runs none of the melee library, and this map's
+   * script counts nobody but `MAP_CONTROL_USER` as a racer, so in the real game a computer seat
+   * is not in the race at all. `port` is the seat's doors onto the SCRIPT — its arrow keys, the lap
+   * dialog and what the board shows — which the scene owns because the interpreter is the scene's.
+   * The cart's buttons go through `execute` like anybody's. Nothing is granted: the seat is given
+   * its picker, its cart and its place on the board by the map's own init, because the script is
+   * told the seat is a player's (`MapViewerScene.runMapScript`'s `onBoot`).
+   */
+  startGrandPrixAI(seats: ReadonlyArray<{ player: number; difficulty: number }>, port: GrandPrixPort): void {
+    if (!seats.length) return;
+    const ai = (this.grandPrix ??= new GrandPrixAi({ world: this.sim, execute: (player, cmd) => this.execute(player, cmd) }));
+    ai.attach(port);
     for (const s of seats) ai.add(s.player, s.difficulty, this.meleeSeed);
   }
 
@@ -5484,6 +5506,7 @@ export class RtsController {
         if (this.computerPlus?.active && this.seeded) this.computerPlus.tick(dt);
         if (this.candyWar?.active && this.seeded) this.candyWar.tick(dt);
         if (this.warChasers?.active && this.seeded) this.warChasers.tick(dt);
+        if (this.grandPrix?.active && this.seeded) this.grandPrix.tick(dt);
       }
       // A map's OWN AI script (a campaign's `o03_blue.ai`, Monolith's creep players) is part of
       // the MAP, like its triggers: it orders through the same engine hooks they do rather than
@@ -6411,11 +6434,15 @@ export class RtsController {
    *  seconds — the whole cast (wind-up + backswing, or wind-up + channel). A channel
    *  (`loop`) prefers a "channel" clip and loops it for the duration; a one-shot cast
    *  plays its gesture once. The sim drops the hold early on interruption. */
-  playCastAnim(casterId: number, code: string, hold: number, loop: boolean): void {
+  playCastAnim(casterId: number, code: string, hold: number, loop: boolean, abilityId = ""): void {
     const e = this.byId.get(casterId);
     if (!e) return;
     if (CAST_ANIM_STAND.has(code)) return; // no gesture at all — see CAST_ANIM_STAND
-    const def = this.abilityDefByCode(code);
+    // The ROW that was cast, when the cast names it: a map builds many abilities on one code
+    // (every Channel is `ANcl`) and each brings its own `Animnames`. Asked by code alone, the
+    // first `ANcl` row in the table answered for all of them — Angel Arena Allstars' Item
+    // Stock barrel played some other spell's clip for its "Return".
+    const def = this.abilities.get(abilityId) ?? this.abilityDefByCode(code);
     // `Animnames` is a list of NAME TOKENS that together pick one clip, not a list of
     // alternatives: `spell,slam` means the sequence called "Spell Slam", `spell,throw`
     // "Spell Throw", `spell,two` "Spell Two". Matching on the last token alone — which is
@@ -7498,6 +7525,16 @@ export class RtsController {
         return true;
       }
       if (cast.target === "unit") {
+        // An ITEM under the cursor, for a spell that may be aimed at one (castAtItem). Asked
+        // first and only taken when a caster accepts it, so every other unit spell is untouched.
+        const ig = this.groundPoint(cssX, cssY);
+        const it = ig ? this.itemAt(ig[0], ig[1], ITEM_PICK_RADIUS) : null;
+        if (it && this.castAtItem(cast.code, it.id, queued)) {
+          this.orderMode = null;
+          this.armedCast = null;
+          this.flashRing(it.x, it.y, ITEM_RING_RADIUS, FLASH_YELLOW, true);
+          return true;
+        }
         let picked = this.pickAt(cssX, cssY);
         // A MASS TELEPORT dropped on the GROUND — in the yard of a town hall, between the
         // buildings of a base — means the friendly body nearest that spot, as the same click
@@ -8057,6 +8094,38 @@ export class RtsController {
     }
     if (any) this.ack(false);
     return any;
+  }
+
+  /** Cast an armed unit-target spell at an ITEM — one on the ground, or one in the caster's own
+   *  pockets — when the spell's Targets Allowed names `item` (SimWorld.castError is the judge).
+   *  One caster, as every aimed spell (castFromSelection). False when nobody may, and then
+   *  nothing was ordered. Angel Arena Allstars' "Send Item" is the spell this exists for. */
+  private castAtItem(code: string, itemId: number, queued: boolean, only?: number): boolean {
+    for (const id of this.orderees) {
+      if (only !== undefined && id !== only) continue;
+      const u = this.sim.units.get(id);
+      if (!u || u.owner !== this.localPlayer || u.isIllusion) continue;
+      if (this.sim.castError(id, code, 0, 0, 0, itemId) !== null) continue;
+      if (!this.execute(this.localPlayer, { c: "cast", unitId: id, code, targetId: 0, x: u.x, y: u.y, queued, itemId })) continue;
+      this.ack(false);
+      return true;
+    }
+    return false;
+  }
+
+  /** A click on one of the primary unit's own INVENTORY buttons while a unit-target spell is
+   *  armed: the item in that pocket is the target, if the spell takes items (castAtItem). The
+   *  game allows exactly this — a targeting cursor may be put down on an inventory button.
+   *  True when the click was the cast (and the order is disarmed). */
+  castAtInventorySlot(slot: number, queued = false): boolean {
+    const cast = this.orderMode === "cast" ? this.armedCast : null;
+    const id = this.primary;
+    if (!cast || cast.target !== "unit" || cast.shopId || id === null) return false;
+    const held = this.sim.units.get(id)?.inventory[slot];
+    if (!held || !this.castAtItem(cast.code, held.id, queued, id)) return false;
+    this.orderMode = null;
+    this.armedCast = null;
+    return true;
   }
 
   /** Can ANY unit in the selection cast this at that target? Returns null when one can,

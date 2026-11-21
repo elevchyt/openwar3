@@ -1412,7 +1412,7 @@ here" mask — and blizzard.j gives each its own On/Off pair precisely because t
 
 ### Way gates
 
-A Way Gate (`'nwgt'`) teleports anything entering it to a destination point. Seven of the eleven maps that use one are
+A Way Gate (`'nwgt'`) teleports a unit sent into it to a destination point. Seven of the eleven maps that use one are
 plain **melee** maps (CentaurGrove, WindyWaste, Riverrun, Plaguelands, IceCrown, MysticIsles, Venetia) — the gate is a
 map feature, not a custom-map gadget.
 
@@ -1420,13 +1420,17 @@ map feature, not a custom-map gadget.
 and `Awrp`'s `DataA1`/`DataB1` are `400`/`400` — which `AbilityMetaData.slk` + `WorldEditStrings.txt` name **"Teleport
 Area Width"** and **"Teleport Area Height"**. So the gate is a **400×400 box**, not a circle.
 
-> **A gate fires on ENTERING its box, not on standing in it** — and this is the whole behaviour, not a nicety. A gate's
-> destination *is its partner gate*, so the traveller lands **inside the partner's box**. Fire on occupancy and the
-> partner throws it straight back, the first gate throws it forward again, and it ping-pongs forever. That is not
-> hypothetical: it is what the first implementation did, measured live on `(4)CentaurGrove` — the footman bounced SW↔NE
-> **every tick** and never arrived. So each gate keeps the set of units already inside it and diffs against it, exactly
-> as the enter-region pump keeps its baseline (7.4b); a unit deposited inside a gate is seeded as already-there, and only
-> crosses again once it leaves and walks back in. Pinned by a multi-tick check in §7.22.
+> **A gate takes a unit that was SENT INTO it, and nobody else** (the developer's ruling, off the game). Two things
+> send one: a **right-click on the gate** (a move/follow order with the gate as its target — `SimWorld.askGate`), and a
+> walk whose goal lies on ground only the gate leads to (`gateHop`, which is how a melee AI reaches (2)MysticIsles'
+> islands). Both leave one mark on the unit, `viaGate`, and that mark is the whole test: a unit merely crossing the box
+> on its way somewhere else carries none and walks on, and a unit already standing in the box goes the moment it is
+> told to. The right-clicked gate's ring flashes yellow, as any neutral building's does.
+>
+> It used to fire on ENTERING the box (a rising edge, with an occupancy baseline per gate so a pair of gates could not
+> ping-pong a traveller — the first implementation did exactly that on `(4)CentaurGrove`). That teleported every army
+> whose road passed a gate. The mark retires the baseline too: a traveller lands inside the partner gate with its mark
+> already spent. Pinned by `tools/sim-waygate-route-test.cjs`.
 
 ### The discovery all four needed: a record-only handle points at nothing
 

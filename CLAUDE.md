@@ -675,9 +675,9 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   exception is an ALTERED MELEE map, whose script runs all eight `Melee*` init calls
   (`runsMeleeInit` — the all-random "ATR" maps): it plays those, and meets their random-hero
   altars with `settleHeroSlots` (a hero in no slot is ADOPTED; a slot whose hero no altar or
-  Tavern can supply trains a random entry the altar still allows). The two custom
+  Tavern can supply trains a random entry the altar still allows). The three custom
   maps that DO have it are seated somewhere else entirely (`startCandyWarAI`,
-  `startWarChasersAI`), and neither goes through `StartMeleeAI`.
+  `startWarChasersAI`, `startGrandPrixAI`), and none goes through `StartMeleeAI`.
   CREEPING is PRICED, never measured in food ([`plus/power.ts`](src/ai/plus/power.ts)): a camp's
   combined level already says how hard it is on the game's own green/orange/red scale, and a
   party is priced by √Σ(dps × current hp) × a hero factor — FOOD is not what an army is worth,
@@ -1040,6 +1040,27 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   "tank", "take the lead" hands the lead to ONE computer, strength or agility before intelligence,
   for 12–20 s (`leadPass`); "help" is an attack order. Loot and shopping value an item for ITS hero
   (an intelligence hero drops Strength items first).
+- **Azeroth Grand Prix:** read [`docs/grand-prix-ai.md`](docs/grand-prix-ai.md) before touching
+  [`src/ai/plus/grandprix/`](src/ai/plus/grandprix/). It is Computer+ as a RACER on Blizzard's kart
+  map, seated by `startCustom` on racer seats 0–7 when the script has the map's triggers, and — as on
+  Extreme Candy War — presented to the SCRIPT as a `MAP_CONTROL_USER` seat, because every loop in
+  that script counts nobody else as a racer. It drives with the four ARROW KEYS and nothing else:
+  the same `EVENT_PLAYER_ARROW_*` a keyboard raises (`GrandPrixPort.arrow`, the scene's, since the
+  interpreter is the scene's), so the map's own 0.05 s loop moves a computer's cart exactly as it
+  moves a person's; the picker, the four power-up slots and the gun are the cart's buttons through
+  `execute`, cast by ABILITY ID (every one is a Channel dummy, so the base code names nothing).
+  Four traps: a cart turns 60° a second WHATEVER its speed, so flat out its turning circle is wider
+  than the track and the speed plan (`route.ts`: an A* racing line through the script's 34 check
+  points over cliff-level-4 walkable ground, a corner limit per sample, a backward braking pass) is
+  the whole of the driving; a STOPPED cart cannot turn (`CalcTurnSpeed`), so a wall is left in
+  reverse with the wheel the other way; the held keys are read back from the script
+  (`udg_Accelerating`/`udg_Turning`), never remembered, because `Accelerate` ignores a press while
+  the other pedal is down; and eight carts on one line shove each other to a third of their speed
+  (the script reads a shove as a slide), so each seat keeps a lane. The route search's costs are
+  Float64 on purpose — a float32 that rounded up re-pushed equal-cost paths without end.
+  `tools/ai-plus-grandprix-test.cjs` races eight seats through the REAL `war3map.j` headless
+  (`tools/grandprix-harness.cjs`) and bounds every finish against the lap's own length and the
+  cart's top speed. The mine-cart crossing shortcut and the pit stop are not used.
 - **Download Maps:** read the headers of [`src/ui/mapSites.ts`](src/ui/mapSites.ts) and
   [`electron/mapSitesView.mjs`](electron/mapSitesView.mjs) before touching the map list's
   download glyph (right end of the search box) or its dialog. EpicWar is READ — searched and

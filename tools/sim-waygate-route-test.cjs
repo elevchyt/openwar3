@@ -107,6 +107,40 @@ console.log("a stop drops the plan");
   check("no gate after a stop", !u.viaGate);
 }
 
+console.log("a unit walking PAST a gate on its own side is not taken");
+{
+  const { w } = world();
+  // Straight through the west gate's 400×400 box, to a point on the same side.
+  const u = addUnit(w, 1, 0, 300, 800);
+  w.issueMove(u.id, 1300, 800);
+  let west = true;
+  const arrived = run(w, 20, () => { if (u.x > 1500) west = false; return Math.hypot(u.x - 1300, u.y - 800) < 64; });
+  check("it arrives where it was sent", arrived, `at ${u.x.toFixed(0)},${u.y.toFixed(0)}`);
+  check("…having never left its side", west);
+}
+
+console.log("a right-click on the gate takes the unit through, and it stops there");
+{
+  const { w, gw } = world();
+  const u = addUnit(w, 1, 0, 300, 1400);
+  check("the order is taken", w.issueOrder(u.id, { kind: "move", x: gw.x, y: gw.y, targetId: gw.id }));
+  check("it comes out on the far side", run(w, 20, () => u.x > 1600), `at ${u.x.toFixed(0)},${u.y.toFixed(0)}`);
+  run(w, 2);
+  check("…and stands there, not sent back", u.x > 1600 && u.order === "idle", `at ${u.x.toFixed(0)} order=${u.order}`);
+  check("a follow order on the gate is the same thing", w.issueOrder(u.id, { kind: "follow", targetId: 101 }));
+  check("…back on the west side at once (it stood in the box)", u.x < 1500, `at ${u.x.toFixed(0)}`);
+}
+
+console.log("a unit standing ON a gate uses it when told to, and not before");
+{
+  const { w, gw } = world();
+  const u = addUnit(w, 1, 0, 900, 880);
+  run(w, 3);
+  check("standing in the box does nothing", u.x < 1500);
+  w.issueOrder(u.id, { kind: "move", x: gw.x, y: gw.y, targetId: gw.id });
+  check("the right-click takes it", u.x > 1600, `at ${u.x.toFixed(0)},${u.y.toFixed(0)}`);
+}
+
 if (failures) {
   console.log(`\n${failures} FAILED`);
   process.exit(1);

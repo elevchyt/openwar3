@@ -74,11 +74,12 @@ and Insane its three; the person in seat 0 receives none of them (that took the
 `GetTriggerPlayer` fix in `Interpreter.withTrigger` — before it, every hero the computer's altar
 made was handed to Player 0).
 
-The two custom maps that DO have Computer+ are seated somewhere else entirely and are untouched
-by this — **Extreme Candy War** through `startCandyWarAI` and **WarChasers** through
-`startWarChasersAI`, each with its own AI object and its own rules for that one map
-(docs/candy-war-ai.md, docs/warchasers-ai.md). Neither goes through `StartMeleeAI` at all,
-because a scenario runs none of the melee library.
+The three custom maps that DO have Computer+ are seated somewhere else entirely and are untouched
+by this — **Extreme Candy War** through `startCandyWarAI`, **WarChasers** through
+`startWarChasersAI` and **Azeroth Grand Prix** through `startGrandPrixAI`, each with its own AI
+object and its own rules for that one map (docs/candy-war-ai.md, docs/warchasers-ai.md,
+docs/grand-prix-ai.md). None goes through `StartMeleeAI` at all, because a scenario runs none of
+the melee library.
 
 
 **Computer+ is a second player sitting at the same controls.** Not a difficulty slider on the

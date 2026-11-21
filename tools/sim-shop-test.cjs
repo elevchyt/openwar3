@@ -199,6 +199,21 @@ console.log("\n…and the adoption pass never hands a shop one either");
   check("the hero who walks up behind it is", world.shopBuyer(s.id, 0)?.id, real.id);
 }
 
+console.log("\na hero outranks a carrier the shop adopted by itself (Angel Arena Allstars' Item Stock barrel)");
+{
+  world = newWorld();
+  const s = shop();
+  const mule = hero({ x: 2150, y: 2000, prevX: 2150, prevY: 2000, isHero: false });
+  world.adoptShopBuyers();
+  check("a carrier alone at the counter is the buyer", world.shopBuyer(s.id, 0)?.id, mule.id);
+  const h = hero({ x: 2200, y: 2000, prevX: 2200, prevY: 2000 });
+  world.adoptShopBuyers();
+  check("…until a hero walks up", world.shopBuyer(s.id, 0)?.id, h.id);
+  check("the player may still pick the carrier", world.setShopBuyer(s.id, 0, mule.id), true);
+  world.adoptShopBuyers();
+  check("…and a pick is kept", world.shopBuyer(s.id, 0)?.id, mule.id);
+}
+
 console.log("\nAn ITEM shop with no Select User button still hands its wares to a patron");
 // Bleach vs One Piece sets `Neu3` (DataC, "show select unit button") to 0 on its `Aneu`
 // (war3map.w3a) — and every one of its eleven item shops carries Aneu. The button is only the
