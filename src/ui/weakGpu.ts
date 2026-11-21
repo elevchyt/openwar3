@@ -3,7 +3,7 @@ import { loadOptions, saveOptions } from "../data/options";
 import { applyVideoOptions } from "../render/videoQuality";
 import type { DataSource } from "../vfs/types";
 
-// "Your graphics may struggle" — asked ONCE, at the main menu, of a machine whose GPU the game
+// "Your GPU may struggle" — asked ONCE, at the main menu, of a machine whose GPU the game
 // already knows will be short of what a match costs.
 //
 // Found on a friend's laptop: an i5-6300U on Intel HD Graphics 520 played whole games at ~25 fps
@@ -47,7 +47,7 @@ const PROMPT_RESOLUTION = "1280x720";
 export function weakGpuName(renderer: string | null): string | null {
   if (!renderer) return null;
   const r = renderer;
-  if (/swiftshader|llvmpipe|softpipe|basic render/i.test(r)) return "software rendering";
+  if (/swiftshader|llvmpipe|softpipe|basic render/i.test(r)) return "a software renderer"; // "Your GPU, a software renderer, …"
   if (/iris\(r\)? xe|\barc\b/i.test(r)) return null;
   const intel = /Intel\(R\)\s+((?:U?HD|Iris(?:\(R\))?(?:\s+(?:Plus|Pro))?)\s+Graphics(?:\s+P?\d{3,4})?)/i.exec(r);
   if (intel) return `Intel ${intel[1].replace(/\(R\)/gi, "").replace(/\s+/g, " ").trim()}`;
@@ -87,7 +87,7 @@ export async function maybeAskWeakGpu(container: HTMLElement, vfs: DataSource, r
     // box is DialogWar3.fdf's 0.35 x 0.2, and a third line ("you can change this later in
     // Options > Video") ran under the Yes/No pair — the two rows it names are on that screen.
     text:
-      `Your graphics, |cffffcc00${name}|r, may struggle to run OpenWar3 smoothly.|n|n` +
+      `Your GPU, |cffffcc00${name}|r, may struggle to run OpenWar3 smoothly.|n|n` +
       `Turn on Low Performance Mode and draw the world at 1280 x 720?`,
     buttons: "yesno",
     // Ours, not the game's: a question about the machine, not about the menu behind it — the
