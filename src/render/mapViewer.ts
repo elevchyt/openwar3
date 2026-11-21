@@ -2488,6 +2488,9 @@ export class MapViewerScene {
       this.heightSampler = makeHeightSampler(terrain);
       this.footMaxHeight = makeFootprintMaxSampler(terrain);
       this.rts = new RtsController(grid, this.heightSampler, host, this.registry, this.abilities, this.items, this.tech, this.upgrades, this.footMaxHeight, neutralTeamColor(this.vfs));
+      // The terrain cull is also the cheapest answer to "is this anywhere near the screen" for
+      // the per-unit overlay passes (RtsController.groundSeen).
+      this.rts.groundSeen = (x: number, y: number, pad: number) => this.terrainCull?.overlaps(x - pad, y - pad, x + pad, y + pad) ?? true;
       this.syncVoiceTags();
       // Ships ride the water the viewer draws, at the viewer's own tileset offset (read lazily —
       // see makeWaterSampler).

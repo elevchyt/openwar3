@@ -160,3 +160,21 @@ instance (`ow3TickHidden`) asked every event emitter that can produce something 
 come?" on every frame, and 870 instances standing in a Stand clip were asking a death splat
 that has no key in that clip. The emitters with a key inside the playing sequence are now listed
 once per clip; one on a global sequence is always asked.
+
+## …and the status bars
+
+`RtsController.groundSeen` is the same question handed to the game glue (the map scene installs
+it off `overlaps`): the health-bar pass built a spec — a floor lookup, an ability row, an object
+— for every unit on the map and let `syncBars` project them all and drop the off-screen ones.
+It now skips a unit more than `BAR_GROUND_PAD` (768) from drawn ground first. The pad is there
+because a bar floats over its unit (a flyer under the bottom edge still shows one) and because
+the units are synced before the frame is drawn, so the answer is for the LAST frame's camera;
+after a camera cut the bars at the new spot are one frame late, as the models are.
+
+Beside it, `Entry.floorZ` keeps the floor height found under a unit that has not moved
+(`FloorCache.enabled`, `RtsController.floorEpoch`): the terrain's heights never change in a
+match and the walkable decks are built once, so the bilinear sample and the deck test were
+being redone for every standing unit every frame. A hull is never kept — the water offset is
+filled in late. Together, with the sim held on Angel Arena Allstars: 3.51 → 2.85 ms a frame,
+interleaved, and the same bars on screen either way.
+

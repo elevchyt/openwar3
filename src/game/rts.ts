@@ -316,6 +316,16 @@ interface Entry {
    *  Destroyer), so its height is the SIM's (`flyHeight`) rather than its type's: it stays on
    *  the ground through its Morph clip and climbs over the row's Altitude Adjustment Duration
    *  (SimWorld.shiftAltitude) instead of popping 240 units up the frame the type swaps. */
+  /** The floor height `syncEntries` last found under this unit, where (`floorX`/`floorY`), for
+   *  which footprint and on which floor (`RtsController.floorEpoch`). The lookup — a bilinear
+   *  sample of the terrain, the bridges' decks, a footprint's tallest corner — was run for every
+   *  unit on the map every frame and nine tenths of them had not moved (FloorCache). A hull is
+   *  never kept: the water it rides takes an offset the viewer fills in late. */
+  floorX?: number;
+  floorY?: number;
+  floorZ?: number;
+  floorFoot?: number;
+  floorEpoch?: number;
   liftFromSim?: boolean;
   /** The flyer is held DOWN by a net (Web, or Ensnare on a flyer): the height it returns to,
    *  while the model follows the sim's lowered `flyHeight` (syncEntries). Absent otherwise. */
@@ -5720,8 +5730,18 @@ export class RtsController {
       // units (footHalfW 0) ride the centre-sampled FLOOR + their fly height — the ground, or
       // the deck of a walkable destructible where one is over it, which is what puts a unit
       // ON a bridge rather than in the river under it (`groundOrDeck`).
-      this.loc[2] =
-        (e.footHalfW > 0 ? this.footMaxHeight(u.x, u.y, e.footHalfW, e.footHalfH) : this.groundOrDeck(u.x, u.y));
+      // The FLOOR under a body that has not moved is the floor it stood on last frame (FloorCache).
+      if (FloorCache.enabled && !e.floats && e.floorEpoch === this.floorEpoch && e.floorX === u.x && e.floorY === u.y && e.floorFoot === e.footHalfW) {
+        this.loc[2] = e.floorZ!;
+      } else {
+        this.loc[2] =
+          (e.footHalfW > 0 ? this.footMaxHeight(u.x, u.y, e.footHalfW, e.footHalfH) : this.groundOrDeck(u.x, u.y));
+        e.floorX = u.x;
+        e.floorY = u.y;
+        e.floorZ = this.loc[2];
+        e.floorFoot = e.footHalfW;
+        e.floorEpoch = this.floorEpoch;
+      }
       if (e.floats) this.loc[2] = Math.max(this.loc[2], this.waterAt(u.x, u.y)); // a hull rides the surface, not the sea floor
       this.loc[2] += e.moveHeight;
       setZQuat(this.quat, u.facing);
@@ -9082,7 +9102,25 @@ export class RtsController {
   private walkableAt: HeightSampler = () => -Infinity;
   setWalkableSampler(sampler: HeightSampler): void {
     this.walkableAt = sampler;
+    this.floorEpoch++; // the decks are (re)built before this is handed over
   }
+
+  /**
+   * Is the ground within `pad` of this point on ground the camera draws? Installed by the map
+   * scene off its terrain cull (render/terrainCull.ts `overlaps`); null — "everything is" —
+   * until then and wherever there is no cull. A cheap way to say "this is nowhere near the
+   * screen" for the passes that walk every unit on the map to draw something over a few of
+   * them. It answers for the LAST frame's camera, since the units are synced before the frame
+   * is drawn, which is what the pad is for.
+   */
+  groundSeen: ((x: number, y: number, pad: number) => boolean) | null = null;
+
+  /** Which FLOOR the entries' kept heights were read off (Entry.floorZ). The terrain's heights
+   *  never change in a match — the TerrainDeform natives are no-ops here (jass/natives/weather.ts)
+   *  — and the walkable decks are built once and handed over through `setWalkableSampler`, so
+   *  that hand-over is the one thing that moves it. Anything that ever DOES move the ground
+   *  under a standing unit bumps this. */
+  private floorEpoch = 0;
 
   /** How far above the GROUND a flash ring round this unit sits — its fly height, plus the
    *  water it floats on (`flashRing` adds the ground itself). */
@@ -11828,6 +11866,10 @@ export class RtsController {
       // snapshot's would track a unit it is not attached to.
       const u = this.frameUnit(e.simId);
       if (!u || e.hidden) continue; // no model on screen (worker in a mine, unexplored fog)
+      // …nor is it anywhere near the screen (groundSeen): `syncBars` projects every spec and
+      // drops the ones off screen anyway, but by then each had been built — a floor lookup, an
+      // ability row and an object apiece, for every unit on the map, every frame.
+      if (this.groundSeen && !this.groundSeen(u.x, u.y, BAR_GROUND_PAD)) continue;
       // Critters (Sheep, Pig, Raccoon, Rabbit — 15 hp of neutral-passive wildlife) DO carry a
       // bar in WC3, like every other unit on the field (issue #100). Skipping everything
       // neutral-passive-and-not-a-building was a guess, and nothing in the unit tables backs
@@ -12117,6 +12159,17 @@ function upgradeProgress(job: RenderBuildJob): number {
  *  to `setLocation` + `setRotation` — it changes what drawing a unit COSTS and never where it is
  *  drawn (docs/perf-research.md). */
 export const PlaceInstance = { skipUnchanged: true };
+
+/** The kept floor height (Entry.floorZ). On, unless a live A/B turns it off to sample the floor
+ *  under every unit every frame again — it changes what placing a unit costs, never where. */
+export const FloorCache = { enabled: true };
+
+/** How far from drawn ground a unit may stand and still be asked for a status bar
+ *  (RtsController.groundSeen). OURS: a bar floats over its unit, so a flyer whose ground point
+ *  is just under the bottom edge still has its bar on screen — 350 units of fly height lean
+ *  about 250 up the screen at the game camera's pitch — and the camera may have panned since
+ *  the cull was taken. The cull's own blocks are 1024 wide on top of this. */
+const BAR_GROUND_PAD = 768;
 
 /**
  * Put a unit's model at `loc`, turned to `quat` — the placement syncEntries makes for every unit

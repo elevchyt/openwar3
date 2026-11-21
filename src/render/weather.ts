@@ -406,19 +406,27 @@ export class WeatherOverlay {
     const { pos, uv, color } = batch;
     const frames = def.texRows * def.texCols;
 
+    // No allocation in here: this runs for every live particle on every frame (heavy rain is
+    // 1800), and it used to make a colour triple, five corner arrays and an index list for each
+    // one — 5% of a frame, most of it the garbage. Same arithmetic, written out.
+    const cs = def.colorStart, cm = def.colorMid, ce = def.colorEnd, mid = def.midTime;
+    const tailLen = Math.abs(def.veloc) * def.taillen; // the streak's world length
+    let n = batch.count;
     for (const p of e.particles) {
       const t = p.age / p.life;
-      const [r, g, b] = this.ramp3(def.colorStart, def.colorMid, def.colorEnd, t, def.midTime);
-      const a = this.ramp(def.alphaStart, def.alphaMid, def.alphaEnd, t, def.midTime) / 255;
+      const a = this.ramp(def.alphaStart, def.alphaMid, def.alphaEnd, t, mid) / 255;
       if (a <= 0.002) continue;
-      const scale = this.ramp(def.scaleStart, def.scaleMid, def.scaleEnd, t, def.midTime) * this.sizeScale;
+      const scale = this.ramp(def.scaleStart, def.scaleMid, def.scaleEnd, t, mid) * this.sizeScale;
       if (scale <= 0) continue;
+      const r = this.ramp(cs[0], cm[0], ce[0], t, mid) / 255;
+      const g = this.ramp(cs[1], cm[1], ce[1], t, mid) / 255;
+      const b = this.ramp(cs[2], cm[2], ce[2], t, mid) / 255;
 
       // The sprite-atlas frame (`texr`×`texc`), animated over the particle's life by the
       // hUV ramp — 1×1 for everything but the 8×8 cloud sheet, where 0→32→63 walks the sheet.
       let u0 = 0, v0 = 0, uw = 1, vh = 1;
       if (frames > 1) {
-        const f = Math.min(frames - 1, Math.max(0, Math.round(this.ramp(def.uvStart, def.uvMid, def.uvEnd, t, def.midTime))));
+        const f = Math.min(frames - 1, Math.max(0, Math.round(this.ramp(def.uvStart, def.uvMid, def.uvEnd, t, mid))));
         uw = 1 / def.texCols;
         vh = 1 / def.texRows;
         u0 = (f % def.texCols) * uw;
@@ -434,15 +442,14 @@ export class WeatherOverlay {
       if (def.tail) {
         const sp = Math.hypot(p.vx, p.vy, p.vz) || 1;
         const dx = p.vx / sp, dy = p.vy / sp, dz = p.vz / sp;
-        const len = Math.abs(def.veloc) * def.taillen; // the streak's world length
         // The quad runs from the particle's head BACK along the velocity, so the streak
         // trails behind the drop rather than straddling it.
-        cx -= (dx * len) / 2;
-        cy -= (dy * len) / 2;
-        cz -= (dz * len) / 2;
-        ax = (dx * len) / 2;
-        ay = (dy * len) / 2;
-        az = (dz * len) / 2;
+        cx -= (dx * tailLen) / 2;
+        cy -= (dy * tailLen) / 2;
+        cz -= (dz * tailLen) / 2;
+        ax = (dx * tailLen) / 2;
+        ay = (dy * tailLen) / 2;
+        az = (dz * tailLen) / 2;
         // side = normalize(dir × view) — keeps the flat streak turned toward the camera.
         const vx = cx - camPos[0], vy = cy - camPos[1], vz = cz - camPos[2];
         let nx = dy * vz - dz * vy;
@@ -456,23 +463,25 @@ export class WeatherOverlay {
         sx = camRight[0] * scale; sy = camRight[1] * scale; sz = camRight[2] * scale;
       }
 
-      // corners: (-s,-a) (+s,-a) (+s,+a) (-s,+a) → two triangles
-      const px = [cx - sx - ax, cx + sx - ax, cx + sx + ax, cx - sx + ax];
-      const py = [cy - sy - ay, cy + sy - ay, cy + sy + ay, cy - sy + ay];
-      const pz = [cz - sz - az, cz + sz - az, cz + sz + az, cz - sz + az];
-      const qu = [u0, u0 + uw, u0 + uw, u0];
-      const qv = [v0 + vh, v0 + vh, v0, v0];
-      const order = [0, 1, 2, 0, 2, 3];
-      for (const i of order) {
-        const o3 = batch.count * 3;
-        const o2 = batch.count * 2;
-        const o4 = batch.count * 4;
-        pos[o3] = px[i]; pos[o3 + 1] = py[i]; pos[o3 + 2] = pz[i];
-        uv[o2] = qu[i]; uv[o2 + 1] = qv[i];
+      // corners: 0 (-s,-a)  1 (+s,-a)  2 (+s,+a)  3 (-s,+a) → triangles 0 1 2 and 0 2 3
+      const x0 = cx - sx - ax, y0 = cy - sy - ay, z0 = cz - sz - az;
+      const x1 = cx + sx - ax, y1 = cy + sy - ay, z1 = cz + sz - az;
+      const x2 = cx + sx + ax, y2 = cy + sy + ay, z2 = cz + sz + az;
+      const x3 = cx - sx + ax, y3 = cy - sy + ay, z3 = cz - sz + az;
+      const u1 = u0 + uw, v1 = v0 + vh;
+      let o3 = n * 3, o2 = n * 2;
+      pos[o3++] = x0; pos[o3++] = y0; pos[o3++] = z0; uv[o2++] = u0; uv[o2++] = v1;
+      pos[o3++] = x1; pos[o3++] = y1; pos[o3++] = z1; uv[o2++] = u1; uv[o2++] = v1;
+      pos[o3++] = x2; pos[o3++] = y2; pos[o3++] = z2; uv[o2++] = u1; uv[o2++] = v0;
+      pos[o3++] = x0; pos[o3++] = y0; pos[o3++] = z0; uv[o2++] = u0; uv[o2++] = v1;
+      pos[o3++] = x2; pos[o3++] = y2; pos[o3++] = z2; uv[o2++] = u1; uv[o2++] = v0;
+      pos[o3++] = x3; pos[o3++] = y3; pos[o3++] = z3; uv[o2++] = u0; uv[o2++] = v0;
+      for (let o4 = n * 4, end = o4 + 24; o4 < end; o4 += 4) {
         color[o4] = r; color[o4 + 1] = g; color[o4 + 2] = b; color[o4 + 3] = a;
-        batch.count++;
       }
+      n += 6;
     }
+    batch.count = n;
   }
 
   /** The SLK's three-key ramps: start → mid (at `midTime` of the life) → end. */
@@ -480,14 +489,6 @@ export class WeatherOverlay {
     if (t <= midTime) return s + ((m - s) * (midTime > 0 ? t / midTime : 1));
     const k = midTime < 1 ? (t - midTime) / (1 - midTime) : 1;
     return m + (e - m) * k;
-  }
-
-  private ramp3(s: [number, number, number], m: [number, number, number], e: [number, number, number], t: number, midTime: number): [number, number, number] {
-    return [
-      this.ramp(s[0], m[0], e[0], t, midTime) / 255,
-      this.ramp(s[1], m[1], e[1], t, midTime) / 255,
-      this.ramp(s[2], m[2], e[2], t, midTime) / 255,
-    ];
   }
 
   private batchFor(def: WeatherDef): Batch {
