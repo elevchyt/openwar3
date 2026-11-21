@@ -102,7 +102,7 @@ import { diffDumps, stateDump, stateHash } from "../game/replayHash";
 import { STATE_EVERY, StateTracker } from "../game/replayState";
 import { InputTracker, isInputSample, type InputSample } from "../game/inputTrack";
 import { commandSource, cursorPermille, selectionSource, watchInputSource } from "../ui/inputSource";
-import { hotkeyMode } from "../data/hotkeys";
+import { hotkeyMode, setClassicKeysForMap, wantsClassicKeys } from "../data/hotkeys";
 import { replaySink, type ReplaySink } from "../game/replaySink";
 import { ReplayUploader, installId } from "../game/replayUpload";
 import { autosaveReplay } from "../data/options";
@@ -3031,6 +3031,9 @@ export class MapViewerScene {
     // The seed actually used is kept: a replay must roll with it, not with "roll one".
     const seed = config.seed ?? randomSeed();
     this.rts!.setSeed(seed);
+    // A map that is played by letter (Azeroth Grand Prix) puts Grid back to Legacy for its
+    // match only (data/hotkeys.ts `wantsClassicKeys`); every match starts on the player's own.
+    setClassicKeysForMap(false);
     // …and from here the world does not STEP until the loading screen lifts (`holdAtStart`).
     // Setup is seconds of the map's art streaming in, and the frame loop used to keep stepping
     // through it — so how many steps the match had taken before its first real one depended on
@@ -4702,6 +4705,9 @@ export class MapViewerScene {
     // computer seat gets Computer+, whatever the Advanced Options switch says: the classic AI is a
     // melee build order and has nothing to play on a lane map.
     const scriptGlobals = this.mapScript?.interp.rt.globals;
+    // A map whose own tips name LETTERS ("'W' - Fire machine gun") is played on Classic keys
+    // whatever the Hotkeys row says — Grid would put W on a card slot (data/hotkeys.ts).
+    if (scriptGlobals && wantsClassicKeys(scriptGlobals)) setClassicKeysForMap(true);
     if (scriptGlobals && isCandyWarScript(scriptGlobals)) {
       const seats = config.slots
         .filter((s) => s.controller === "computer" && CANDY_HERO_SEATS.has(s.id))
@@ -5383,6 +5389,37 @@ export class MapViewerScene {
     const meta = (e.shiftKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.altKey ? 4 : 0) | (e.metaKey ? 8 : 0);
     interp.firePlayerKey(this.localPlayer, e.keyCode, meta, down);
   }
+
+  /**
+   * The ARROW KEYS, for a map that listens to them — `TriggerRegisterPlayerKeyEventBJ(trig, p,
+   * bj_KEYEVENTTYPE_DEPRESS, bj_KEYEVENTKEY_UP)` is blizzard.j's one-liner over
+   * `TriggerRegisterPlayerEvent(trig, p, EVENT_PLAYER_ARROW_UP_DOWN)`, and common.j numbers the
+   * eight of them 261…268 (`EVENT_PLAYER_ARROW_LEFT_DOWN` = 261, its `_UP` = 262, then RIGHT,
+   * DOWN and UP the same way). This is the 1.30 keyboard a map has, older than
+   * `BlzTriggerRegisterPlayerKeyEvent` (`scriptKey`), and Blizzard's own Azeroth Grand Prix is
+   * driven by nothing else ("Arrow keys - Drive your cart", its `GetGameTip`): left unraised, the
+   * cart could not move at all. The key still pans the camera as it always does — the game
+   * raises the event AND scrolls, and a map that wants the camera keeps it on its own unit.
+   *
+   * Raised only when a switched-on trigger is listening (`playerEventAnswered`), so every other
+   * map's arrows put nothing into a replay. A held key's auto-repeat is not a second press, and
+   * an arrow typed into a text box is not the map's. Like `scriptKey`, raised on the machine
+   * that runs the script: a LAN client's arrows do not reach the host's interpreter yet.
+   */
+  private scriptArrow(e: KeyboardEvent, down: boolean): void {
+    const base = MapViewerScene.ARROW_EVENTS[e.code];
+    const interp = this.mapScript?.interp;
+    if (base === undefined || !interp || this.replayPlayback) return;
+    if (down && e.repeat) return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    const ev = base + (down ? 0 : 1);
+    if (interp.playerEventAnswered(this.localPlayer, ev)) interp.firePlayerEvent(this.localPlayer, ev);
+  }
+  /** common.j's `EVENT_PLAYER_ARROW_<KEY>_DOWN`; the matching `_UP` is the next number. */
+  private static readonly ARROW_EVENTS: Readonly<Record<string, number>> = {
+    ArrowLeft: 261, ArrowRight: 263, ArrowDown: 265, ArrowUp: 267,
+  };
 
   /** `BlzGetDoodad…(index)` — one of the map's placed doodads, by its place in the viewer's own
    *  list (the order war3map.doo lists them). The scale is the model instance's uniform one and
@@ -18026,6 +18063,7 @@ export class MapViewerScene {
   dispose(): void {
     this.disposed = true;
     setGamepadHost(null); // the pad's match actions die with the match
+    setClassicKeysForMap(false); // …and so does a map's Classic-keys override (data/hotkeys.ts)
     this.stop();
     // The listeners first: they are the only leak that would keep FIRING — every keydown
     // handler a dead match left on `window` still answers keys typed at the main menu.
@@ -19861,6 +19899,7 @@ export class MapViewerScene {
     this.bindVoiceKeys();
     this.on(window, "keydown", (e: KeyboardEvent) => {
       this.scriptKey(e, true);
+      this.scriptArrow(e, true);
       // ESC during a cinematic SKIPS it — WC3 raises EVENT_PLAYER_END_CINEMATIC for the
       // local player and the map's own skip trigger takes it from there (see
       // Interpreter.firePlayerEvent for the NightElfX01 trigger this exists for).
@@ -19931,6 +19970,7 @@ export class MapViewerScene {
     });
     this.on(window, "keyup", (e: KeyboardEvent) => {
       this.scriptKey(e, false);
+      this.scriptArrow(e, false);
       const k = e.key.toLowerCase();
       this.keys.delete(k);
       // Letting go of SHIFT ends a shift-queued placement (issue #123 — the original game
