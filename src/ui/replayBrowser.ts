@@ -261,7 +261,7 @@ export async function showReplayBrowser(opts: {
     return s;
   };
 
-  /** The players on one line (two when they do not fit): team against team. */
+  /** The players on one line (two when they do not fit — past that, `fitCrowd`): team against team. */
   const matchup = (r: SharedReplay): HTMLElement => {
     const line = el("div", "ow3-rb-matchup");
     const teams = [...new Set(r.seats.map((s) => s.team))].sort((a, b) => a - b);
@@ -272,6 +272,51 @@ export async function showReplayBrowser(opts: {
       line.append(t);
     });
     return line;
+  };
+
+  // --- a CROWDED match: its players do not fit the row's two lines ---
+  // The row is a fixed height (a page is `PAGE_ROWS` of them), so a 6v6 laid out name by name
+  // ran up over the header and down over the row below. Such a row is redrawn as CHIPS — a seat
+  // is its colour and its race, its name is the chip's hover — behind the kind of match it was.
+  // The developer's pick out of three (fold alike computers into "×5"; a one-line summary).
+
+  const teamsOf = (r: SharedReplay): SharedSeat[][] => {
+    const ids = [...new Set(r.seats.map((s) => s.team))].sort((a, b) => a - b);
+    return ids.map((t) => r.seats.filter((s) => s.team === t));
+  };
+  const isFfa = (teams: SharedSeat[][]): boolean => teams.length > 2 && teams.every((t) => t.length === 1);
+  /** "6v6", "2v2v2v2", "12-player FFA". */
+  const formatOf = (teams: SharedSeat[][]): string =>
+    isFfa(teams) ? `${teams.length}-player FFA` : teams.map((t) => t.length).join("v");
+
+  const chipsOf = (r: SharedReplay): HTMLElement => {
+    const line = el("div", "ow3-rb-matchup ow3-rb-chips");
+    const teams = teamsOf(r);
+    line.append(el("span", "ow3-rb-format", formatOf(teams)));
+    // A free-for-all is one run of chips: the format in front already says nobody was allied.
+    (isFfa(teams) ? [r.seats] : teams).forEach((team, i) => {
+      if (i) line.append(el("span", "ow3-rb-vs", "vs"));
+      const t = el("span", "ow3-rb-team");
+      for (const s of team) {
+        const chip = el("span", `ow3-rb-chip${s.computer ? " cpu" : ""}`);
+        chip.style.setProperty("--seat", PLAYER_COLORS[s.color] ?? "#888");
+        const url = symbolOf(s.race);
+        if (s.random) chip.append(icon(Dices, "ow3-rb-die"));
+        // A race with no symbol (a custom map's own) keeps the chip's size with an empty face.
+        chip.append(url ? Object.assign(document.createElement("img"), { src: url, alt: "" }) : el("span", "ow3-rb-chip-blank"));
+        setGameTip(chip, `${s.name} — ${s.random ? `Random, rolled ${raceName(s.race)}` : raceName(s.race)}`);
+        t.append(chip);
+      }
+      line.append(t);
+    });
+    return line;
+  };
+
+  /** The row's players ran past its two lines: lay them out as chips. Measured, not counted —
+   *  four long names overflow where eight short ones would not. */
+  const fitCrowd = (body: HTMLElement, r: SharedReplay): void => {
+    const line = body.querySelector<HTMLElement>(".ow3-rb-matchup");
+    if (line && line.scrollHeight > body.clientHeight + 1) line.replaceWith(chipsOf(r));
   };
 
   const fillBody = (body: HTMLElement, r: SharedReplay): void => {
@@ -358,7 +403,7 @@ export async function showReplayBrowser(opts: {
     model.rows.forEach((r, i) => {
       s.frame(`RBRow_r${i}`)?.classList.add("ow3-sites-row");
       const body = s.frame(`RBRowBody_r${i}`);
-      if (body) fillBody(body, r);
+      if (body) { fillBody(body, r); fitCrowd(body, r); }
       paintGet(s, r, i);
     });
     if (model.loading) {
