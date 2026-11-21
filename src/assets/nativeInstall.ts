@@ -37,6 +37,11 @@ interface NativeBridge {
     set(on: boolean): Promise<void>;
   };
   relaunch?(): Promise<void>;
+  /** The no-WebGL screen's two calls (src/ui/noWebgl.ts). Absent on an older shell. */
+  gpu?: {
+    report(probe: string): Promise<GpuReport>;
+    setSoftware(on: boolean): Promise<void>;
+  };
   /** The window is closing; the shell waits for `fn` before it does. Absent on an older shell. */
   onClosing?(fn: () => Promise<void> | void): void;
   /** Write the install's CustomKeys.txt (issue #156). Absent on a shell older than the editor. */
@@ -89,6 +94,22 @@ export const nativeVsync = async (): Promise<boolean | null> => {
 export const setNativeVsync = async (on: boolean): Promise<void> => { await bridge()?.vsync?.set(on); };
 /** Quit and start the desktop app again (electron/main.mjs `ow3:relaunch`). */
 export const relaunchNative = (): void => void bridge()?.relaunch?.();
+
+/** What the shell did with a GPU report: the `.logs/` file it wrote (null if it could not), and
+ *  whether software rendering was already on for THIS launch. */
+export interface GpuReport {
+  file: string | null;
+  softwareGl: boolean;
+}
+
+/** Write the GPU report (electron/main.mjs `ow3:gpu-report`). Null in a browser, or on a shell
+ *  older than the no-WebGL screen. */
+export const reportGpu = async (probe: string): Promise<GpuReport | null> => {
+  const gpu = bridge()?.gpu;
+  return gpu ? gpu.report(probe).catch(() => null) : null;
+};
+/** Save the software-rendering launch switch; `relaunchNative` applies it. */
+export const setNativeSoftwareGl = async (on: boolean): Promise<void> => { await bridge()?.gpu?.setSoftware(on); };
 
 export const downloadUpdate = (): void => void bridge()?.update?.download();
 export const installUpdate = (): void => void bridge()?.update?.install();

@@ -148,6 +148,27 @@ if (!VSYNC) {
 /** The page's cap with vsync off; with it on the display's refresh is the cap and there is none. */
 const MAX_FPS = VSYNC ? 0 : 300;
 
+// SOFTWARE RENDERING — the player's choice, made on the no-WebGL screen (src/ui/noWebgl.ts) and
+// kept here for the same reason vsync is: it is a launch switch. Since Chromium 139 a GPU the
+// browser will not use leaves the page with NO WebGL at all rather than quietly falling back to
+// SwiftShader (blink-dev "Intent to Remove: SwiftShader Fallback"), and Electron 44 is Chromium
+// 152 — so on a machine like a 2008 ThinkPad's GM45 the menu came up with no 3D and a match was a
+// black screen. `enable-unsafe-swiftshader` only PERMITS that fallback: a GPU that works is still
+// the one used, so the setting can stay on after the driver is fixed. It is opt-in rather than
+// always on because the fallback also reaches the map sites' web views (electron/mapSitesView.mjs),
+// which are other people's pages — the "unsafe" is about running untrusted WebGL in software.
+// OURS, not the game's.
+const SOFTWARE_GL = readSettings().softwareGl === true;
+if (SOFTWARE_GL) app.commandLine.appendSwitch("enable-unsafe-swiftshader");
+
+// Every time the GPU process went down this run. Chromium gives up on the GPU after it crashes a
+// few times, which is the OTHER way a page ends up with no WebGL, and only the main process hears
+// it happen — so it rides along in the GPU report (`ow3:gpu-report`).
+const gpuExits = [];
+app.on("child-process-gone", (_event, d) => {
+  if (d.type === "GPU") gpuExits.push(`${d.reason} (exit code ${d.exitCode})`);
+});
+
 /** Point the window at a running `pnpm dev` instead of the build. In that mode we start NO
  *  server of our own: the dev server is already carrying the relay at its own origin
  *  (tools/vite-plugin-relay.ts), and a second relay on a second port would be one the page never
@@ -496,6 +517,37 @@ app.whenReady().then(async () => {
   // free. An AppImage's `execPath` is inside its own squashfs mount, which is gone the moment this
   // process exits, so there the file the player launched (`APPIMAGE`, set by its runtime) is what
   // is started again.
+  // The no-WebGL screen (src/ui/noWebgl.ts): what the page found and what the SHELL knows about
+  // the GPU, written into `.logs/` through the one log writer (so it is swept with the rest) —
+  // that file is what a player with a broken driver sends to get it looked at. Returns where it
+  // went and whether software rendering is already on, which changes what the screen offers.
+  ipcMain.handle("ow3:gpu-report", async (_event, probe) => {
+    let info;
+    try {
+      // `complete` carries the GL renderer and driver strings, and can take a while on Linux;
+      // `basic` is the vendor and device ids, which is still enough to name the chip.
+      info = await Promise.race([app.getGPUInfo("complete"), new Promise((_, no) => setTimeout(() => no(new Error("timed out")), 5000))]);
+    } catch {
+      info = await app.getGPUInfo("basic").catch((err) => ({ error: String(err) }));
+    }
+    const lines = [
+      `OpenWar3 ${app.getVersion()} — no usable WebGL`,
+      `Electron ${process.versions.electron}, Chromium ${process.versions.chrome}, ${process.platform} ${process.arch}`,
+      `Software rendering (enable-unsafe-swiftshader): ${SOFTWARE_GL ? "on" : "off"}`,
+      `The page found: ${String(probe ?? "")}`,
+      `GPU process exits this run: ${gpuExits.length ? gpuExits.join("; ") : "none"}`,
+      `Feature status: ${JSON.stringify(app.getGPUFeatureStatus(), null, 2)}`,
+      `GPU info: ${JSON.stringify(info, null, 2)}`,
+      "",
+    ];
+    const log = matchLogs.begin("no-webgl");
+    if (log) {
+      matchLogs.append(log.id, lines.join("\n"));
+      matchLogs.end(log.id);
+    }
+    return { file: log?.file ?? null, softwareGl: SOFTWARE_GL };
+  });
+  ipcMain.handle("ow3:software-gl-set", (_event, on) => { writeSettings({ softwareGl: on === true }); });
   ipcMain.handle("ow3:relaunch", () => {
     app.relaunch(process.env.APPIMAGE ? { execPath: process.env.APPIMAGE, args: process.argv.slice(1) } : {});
     app.quit();

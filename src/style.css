@@ -3790,6 +3790,12 @@ body.in-game .fdf-screen.fdf-ingame {
 .load-gate-link.pad-hover { color: var(--ow3-gold); opacity: 1; }
 .load-gate-link[hidden] { display: none; }
 
+/* The no-WebGL screen (src/ui/noWebgl.ts) is the gate's layout with different words: what is
+   missing (in the gate's error red), the advice under it a step smaller, and the one button —
+   which a browser has no use for, so its slot must really go rather than leave 80px of nothing. */
+.no-webgl .load-gate-sub.no-webgl-advice { font-size: 13px; color: var(--ow3-text-dim); }
+.no-webgl .load-gate-action[hidden] { display: none; }
+
 /* --- FDF-driven frames (issue #54): the WC3 UI system, built from UI\FrameDef\*.fdf.
    Frames are absolutely positioned over the 3D background; only interactive frames
    take pointer events so the terrain stays draggable in the empty areas. */

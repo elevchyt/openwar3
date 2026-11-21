@@ -60,6 +60,8 @@ import { mountLoadingScreen, type LoadingScreen } from "./ui/loadingScreen";
 import { mountScoreScreen, scoreScreenMusic } from "./ui/scoreScreen";
 import type { ScoreTable } from "./game/scoreTable";
 import { mountLoadGate, type GateLoad } from "./ui/gate";
+import { mountNoWebgl } from "./ui/noWebgl";
+import { probeWebgl } from "./render/webglSupport";
 import { setFdfClickSound, type FdfScreen } from "./ui/fdf/render";
 import { GlueAudio } from "./ui/glueAudio";
 import { SoundBoard } from "./audio/sounds";
@@ -1678,7 +1680,13 @@ startGamepad();
 // that Vite folds to `false` for `pnpm build`, so this branch and the dynamic import inside it
 // are dropped from the bundle entirely; there is no path from a shipped artifact to an asset
 // route. See src/dev/devBoot.ts and tools/vite-plugin-dev-install.ts.
-if (replayBridge()) {
+// …but first, whether there is anything to draw WITH (render/webglSupport.ts). A machine whose
+// driver gives the page no usable WebGL gets a screen that says so, in place of every boot below
+// — dev boot included, so the screen can be checked with `--disable-3d-apis`.
+const webgl = probeWebgl();
+if (!webgl.ok) {
+  mountNoWebgl(ui, webgl);
+} else if (replayBridge()) {
   // A REPLAY WINDOW: another version's replay, opened by a later desktop app in this version's
   // own page (src/replayBoot.ts). It watches the one replay it is handed and nothing else.
   void replayBoot(ui, replayBridge()!, { mountInstall, watchReplay });

@@ -48,6 +48,13 @@ contextBridge.exposeInMainWorld("ow3native", {
   /** Quit and start the game again — how a saved vsync choice is applied without the player
    *  having to do it by hand. */
   relaunch: () => ipcRenderer.invoke("ow3:relaunch"),
+  /** The no-WebGL screen (src/ui/noWebgl.ts). `report` writes what the page found beside what
+   *  the shell knows about the GPU into `.logs/` and resolves to `{ file, softwareGl }`;
+   *  `setSoftware` saves the software-rendering launch switch for the next launch. */
+  gpu: {
+    report: (probe) => ipcRenderer.invoke("ow3:gpu-report", String(probe ?? "")),
+    setSoftware: (on) => ipcRenderer.invoke("ow3:software-gl-set", on === true),
+  },
   /** `{ path, valid }` — the remembered folder, and whether it is still an install. A folder
    *  that has been moved or deleted is reported rather than silently re-asked for, so the
    *  screen can say which one it lost. */

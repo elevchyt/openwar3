@@ -271,6 +271,16 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   because interleaved it is worth nothing and the sign flips between runs: a silent node's sample
   is a miss or a constant, and the instances a move forces are the UNITS, whose clips animate most
   of their skeleton. See docs/video-options.md before reaching for it again.
+- **No WebGL:** a GPU Chromium will not use leaves the page with NO WebGL at all since Chromium
+  139 — no quiet SwiftShader fallback — so an old machine (the report was a ThinkPad T500's GM45)
+  got a menu with no 3D and a black match. `probeWebgl` ([`src/render/webglSupport.ts`](src/render/webglSupport.ts))
+  asks once at boot for what mdx-m3-viewer throws without (WebGL **1**, `OES_texture_float`,
+  `ANGLE_instanced_arrays`, vertex texture fetch — WebGL 2 is not needed, a match was played
+  with it off) and [`src/ui/noWebgl.ts`](src/ui/noWebgl.ts) replaces every boot when it fails:
+  in the desktop app it writes a GPU report to `.logs/` and offers to relaunch with the shell's
+  `softwareGl` setting (`enable-unsafe-swiftshader`, which only PERMITS the fallback). Reproduce
+  with Chrome's `--disable-3d-apis`, or the desktop app headless with `--ozone-platform=headless
+  --disable-gpu` and a scratch `XDG_CONFIG_HOME`.
 - **Windows:** read [`docs/windows.md`](docs/windows.md) before touching the NSIS include
   ([`packaging/windows-installer.nsh`](packaging/windows-installer.nsh)), the `win`/`nsis` build
   blocks or [`electron/locate.mjs`](electron/locate.mjs). ONE installer carries the 64- and the
