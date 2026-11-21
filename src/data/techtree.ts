@@ -429,17 +429,3 @@ function int(row: { string(key: string): string | undefined }, key: string, fall
   const n = parseInt(v, 10);
   return Number.isNaN(n) ? fallback : n;
 }
-
-// Ground-order hotkeys (WC3 standard). Build/train use the unit's name hotkey.
-export const ORDER_HOTKEYS = {
-  move: "M",
-  stop: "S",
-  hold: "H",
-  attack: "A",
-  patrol: "P",
-  build: "B",
-  buildAdvanced: "V",
-  repair: "R",
-  gather: "G",
-  cancel: "Escape",
-} as const;

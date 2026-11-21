@@ -16,12 +16,6 @@ export interface LoadedMap {
   placedUnits: PlacedUnit[];
 }
 
-/** Open a .w3x/.w3m file (an MPQ) and extract its terrain and doodads. */
-export async function loadMapFile(file: File): Promise<LoadedMap> {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  return loadMapBytes(bytes, file.name);
-}
-
 export function loadMapBytes(bytes: Uint8Array, label = "map"): LoadedMap {
   const mpq = new MpqDataSource(label, bytes);
 

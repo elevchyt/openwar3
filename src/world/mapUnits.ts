@@ -97,24 +97,3 @@ export function parseMapUnits(bytes: Uint8Array | null, buildVersion = 0): Place
   });
 }
 
-/** Split placed units into the categories a game setup cares about. Start-location
- *  markers and gold mines are separated out; the rest are grouped by whether they
- *  belong to a player slot (0–11) or a neutral slot (12–15). */
-export function categorizeMapUnits(units: PlacedUnit[]): {
-  startLocations: PlacedUnit[];
-  goldMines: PlacedUnit[];
-  playerUnits: PlacedUnit[]; // owned by a real player slot (custom/campaign maps)
-  neutralUnits: PlacedUnit[]; // creeps + neutral-passive (shops/critters/etc.)
-} {
-  const startLocations: PlacedUnit[] = [];
-  const goldMines: PlacedUnit[] = [];
-  const playerUnits: PlacedUnit[] = [];
-  const neutralUnits: PlacedUnit[] = [];
-  for (const u of units) {
-    if (u.typeId === START_LOCATION_ID) startLocations.push(u);
-    else if (u.typeId === GOLD_MINE_ID) goldMines.push(u);
-    else if (u.neutral) neutralUnits.push(u);
-    else playerUnits.push(u);
-  }
-  return { startLocations, goldMines, playerUnits, neutralUnits };
-}

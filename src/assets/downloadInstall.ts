@@ -371,11 +371,5 @@ export async function storedInstall(): Promise<PickedInstall | null> {
   }
 }
 
-/** Throw away the stored copy — a downloaded install the game then refuses (the wrong build)
- *  would otherwise be mounted again at every visit. */
-export async function forgetStoredInstall(): Promise<void> {
-  await (await navigator.storage?.getDirectory?.())?.removeEntry(STORE_DIR, { recursive: true }).catch(() => {});
-}
-
 export const gb = (bytes: number): string =>
   bytes >= 1 << 30 ? `${(bytes / (1 << 30)).toFixed(2)} GB` : `${Math.round(bytes / (1 << 20))} MB`;

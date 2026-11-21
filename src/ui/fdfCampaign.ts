@@ -1,7 +1,7 @@
 import type { DataSource } from "../vfs/types";
 import type { Campaign } from "../data/campaigns";
 import {
-  completed, loadProgress, openCampaigns, openRows,
+  loadProgress, openCampaigns, openRows,
   type CampaignRow, type Difficulty,
 } from "../data/campaignProgress";
 import type { FdfFrame } from "./fdf/parser";
@@ -362,9 +362,4 @@ function findChild(f: FdfFrame, name: string): FdfFrame | undefined {
     if (hit) return hit;
   }
   return undefined;
-}
-
-/** How far into `campaign` the player has got — for the caller's "resume here" default. */
-export function resumeIndex(c: Campaign): number {
-  return Math.min(completed(c), Math.max(0, c.missions.length - 1));
 }

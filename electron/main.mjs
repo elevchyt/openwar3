@@ -471,7 +471,6 @@ app.whenReady().then(async () => {
     writeSettings({ installPath: picked });
     return picked;
   });
-  ipcMain.handle("ow3:install-forget", () => { writeSettings({ installPath: null }); });
   // "Download game files" (electron/download.mjs): an install, from the first of the page's
   // sources that works (the Drive zip, then the Internet Archive — src/assets/downloadInstall.ts).
   // Where it goes is asked here with the OS dialog — a 2 GB folder lands where the player says, not in app data — and

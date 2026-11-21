@@ -40,12 +40,6 @@ export async function requestPersistence(): Promise<boolean> {
   return navigator.storage.persist();
 }
 
-/** Rough free-space check before importing a multi-GB install. */
-export async function estimateQuota(): Promise<{ usage: number; quota: number }> {
-  const est = (await navigator.storage?.estimate?.()) ?? {};
-  return { usage: est.usage ?? 0, quota: est.quota ?? 0 };
-}
-
 // The File System Access API has spotty lib typings, so declare the slice we use.
 interface DirEntry {
   kind: "file" | "directory";

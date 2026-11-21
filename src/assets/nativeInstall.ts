@@ -25,7 +25,6 @@ import {
 interface NativeBridge {
   installPath(): Promise<InstalledFolder>;
   pickInstall(): Promise<string | null>;
-  forgetInstall(): Promise<void>;
   /** Absent on a shell older than "Download game files". */
   downloadInstall?(sources: GameFilesSource[], onProgress: (p: DownloadProgress) => void): Promise<string | null>;
   /** The load gate's Cancel: abort that transfer mid-flight. Absent with it. */
@@ -208,10 +207,6 @@ export async function downloadNativeInstall(sources: GameFilesSource[], onProgre
  *  about to start, and the shell's own abort check catches it. */
 export function cancelNativeDownload(): void {
   bridge()?.cancelDownload?.();
-}
-
-export async function forgetNativeInstall(): Promise<void> {
-  await bridge()?.forgetInstall();
 }
 
 /** `local` is the scheme's host and means nothing: a `standard` scheme needs an origin, and

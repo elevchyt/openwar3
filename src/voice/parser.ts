@@ -376,27 +376,6 @@ export interface ParseContext {
   lexicon: Lexicon;
 }
 
-/**
- * The words `parse` itself knows — the verbs, numbers, targets — for the recogniser's grammar.
- * The lexicon's own names are added beside them (src/voice/vocabulary.ts).
- */
-export function grammarWords(): string[] {
-  const out = new Set<string>();
-  for (const [p] of VERBS2) for (const w of p.split(" ")) out.add(w);
-  for (const w of Object.keys(VERBS1)) out.add(w);
-  for (const w of Object.keys(NUMBERS)) if (!/^\d+$/.test(w)) out.add(w);
-  for (const s of [SCREEN_WORDS, CURSOR_WORDS, NEXT_WORDS, NEAREST_WORDS, ENEMY_WORDS, MINE_WORDS, ALLY_WORDS, PREPOSITIONS, FILLER]) for (const w of s) out.add(w);
-  for (const w of Object.keys(REGION_WORDS)) out.add(w);
-  for (const w of ["side", "map", "corner", "camera", "move", "take", "put", "look", "one", "pan", "place", "fall", "back",
-    "retreat", "home", "green", "orange", "yellow", "red", "goblin", "tavern"]) out.add(w);
-  for (const set of [WORKER_WORDS, ALL_WORDS, FROM_WORDS, GOLD_WORDS, LUMBER_WORDS]) for (const w of set) out.add(w);
-  for (const w of ["finish", "complete", "resume", "continue", "construction", "building", "buildings", "item", "items",
-    "idle", "rally", "point", "creep", "creeps", "camp", "camps", "neutral", "tower", "shop", "farm",
-    "supply", "house", "hall", "altar", "barracks", "tavern", "fountain", "merchant", "laboratory", "marketplace"]) out.add(w);
-  for (const w of ["hero", "heroes", "base", "home", "town", "hall", "gold", "lumber", "wood", "trees", "forest", "position",
-    "point", "ground", "item", "slot", "off", "worker", "workers", "units", "all", "every", "unit", "group", "add"]) out.add(w);
-  return [...out];
-}
 
 /** Parse what was heard. An empty list means nothing in it was a command. */
 export function parse(text: string, ctx: ParseContext): VoiceIntent[] {
