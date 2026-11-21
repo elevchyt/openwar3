@@ -26944,7 +26944,7 @@ export class SimWorld {
     else amount = this.absorbWithManaShield(target, amount);
     if (amount <= 0) return 0;
     if (recordHit) this.hits.push({ attackerId, targetId: target.id, weaponSound, x: target.x, y: target.y });
-    this.noteAttacked(target, attackerId); // "The battle has been joined." / "Our town is under siege!"
+    this.noteAttacked(target, attackerId); // the under-attack voice + minimap flash ("Our town is under siege!" for a building)
     this.revealFoggedAttacker(attackerId, target);
     // The script's DAMAGED event, synchronously: the amount about to come off, which it may change
     // ("1 and 2 — modify the damage after any reduction", jassbot) — so it is raised BEFORE the

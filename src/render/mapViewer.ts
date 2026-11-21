@@ -15710,7 +15710,10 @@ export class MapViewerScene {
         // An ally's raid is HEARD and not read: the data carries an `Allytownattack` line ("%s's
         // city is under siege!"), but the real client never prints it (the developer's ruling,
         // off the game) — the race's voice and the red flash on the minimap are the whole of it.
-        key = own ? (town ? "Townattack" : "Unitattack") : "";
+        // A UNIT under attack is likewise heard and not read: `Unitattack` ("The battle has been
+        // joined.") sits in the data too, and the real client never prints it either (the
+        // developer's ruling, off the game) — voice and minimap flash only.
+        key = own && town ? "Townattack" : "";
         sound = own ? (town ? "TownAttack" : "UnderAttack") : "AllyTownUnderAttack";
         // …and the minimap flashes where the blow landed, which is how you find a raid you
         // cannot see. Observed behaviour rather than a data field: no table carries a colour
