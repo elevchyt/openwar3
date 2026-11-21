@@ -185,8 +185,17 @@ listed once a step, in the units' own order. Toggled live in one match, interlea
 **5.07 → 4.00 ms a step (−21%)** for the first two, the shop pass on top of that.
 `tools/sim-scan-shortcuts-test.cjs` runs one raid across 36 camps with the short cuts on and off
 and demands the same world on every step; `CampFighters.enabled` / `AuraCells.enabled` are the
-switches. What is LEFT in that step is `recomputeStats` — every unit's stats rebuilt every step,
-a third of it — and that one is not a scan.
+switches. What was LEFT in that step was `recomputeStats` — every unit's stats rebuilt every
+step, a third of it — and that one is not a scan. It is NOT skipped for a unit whose inputs have
+not moved: it reads some forty fields of the unit, its buffs, bag and abilities, the owner's
+research, the clock, the blight under it and the teleports in flight, and it has side effects
+(a hex ending, a net letting go, a pool rescaling), so a dirty flag is one missed write site away
+from a desync nobody would find. What it paid for needlessly was its CONSTANTS: six `MiscGame`
+rows per unit, each resolved from scratch through the map overlay / map kind / edition / patch
+chain (`miscGame`), with a lower-cased copy of the key whenever a map states an overlay. The
+resolved row is now kept and dropped whole when any of the four moves (`MiscMemo.enabled`):
+**3.86 → 3.38 ms a step (−12%)**, interleaved in one match, and every other `gameNum` in the
+sim reads through the same door.
 
 **THE SAME ANSWER, UPLOADED AGAIN.** Every MDX instance owns a bone-matrix texture and re-sent it
 to the GPU every frame — one `bindTexture` plus one `texSubImage2D` apiece, and the cost is almost

@@ -418,6 +418,38 @@ export function engineFoodCeiling(): number {
  * agree about it, so the order is a statement of intent rather than a tie-break.
  */
 export function miscGame<K extends keyof typeof MISC_GAME>(key: K): (typeof MISC_GAME)[K] | number | readonly number[] {
+  if (!MiscMemo.enabled) return resolveMiscGame(key);
+  // The answer is a function of four things — the map's overlay, the map kind, the edition and
+  // the patch level — and none of them moves during a match, while the question is asked per
+  // unit per step (`recomputeStats` alone asks six rows of every unit: with a map overlay up
+  // that was a lower-cased copy of the key and two lookups apiece, 3% of an Angel Arena
+  // Allstars frame). So the resolved row is kept, and dropped whole the moment any of the four
+  // is not what it was when the first row was kept.
+  const epoch = overlayEpoch;
+  const set = mapDataSet();
+  const roc = isRoc();
+  if (epoch !== gameMemoEpoch || set !== gameMemoSet || roc !== gameMemoRoc) {
+    gameMemo.clear();
+    gameMemoEpoch = epoch;
+    gameMemoSet = set;
+    gameMemoRoc = roc;
+  }
+  let v = gameMemo.get(key);
+  if (v === undefined) gameMemo.set(key, (v = resolveMiscGame(key)));
+  return v as (typeof MISC_GAME)[K] | number | readonly number[];
+}
+
+/** `miscGame`'s kept answers (see there). On, unless a test or a live A/B turns it off. */
+export const MiscMemo = { enabled: true };
+const gameMemo = new Map<string, unknown>();
+let gameMemoEpoch = -1;
+let gameMemoSet: ReturnType<typeof mapDataSet> | undefined;
+let gameMemoRoc: boolean | undefined;
+const dataMemo = new Map<string, unknown>();
+let dataMemoEpoch = -1;
+
+/** `miscGame` without the memo: the chain itself. */
+function resolveMiscGame<K extends keyof typeof MISC_GAME>(key: K): (typeof MISC_GAME)[K] | number | readonly number[] {
   const own = mapValue(key, MISC_GAME[key]);
   if (own !== undefined) return own;
   if (mapDataSet() === "custom" && key in MISC_GAME_CUSTOM) return MISC_GAME_CUSTOM[key as keyof typeof MISC_GAME_CUSTOM];
@@ -436,7 +468,10 @@ export function miscGame<K extends keyof typeof MISC_GAME>(key: K): (typeof MISC
 // Reign of Chaos and a custom map first, and neither was ever rebalanced).
 
 const patchParsed = new Map<string, Shaped | null>();
-onPatchLevelChange(() => patchParsed.clear());
+onPatchLevelChange(() => {
+  patchParsed.clear();
+  gameMemo.clear(); // a kept row may be a patched one (miscGame)
+});
 
 function patchValue(key: string, base: unknown): Shaped | undefined {
   let v = patchParsed.get(key);
@@ -451,6 +486,16 @@ function patchValue(key: string, base: unknown): Shaped | undefined {
 /** `Units\MiscData.txt`'s row `key` for this match — the MAP's own value when its
  *  war3mapMisc.txt states one (MiscData has no edition or map-kind copies). */
 export function miscData<K extends keyof typeof MISC_DATA>(key: K): (typeof MISC_DATA)[K] | number | readonly number[] {
+  if (MiscMemo.enabled && mapStated) {
+    // Only the overlay can move this one (see miscGame); with none up it is a plain read.
+    if (overlayEpoch !== dataMemoEpoch) {
+      dataMemo.clear();
+      dataMemoEpoch = overlayEpoch;
+    }
+    let v = dataMemo.get(key);
+    if (v === undefined) dataMemo.set(key, (v = mapValue(key, MISC_DATA[key]) ?? MISC_DATA[key]));
+    return v as (typeof MISC_DATA)[K] | number | readonly number[];
+  }
   const own = mapValue(key, MISC_DATA[key]);
   return own !== undefined ? own : MISC_DATA[key];
 }
