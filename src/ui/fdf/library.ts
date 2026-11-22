@@ -166,7 +166,30 @@ export class FdfLibrary {
 
   /** Resolve a Text value: a string-table key wins, else the literal text. */
   string(keyOrLiteral: string): string {
-    return this.strings.get(keyOrLiteral) ?? keyOrLiteral;
+    return this.strings.get(keyOrLiteral) ?? this.laterString(keyOrLiteral) ?? keyOrLiteral;
+  }
+
+  /**
+   * A key 1.30 ADDED, answered out of the older build's own table (docs/versions.md).
+   *
+   * 1.30 split two families out of strings every earlier build has, and an install from before
+   * it (the Legacy 1.29.2 among them) printed the raw key wherever our code named the new one:
+   *
+   *   • `LOW_MODELS`, `MEDIUM_ANIM`, `HIGH_SPELLS`… — the Video panel's rungs, named per ROW.
+   *     Before 1.30 every row shared `LOW` / `MEDIUM` / `HIGH`, and those are still there.
+   *   • `KEY_START_GAME_SHORTCUT` = "S" — a button's accelerator as a key of its own. Before
+   *     1.30 it was only the highlighted letter inside the label: `KEY_START_GAME` =
+   *     "|CffffffffS|Rtart Game". It is read back out of that.
+   *
+   * Both are the install's own words, so nothing here is ours; a key neither rule covers is
+   * left to print as itself.
+   */
+  private laterString(key: string): string | undefined {
+    const rung = /^(LOW|MEDIUM|HIGH)_[A-Z]+$/.exec(key);
+    if (rung) return this.strings.get(rung[1]);
+    const shortcut = /^(.+)_SHORTCUT$/.exec(key);
+    if (shortcut) return /\|c[0-9a-f]{8}(.)\|r/i.exec(this.strings.get(shortcut[1]) ?? "")?.[1]?.toUpperCase();
+    return undefined;
   }
 }
 

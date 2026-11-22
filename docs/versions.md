@@ -113,16 +113,34 @@ the install's own art, never shipped):
 | `<Race>UITile05/06` and their four frames (widescreen console, 1.29) | ≤ 1.28.5 | the frames are added in code to 1.30.4's numbers (`ConsoleUi.rootFrame`); the art is the stone pier of the console's own first tile, laid across (`wallFromConsole`) |
 | `PASBTN*` / `DISPASBTN*` the patches name | all | docs/icons.md |
 
+**Art that needs REMAKING** (issue #319) — asked for by the game, and answered today by a
+stand-in or by nothing. 14 files, and no others: an old build's own models reference only
+textures that build has (checked on 1.21a and 1.29.2 — 3 234 models, 8 089 references), so the
+~360 `Doodads\Cinematic\*` and `Textures\*` files 1.30.4 has and they lack are 1.30's re-filing.
+
+| file | size | builds that lack it | today |
+| --- | --- | --- | --- |
+| `UI\Console\<Race>\<Race>UITile05.blp`, `…06.blp` × 4 races | 512×512 | ≤ 1.28.5 | derived stone (`wallFromConsole`) — nothing like the real framed panel on the orc, undead and night elf consoles |
+| `UI\Widgets\Glues\GlueScreen-ROC-EditionButton-{up,down,disabled}.blp`, `…-TFT-…` | 64×64 (down 32×32) | ≤ 1.27b | nothing; and such a build's `MainMenu.fdf` has no `EditionButton` frame to wear them |
+
+`TeamColor16…27` are exact (a swatch is its colour) and `TeamGlow16…27` are the install's own
+glow re-tinted; neither needs a remake.
+
+**Strings 1.30 added** are answered out of the older table (`FdfLibrary.laterString`): the
+Video panel's per-row rungs (`LOW_MODELS` → the build's `LOW`) and a button's accelerator
+(`KEY_START_GAME_SHORTCUT` → the highlighted letter of `KEY_START_GAME`). 1.29.2 lacks 129 of
+1.30.4's GlobalStrings keys and all but four are one of those two families; the four our code
+could meet (`DOWNLOADING_MAP`, `FAST_SCROLL`, `SLOW_SCROLL`, `COLON_REGION`) still print as
+themselves where nothing supplies a fallback.
+
 **Known gaps** — seen, or listed by the survey and NOT yet looked at in the running game:
 
-- Seen on 1.21a: the main menu has no edition switch (`GlueScreen-ROC-EditionButton-*.blp` came
-  with the 1.28 RoC/TFT merge), so Reign of Chaos cannot be reached from the menu there.
-  `?dev&edition=roc` still switches, but RoC's glue art and music are `_V0` war3skins keys such
-  a build does not have.
-- Listed, not checked: `UI\FrameDef\UI\ObserverPanel.fdf` (new in 1.30 — the observer HUD's
-  checkbox), five glue FrameDefs 1.29 added (`dialog.fdf`, `listbox.fdf`, …), and whatever
-  `GlobalStrings.fdf` keys were added after a build shipped. Only the main menu and a melee
-  match were driven on 1.21a and 1.29.2; no other screen, no campaign, no LAN game.
+- `UI\FrameDef\UI\ObserverPanel.fdf` is new in 1.30: NO older build has it, Legacy included.
+  The observer HUD reads its checkbox and pulldown from it; not yet driven on an old build.
+- 1.21a has no `Glue\Dialog.fdf` / `Glue\ListBox.fdf` (1.28.5 not checked), and its main menu
+  has no edition switch, so Reign of Chaos cannot be reached from the menu there.
+- Only the main menu, Options → Video and a melee match were driven on 1.29.2, and the menu and
+  a match on 1.21a. No campaign, LAN game, observer HUD or other screen on an old build.
 - An MPQ mount reads every archive whole — about 1.1 GB of files for 1.29.2 — where a CASC mount
   reads slices. Not measured in the 32-bit Linux shell (docs/linux.md), which has little room.
 - 1.30.0 … 1.30.3 are CASC stores with no normalization yet and are still refused.
