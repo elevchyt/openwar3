@@ -36,7 +36,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
      without listing it), the archives win over a `.build.info` (Legacy has both), and a data
      set a build files only partly STARTS as its live table. Art a later patch added is
      DERIVED from the install's own (the 24-player team colours, the wide console's side
-     panels — `src/vfs/derivedArt.ts`), never shipped.
+     panels — `src/vfs/derivedArt.ts`), never shipped; a REMAKE of our own is a PNG dropped
+     into `src/fallback/art/` at the game's path ([`src/fallback/README.md`](src/fallback/README.md)),
+     served by `src/vfs/fallbackArt.ts` only to an install with no file there, and found before
+     anything is derived. Never put a file exported from an install in that folder.
    - **1.31.1 is accepted and DOWNGRADED** (docs/casc.md "1.31.1"): "Download game files" tries
      the Drive zip of a 1.30.4 install first and falls back on the Internet Archive's 1.31.1 store
      (fetched member by member out of its RAR). Its `War3.w3mod` tree is renamed back to 1.30's

@@ -123,6 +123,12 @@ textures that build has (checked on 1.21a and 1.29.2 — 3 234 models, 8 089 ref
 | `UI\Console\<Race>\<Race>UITile05.blp`, `…06.blp` × 4 races | 512×512 | ≤ 1.28.5 | derived stone (`wallFromConsole`) — nothing like the real framed panel on the orc, undead and night elf consoles |
 | `UI\Widgets\Glues\GlueScreen-ROC-EditionButton-{up,down,disabled}.blp`, `…-TFT-…` | 64×64 (down 32×32) | ≤ 1.27b | nothing; and such a build's `MainMenu.fdf` has no `EditionButton` frame to wear them |
 
+**Where a remake goes:** `src/fallback/art/`, as a PNG at the game's own path
+([`src/fallback/README.md`](../src/fallback/README.md)). `node tools/patch-art.mjs` turns it
+into a BLP and `FallbackArtDataSource` (src/vfs/fallbackArt.ts) serves it to any install with no
+file there — under the layer that derives, so a drawn panel retires the derived one by itself.
+The folder is empty today. An edition button will also want its frame added for 1.21a.
+
 `TeamColor16…27` are exact (a swatch is its colour) and `TeamGlow16…27` are the install's own
 glow re-tinted; neither needs a remake.
 

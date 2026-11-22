@@ -9,6 +9,7 @@ import { setMapWriter } from "../assets/downloadedMaps";
 import { EditionDataSource } from "./edition";
 import { PatchDataSource } from "./patch";
 import { DerivedArtDataSource } from "./derivedArt";
+import { FallbackArtDataSource } from "./fallbackArt";
 import { mpqEraBuild, NormalizeDataSource } from "./normalize";
 import { hasNormalization, loadNormalization } from "../patches/normalize";
 
@@ -76,7 +77,10 @@ export async function loadProfile(
     }
     onProgress?.("Bringing the game data up to date…");
     const edits = await loadNormalization(build.version);
-    const store: DataSource = edits ? new NormalizeDataSource(mpq, edits, build.version) : mpq;
+    const normalized: DataSource = edits ? new NormalizeDataSource(mpq, edits, build.version) : mpq;
+    // …and our own remakes of the art this build lacks, UNDER everything that derives art, so a
+    // drawn file is found before a stand-in is computed (src/vfs/fallbackArt.ts).
+    const store = await FallbackArtDataSource.over(normalized);
     const vfs = new DerivedArtDataSource(new EditionDataSource(new PatchDataSource(store)));
     onProgress?.("Preparing icons…");
     vfs.prepare();
@@ -93,7 +97,7 @@ export async function loadProfile(
     const version = buildInfoVersion(install.casc.buildInfo);
     const build = version?.split(".").slice(0, 3).join(".") ?? "";
     const downgrade = hasNormalization(build) ? await loadNormalization(build) : null;
-    const store: DataSource = downgrade ? new NormalizeDataSource(casc, downgrade, version ?? "") : casc;
+    const store = await FallbackArtDataSource.over(downgrade ? new NormalizeDataSource(casc, downgrade, version ?? "") : casc);
     // …and the game's later patches UNDER the edition overlay, so they reach the live melee
     // tables alone (src/vfs/patch.ts, docs/patches.md): the patches are stated against 1.30.4,
     // which a 1.31.1 store has just been turned back into.
