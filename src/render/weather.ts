@@ -26,17 +26,87 @@
 import type { WeatherDef } from "../data/weather";
 import { pipelineState } from "./glPipelineState";
 
+// ### The particle lives in the VERTEX SHADER
+//
+// A weather particle is decided entirely at its birth: where it starts, which way it goes, when
+// it was born and how long it lives. Everything after that — where it is now, its colour, its
+// size, its atlas frame, the quad turned to the camera — is a function of those and the clock,
+// so it is computed where the vertex is drawn. The CPU's whole job per frame is to notice which
+// particles have died and write a new birth into their slot; a frame used to integrate every
+// particle and rebuild every quad (3200 of them on Angel Arena Allstars' two rains: 5% of the
+// frame), to re-upload geometry that had only moved by `velocity × dt`.
+//
+// `accel` is integrated in closed form (`½·a·t²`), which is what the per-frame Euler step
+// converged on; it is 0 in every shipped row of Weather.slk.
 const VERT_SRC = `
-attribute vec3 aPos;
-attribute vec2 aUv;
-attribute vec4 aColor;
+attribute vec3 aBirth;   // where the particle was born
+attribute vec3 aVel;     // its velocity at birth
+attribute vec2 aTime;    // x = when it was born (weather clock, seconds), y = its lifespan
+attribute vec2 aCorner;  // x = side (-1/+1), y = along (-1/+1)
 uniform mat4 uViewProj;
+uniform float uNow;
+uniform float uAccel;
+uniform float uMid;      // when the mid key of every ramp lands, as a fraction of the life
+uniform vec3 uColor0;
+uniform vec3 uColor1;
+uniform vec3 uColor2;
+uniform vec3 uAlpha;     // start, mid, end — already 0..1
+uniform vec3 uScale;     // start, mid, end — world units, the size knob folded in
+uniform vec3 uFrame;     // atlas frame index: start, mid, end
+uniform vec2 uAtlas;     // columns, rows
+uniform float uTail;     // 1 = a streak along the velocity, 0 = a camera-facing billboard
+uniform float uTailLen;
+uniform vec3 uCamPos;
+uniform vec3 uCamRight;
+uniform vec3 uCamUp;
 varying vec2 vUv;
 varying vec4 vColor;
+
+// The SLK's three-key ramps: start -> mid (at uMid of the life) -> end.
+float ramp(vec3 k, float t) {
+  if (t <= uMid) return k.x + (k.y - k.x) * (uMid > 0.0 ? t / uMid : 1.0);
+  return k.y + (k.z - k.y) * (uMid < 1.0 ? (t - uMid) / (1.0 - uMid) : 1.0);
+}
+
 void main() {
-  vUv = aUv;
-  vColor = aColor;
-  gl_Position = uViewProj * vec4(aPos, 1.0);
+  float age = uNow - aTime.x;
+  float t = age / aTime.y;
+  float alpha = ramp(uAlpha, t);
+  float scale = ramp(uScale, t);
+  // Dead, not yet born, or too faint or small to draw: every corner onto one point outside the
+  // clip volume, so the triangle has no area.
+  if (age < 0.0 || age >= aTime.y || alpha <= 0.002 || scale <= 0.0) {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    vUv = vec2(0.0);
+    vColor = vec4(0.0);
+    return;
+  }
+  vec3 vel = aVel + vec3(0.0, 0.0, uAccel * age);
+  vec3 c = aBirth + aVel * age + vec3(0.0, 0.0, 0.5 * uAccel * age * age);
+  vec3 along;
+  vec3 side;
+  if (uTail > 0.5) {
+    // A quad stretched BACK along the velocity (the streak trails the drop), turned about that
+    // axis to face the camera: side = normalize(dir x view).
+    float sp = length(vel);
+    vec3 dir = sp > 0.0 ? vel / sp : vec3(0.0);
+    along = dir * (uTailLen * 0.5);
+    c -= along;
+    vec3 n = cross(dir, c - uCamPos);
+    float nl = length(n);
+    side = (nl > 0.0 ? n / nl : n) * scale;
+  } else {
+    along = uCamUp * scale;
+    side = uCamRight * scale;
+  }
+  // The sprite-atlas frame, animated over the life (1x1 for everything but the cloud sheet).
+  vec2 cell = vec2(1.0) / uAtlas;
+  float frames = uAtlas.x * uAtlas.y;
+  float f = frames > 1.0 ? clamp(floor(ramp(uFrame, t) + 0.5), 0.0, frames - 1.0) : 0.0;
+  vec2 origin = vec2(mod(f, uAtlas.x), floor(f / uAtlas.x)) * cell;
+  vUv = origin + cell * vec2(aCorner.x * 0.5 + 0.5, 0.5 - aCorner.y * 0.5);
+  vColor = vec4(vec3(ramp(vec3(uColor0.r, uColor1.r, uColor2.r), t), ramp(vec3(uColor0.g, uColor1.g, uColor2.g), t), ramp(vec3(uColor0.b, uColor1.b, uColor2.b), t)), alpha);
+  gl_Position = uViewProj * vec4(c + side * aCorner.x + along * aCorner.y, 1.0);
 }`;
 
 const FRAG_SRC = `
@@ -91,36 +161,36 @@ export interface WeatherView {
   distance: number;
 }
 
-interface Particle {
-  x: number;
-  y: number;
-  z: number;
-  vx: number;
-  vy: number;
-  vz: number;
-  age: number;
-  life: number;
-}
+/** Floats per vertex in an effect's buffer: birth xyz, velocity xyz, birth time, lifespan. */
+const STRIDE = 8;
+/** Vertices per particle — two triangles, written out (no index buffer, no instancing: one
+ *  fewer piece of GL state for the viewer's own cache to trip over). */
+const VERTS = 6;
+/** The weather clock is rebased when it passes this many seconds, so a birth time handed to
+ *  the shader as a float32 never loses the millisecond (WeatherOverlay.rebase). */
+const CLOCK_WRAP = 2048;
+/** The six corners of a particle's quad as (side, along): 0 1 2 and 0 2 3 of
+ *  (-s,-a) (+s,-a) (+s,+a) (-s,+a). */
+const CORNERS = [-1, -1, 1, -1, 1, 1, -1, -1, 1, 1, -1, 1];
 
 interface Effect {
   id: number;
   def: WeatherDef;
   area: WeatherArea;
   enabled: boolean;
-  particles: Particle[];
-}
-
-interface Batch {
-  pos: Float32Array;
-  uv: Float32Array;
-  color: Float32Array;
-  cap: number; // vertex capacity
-  count: number; // verts filled this frame
-  posBuf: WebGLBuffer;
-  uvBuf: WebGLBuffer;
-  colorBuf: WebGLBuffer;
-  glCap: number;
-  additive: boolean;
+  /** Live particles: slots 0..count-1 of everything below. */
+  count: number;
+  cap: number;
+  /** When each was born, on the weather clock, and how long it lives — all the CPU keeps. */
+  birth: Float64Array;
+  life: Float32Array;
+  /** The vertex data as uploaded: STRIDE floats x VERTS vertices per particle. */
+  data: Float32Array;
+  buf: WebGLBuffer;
+  glCap: number; // particles the GL buffer has room for
+  /** The slots written since the last upload, or lo > hi for none. */
+  dirtyLo: number;
+  dirtyHi: number;
 }
 
 interface CachedTexture {
@@ -133,18 +203,23 @@ export class WeatherOverlay {
   private loader: TextureLoader;
   private heightAt: (x: number, y: number) => number;
   private program: WebGLProgram;
-  private aPos: number;
-  private aUv: number;
-  private aColor: number;
-  private uViewProj: WebGLUniformLocation;
-  private uTex: WebGLUniformLocation;
+  private aBirth: number;
+  private aVel: number;
+  private aTime: number;
+  private aCorner: number;
+  private u: Record<string, WebGLUniformLocation>;
   private maxAttribs: number;
   private effects = new Map<number, Effect>();
-  private batches = new Map<string, Batch>(); // key = `${texture}|${additive}`
   private textures = new Map<string, CachedTexture>();
+  /** The quad corners, the same six for every particle of every effect. */
+  private cornerBuf: WebGLBuffer;
+  private cornerCap = 0; // particles it covers
   private nextId = 1;
   private live = 0; // live particles across all effects (against MAX_PARTICLES)
   private warnedDt = false;
+  /** Weather time, in seconds — what a particle's age is measured on. It only advances in
+   *  `update`, so a paused world holds every drop where it hangs. */
+  private clock = 0;
   /** Live-tunable knobs (A/B in the browser without a rebuild). */
   sizeScale = SIZE_SCALE;
   spanPerDistance = SPAN_PER_DISTANCE;
@@ -155,11 +230,24 @@ export class WeatherOverlay {
     this.heightAt = heightAt;
     this.maxAttribs = gl.getParameter(gl.MAX_VERTEX_ATTRIBS) as number;
     this.program = compileProgram(gl, VERT_SRC, FRAG_SRC);
-    this.aPos = gl.getAttribLocation(this.program, "aPos");
-    this.aUv = gl.getAttribLocation(this.program, "aUv");
-    this.aColor = gl.getAttribLocation(this.program, "aColor");
-    this.uViewProj = gl.getUniformLocation(this.program, "uViewProj")!;
-    this.uTex = gl.getUniformLocation(this.program, "uTex")!;
+    this.aBirth = gl.getAttribLocation(this.program, "aBirth");
+    this.aVel = gl.getAttribLocation(this.program, "aVel");
+    this.aTime = gl.getAttribLocation(this.program, "aTime");
+    this.aCorner = gl.getAttribLocation(this.program, "aCorner");
+    this.u = {};
+    for (const name of ["uViewProj", "uTex", "uNow", "uAccel", "uMid", "uColor0", "uColor1", "uColor2", "uAlpha", "uScale", "uFrame", "uAtlas", "uTail", "uTailLen", "uCamPos", "uCamRight", "uCamUp"]) {
+      this.u[name] = gl.getUniformLocation(this.program, name)!;
+    }
+    this.cornerBuf = gl.createBuffer()!;
+  }
+
+  private newEffect(id: number, def: WeatherDef, area: WeatherArea, enabled: boolean): Effect {
+    const cap = 256;
+    return {
+      id, def, area, enabled, count: 0, cap,
+      birth: new Float64Array(cap), life: new Float32Array(cap), data: new Float32Array(cap * VERTS * STRIDE),
+      buf: this.gl.createBuffer()!, glCap: 0, dirtyLo: cap, dirtyHi: -1,
+    };
   }
 
   /** JASS `AddWeatherEffect(where, effectID)` — created DISABLED, exactly as the native
@@ -167,7 +255,7 @@ export class WeatherOverlay {
    *  which would be pointless if the native started it. Returns the effect's id. */
   add(def: WeatherDef, area: WeatherArea): number {
     const id = this.nextId++;
-    this.effects.set(id, { id, def, area, enabled: false, particles: [] });
+    this.effects.set(id, this.newEffect(id, def, area, false));
     if (!this.textures.has(def.texture)) {
       this.textures.set(def.texture, { canvas: this.loader(def.texture), tex: null });
     }
@@ -185,7 +273,8 @@ export class WeatherOverlay {
   remove(id: number): void {
     const e = this.effects.get(id);
     if (!e) return;
-    this.live -= e.particles.length;
+    this.live -= e.count;
+    this.gl.deleteBuffer(e.buf);
     this.effects.delete(id);
   }
 
@@ -204,7 +293,12 @@ export class WeatherOverlay {
     for (const e of s.effects) {
       const def = defOf(e.def);
       if (!def) continue;
-      this.effects.set(e.id, { id: e.id, def, area: e.area, enabled: e.enabled, particles: [] });
+      const old = this.effects.get(e.id);
+      if (old) {
+        this.live -= old.count;
+        this.gl.deleteBuffer(old.buf);
+      }
+      this.effects.set(e.id, this.newEffect(e.id, def, e.area, e.enabled));
       if (!this.textures.has(def.texture)) this.textures.set(def.texture, { canvas: this.loader(def.texture), tex: null });
     }
     this.nextId = Math.max(this.nextId, s.nextId);
@@ -233,6 +327,9 @@ export class WeatherOverlay {
       dt = MAX_STEP;
     }
     dt = Math.min(dt, MAX_STEP);
+    this.clock += dt;
+    if (this.clock > CLOCK_WRAP) this.rebase();
+    const now = this.clock;
     const span = Math.max(MIN_SPAN, view.distance * this.spanPerDistance);
     for (const e of this.effects.values()) {
       const def = e.def;
@@ -243,26 +340,27 @@ export class WeatherOverlay {
       const maxY = Math.min(e.area.maxY, view.targetY + span / 2);
       const canSpawn = e.enabled && maxX > minX && maxY > minY;
 
-      // Integrate, and recycle whatever died. A dead particle is respawned in place rather
-      // than churning the array — this keeps the pool at a steady `particles` with no
+      // Recycle whatever died. This is ALL a living particle costs the CPU: one subtraction
+      // and one compare — where it is and what it looks like is the shader's business. A dead
+      // one is reborn in its own slot, so the pool holds a steady `particles` with no
       // allocation once it has warmed up.
-      for (let i = e.particles.length - 1; i >= 0; i--) {
-        const p = e.particles[i];
-        p.age += dt;
-        if (p.age >= p.life) {
-          if (!canSpawn) {
-            // Effect switched off (or the camera left the rect) — let the pool drain.
-            e.particles.splice(i, 1);
-            this.live--;
-            continue;
-          }
-          this.spawn(p, def, minX, maxX, minY, maxY);
+      for (let i = e.count - 1; i >= 0; i--) {
+        if (now - e.birth[i] < e.life[i]) continue;
+        if (canSpawn) {
+          this.spawn(e, i, now, minX, maxX, minY, maxY);
           continue;
         }
-        p.vz += def.accel * dt;
-        p.x += p.vx * dt;
-        p.y += p.vy * dt;
-        p.z += p.vz * dt;
+        // Effect switched off (or the camera left the rect) — let the pool drain: the last
+        // particle moves into the hole (it has been looked at already; we walk downwards).
+        const last = --e.count;
+        this.live--;
+        if (i !== last) {
+          e.birth[i] = e.birth[last];
+          e.life[i] = e.life[last];
+          const n = VERTS * STRIDE;
+          e.data.copyWithin(i * n, last * n, last * n + n);
+          this.touch(e, i);
+        }
       }
 
       // Grow toward the table's budget. `particles` IS the steady-state population (it is
@@ -270,31 +368,28 @@ export class WeatherOverlay {
       // the pool over one lifespan rather than all at once: a storm rolls in, it doesn't
       // blink into existence.
       if (!canSpawn) continue;
-      const want = Math.min(def.particles, MAX_PARTICLES - (this.live - e.particles.length));
+      const want = Math.min(def.particles, MAX_PARTICLES - (this.live - e.count));
       const perSecond = def.particles / def.lifespan;
-      const budget = Math.min(want - e.particles.length, Math.ceil(perSecond * dt) + 1);
-      for (let i = 0; i < budget; i++) {
-        const p: Particle = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, age: 0, life: def.lifespan };
-        this.spawn(p, def, minX, maxX, minY, maxY);
+      const budget = Math.min(want - e.count, Math.ceil(perSecond * dt) + 1);
+      for (let k = 0; k < budget; k++) {
+        if (e.count === e.cap) this.grow(e);
         // A fresh pool would otherwise all be born at the same height and fall as one sheet;
-        // ageing each new particle randomly scatters them through the column at once.
-        p.age = Math.random() * def.lifespan;
-        p.x += p.vx * p.age;
-        p.y += p.vy * p.age;
-        p.z += p.vz * p.age;
-        e.particles.push(p);
+        // dating each new particle's birth randomly into the past scatters them through the
+        // column at once (the shader carries it down the part of the fall it has "already" done).
+        this.spawn(e, e.count, now - Math.random() * def.lifespan, minX, maxX, minY, maxY);
+        e.count++;
         this.live++;
       }
     }
   }
 
-  /** (Re)birth a particle at the top of the column, with the table's tilt and scatter. */
-  private spawn(p: Particle, def: WeatherDef, minX: number, maxX: number, minY: number, maxY: number): void {
-    p.x = minX + Math.random() * (maxX - minX);
-    p.y = minY + Math.random() * (maxY - minY);
-    p.z = this.heightAt(p.x, p.y) + def.height;
-    p.age = 0;
-    p.life = def.lifespan;
+  /** (Re)birth the particle in slot `i` at the top of the column, with the table's tilt and
+   *  scatter, born at `birth` on the weather clock. */
+  private spawn(e: Effect, i: number, birth: number, minX: number, maxX: number, minY: number, maxY: number): void {
+    const def = e.def;
+    const x = minX + Math.random() * (maxX - minX);
+    const y = minY + Math.random() * (maxY - minY);
+    const z = this.heightAt(x, y) + def.height;
 
     // `veloc` is the speed along the emission axis — NEGATIVE means falling. `var` jitters
     // it, so a snowfield doesn't descend in lock-step.
@@ -311,21 +406,62 @@ export class WeatherOverlay {
       vx += speed * Math.tan(t) * Math.cos(a);
       vy += speed * Math.tan(t) * Math.sin(a);
     }
-    p.vx = vx;
-    p.vy = vy;
-    p.vz = sign * speed;
+    const vz = sign * speed;
+
+    e.birth[i] = birth;
+    e.life[i] = def.lifespan;
+    const d = e.data;
+    for (let v = 0, o = i * VERTS * STRIDE; v < VERTS; v++, o += STRIDE) {
+      d[o] = x; d[o + 1] = y; d[o + 2] = z;
+      d[o + 3] = vx; d[o + 4] = vy; d[o + 5] = vz;
+      d[o + 6] = birth; d[o + 7] = def.lifespan;
+    }
+    this.touch(e, i);
   }
 
-  /** Build this frame's geometry and draw it. Call after the world is rendered. */
-  render(viewProj: Float32Array | Iterable<number>, camPos: ArrayLike<number>, camRight: ArrayLike<number>, camUp: ArrayLike<number>): void {
-    for (const b of this.batches.values()) b.count = 0;
-    let any = false;
+  /** Slot `i` has new vertex data to upload. */
+  private touch(e: Effect, i: number): void {
+    if (i < e.dirtyLo) e.dirtyLo = i;
+    if (i > e.dirtyHi) e.dirtyHi = i;
+  }
+
+  private grow(e: Effect): void {
+    const cap = e.cap * 2;
+    const birth = new Float64Array(cap);
+    const life = new Float32Array(cap);
+    const data = new Float32Array(cap * VERTS * STRIDE);
+    birth.set(e.birth);
+    life.set(e.life);
+    data.set(e.data);
+    e.birth = birth;
+    e.life = life;
+    e.data = data;
+    e.cap = cap;
+  }
+
+  /** Pull the clock, and every birth measured on it, back toward zero. A birth time reaches
+   *  the shader as a float32: at an hour it would be good to a quarter of a millisecond, at a
+   *  day to eight, and a rain streak falls 1200 units a second. */
+  private rebase(): void {
+    const by = this.clock - 16; // nothing lives 16 seconds (the longest lifespan in the table is 6)
+    this.clock -= by;
     for (const e of this.effects.values()) {
-      if (!e.particles.length) continue;
-      this.buildBatch(e, camPos, camRight, camUp);
-      any = true;
+      for (let i = 0; i < e.count; i++) {
+        const b = (e.birth[i] -= by);
+        for (let v = 0, o = i * VERTS * STRIDE + 6; v < VERTS; v++, o += STRIDE) e.data[o] = b;
+      }
+      if (e.count) {
+        e.dirtyLo = 0;
+        e.dirtyHi = e.count - 1;
+      }
     }
-    if (!any) return;
+  }
+
+  /** Draw every effect. Call after the world is rendered. */
+  render(viewProj: Float32Array | Iterable<number>, camPos: ArrayLike<number>, camRight: ArrayLike<number>, camUp: ArrayLike<number>): void {
+    let most = 0;
+    for (const e of this.effects.values()) if (e.count > most) most = e.count;
+    if (!most) return;
 
     const gl = this.gl;
     const prevProgram = gl.getParameter(gl.CURRENT_PROGRAM) as WebGLProgram | null;
@@ -355,33 +491,59 @@ export class WeatherOverlay {
     // a cliff is correctly hidden by it.
     gl.depthMask(false);
     gl.disable(gl.CULL_FACE);
+    const mine = [this.aBirth, this.aVel, this.aTime, this.aCorner];
     for (let i = 0; i < this.maxAttribs; i++) {
-      if (i !== this.aPos && i !== this.aUv && i !== this.aColor) gl.disableVertexAttribArray(i);
+      if (!mine.includes(i)) gl.disableVertexAttribArray(i);
     }
-    gl.uniformMatrix4fv(this.uViewProj, false, viewProj as Float32Array);
-    gl.uniform1i(this.uTex, 0);
-    gl.enableVertexAttribArray(this.aPos);
-    gl.enableVertexAttribArray(this.aUv);
-    gl.enableVertexAttribArray(this.aColor);
+    for (const a of mine) gl.enableVertexAttribArray(a);
+    const u = this.u;
+    gl.uniformMatrix4fv(u.uViewProj, false, viewProj as Float32Array);
+    gl.uniform1i(u.uTex, 0);
+    gl.uniform1f(u.uNow, this.clock);
+    gl.uniform3f(u.uCamPos, camPos[0], camPos[1], camPos[2]);
+    gl.uniform3f(u.uCamRight, camRight[0], camRight[1], camRight[2]);
+    gl.uniform3f(u.uCamUp, camUp[0], camUp[1], camUp[2]);
 
-    for (const [key, batch] of this.batches) {
-      if (batch.count === 0) continue;
-      const tex = this.resolveTexture(key.slice(0, key.lastIndexOf("|")));
+    // The corners: static, and long enough for the fullest effect.
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.cornerBuf);
+    if (most > this.cornerCap) {
+      let cap = Math.max(256, this.cornerCap);
+      while (cap < most) cap *= 2;
+      const corners = new Float32Array(cap * CORNERS.length);
+      for (let i = 0; i < cap; i++) corners.set(CORNERS, i * CORNERS.length);
+      gl.bufferData(gl.ARRAY_BUFFER, corners, gl.STATIC_DRAW);
+      this.cornerCap = cap;
+    }
+    gl.vertexAttribPointer(this.aCorner, 2, gl.FLOAT, false, 0, 0);
+
+    for (const e of this.effects.values()) {
+      if (!e.count) continue;
+      const def = e.def;
+      const tex = this.resolveTexture(def.texture);
       if (!tex) continue;
       // `alphaMode` picks the blend: 0 = ordinary alpha (snow — solid little flakes),
       // 1 = ADDITIVE (rain, fog, light rays, cloud), which is what makes them glow against
       // the terrain rather than smear it.
-      if (batch.additive) gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+      if (def.additive) gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
       else gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-      this.uploadBatch(batch);
+      gl.uniform1f(u.uAccel, def.accel);
+      gl.uniform1f(u.uMid, def.midTime);
+      gl.uniform3f(u.uColor0, def.colorStart[0] / 255, def.colorStart[1] / 255, def.colorStart[2] / 255);
+      gl.uniform3f(u.uColor1, def.colorMid[0] / 255, def.colorMid[1] / 255, def.colorMid[2] / 255);
+      gl.uniform3f(u.uColor2, def.colorEnd[0] / 255, def.colorEnd[1] / 255, def.colorEnd[2] / 255);
+      gl.uniform3f(u.uAlpha, def.alphaStart / 255, def.alphaMid / 255, def.alphaEnd / 255);
+      gl.uniform3f(u.uScale, def.scaleStart * this.sizeScale, def.scaleMid * this.sizeScale, def.scaleEnd * this.sizeScale);
+      gl.uniform3f(u.uFrame, def.uvStart, def.uvMid, def.uvEnd);
+      gl.uniform2f(u.uAtlas, def.texCols, def.texRows);
+      gl.uniform1f(u.uTail, def.tail ? 1 : 0);
+      gl.uniform1f(u.uTailLen, Math.abs(def.veloc) * def.taillen); // the streak's world length
+      this.upload(e);
+      const stride = STRIDE * 4;
+      gl.vertexAttribPointer(this.aBirth, 3, gl.FLOAT, false, stride, 0);
+      gl.vertexAttribPointer(this.aVel, 3, gl.FLOAT, false, stride, 12);
+      gl.vertexAttribPointer(this.aTime, 2, gl.FLOAT, false, stride, 24);
       gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.bindBuffer(gl.ARRAY_BUFFER, batch.posBuf);
-      gl.vertexAttribPointer(this.aPos, 3, gl.FLOAT, false, 0, 0);
-      gl.bindBuffer(gl.ARRAY_BUFFER, batch.uvBuf);
-      gl.vertexAttribPointer(this.aUv, 2, gl.FLOAT, false, 0, 0);
-      gl.bindBuffer(gl.ARRAY_BUFFER, batch.colorBuf);
-      gl.vertexAttribPointer(this.aColor, 4, gl.FLOAT, false, 0, 0);
-      gl.drawArrays(gl.TRIANGLES, 0, batch.count);
+      gl.drawArrays(gl.TRIANGLES, 0, e.count * VERTS);
     }
 
     gl.bindTexture(gl.TEXTURE_2D, prevTex0);
@@ -398,150 +560,20 @@ export class WeatherOverlay {
     }
   }
 
-  /** Turn one effect's live particles into two triangles each, in its texture's batch. */
-  private buildBatch(e: Effect, camPos: ArrayLike<number>, camRight: ArrayLike<number>, camUp: ArrayLike<number>): void {
-    const def = e.def;
-    const batch = this.batchFor(def);
-    this.ensureCapacity(batch, batch.count + e.particles.length * 6);
-    const { pos, uv, color } = batch;
-    const frames = def.texRows * def.texCols;
-
-    // No allocation in here: this runs for every live particle on every frame (heavy rain is
-    // 1800), and it used to make a colour triple, five corner arrays and an index list for each
-    // one — 5% of a frame, most of it the garbage. Same arithmetic, written out.
-    const cs = def.colorStart, cm = def.colorMid, ce = def.colorEnd, mid = def.midTime;
-    const tailLen = Math.abs(def.veloc) * def.taillen; // the streak's world length
-    let n = batch.count;
-    for (const p of e.particles) {
-      const t = p.age / p.life;
-      const a = this.ramp(def.alphaStart, def.alphaMid, def.alphaEnd, t, mid) / 255;
-      if (a <= 0.002) continue;
-      const scale = this.ramp(def.scaleStart, def.scaleMid, def.scaleEnd, t, mid) * this.sizeScale;
-      if (scale <= 0) continue;
-      const r = this.ramp(cs[0], cm[0], ce[0], t, mid) / 255;
-      const g = this.ramp(cs[1], cm[1], ce[1], t, mid) / 255;
-      const b = this.ramp(cs[2], cm[2], ce[2], t, mid) / 255;
-
-      // The sprite-atlas frame (`texr`×`texc`), animated over the particle's life by the
-      // hUV ramp — 1×1 for everything but the 8×8 cloud sheet, where 0→32→63 walks the sheet.
-      let u0 = 0, v0 = 0, uw = 1, vh = 1;
-      if (frames > 1) {
-        const f = Math.min(frames - 1, Math.max(0, Math.round(this.ramp(def.uvStart, def.uvMid, def.uvEnd, t, mid))));
-        uw = 1 / def.texCols;
-        vh = 1 / def.texRows;
-        u0 = (f % def.texCols) * uw;
-        v0 = Math.floor(f / def.texCols) * vh;
-      }
-
-      // Two corner axes. A HEAD particle is a camera-facing billboard; a TAIL particle is a
-      // quad stretched back along its own velocity (the rain streak), rotated about that
-      // axis to face the camera.
-      let ax: number, ay: number, az: number; // "along" (half-length)
-      let sx: number, sy: number, sz: number; // "side"  (half-width)
-      let cx = p.x, cy = p.y, cz = p.z;
-      if (def.tail) {
-        const sp = Math.hypot(p.vx, p.vy, p.vz) || 1;
-        const dx = p.vx / sp, dy = p.vy / sp, dz = p.vz / sp;
-        // The quad runs from the particle's head BACK along the velocity, so the streak
-        // trails behind the drop rather than straddling it.
-        cx -= (dx * tailLen) / 2;
-        cy -= (dy * tailLen) / 2;
-        cz -= (dz * tailLen) / 2;
-        ax = (dx * tailLen) / 2;
-        ay = (dy * tailLen) / 2;
-        az = (dz * tailLen) / 2;
-        // side = normalize(dir × view) — keeps the flat streak turned toward the camera.
-        const vx = cx - camPos[0], vy = cy - camPos[1], vz = cz - camPos[2];
-        let nx = dy * vz - dz * vy;
-        let ny = dz * vx - dx * vz;
-        let nz = dx * vy - dy * vx;
-        const nl = Math.hypot(nx, ny, nz) || 1;
-        nx /= nl; ny /= nl; nz /= nl;
-        sx = nx * scale; sy = ny * scale; sz = nz * scale;
-      } else {
-        ax = camUp[0] * scale; ay = camUp[1] * scale; az = camUp[2] * scale;
-        sx = camRight[0] * scale; sy = camRight[1] * scale; sz = camRight[2] * scale;
-      }
-
-      // corners: 0 (-s,-a)  1 (+s,-a)  2 (+s,+a)  3 (-s,+a) → triangles 0 1 2 and 0 2 3
-      const x0 = cx - sx - ax, y0 = cy - sy - ay, z0 = cz - sz - az;
-      const x1 = cx + sx - ax, y1 = cy + sy - ay, z1 = cz + sz - az;
-      const x2 = cx + sx + ax, y2 = cy + sy + ay, z2 = cz + sz + az;
-      const x3 = cx - sx + ax, y3 = cy - sy + ay, z3 = cz - sz + az;
-      const u1 = u0 + uw, v1 = v0 + vh;
-      let o3 = n * 3, o2 = n * 2;
-      pos[o3++] = x0; pos[o3++] = y0; pos[o3++] = z0; uv[o2++] = u0; uv[o2++] = v1;
-      pos[o3++] = x1; pos[o3++] = y1; pos[o3++] = z1; uv[o2++] = u1; uv[o2++] = v1;
-      pos[o3++] = x2; pos[o3++] = y2; pos[o3++] = z2; uv[o2++] = u1; uv[o2++] = v0;
-      pos[o3++] = x0; pos[o3++] = y0; pos[o3++] = z0; uv[o2++] = u0; uv[o2++] = v1;
-      pos[o3++] = x2; pos[o3++] = y2; pos[o3++] = z2; uv[o2++] = u1; uv[o2++] = v0;
-      pos[o3++] = x3; pos[o3++] = y3; pos[o3++] = z3; uv[o2++] = u0; uv[o2++] = v0;
-      for (let o4 = n * 4, end = o4 + 24; o4 < end; o4 += 4) {
-        color[o4] = r; color[o4 + 1] = g; color[o4 + 2] = b; color[o4 + 3] = a;
-      }
-      n += 6;
-    }
-    batch.count = n;
-  }
-
-  /** The SLK's three-key ramps: start → mid (at `midTime` of the life) → end. */
-  private ramp(s: number, m: number, e: number, t: number, midTime: number): number {
-    if (t <= midTime) return s + ((m - s) * (midTime > 0 ? t / midTime : 1));
-    const k = midTime < 1 ? (t - midTime) / (1 - midTime) : 1;
-    return m + (e - m) * k;
-  }
-
-  private batchFor(def: WeatherDef): Batch {
-    const key = `${def.texture}|${def.additive}`;
-    let b = this.batches.get(key);
-    if (!b) {
-      const gl = this.gl;
-      const cap = 2048 * 6;
-      b = {
-        pos: new Float32Array(cap * 3),
-        uv: new Float32Array(cap * 2),
-        color: new Float32Array(cap * 4),
-        cap,
-        count: 0,
-        posBuf: gl.createBuffer()!,
-        uvBuf: gl.createBuffer()!,
-        colorBuf: gl.createBuffer()!,
-        glCap: 0,
-        additive: def.additive,
-      };
-      this.batches.set(key, b);
-    }
-    return b;
-  }
-
-  private ensureCapacity(batch: Batch, verts: number): void {
-    if (verts <= batch.cap) return;
-    let cap = batch.cap;
-    while (cap < verts) cap *= 2;
-    const pos = new Float32Array(cap * 3);
-    const uv = new Float32Array(cap * 2);
-    const color = new Float32Array(cap * 4);
-    pos.set(batch.pos.subarray(0, batch.count * 3));
-    uv.set(batch.uv.subarray(0, batch.count * 2));
-    color.set(batch.color.subarray(0, batch.count * 4));
-    batch.pos = pos;
-    batch.uv = uv;
-    batch.color = color;
-    batch.cap = cap;
-  }
-
-  private uploadBatch(batch: Batch): void {
+  /** Bind an effect's buffer and send it the slots written since the last frame — the births
+   *  of this frame's reborn particles, a few dozen of a few thousand. */
+  private upload(e: Effect): void {
     const gl = this.gl;
-    gl.bindBuffer(gl.ARRAY_BUFFER, batch.posBuf);
-    if (batch.count > batch.glCap) gl.bufferData(gl.ARRAY_BUFFER, batch.cap * 3 * 4, gl.DYNAMIC_DRAW);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, batch.pos.subarray(0, batch.count * 3));
-    gl.bindBuffer(gl.ARRAY_BUFFER, batch.uvBuf);
-    if (batch.count > batch.glCap) gl.bufferData(gl.ARRAY_BUFFER, batch.cap * 2 * 4, gl.DYNAMIC_DRAW);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, batch.uv.subarray(0, batch.count * 2));
-    gl.bindBuffer(gl.ARRAY_BUFFER, batch.colorBuf);
-    if (batch.count > batch.glCap) gl.bufferData(gl.ARRAY_BUFFER, batch.cap * 4 * 4, gl.DYNAMIC_DRAW);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, batch.color.subarray(0, batch.count * 4));
-    if (batch.count > batch.glCap) batch.glCap = batch.cap;
+    const n = VERTS * STRIDE;
+    gl.bindBuffer(gl.ARRAY_BUFFER, e.buf);
+    if (e.glCap < e.cap) {
+      gl.bufferData(gl.ARRAY_BUFFER, e.data, gl.DYNAMIC_DRAW); // grown: the whole thing, once
+      e.glCap = e.cap;
+    } else if (e.dirtyHi >= e.dirtyLo) {
+      gl.bufferSubData(gl.ARRAY_BUFFER, e.dirtyLo * n * 4, e.data.subarray(e.dirtyLo * n, (e.dirtyHi + 1) * n));
+    }
+    e.dirtyLo = e.cap;
+    e.dirtyHi = -1;
   }
 
   private resolveTexture(path: string): WebGLTexture | null {
@@ -571,12 +603,8 @@ export class WeatherOverlay {
 
   dispose(): void {
     const gl = this.gl;
-    for (const b of this.batches.values()) {
-      gl.deleteBuffer(b.posBuf);
-      gl.deleteBuffer(b.uvBuf);
-      gl.deleteBuffer(b.colorBuf);
-    }
-    this.batches.clear();
+    for (const e of this.effects.values()) gl.deleteBuffer(e.buf);
+    gl.deleteBuffer(this.cornerBuf);
     for (const t of this.textures.values()) if (t.tex) gl.deleteTexture(t.tex);
     this.textures.clear();
     this.effects.clear();
