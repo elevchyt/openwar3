@@ -129,9 +129,10 @@ glow re-tinted; neither needs a remake.
 **Strings 1.30 added** are answered out of the older table (`FdfLibrary.laterString`): the
 Video panel's per-row rungs (`LOW_MODELS` → the build's `LOW`) and a button's accelerator
 (`KEY_START_GAME_SHORTCUT` → the highlighted letter of `KEY_START_GAME`). 1.29.2 lacks 129 of
-1.30.4's GlobalStrings keys and all but four are one of those two families; the four our code
-could meet (`DOWNLOADING_MAP`, `FAST_SCROLL`, `SLOW_SCROLL`, `COLON_REGION`) still print as
-themselves where nothing supplies a fallback.
+1.30.4's GlobalStrings keys and those two families are all but eight of them. Of the eight,
+our code names one — `DOWNLOADING_MAP`, which has a fallback at its call site; the rest
+(`COLON_REGION`, `UPDATE_REQUIRED`, `FAST_SCROLL`, `SLOW_SCROLL`, `KEY_BROWSER`, `RESERVED`,
+`TAIWAN_LEGAL`) nothing of ours asks for.
 
 **Known gaps** — seen, or listed by the survey and NOT yet looked at in the running game:
 
