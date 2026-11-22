@@ -12,6 +12,7 @@ import {
   type OptionValue,
 } from "../data/options";
 import { applyVideoOptions } from "../render/videoQuality";
+import { applyStageOptions } from "./stage";
 import { applyHealthBarOptions } from "../render/worldOverlays";
 import { applyHotkeyOptions } from "../data/hotkeys";
 import { applyScrollOptions } from "../render/scrollOptions";
@@ -130,6 +131,7 @@ export class EscOptions {
     applyHotkeyOptions(opts);
     applyScrollOptions(opts);
     applyVoiceOptions(opts);
+    applyStageOptions(opts);
   }
 
   private bindOne(screen: FdfScreen, d: OptionDef, lib: FdfLibrary | null): void {
@@ -146,6 +148,7 @@ export class EscOptions {
         applyHotkeyOptions(this.working);
         applyScrollOptions(this.working);
         applyVoiceOptions(this.working);
+        applyStageOptions(this.working);
       }
     };
     if (d.kind === "bool") {

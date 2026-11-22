@@ -189,6 +189,12 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   // here the row is a download button instead — ui/voiceOptions.ts). Live through
   // `applyVoiceOptions`.
   { key: "voiceControl", frame: "VoiceControlCheckBox", kind: "bool", panel: "gameplay", def: false },
+  // "Wide Screen": a match fills a screen wider than 16:9 (21:9, 32:9) instead of being
+  // pillarboxed — ui/stage.ts `setWideStage`. Not a WC3 row: 1.30.4 caps its frame at 16:9, and
+  // the extra width is extra map at the sides, which is why it is a choice and OFF by default.
+  // On the Gameplay panel, beside "Detect Gamepad", for that reason (and because the Video
+  // panel has no room left). Live through `applyStageOptions`.
+  { key: "wideStage", frame: "WideStageCheckBox", kind: "bool", panel: "gameplay", def: false },
 
   // --- Video (applied through render/videoQuality.ts, which documents what each rung does) ---
   // Gamma opens at 46 — the developer's pick, read off a screenshot of this panel: the thumb a

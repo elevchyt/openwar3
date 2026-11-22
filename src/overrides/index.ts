@@ -185,6 +185,8 @@ export const OPTIONS_MENU_OVERRIDE: FdfOverride = {
     { frame: "VoiceControlCheckBox", into: "GameplayPanel" },
     { frame: "VoiceControlLabel", into: "GameplayPanel" },
     { frame: "GamepadButton", into: "GameplayPanel" }, // Detect / Unpair Gamepad, issue #162
+    { frame: "WideStageCheckBox", into: "GameplayPanel" }, // "Wide Screen", after the button
+    { frame: "WideStageLabel", into: "GameplayPanel" },
     // Options → Video: "Vertical Sync" under the game's last row (Occlusion). Box before label in
     // each pair — a label anchors to the box beside it.
     { frame: "RendererLabel", into: "VideoPanel" }, // "Renderer:", above Resolution
