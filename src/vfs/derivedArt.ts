@@ -31,6 +31,19 @@ import { encodeBlp } from "../assets/blpEncode";
 // three steps — so a fourth rung left two knobs parked between notches. It is the same track
 // with the middle notch painted out and stamped again at the thirds (`fourStepTrack`).
 //
+// And three kinds are for an OLDER BUILD (docs/versions.md, issue #319) — art a later patch
+// added, that the engine asks for whatever the install is:
+//
+//   • the 24-PLAYER TEAM COLOURS. Before 1.29 there were twelve, `TeamColor12` was the black
+//     the neutral players wore, and nothing past 15 existed. A flat swatch is its colour and
+//     nothing else, so the sixteen 1.29 added are made from the colours themselves
+//     (`TEAM_COLORS`, read off 1.30.4's swatches), and each `TeamGlowNN` is the install's own
+//     `TeamGlow00` — a red glow — with its red swapped for that colour. They REPLACE such an
+//     install's 12–15, which are not the colours a thirteenth player wears today.
+//   • the WIDE CONSOLE's side panels, `<Race>UITile05`/`06` (1.29's widescreen HUD). They are
+//     more of the wall the console is built from, so they are made from the stone the older
+//     console's own first tile has (`wallFromConsole`).
+//
 // What this layer does NOT do is the last resort. An icon that can be neither found nor derived
 // is drawn as a flat fuchsia square (`MISSING_ICON_URL`) — but that is a fact about DRAWING
 // (render/mapViewer.ts `blpIcon`), not about the install, so `exists()` here stays truthful for
@@ -59,10 +72,34 @@ const TRACK_PLAIN_OFFSET = 34 / 512;
 /** Each pasted strip fades in over this many texels at its two edges, so no seam shows. */
 const TRACK_FADE = 5;
 
+/** The 1.29 player colours 13–24 and the four neutral slots, as `TeamColor12…27.blp` hold them
+ *  in 1.30.4 (every texel of a swatch is the colour; measured, not chosen). */
+export const TEAM_COLORS: Record<number, [number, number, number]> = {
+  12: [155, 0, 0], 13: [0, 0, 195], 14: [0, 234, 255], 15: [190, 0, 254], 16: [235, 205, 135], 17: [248, 164, 139],
+  18: [191, 255, 128], 19: [220, 185, 235], 20: [40, 40, 40], 21: [235, 240, 255], 22: [0, 120, 30], 23: [164, 111, 51],
+  24: [0, 0, 0], 25: [0, 0, 0], 26: [0, 0, 0], 27: [0, 0, 0],
+};
+const TEAM = "ReplaceableTextures\\Team";
+/** The swatch only a 24-colour install has — what tells the two team-colour tables apart
+ *  (src/render/teamColor.ts asks the same file the same question). */
+const TEAM_24 = `${TEAM}Color\\TeamColor24.blp`;
+
+type Source = { kind: "passive" | "same" | "track4" | "teamcolor" | "teamglow" | "wall"; from: string; n?: number };
+
 /** The source a missing icon can be derived from, or null. Keyed on the file NAME, since the
  *  data sometimes files a PASBTN under CommandButtons (and the rule is the name's). */
-function sourceOf(path: string): { kind: "passive" | "same" | "track4"; from: string } | null {
-  const name = path.replace(/\//g, "\\").split("\\").pop() ?? "";
+function sourceOf(path: string): Source | null {
+  const whole = path.replace(/\//g, "\\");
+  const name = whole.split("\\").pop() ?? "";
+  const team = /^Team(Color|Glow)(\d\d)\.blp$/i.exec(name);
+  if (team && TEAM_COLORS[Number(team[2])]) {
+    return team[1].toLowerCase() === "color"
+      ? { kind: "teamcolor", from: `${TEAM}Color\\TeamColor00.blp`, n: Number(team[2]) }
+      : { kind: "teamglow", from: `${TEAM}Glow\\TeamGlow00.blp`, n: Number(team[2]) };
+  }
+  // The skin table names these with no extension (`UI\Console\Human\HumanUITile05`).
+  const wall = /^(.*UITile0)([56])(\.blp)?$/i.exec(whole);
+  if (wall) return { kind: "wall", from: `${wall[1]}1.blp`, n: Number(wall[2]) };
   if (/^bnet-slider-bar4\.blp$/i.test(name)) return { kind: "track4", from: `${BATTLENET}bnet-slider-bar3.blp` };
   let m = /^DISPASBTN(.+)\.blp$/i.exec(name);
   if (m) return { kind: "same", from: `${DISABLED}DISBTN${m[1]}.blp` };
@@ -94,6 +131,104 @@ export function passiveFromCommand(bytes: Uint8Array): Uint8Array | null {
       out[i] = Math.round(out[i] * k);
       out[i + 1] = Math.round(out[i + 1] * k);
       out[i + 2] = Math.round(out[i + 2] * k);
+    }
+  }
+  return encodeBlp({ width: w, height: h, data: out });
+}
+
+function decode(bytes: Uint8Array): ImageData | null {
+  try {
+    const blp = new BlpImage();
+    blp.load(bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes : bytes.slice());
+    return blp.getMipmap(0);
+  } catch {
+    return null;
+  }
+}
+
+/** A flat team-colour swatch, the size the install's own are. */
+export function teamColorSwatch(like: Uint8Array, [r, g, b]: [number, number, number]): Uint8Array | null {
+  const image = decode(like);
+  if (!image) return null;
+  const out = new Uint8Array(image.width * image.height * 4);
+  for (let i = 0; i < out.length; i += 4) out.set([r, g, b, 255], i);
+  return encodeBlp({ width: image.width, height: image.height, data: out });
+}
+
+/** The install's red glow (`TeamGlow00`) in another colour: its brightness, that colour's hue. */
+export function teamGlowFrom(red: Uint8Array, [r, g, b]: [number, number, number]): Uint8Array | null {
+  const image = decode(red);
+  if (!image) return null;
+  const out = new Uint8Array(image.data);
+  for (let i = 0; i < out.length; i += 4) {
+    const k = Math.max(out[i], out[i + 1], out[i + 2]) / 255; // player 0 is pure red: its own peak
+    out[i] = Math.round(r * k);
+    out[i + 1] = Math.round(g * k);
+    out[i + 2] = Math.round(b * k);
+  }
+  return encodeBlp({ width: image.width, height: image.height, data: out });
+}
+
+/** The share of the tile the console's bottom band starts at, and its top strip ends at — the
+ *  `TexCoord`s `ConsoleUI.fdf` draws the two bands with (0.3125 … 1 and 0 … 0.125). */
+const BAND_TOP = 0.3125;
+const STRIP_BOTTOM = 0.125;
+
+/**
+ * A wide console's side panel, made from the console's own first tile (`<Race>UITile01`).
+ *
+ * A pre-1.29 console has no spare wall: its minimap and command card run to the ends of the 4:3
+ * box. What it does have is the stone the sockets are cut out of, and the widest run of columns
+ * that is SOLID stone from the band's top to the bottom of the tile (the pier between the
+ * minimap and the portrait, on all four races) is laid across the new tile, every other copy
+ * mirrored so each seam meets itself. The top strip is the tile's own first columns, laid the
+ * same way, so the rail the resource bar sits in carries on. Null when the tile has no such
+ * run — then there is no panel, which is what such an install's own game showed.
+ */
+export function wallFromConsole(tile: Uint8Array): Uint8Array | null {
+  const image = decode(tile);
+  if (!image) return null;
+  const { width: w, height: h, data } = image;
+  const from = Math.floor(h * 0.55);
+  const rows = h - from;
+  // A column of STONE: opaque all the way down, and not the black of a socket or a button.
+  const stone = (x: number): boolean => {
+    let opaque = 0, dark = 0;
+    for (let y = from; y < h; y++) {
+      const i = (y * w + x) * 4;
+      if (data[i + 3] > 200) opaque++;
+      if (data[i] + data[i + 1] + data[i + 2] < 36) dark++;
+    }
+    return opaque >= rows * 0.97 && dark < rows * 0.2;
+  };
+  let best = [0, 0];
+  for (let x = 0, start = -1; x <= w; x++) {
+    const ok = x < w && stone(x);
+    if (ok && start < 0) start = x;
+    if (!ok && start >= 0) {
+      if (x - start > best[1] - best[0]) best = [start, x];
+      start = -1;
+    }
+  }
+  // Inset: the run's first and last columns are where the stone meets a socket's bevel.
+  const a = best[0] + 2, sw = best[1] - best[0] - 4;
+  if (sw < 12) return null;
+  const mirror = (x: number, period: number): number => {
+    const k = x % (2 * period);
+    return k < period ? k : 2 * period - 1 - k;
+  };
+  const out = new Uint8Array(w * h * 4);
+  const bandTop = Math.floor(h * BAND_TOP), stripBottom = Math.ceil(h * STRIP_BOTTOM);
+  const rail = Math.min(64, w);
+  for (let y = 0; y < h; y++) {
+    if (y >= stripBottom && y < bandTop) continue;
+    for (let x = 0; x < w; x++) {
+      const sx = y < stripBottom ? mirror(x, rail) : a + mirror(x, sw);
+      const si = (y * w + sx) * 4, di = (y * w + x) * 4;
+      out[di] = data[si];
+      out[di + 1] = data[si + 1];
+      out[di + 2] = data[si + 2];
+      out[di + 3] = data[si + 3];
     }
   }
   return encodeBlp({ width: w, height: h, data: out });
@@ -183,7 +318,13 @@ export class DerivedArtDataSource implements DataSource {
     const src = sourceOf(path);
     const bytes = src ? this.base.rawBytes(src.from) : null;
     if (src && bytes) {
-      out = src.kind === "same" ? bytes : src.kind === "track4" ? fourStepTrack(bytes) : passiveFromCommand(bytes);
+      out =
+        src.kind === "same" ? bytes
+        : src.kind === "track4" ? fourStepTrack(bytes)
+        : src.kind === "teamcolor" ? teamColorSwatch(bytes, TEAM_COLORS[src.n!])
+        : src.kind === "teamglow" ? teamGlowFrom(bytes, TEAM_COLORS[src.n!])
+        : src.kind === "wall" ? wallFromConsole(bytes)
+        : passiveFromCommand(bytes);
     }
     this.derived.set(key, out);
     return out;
@@ -191,7 +332,12 @@ export class DerivedArtDataSource implements DataSource {
 
   /** The bytes this layer answers `path` with, when the base has none. */
   private own(path: string): Uint8Array | null {
-    if (!sourceOf(path) || this.base.exists(path)) return null;
+    const src = sourceOf(path);
+    if (!src) return null;
+    // A twelve-colour install's swatches 12–15 are REPLACED, not kept: its 12 is the neutral
+    // players' black, where a thirteenth player is maroon now.
+    const replaces = (src.kind === "teamcolor" || src.kind === "teamglow") && !this.base.exists(TEAM_24);
+    if (!replaces && (this.base.exists(path) || (src.kind === "wall" && !/\.blp$/i.test(path) && this.base.exists(`${path}.blp`)))) return null;
     return this.derive(path);
   }
 

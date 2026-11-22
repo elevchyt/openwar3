@@ -16,7 +16,7 @@
 // The manifest's shape is the renderer's `InstallManifest` (src/assets/remoteInstall.ts), and
 // paths in it speak WC3's `\` separator so they can be used as `InstallFiles` keys verbatim.
 
-import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
@@ -140,7 +140,7 @@ export async function writeDownloadedMap(root, name, bytes) {
   await writeFile(join(dir, name), Buffer.from(bytes));
 }
 
-/** The build OpenWar3 plays. MUST equal `REQUIRED_VERSION` in src/vfs/version.ts, which states
+/** The build every install is turned INTO (src/vfs/normalize.ts). MUST equal `REQUIRED_VERSION` in src/vfs/version.ts, which states
  *  WHY there is a version rule at all and says it to the player; this side only has to agree, so
  *  that a folder the game would refuse is never remembered in the first place. `pnpm app:test`
  *  compares the two. */
@@ -176,11 +176,23 @@ export function installVersion(root) {
  * never SAVED as the remembered one. The game checks again every launch (src/vfs/version.ts);
  * this is the same rule asked earlier, not a second one.
  *
- * A pre-1.30 (MPQ) folder has no `.build.info` at all and so cannot pass, which is correct: it is
- * older than the build we play by construction.
+ * An MPQ-era folder (every build before 1.30, and the Legacy install Battle.net ships beside
+ * Reforged) is told by its ARCHIVES: the base game and The Frozen Throne beside the exe. It may
+ * carry a `.build.info` as well — Legacy's says "1.29.2.9232-legacy-tft" — and that is not what
+ * is asked. MUST agree with `isMpqEraInstall` in src/vfs/mpqEra.ts.
  */
+export function isMpqEraFolder(root) {
+  try {
+    const have = new Set(readdirSync(root).map((n) => n.toLowerCase()));
+    return have.has("war3.mpq") && have.has("war3x.mpq");
+  } catch {
+    return false;
+  }
+}
+
 export function looksLikeInstall(root) {
   if (!root || !existsSync(root)) return false;
+  if (isMpqEraFolder(root)) return true;
   if (!existsSync(join(root, "Data"))) return false;
   const version = installVersion(root);
   const build = version?.split(".").slice(0, 3).join(".");

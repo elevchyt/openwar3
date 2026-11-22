@@ -41,6 +41,7 @@ import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { fitLine } from "./fdf/widgets";
 import { wc3ToHtml } from "./wc3Text";
 import type { ResourceKind } from "./hud";
+import { parseWar3Skins, skinValue, WAR3SKINS } from "../data/war3skins";
 
 const CONSOLE_FDF = "UI\\FrameDef\\UI\\ConsoleUI.fdf";
 const UPPER_BAR_FDF = "UI\\FrameDef\\UI\\UpperButtonBar.fdf";
@@ -482,6 +483,17 @@ export class ConsoleUi {
     }
   }
 
+  /** This skin's console tile path up to its number (`UI\\Console\\Orc\\OrcUITile0`), read off
+   *  the one tile every build names, or null when the skin names none. */
+  private sideTile(): string | null {
+    const bytes = this.vfs.rawBytes(WAR3SKINS);
+    if (!bytes) return null;
+    const skins = parseWar3Skins(new TextDecoder("windows-1252").decode(bytes));
+    const tile = skinValue(skins, this.skin, "ConsoleTexture04") ?? skinValue(skins, "Default", "ConsoleTexture04");
+    const m = tile ? /^(.*UITile0)4(\.blp)?$/i.exec(tile) : null;
+    return m ? m[1] : null;
+  }
+
   /**
    * The whole console: every `Texture` `ConsoleUI` declares — the top strip AND the bottom
    * band — plus the medallion bridge, the two bars anchored to the strip's ends, and the side
@@ -516,6 +528,37 @@ export class ConsoleUi {
       ],
       children: [],
     });
+
+    // The WIDE console's side panels, for an install from before 1.29 (docs/versions.md). 1.29
+    // drew the console for widescreen by adding a tile either side of both bands
+    // (`ConsoleTexture05`/`06`); an older `ConsoleUI.fdf` stops at the 4:3 box and the map
+    // shows past its ends. The four frames below are 1.30.4's own, to the number; the art is
+    // the race's `UITile05`/`06`, which such an install lacks and vfs/derivedArt.ts makes from
+    // its `UITile04` — named by PATH, since its war3skins.txt has no key for them either.
+    const edge = this.sideTile();
+    if (edge && !JSON.stringify(console.children).includes("ConsoleTexture05")) {
+      const side = (file: string, h: number, v0: number, v1: number, point: string, dx: number): void => {
+        children.push({
+          type: "TEXTURE",
+          name: "",
+          inherits: null,
+          withChildren: false,
+          props: [
+            prop("File", s(file)),
+            prop("Width", num(0.256)),
+            prop("Height", num(h)),
+            prop("TexCoord", num(0), num(1), num(v0), num(v1)),
+            prop("AlphaMode", s("ALPHAKEY")),
+            prop("Anchor", word(point), num(dx), num(0)),
+          ],
+          children: [],
+        });
+      };
+      side(`${edge}5`, 0.032, 0, 0.125, "TOPLEFT", -0.256);
+      side(`${edge}6`, 0.032, 0, 0.125, "TOPRIGHT", 0.256);
+      side(`${edge}5`, 0.176, 0.3125, 1, "BOTTOMLEFT", -0.256);
+      side(`${edge}6`, 0.176, 0.3125, 1, "BOTTOMRIGHT", 0.256);
+    }
 
     const bar = (name: string, point: "TOPLEFT" | "TOPRIGHT", dx: number, dy: number): void => {
       const frame = lib.resolveRoot(name);

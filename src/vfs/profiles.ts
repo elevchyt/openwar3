@@ -2,9 +2,10 @@
 // later). Profiles, not forks: RoC and TFT are the same engine over different
 // data. `archives` is listed LOWEST priority first (later entries override earlier).
 //
-// This describes the MPQ era (the MPQ era). A 1.30+ install is a CASC content store whose
-// layering is written into the paths inside its own root listing, so there is nothing for a
-// profile to declare there — see ARCHIVE_ORDER in vfs/casc.ts.
+// The archive ORDER is no longer here: an MPQ-era folder mounts every archive of
+// `MPQ_ERA_ORDER` it has (vfs/mpqEra.ts — three generations of names, one order), and a 1.30+
+// install is a CASC content store whose layering is in its own root listing (ARCHIVE_ORDER in
+// vfs/casc.ts). `archives` is what a profile cannot do WITHOUT, for the gate to report.
 
 export interface ContentProfile {
   id: "tft" | "roc";
@@ -17,13 +18,13 @@ export const PROFILES: Record<ContentProfile["id"], ContentProfile> = {
   tft: {
     id: "tft",
     name: "The Frozen Throne",
-    archives: ["war3.mpq", "war3x.mpq", "war3xlocal.mpq", "war3patch.mpq"],
+    archives: ["war3.mpq", "war3x.mpq"],
   },
   // Later (§9): a Reign of Chaos install mounts only the base + its patch.
   roc: {
     id: "roc",
     name: "Reign of Chaos",
-    archives: ["war3.mpq", "war3patch.mpq"],
+    archives: ["war3.mpq"],
   },
 };
 

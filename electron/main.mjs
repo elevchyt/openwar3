@@ -654,7 +654,7 @@ app.whenReady().then(async () => {
       ? "[OpenWar3] no install remembered — the game will ask for it"
       : !install.present
         ? `[OpenWar3] install: ${install.path} — NOT FOUND, the game will ask for it`
-        : `[OpenWar3] install: ${install.path} is ${install.version ?? "an unknown version"}, not ${REQUIRED_VERSION} — the game will ask for another`);
+        : `[OpenWar3] install: ${install.path} is ${install.version ?? "an unknown version"}, which the game cannot read — it will ask for another`);
 
   // Announce this game on the subnet and listen for others (electron/beacon.mjs). This is the
   // half of LAN play a page cannot do at all, and it is why the export is native: with it,

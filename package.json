@@ -23,6 +23,7 @@
     "data:browse": "node tools/build-data-browser.mjs --open",
     "data:verify": "node tools/verify-gameplay-constants.mjs",
     "patches:check": "tsc -p tools/tsconfig.sim.json && node tools/patch-check.cjs",
+    "versions:test": "node --max-old-space-size=8192 tools/version-normalize-test.cjs",
     "patches:art": "node tools/patch-art.mjs",
     "map:compat": "node tools/map-compat.cjs",
     "map:compat:test": "node tools/map-compat.cjs --check",

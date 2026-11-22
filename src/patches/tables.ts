@@ -156,9 +156,10 @@ function writeSlk(head: string, grid: Grid): string {
   return lines.join("\r\n") + "\r\n";
 }
 
-function patchSlk(file: string, text: string, edits: FileEdits, problems: PatchProblem[]): string {
+function patchSlk(file: string, text: string, edits: FileEdits, problems: PatchProblem[], grow = false): string {
   const { head, grid } = parseSlk(text);
-  const header = grid.get(0) ?? new Map<number, string>();
+  let header = grid.get(0);
+  if (!header) grid.set(0, (header = new Map<number, string>()));
   const columns = new Map<string, number>();
   for (const [c, raw] of header) columns.set(unquote(raw).toLowerCase(), c);
   const rowOf = new Map<string, number>();
@@ -191,9 +192,16 @@ function patchSlk(file: string, text: string, edits: FileEdits, problems: PatchP
     const cells = grid.get(r)!;
     for (const [key, value] of Object.entries(edit)) {
       if (key === "$base" || value === undefined) continue;
-      const c = columns.get(key.toLowerCase());
+      let c = columns.get(key.toLowerCase());
+      if (c === undefined && grow && value !== null) {
+        // A NORMALIZATION may name a column the older build's SLK never had (1.30 added
+        // `legacyScale` to unitUI.slk): it is appended, under the name the readers ask for.
+        c = Math.max(-1, ...header.keys()) + 1;
+        header.set(c, slkToken(key));
+        columns.set(key.toLowerCase(), c);
+      }
       if (c === undefined) {
-        problems.push({ file, row: id, message: `no column "${key}"` });
+        if (!grow) problems.push({ file, row: id, message: `no column "${key}"` });
         continue;
       }
       if (c === 0) {
@@ -307,6 +315,16 @@ function patchTxt(file: string, text: string, edits: FileEdits, problems: PatchP
   return lines.join(eol);
 }
 
+/**
+ * A table with no rows, for a normalization to fill: 1.30.4 has tables an older build never
+ * shipped (a whole data set, before 1.28). An SLK is its header row; a TXT is nothing at all.
+ */
+export function emptyTable(path: string, columns: string[]): Uint8Array {
+  if (!/\.slk$/i.test(path)) return new Uint8Array(0);
+  const cells = columns.map((c, i) => `C;X${i + 1}${i === 0 ? ";Y1" : ""};K${slkToken(c)}`);
+  return binaryToBytes(["ID;PWXL;N;E", `B;X${columns.length};Y1;D0`, ...cells, "E"].join("\r\n") + "\r\n");
+}
+
 /** Is this a table the rewrite knows how to edit? */
 export function patchableFile(path: string): boolean {
   return /\.(slk|txt)$/i.test(path);
@@ -319,11 +337,15 @@ export function patchableFile(path: string): boolean {
  * later one removes folds to a removal of something the install never had, which is the right
  * answer, not a problem. Each release on its own is still checked strictly
  * (tools/patch-check.cjs), and that the folded chain reads the same as the step-by-step one.
+ *
+ * `grow` is for a NORMALIZATION (src/vfs/normalize.ts), which turns another build's table into
+ * 1.30.4's and so may name a column that build's SLK does not have: the column is added rather
+ * than reported.
  */
-export function patchTable(path: string, bytes: Uint8Array, edits: FileEdits, problems: PatchProblem[] = [], folded = false): Uint8Array {
+export function patchTable(path: string, bytes: Uint8Array, edits: FileEdits, problems: PatchProblem[] = [], folded = false, grow = false): Uint8Array {
   const text = bytesToBinary(bytes);
   const found: PatchProblem[] = [];
-  const out = /\.slk$/i.test(path) ? patchSlk(path, text, edits, found) : patchTxt(path, text, edits, found);
+  const out = /\.slk$/i.test(path) ? patchSlk(path, text, edits, found, grow) : patchTxt(path, text, edits, found);
   problems.push(...(folded ? found.filter((p) => !p.message.startsWith("removes ")) : found));
   return binaryToBytes(out);
 }

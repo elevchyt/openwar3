@@ -4,7 +4,7 @@ import {
 } from "../assets/downloadInstall";
 import { cancelNativeDownload, downloadNativeInstall, isDesktopApp, loadNativeInstall, pickNativeInstall, rememberedInstall } from "../assets/nativeInstall";
 import { loadProfile } from "../vfs/loader";
-import { REQUIRED_VERSION, wrongVersionMessage } from "../vfs/version";
+import { RECOMMENDED_INSTALL, wrongVersionMessage } from "../vfs/version";
 import { DEFAULT_PROFILE } from "../vfs/profiles";
 import type { DataSource } from "../vfs/types";
 import { bindHotkeys, createGlueButton, createPanel, createProgressBar } from "@openwar3/ui/dom";
@@ -65,11 +65,12 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
 
   const sub = document.createElement("p");
   sub.className = "load-gate-sub";
-  // "Required", not "recommended": the version is a gate now (src/vfs/version.ts), and a screen
-  // that suggests where the game refuses is a screen that reads as broken.
+  // Any classic Warcraft III will do (issue #319): the mount brings every build's game data to
+  // the same patch (src/vfs/normalize.ts), so what is NAMED here is the one a player can still
+  // get — the Legacy install Battle.net offers to everybody who owns the game.
   sub.textContent = native
-    ? `Select your Warcraft III (The Frozen Throne ${REQUIRED_VERSION}) folder. That version is required — every player has to be on the same game data — and it is checked at every launch. You will only be asked once: the game remembers where it is. Nothing is uploaded; your install is read from your own disk.`
-    : `Select your Warcraft III (The Frozen Throne ${REQUIRED_VERSION}) folder to begin. That version is required — every player has to be on the same game data. The menu is built from the game's own files, so they're loaded first. Nothing is uploaded — your install is read locally in the browser.`;
+    ? `Select your Warcraft III folder. We recommend ${RECOMMENDED_INSTALL}; any classic install up to 1.31.1 with The Frozen Throne works, and its game data is brought to the current patch for you. You will only be asked once: the game remembers where it is. Nothing is uploaded; your install is read from your own disk.`
+    : `Select your Warcraft III folder to begin. We recommend ${RECOMMENDED_INSTALL}; any classic install up to 1.31.1 with The Frozen Throne works, and its game data is brought to the current patch for you. The menu is built from the game's own files, so they're loaded first. Nothing is uploaded — your install is read locally in the browser.`;
 
   /** What the button says when it is not busy. The desktop app changes it once — a player who
    *  is being asked a SECOND time is choosing a folder, not loading files — so a failure has to

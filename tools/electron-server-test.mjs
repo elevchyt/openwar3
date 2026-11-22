@@ -105,11 +105,11 @@ try {
       build("1.30.4.11274");
       ok("the build we play is accepted", looksLikeInstall(tmp), installVersion(tmp));
       build("1.29.2.9231");
-      ok("an older one is refused", !looksLikeInstall(tmp), installVersion(tmp));
+      ok("a store that claims an older build is refused — no such store exists", !looksLikeInstall(tmp), installVersion(tmp));
       build("1.32.10.18820");
       ok("…and a newer one too — same data, not later data", !looksLikeInstall(tmp));
       // …except the one the game turns back into 1.30.4: the Internet Archive's copy, which
-      // "Download game files" falls back on (src/vfs/downgrade.ts).
+      // "Download game files" falls back on (src/vfs/normalize.ts).
       build("1.31.1.12164");
       ok("the Internet Archive's 1.31.1 is accepted — the mount downgrades it", looksLikeInstall(tmp));
       // The build NUMBER is not part of the rule: it varies with the download and says nothing
@@ -118,6 +118,20 @@ try {
       ok("a different build number of the same version still passes", looksLikeInstall(tmp));
       rmSync(join(tmp, ".build.info"));
       ok("a folder that says nothing is refused", !looksLikeInstall(tmp));
+      // An MPQ-era install is told by its ARCHIVES (issue #319): the base game and The Frozen
+      // Throne beside the exe, whatever a `.build.info` says or does not say.
+      writeFileSync(join(tmp, "war3.mpq"), "");
+      ok("Reign of Chaos alone is refused", !looksLikeInstall(tmp));
+      writeFileSync(join(tmp, "War3x.mpq"), "");
+      ok("an MPQ-era install with The Frozen Throne is accepted", looksLikeInstall(tmp));
+      build("1.29.2.9232-legacy-tft"); // …which starts the folder afresh
+      ok("a store claiming to be Legacy, with no archives, is refused", !looksLikeInstall(tmp));
+      writeFileSync(join(tmp, "War3.mpq"), "");
+      writeFileSync(join(tmp, "War3x.mpq"), "");
+      ok("Battle.net's Legacy install — archives AND a .build.info — is accepted", looksLikeInstall(tmp));
+      rmSync(join(tmp, "War3.mpq"), { force: true });
+      rmSync(join(tmp, "War3x.mpq"), { force: true });
+      rmSync(join(tmp, ".build.info"), { force: true });
       // The installer puts the app INSIDE the game folder, so a packaged app finds the install
       // from where its own executable sits (electron/locate.mjs) — and an unpackaged one, run
       // out of node_modules, must not go looking there.

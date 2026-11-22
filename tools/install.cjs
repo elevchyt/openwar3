@@ -16,11 +16,22 @@ const { join, resolve } = require('node:path');
 const REPO = resolve(__dirname, '..');
 const BUILD = join(REPO, '.casc-build');
 
-/** Lowest priority first — later archives win (src/vfs/profiles.ts). */
-const MPQ_ARCHIVES = ['War3.mpq', 'War3x.mpq', 'War3xLocal.mpq', 'War3Patch.mpq'];
+/** Lowest priority first — later archives win. Every archive name the MPQ era used; a folder
+ *  has a subset (src/vfs/mpqEra.ts `MPQ_ERA_ORDER`, which this MUST equal). */
+const MPQ_ARCHIVES = ['Deprecated.mpq', 'War3.mpq', 'War3Local.mpq', 'War3x.mpq', 'War3xLocal.mpq', 'War3Patch.mpq'];
+
+/** The folder's own spelling of each era archive it has — installs disagree about case. */
+function eraArchives(dir) {
+  let names = [];
+  try { names = readdirSync(dir); } catch { return []; }
+  return MPQ_ARCHIVES.map((want) => names.find((n) => n.toLowerCase() === want.toLowerCase())).filter(Boolean);
+}
 
 /** True if `dir` is a CASC-era install (1.30+) rather than an MPQ one. */
 function isCascInstallDir(dir) {
+  // The archives win over a `.build.info`: the Legacy install Battle.net ships has both.
+  const era = eraArchives(dir).map((n) => n.toLowerCase());
+  if (era.includes('war3.mpq') && era.includes('war3x.mpq')) return false;
   return existsSync(join(dir, '.build.info')) && existsSync(join(dir, 'Data'));
 }
 
@@ -80,9 +91,8 @@ function openMpqInstall(dir) {
   const MpqArchive = (mpqMod.default ?? mpqMod).Archive;
   const archives = [];
   const mounted = [];
-  for (const name of MPQ_ARCHIVES) {
+  for (const name of eraArchives(dir)) {
     const file = join(dir, name);
-    if (!existsSync(file)) continue;
     const buf = readFileSync(file);
     // Node pools Buffers, so buf.buffer is shared and unaligned; the parser needs a hash table
     // aligned to 4 from offset 0. Hand it a standalone copy.

@@ -10,8 +10,9 @@
 //   node tools/patch-extract.mjs --install <folder>         a local CASC install (1.30+, any layout)
 //   node tools/patch-extract.mjs --diff <out>               …then diff it against the 1.30.4 install
 //   node tools/patch-extract.mjs --verify <out>             …and against OUR patch chain (the check)
-//   node tools/patch-extract.mjs --downgrade <out>          write src/patches/downgrade/<version>.json,
-//                                                           the edits that turn it BACK into 1.30.4
+//   node tools/patch-extract.mjs --normalize <out>          write src/patches/normalize/<version>.json,
+//                                                           the edits that turn it INTO 1.30.4, and check them
+//                                                           (an MPQ-era build is extracted by tools/version-survey.mjs)
 //
 // What comes out is `.cdn-cache/extract/<version>/`, laid out in 1.30.4's paths (`Units\…`,
 // `Custom_V1\Units\…`, `Melee_V0\…`, `Scripts\…`) whatever the build's own layout was, so the two
@@ -324,44 +325,109 @@ function printReport(report, title) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Downgrade: the edits that turn an extracted build's tables BACK into the 1.30.4 install's
-// (src/vfs/downgrade.ts). Unlike a diff for a patch this covers all four data sets and every
-// object table but the strings, and it states each cell as 1.30.4 has it — so applying it to the
-// newer tables must leave nothing for `diffTrees` to find, which is checked straight after.
+// Normalize: the edits that turn an extracted build's tables INTO the 1.30.4 install's
+// (src/vfs/normalize.ts) — back, for 1.31.1; forward, for every MPQ-era build (issue #319).
+// Unlike a diff for a patch this covers all four data sets and every object table but the
+// strings, and it states each cell as 1.30.4 has it — so applying it to the other build's tables
+// must leave nothing for a table comparison to find, which `checkNormalize` does straight after.
 
-/** The object tables a downgrade puts back: every data set, never the strings (wording is not
- *  game data, and is Blizzard's text). */
-const DOWNGRADE_ONLY = /^((custom|melee)_v[01]\\)?units\\[^\\]+\.(slk|txt)$/i;
+/** The object tables a normalization rewrites: every data set, never the strings (wording is
+ *  not game data, and is Blizzard's text). */
+const NORMALIZE_ONLY = /^((custom|melee)_v[01]\\)?units\\[^\\]+\.(slk|txt)$/i;
 
-function downgradeEdits(ours, theirs) {
+/** An SLK's header row in file order, as the file spells it. */
+function slkHeader(file) {
+  const text = new TextDecoder("windows-1252").decode(fs.readFileSync(file));
+  const cols = [];
+  let x = 0, y = 0;
+  for (const line of text.split("\n")) {
+    if (line[0] === "B" || line.startsWith("ID")) continue;
+    let k = null;
+    for (const tok of line.replace(/\r$/, "").split(";")) {
+      if (tok[0] === "X") x = parseInt(tok.slice(1), 10) - 1;
+      else if (tok[0] === "Y") y = parseInt(tok.slice(1), 10) - 1;
+      else if (tok[0] === "K") k = tok.slice(1).replace(/^"|"$/g, "");
+    }
+    if (y > 0) break;
+    if (k !== null) cols[x] = k;
+  }
+  return cols.filter((c) => c !== undefined);
+}
+
+function normalizeEdits(ours, theirs) {
   const a = listTree(ours), b = listTree(theirs);
   const files = {};
-  for (const [key, fileB] of b) {
-    if (!DOWNGRADE_ONLY.test(key) || /strings\.txt$/i.test(key)) continue;
-    const fileA = a.get(key);
-    if (!fileA) continue;
-    const ta = table(fileA), tb = table(fileB);
-    const ca = slkColumns(fileA), cb = slkColumns(fileB);
+  /** Tables the other build does not have at all: name → 1.30.4's header (an SLK) or []. */
+  const create = {};
+  for (const [key, fileA] of a) {
+    if (!NORMALIZE_ONLY.test(key) || /strings\.txt$/i.test(key)) continue;
+    const fileB = b.get(key);
+    const ta = table(fileA), tb = fileB ? table(fileB) : { map: {} };
+    const ca = slkColumns(fileA);
     const name = path.relative(ours, fileA).split(path.sep).join("\\");
+    if (!fileB) create[name] = /\.slk$/i.test(key) ? slkHeader(fileA) : [];
     const rows = {};
+    // The FIRST column is the row's key whatever it is called (1.30 renamed UnitWeapons.slk's
+    // from `unitWeapID` to `unitWeaponID`): every reader keys on its place, never on its name.
+    const idCol = ca ? slkHeader(fileA)[0].toLowerCase() : null;
     for (const id of new Set([...Object.keys(ta.map), ...Object.keys(tb.map)])) {
       const ra = ta.map[id]?.map, rb = tb.map[id]?.map;
       if (!ra) { rows[id] = null; continue; } // a row 1.30.4 never had
       const edit = {};
       for (const col of new Set([...Object.keys(ra), ...Object.keys(rb ?? {})])) {
-        // A column only the newer SLK has is LAYOUT (1.31's `stockInitial`): 1.30.4's readers
-        // never ask for it, and the rewrite cannot remove a column.
-        if (ca && cb && !ca.has(col)) continue;
+        if (col === idCol) continue;
+        // A column only the OTHER SLK has is layout (1.31's `stockInitial`): 1.30.4's readers
+        // never ask for it, and the rewrite cannot remove a column. One only 1.30.4 has
+        // (`legacyScale`, new in 1.30) is added by the rewrite (`grow`).
+        if (ca && !ca.has(col)) continue;
         const va = ra[col] ?? "", vb = rb?.[col] ?? "";
         if (rb && (va === vb || (empty(va) && empty(vb)))) continue;
-        edit[col] = empty(va) && !rb ? undefined : va === "" ? null : /^-?\d+(\.\d+)?$/.test(va) ? Number(va) : va;
+        if (/^-?[\d.]+$/.test(va) && /^-?[\d.]+$/.test(vb) && parseFloat(va) === parseFloat(vb)) continue; // "1" vs "1.0"
+        edit[col] = empty(va) && !rb ? undefined : va === "" ? null : /^-?\d+(\.\d+)?$/.test(va) && String(Number(va)) === va ? Number(va) : va;
         if (edit[col] === undefined) delete edit[col];
       }
-      if (Object.keys(edit).length) rows[id] = edit;
+      if (Object.keys(edit).length || !rb) rows[id] = edit;
     }
     if (Object.keys(rows).length) files[name] = rows;
   }
-  return files;
+  return { files, create };
+}
+
+/** Apply a normalization to the build it was made from and compare the result with 1.30.4, as
+ *  TABLES. Returns the cells that still differ — which must be none. */
+function checkNormalize(ours, theirs, norm) {
+  const BUILD = path.join(REPO, ".sim-build");
+  if (!fs.existsSync(path.join(BUILD, "src", "patches", "tables.js")) || flag("--build")) {
+    fs.mkdirSync(BUILD, { recursive: true });
+    fs.writeFileSync(path.join(BUILD, "package.json"), '{"type":"commonjs"}');
+    execFileSync("npx", ["tsc", "-p", "tools/tsconfig.sim.json"], { cwd: REPO, stdio: "inherit" });
+  }
+  const { patchTable, emptyTable } = require(path.join(BUILD, "src", "patches", "tables.js"));
+  const a = listTree(ours), b = listTree(theirs);
+  const left = [];
+  const problems = [];
+  for (const [key, fileA] of a) {
+    if (!NORMALIZE_ONLY.test(key) || /strings\.txt$/i.test(key)) continue;
+    const name = path.relative(ours, fileA).split(path.sep).join("\\");
+    const fileB = b.get(key);
+    let bytes = fileB ? new Uint8Array(fs.readFileSync(fileB)) : emptyTable(name, norm.create[name] ?? []);
+    if (norm.files[name]) bytes = patchTable(name, bytes, norm.files[name], problems, false, true);
+    const ta = table(fileA), tb = new MappedData(new TextDecoder("windows-1252").decode(bytes));
+    const ca = slkColumns(fileA);
+    if (ca) ca.delete(slkHeader(fileA)[0].toLowerCase()); // the row's key, by place
+    for (const id of new Set([...Object.keys(ta.map), ...Object.keys(tb.map)])) {
+      const ra = ta.map[id]?.map, rb = tb.map[id]?.map;
+      if (!ra || !rb) { left.push(`${name} [${id}] ${ra ? "missing" : "extra"}`); continue; }
+      for (const col of new Set([...Object.keys(ra), ...Object.keys(rb)])) {
+        if (ca && !ca.has(col)) continue;
+        const va = ra[col] ?? "", vb = rb[col] ?? "";
+        if (va === vb || (empty(va) && empty(vb))) continue;
+        if (/^-?[\d.]+$/.test(va) && /^-?[\d.]+$/.test(vb) && parseFloat(va) === parseFloat(vb)) continue;
+        left.push(`${name} [${id}] ${col}: ${JSON.stringify(vb)} should be ${JSON.stringify(va)}`);
+      }
+    }
+  }
+  return { left, problems };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -399,17 +465,26 @@ if (verifyDir) {
   fs.rmSync(chain, { recursive: true, force: true });
   fs.rmSync(merged, { recursive: true, force: true });
 }
-const downgradeArg = opt("--downgrade")?.[0];
-const downgradeDir = downgradeArg && !downgradeArg.startsWith("--") ? downgradeArg : flag("--downgrade") ? out : null;
-if (downgradeDir) {
-  const version = path.basename(downgradeDir).split(".").slice(0, 3).join(".");
-  const files = downgradeEdits(INSTALL, downgradeDir);
-  const file = path.join(REPO, "src", "patches", "downgrade", `${version}.json`);
+const normFlag = flag("--normalize") ? "--normalize" : "--downgrade"; // the flag's first name
+const normArg = opt(normFlag)?.[0];
+const normDir = normArg && !normArg.startsWith("--") ? normArg : flag(normFlag) ? out : null;
+if (normDir) {
+  const label = path.basename(normDir);
+  const version = /^\d+\.\d+\.\d+\.\d+/.test(label) ? label.split(".").slice(0, 3).join(".") : label;
+  const norm = normalizeEdits(INSTALL, normDir);
+  const file = path.join(REPO, "src", "patches", "normalize", `${version}.json`);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify({ from: version, to: "1.30.4", files }, null, 2) + "\n");
-  const cells = Object.values(files).reduce((n, rows) => n + Object.values(rows).reduce((m, r) => m + (r ? Object.keys(r).length : 1), 0), 0);
-  console.log(`wrote ${path.relative(REPO, file)}: ${Object.keys(files).length} files, ${cells} cells`);
+  // One row per line: a reviewable diff, and a third of the size of an indented dump.
+  const body = Object.entries(norm.files).map(([f, rows]) => `    ${JSON.stringify(f)}: {\n${Object.entries(rows).map(([id, r]) => `      ${JSON.stringify(id)}: ${JSON.stringify(r)}`).join(",\n")}\n    }`).join(",\n");
+  fs.writeFileSync(file, `{\n  "from": ${JSON.stringify(version)},\n  "to": "1.30.4",\n  "create": ${JSON.stringify(norm.create)},\n  "files": {\n${body}\n  }\n}\n`);
+  const cells = Object.values(norm.files).reduce((n, rows) => n + Object.values(rows).reduce((m, r) => m + (r ? Object.keys(r).length : 1), 0), 0);
+  console.log(`wrote ${path.relative(REPO, file)}: ${Object.keys(norm.files).length} files, ${cells} cells, ${Object.keys(norm.create).length} tables made from nothing`);
+  const { left, problems } = checkNormalize(INSTALL, normDir, JSON.parse(fs.readFileSync(file, "utf8")));
+  for (const p of problems.slice(0, 20)) console.log(`  problem  ${p.file} [${p.row}] ${p.message}`);
+  for (const l of left.slice(0, 40)) console.log(`  LEFT  ${l}`);
+  console.log(`${left.length ? " FAIL " : "  ok  "} applied to ${label}, ${left.length} cells differ from 1.30.4 (${problems.length} problems)`);
+  if (left.length) process.exitCode = 1;
 }
-if (!out && !diffDir && !verifyDir && !downgradeDir) {
+if (!out && !diffDir && !verifyDir && !normDir) {
   console.log("usage: --cdn [--ptr] [<build> <cdn>] | --install <folder>, then --diff / --verify (see the header)");
 }

@@ -75,7 +75,7 @@ export interface ReplayHeader {
    */
   fingerprint?: string;
   /** Which game files the match read: `casc-1.30.4.11274`, `casc-1.31.1.12164-downgraded` (a
-   *  1.31 store put back to 1.30.4's values, src/vfs/downgrade.ts), or `mpq` for an MPQ-era
+   *  1.31 store put back to 1.30.4's values, src/vfs/normalize.ts), or `mpq-<build>-normalized` for an MPQ-era
    *  folder. The same map on different data is a different match. */
   install?: string;
   /** When it was recorded (ISO). */

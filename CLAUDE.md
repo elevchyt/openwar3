@@ -21,11 +21,27 @@ data, or asset behaviour, **consult our sources** and cite what you used.
    - **[`docs/casc.md`](docs/casc.md)** — read this before touching `src/vfs/`, the install picker, or the extractor.
      1.30.4 is a **CASC** content store, not MPQs: nothing in it is addressed by name, a campaign map is no longer a
      file, and six `common.j`/`Blizzard.j` constants became natives the engine has to answer.
+   - **Every classic build is accepted and NORMALIZED** (read [`docs/versions.md`](docs/versions.md)
+     before touching `src/vfs/mpqEra.ts`, `src/vfs/normalize.ts`, `src/vfs/version.ts` or
+     `src/patches/normalize/`). 1.30.4 is still the build the engine is WRITTEN against and the
+     one `Warcraft III/` holds, but it is no longer required: an MPQ-era install (1.21a … 1.29.2)
+     has its object tables turned INTO 1.30.4's at the mount and the patch chain laid over
+     those, so every player reads one set of numbers. We RECOMMEND Warcraft III 1.29 — the
+     "Warcraft III (Legacy)" install Battle.net ships beside Reforged. A build's edits are MADE
+     and PROVED by `tools/version-survey.mjs` + `tools/patch-extract.mjs --normalize` (zero
+     cells of difference, or it fails) — never hand-written; `pnpm versions:test` re-proves it
+     through the engine's own mount. Reforged is the REFERENCE the chain's end is checked
+     against (`patch-extract.mjs --install <Reforged> --verify`), never mounted. Three traps: an
+     MPQ's listfile is a courtesy (1.21a's `War3Patch.mpq` overrides `Units\AbilityData.slk`
+     without listing it), the archives win over a `.build.info` (Legacy has both), and a data
+     set a build files only partly STARTS as its live table. Art a later patch added is
+     DERIVED from the install's own (the 24-player team colours, the wide console's side
+     panels — `src/vfs/derivedArt.ts`), never shipped.
    - **1.31.1 is accepted and DOWNGRADED** (docs/casc.md "1.31.1"): "Download game files" tries
      the Drive zip of a 1.30.4 install first and falls back on the Internet Archive's 1.31.1 store
      (fetched member by member out of its RAR). Its `War3.w3mod` tree is renamed back to 1.30's
      archive names as the root is read (`legacyRootName`), and its object tables are put back to
-     1.30.4's values under the patch chain (`src/vfs/downgrade.ts`); wording, art and scripts
+     1.30.4's values under the patch chain (`src/vfs/normalize.ts`); wording, art and scripts
      stay 1.31's, since restoring them would mean shipping Blizzard's bytes.
    - **Archive split** (`ARCHIVE_ORDER` in `src/vfs/casc.ts`, later wins): `Deprecated.mpq` = art old custom maps
      still reference; `War3.mpq` = everything shared; `<locale>-War3Local.mpq` = localized text, unit voices and the

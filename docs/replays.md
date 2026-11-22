@@ -103,7 +103,7 @@ format. Measured, two Insane Computer+ players on Echo Isles for ten minutes: 18
 build — `STAT` 138 KB, `EVTS` 21 KB (2 065 inputs), `DUMP` 25 KB, the rest under 2 KB.
 
 The header holds the OpenWar3 version, its commit and its SIM FINGERPRINT (below), which game
-files were mounted (`casc-1.30.4…`, `…-downgraded`, `mpq`), the map (its install path, name and a hash of its bytes —
+files were mounted (`casc-1.30.4…`, `…-downgraded`, `mpq-1.29.2-normalized`), the map (its install path, name and a hash of its bytes —
 the same name is not the same map), the lobby's config RESOLVED (the seed it rolled with, every
 Random race already rolled), every seat as `human` or `computer` (and which AI, at what
 difficulty), whom the recorder was (`GetLocalPlayer` answers with it on playback), the edition and

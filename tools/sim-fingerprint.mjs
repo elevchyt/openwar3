@@ -9,7 +9,7 @@
 // own bundle (electron/replayBundles.mjs).
 //
 // WHAT IS IN IT is deliberately wide. The issue names `src/sim`, `src/data`, `src/jass`,
-// `src/patches`, the downgrade and the authority; but the controller (`src/game/rts.ts`) spawns
+// `src/patches`, the normalization and the authority; but the controller (`src/game/rts.ts`) spawns
 // units and seats players, the scene (`src/render/mapViewer.ts`) pumps the map script and orders
 // the step, a map's own AI script and the creep caster run on playback (`src/ai`), and the map
 // parsers decide what the world is built from (`src/compat`, `src/world`, `src/vfs`). A hash

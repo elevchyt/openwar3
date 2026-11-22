@@ -230,13 +230,13 @@ The two map rows are the only ones that are not renames: 1.31 keeps a map as ONE
 store where 1.30.4's installer copied them out — so the store answers for a `Maps\` folder the
 downloaded folder does not have. Map blobs are streamed, never preloaded.
 
-**The game data.** `src/patches/downgrade/1.31.1.json` states the 1.30.4 value of every cell
+**The game data.** `src/patches/normalize/1.31.1.json` states the 1.30.4 value of every cell
 1.31.0 and 1.31.1 changed in every object table of all four data sets (105 tables, 6553 cells —
 most of them icon paths, which 1.31 respelled `.tga` over the same `.blp` files), and
-`src/vfs/downgrade.ts` lays it UNDER the patches, so the chain lands on 1.30.4's tables exactly
+`src/vfs/normalize.ts` lays it UNDER the patches, so the chain lands on 1.30.4's tables exactly
 as it does on a 1.30.4 install. It is made, and checked, by the extraction tool:
 
-    node tools/patch-extract.mjs --install <1.31.1 folder> --downgrade
+    node tools/patch-extract.mjs --install <1.31.1 folder> --normalize
 
 Applied to the 1.31.1 tables it leaves ONE cell of difference against 1.30.4: a duplicated
 `sppb` row in `Custom_V0\Units\UpgradeEffectMetaData.slk`, World Editor metadata nothing reads.

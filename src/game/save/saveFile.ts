@@ -46,7 +46,7 @@ export interface SaveHeader {
   fingerprint?: string;
   /** The Warcraft III game files: always 1.30.4 (`SAVE_GAME_VERSION`)… */
   gameVersion: string;
-  /** …and how they were mounted (`casc-1.30.4`, `…-downgraded`, `mpq`). */
+  /** …and how they were mounted (`casc-1.30.4`, `…-downgraded`, `mpq-1.29.2-normalized`). */
   install?: string;
   /** When, wall-clock ISO, and how far into the match (game seconds). */
   savedAt: string;

@@ -1,5 +1,6 @@
 import type { PickedInstall, InstallFiles } from "./opfs";
 import type { DownloadProgress, GameFilesSource } from "./downloadInstall";
+import { isMpqEraInstall, MPQ_ERA_ORDER } from "../vfs/mpqEra";
 import {
   fetchCasc, fetchInstallAnsi, fetchInstallFile, lazyMapFile,
   type FileUrl, type InstallManifest,
@@ -231,10 +232,13 @@ export async function loadNativeInstall(): Promise<PickedInstall> {
   for (const path of manifest.maps) files.set(path, lazyMapFile(fileUrl, path));
 
   // Only an MPQ-era folder needs its archives: a CASC mount reads the content store instead,
-  // and `loadProfile` never asks `files` for one (src/vfs/loader.ts).
-  if (!manifest.casc) {
+  // and `loadProfile` never asks `files` for one (src/vfs/loader.ts). It is told by the archives
+  // themselves — the Legacy install has a `.build.info` and a `Data\` as well, and they are the
+  // launcher's (src/vfs/mpqEra.ts).
+  const mpqEra = isMpqEraInstall(manifest.archives);
+  if (mpqEra) {
     for (const name of manifest.archives) {
-      files.set(name.toLowerCase(), await fetchInstallFile(fileUrl, name));
+      if ((MPQ_ERA_ORDER as readonly string[]).includes(name.toLowerCase())) files.set(name.toLowerCase(), await fetchInstallFile(fileUrl, name));
     }
   }
 
@@ -249,5 +253,5 @@ export async function loadNativeInstall(): Promise<PickedInstall> {
   // …and so does a map a LAN game hands us (assets/downloadedMaps.ts), for the same reason.
   const saveMap = native?.saveMap ? (name: string, bytes: Uint8Array) => native.saveMap!(name, bytes) : undefined;
 
-  return { files, casc: manifest.casc ? await fetchCasc(fileUrl, manifest.casc) : null, customKeys, saveCustomKeys, saveMap };
+  return { files, casc: manifest.casc && !mpqEra ? await fetchCasc(fileUrl, manifest.casc) : null, customKeys, saveCustomKeys, saveMap };
 }

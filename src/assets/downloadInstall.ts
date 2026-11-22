@@ -17,7 +17,7 @@ import { readInstallDir, type DirHandle, type PickedInstall } from "./opfs";
 //      the only source that works. We take only the CASC store out of it: `.build.info`, the
 //      two configs, the LIVE `.idx` of each of the sixteen buckets and the two `data.NNN`. The
 //      build is **1.31.1**, not the 1.30.4 we play; the mount turns it back into 1.30.4
-//      (src/vfs/downgrade.ts, docs/casc.md).
+//      (src/vfs/normalize.ts, docs/casc.md).
 //
 // A source that fails for any reason but Cancel hands over to the next one; the player sees
 // one bar and, at worst, a line saying the mirror was used.

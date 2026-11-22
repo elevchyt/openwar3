@@ -5,6 +5,7 @@ import { decodeReplay, type Replay } from "../game/replay";
 import { replaySink } from "../game/replaySink";
 import { toGameSpeed } from "../data/gameSpeed";
 import { DEFAULT_PROFILE } from "../vfs/profiles";
+import { isMpqEraInstall, MPQ_ERA_ORDER } from "../vfs/mpqEra";
 import type { InstallFiles } from "../assets/opfs";
 import {
   fetchCasc, fetchInstallAnsi, fetchInstallFile, type FileUrl, type InstallManifest,
@@ -237,8 +238,12 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   // install's Maps\ folder holds hundreds and fetching them all would add minutes to a boot
   // that already costs 2–4 under swiftshader. A 1.30.4 install has no archives at all — its
   // content store is mounted instead, and the maps beside it are still ordinary files.
-  const wanted = DEFAULT_PROFILE.archives;
-  const archives = manifest.casc ? [] : manifest.archives.filter((a) => wanted.includes(a.toLowerCase()));
+  // An MPQ-era folder is told by its archives and NOT by the absence of a store: the Legacy
+  // install Battle.net ships has both (src/vfs/mpqEra.ts).
+  const mpqEra = isMpqEraInstall(manifest.archives);
+  if (mpqEra) manifest.casc = null;
+  const wanted: readonly string[] = MPQ_ERA_ORDER;
+  const archives = mpqEra ? manifest.archives.filter((a) => wanted.includes(a.toLowerCase())) : [];
   let mapPath = wantMap
     ? manifest.maps.find((m) => m.toLowerCase().includes(wantMap.toLowerCase()))
     : undefined;

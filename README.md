@@ -4,7 +4,10 @@
 <img src="public/demoscreens/game1.avif" width="800">
 
 A recreation of the **Warcraft III** engine in TypeScript. Ships **zero Blizzard assets** — it reads
-your own install at runtime. **The Frozen Throne 1.30.4 is required.**
+your own install at runtime. Any classic Warcraft III with The Frozen Throne works, from 1.21 to
+1.31.1; we recommend **Warcraft III 1.29**, the "Warcraft III (Legacy)" install Battle.net offers
+beside Reforged. Whatever the build, the game data is brought to the current balance patch
+([how](docs/versions.md)).
 
 ## Features
 

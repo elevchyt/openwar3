@@ -16,7 +16,7 @@ reader sees the patched game. The ledger of releases, with sources, is
 | `index.ts` | the chain: order, the patch level, `patchAtLeast`, the Forsaken Paladin denylist |
 | `tables.ts` | the SLK/TXT rewrite |
 | `art/*.png` | our own icons for objects the patches added; `node tools/patch-art.mjs` → `art.ts` |
-| `downgrade/<version>.json` | NOT a patch: the 1.30.4 values that turn a NEWER store back into 1.30.4 (the Internet Archive's 1.31.1, which "Download game files" falls back on). Applied under the chain by `src/vfs/downgrade.ts`, all four data sets; made and checked by `node tools/patch-extract.mjs --install <folder> --downgrade` (docs/casc.md, "1.31.1") |
+| `normalize/<build>.json` | NOT a patch: the 1.30.4 values that turn ANOTHER build's tables into 1.30.4's — forward for an MPQ-era install (1.21a … 1.29.2), back for the Internet Archive's 1.31.1. Applied under the chain by `src/vfs/normalize.ts`, all four data sets; made and checked by `node tools/patch-extract.mjs --normalize <extract>` (docs/versions.md) |
 
 ## Rules
 
