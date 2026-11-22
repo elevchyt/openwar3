@@ -120,14 +120,14 @@ textures that build has (checked on 1.21a and 1.29.2 — 3 234 models, 8 089 ref
 
 | file | size | builds that lack it | today |
 | --- | --- | --- | --- |
-| `UI\Console\<Race>\<Race>UITile05.blp`, `…06.blp` × 4 races | 512×512 | ≤ 1.28.5 | derived stone (`wallFromConsole`) — nothing like the real framed panel on the orc, undead and night elf consoles |
-| `UI\Widgets\Glues\GlueScreen-ROC-EditionButton-{up,down,disabled}.blp`, `…-TFT-…` | 64×64 (down 32×32) | ≤ 1.27b | nothing; and such a build's `MainMenu.fdf` has no `EditionButton` frame to wear them |
+| `UI\Console\<Race>\<Race>UITile05.blp`, `…06.blp` × 4 races | 512×512 | ≤ 1.28.5 | our remake (src/fallback/), drawn per race and fitted to the console tile it meets; the derived stone (`wallFromConsole`) is only reached if a remake is removed |
+| `UI\Widgets\Glues\GlueScreen-ROC-EditionButton-{up,down,disabled}.blp`, `…-TFT-…` | 64×64 (down 32×32) | ≤ 1.27b | our remake, on a frame of our own (src/overrides/ui/EditionButton.fdf) adopted into a `MainMenu.fdf` that has none — 1.28's own layout. On 1.21a it switches to Reign of Chaos, glue screen and all |
 
 **Where a remake goes:** `src/fallback/art/`, as a PNG at the game's own path
 ([`src/fallback/README.md`](../src/fallback/README.md)). `node tools/patch-art.mjs` turns it
 into a BLP and `FallbackArtDataSource` (src/vfs/fallbackArt.ts) serves it to any install with no
 file there — under the layer that derives, so a drawn panel retires the derived one by itself.
-The folder is empty today. An edition button will also want its frame added for 1.21a.
+All fourteen are in it now (`pnpm fallback:draw` remakes them).
 
 `TeamColor16…27` are exact (a swatch is its colour) and `TeamGlow16…27` are the install's own
 glow re-tinted; neither needs a remake.
@@ -140,12 +140,18 @@ our code names one — `DOWNLOADING_MAP`, which has a fallback at its call site;
 (`COLON_REGION`, `UPDATE_REQUIRED`, `FAST_SCROLL`, `SLOW_SCROLL`, `KEY_BROWSER`, `RESERVED`,
 `TAIWAN_LEGAL`) nothing of ours asks for.
 
+**Art the updated TABLES name.** Normalizing writes 1.30.4's model and art paths into an older
+build's tables, so they were checked against each build: 30 paths on 1.21a and on 1.29.2 resolve
+to no file, and every one of them resolves to no file on 1.30.4 either — a tree stored as its
+numbered variants (`AshenTree0.mdx`), or a reference the game itself never shipped
+(`RifleTankMissile`, `NatureTouchTarget`, `SpawnData.slk`'s `NightElfBloodHeroMoonPriestess`).
+Normalizing adds nothing missing.
+
 **Known gaps** — seen, or listed by the survey and NOT yet looked at in the running game:
 
 - `UI\FrameDef\UI\ObserverPanel.fdf` is new in 1.30: NO older build has it, Legacy included.
   The observer HUD reads its checkbox and pulldown from it; not yet driven on an old build.
-- 1.21a has no `Glue\Dialog.fdf` / `Glue\ListBox.fdf` (1.28.5 not checked), and its main menu
-  has no edition switch, so Reign of Chaos cannot be reached from the menu there.
+- 1.21a has no `Glue\Dialog.fdf` / `Glue\ListBox.fdf` (1.28.5 not checked).
 - Only the main menu, Options → Video and a melee match were driven on 1.29.2, and the menu and
   a match on 1.21a. No campaign, LAN game, observer HUD or other screen on an old build.
 - An MPQ mount reads every archive whole — about 1.1 GB of files for 1.29.2 — where a CASC mount

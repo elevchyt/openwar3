@@ -1,0 +1,47 @@
+// OpenWar3 override — the main menu's edition switch, for a Warcraft III older than 1.28
+// (docs/versions.md, issue #319).
+//
+// 1.28 put Reign of Chaos and The Frozen Throne into one executable and gave the main menu a
+// square button beside Single Player to switch between them. An older install's MainMenu.fdf
+// has no such frame, so OpenWar3's own switch had nothing to live in. This is that frame, in
+// the game's own terms: a 0.031 square on the install's StandardIconicButtonTemplate, inset
+// from the Single Player backdrop as the Single Player button was. src/ui/fdfMainMenu.ts adopts
+// it into `SinglePlayerBackdrop` and narrows the Single Player button beside it — ONLY when the
+// install declares no `EditionButton` of its own.
+//
+// The art it names comes with the install from 1.28 on; for anything older it is OpenWar3's
+// own (src/fallback/art/UI/Widgets/Glues/), served by src/vfs/fallbackArt.ts.
+
+Frame "GLUEBUTTON" "EditionButton" INHERITS WITHCHILDREN "StandardIconicButtonTemplate" {
+    SetPoint TOPRIGHT, "SinglePlayerBackdrop", TOPRIGHT, -0.012, -0.0165,
+
+    ControlBackdrop "EditionButtonBackdropTemplate",
+    Frame "BACKDROP" "EditionButtonBackdropTemplate" {
+        BackdropBackground  "UI\Widgets\Glues\GlueScreen-ROC-EditionButton-up.blp",
+        BackdropCornerFlags "UL|UR|BL|BR|T|L|B|R",
+        BackdropCornerSize  0.0155,
+        BackdropBackgroundSize  0.031,
+        BackdropBackgroundInsets 0.004 0.004 0.004 0.004,
+        BackdropEdgeFile  "UI\Widgets\Glues\GlueScreen-Button2-BackdropBorder.blp",
+    }
+
+    ControlPushedBackdrop "EditionButtonPushedBackdropTemplate",
+    Frame "BACKDROP" "EditionButtonPushedBackdropTemplate" {
+        BackdropBackground  "UI\Widgets\Glues\GlueScreen-ROC-EditionButton-down.blp",
+        BackdropCornerFlags "UL|UR|BL|BR|T|L|B|R",
+        BackdropCornerSize  0.0155,
+        BackdropBackgroundSize  0.031,
+        BackdropBackgroundInsets 0.004 0.004 0.004 0.004,
+        BackdropEdgeFile  "UI\Widgets\Glues\GlueScreen-Button2-BackdropBorder-Down.blp",
+    }
+
+    ControlDisabledBackdrop "EditionButtonDisabledBackdropTemplate",
+    Frame "BACKDROP" "EditionButtonDisabledBackdropTemplate" {
+        BackdropBackground  "UI\Widgets\Glues\GlueScreen-ROC-EditionButton-disabled.blp",
+        BackdropCornerFlags "UL|UR|BL|BR|T|L|B|R",
+        BackdropCornerSize  0.0155,
+        BackdropBackgroundSize  0.031,
+        BackdropBackgroundInsets 0.004 0.004 0.004 0.004,
+        BackdropEdgeFile  "UI\Widgets\Glues\GlueScreen-Button2-BackdropBorder-Disabled.blp",
+    }
+}

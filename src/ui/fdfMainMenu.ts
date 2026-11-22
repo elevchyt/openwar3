@@ -5,6 +5,7 @@ import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { arg, findFrame, num, setProp, str } from "./mapBrowser";
 import { isRoc } from "../data/edition";
 import { setGameTip } from "./gameTip";
+import editionButtonFdf from "../overrides/ui/EditionButton.fdf?raw";
 
 // The main menu, constructed from the game's own UI\FrameDef\Glue\MainMenu.fdf
 // (issue #54) rather than hand-authored DOM. This is the payoff of the FDF engine:
@@ -144,6 +145,7 @@ function buildMainMenuRoot(lib: FdfLibrary): FdfFrame {
   const root = lib.resolveRoot("MainMenuFrame");
   if (!root) throw new Error("MainMenu.fdf: no MainMenuFrame frame");
 
+  addEditionButton(lib, root);
   wearOtherEdition(root);
 
   // "Local Area Network" is "Multiplayer": the relay-backed game list (docs/multiplayer.md)
@@ -171,6 +173,26 @@ function buildMainMenuRoot(lib: FdfLibrary): FdfFrame {
     root.children.push(line);
   }
   return root;
+}
+
+/**
+ * The edition switch, for an install whose MainMenu.fdf predates it (anything before 1.28 —
+ * docs/versions.md). Our own declaration of the frame (src/overrides/ui/EditionButton.fdf) is
+ * hung in the Single Player backdrop, and the Single Player button is narrowed and anchored to
+ * its left: 1.28's own layout, `Width 0.149` and `SetPoint TOPRIGHT, "EditionButton", TOPLEFT,
+ * 0.001, 0.0`. An install that declares the button keeps its own and this does nothing.
+ */
+function addEditionButton(lib: FdfLibrary, root: FdfFrame): void {
+  if (findFrame(root, "EditionButton")) return;
+  const backdrop = findFrame(root, "SinglePlayerBackdrop");
+  const single = findFrame(root, "SinglePlayerButton");
+  if (!backdrop || !single) return;
+  lib.loadOverride("edition-button", editionButtonFdf);
+  const button = lib.resolveRoot("EditionButton");
+  if (!button) return;
+  backdrop.children.unshift(button);
+  setProp(single, "Width", [num(0.149)]);
+  setProp(single, "SetPoint", [arg("TOPRIGHT"), str("EditionButton"), arg("TOPLEFT"), num(0.001), num(0)]);
 }
 
 /**

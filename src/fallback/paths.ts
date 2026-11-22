@@ -2,4 +2,18 @@
 // and always loaded: it is what decides whether an install needs the art itself (art.ts).
 
 export const FALLBACK_ART_PATHS: readonly string[] = [
+  "UI\\Console\\Human\\HumanUITile05.blp",
+  "UI\\Console\\Human\\HumanUITile06.blp",
+  "UI\\Console\\NightElf\\NightElfUITile05.blp",
+  "UI\\Console\\NightElf\\NightElfUITile06.blp",
+  "UI\\Console\\Orc\\OrcUITile05.blp",
+  "UI\\Console\\Orc\\OrcUITile06.blp",
+  "UI\\Console\\Undead\\UndeadUITile05.blp",
+  "UI\\Console\\Undead\\UndeadUITile06.blp",
+  "UI\\Widgets\\Glues\\GlueScreen-ROC-EditionButton-disabled.blp",
+  "UI\\Widgets\\Glues\\GlueScreen-ROC-EditionButton-down.blp",
+  "UI\\Widgets\\Glues\\GlueScreen-ROC-EditionButton-up.blp",
+  "UI\\Widgets\\Glues\\GlueScreen-TFT-EditionButton-disabled.blp",
+  "UI\\Widgets\\Glues\\GlueScreen-TFT-EditionButton-down.blp",
+  "UI\\Widgets\\Glues\\GlueScreen-TFT-EditionButton-up.blp",
 ];
