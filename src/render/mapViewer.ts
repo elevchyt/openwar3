@@ -17636,6 +17636,7 @@ export class MapViewerScene {
       // …and scaled by the Game Speed, so a clip plays at the rate the sim under it walks.
       const wdt = this.paused ? 0 : dt * this.speedRate;
       this.updateCamera(dt);
+      this.rts?.reprojectBars(); // the bars follow THIS camera, not the one the step saw
       this.metrics.frame(dt, this.rts?.unitCount() ?? 0, this.rts?.pingMs());
       this.hud?.frame(dt);
       this.updateClock(wdt);
