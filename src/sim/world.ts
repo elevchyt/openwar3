@@ -12162,9 +12162,10 @@ export class SimWorld {
     // the ground under the target, so the unit walked off after something it can never hit.
     // WC3 refuses the click with the target kind's own line instead — `Units\CommandStrings.txt`
     // [Errors] `Noair` "Unable to target air units." / `Noground` "Unable to target ground
-    // units." / `Nostructure` … — and keeps the reticle up. Only the named attack hears it,
-    // for the same reason as the two above: a right-click is a smart order.
-    if (commanded && u.weapon && !this.canAttack(u, t)) {
+    // units." / `Nostructure` … — and keeps the reticle up. Unlike the two above, a RIGHT-CLICK
+    // on such an enemy hears it too (the developer's call, 2026-11-22): a smart click on a
+    // hostile body means "attack it", and walking at a flyer you cannot hit is not an answer.
+    if (u.weapon && !this.canAttack(u, t)) {
       const kind = this.attackKindBar(u, t);
       if (kind) return kind;
     }

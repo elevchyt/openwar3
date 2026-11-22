@@ -141,8 +141,8 @@ const armed = (targets) => {
   return unit({ owner: 0, team: 0, abilities: [], baseSpeed: 270, uprooted: false, weapon, weapons: [weapon] });
 };
 const swinger = armed(["ground", "air", "structure"]);
-// A unit with no weapon for the target's KIND: the Attack command is refused with that kind's
-// own line rather than turned into an attack-move onto the ground under the target.
+// A unit with no weapon for the target's KIND: the Attack command (and a right-click) is refused
+// with that kind's own line rather than turned into a walk at the ground under the target.
 // `[hfoo] targs1 = ground,structure,debris,item,ward` (the Footman, no `air`) and the Flying
 // Machine before Gyrocopter Bombs (`air` alone).
 const footman = armed(["ground", "structure", "debris", "item", "ward"]);
@@ -152,7 +152,7 @@ const ATTACK_CASES = [
   [swinger, invuFoe, false, null, "a right-click on the same one says nothing"],
   [swinger, enemyGround, true, null, "and a vulnerable enemy is attacked as before"],
   [footman, enemyAir, true, "Noair", "a Footman's Attack on a Gryphon: Unable to target air units."],
-  [footman, enemyAir, false, null, "…a right-click on it is a smart order and says nothing"],
+  [footman, enemyAir, false, "Noair", "…and a right-click on it is refused the same way"],
   [footman, enemyGround, true, null, "…and it attacks a Grunt as before"],
   [flyingMachine, enemyGround, true, "Noground", "a Flying Machine's Attack on a Grunt: Unable to target ground units."],
   [flyingMachine, enemyBuilding, true, "Nostructure", "…on a building: Unable to target buildings."],

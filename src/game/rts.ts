@@ -10923,6 +10923,12 @@ export class RtsController {
         }
       }
     }
+    // A right-click on an ENEMY that nothing in the selection has a weapon for — Footmen on a
+    // Gryphon Rider, a Flying Machine on a Grunt or a Barracks — is refused with the kind's own
+    // line (SimWorld.attackRefusal: [Errors] `Noair`/`Noground`/`Nostructure`), exactly as the
+    // Attack command is, rather than turned into a walk at the ground under it. Asked before the
+    // acknowledgement, so a refused click gets the error and not the unit's attack quote.
+    if (picked !== null && this.refuseUnhittable(picked)) return;
     // Acknowledge the order with the focused unit's voice — attack quote if it
     // targets a hostile unit, otherwise the move quote.
     {
@@ -11226,6 +11232,28 @@ export class RtsController {
     }
     if (any) this.ack(false);
     return any;
+  }
+
+  /** The right-click half of the Attack command's kind refusal: a HOSTILE unit or building
+   *  (never a destructible, which a right-click force-attacks by its own rule, nor anything
+   *  of our own) that NO orderee has an enabled weapon for. One member that can hit it and
+   *  the click is an ordinary attack — the rest of a mixed group is not worth a line. Says
+   *  why and returns true when refused. */
+  private refuseUnhittable(picked: number): boolean {
+    if (this.selected.has(picked)) return false;
+    const t = this.sim.units.get(picked);
+    const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
+    if (!t || !prim || t.targetKey || !this.sim.hostile(prim, t)) return false;
+    let err: string | null = null;
+    for (const id of this.orderees) {
+      const u = this.sim.units.get(id);
+      if (!u || id === picked) continue;
+      if (this.sim.weaponVs(u, t)) return false; // somebody can strike it: an ordinary attack
+      err ??= this.sim.attackRefusal(id, picked);
+    }
+    if (!err) return false;
+    this.refuseOrder(err);
+    return true;
   }
 
   /** Is every unit in the selection a PLANTED building — nothing in it that could take a
