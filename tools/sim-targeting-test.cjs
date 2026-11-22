@@ -136,17 +136,30 @@ for (const [code, targs, target, want, what] of CASES) {
 // attack on an invulnerable target down; what is checked here is that the refusal now has WORDS
 // — and that only a deliberate Attack command hears them. A right-click is a smart order, and a
 // smart click on something that cannot be attacked is simply not an attack.
-const swinger = unit({
-  owner: 0, team: 0, abilities: [], baseSpeed: 270, uprooted: false,
-  weapon: { enabled: true, targets: ["ground", "air", "structure"], range: 90, ranged: false },
-});
+const armed = (targets) => {
+  const weapon = { enabled: true, targets, range: 90, ranged: false };
+  return unit({ owner: 0, team: 0, abilities: [], baseSpeed: 270, uprooted: false, weapon, weapons: [weapon] });
+};
+const swinger = armed(["ground", "air", "structure"]);
+// A unit with no weapon for the target's KIND: the Attack command is refused with that kind's
+// own line rather than turned into an attack-move onto the ground under the target.
+// `[hfoo] targs1 = ground,structure,debris,item,ward` (the Footman, no `air`) and the Flying
+// Machine before Gyrocopter Bombs (`air` alone).
+const footman = armed(["ground", "structure", "debris", "item", "ward"]);
+const flyingMachine = armed(["air"]);
 const ATTACK_CASES = [
-  [invuFoe, true, "Notinvulnerable", "the Attack command on an invulnerable enemy says so"],
-  [invuFoe, false, null, "a right-click on the same one says nothing"],
-  [enemyGround, true, null, "and a vulnerable enemy is attacked as before"],
+  [swinger, invuFoe, true, "Notinvulnerable", "the Attack command on an invulnerable enemy says so"],
+  [swinger, invuFoe, false, null, "a right-click on the same one says nothing"],
+  [swinger, enemyGround, true, null, "and a vulnerable enemy is attacked as before"],
+  [footman, enemyAir, true, "Noair", "a Footman's Attack on a Gryphon: Unable to target air units."],
+  [footman, enemyAir, false, null, "…a right-click on it is a smart order and says nothing"],
+  [footman, enemyGround, true, null, "…and it attacks a Grunt as before"],
+  [flyingMachine, enemyGround, true, "Noground", "a Flying Machine's Attack on a Grunt: Unable to target ground units."],
+  [flyingMachine, enemyBuilding, true, "Nostructure", "…on a building: Unable to target buildings."],
+  [flyingMachine, enemyAir, true, null, "…and it attacks a Gryphon as before"],
 ];
-for (const [target, commanded, want, what] of ATTACK_CASES) {
-  const got = world.attackRefusal(swinger.id, target.id, commanded);
+for (const [attacker, target, commanded, want, what] of ATTACK_CASES) {
+  const got = world.attackRefusal(attacker.id, target.id, commanded);
   const ok = got === want;
   if (!ok) failed++;
   console.log(`${ok ? "ok  " : "FAIL"}  attack  ${what}\n        want ${want ?? "(allowed)"}, got ${got ?? "(allowed)"}`);

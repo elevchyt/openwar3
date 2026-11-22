@@ -12156,10 +12156,22 @@ export class SimWorld {
     // every attack type MiscGame's EtherealDamageBonus zeroes). Only the named attack hears it,
     // for the same reason as `Notinvulnerable` above — a right-click is a smart order.
     if (commanded && t.ethereal && u.weapon && !this.canAttack(u, t) && this.etherealOnlyBar(u, t)) return "Notethereal";
+    // Nothing in the loadout may strike this KIND of thing — a Footman pointed at a Gryphon
+    // Rider, a Flying Machine without Bombs at a Grunt. issueAttack already turns the order
+    // down (`canAttack`), and the Attack command used to fall through to an attack-MOVE onto
+    // the ground under the target, so the unit walked off after something it can never hit.
+    // WC3 refuses the click with the target kind's own line instead — `Units\CommandStrings.txt`
+    // [Errors] `Noair` "Unable to target air units." / `Noground` "Unable to target ground
+    // units." / `Nostructure` … — and keeps the reticle up. Only the named attack hears it,
+    // for the same reason as the two above: a right-click is a smart order.
+    if (commanded && u.weapon && !this.canAttack(u, t)) {
+      const kind = this.attackKindBar(u, t);
+      if (kind) return kind;
+    }
     if (!u.weapon || this.canPursue(u)) return null;
-    // Nothing in the loadout may strike it at all (a ground tower pointed at a Gryphon):
-    // that is a different refusal and not one this method has the line for — issueAttack
-    // turns the order down on `canAttack` and the cursor never went red in the first place.
+    // Nothing in the loadout may strike it at all for some OTHER reason (a smart order on a
+    // flyer, a magic weapon against an immune target): not a refusal this method has a line
+    // for — issueAttack turns the order down on `canAttack`.
     if (!this.canAttack(u, t)) return null;
     return this.inWeaponRange(u, t) ? null : "Notinrange";
   }
@@ -12169,6 +12181,14 @@ export class SimWorld {
   private etherealOnlyBar(u: SimUnit, t: SimUnit): boolean {
     const key = targetKeyOf(t);
     return u.weapons.some((w) => w.enabled && (!w.targets.length || w.targets.includes(key)));
+  }
+
+  /** The [Errors] key for "no enabled weapon of `u`'s lists `t`'s KIND in its Targets Allowed"
+   *  — `Noair` for a ground-only attacker on a flyer, `Noground` for an air-only one on a
+   *  walker — or null when some weapon does admit the kind (the bar is something else). */
+  private attackKindBar(u: SimUnit, t: SimUnit): string | null {
+    if (this.etherealOnlyBar(u, t)) return null;
+    return ATTACK_KIND_ERRORS[targetKeyOf(t)] ?? null;
   }
 
   /** Can this unit walk to a fight at all? A structure (and anything else the data gives no
@@ -33043,6 +33063,20 @@ export function isArtillery(w: { weaponType: WeaponType }): boolean {
  *  `structure`, everything else is `ground` — and a DESTRUCTIBLE carries its own class in
  *  `targType` (a gate is `debris`, never a "structure"). Shared by the weapon-slot pick and
  *  by an artillery burst's `splashTargs` list. */
+/** What an Attack command aimed at a thing of this target KIND (`targetKeyOf`) says when no
+ *  weapon may strike that kind — `Units\CommandStrings.txt` [Errors], one line per kind. */
+const ATTACK_KIND_ERRORS: Readonly<Record<string, string>> = {
+  air: "Noair", // "Unable to target air units."
+  ground: "Noground", // "Unable to target ground units."
+  structure: "Nostructure", // "Unable to target buildings."
+  ward: "Noward", // "Unable to target wards."
+  debris: "Nodebris", // "Unable to target debris."
+  wall: "Nowall", // "Unable to target walls."
+  bridge: "Nobridge", // "Unable to target bridges."
+  tree: "Notree", // "Unable to target trees."
+  item: "Noitem", // "Unable to target items."
+};
+
 function targetKeyOf(t: SimUnit): string {
   // …and a WEBBED flyer answers to `ground`, because that is where it is. Web's whole point is
   // that it "forces the target to the ground, where it can be attacked by melee units"
