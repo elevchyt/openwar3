@@ -39,6 +39,15 @@ export interface GateLoad {
 /** What the bar says while the install mounts. */
 const LOADING = "Loading game data…";
 
+/** How the mount's stages share the one bar (see `mount`). The index is read before anything has
+ *  a size — the encoding and root files, a few tens of megabytes against the preload's ~291 —
+ *  and the last sliver past LOADED_SHARE is the work after the preload (deriving icons) that the
+ *  bar's own fill to 1 announces. Ours, not the game's: 1.30.4's own bar is the loading screen's. */
+const INDEX_SHARE = 0.1;
+const LOADED_SHARE = 0.97;
+/** The index stage's creep: ~63 % of its share after this long, never all of it. */
+const INDEX_CREEP_MS = 1500;
+
 export interface LoadGate {
   dispose(): void;
 }
@@ -132,7 +141,7 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
     btn.setDisabled(true);
     status.textContent = "";
     status.classList.remove("error");
-    bar.set(null);
+    bar.set(0);
     // One line for the whole wait. The mount narrates itself stage by stage (which archive,
     // the content index, a percentage) and that is a developer's reading, not a player's: what a
     // player needs from this screen is "it is loading", then "it loaded" — or, in red, why not.
@@ -143,21 +152,35 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
       // from, which is the other half of why the export is native.
       if (!native) await requestPersistence();
       if (stale()) return;
-      // A CASC mount reads a few hundred megabytes off disk before the first file can be
-      // asked for (vfs/casc.ts), so it reports as it goes rather than sitting mute — and says
-      // how far through it is once it knows, which is what the bar draws.
-      // A stage with no size (the content index before it, "Preparing icons…" after it) sweeps
-      // only until the bar has a number: once it has filled, falling back to the sweep emptied
-      // it and refilled it in one jump at the end.
-      let sized = false;
-      const load = await loadProfile(install, DEFAULT_PROFILE, (_msg, fraction) => {
-        // An abandoned mount keeps reporting; the bar may already be a NEWER mount's.
-        if (stale()) return;
-        if (fraction != null) {
-          sized = true;
-          bar.set(fraction);
-        } else if (!sized) bar.set(null);
-      });
+      // ONE bar for the whole load, and it only ever moves forward. The mount is stages (vfs/casc.ts:
+      // the content index, then the ~291 MB preload, then "Preparing icons…"), and only the
+      // preload knows how far through it is — drawn stage by stage, the bar swept the hole while
+      // the index was read, then dropped to empty and started again: a bar that went BACK, which
+      // reads as "it started over". So the stages share it instead: the index takes the first
+      // INDEX_SHARE, which it CREEPS toward on the clock (it has no number to report, and a bar
+      // standing at zero reads as hung), the preload maps onto the rest, and the high-water mark
+      // means a report that would move it backwards is simply not drawn.
+      let shown = 0;
+      const advance = (f: number): void => {
+        if (stale() || f <= shown) return;
+        shown = Math.min(1, f);
+        bar.set(shown);
+      };
+      const crept = performance.now();
+      const creep = window.setInterval(
+        () => advance(INDEX_SHARE * (1 - Math.exp(-(performance.now() - crept) / INDEX_CREEP_MS))),
+        100,
+      );
+      let load: Awaited<ReturnType<typeof loadProfile>>;
+      try {
+        load = await loadProfile(install, DEFAULT_PROFILE, (_msg, fraction) => {
+          if (fraction == null) return;
+          window.clearInterval(creep);
+          advance(INDEX_SHARE + (LOADED_SHARE - INDEX_SHARE) * fraction);
+        });
+      } finally {
+        window.clearInterval(creep);
+      }
       if (stale()) return;
       // Past here it has loaded, and there is nothing left to cancel.
       mounting = false;
