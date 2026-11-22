@@ -240,7 +240,8 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
         if (!folder) {
           showBar(false);
           btn.setDisabled(false);
-          status.textContent = dlCancelled ? "Cancelled." : "No folder chosen.";
+          // A press of Cancel leaves nothing to say: the player chose it.
+          status.textContent = dlCancelled ? "" : "No folder chosen.";
           return;
         }
         return mount(await loadNativeInstall());
@@ -254,7 +255,7 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
       if (dlCancelled) {
         showBar(false);
         btn.setDisabled(false);
-        status.textContent = "Cancelled.";
+        status.textContent = "";
         return;
       }
       // An IPC rejection arrives wrapped in Electron's own words around the shell's message.
