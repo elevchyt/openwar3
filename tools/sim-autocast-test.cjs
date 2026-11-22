@@ -51,6 +51,15 @@ const BLOODLUST = {
   levelData: [{ cost: 35, cooldown: 1, castRange: 600, area: 0, duration: 60, heroDuration: 60, castTime: 0, data: [0.4, 0.25], buffs: ["Bblo"], summon: "" }],
 };
 
+/** Slow (`Aslo`) as the 1.30.4 row has it — `targs1` "air,ground,enemy", `Cost1` 50, `Rng1` 700,
+ *  `Dur1` 60 / `HeroDur1` 10, DataA 0.6 move / DataB 0.25 attack, `BuffID1` Bslo. `buffFx` empty
+ *  so the real handler's `fx(def)` stamps `buffId` off `buffs` and nothing else. */
+const SLOW = {
+  id: "Aslo", code: "Aslo", target: "unit", autocast: true, buffFx: [], buffArt: "", targetArt: "",
+  targetFlags: ["air", "ground", "enemy"],
+  levelData: [{ cost: 50, cooldown: 1, castRange: 700, area: 0, duration: 60, heroDuration: 10, castTime: 0, data: [0.6, 0.25], buffs: ["Bslo"], summon: "" }],
+};
+
 /** The Priest's ranged slot — `acquire` 600 is the number this whole issue turns on. */
 // Every `base*` twin is spelled out because recomputeStats REBUILDS the live fields off them
 // each tick (`w.range = w.baseRange + upg.range`) — leave one out and the weapon's range comes
@@ -79,7 +88,7 @@ function world() {
   const W = 64, H = 64;
   const g = new PathingGrid({ width: W, height: H, flags: new Uint8Array(W * H) }, [-(W * 32) / 2, -(H * 32) / 2]);
   const w = new SimWorld(g, 1);
-  const rows = { Ahea: HEAL, Aadm: ABOLISH, Ablo: BLOODLUST };
+  const rows = { Ahea: HEAL, Aadm: ABOLISH, Ablo: BLOODLUST, Aslo: SLOW };
   w.abilities = { get: (id) => rows[id], all: () => Object.values(rows) };
   return w;
 }
@@ -508,6 +517,109 @@ function shaman(w, over = {}) {
   g.order = "idle";
   g.targetId = null;
   check("…and gives it up once the Grunt stops fighting", w.autocastStillWanted(s, g, BLOODLUST), false);
+}
+
+// ==========================================================================================
+// ONE CASTER PER JOB (issue #317). An army of Dryads facing ONE Bloodlusted enemy sends ONE
+// Dryad; the rest look for other work, and stand if there is none. The same rule for every
+// unit-target autocast — Slow, Bloodlust, Heal — and the job is released when the effect lands
+// (then the target's own state answers) or when the claimant stops. And a target the effect is
+// ALREADY on is no job at all, whoever put it there.
+// ==========================================================================================
+function sorceress(w, over = {}) {
+  const u = add(w, {
+    typeId: "hsor", hp: 325, maxHp: 325, mana: 200, maxMana: 200,
+    weapon: PRIEST_WEAPON, weapons: [PRIEST_WEAPON], oldWeapons: [PRIEST_WEAPON], name: "Sorceress",
+    ...over,
+  });
+  u.abilities = [{ id: "Aslo", code: "Aslo", level: 1, cooldownLeft: 0, autocastOn: true }];
+  u.mana = 200;
+  return u;
+}
+/** Run the world until `pred` holds (or `max` seconds pass) — the casts land on their own. */
+function runUntil(w, pred, max = 5) {
+  for (let t = 0; t < max && !pred(); t += 0.05) w.tick(0.05);
+  return pred();
+}
+{
+  const w = world();
+  const dryads = [0, 1, 2, 3].map((i) => dryad(w, { x: -40 * i, y: 0 }));
+  const shaman = add(w, { owner: 1, team: 1, x: -800, y: 0 });
+  const grunt = add(w, { owner: 1, team: 1, typeId: "ogru", x: 300, y: 0 });
+  grunt.buffs = [from(shaman)];
+  const took = dryads.map((d) => w.tickAutocast(d));
+  check("four Dryads, one Bloodlusted Grunt: exactly ONE sets off to dispel it", took, [true, false, false, false]);
+  check("…aimed at the Grunt", dryads[0].pendingCast?.targetId, grunt.id);
+  check("…and the other three keep their orders and their mana",
+    dryads.slice(1).map((d) => [d.order, d.mana]), [["idle", 200], ["idle", 200], ["idle", 200]]);
+  // A second Bloodlusted enemy is the next Dryad's job, not the first one's.
+  const grunt2 = add(w, { owner: 1, team: 1, typeId: "ogru", x: 320, y: 120 });
+  grunt2.buffs = [from(shaman)];
+  check("a second Bloodlusted Grunt is taken by the next Dryad", w.tickAutocast(dryads[1]), true);
+  check("…aimed at the second Grunt", dryads[1].pendingCast?.targetId, grunt2.id);
+  check("…and the third still finds nothing left to do", w.tickAutocast(dryads[2]), false);
+  // The claimant stopping frees the job.
+  w.stop(dryads[0].id);
+  check("once the first Dryad is stopped, the next free one takes the Grunt", w.tickAutocast(dryads[2]), true);
+  check("…aimed at the first Grunt", dryads[2].pendingCast?.targetId, grunt.id);
+}
+{
+  // Slow, through the REAL handler: one Sorceress per Footman, and a slowed Footman is no
+  // job for anybody — not for the caster that slowed it and not for its neighbour.
+  const { SPELL_HANDLERS } = require(join(REPO, ".sim-build", "src", "sim", "spells.js"));
+  const w = world();
+  const a = sorceress(w, { x: 0, y: 0 });
+  const b = sorceress(w, { x: -40, y: 0 });
+  const foot = add(w, { owner: 1, team: 1, x: 400, y: 0 });
+  check("two Sorceresses, one Footman: the first sets off to Slow it", w.tickAutocast(a), true);
+  check("…and the second leaves it to her", w.tickAutocast(b), false);
+  check("the Slow lands", runUntil(w, () => foot.buffs.some((x) => x.buffId === "Bslo")), true);
+  check("…from the first Sorceress", foot.buffs.find((x) => x.buffId === "Bslo")?.sourceId, a.id);
+  check("a SLOWED Footman is not a target for the second Sorceress", w.tickAutocast(b), false);
+  check("…nor for the first, once her cooldown is up", (a.abilities[0].cooldownLeft = 0, w.tickAutocast(a)), false);
+  check("…and the second keeps her mana", b.mana, 200);
+  // Slowed by ANOTHER player's Sorceress (an ally's): still already affected.
+  const w2 = world();
+  const mine = sorceress(w2, { x: 0, y: 0 });
+  const allyS = sorceress(w2, { owner: 2, team: 0, x: 0, y: 200 });
+  const foot2 = add(w2, { owner: 1, team: 1, x: 400, y: 0 });
+  SPELL_HANDLERS.Aslo(w2.spellApi, allyS, SLOW, 1, { targetId: foot2.id, x: foot2.x, y: foot2.y });
+  check("an ally's Slow on the Footman lands with the row's buff id", foot2.buffs.map((x) => x.buffId), ["Bslo"]);
+  check("…so the Footman is not a Slow target for us either", w2.tickAutocast(mine), false);
+}
+{
+  // The claim is per PLAYER: an ally's Sorceress walking to the Footman does not hold it for us.
+  const w = world();
+  const allyS = sorceress(w, { owner: 2, team: 0, x: 0, y: 200 });
+  const mine = sorceress(w, { x: 0, y: 0 });
+  add(w, { owner: 1, team: 1, x: 400, y: 0 });
+  check("an ally's Sorceress sets off for the Footman", w.tickAutocast(allyS), true);
+  check("…and that does not take the job off OUR Sorceress", w.tickAutocast(mine), true);
+}
+{
+  // A spell MISSILE in the air towards the target is a claim too (Web nets on impact).
+  const w = world();
+  const a = sorceress(w, { x: 0, y: 0 });
+  const b = sorceress(w, { x: -40, y: 0 });
+  const foot = add(w, { owner: 1, team: 1, x: 400, y: 0 });
+  w.projectiles.set(999, { id: 999, x: 0, y: 0, z: 0, sourceId: a.id, targetId: foot.id, speed: 900, damage: 0, art: "",
+    spell: { code: "Aslo", rank: 1, abilityId: "Aslo" }, startZ: 0, impactZ: 0, startDist: 400 });
+  check("a Slow missile in flight at the Footman keeps the second Sorceress off it", w.tickAutocast(b), false);
+  w.projectiles.delete(999);
+  check("…and with the missile gone the Footman is work again", w.tickAutocast(b), true);
+}
+{
+  // Bloodlust: two Shamans, two Grunts in the fight — one Bloodlust each, not two on one.
+  const w = world();
+  const s1 = shaman(w, { x: 0, y: 0 });
+  const s2 = shaman(w, { x: -40, y: 0 });
+  const g1 = add(w, { typeId: "ogru", x: 200, y: 0, race: "orc" });
+  const g2 = add(w, { typeId: "ogru", x: 200, y: 100, race: "orc" });
+  const foe = add(w, { owner: 1, team: 1, x: 260, y: 50 });
+  w.issueAttack(g1.id, foe.id);
+  w.issueAttack(g2.id, foe.id);
+  check("two Shamans both take a job", [w.tickAutocast(s1), w.tickAutocast(s2)], [true, true]);
+  check("…on two DIFFERENT Grunts", new Set([s1.pendingCast?.targetId, s2.pendingCast?.targetId]).size, 2);
 }
 
 console.log(`\n${failed ? `${failed} FAILED` : "all passed"}`);

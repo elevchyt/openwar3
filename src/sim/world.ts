@@ -17595,11 +17595,14 @@ export class SimWorld {
       // (Heal/Inner Fire/Frost Armor all carry it — verified in the real game data).
       const friendly = !F.has("enemy") && (F.has("friend") || F.has("self") || F.has("player"));
       const range = inPlace ? lvl.castRange : this.autocastSearchRange(u, lvl.castRange);
+      // What the player's OTHER casters of this ability are already on (issue #317): one Dryad
+      // takes the Bloodlusted Grunt and the rest look for other work.
+      const claimed = this.autocastClaims(u, def.code);
       // A DISPEL IS NEITHER a friendly autocast nor a hostile one — it is BOTH, and it wants a
       // target with something on it. See `dispelAutocastTarget`; Abolish Magic (`Aadm`, the
       // Dryad's) is the one that reaches this, and it is the whole of what that unit does.
       if (DISPEL_CODES.has(def.code)) {
-        const t = this.dispelAutocastTarget(u, range, def);
+        const t = this.dispelAutocastTarget(u, range, def, claimed);
         if (t) return this.issueCast(u.id, def.code, t.id, 0, 0, true);
         continue;
       }
@@ -17611,6 +17614,7 @@ export class SimWorld {
         let bestD = Infinity;
         for (const t of this.autocastPool()) {
           if (t.hp <= 0 || t.building || autocastOutOfReach(u, t, range)) continue;
+          if (claimed?.has(t.id)) continue;
           if (this.targetError(u, t, def.targetFlags, def.code) !== null) continue;
           if (!spellStealPlan(this.spellApi, u, def, ab.level, t)) continue;
           const dd = Math.hypot(t.x - u.x, t.y - u.y);
@@ -17619,7 +17623,7 @@ export class SimWorld {
         if (best) return this.issueCast(u.id, def.code, best.id, 0, 0, true);
         continue;
       }
-      const target = this.autocastTarget(u, range, friendly, def.code, F.has("self"), def.targetFlags, lvl.buffs.map((b) => b.toLowerCase()));
+      const target = this.autocastTarget(u, range, friendly, def.code, F.has("self"), def.targetFlags, lvl.buffs.map((b) => b.toLowerCase()), claimed);
       if (target) return this.issueCast(u.id, def.code, target.id, 0, 0, true);
     }
     return false;
@@ -17760,7 +17764,44 @@ export class SimWorld {
     return AutocastScan.fast ? this.unitsInOrder() : this.units.values();
   }
 
-  private autocastTarget(u: SimUnit, range: number, friendly: boolean, code: string, selfOk: boolean, flags: string[] = [], buffs: string[] = []): SimUnit | null {
+  /**
+   * WHO IS ALREADY ON IT — the unit targets another caster of `u`'s OWNER has set out to cast
+   * this same ability at and not yet landed (issue #317). An autocast picks its target the same
+   * way for every caster that sees the same field, so without this an army of Dryads facing one
+   * Bloodlusted Grunt ALL chose it — the nearest body with something on it — and all spent 50
+   * mana on one Abolish Magic's worth of work, and six Sorceresses Slowed the same Footman. The
+   * job is TAKEN by the first caster that sets off for it; the rest look past it for the next
+   * one, and stand if there is none.
+   *
+   * A claim is a cast in hand — walking to the target or winding up at it (`pendingCast`, not yet
+   * `fired`; an ORDERED cast claims too, the player already sent somebody) — or a spell MISSILE
+   * still in the air towards it (Web lands its net on impact, so until then the target looks
+   * exactly as un-netted as before). It ends the moment the effect lands, because from then on
+   * the target's own state answers the question (a buff worn, a buff stripped, the hit points
+   * healed) and `autocastWants` asks that. It also ends with the claimant: a caster stopped,
+   * killed or re-ordered holds no `pendingCast` and frees the job for the next.
+   *
+   * Keyed on the BASE `code`, which is what the effect is: two rows of one code are one job.
+   * The OWNER, not the team — the issue's own words, "another unit of the same player". Null when
+   * nothing is claimed, which is the common case and costs the search nothing.
+   */
+  private autocastClaims(u: SimUnit, code: string): Set<number> | null {
+    let out: Set<number> | null = null;
+    for (const o of this.autocastPool()) {
+      if (o === u || o.owner !== u.owner || o.hp <= 0) continue;
+      const pc = o.pendingCast;
+      if (!pc || pc.code !== code || pc.fired || pc.ended || !pc.targetId || o.order !== "cast") continue;
+      (out ??= new Set()).add(pc.targetId);
+    }
+    for (const p of this.projectiles.values()) {
+      if (!p.spell || p.spell.code !== code || !p.targetId || p.sourceId === u.id) continue;
+      const owner = this.units.get(p.sourceId)?.owner ?? p.sourceOwner;
+      if (owner === u.owner) (out ??= new Set()).add(p.targetId);
+    }
+    return out;
+  }
+
+  private autocastTarget(u: SimUnit, range: number, friendly: boolean, code: string, selfOk: boolean, flags: string[] = [], buffs: string[] = [], claimed: Set<number> | null = null): SimUnit | null {
     let best: SimUnit | null = null;
     let bestScore = friendly ? 1.999 : Infinity;
     /**
@@ -17798,6 +17839,7 @@ export class SimWorld {
     const campFight = !friendly && u.isCreep ? this.fightSides() : null;
     for (const t of this.autocastPool()) {
       if (autocastOutOfReach(u, t, range)) continue;
+      if (claimed?.has(t.id)) continue;
       if (!this.autocastWants(u, t, friendly, code, selfOk, flags, buffs)) continue;
       if (friendly) {
         // heal the most-hurt ally; a buff, the one in the fight (then the most hurt)
@@ -17849,11 +17891,11 @@ export class SimWorld {
    * Whatever is nearest, then. (A summon ranked first here for as long as the autocast hunted
    * them; with the kill gone there is nothing left to rank.)
    */
-  private dispelAutocastTarget(u: SimUnit, range: number, def: AbilityDef): SimUnit | null {
+  private dispelAutocastTarget(u: SimUnit, range: number, def: AbilityDef, claimed: Set<number> | null = null): SimUnit | null {
     let best: SimUnit | null = null;
     let bestScore = -Infinity;
     for (const t of this.autocastPool()) {
-      if (t.hp <= 0 || t.building) continue;
+      if (t.hp <= 0 || t.building || claimed?.has(t.id)) continue;
       if (autocastOutOfReach(u, t, range)) continue;
       if (this.targetError(u, t, def.targetFlags, def.code) !== null) continue;
       const ours = !this.hostile(u, t);
