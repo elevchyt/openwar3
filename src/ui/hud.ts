@@ -503,6 +503,12 @@ export interface HudDriver {
   commandIcon(name: string): string | null;
   /** Data URL for an arbitrary BLP path (e.g. a unit's command icon), or null. */
   blpUrl(path: string): string | null;
+  /** The greyed `CommandButtonsDisabled\DIS*` twin of a decoded icon (a data URL `blpUrl` or
+   *  the card handed out), or the same URL when the icon ships none. */
+  dimmedArt(url: string): string;
+  /** The world is STOPPED, for any reason (a player's pause, the map's `PauseGame`, a panel in
+   *  single player, a dropped player) — every button on the console wears its DIS* art. */
+  worldPaused(): boolean;
   /** The same icon washed blue, for an illusion's grid slot. */
   illusionIconUrl(path: string): string | null;
   /** An arbitrary BLP decoded to a canvas, for chrome that needs pixel work — the
@@ -1546,6 +1552,9 @@ export class GameHud {
     manaFill: HTMLDivElement;
   }> = [];
   private idleIconSet = false; // worker icon lazily applied once
+  /** The console was last dressed for a STOPPED world (`worldPaused`): every button's art is
+   *  its DIS* twin. Kept so the toggle can drop the caches that would otherwise hold the art. */
+  private pauseArt = false;
   private cmdTooltip!: HTMLDivElement; // the ONE tooltip slab, above the command card
   private invHover = -1; // inventory slot under the cursor (-1 = none), so its tooltip can refresh
   /** Command-card slot under the cursor (-1 = none), so its tooltip can refresh IN PLACE: the
@@ -1871,6 +1880,17 @@ export class GameHud {
   frame(dtMs: number): void {
     if (this.root.hidden) return;
     this.syncCheatPanel();
+    // A stopped world greys the WHOLE console — the command card, the pockets, the hero
+    // portraits, the selection and the queue all wear their DIS* art until it moves again —
+    // so the edge drops every cache that is holding live art and forces the throttled panel.
+    const pausedNow = this.driver.worldPaused();
+    if (pausedNow !== this.pauseArt) {
+      this.pauseArt = pausedNow;
+      this.cmdKey = "";
+      this.invKey = "";
+      this.idleIconSet = false;
+      this.textT = TEXT_PERIOD;
+    }
     this.dotsT += dtMs;
     this.textT += dtMs;
     // Refresh the info panel immediately when the selection changes, so the
@@ -1931,6 +1951,14 @@ export class GameHud {
     this.refreshHeroBar(); // a hero picked by hotkey shows its bars in the same tick as the card
   }
 
+  /** A BUTTON's art as the console should draw it now: the decoded icon, or — while the world
+   *  is stopped — its DIS* twin (`pauseArt`). Every button-art site goes through here, so a
+   *  pause greys all of them or none. Not the info panel's damage/armour icons or the buffs:
+   *  those are pictures, not buttons. */
+  private art(url: string | null): string | null {
+    return url && this.pauseArt ? this.driver.dimmedArt(url) : url;
+  }
+
   /** Show/hide the idle-worker button and update its count; apply the race worker
    *  icon once it's known. */
   private updateIdleWorkers(): void {
@@ -1940,7 +1968,7 @@ export class GameHud {
     setCount(this.idleWorkerCount, String(n));
     if (!this.idleIconSet) {
       const path = this.driver.workerIcon();
-      const url = path ? this.driver.blpUrl(path) : null;
+      const url = this.art(path ? this.driver.blpUrl(path) : null);
       if (url) {
         this.idleWorkerBadge.style.backgroundImage = `url(${url})`;
         this.idleIconSet = true;
@@ -3283,7 +3311,7 @@ export class GameHud {
       // is desaturated AND frameless, and losing the gold frame is most of what reads as
       // "you can't press this". Falls back to the live art for the icons that ship no twin.
       const art = h.dead ? (h.disabledIcon ?? h.icon) : h.icon;
-      const url = art ? this.driver.blpUrl(art) : null;
+      const url = this.art(art ? this.driver.blpUrl(art) : null);
       s.btn.style.backgroundImage = url ? `url(${url})` : "";
       s.slot.dataset.dead = h.dead ? "1" : "";
       // Its bars are gone with it — the whole CONTAINER, not the two bars inside it. A corpse
@@ -3821,7 +3849,8 @@ export class GameHud {
       btn.classList.remove("empty");
       btn.classList.toggle("disabled", s.disabled);
       btn.classList.toggle("patron-view", !!s.patronView);
-      btn.style.backgroundImage = s.icon ? `url(${s.icon})` : "";
+      const icon = this.art(s.icon);
+      btn.style.backgroundImage = icon ? `url(${icon})` : "";
       btn.draggable = !s.disabled; // a stunned hero's gear stays in its pockets, as does a patron's
       setCount(this.invCount[i], s.charges > 0 ? String(s.charges) : "");
     }
@@ -3948,13 +3977,16 @@ export class GameHud {
       // icon is multiplied by a deep blue (`.no-mana`) while the button stays live. Only
       // the ART is tinted, so it rides with `dis-art`/`unavailable` rather than replacing
       // them — a DIS* swap already means something else and wins the tile.
-      const disArt = c.disabled ? c.disabledIcon ?? null : null;
+      //
+      // A STOPPED world greys every button the same way (`art`), live ones included.
+      const paused = !c.disabled && c.icon ? this.art(c.icon) : null;
+      const disArt = c.disabled ? c.disabledIcon ?? null : paused !== c.icon ? paused : null;
       btn.classList.toggle("dis-art", !!disArt);
       btn.classList.toggle("unavailable", c.disabled);
       btn.classList.toggle("passive", !!c.passive);
       // The tint is a multiply over the ICON, so it needs one there: a button falling back
       // to its 4-letter name has no art to darken and would just turn into a blue tile.
-      btn.classList.toggle("no-mana", !!c.noMana && !c.disabled && !!c.icon);
+      btn.classList.toggle("no-mana", !!c.noMana && !disArt && !c.disabled && !!c.icon);
       if (disArt || c.icon) btn.style.backgroundImage = `url(${disArt ?? c.icon})`;
       else this.cmdLabels[idx].textContent = wc3StripMarkup(c.name).slice(0, 4); // 4 chars of NAME, not of "|cff…"
 
@@ -4380,7 +4412,7 @@ export class GameHud {
         // Cancel button), and only on the local player's own building — queueCancellable (set
         // above) gates the click handler.
         const iconPath = constructing ? sel.icon : sel.queue[0]?.icon ?? sel.icon;
-        const url = iconPath ? this.driver.blpUrl(iconPath) : null;
+        const url = this.art(iconPath ? this.driver.blpUrl(iconPath) : null);
         this.statusIcon.style.backgroundImage = url ? `url(${url})` : "";
         this.statusIcon.style.visibility = url ? "visible" : "hidden";
         this.statusIcon.classList.toggle("clickable", cancellable);
@@ -4391,7 +4423,7 @@ export class GameHud {
         // The peon walled into the site (Orc only — nothing else builds from inside), as a
         // button that selects it. Its art is the icon's own, frame included, so there is no
         // border of ours around it.
-        const bUrl = sel.builderId && sel.builderIcon ? this.driver.blpUrl(sel.builderIcon) : null;
+        const bUrl = this.art(sel.builderId && sel.builderIcon ? this.driver.blpUrl(sel.builderIcon) : null);
         this.builderBtn.hidden = !bUrl;
         this.builderBtn.style.backgroundImage = bUrl ? `url(${bUrl})` : "";
         // Queue slots hold positions 2..7 (the current unit is above the bar).
@@ -4400,7 +4432,7 @@ export class GameHud {
           const rest = sel.queue.slice(1);
           this.queueSlots.forEach((slot, i) => {
             const q = rest[i];
-            const qUrl = q?.icon ? this.driver.blpUrl(q.icon) : null;
+            const qUrl = this.art(q?.icon ? this.driver.blpUrl(q.icon) : null);
             // A filled slot is a cancel button exactly as the status icon is, and says so at
             // the cursor; an empty one is a number and says nothing, and so does an ally's.
             const tip = !!qUrl && cancellable;
@@ -4575,7 +4607,8 @@ export class GameHud {
         return;
       }
       slot.hidden = false;
-      const url = ic.icon ? (ic.illusion ? this.driver.illusionIconUrl(ic.icon) : this.driver.blpUrl(ic.icon)) : null;
+      // Paused, an illusion is greyed like its original: the DIS* art has no colour to wash blue.
+      const url = !ic.icon ? null : this.pauseArt ? this.art(this.driver.blpUrl(ic.icon)) : ic.illusion ? this.driver.illusionIconUrl(ic.icon) : this.driver.blpUrl(ic.icon);
       bars.art.style.backgroundImage = url ? `url(${url})` : "";
       slot.classList.toggle("focused", ic.focused);
       const frac = Math.max(0, Math.min(1, ic.hpFrac));
@@ -4721,7 +4754,7 @@ export class GameHud {
       // A MEAL wears its icon's greyed DIS* twin under the red wash (the reference shot of the
       // real client), falling back to the live art for an icon that ships no twin.
       const dis = sel.cargoDevour && c.disIcon ? this.driver.blpUrl(c.disIcon) : null;
-      const url = dis ?? (c.icon ? this.driver.blpUrl(c.icon) : null);
+      const url = dis ?? this.art(c.icon ? this.driver.blpUrl(c.icon) : null);
       for (let k = 0; k < c.size && i < this.cargoPockets.length; k++, i++) {
         const p = this.cargoPockets[i];
         p.slot.classList.add("filled");

@@ -11863,6 +11863,8 @@ export class MapViewerScene {
       icon: (kind) => this.resourceIcon(kind),
       commandIcon: (name) => this.blpIcon(`ReplaceableTextures\\CommandButtons\\${name}.blp`),
       blpUrl: (path) => this.blpIcon(path),
+      dimmedArt: (url) => this.disabledArt(url) ?? url,
+      worldPaused: () => this.paused,
       illusionIconUrl: (path) => this.illusionIcon(path),
       blpCanvas: (path) => {
         const bytes = this.vfs.rawBytes(path);
