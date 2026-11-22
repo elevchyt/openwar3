@@ -861,6 +861,7 @@ function applyAbilityMods(def: AbilityDef, mods: AbilMod[], meta: MappedData, tr
       case "name": def.name = trigStr(s(m.value)); break;
       case "art": def.icon = s(m.value).replace(/\//g, "\\"); break;
       case "unart": def.unIcon = s(m.value).replace(/\//g, "\\"); break;
+      case "researchart": def.researchIcon = s(m.value).replace(/\//g, "\\"); break;
       case "hero": def.isHero = n(m.value) === 1; def.research = def.isHero; break;
       case "item": def.isItem = n(m.value) === 1; break;
       case "levels": def.levels = n(m.value); break;

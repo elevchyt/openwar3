@@ -14879,7 +14879,8 @@ export class MapViewerScene {
           const desc = maxed || su.level >= need ? body : `${body}${levelLine}`;
           out.push(this.cmd({
             id: canLearn ? `learn:${ab.id}` : "noop",
-            icon: this.blpIcon(def.icon),
+            // Researchart, not Art: a passive's Art is the frameless PASBTN face.
+            icon: this.blpIcon(def.researchIcon || def.icon),
             name: maxed ? `${def.name} (Max)` : `+ ${def.name} [${ab.level}/${def.levels}]`,
             hotkey: def.researchHotkey, // Researchhotkey — a passive has no cast Hotkey to borrow
             tip: maxed ? `${def.name} - [|cffffcc00Level ${def.levels}|r]` : tip,
