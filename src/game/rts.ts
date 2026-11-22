@@ -5760,7 +5760,7 @@ export class RtsController {
       this.applyStanceAnims(e, u);
       // A building under construction: play its own "Birth" animation, scrubbed
       // to the construction progress so it assembles in sync with the timer.
-      // Models without a Birth clip fall back to scaling up from ~40% to full.
+      // Models without a Birth clip stand as they are (below).
       if (u.building && u.building.constructionLeft > 0) {
         // The Birth clip is scrubbed by progress, not played at a rate — but the rate is still
         // the instance's CLOCK, and two things on a scaffold run off it and not off the frame:
@@ -5788,10 +5788,18 @@ export class RtsController {
           }
           e.unit.instance.frame = e.birthStart + prog * (e.birthEnd - e.birthStart);
         } else {
-          const s = e.baseScale * (0.4 + 0.6 * prog);
-          if (Math.abs(s - e.curScale) > 0.005) {
-            e.curScale = s;
-            e.unit.instance.setUniformScale(s);
+          // No Birth clip (a doodad model on a map's own structure, e.g. a TreasurePile): the
+          // model stands at its full size for the whole build, as war3.exe 1.27 draws it.
+          // Scaling it up from a fraction of its size was ours and read as the building GROWING.
+          if (e.curScale !== e.baseScale) {
+            e.curScale = e.baseScale;
+            e.unit.instance.setUniformScale(e.baseScale);
+          }
+          if (e.curSeq !== e.anims.stand && e.anims.stand >= 0) {
+            e.curSeq = e.anims.stand;
+            e.unit.state = WidgetState.IDLE;
+            e.unit.instance.setSequence(e.anims.stand);
+            e.unit.instance.setSequenceLoopMode(SequenceLoopMode.Loop);
           }
         }
         continue; // don't run the normal animation picker while building
