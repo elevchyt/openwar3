@@ -60,6 +60,7 @@ StringList {
     // is paired it wears the second string and lets it go. The game never knew a controller, so
     // it has no word for one.
     DETECT_GAMEPAD              "Detect Gamepad",
+    WIDE_SCREEN                 "Wide Screen",
     UNPAIR_GAMEPAD              "Unpair Gamepad",
     // ...and the row between the two: push-to-talk commands on the "." key (src/voice/). The
     // button is the row until the speech model is on this machine, the checkbox after it.

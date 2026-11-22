@@ -33,12 +33,33 @@ export function stageSize(): { w: number; h: number } {
   // Resolution rungs are named by.
   if (typeof window === "undefined") return { w: GAME_WIDTH, h: GAME_HEIGHT };
   return {
-    w: Math.min(window.innerWidth, window.innerHeight * GAME_ASPECT),
+    w: wideStage ? window.innerWidth : Math.min(window.innerWidth, window.innerHeight * GAME_ASPECT),
     h: Math.min(window.innerHeight, window.innerWidth / MIN_GAME_ASPECT),
   };
 }
 
-/** The stage's aspect (width / height), always within [4:3, 16:9]. */
+/**
+ * Options -> Video -> "Wide Screen" (ours, off by default): the 16:9 cap is lifted and the stage
+ * takes the window's own width, so a 21:9 or 32:9 monitor is filled edge to edge instead of
+ * pillarboxed. The camera keeps its vertical angle (docs/camera.md), so the extra width is extra
+ * map at the sides — exactly what the cap is there to refuse, which is why it is a choice. The
+ * height rule is unchanged, and so is everything measured off `--stage-h` (the whole HUD).
+ */
+let wideStage = false;
+export function setWideStage(on: boolean): void {
+  if (typeof document === "undefined") return; // headless (the options test compiles this file)
+  if (on === wideStage) return;
+  wideStage = on;
+  document.body.classList.toggle("stage-wide", on);
+  window.dispatchEvent(new Event("resize"));
+}
+
+/** The Options row's applier — `wideStage` in data/options.ts. */
+export function applyStageOptions(opts: { wideStage?: unknown }): void {
+  setWideStage(opts.wideStage === true);
+}
+
+/** The stage's aspect (width / height): within [4:3, 16:9], or wider under "Wide Screen". */
 export function stageAspect(): number {
   const { w, h } = stageSize();
   return h > 0 ? w / h : GAME_ASPECT;
