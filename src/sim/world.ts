@@ -3457,6 +3457,13 @@ const ALTITUDE_BLEND_TIME = 0.4;
  *  a member whose buff is gone is out of the link (see the tick's linkT clause). */
 export const SPIRIT_LINK_GROUP = "spiritlink";
 const AURA_REFRESH = 0.5; // aura buffs re-applied each tick with this TTL (fade on leave)
+/** How often the aura pass runs, in game seconds. It used to run every sim step (60 a second),
+ *  and with the buffs on a 0.5 s leash that bought nothing but cost: a custom map's hero-select ring stands
+ *  ~250 bodies inside two dozen auras, 6 000 refreshes a step and 40% of the whole step. Ten a
+ *  second keeps every buff renewed five times over before it would lapse; what moves is only
+ *  WHEN a body walking in or out is first seen, by up to this much. OURS — no file states the
+ *  game's own aura clock. */
+const AURA_TICK = 0.1;
 /** Big Bad Voodoo's invulnerability is handed out on the same short leash an aura is, for
  *  the same reason: a broken CHANNEL has to strip it from everybody the same instant, and
  *  the cheapest way to make that true is to stop renewing it. Shorter than AURA_REFRESH —
@@ -16004,6 +16011,7 @@ export class SimWorld {
    *  when a unit leaves the aura). Non-stacking auras keep the strongest. */
   private applyAuras(): void {
     if (!this.abilities) return;
+    this.auraKinds.clear(); // a body's kind can change between passes (a morph, a death), never inside one
     let celled = false; // the cells are filled on the first aura that wants them, if any does
     for (const src of this.units.values()) {
       if (src.hp <= 0) continue;
@@ -16022,6 +16030,11 @@ export class SimWorld {
         }
         const radius = lvl.area || 900;
         const effects = make(lvl);
+        // What every target of this source is handed, worked out once rather than per target:
+        // the buff's group key and its id are the source's, and a source reaches dozens of
+        // bodies a step where a crowd stands (a hero-select ring: 6 000 refreshes a step).
+        const buffId = buffIdOf(def, ab.level);
+        const groups = effects.map((e) => this.auraGroup(ab.code, e.kind));
         // Which side an aura lands on is the ability's own business, read off `targs1`, and
         // there are THREE answers, not two:
         //   • `friend` and not `enemy` — the hero auras (`air,ground,friend,self,vuln,invu`).
@@ -16068,10 +16081,11 @@ export class SimWorld {
             if (!this.hostile(src, t) || this.targetError(src, t, def.targetFlags, ab.code) !== null) continue;
           } else {
             if (alliedAura && t.team !== src.team) continue;
-            if (this.targetAllowed(src, t, def.targetFlags) !== null) continue;
+            if (this.targetAllowedAfterKind(src, t, def.targetFlags, this.auraKindError(t, def.targetFlags)) !== null) continue;
           }
           const ranged = !!t.weapon?.ranged;
-          for (const e of effects) {
+          for (let ei = 0; ei < effects.length; ei++) {
+            const e = effects[ei];
             if (e.rangedOnly && !ranged) continue; // Trueshot only helps ranged units
             // Vampiric only helps MELEE units, and a unit with ANY ranged weapon is not one:
             // the Gargoyle's anti-air claw is a `normal` slot (UnitWeapons [ugar] weapTp1 =
@@ -16084,7 +16098,7 @@ export class SimWorld {
             if (e.pctOfMax && value <= 0) continue; // a unit with no mana pool gains nothing
             // An ordinary aura re-applies on a short TTL so it fades as its holder walks
             // away; one with its own `duration` (Disease Cloud) leaves something behind.
-            this.applyBuffInternal(t, { kind: e.kind, group: `${ab.code}:${e.kind}`, timeLeft: e.duration ?? AURA_REFRESH, sourceId: src.id, value, value2: e.value2, buffId: buffIdOf(def, ab.level), aura: e.duration === undefined });
+            this.applyBuffInternal(t, { kind: e.kind, group: groups[ei], timeLeft: e.duration ?? AURA_REFRESH, sourceId: src.id, value, value2: e.value2, buffId, aura: e.duration === undefined });
           }
         }
       }
@@ -16108,6 +16122,8 @@ export class SimWorld {
    * cells, which is a map-wide aura and cheaper to walk outright (`auraNear` answers null).
    * Nothing in the pass moves a unit, kills one or makes one, so the fill holds for all of it.
    */
+  /** Game seconds until the aura pass runs again (AURA_TICK); 0 runs it on the first step. */
+  private auraClock = 0;
   private readonly auraCells = new Map<number, SimUnit[]>();
   private readonly auraLoose: SimUnit[] = [];
   private readonly auraScratch: SimUnit[] = [];
@@ -16189,6 +16205,29 @@ export class SimWorld {
     return art;
   }
 
+  /** `targsKindError` per (row, target) for ONE applyAuras pass: the kind half of Targets
+   *  Allowed reads only the target's own kind and the row, and nothing in the pass changes
+   *  either, while a crowd under a dozen auras asks it of every body a dozen times. */
+  private readonly auraKinds = new Map<readonly string[], Map<SimUnit, string | null>>();
+  private auraKindError(t: SimUnit, flags: string[]): string | null {
+    let byUnit = this.auraKinds.get(flags);
+    if (!byUnit) this.auraKinds.set(flags, (byUnit = new Map()));
+    let e = byUnit.get(t);
+    if (e === undefined) byUnit.set(t, (e = targsKindError(t, flags)));
+    return e;
+  }
+
+  /** An aura buff's GROUP key, `${code}:${kind}` — interned, since applyAuras hands one to
+   *  every body in every aura every step and the string is always one of a few dozen. */
+  private readonly auraGroups = new Map<string, Map<string, string>>();
+  private auraGroup(code: string, kind: string): string {
+    let byKind = this.auraGroups.get(code);
+    if (!byKind) this.auraGroups.set(code, (byKind = new Map()));
+    let g = byKind.get(kind);
+    if (g === undefined) byKind.set(kind, (g = `${code}:${kind}`));
+    return g;
+  }
+
   /** WHICH SIDE each aura ability lands on, memoised by ability id — see `applyAuras` for the
    *  three answers and why "neither" is one of them. Keyed on the id because the answer is the
    *  ability's `targs1` column, which is fixed for the whole match. */
@@ -16236,7 +16275,12 @@ export class SimWorld {
     if (group) {
       // De-dupe per (group, kind): abilities like Avatar/Inner Fire apply an armour
       // AND a damage buff under one group — keying on group alone would drop the 2nd.
-      const existing = u.buffs.find((b) => b.group === group && b.kind === init.kind);
+      // A plain loop, not `find`: this is the aura pass's innermost call (see applyAuras).
+      let existing: SimBuff | undefined;
+      for (let i = 0; i < u.buffs.length; i++) {
+        const b = u.buffs[i];
+        if (b.group === group && b.kind === init.kind) { existing = b; break; }
+      }
       if (existing) {
         existing.value = Math.max(existing.value, init.value ?? 0);
         existing.value2 = Math.max(existing.value2, init.value2 ?? 0);
@@ -16495,8 +16539,14 @@ export class SimWorld {
     // kept rather than rebuilt per question (`targetFlagSet`, data/abilities.ts). This function
     // and `targsKindError` under it were each building their own, on a path an autocast scan
     // walks for every unit against every candidate.
+    return this.targetAllowedAfterKind(caster, target, flags, targsKindError(target, flags));
+  }
+
+  /** `targetAllowed` with the KIND half already answered — `kindError` is `targsKindError(target,
+   *  flags)`, which reads nothing but the target and the row and so may be asked once per target
+   *  for a whole pass (applyAuras). */
+  private targetAllowedAfterKind(caster: SimUnit, target: SimUnit, flags: string[], kindError: string | null): string | null {
     const F = targetFlagSet(flags);
-    const kindError = targsKindError(target, flags);
     if (kindError !== null) return kindError;
     const enemy = F.has("enemy");
     // `player` = own units (Death Pact/Dark Ritual); `allies` = the allied players' — both are the
@@ -17933,14 +17983,17 @@ export class SimWorld {
    *  mana on a full-health unit. */
   private autocastWants(u: SimUnit, t: SimUnit, friendly: boolean, code: string, selfOk: boolean, flags: string[], buffs: string[] = []): boolean {
     if (t.building || t.hp <= 0) return false;
-    // The pick must satisfy the same Targets Allowed gate the cast itself will run.
-    // Without this the search happily returns a target issueCast then refuses — and a
-    // Shaman standing between a Gryphon and a Grunt would keep choosing the Gryphon for
-    // his ground-only Lightning Shield and never shield anything at all.
-    if (this.targetError(u, t, flags, code) !== null) return false;
     // Skip the caster unless the spell's flags permit self-targeting (a `self`
     // autocast like Priest Heal can pick itself when it's the most-hurt ally).
     if (t === u && !(friendly && selfOk)) return false;
+    // The pick must satisfy the same Targets Allowed gate the cast itself will run (`targetError`,
+    // below). Without it the search happily returns a target issueCast then refuses — and a
+    // Shaman standing between a Gryphon and a Grunt would keep choosing the Gryphon for his
+    // ground-only Lightning Shield and never shield anything at all. It is asked LAST, after the
+    // field reads: every test here is a pure predicate, so the order cannot change the answer,
+    // and `targetError` is the dear one — asked first, it ran for every unit in reach of every
+    // idle caster every step (10 800 a step on a crowded custom map, most of them full-health allies a Heal
+    // was always going to pass over). `creepNetRefused`, which keeps a record, stays after it.
     if (friendly) {
       if (!this.allied(u, t) || t.mechanical) return false;
       if (HEAL_SPELLS.has(code) && t.hp >= t.maxHp) return false; // only wounded (the Priest's Heal and the creeps' Anhe alike)
@@ -17955,7 +18008,7 @@ export class SimWorld {
       // nothing else: not a Peon that happens to be hurt, and not a Grunt standing about —
       // even one being hit — until it hits back (FIGHTER_BUFFS, issue #213).
       if (FIGHTER_BUFFS.has(code) && (t.isPeon || t.worker || !this.attackingEnemy(t))) return false;
-      return true;
+      return this.targetError(u, t, flags, code) === null;
     }
     if (!this.hostile(u, t) || t.invulnerable) return false;
     // …and a DEBUFF already worn is not work either, whoever laid it: a Slow on a slowed Footman
@@ -17963,6 +18016,7 @@ export class SimWorld {
     // the Geomancer 50 mana it then lacks for the next body. (This read `u.buffs.length` — the
     // CASTER's list — so a caster wearing nothing re-cast on its own victim every time.)
     if (t.buffs.length && (this.findBuffFrom(t, u.id) || (buffs.length && t.buffs.some((b) => b.buffId && buffs.includes(b.buffId.toLowerCase()))))) return false;
+    if (this.targetError(u, t, flags, code) !== null) return false;
     // A creep's Ensnare goes on what ENTERS its reach after the fight has begun (creepNetRefused).
     if (this.creepNetRefused(u, code, t)) return false;
     return true;
@@ -22319,7 +22373,12 @@ export class SimWorld {
     this.tickPointDamage(dt); // UnitDamagePoint — a script's delayed blast
     this.tickShops(dt);
     this.tickShopBuyers(); // adopt a purchaser for whoever has just walked one up to a shop
-    this.applyAuras(); // refresh aura buffs on in-range allies (before recompute)
+    // refresh aura buffs on in-range allies (before recompute), on its own clock (AURA_TICK)
+    if ((this.auraClock -= dt) <= 0) {
+      this.auraClock += AURA_TICK;
+      if (this.auraClock <= 0) this.auraClock = AURA_TICK; // a long step pays one pass, not a backlog
+      this.applyAuras();
+    }
     this.tickBlight(dt); // the rot spreading out from each new structure (before recompute)
     simProfile.end("sim.world.pre");
     simProfile.begin("sim.world.units");
