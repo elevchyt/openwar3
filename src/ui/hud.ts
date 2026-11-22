@@ -73,7 +73,8 @@ export interface CommandButton {
    *  `CommandButtonsDisabled\DIS*` twin (see MapViewerScene.disabledArt). It is a different
    *  texture, not a filter: the twin is drawn desaturated AND with the gold button frame
    *  removed, which is how the original says "you can't press this". Only set when the
-   *  button is unavailable, and null when the icon ships no twin — the button then falls
+   *  button is unavailable or ON COOLDOWN (the original draws the twin under the radial
+   *  sweep too), and null when the icon ships no twin — an unavailable button then falls
    *  back to desaturating the live art. */
   disabledIcon?: string | null;
   name: string;
@@ -3800,7 +3801,8 @@ export class GameHud {
         cd.hidden = true;
       }
     }
-    const key = inv.map((s) => (s ? `${s.icon ? 1 : 0}:${s.name}:${s.charges}:${s.disabled ? 1 : 0}:${s.patronView ? 1 : 0}` : "-")).join("|");
+    // `icon` is a data URL, so the key carries whether it is the cooldown's DIS* twin instead.
+    const key = inv.map((s) => (s ? `${s.icon ? 1 : 0}:${s.cooldownLeft > 0 ? 1 : 0}:${s.name}:${s.charges}:${s.disabled ? 1 : 0}:${s.patronView ? 1 : 0}` : "-")).join("|");
     if (key === this.invKey) return;
     this.invKey = key;
     for (let i = 0; i < this.invSlots.length; i++) {
@@ -3902,7 +3904,9 @@ export class GameHud {
     // it Storm Bolt's. The titles are short and go in the key; the icon is a DATA URL, kilobytes
     // per button on a key rebuilt every frame, so it is compared per slot instead — the cached
     // string for an unchanged icon is the same string, and that comparison costs nothing.
-    const key = `${printKeys ? hotkeyMode() : "-"}#` + cmds.map((c) => `${c.id}:${c.hotkey}:${c.disabled}:${!!c.cantAfford}:${!!c.noMana}:${c.active}:${c.modal}:${c.count ?? 0}:${c.name}:${c.tip ?? ""}:${c.desc}`).join("|");
+    // Whether a cooldown is RUNNING is in the key (its art is the DIS* twin until it ends),
+    // though the seconds left are not — those are the per-frame overlay's.
+    const key = `${printKeys ? hotkeyMode() : "-"}#` + cmds.map((c) => `${c.id}:${c.hotkey}:${c.disabled}:${(c.cooldownLeft ?? 0) > 0}:${!!c.cantAfford}:${!!c.noMana}:${c.active}:${c.modal}:${c.count ?? 0}:${c.name}:${c.tip ?? ""}:${c.desc}`).join("|");
     const iconsSame = cmds.length === this.cmdIcons.length && cmds.every((c, i) => c.icon === this.cmdIcons[i]);
     if (key === this.cmdKey && iconsSame) {
       this.refreshCmdTooltip(cmds); // every frame: the stash moves without the card changing
@@ -3948,13 +3952,18 @@ export class GameHud {
       // icon is multiplied by a deep blue (`.no-mana`) while the button stays live. Only
       // the ART is tinted, so it rides with `dis-art`/`unavailable` rather than replacing
       // them — a DIS* swap already means something else and wins the tile.
-      const disArt = c.disabled ? c.disabledIcon ?? null : null;
+      //
+      // A COOLDOWN wears the same twin under its sweep — a spell recharging, a Tavern hero or a
+      // shop ware restocking is drawn greyed until it is ready — but only the ART: the button
+      // stays live, keeps its key, and its press earns the game's "not ready" line.
+      const onCooldown = (c.cooldownLeft ?? 0) > 0;
+      const disArt = c.disabled || onCooldown ? c.disabledIcon ?? null : null;
       btn.classList.toggle("dis-art", !!disArt);
       btn.classList.toggle("unavailable", c.disabled);
       btn.classList.toggle("passive", !!c.passive);
       // The tint is a multiply over the ICON, so it needs one there: a button falling back
       // to its 4-letter name has no art to darken and would just turn into a blue tile.
-      btn.classList.toggle("no-mana", !!c.noMana && !c.disabled && !!c.icon);
+      btn.classList.toggle("no-mana", !!c.noMana && !disArt && !c.disabled && !!c.icon);
       if (disArt || c.icon) btn.style.backgroundImage = `url(${disArt ?? c.icon})`;
       else this.cmdLabels[idx].textContent = wc3StripMarkup(c.name).slice(0, 4); // 4 chars of NAME, not of "|cff…"
 

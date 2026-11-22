@@ -11961,8 +11961,9 @@ export class MapViewerScene {
       unloadCargo: (hostId, passengerId) => !!this.rts?.unloadCargo(hostId, passengerId),
       inventory: () =>
         (this.rts?.inventorySlots() ?? []).map((s) =>
-          // An unavailable pocket wears the icon's DIS* twin, never a tint (see disabledArt).
-          s ? { icon: s.icon ? this.inventoryIcon(s.icon, s.disabled) : null, name: s.name, desc: s.desc, charges: s.charges, cooldownLeft: s.cooldownLeft, cooldownFrac: s.cooldownFrac, usable: s.usable, pawnable: s.pawnable, sellGold: s.sellGold, sellLumber: s.sellLumber, disabled: s.disabled, patronView: s.patronView } : null,
+          // An unavailable pocket wears the icon's DIS* twin, never a tint (see disabledArt) —
+          // and so does one whose item is RECHARGING, as a spell button on cooldown does (cmd()).
+          s ? { icon: s.icon ? this.inventoryIcon(s.icon, s.disabled || s.cooldownLeft > 0) : null, name: s.name, desc: s.desc, charges: s.charges, cooldownLeft: s.cooldownLeft, cooldownFrac: s.cooldownFrac, usable: s.usable, pawnable: s.pawnable, sellGold: s.sellGold, sellLumber: s.sellLumber, disabled: s.disabled, patronView: s.patronView } : null,
         ),
       useInventory: (slot) => {
         // A shop's patron's pockets, shown while the SHOP is selected (rts.inventorySlots): to
@@ -13918,7 +13919,12 @@ export class MapViewerScene {
     // the click that earns "Not enough gold.", and it keeps its frame to say so. And only
     // when it is actually greyed, because the twins of live buttons would double every
     // card's decode for art nobody sees.
-    if (b.icon && b.disabled) b.disabledIcon = this.disabledArt(b.icon);
+    //
+    // A COOLDOWN is the other time the original draws the twin: a spell recharging, a Tavern
+    // hero or a shop ware waiting to restock all show their DIS* art under the radial sweep
+    // until they are ready again. The button stays live (the press earns "That ability is not
+    // ready yet."), so this is the ART alone — `disabled` is left untouched.
+    if (b.icon && (b.disabled || (b.cooldownLeft ?? 0) > 0)) b.disabledIcon = this.disabledArt(b.icon);
     return b;
   }
 
