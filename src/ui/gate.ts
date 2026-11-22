@@ -101,7 +101,10 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
   dlCancel.textContent = "Cancel";
   dlCancel.hidden = true;
 
-  /** `cancelable` is the download's own: the mount that follows it has nothing to cancel. */
+  /** `cancelable` puts the Cancel link under the bar: the download's, and the mount's too — a
+   *  player watching "Loading game data…" may have realised it is the WRONG folder (or the desktop
+   *  app went straight into the one it remembered), and the way out is back to this screen's
+   *  choice, not a wait for a menu they did not want. */
   const showBar = (on: boolean, cancelable = false): void => {
     bar.root.hidden = !on;
     btn.root.hidden = on;
@@ -120,6 +123,12 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
   /** Mount whatever was picked and hand it on. Shared by both doors, because past the picking
    *  there is no difference between them: a `PickedInstall` is a `PickedInstall`. */
   const mount = async (install: PickedInstall): Promise<void> => {
+    // A mount cannot be stopped part-way (the CASC index is read in one go, vfs/casc.ts), so
+    // Cancel ABANDONS it instead: every await below asks whether it is still the current one,
+    // and one that is not hands nothing on — what it read is dropped with it.
+    const gen = ++mountGen;
+    const stale = (): boolean => gen !== mountGen;
+    mounting = true;
     btn.setDisabled(true);
     status.textContent = "";
     status.classList.remove("error");
@@ -128,11 +137,12 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
     // the content index, a percentage) and that is a developer's reading, not a player's: what a
     // player needs from this screen is "it is loading", then "it loaded" — or, in red, why not.
     bar.setLabel(LOADING);
-    showBar(true);
+    showBar(true, true);
     try {
       // Browser only: the desktop app reads the folder off disk and has no quota to be evicted
       // from, which is the other half of why the export is native.
       if (!native) await requestPersistence();
+      if (stale()) return;
       // A CASC mount reads a few hundred megabytes off disk before the first file can be
       // asked for (vfs/casc.ts), so it reports as it goes rather than sitting mute — and says
       // how far through it is once it knows, which is what the bar draws.
@@ -141,11 +151,17 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
       // it and refilled it in one jump at the end.
       let sized = false;
       const load = await loadProfile(install, DEFAULT_PROFILE, (_msg, fraction) => {
+        // An abandoned mount keeps reporting; the bar may already be a NEWER mount's.
+        if (stale()) return;
         if (fraction != null) {
           sized = true;
           bar.set(fraction);
         } else if (!sized) bar.set(null);
       });
+      if (stale()) return;
+      // Past here it has loaded, and there is nothing left to cancel.
+      mounting = false;
+      dlCancel.hidden = true;
       bar.set(1);
       bar.setLabel("Data successfully loaded");
       // Let the full bar and that line reach the screen and be READ first: building the menu
@@ -153,8 +169,11 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
       // until it lets go — a confirmation shown for one frame is a confirmation nobody saw.
       await new Promise((r) => setTimeout(r, 600));
       await new Promise((r) => requestAnimationFrame(() => setTimeout(r)));
+      if (stale()) return;
       onLoaded(load);
     } catch (err) {
+      if (stale()) return;
+      mounting = false;
       fail(`Couldn't load that folder: ${(err as Error).message}`);
     }
   };
@@ -163,8 +182,26 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
    *  `dlCancelled` is the press of Cancel, which tells an abort apart from a failure. */
   let dlAbort: AbortController | null = null;
   let dlCancelled = false;
+  /** The mount in flight, if any, and its generation: Cancel bumps the number, which is how a
+   *  mount still reading in the background learns it was abandoned. */
+  let mounting = false;
+  let mountGen = 0;
 
   const cancelled = (): void => {
+    if (mounting) {
+      mountGen++;
+      mounting = false;
+      // Back to the choice this screen exists for. On the desktop the button now picks a folder
+      // (the shell's dialog), so it says so, as it does for a remembered folder that failed.
+      if (native) idleLabel = "Choose Warcraft III Folder";
+      showBar(false);
+      // The screen as it was before the load, with nothing to say about it: the player chose this.
+      status.classList.remove("error");
+      status.textContent = "";
+      btn.setDisabled(false);
+      btn.setLabel(idleLabel);
+      return;
+    }
     dlCancelled = true;
     dlAbort?.abort();
     void cancelNativeDownload();
