@@ -21995,7 +21995,7 @@ export class SimWorld {
   /** JASS SetUnitOwner — reassign owner + team (team decides allegiance/vision). Goes
    *  through changeUnitOwner so a script-driven handover re-tints the model too, exactly as
    *  Charm's does (the native's own `changeColor` argument is what the engine calls it). */
-  setUnitOwner(id: number, owner: number, team: number, side?: "creep" | "passive" | "player"): void {
+  setUnitOwner(id: number, owner: number, team: number, side?: "creep" | "passive" | "player", slot = -1): void {
     const u = this.units.get(id);
     if (u) {
       this.changeUnitOwner(u, owner, team);
@@ -22005,6 +22005,7 @@ export class SimWorld {
       // where it stands, as a creep the script creates does (RtsController.createScriptUnit);
       // and only the passive slots' units are held out of the fight.
       u.neutralPassive = side === "passive";
+      u.neutralSlot = side === "passive" ? slot : -1; // Neutral Victim/Extra's own slot (jassOwnerOf)
       if (side === "creep" && !u.isCreep && !u.isHero) {
         u.isCreep = true;
         u.guardX = u.x;
