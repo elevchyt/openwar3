@@ -15402,12 +15402,14 @@ export class MapViewerScene {
     // hiveworkshop 139838, a map author asking how to show points on a hero with none). Test of
     // Balance's heroes are all `uhab=` — their abilities come from the map's own reward dialog —
     // and the Reforged client shows them no Hero Abilities button.
-    if (su.isHero && !bookId && this.rts.simView.hasHeroSkills(su)) {
+    // …and only while it has POINTS to spend: a hero with none has no Hero Abilities button, its
+    // slot is empty (war3.exe 1.27, a level-10 Dark Ranger after her tenth point), and maps build
+    // on that — a scenario sells level-10 spells that "occupy the empty space where the Hero Ability
+    // button was", and only to a hero with no points left.
+    if (su.isHero && !bookId && su.skillPoints > 0 && this.rts.simView.hasHeroSkills(su)) {
       // Hero Abilities (learn-skill): opens the skill list to spend unspent points.
       // WC3's canonical learn-abilities "Skillz" book art, default hotkey O, and a
-      // corner badge showing the points available. The button is on the card for EVERY
-      // hero with skills, points or not — the game never takes it away; with nothing to spend it simply
-      // wears no badge, and the page it opens shows every row greyed. Take the
+      // corner badge showing the points available. Take the
       // CommandButtons copy, not the CommandButtonsDisabled one — the button is live either
       // way, and DISBTN* is just the desaturated art the engine swaps in when a button is
       // unavailable.
