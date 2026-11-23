@@ -45,9 +45,15 @@ const check = (name, got, want) => {
 // The stand-in sim: a learn or a level queues an event, exactly as SimWorld's does.
 const snap = (id) => ({ id, typeId: 'Hpal', owner: 1, x: 0, y: 0, facing: 0 });
 let queue = [];
+const levels = new Map();
 const hooks = {
   selectHeroSkill: (id, abilityId) => void queue.push({ hero: snap(id), phase: 'skill', level: 1, abilityId }),
-  setHeroLevel: (id, level) => void queue.push({ hero: snap(id), phase: 'level', level, abilityId: '' }),
+  // …and a jump of several levels queues one event per level gained, as SimWorld.setHeroLevel does.
+  setHeroLevel: (id, level) => {
+    for (let lv = (levels.get(id) ?? 1) + 1; lv <= level; lv++) queue.push({ hero: snap(id), phase: 'level', level: lv, abilityId: '' });
+    levels.set(id, level);
+  },
+  getUnitLevel: (id) => levels.get(id) ?? 1,
   drainHeroEvents: () => { const out = queue; queue = []; return out; },
 };
 const src = `
@@ -56,6 +62,7 @@ globals
     integer learned = 0
     integer levelled = 0
     integer levelSeenInside = -1
+    string levelsSeen = ""
 endglobals
 function OnLearn takes nothing returns nothing
     set learned = learned + 1
@@ -65,6 +72,7 @@ function OnLearn takes nothing returns nothing
 endfunction
 function OnLevel takes nothing returns nothing
     set levelled = levelled + 1
+    set levelsSeen = levelsSeen + I2S(GetHeroLevel(GetTriggerUnit()))
 endfunction
 function Setup takes unit c returns nothing
     local trigger t = CreateTrigger()
@@ -95,7 +103,10 @@ check('…and nothing is left for the frame to raise after it is enabled again',
 
 console.log('\nthe event precedes the native\'s return');
 interp.callFunction('LevelThenLook', [hero]);
-check('EVENT_PLAYER_HERO_LEVEL had fired by the line after SetHeroLevel', g('levelSeenInside'), 1);
+check('EVENT_PLAYER_HERO_LEVEL had fired by the line after SetHeroLevel — once per level gained', g('levelSeenInside'), 4);
+// …and each one while the hero STOOD at that level: a handler gated on "has reached level N"
+// (a scenario's level-10 announcement) fires once, not once per level of a jump.
+check('…each seeing the level it announces', rt.globals.get('levelsSeen')?.s, '2345');
 
 console.log(failures ? `\n${failures} FAILED` : '\nall hero-event checks passed');
 process.exit(failures ? 1 : 0);
