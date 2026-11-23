@@ -28588,7 +28588,7 @@ export class SimWorld {
   /** Hand a held item from one hero to another (drops to the ground if the
    *  recipient's inventory is full). WC3 raises BOTH events for a hand-over: the giver
    *  DROPs the item and the receiver PICKs it UP. */
-  private transferItem(from: SimUnit, slot: number, to: SimUnit): void {
+  private transferItem(from: SimUnit, slot: number, to: SimUnit, byScript = false): void {
     // An illusion's inventory is a picture of the original's: it is there to be SEEN and to
     // grant the same stat bonuses, and nothing more. The items are inert copies with no
     // entity behind them (see initIllusion), so letting a copy move one would either
@@ -28596,7 +28596,12 @@ export class SimWorld {
     if (from.isIllusion) return;
     const held = from.inventory[slot];
     if (!held) return;
-    if (!this.mayLeaveInventory(held)) return; // undroppable: it cannot change hands either
+    // Undroppable: it cannot change hands either — by the PLAYER's hand. A trigger moves it
+    // regardless (`byScript`): the flag is "cannot be removed from a Hero's inventory once it
+    // has been picked up" (UI\TriggerStrings.txt, beside SetItemDroppableBJ), which is the hero
+    // letting go of it, and a map that swaps a hero for another (a morph done by triggers) hands
+    // every item across with UnitAddItem, the undroppable ones included.
+    if (!byScript && !this.mayLeaveInventory(held)) return;
     const dest = to.inventory.indexOf(null);
     if (dest < 0) { this.spawnGroundItem(held.itemId, to.x, to.y, held.charges, held.id); }
     else { to.inventory[dest] = { id: held.id, itemId: held.itemId, charges: held.charges, cooldownLeft: this.itemCooldownOn(to, held.itemId) }; }
@@ -28656,16 +28661,18 @@ export class SimWorld {
 
   /** Actually place a slot's item on the ground at (x,y) and clear the slot. The item
    *  keeps its entity id (same item, now on the ground) and raises DROP_ITEM. */
-  private doDropItem(u: SimUnit, slot: number, x: number, y: number): void {
+  private doDropItem(u: SimUnit, slot: number, x: number, y: number, byScript = false): void {
     // An illusion's inventory is a picture of the original's: it is there to be SEEN and to
     // grant the same stat bonuses, and nothing more. The items are inert copies with no
     // entity behind them (see initIllusion), so letting a copy move one would either
     // duplicate the original's gear or hand out an item that does not exist.
     if (u.isIllusion) return;
-    if (this.itemsLocked(u)) return; // a walk-and-drop that arrives stunned drops nothing (yet)
+    if (!byScript && this.itemsLocked(u)) return; // a walk-and-drop that arrives stunned drops nothing (yet)
     const held = u.inventory[slot];
     if (!held) return;
-    if (!this.mayLeaveInventory(held)) return; // made undroppable while the hero was walking over
+    // Made undroppable while the hero was walking over. A TRIGGER's move is not refused
+    // (`byScript`, see transferItem): SetItemPosition / UnitRemoveItem take any item out.
+    if (!byScript && !this.mayLeaveInventory(held)) return;
     u.inventory[slot] = null;
     u.pendingDrop = null;
     this.spawnGroundItem(held.itemId, x, y, held.charges, held.id);
@@ -30338,7 +30345,7 @@ export class SimWorld {
     }
     for (const u of this.units.values()) {
       const slot = u.inventory.findIndex((h) => h?.id === id);
-      if (slot >= 0) { this.doDropItem(u, slot, x, y); return true; }
+      if (slot >= 0) { this.doDropItem(u, slot, x, y, true); return true; }
     }
     return false;
   }
@@ -30359,7 +30366,7 @@ export class SimWorld {
       if (slot >= 0) {
         if (from.id === unitId) return true; // already his
         if (u.inventory.indexOf(null) < 0) return false;
-        this.transferItem(from, slot, u);
+        this.transferItem(from, slot, u, true);
         return true;
       }
     }
@@ -30371,7 +30378,7 @@ export class SimWorld {
     const u = this.units.get(unitId);
     const slot = u?.inventory.findIndex((h) => h?.id === itemId) ?? -1;
     if (!u || slot < 0) return false;
-    this.doDropItem(u, slot, u.x, u.y);
+    this.doDropItem(u, slot, u.x, u.y, true);
     return true;
   }
 
@@ -30381,7 +30388,7 @@ export class SimWorld {
     const held = u?.inventory[slot];
     if (!u || !held) return 0;
     const id = held.id;
-    this.doDropItem(u, slot, u.x, u.y);
+    this.doDropItem(u, slot, u.x, u.y, true);
     return id;
   }
 
