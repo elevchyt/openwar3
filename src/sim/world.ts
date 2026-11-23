@@ -28020,7 +28020,9 @@ export class SimWorld {
     // EVENT_PLAYER_UNIT_DEATH). Only when a script is listening (captureDeaths), so a
     // melee match with no trigger pump doesn't accumulate these. Snapshot both units
     // now — the victim is gone from `units` next tick, and the killer may move/die.
-    if (this.captureDeaths) {
+    // A destructible's body (`targetKey`) dies as a DESTRUCTABLE — the renderer raises that
+    // (MapViewerScene.reapDestructibles) — never as a Neutral Passive unit.
+    if (this.captureDeaths && !u.targetKey) {
       const killer = killerId ? this.units.get(killerId) : undefined;
       this.deathEvents.push({ victim: eventInfo(u), killer: killer ? eventInfo(killer) : null });
     }
