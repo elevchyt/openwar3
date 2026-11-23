@@ -2438,14 +2438,15 @@ export class Interpreter {
    * `TriggerRegisterPlayerChatEvent(t, p, chatString, exactMatchOnly)`:
    *
    *   • `exactMatchOnly` true  → the message must EQUAL `chatString`. "-ap" and nothing else.
-   *   • `exactMatchOnly` false → `chatString` is a PREFIX. This is the form that carries an
-   *     argument: a map registers "-kick " and reads the rest off the end, which is why
-   *     `GetEventPlayerChatStringMatched` exists at all — it hands back the registered
-   *     prefix so the action can slice it off and keep the parameter.
+   *   • `exactMatchOnly` false → `chatString` may stand ANYWHERE in the message — the GUI
+   *     words this choice "as A Substring" (`UI\TriggerData.txt` ChatMatchTypeSubstring), and
+   *     a map's command can carry its argument on either side: "-kick 3" works as before,
+   *     and a map's cheats may be typed number first ("5000gold", "10level" against "gold",
+   *     "level"). `GetEventPlayerChatStringMatched` hands back the registered string so the
+   *     action can cut it out and keep the parameter.
    *
-   * An EMPTY `chatString` with exactMatchOnly false is a prefix every message starts with, so
-   * it catches everything the player says. That is not an accident of this implementation —
-   * it is the documented idiom for "give me all of this player's chat".
+   * An EMPTY `chatString` with exactMatchOnly false is in every message, so it catches
+   * everything the player says — the documented idiom for "give me all of this player's chat".
    *
    * The comparison is case-SENSITIVE, as WC3's is: a map registering "-ap" is not answered by
    * "-AP", and maps that want both register both.
@@ -2464,7 +2465,7 @@ export class Interpreter {
       if (who?.k === "handle" && (this.rt.data<JassPlayer>(who)?.index ?? -1) !== player) continue;
       const pattern = reg.params[1]?.k === "string" ? reg.params[1].s : "";
       const exact = reg.params[2]?.k === "bool" && reg.params[2].b;
-      if (exact ? message !== pattern : !message.startsWith(pattern)) continue;
+      if (exact ? message !== pattern : !message.includes(pattern)) continue;
       const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
       if (!trig) continue;
       // The MATCHED string is per-registration, so it is added here rather than above.
