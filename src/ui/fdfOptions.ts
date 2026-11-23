@@ -13,6 +13,7 @@ import {
   type OptionDef,
 } from "../data/options";
 import { applyVideoOptions } from "../render/videoQuality";
+import { applyStageOptions } from "./stage";
 import { applyHealthBarOptions } from "../render/worldOverlays";
 import { applyHotkeyOptions } from "../data/hotkeys";
 import { applyScrollOptions } from "../render/scrollOptions";
@@ -118,7 +119,7 @@ export async function mountOptions(
   // per frame by the world overlays, so a bar changes colour as the pulldown is used — the
   // "Hotkeys:" row (issue #142), which the HUD's key handler asks before every keystroke — and
   // the two scroll sliders, which the camera asks every frame (render/scrollOptions.ts).
-  const applyGameplay = (opts: Options): void => { applyHealthBarOptions(opts); applyHotkeyOptions(opts); applyScrollOptions(opts); applyVoiceOptions(opts); };
+  const applyGameplay = (opts: Options): void => { applyHealthBarOptions(opts); applyHotkeyOptions(opts); applyScrollOptions(opts); applyVoiceOptions(opts); applyStageOptions(opts); };
 
   const num = (v: unknown, fallback: number): number => (typeof v === "number" ? v : fallback);
   const str = (v: unknown, fallback: string): string => (typeof v === "string" ? v : fallback);

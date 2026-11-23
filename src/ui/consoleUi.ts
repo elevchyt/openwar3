@@ -536,8 +536,7 @@ export class ConsoleUi {
     // the race's `UITile05`/`06`, which such an install lacks and vfs/derivedArt.ts makes from
     // its `UITile04` — named by PATH, since its war3skins.txt has no key for them either.
     const edge = this.sideTile();
-    if (edge && !JSON.stringify(console.children).includes("ConsoleTexture05")) {
-      const side = (file: string, h: number, v0: number, v1: number, point: string, dx: number): void => {
+    const side = (file: string, h: number, v0: number, v1: number, point: string, dx: number): void => {
         children.push({
           type: "TEXTURE",
           name: "",
@@ -553,11 +552,25 @@ export class ConsoleUi {
           ],
           children: [],
         });
-      };
+    };
+    if (edge && !JSON.stringify(console.children).includes("ConsoleTexture05")) {
       side(`${edge}5`, 0.032, 0, 0.125, "TOPLEFT", -0.256);
       side(`${edge}6`, 0.032, 0, 0.125, "TOPRIGHT", 0.256);
       side(`${edge}5`, 0.176, 0.3125, 1, "BOTTOMLEFT", -0.256);
       side(`${edge}6`, 0.176, 0.3125, 1, "BOTTOMRIGHT", 0.256);
+    }
+    // Past 16:9 ("Wide Screen", ui/stage.ts) the stage is wider than the two side panels reach
+    // (0.8 + 2 × 0.256 = an aspect of 2.19 at 0.6 tall), so the same panels are laid again
+    // further out, three more a side — wide enough for 32:9 and past it. Inside 16:9 they are
+    // all outside the stage and clipped with it. The panel is a run of masonry, so the copies
+    // meet as more of the same wall.
+    if (edge) {
+      for (let k = 2; k <= 4; k++) {
+        side(`${edge}5`, 0.032, 0, 0.125, "TOPLEFT", -0.256 * k);
+        side(`${edge}6`, 0.032, 0, 0.125, "TOPRIGHT", 0.256 * k);
+        side(`${edge}5`, 0.176, 0.3125, 1, "BOTTOMLEFT", -0.256 * k);
+        side(`${edge}6`, 0.176, 0.3125, 1, "BOTTOMRIGHT", 0.256 * k);
+      }
     }
 
     const bar = (name: string, point: "TOPLEFT" | "TOPRIGHT", dx: number, dy: number): void => {

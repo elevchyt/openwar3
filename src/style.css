@@ -76,6 +76,11 @@ html, body {
   --stage-h: min(100vh, calc(100vw * 3 / 4));
 }
 
+/* Options -> Video -> "Wide Screen" (ui/stage.ts `setWideStage`): no 16:9 cap on the width. */
+body.stage-wide {
+  --stage-w: 100vw;
+}
+
 /* WebGL scenes (terrain / model / map) sit behind the UI. One shows at a time. */
 #bg,
 #menubg,

@@ -50,6 +50,7 @@ import { mountOptions } from "./ui/fdfOptions";
 import { applyAudioOptions, loadOptions } from "./data/options";
 import { activeProfile, profilePlayerName } from "./data/profiles";
 import { applyVideoOptions } from "./render/videoQuality";
+import { applyStageOptions } from "./ui/stage";
 import { applyHealthBarOptions } from "./render/worldOverlays";
 import { applyHotkeyOptions } from "./data/hotkeys";
 import { applyScrollOptions } from "./render/scrollOptions";
@@ -122,6 +123,7 @@ applyVideoOptions(bootOptions);
 // live. Here beside the video half so a match started straight off a deep link is already
 // wearing the player's committed settings.
 applyHealthBarOptions(bootOptions);
+applyStageOptions(bootOptions); // "Wide Screen" (ui/stage.ts)
 // …and the panel's "Hotkeys:" row (issue #142), which the HUD's key handler reads live.
 applyHotkeyOptions(bootOptions);
 // …and its two scroll sliders, which the camera reads every frame (render/scrollOptions.ts).
