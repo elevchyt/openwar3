@@ -95,6 +95,9 @@ data, or asset behaviour, **consult our sources** and cite what you used.
 
 - **Git workflow:** commit and push directly to `main` — do **not** create a branch or open a PR unless the developer
   explicitly asks for one. Still commit only when the change is done and verified (`pnpm typecheck` / in-browser as needed).
+  **No AI co-authors:** never add a `Co-authored-by: Claude …` trailer or a "Generated with Claude Code" footer to a
+  commit or PR. `.claude/settings.json` turns Claude Code's own attribution off, `.husky/commit-msg` strips it
+  (`tools/strip-ai-attribution.mjs`), and the `Attribution` workflow fails a PR whose commits still carry it.
 - **Build / check:** `pnpm dev` (localhost:5173), `pnpm build` (typecheck + build), `pnpm typecheck`. Run `pnpm typecheck`
   before considering a change done. `pnpm data:verify` re-checks `src/data/gameplayConstants.ts` against the unpacked
   data — run it after touching that file (needs `pnpm data:extract` first). `pnpm casc:test` checks the CASC mount

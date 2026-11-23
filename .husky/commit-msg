@@ -1,0 +1,5 @@
+# No AI assistant is listed as a commit's co-author here: a `Co-authored-by: Claude …` trailer
+# or a "Generated with Claude Code" footer is taken out of the message before the commit is
+# made, so it never reaches a pull request. tools/strip-ai-attribution.mjs says what counts;
+# .github/workflows/attribution.yml catches a commit made where this hook did not run.
+node tools/strip-ai-attribution.mjs "$1"

@@ -1,0 +1,53 @@
+# No AI co-authors (the developer's rule): a pull request whose commits name Claude as a
+# co-author (`Co-authored-by: Claude … <noreply@anthropic.com>`) or as the author fails here,
+# because a squash merge carries those trailers into main and GitHub then lists "claude" among
+# the repo's participants. Commits made in a clone with `pnpm install` run never get that far —
+# .husky/commit-msg strips the trailer — and Claude Code is told not to write one
+# (.claude/settings.json). This is the backstop for everything else, e.g. a fork whose branch
+# we cannot rewrite: the contributor strips it with the command printed below.
+#
+# It reads the PR's commits through the API and runs nothing from the PR's own tree.
+name: Attribution
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  no-ai-coauthors:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          sparse-checkout: tools/strip-ai-attribution.mjs
+          sparse-checkout-cone-mode: false
+      - name: Check commit messages and authors
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+        run: |
+          gh api --paginate "repos/${{ github.repository }}/pulls/$PR/commits" \
+            --jq '.[] | .commit.message, "Co-authored-by: \(.commit.author.name) <\(.commit.author.email)>", "Co-authored-by: \(.commit.committer.name) <\(.commit.committer.email)>"' \
+            > commits.txt
+          if ! node tools/strip-ai-attribution.mjs --check < commits.txt > hits.txt; then
+            echo "::error::This pull request lists Claude as a commit co-author or author:"
+            sort -u hits.txt | sed 's/^/    /'
+            cat <<EOF
+
+          Remove it before merging. In your branch (no other change to the commits):
+
+            git filter-branch -f --msg-filter 'node tools/strip-ai-attribution.mjs' origin/$BASE..HEAD
+            git push --force-with-lease
+
+          and run \`pnpm install\` once so .husky/commit-msg keeps it out of your next commits.
+          EOF
+            exit 1
+          fi
+          echo "No AI co-authors."

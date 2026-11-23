@@ -38,4 +38,6 @@ build/
 electron/main-legacy.cjs
 
 # Claude Code local settings and worktrees
-.claude/
+.claude/*
+# …except the project settings, which keep Claude Code from adding co-author trailers
+!.claude/settings.json
