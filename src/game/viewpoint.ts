@@ -370,7 +370,9 @@ export class Viewpoint {
     this.stampModifiers(modifiers, false);
     for (const u of this.world.units.values()) {
       // Shops/critters don't scout for you — unless a script lent that one unit's sight to us.
-      if (u.neutralPassive && !(this.player >= 0 && u.visionSharedWith?.includes(this.player))) continue;
+      // A neutral that kept its SLOT (Neutral Victim/Extra, RtsController.createScriptUnit) is a
+      // player the script can make share its sight, and `revealsFor` asks the alliance for it.
+      if (u.neutralPassive && u.owner < 0 && !(this.player >= 0 && u.visionSharedWith?.includes(this.player))) continue;
       if (!this.revealsFor(u)) continue;
       const r = (day ? u.sightDay : u.sightNight) || u.sightDay || 800;
       // The unit id opts this sight into the shared footprint cache: a unit that has not

@@ -3104,7 +3104,13 @@ export class RtsController {
     // 13/14/15 — never a fighting slot. And ONLY those: 16–23 are real players on a map saved
     // for the 24-player table (enums.ts isNeutralSlot).
     const passive = isNeutralSlot(player) && !creep;
-    const owner = creep ? NEUTRAL_HOSTILE_OWNER : passive ? NEUTRAL_PASSIVE_OWNER : player;
+    // Neutral Victim (13) and Neutral Extra (14) keep their SLOT as the sim owner: a script can
+    // grant either one's sight to the players (`SetPlayerAlliance(Player(14), p,
+    // ALLIANCE_SHARED_VISION, true)` is how a scenario shows a player set pieces it builds on
+    // those slots), and sight is shared by owner, never by the anonymous -1 every other neutral
+    // is filed under. They stay passive (`neutralPassive`, the passive team).
+    const keepSlot = passive && player !== neutralSlot(PlayerSlot.NeutralPassive);
+    const owner = creep ? NEUTRAL_HOSTILE_OWNER : keepSlot ? player : passive ? NEUTRAL_PASSIVE_OWNER : player;
     const team = creep ? NEUTRAL_HOSTILE_TEAM : passive ? NEUTRAL_PASSIVE_TEAM : teamOf(player);
     const simId = this.reserveUnitId();
     this.addSimUnit(def, x, y, facing, owner, team, 0, simId); // exists NOW
