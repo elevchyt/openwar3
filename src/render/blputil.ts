@@ -11,6 +11,10 @@ export interface BlpOptions {
 }
 
 export function blpToCanvas(bytes: Uint8Array, opts: BlpOptions = {}): HTMLCanvasElement | null {
+  // A map may import its art as TARGA under any name a texture is asked for by — an item icon
+  // `BTN….tga`, a cinematic filter mask in `war3mapImported\` (RLE, 32-bit). The game reads
+  // either format wherever it reads an image, so the bytes decide, not the caller.
+  if (!isBlp(bytes)) return tgaToCanvas(bytes);
   try {
     const image = new BlpImage();
     image.load(bytes);
@@ -24,6 +28,11 @@ export function blpToCanvas(bytes: Uint8Array, opts: BlpOptions = {}): HTMLCanva
   } catch {
     return null;
   }
+}
+
+/** Does this file start with a BLP magic (`BLP0`/`BLP1`/`BLP2`)? */
+function isBlp(bytes: Uint8Array): boolean {
+  return bytes.length >= 4 && bytes[0] === 0x42 && bytes[1] === 0x4c && bytes[2] === 0x50;
 }
 
 /** The TGA twin of `blpToCanvas` — a map's `war3mapPreview.tga` is the one TGA the UI draws

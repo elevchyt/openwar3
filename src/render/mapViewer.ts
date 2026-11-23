@@ -2176,6 +2176,16 @@ export class MapViewerScene {
     return this.assetLayer.files;
   }
   private assetLayer: { epoch: number; files: DataSource } | null = null;
+  /** `assetFiles()` as a DataSource that asks it at every read, for the overlays made once per
+   *  scene before any map is mounted: a cinematic filter (`SetCineFilterTexture` on a
+   *  `war3mapImported\…` mask) and a multiboard icon may be the map's own art. */
+  private readonly liveAssets: DataSource = {
+    label: "map+install",
+    exists: (path) => this.assetFiles().exists(path),
+    read: (path) => this.assetFiles().read(path),
+    rawBytes: (path) => this.assetFiles().rawBytes(path),
+    list: () => this.assetFiles().list(),
+  };
 
   /** Construct the viewer and wait for its base SLK tables (required before loadMap). */
   static async create(canvas: HTMLCanvasElement, vfs: DataSource, sounds: SoundBoard | null = null): Promise<MapViewerScene> {
@@ -6287,10 +6297,10 @@ export class MapViewerScene {
     this.scriptFrames = new ScriptFrameOverlay(ui, () => this.assetFiles(), skin, (frame, event) => {
       if (!this.replayPlayback) this.mapScript?.interp.fireFrameEvent(frame, event, this.localPlayer);
     });
-    this.multiboard = new MultiboardOverlay(ui, this.vfs, skin);
+    this.multiboard = new MultiboardOverlay(ui, this.liveAssets, skin);
     this.timerDialogs = new TimerDialogOverlay(ui, this.vfs, skin);
     this.suspendDialog = new SuspendDialogOverlay(ui, this.vfs, skin);
-    this.cinematic = new CinematicPanelOverlay(ui, this.vfs, skin);
+    this.cinematic = new CinematicPanelOverlay(ui, this.liveAssets, skin);
     this.dialog = new GameDialogOverlay(ui, this.vfs, skin, {
       // WC3 closes a dialog on ANY button click, and a QUIT button additionally ends the
       // game — both are the engine's doing, which is why blizzard.j's MeleeVictoryDialogBJ
@@ -17834,6 +17844,7 @@ export class MapViewerScene {
       // …and scaled by the Game Speed, so a clip plays at the rate the sim under it walks.
       const wdt = this.paused ? 0 : dt * this.speedRate;
       this.updateCamera(dt);
+      this.rts?.reprojectBars(); // the bars follow THIS camera, not the one the step saw
       this.metrics.frame(dt, this.rts?.unitCount() ?? 0, this.rts?.pingMs());
       this.hud?.frame(dt);
       this.updateClock(wdt);

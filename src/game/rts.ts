@@ -11863,6 +11863,21 @@ export class RtsController {
     this.overlays.syncVoiceLabels(specs);
   }
 
+  /** The status bars `updateHealthBars` last built — kept so `reprojectBars` can put them
+   *  under the camera of the frame actually drawn. */
+  private barSpecs: BarSpec[] = [];
+
+  /**
+   * Put the status bars where THIS frame's camera sees their units. The specs are built in
+   * `syncEntries`, which runs only on a frame that retired a sim step and before the scene
+   * moves its camera — so a pan left the bars standing where the last camera had them, a frame
+   * behind every frame and several behind on frames with no step (or a paused game), sliding
+   * after their units. The projection is cheap and `syncBars` writes only what changed.
+   */
+  reprojectBars(): void {
+    this.overlays.syncBars(this.barSpecs);
+  }
+
   /** Draw a floating HP bar above every visible unit each frame (always-on),
    *  reusing a pool of DOM elements. Off-screen / hidden units release theirs. */
   /**
@@ -11881,6 +11896,7 @@ export class RtsController {
     // over a scene that is meant to look like a film: bars over every Watcher through
     // Maiev's opening lines. Same switch, honoured in the one place that builds them.
     if (!this.interfaceShown) {
+      this.barSpecs = specs;
       this.overlays.syncBars(specs);
       return;
     }
@@ -11963,6 +11979,7 @@ export class RtsController {
         abilitySig: row?.sig ?? "",
       });
     }
+    this.barSpecs = specs;
     this.overlays.syncBars(specs);
   }
 

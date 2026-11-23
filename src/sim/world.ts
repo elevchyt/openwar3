@@ -21053,11 +21053,15 @@ export class SimWorld {
   }
 
   /**
-   * `AddItemToAllStock` / `AddUnitToAllStock` — the ware goes on the shelf of EVERY building that
-   * sells that kind of thing ("Adds an item … to all shops and marketplaces" — jassdoc), and
-   * `Remove…FromAllStock` takes it off every shelf. A shop is asked the way a purchase asks it
-   * (`isShopUnit`), plus the one shop that is empty by design until a script stocks it: the
-   * Marketplace, which Blizzard.j itself finds by name (`GroupEnumUnitsOfType(g, "marketplace")`).
+   * `AddItemToAllStock` / `AddUnitToAllStock` — the ware goes on the shelf of every building that
+   * keeps a SCRIPTED shelf of that kind, and `Remove…FromAllStock` takes it off every shelf. A
+   * scripted shelf is an ABILITY, not "sells something": `Asid` "Sell Items" / `Asud` "Sell
+   * Units", which the data puts on exactly one stock unit — the Marketplace, `nmrk`
+   * `abilList=Aneu,Asid,Avul,Asud,Apit` (Units\UnitAbilities.slk) — while every shop that sells
+   * off its own `Sellitems`/`Sellunits` row (Goblin Merchant `Aneu,Avul,Apit`, Tavern, Goblin
+   * Laboratory `Ane2,Andt,Avul`) has neither. Asking the data rows instead put a map's rotating
+   * market wares ("Hire Murloc Huntsman") on a custom shop built on the Goblin Laboratory,
+   * which a player reports the original (1.27) never offers there.
    */
   addToAllStock(wareId: string, kind: "item" | "unit", count: number, max: number): void {
     for (const u of this.units.values()) {
@@ -21069,12 +21073,12 @@ export class SimWorld {
   removeFromAllStock(wareId: string): void {
     for (const u of this.units.values()) u.building?.stock?.delete(wareId);
   }
-  /** Does this building keep a shelf of `kind` — by data, or by what a script already put there? */
+  /** Does this building carry the scripted shelf of `kind` — `Asid` / `Asud`, on the unit itself
+   *  (a map may grant one) or in its type's `abilList`? */
   private sellsKind(u: SimUnit, kind: "item" | "unit"): boolean {
-    const w = this.shopWares(u.typeId);
-    if ((kind === "item" ? w.items : w.units).length > 0) return true;
-    for (const s of u.building?.stock?.values() ?? []) if (s.kind === kind) return true;
-    return kind === "item" && u.typeId === "nmrk"; // the Marketplace: no Sellitems row at all
+    const code = kind === "item" ? "Asid" : "Asud";
+    if (u.abilities.some((a) => a.id === code || a.code === code)) return true;
+    return this.unitReg?.get(u.typeId)?.abilities?.includes(code) ?? false;
   }
 
   /**
@@ -21858,6 +21862,19 @@ export class SimWorld {
    *  spot that fits (the snap teleportUnit always takes); a ghost (`SetUnitPathing` off) refuses
    *  nothing, exactly as everywhere else. The body is then settled WHERE IT STANDS. */
   private scriptPlace(u: SimUnit, x: number, y: number, pathed: boolean): void {
+    // Nothing is set down past the edge of the WORLD. SetUnitPosition keeps a unit inside it,
+    // and a SetUnitX/Y out there is the classic crash of the original (Jassbot: SetUnitX "is a
+    // low level call"; hiveworkshop's standing advice is to clamp it to the world bounds first),
+    // so the edge is the one answer that is safe for both. Maps park units "out of play" with a
+    // huge coordinate, and a body a billion units out is one every path search and distance
+    // test in the world then has to reach.
+    if (this.grid) {
+      const [ox, oy] = this.grid.origin;
+      const maxX = ox + this.grid.width * PATHING_CELL - 1;
+      const maxY = oy + this.grid.height * PATHING_CELL - 1;
+      x = Math.min(Math.max(x, ox), maxX);
+      y = Math.min(Math.max(y, oy), maxY);
+    }
     u.teleports++; // a missile in the air at it is disjointed, as by any teleport (missileDisjointed)
     this.teleportedFrom.set(u.id, { x: u.x, y: u.y });
     this.popFromMine(u);
@@ -21956,7 +21973,10 @@ export class SimWorld {
     // A unit that cannot turn (turnRate 0 — every structure) would otherwise sit on an
     // unreachable target forever, so the timed form lands instantly too. The trigger still
     // gets what it asked for; only the rotating-there part has no meaning here.
-    if (instant || u.turnRate <= 0) u.facing = rad;
+    // A PAUSED unit is left out of the turning pass, yet war3.exe still turns it (1.27, checked:
+    // a row of paused units turned with SetUnitFacingTimed(…, 0) is drawn facing the new way).
+    // So it lands at once too.
+    if (instant || u.turnRate <= 0 || u.paused) u.facing = rad;
   }
   /** JASS SetUnitOwner — reassign owner + team (team decides allegiance/vision). Goes
    *  through changeUnitOwner so a script-driven handover re-tints the model too, exactly as
@@ -28020,7 +28040,9 @@ export class SimWorld {
     // EVENT_PLAYER_UNIT_DEATH). Only when a script is listening (captureDeaths), so a
     // melee match with no trigger pump doesn't accumulate these. Snapshot both units
     // now — the victim is gone from `units` next tick, and the killer may move/die.
-    if (this.captureDeaths) {
+    // A destructible's body (`targetKey`) dies as a DESTRUCTABLE — the renderer raises that
+    // (MapViewerScene.reapDestructibles) — never as a Neutral Passive unit.
+    if (this.captureDeaths && !u.targetKey) {
       const killer = killerId ? this.units.get(killerId) : undefined;
       this.deathEvents.push({ victim: eventInfo(u), killer: killer ? eventInfo(killer) : null });
     }
