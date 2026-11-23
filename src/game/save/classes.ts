@@ -66,7 +66,7 @@ export function registerSaveClasses(): void {
   // --- the world -----------------------------------------------------------------------------------
   // `jobScratch` is a path search's working set (pathfind.ts PathScratch) — scratch; a search in
   // flight is landed before a save is taken (SimWorld.settleForSave), so there is none to keep.
-  registerSaveClass("sim.SimWorld", SimWorld, ["jobScratch", "arrowBlow", "auraCells", "auraLoose", "auraScratch"]);
+  registerSaveClass("sim.SimWorld", SimWorld, ["jobScratch", "arrowBlow", "auraCells", "auraLoose", "auraScratch", "auraGroups", "auraKinds"]);
   registerSaveClass("sim.PathingGrid", PathingGrid);
   registerSaveClass("sim.TechState", TechState);
   registerSaveClass("sim.MatchStats", MatchStats);
