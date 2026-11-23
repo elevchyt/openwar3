@@ -37,7 +37,7 @@ carry a `SpellFilterValue` — see below — but as a READOUT, not a control.)
 | **Renderer** | Ours. Which Chromium launch switches the desktop app starts with — see "Renderer" below. |
 | **Resolution** | The size of the buffer the world is drawn into. |
 | **Model Detail** | *Nothing* — see below. |
-| **Animation Quality** | Strides the map's widget stand-scan (1 / 2 / 4 frames); **Low** also SHARES animation (30 Hz poses — see below). |
+| **Animation Quality** | Samples the shared poses at 240 / 60 / 30 Hz (every rung takes the shared pose path — see below), and strides the map's widget stand-scan (1 / 2 / 4 frames). |
 | **Texture Quality** | Drops 0 / 1 / 2 mip levels off the top of every BLP as it uploads. |
 | **Particles** | Scales emission ×1 / ×0.5 / ×0.25 on top of the viewer's `SETTING_PARTICLES_HIGH`. |
 | **Lights** | Caps the glue scene's uploaded omni lights at 8 / 4 / 0. |
@@ -176,10 +176,42 @@ ordinary values by three doors: the weak-graphics prompt's Yes, the `?lowperf` l
 #161 asks for one), and a store from when the box existed (`loadOptions` migrates a stored
 `lowPerf: true` ONCE into the rows it was drawing, resolution untouched, and drops the key).
 
-### The shared pose cache — Animation Quality: Low
+### The shared pose cache — every Animation Quality rung
 
-`SHARED_POSES` in videoQuality.ts. It began as the mode's alone; it now lives on the row whose
-name already says what it costs, so High stays the exact, every-frame animation the game draws.
+`SHARED_POSES` and `POSE_BUCKET_MS` in videoQuality.ts. It began as Low Performance Mode's alone,
+then lived on Animation Quality: Low while High and Medium kept the old per-instance node walk for
+"exact" animation. **It is every rung's path now, and the rungs differ only in how often a pose is
+sampled**: High at 1/240 s (finer than any display draws), Medium at 1/60, Low at 1/30.
+
+What moved it is a measurement that turned the reasoning around (2026-11-23, a 300-unit brawl on
+Bleach vs One Piece, ~370 models on screen, every clip desynchronised so almost nothing shared, the
+scene's own update timed in a loop):
+
+| Path | Animation, ms per frame |
+|---|---|
+| The old per-instance walk (what High and Medium used to be) | 14.5–15.9 |
+| Shared path, sampled every 1/240 s (High now) | 6.8 |
+| Shared path, every 1/144 s | 5.2 |
+| Shared path, every 1/60 s (Medium now) | 5.3 |
+| Shared path, every 1/30 s (Low) | 5.6 |
+
+The cost does not move with the bucket. What makes this path cheap was assumed to be SHARING —
+instances at one point of one clip taking one pose — and in a real fight it barely is; it is the
+path itself: the pose is composed in the instance's own space and the instance's matrix is applied
+in the shader (`u_instance`), so a unit that moves no longer forces its whole skeleton to be
+recomposed every frame (the `forced` trap below). Finer buckets only cost cache hits, which are
+cheap. And the path is exact up to the bucket: parked on a bucket boundary, the shader's product
+`instance.worldMatrix × bones[i]` agrees with the old walk's `worldMatrices[i]` to ≤0.00024 world
+units on the brawl's 16 models and ≤0.001 on the stock heroes and buildings (the method is
+"How to verify a change here" below). A cross-fade between two clips still samples for itself, as
+it always did, so transitions are untouched.
+
+One thing the faster rate exposed: a dropped pose's bone TEXTURE was never freed. At 30 Hz the
+cache rarely filled; at 1/240 s a no-billboard model mints a pose a frame, the 3 000-entry cap is
+hit every few seconds, and the textures were left for the garbage collector. `ow3ClearPoses` now
+frees them one clear LATE (`ow3TexturesToFree`), because a clear happens mid-update and an
+instance updated earlier that frame is about to be drawn with a texture of the generation being
+dropped.
 
 The other rows of the preset are the small half of what it is worth. The large half is this one
 change, and it comes straight off the profile: at 257 units and 6× CPU throttle the
@@ -240,7 +272,7 @@ Three things still belong to the instance and are done for it:
   runtime (`inst.setParent(node)`), and a cached list would leave that model at the world origin.
 - **The click ray** (`src/render/modelCollision.ts`) composes the same product for the two or
   three collision shapes it tests, or a click lands on a body standing at the origin.
-- **The flip itself.** Entering or leaving Animation Quality: Low changes what the matrices MEAN, so the instance
+- **The flip itself.** Taking or leaving the shared path (`sharedPoses`, or a cross-fade starting) changes what the matrices MEAN, so the instance
   forces a full pass on that frame and re-uploads its own texture.
 
 **BILLBOARDED nodes are redone per instance rather than shut out.** A billboarded node faces the
@@ -356,7 +388,7 @@ is a hunk somebody has to reason about later.
 | Row | Set to |
 |---|---|
 | Model Detail | Low *(no backend — see below)* |
-| Animation Quality | Low (widget scan strided 4, and the shared pose cache above) |
+| Animation Quality | Low (widget scan strided 4, and poses sampled at 30 Hz) |
 | Texture Quality | Low (2 mips dropped; reaches the NEXT map) |
 | Particles | Low (×0.25) |
 | Lights | Low (no omni lights) |
@@ -419,9 +451,8 @@ level down blends further across their borders; promoting a coarse level to leve
 drop. Nothing is lost by it: the memory is in the hundreds of unit and doodad skins, and those
 are square.
 
-**Animation Quality cannot STRIDE the skeletons, and that is not an oversight.** (Its Low rung
-reaches them a different way — by SHARING them, a cache rather than a skip; see the shared pose
-cache.) The expensive
+**Animation Quality cannot STRIDE the skeletons, and that is not an oversight.** (Every rung
+reaches them a different way — the shared pose cache above, a cache rather than a skip.) The expensive
 half of animating a model is the node walk and the per-instance bone-texture upload — and the sim
 moves a unit by writing its position onto the instance, with the bone matrices carrying that to
 the screen. An instance whose animation is skipped is an instance that **stops moving**. So what

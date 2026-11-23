@@ -1486,10 +1486,10 @@ index 5f2c0c2ffbfae107c42070fe99e41669814924ef..3101fe8514c3933b217efeeaa2f1397b
              solverParams.hd = true;
              // mdxHandler.loadEnv(viewer);
 diff --git a/dist/cjs/viewer/handlers/mdx/modelinstance.js b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-index 020a99b949ec1634579d439261027e00b6da23ac..e58db761fa91346f12c29e6dcbc21100de11c888 100644
+index 020a99b949ec1634579d439261027e00b6da23ac..6d258ff9b9a44ad641b2bbff54cb97d86fa90525 100644
 --- a/dist/cjs/viewer/handlers/mdx/modelinstance.js
 +++ b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-@@ -15,12 +15,545 @@ const eventobjectubremitter_1 = require("./eventobjectubremitter");
+@@ -15,12 +15,569 @@ const eventobjectubremitter_1 = require("./eventobjectubremitter");
  const eventobjectsndemitter_1 = require("./eventobjectsndemitter");
  const geometryemitterfuncs_1 = require("./geometryemitterfuncs");
  const visibilityHeap = new Float32Array(1);
@@ -1549,7 +1549,8 @@ index 020a99b949ec1634579d439261027e00b6da23ac..e58db761fa91346f12c29e6dcbc21100
 +// THE COST IS QUANTIZED ANIMATION TIME. A shared pose is sampled at the BUCKET's time rather
 +// than at each instance's own frame, so clips step at 30 Hz. That is the trade this mode is
 +// for, and it is smaller than it sounds — MDX tracks are authored at about that rate — but it
-+// is why this is off unless Low Performance Mode is on.
++// is why each Animation Quality rung picks its own bucket (src/render/videoQuality.ts
++// POSE_BUCKET_MS): High samples finer than any display draws, so on High it is exact up to 1/240 s.
 +//
 +// Entries OUTLIVE THE FRAME on purpose: a walk cycle loops, so after one lap every bucket of
 +// it is already sampled and a crowd of Footmen samples nothing at all.
@@ -1765,10 +1766,33 @@ index 020a99b949ec1634579d439261027e00b6da23ac..e58db761fa91346f12c29e6dcbc21100
 +    }
 +    return pose;
 +}
++/**
++ * The bone textures of the generation of poses dropped at the LAST clear, still waiting to be
++ * freed. A dropped pose's texture used to be left for the garbage collector — harmless when the
++ * cache filled once a minute at 30 Hz, and not once every rung shares at its own rate: High's
++ * 1/240 s buckets in a 300-unit fight drop the cache every few frames, and the textures piled up
++ * at hundreds a second.
++ *
++ * Freed one clear LATE on purpose. A clear happens inside a frame's update, so an instance
++ * updated earlier in that frame is still wearing a texture from the generation being dropped
++ * and is about to be drawn with it. By the next clear every instance that is drawn has been
++ * updated since (a drawn instance is updated before the draw, every frame), so nothing can be
++ * holding the generation before.
++ */
++let ow3TexturesToFree = [];
 +/** Drop every cached pose. Called when the cache has grown past its cap — the models whose
 + *  poses are being asked for right now re-fill within a lap of their clips. */
 +function ow3ClearPoses(current) {
++    for (const texture of ow3TexturesToFree) {
++        texture.gl.deleteTexture(texture.texture);
++    }
++    ow3TexturesToFree = [];
 +    for (const model of ow3PoseModels) {
++        for (const pose of model.ow3PoseCache.values()) {
++            if (pose.texture !== null) {
++                ow3TexturesToFree.push(pose.texture);
++            }
++        }
 +        model.ow3PoseCache = new Map();
 +    }
 +    ow3PoseModels.clear();
@@ -2035,7 +2059,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..e58db761fa91346f12c29e6dcbc21100
  /**
   * An MDX model instance.
   */
-@@ -48,12 +581,60 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -48,12 +605,60 @@ class MdxModelInstance extends modelinstance_1.default {
          // Any later non-forced update can then use variancy to skip updating things.
          // It is set to true every time the sequence is set with setSequence().
          this.forced = true;
@@ -2096,7 +2120,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..e58db761fa91346f12c29e6dcbc21100
          for (let i = 0, l = model.geosets.length; i < l; i++) {
              this.geosetColors[i] = new Float32Array(4);
          }
-@@ -216,45 +797,193 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -216,45 +821,193 @@ class MdxModelInstance extends modelinstance_1.default {
       * Updates all of this instance internal nodes and objects.
       * Nodes that are determined to not be visible will not be updated, nor will any of their children down the hierarchy.
       */
@@ -2303,7 +2327,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..e58db761fa91346f12c29e6dcbc21100
                  // If the attachment/emitter is visible, update it.
                  if (visibilityHeap[0] > 0) {
                      node.object.update(dt);
-@@ -262,13 +991,50 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -262,13 +1015,50 @@ class MdxModelInstance extends modelinstance_1.default {
              }
              // Recalculate and update child nodes.
              // Note that this only affects normal nodes such as instances, and not skeletal nodes.
@@ -2355,7 +2379,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..e58db761fa91346f12c29e6dcbc21100
      }
      /**
       * If a model has no sequences or is running no sequence, it will only update once since it will never be forced to update.
-@@ -362,24 +1128,192 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -362,24 +1152,192 @@ class MdxModelInstance extends modelinstance_1.default {
              }
          }
      }
@@ -2550,7 +2574,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..e58db761fa91346f12c29e6dcbc21100
          const model = this.model;
          const sequenceId = this.sequence;
          if (sequenceId !== -1) {
-@@ -405,6 +1339,10 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -405,6 +1363,10 @@ class MdxModelInstance extends modelinstance_1.default {
                  this.sequenceEnded = false;
              }
          }
@@ -2561,7 +2585,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..e58db761fa91346f12c29e6dcbc21100
          const forced = this.forced;
          if (sequenceId !== -1 || forced) {
              // Update the nodes
-@@ -421,6 +1359,12 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -421,6 +1383,12 @@ class MdxModelInstance extends modelinstance_1.default {
       */
      setTeamColor(id) {
          this.teamColor = id;
@@ -2574,7 +2598,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..e58db761fa91346f12c29e6dcbc21100
          return this;
      }
      /**
-@@ -436,6 +1380,7 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -436,6 +1404,7 @@ class MdxModelInstance extends modelinstance_1.default {
      setSequence(id) {
          const model = this.model;
          const sequences = model.sequences;
@@ -2582,7 +2606,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..e58db761fa91346f12c29e6dcbc21100
          this.sequence = id;
          if (id < 0 || id > sequences.length - 1) {
              this.sequence = -1;
-@@ -445,11 +1390,86 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -445,11 +1414,86 @@ class MdxModelInstance extends modelinstance_1.default {
          else {
              this.frame = sequences[id].interval[0];
          }

@@ -274,8 +274,14 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   are not in it. A future cheaper rendering path lands as a RUNG of its own row, not as a switch
   over the panel. That row's big trick is the **shared pose cache**
   (`VideoBridge.sharedPoses`, the cache at the top of the patch's `mdx/modelinstance.js`), which
-  is **Animation Quality: Low** (`SHARED_POSES`) — High and Medium stay exact, every-frame
-  animation:
+  EVERY Animation Quality rung takes (`SHARED_POSES`); a rung picks only how often a pose is
+  SAMPLED (`POSE_BUCKET_MS`: High 1/240 s — finer than any display draws, so it reads as exact,
+  ≤0.001 world units off the old per-instance walk — Medium 1/60, Low 1/30). Its cost does NOT
+  depend on that rate: the saving is the PATH (a pose composed in instance space, the instance's
+  matrix applied in the shader, so a moving unit no longer recomposes its skeleton), not
+  cross-instance sharing — 300 brawling units on Bleach vs One Piece were 14.5 ms of animation a
+  frame on the old walk and 5.2–5.6 ms here at every bucket from 1/144 to 1/30 s. The cache frees
+  the bone textures of the poses it drops one clear later (`ow3TexturesToFree`). Originally:
   profiled, the MDX NODE WALK is ~41% of all CPU and the DRAWING is ~7%, so a second renderer is
   aimed at the wrong number — and 317 visible instances were found holding **60** distinct
   `(model, sequence, 1/30 s)` poses, so the pose is sampled once and replayed (SightStamps'

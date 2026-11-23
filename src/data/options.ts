@@ -342,7 +342,7 @@ export function loadOptions(): Options {
  */
 export const LOWEST_VIDEO: Readonly<Options> = {
   modelDetail: "low",
-  animQuality: "low", // …which is also the shared pose cache, the largest saving of all (render/videoQuality.ts SHARED_POSES)
+  animQuality: "low", // 30 Hz poses and a widget scan every 4th frame (render/videoQuality.ts POSE_BUCKET_MS)
   textureQuality: "low",
   particles: "low",
   lights: "low",

@@ -170,13 +170,14 @@ console.log("\nthe video applier turns the panel's words into the renderer's num
   applyVideoOptions({ ...defaultOptions(), animQuality: "low", lights: "low" });
   check("low anim scans a quarter as often", animStride(), 4);
   check("low lights uploads no points", maxOmniLights(), 0);
-  // …and Low is the rung that SHARES animation (30 Hz poses, `sharedPoses`). High and Medium
-  // stay exact.
-  check("low anim shares poses", bridge().sharedPoses, true);
+  // Every rung takes the shared-skeleton path (`sharedPoses`); what a rung picks is how often a
+  // pose is sampled (`poseBucket`): 1/30 s on Low, 1/60 on Medium, and finer than any display
+  // draws on High (1/240 s), so High reads as exact.
+  check("low anim samples at 30 Hz", [bridge().sharedPoses, bridge().poseBucket], [true, 1000 / 30]);
   applyVideoOptions({ ...defaultOptions(), animQuality: "medium" });
-  check("medium anim animates every frame", bridge().sharedPoses, false);
+  check("medium anim samples at 60 Hz", [bridge().sharedPoses, bridge().poseBucket], [true, 1000 / 60]);
   applyVideoOptions(defaultOptions());
-  check("…and so does high, the default", bridge().sharedPoses, false);
+  check("high, the default, samples at 240 Hz", [bridge().sharedPoses, bridge().poseBucket], [true, 1000 / 240]);
 
   // A store written by an older build, or edited by hand, must not put a junk string into a
   // renderer ladder — every rung is looked up by key and an unknown one is not a rung.

@@ -63,43 +63,47 @@ export interface VideoBridge {
   /** Mipmap levels to drop from the top of a BLP's chain as it is uploaded. 0 = full size. */
   textureMipDrop: number;
   /**
-   * Animation Quality's LOW rung (`SHARED_POSES`): may an MDX instance take a pose another
-   * instance of the same model already sampled, at the same clip and the same 1/30 s of it?
-   *
-   * The one rung on the panel that takes real work off the CPU in a big fight. Profiled at 257 units and 6x CPU
-   * throttle, the MDX node walk is ~41% of all CPU against ~7% for the drawing, and 317 visible
-   * instances were holding 60 distinct poses. The cache and the reasoning live at the top of
-   * `viewer/handlers/mdx/modelinstance.js` in the patch; what it costs is animation time
-   * quantized to 30 Hz, which is why High and Medium leave it off: they animate every frame,
-   * as the game does.
+   * Does the match's world viewer take the SHARED-SKELETON path (`SHARED_POSES` — every rung):
+   * a pose composed in the instance's own space, cached per (model, clip, `poseBucket`) and worn
+   * by every instance at that point of that clip, with the instance's matrix applied in the
+   * shader. Profiled at 257 units, the MDX node walk was ~41% of all CPU against ~7% for the
+   * drawing; this path takes most of that walk away. The cache and the reasoning live at the top
+   * of `viewer/handlers/mdx/modelinstance.js` in the patch. False is the old per-instance walk,
+   * kept so the two can be measured against each other.
    */
   sharedPoses: boolean;
   /**
-   * How coarse a shared pose bucket is, in ms of ANIMATION time. Default 1000/30, which is about
-   * the rate an MDX's tracks are authored at and so the rate at which stepping stops being
-   * visible. A knob rather than a constant because it is the one dial on the animation path with
-   * two effects at once — fewer buckets means fewer poses SAMPLED and more instances sharing each
-   * one — and its cost is purely how the clips read, which is a judgement to be measured and
-   * looked at rather than argued (docs/perf-research.md).
+   * How often a shared pose is SAMPLED, in ms of animation time — the one dial Animation Quality
+   * turns (`POSE_BUCKET_MS`: 1/240 s on High, 1/60 on Medium, 1/30 on Low).
    */
   poseBucket: number;
 }
 
 const bridge = (): VideoBridge => {
   const g = globalThis as { __OW3_VIDEO__?: VideoBridge };
-  return (g.__OW3_VIDEO__ ??= { particleScale: 1, textureMipDrop: 0, sharedPoses: false, poseBucket: POSE_BUCKET_MS });
+  return (g.__OW3_VIDEO__ ??= { particleScale: 1, textureMipDrop: 0, sharedPoses: true, poseBucket: POSE_BUCKET_MS.high });
 };
 
 /**
- * The shared pose bucket, in ms of animation time — Animation Quality: Low's one dial.
+ * The shared pose bucket per rung, in ms of animation time — how often a clip is SAMPLED. OURS.
  *
- * OURS, and it is the trade that rung makes: clips step at this rate rather than per frame. 1000/30
- * is where it sits because MDX tracks are authored at about that, so the stepping is hard to see;
- * a coarser bucket samples fewer poses AND puts more instances in each one, so it pays twice.
- * Measured interleaved at 287 units and 6× throttle, 15 Hz was worth ~4% of the frame — see
- * docs/perf-research.md for why that was not enough to spend the smoothness on.
+ * Every rung takes the shared-skeleton path now (`SHARED_POSES`), and this is the whole of what
+ * separates them there: High samples finer than any display draws (1/240 s, so a 144 Hz or a
+ * 240 Hz screen sees a new pose every frame and the animation reads as exact — the bone matrices
+ * agree with the per-instance path to ≤0.001 world units on a bucket boundary), Medium at 60 Hz
+ * and Low at 30 Hz, which is about the rate an MDX's tracks are authored at.
+ *
+ * What the buckets are NOT is a speed dial, and that is measured rather than assumed. The saving
+ * was expected to come from sharing — instances of one model at one point of one clip taking one
+ * pose — and it barely does: in a 300-unit brawl on Bleach vs One Piece (370 models on screen,
+ * every clip desynchronised) the animation cost 14.5 ms a frame on the old exact path and 5.2–5.6 ms
+ * here at EVERY bucket from 1/144 s to 1/30 s. It is the path itself that is cheap — a pose
+ * composed in the instance's own space, with the instance's matrix applied in the shader
+ * (`u_instance`), so a unit that moves no longer forces its whole skeleton to be recomposed. Finer
+ * buckets only mean fewer cache hits, which cost next to nothing. (15 Hz was worth ~4% more when
+ * it was last tried — docs/perf-research.md.)
  */
-const POSE_BUCKET_MS = 1000 / 30;
+const POSE_BUCKET_MS: Record<Quality, number> = { high: 1000 / 240, medium: 1000 / 60, low: 1000 / 30 };
 
 /** What OpenWar3 has always rendered at, and what `ui/stage.ts` calls the game frame. */
 const DEFAULT_WIDTH = 1920;
@@ -172,18 +176,23 @@ const PARTICLE_SCALE: Record<Quality, number> = { high: 1, medium: 0.5, low: 0.2
 const ANIM_STRIDE: Record<Quality, number> = { high: 1, medium: 2, low: 4 };
 
 /**
- * Whether a rung SHARES animation (`VideoBridge.sharedPoses`) — Low only. OURS.
+ * Whether a rung takes the SHARED-SKELETON path (`VideoBridge.sharedPoses`) — every rung. OURS.
  *
- * This is the rung that does reach the skeletons, and the moved-instance problem above is why it
- * is a CACHE rather than a stride: a unit whose pose comes from the cache still composes its own
- * position every frame, so nothing stops moving. What it gives up is time: each clip is sampled
- * on a 1/30 s grid (`POSE_BUCKET_MS`) and replayed to every instance of the model at the same
- * point of it, so animation steps at 30 Hz instead of every frame — 1.8–3.1× off a 259-unit
- * frame at 6× CPU throttle (docs/video-options.md). That is what "Animation Quality: Low"
- * should mean (it began as the switch of a "Low Performance Mode" that is gone). High and Medium
- * are exact.
+ * It used to be Low's alone, on the belief that what made it cheap was the 30 Hz stepping, and so
+ * High and Medium paid the old per-instance node walk for "exact" animation. The cost of the path
+ * turned out not to depend on the stepping at all (see `POSE_BUCKET_MS`), and the path is exact up
+ * to the bucket — the per-instance and the shared matrices agree to ≤0.001 world units across the
+ * stock heroes, creeps and buildings and a custom map's own models. So every rung takes it, and
+ * what a rung chooses is the bucket. Two cases still sample for themselves, as they always did:
+ * an instance in the middle of a cross-fade between two clips (the fade mixes in a snapshot only
+ * it has), and a model with a `dontInherit*` node (`ow3SkeletonShareable` in the viewer patch).
+ * Only the match's world viewer opts in (`viewer.ow3SharePoses`); a portrait or a menu backdrop
+ * keeps the per-instance path.
+ *
+ * The flag stays so the old path can be measured against it (`__OW3_VIDEO__.sharedPoses = false`
+ * in a running match).
  */
-const SHARED_POSES: Record<Quality, boolean> = { high: false, medium: false, low: true };
+const SHARED_POSES: Record<Quality, boolean> = { high: true, medium: true, low: true };
 
 /**
  * Point lights uploaded to the shader. OURS.
@@ -307,10 +316,10 @@ export function applyVideoOptions(options: Options): void {
   const b = bridge();
   b.particleScale = PARTICLE_SCALE[current.particles];
   b.textureMipDrop = MIP_DROP[current.textureQuality];
-  // Animation Quality: Low shares poses (SHARED_POSES). Live: a change takes effect on the next
-  // frame, and leaving Low has every instance sampling for itself again.
+  // Animation Quality picks how often the shared poses are sampled (SHARED_POSES, POSE_BUCKET_MS).
+  // Live: a change takes effect on the next frame.
   b.sharedPoses = SHARED_POSES[current.animQuality];
-  b.poseBucket = POSE_BUCKET_MS;
+  b.poseBucket = POSE_BUCKET_MS[current.animQuality];
   applyGamma(current.gamma);
   // "4:3 Menus" is a layout switch rather than a renderer one, but it is a Video row and so it
   // arrives here, live, with the rest (ui/widescreen.ts). Not in `LOWEST_VIDEO` (data/options.ts):
