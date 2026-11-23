@@ -141,6 +141,33 @@ console.log("SetUnitPosition — pathed: stop, and never inside a wall");
   check(`a second body is not stacked on the first (gap ${Math.hypot(a.x - b.x, a.y - b.y).toFixed(0)})`, Math.hypot(a.x - b.x, a.y - b.y) >= 16);
 }
 
+{
+  // Off the edge of the world: a script that parks a unit a billion units out has it set down on
+  // the world's edge, never out there (scriptPlace) — SetUnitX and SetUnitPosition alike.
+  const w = new SimWorld(grid(), 1);
+  const u = addUnit(w, 1, 800, 800);
+  w.setUnitPosition(1, 1e9, -1e9, false);
+  check(`SetUnitX/Y past the edge lands on it (${u.x.toFixed(0)}, ${u.y.toFixed(0)})`, u.x <= 96 * 32 && u.x >= 96 * 32 - 64 && u.y >= 0 && u.y <= 64);
+  w.setUnitPosition(1, -1e9, 1e9, true);
+  check(`SetUnitPosition past the edge lands on it (${u.x.toFixed(0)}, ${u.y.toFixed(0)})`, u.x >= 0 && u.x <= 64 && u.y <= 96 * 32 && u.y >= 96 * 32 - 64);
+}
+
+// ── SetUnitFacing[Timed] on a PAUSED unit ─────────────────────────────────────────────────
+// war3.exe still turns it, even though a paused unit sits out the turning pass — so the timed
+// form lands at once rather than waiting for a pass that never comes.
+console.log("\nturning a paused unit");
+{
+  const w = new SimWorld(grid(), 1);
+  const u = addUnit(w, 1, 800, 800);
+  u.paused = true;
+  w.setUnitFacing(1, Math.PI / 2, false); // SetUnitFacingTimed(u, 90, 0)
+  run(w, 0.5);
+  check(`a paused unit faces where it was turned (${(u.facing * 180 / Math.PI).toFixed(0)}°)`, near(u.facing, Math.PI / 2));
+  const v = addUnit(w, 2, 1200, 800);
+  w.setUnitFacing(2, Math.PI, false);
+  check("an unpaused one still turns at its own rate, not at once", !near(v.facing, Math.PI));
+}
+
 if (failures) {
   console.error(`\n${failures} check(s) failed`);
   process.exit(1);

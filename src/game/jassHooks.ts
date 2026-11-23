@@ -573,6 +573,11 @@ export function unitSnapshots(sim: {
 }): UnitSnapshot[] {
   const snap: UnitSnapshot[] = [];
   for (const u of sim.units.values()) {
+    // A DESTRUCTIBLE's sim body (a crate, a gate — RtsController.addDestructible, marked by its
+    // `targetKey`) is a destructable to the script, never a unit: a
+    // `GetUnitsOfPlayerAll(Player(PLAYER_NEUTRAL_PASSIVE))` meant to find a map's shops would
+    // otherwise list every crate and barrel with them.
+    if (u.targetKey) continue;
     snap.push({ id: u.id, typeId: u.typeId, owner: jassOwnerOf(u), x: u.x, y: u.y, facing: u.facing, locust: u.locust });
   }
   for (const m of sim.mines.values()) {
