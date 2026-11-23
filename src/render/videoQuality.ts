@@ -77,11 +77,18 @@ export interface VideoBridge {
    * turns (`POSE_BUCKET_MS`: 1/240 s on High, 1/60 on Medium, 1/30 on Low).
    */
   poseBucket: number;
+  /**
+   * Animation Quality: Low's distance LOD (`POSE_LOD_MS`), or null on the rungs without one: an
+   * instance farther than `r` from the camera's focus (`x`, `y`) refreshes its shared pose at
+   * most every `ms` of its own clock. `aimPoseLod` moves the focus every frame. Read by
+   * `ow3LodSkip` in the viewer patch.
+   */
+  poseLod: { x: number; y: number; r: number; ms: number } | null;
 }
 
 const bridge = (): VideoBridge => {
   const g = globalThis as { __OW3_VIDEO__?: VideoBridge };
-  return (g.__OW3_VIDEO__ ??= { particleScale: 1, textureMipDrop: 0, sharedPoses: true, poseBucket: POSE_BUCKET_MS.high });
+  return (g.__OW3_VIDEO__ ??= { particleScale: 1, textureMipDrop: 0, sharedPoses: true, poseBucket: POSE_BUCKET_MS.high, poseLod: null });
 };
 
 /**
@@ -104,6 +111,30 @@ const bridge = (): VideoBridge => {
  * it was last tried — docs/perf-research.md.)
  */
 const POSE_BUCKET_MS: Record<Quality, number> = { high: 1000 / 240, medium: 1000 / 60, low: 1000 / 30 };
+
+/**
+ * Animation Quality: Low's distance LOD — how often a unit OUTSIDE the middle of the screen
+ * refreshes its pose, in ms of its own animation clock (0 = never skipped). OURS.
+ *
+ * The rungs above differ only in how often a pose is sampled, which turned out to cost nothing
+ * either way, so this is what makes Low a real saving rather than a choppier High: inside
+ * `POSE_LOD_RADIUS` of the camera's focus a unit animates as Low always did (30 Hz poses); past
+ * it, at 15 Hz. It can skip the skeleton outright because on the shared path a unit's POSITION is
+ * not in its bones (the instance matrix places it, in the shader), so a skipped refresh steps a
+ * clip and never stops a body; its emitters, sounds and attached models are still placed every
+ * frame (`ow3LodSkip` / `ow3ComposeObjectNodes` in the viewer patch). Measured in a 300-unit brawl
+ * on Bleach vs One Piece (~430 models on screen): Low 7.4 ms of animation a frame, 4.7 ms with the
+ * outer half refreshed every 4th frame, 3.2 ms with everything past 400 units every 4th.
+ */
+const POSE_LOD_MS: Record<Quality, number> = { high: 0, medium: 0, low: 1000 / 15 };
+
+/**
+ * How far from the camera's focus a unit still animates in full on Low, as a fraction of the
+ * camera's DISTANCE — so zooming out widens the full-rate middle with the view rather than
+ * shrinking it to a dot. OURS: at the default 1650 that is ~580 units, about the middle half of
+ * the screen's width at the focus.
+ */
+const POSE_LOD_RADIUS = 0.35;
 
 /** What OpenWar3 has always rendered at, and what `ui/stage.ts` calls the game frame. */
 const DEFAULT_WIDTH = 1920;
@@ -298,6 +329,18 @@ export function maxOmniLights(): number {
  * Three of the five reach their destination through this call; `textureQuality` is read by the
  * loader as textures arrive, and `particles` by the emitters as they emit.
  */
+/**
+ * Point Animation Quality: Low's distance LOD at what the camera is looking at — called by the
+ * match every frame, before the scene's animation advance. A no-op on the rungs without one.
+ */
+export function aimPoseLod(x: number, y: number, cameraDistance: number): void {
+  const lod = bridge().poseLod;
+  if (!lod) return;
+  lod.x = x;
+  lod.y = y;
+  lod.r = cameraDistance * POSE_LOD_RADIUS;
+}
+
 export function applyVideoOptions(options: Options): void {
   const [renderWidth, renderHeight] = resolution(options.resolution);
   current = {
@@ -320,6 +363,8 @@ export function applyVideoOptions(options: Options): void {
   // Live: a change takes effect on the next frame.
   b.sharedPoses = SHARED_POSES[current.animQuality];
   b.poseBucket = POSE_BUCKET_MS[current.animQuality];
+  const lodMs = POSE_LOD_MS[current.animQuality];
+  b.poseLod = lodMs > 0 ? { x: 0, y: 0, r: Infinity, ms: lodMs } : null;
   applyGamma(current.gamma);
   // "4:3 Menus" is a layout switch rather than a renderer one, but it is a Video row and so it
   // arrives here, live, with the rest (ui/widescreen.ts). Not in `LOWEST_VIDEO` (data/options.ts):

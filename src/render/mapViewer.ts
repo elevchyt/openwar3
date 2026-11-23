@@ -159,7 +159,7 @@ import { perfLog } from "../dev/perfLog";
 declare const __OW3_VERSION__: string;
 declare const __OW3_COMMIT__: string;
 declare const __OW3_SIM_FINGERPRINT__: string;
-import { animStride, antialiasing, renderSize, videoSettings } from "./videoQuality";
+import { aimPoseLod, animStride, antialiasing, renderSize, videoSettings } from "./videoQuality";
 import { edgeScrollScale, keyScrollScale } from "./scrollOptions";
 import { centreGamepadCursor, gamepadPan, setGamepadHost } from "../ui/gamepad";
 import { TerrainCull } from "./terrainCull";
@@ -18349,6 +18349,7 @@ export class MapViewerScene {
       // texture on and hand a finished Stand clip its next one, both of which are the world
       // moving.
       perfLog.begin("anim");
+      aimPoseLod(this.target[0], this.target[1], this.distance); // Animation Quality: Low's distance LOD
       baseUpdate.call(this.viewer, wdt);
       if (!this.paused) this.updateMapWidgets(wdt);
       // Re-pin under-construction buildings AFTER the animation advance so a

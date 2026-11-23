@@ -1486,10 +1486,10 @@ index 5f2c0c2ffbfae107c42070fe99e41669814924ef..3101fe8514c3933b217efeeaa2f1397b
              solverParams.hd = true;
              // mdxHandler.loadEnv(viewer);
 diff --git a/dist/cjs/viewer/handlers/mdx/modelinstance.js b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-index 020a99b949ec1634579d439261027e00b6da23ac..6d258ff9b9a44ad641b2bbff54cb97d86fa90525 100644
+index 020a99b949ec1634579d439261027e00b6da23ac..777464e48a5645f8382870ee4324b0f4216bf5b0 100644
 --- a/dist/cjs/viewer/handlers/mdx/modelinstance.js
 +++ b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-@@ -15,12 +15,569 @@ const eventobjectubremitter_1 = require("./eventobjectubremitter");
+@@ -15,12 +15,610 @@ const eventobjectubremitter_1 = require("./eventobjectubremitter");
  const eventobjectsndemitter_1 = require("./eventobjectsndemitter");
  const geometryemitterfuncs_1 = require("./geometryemitterfuncs");
  const visibilityHeap = new Float32Array(1);
@@ -1780,9 +1780,14 @@ index 020a99b949ec1634579d439261027e00b6da23ac..6d258ff9b9a44ad641b2bbff54cb97d8
 + * holding the generation before.
 + */
 +let ow3TexturesToFree = [];
++/** Bumped by every clear. An instance may only go on wearing a pose it did not refresh this frame
++ *  (`ow3LodSkip`) while the generation it was handed in is still the live one — the one-clear-late
++ *  free above is only safe for an instance that is refreshed every frame. */
++let ow3PoseGeneration = 0;
 +/** Drop every cached pose. Called when the cache has grown past its cap — the models whose
 + *  poses are being asked for right now re-fill within a lap of their clips. */
 +function ow3ClearPoses(current) {
++    ow3PoseGeneration++;
 +    for (const texture of ow3TexturesToFree) {
 +        texture.gl.deleteTexture(texture.texture);
 +    }
@@ -1918,6 +1923,42 @@ index 020a99b949ec1634579d439261027e00b6da23ac..6d258ff9b9a44ad641b2bbff54cb97d8
 +            child.update(dt);
 +        }
 +    }
++}
++/**
++ * OpenWar3: Animation Quality: Low's distance LOD — may this instance go on wearing the shared
++ * pose it last refreshed instead of refreshing it this frame?
++ *
++ * Only an instance on the SHARED-SKELETON path, because that is the one whose position does not
++ * live in its bone matrices: its body is placed by the instance matrix in the shader
++ * (`u_instance`), so a pose that is not refreshed is a clip that steps, never a unit that stops
++ * moving — the trap that kept every earlier attempt off the skeletons (docs/video-options.md).
++ * What it still owes the world this frame — emitters, sounds, attached models, all placed off
++ * the instance's NEW matrix — `ow3Pose` pays through `ow3ComposeObjectNodes` as a replay does.
++ *
++ * The app says where and how much through `__OW3_VIDEO__.poseLod` = { x, y, r, ms }: an instance
++ * farther than `r` from the camera's focus (x, y) refreshes at most every `ms` of its own clock
++ * (src/render/videoQuality.ts POSE_LOD_MS). Never while a clip is fading into another, never across
++ * a change of clip or of pose space, and never once the cache has been cleared under the pose.
++ */
++function ow3LodSkip(instance) {
++    const v = globalThis.__OW3_VIDEO__;
++    const lod = v === undefined ? undefined : v.poseLod;
++    if (lod === undefined || lod === null || !(lod.ms > 0)) {
++        return false;
++    }
++    const pose = instance.ow3LodPose;
++    if (pose === null || pose === undefined || !instance.ow3LocalPose || instance.ow3PoseReset
++        || instance.blendRemaining > 0 || instance.ow3LodSeq !== instance.sequence
++        || instance.ow3PoseGen !== ow3PoseGeneration || !ow3SharePoses(instance.model)) {
++        return false;
++    }
++    if (instance.counter - instance.ow3LodAt >= lod.ms || instance.counter < instance.ow3LodAt) {
++        return false;
++    }
++    const p = instance.worldLocation;
++    const dx = p[0] - lod.x;
++    const dy = p[1] - lod.y;
++    return dx * dx + dy * dy > lod.r * lod.r;
 +}
 +const ow3Quat = gl_matrix_1.quat.create();
 +const ow3Inverse = gl_matrix_1.mat4.create();
@@ -2059,7 +2100,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..6d258ff9b9a44ad641b2bbff54cb97d8
  /**
   * An MDX model instance.
   */
-@@ -48,12 +605,60 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -48,12 +646,60 @@ class MdxModelInstance extends modelinstance_1.default {
          // Any later non-forced update can then use variancy to skip updating things.
          // It is set to true every time the sequence is set with setSequence().
          this.forced = true;
@@ -2120,7 +2161,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..6d258ff9b9a44ad641b2bbff54cb97d8
          for (let i = 0, l = model.geosets.length; i < l; i++) {
              this.geosetColors[i] = new Float32Array(4);
          }
-@@ -216,45 +821,193 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -216,45 +862,193 @@ class MdxModelInstance extends modelinstance_1.default {
       * Updates all of this instance internal nodes and objects.
       * Nodes that are determined to not be visible will not be updated, nor will any of their children down the hierarchy.
       */
@@ -2327,7 +2368,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..6d258ff9b9a44ad641b2bbff54cb97d8
                  // If the attachment/emitter is visible, update it.
                  if (visibilityHeap[0] > 0) {
                      node.object.update(dt);
-@@ -262,13 +1015,50 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -262,13 +1056,60 @@ class MdxModelInstance extends modelinstance_1.default {
              }
              // Recalculate and update child nodes.
              // Note that this only affects normal nodes such as instances, and not skeletal nodes.
@@ -2367,10 +2408,20 @@ index 020a99b949ec1634579d439261027e00b6da23ac..6d258ff9b9a44ad641b2bbff54cb97d8
 +                anyDirty = true; // the billboards move with the camera, so this goes up every frame
 +            }
 +            ow3ComposeObjectNodes(this, skeleton, dt, sequence, poseFrame, counter, plan);
++            // OpenWar3: what a frame that skips the refresh goes on wearing (`ow3LodSkip`).
++            this.ow3LodPose = skeleton;
++            this.ow3LodPlan = plan;
++            this.ow3LodSeq = sequence;
++            this.ow3LodFrame = poseFrame;
++            this.ow3LodAt = counter;
++            this.ow3PoseGen = ow3PoseGeneration;
 +        }
 +        else if (this.ow3SharedBones) {
 +            this.ow3SharedTexture = null;
 +            this.ow3SharedBones = null;
++        }
++        if (skeleton === null) {
++            this.ow3LodPose = null; // OpenWar3: nothing worn, so nothing to go on wearing
 +        }
 +        this.ow3PoseReset = false; // OpenWar3 (issue #161): the new clip's locals are written
 +        this.ow3BonesDirty = anyDirty; // OpenWar3
@@ -2379,7 +2430,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..6d258ff9b9a44ad641b2bbff54cb97d8
      }
      /**
       * If a model has no sequences or is running no sequence, it will only update once since it will never be forced to update.
-@@ -362,24 +1152,192 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -362,24 +1203,192 @@ class MdxModelInstance extends modelinstance_1.default {
              }
          }
      }
@@ -2405,22 +2456,22 @@ index 020a99b949ec1634579d439261027e00b6da23ac..6d258ff9b9a44ad641b2bbff54cb97d8
 +        // to send — the texture was filled once, by whoever composed it (`ow3CaptureSkeleton`).
 +        if (this.ow3SharedTexture) {
 +            return;
-+        }
+         }
 +        if (this.boneTexture && (this.ow3BonesDirty || !this.ow3BonesUploaded)) {
 +            // …or from `ow3LocalBones` when this instance wears a shared pose with billboarded
 +            // subtrees of its own in it (ow3FixBillboards).
 +            this.boneTexture.bindAndUpdate(this.ow3LocalBones && this.ow3LocalPose ? this.ow3LocalBones : this.worldMatrices);
 +            this.ow3BonesUploaded = true;
 +            this.ow3BonesDirty = false;
-         }
-     }
++        }
++    }
 +    // OpenWar3 (issue #66): a faded instance (vertex-colour alpha < 1 — Wind Walk,
 +    // Banish, SetUnitVertexColor) has no opaque geometry left. Its "opaque" groups
 +    // move to the translucent pass so they blend over a finished depth buffer instead
 +    // of over whatever the opaque pass happened to have drawn so far.
 +    isFaded() {
 +        return this.vertexColor[3] < 1;
-+    }
+     }
      renderOpaque() {
          const model = this.model;
 +        if (this.isFaded()) {
@@ -2574,7 +2625,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..6d258ff9b9a44ad641b2bbff54cb97d8
          const model = this.model;
          const sequenceId = this.sequence;
          if (sequenceId !== -1) {
-@@ -405,6 +1363,10 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -405,7 +1414,20 @@ class MdxModelInstance extends modelinstance_1.default {
                  this.sequenceEnded = false;
              }
          }
@@ -2583,9 +2634,19 @@ index 020a99b949ec1634579d439261027e00b6da23ac..6d258ff9b9a44ad641b2bbff54cb97d8
 +    ow3Pose(dt) {
 +        const sequenceId = this.sequence;
          const forced = this.forced;
++        // OpenWar3: a far instance on Animation Quality: Low keeps last refresh's pose (see
++        // ow3LodSkip). `forced` does not stop it: on the shared path a MOVE is the instance
++        // matrix, which the shader and the object-node pass below already take fresh — the
++        // sequence-change kind of forced is `ow3PoseReset`, and that one does.
++        if (sequenceId !== -1 && ow3LodSkip(this)) {
++            ow3ComposeObjectNodes(this, this.ow3LodPose, dt, sequenceId, this.ow3LodFrame, this.counter, this.ow3LodPlan);
++            this.forced = false;
++            return;
++        }
          if (sequenceId !== -1 || forced) {
              // Update the nodes
-@@ -421,6 +1383,12 @@ class MdxModelInstance extends modelinstance_1.default {
+             this.updateNodes(dt, forced);
+@@ -421,6 +1443,12 @@ class MdxModelInstance extends modelinstance_1.default {
       */
      setTeamColor(id) {
          this.teamColor = id;
@@ -2598,7 +2659,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..6d258ff9b9a44ad641b2bbff54cb97d8
          return this;
      }
      /**
-@@ -436,6 +1404,7 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -436,6 +1464,7 @@ class MdxModelInstance extends modelinstance_1.default {
      setSequence(id) {
          const model = this.model;
          const sequences = model.sequences;
@@ -2606,7 +2667,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..6d258ff9b9a44ad641b2bbff54cb97d8
          this.sequence = id;
          if (id < 0 || id > sequences.length - 1) {
              this.sequence = -1;
-@@ -445,11 +1414,86 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -445,11 +1474,86 @@ class MdxModelInstance extends modelinstance_1.default {
          else {
              this.frame = sequences[id].interval[0];
          }

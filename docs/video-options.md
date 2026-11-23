@@ -37,7 +37,7 @@ carry a `SpellFilterValue` — see below — but as a READOUT, not a control.)
 | **Renderer** | Ours. Which Chromium launch switches the desktop app starts with — see "Renderer" below. |
 | **Resolution** | The size of the buffer the world is drawn into. |
 | **Model Detail** | *Nothing* — see below. |
-| **Animation Quality** | Samples the shared poses at 240 / 60 / 30 Hz (every rung takes the shared pose path — see below), and strides the map's widget stand-scan (1 / 2 / 4 frames). |
+| **Animation Quality** | Samples the shared poses at 240 / 60 / 30 Hz (every rung takes the shared pose path — see below), and strides the map's widget stand-scan (1 / 2 / 4 frames). **Low** also refreshes units away from the camera's focus at 15 Hz (the distance LOD, below). |
 | **Texture Quality** | Drops 0 / 1 / 2 mip levels off the top of every BLP as it uploads. |
 | **Particles** | Scales emission ×1 / ×0.5 / ×0.25 on top of the viewer's `SETTING_PARTICLES_HIGH`. |
 | **Lights** | Caps the glue scene's uploaded omni lights at 8 / 4 / 0. |
@@ -205,6 +205,22 @@ cheap. And the path is exact up to the bucket: parked on a bucket boundary, the 
 units on the brawl's 16 models and ≤0.001 on the stock heroes and buildings (the method is
 "How to verify a change here" below). A cross-fade between two clips still samples for itself, as
 it always did, so transitions are untouched.
+
+**Low's distance LOD.** Since the rate costs nothing either way, Low earns its place another way:
+a unit farther from the camera's focus than `POSE_LOD_RADIUS` × the camera distance (0.35, about
+the middle half of the screen) refreshes its pose at most every 1/15 s of its own clock and wears
+the last one between refreshes (`POSE_LOD_MS`, `aimPoseLod`; `ow3LodSkip` in the patch). This is
+the stride the section below says cannot be done — and it can here, because on the shared path a
+unit's POSITION is not in its bones: the instance matrix places it in the shader, so a skipped
+refresh steps a clip and never stops a body. What it still owes the world every frame (emitters,
+event objects, attached models) is placed off the instance's new matrix through
+`ow3ComposeObjectNodes`, exactly as a replay does; checked live on walking units, those points
+land where the refreshed path puts them. It never skips through a cross-fade, a change of clip or
+of pose space, or a cache clear (`ow3PoseGeneration` — the one-clear-late texture free is only
+safe for an instance refreshed every frame; 854 textures freed under skipping units over a minute,
+none of them in use). Measured on the 300-unit brawl (~380 models on screen): High 7.9 ms, Low 6.3,
+**Low with the LOD 3.5**. Because the interval is TIME, a machine already under 15 fps skips
+nothing, and a 144 Hz one refreshes the outer ring every ~10th frame.
 
 One thing the faster rate exposed: a dropped pose's bone TEXTURE was never freed. At 30 Hz the
 cache rarely filled; at 1/240 s a no-billboard model mints a pose a frame, the 3 000-entry cap is
@@ -388,7 +404,7 @@ is a hunk somebody has to reason about later.
 | Row | Set to |
 |---|---|
 | Model Detail | Low *(no backend — see below)* |
-| Animation Quality | Low (widget scan strided 4, and poses sampled at 30 Hz) |
+| Animation Quality | Low (widget scan strided 4, poses sampled at 30 Hz, and the distance LOD) |
 | Texture Quality | Low (2 mips dropped; reaches the NEXT map) |
 | Particles | Low (×0.25) |
 | Lights | Low (no omni lights) |
@@ -451,8 +467,9 @@ level down blends further across their borders; promoting a coarse level to leve
 drop. Nothing is lost by it: the memory is in the hundreds of unit and doodad skins, and those
 are square.
 
-**Animation Quality cannot STRIDE the skeletons, and that is not an oversight.** (Every rung
-reaches them a different way — the shared pose cache above, a cache rather than a skip.) The expensive
+**Animation Quality cannot STRIDE the skeletons on the per-instance path, and that is not an
+oversight.** (Every rung now takes the shared pose path above instead, where the position is not
+in the bones — which is exactly what lets Low's distance LOD skip a far unit's refresh.) The expensive
 half of animating a model is the node walk and the per-instance bone-texture upload — and the sim
 moves a unit by writing its position onto the instance, with the bone matrices carrying that to
 the screen. An instance whose animation is skipped is an instance that **stops moving**. So what

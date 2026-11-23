@@ -174,8 +174,11 @@ console.log("\nthe video applier turns the panel's words into the renderer's num
   // pose is sampled (`poseBucket`): 1/30 s on Low, 1/60 on Medium, and finer than any display
   // draws on High (1/240 s), so High reads as exact.
   check("low anim samples at 30 Hz", [bridge().sharedPoses, bridge().poseBucket], [true, 1000 / 30]);
+  // …and only Low refreshes a unit away from the camera's focus less often (15 Hz past the radius).
+  check("low anim has the distance LOD", bridge().poseLod && bridge().poseLod.ms, 1000 / 15);
   applyVideoOptions({ ...defaultOptions(), animQuality: "medium" });
   check("medium anim samples at 60 Hz", [bridge().sharedPoses, bridge().poseBucket], [true, 1000 / 60]);
+  check("…with no distance LOD", bridge().poseLod, null);
   applyVideoOptions(defaultOptions());
   check("high, the default, samples at 240 Hz", [bridge().sharedPoses, bridge().poseBucket], [true, 1000 / 240]);
 

@@ -281,7 +281,12 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   matrix applied in the shader, so a moving unit no longer recomposes its skeleton), not
   cross-instance sharing — 300 brawling units on Bleach vs One Piece were 14.5 ms of animation a
   frame on the old walk and 5.2–5.6 ms here at every bucket from 1/144 to 1/30 s. The cache frees
-  the bone textures of the poses it drops one clear later (`ow3TexturesToFree`). Originally:
+  the bone textures of the poses it drops one clear later (`ow3TexturesToFree`). What makes LOW
+  cheaper is a DISTANCE LOD: past 0.35 × the camera distance from its focus a unit refreshes its
+  pose at 15 Hz of its own clock and wears the last one between (`POSE_LOD_MS`/`aimPoseLod`,
+  `ow3LodSkip`) — possible only on this path, where the instance matrix in the shader carries the
+  position; its world-acting nodes are still composed every frame, and it never skips across a
+  cache clear (`ow3PoseGeneration`). Originally:
   profiled, the MDX NODE WALK is ~41% of all CPU and the DRAWING is ~7%, so a second renderer is
   aimed at the wrong number — and 317 visible instances were found holding **60** distinct
   `(model, sequence, 1/30 s)` poses, so the pose is sampled once and replayed (SightStamps'

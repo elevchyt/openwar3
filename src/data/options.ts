@@ -342,7 +342,7 @@ export function loadOptions(): Options {
  */
 export const LOWEST_VIDEO: Readonly<Options> = {
   modelDetail: "low",
-  animQuality: "low", // 30 Hz poses and a widget scan every 4th frame (render/videoQuality.ts POSE_BUCKET_MS)
+  animQuality: "low", // 30 Hz poses, 15 Hz away from the camera, a widget scan every 4th frame (render/videoQuality.ts)
   textureQuality: "low",
   particles: "low",
   lights: "low",
