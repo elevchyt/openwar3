@@ -1,6 +1,6 @@
 import type { DataSource } from "../vfs/types";
 import { onEditionChange } from "../data/edition";
-import { blpToCanvas } from "../render/blputil";
+import { blpToCanvas, tgaToCanvas } from "../render/blputil";
 import { mapSizeLabel } from "../data/gameplayConstants";
 import { parseMapInfo, type MapInfo } from "../world/mapInfo";
 import { unsupportedReason } from "../compat/mapFormat";
@@ -673,8 +673,11 @@ function minimapPicture(
   const colors = colorOf ? info.slots.map((slot) => colorOf(slot.id)).join() : "";
   const hit = minimapPictures.get(info);
   if (hit && hit.preview === preview && hit.icons === icons && hit.colors === colors) return hit.canvas;
-  const canvas = info.minimap ? blpToCanvas(info.minimap) : null;
-  if (canvas && preview) drawPreviewMarkers(canvas, info, preview, icons, colorOf);
+  // The map's own PREVIEW picture (`war3mapPreview.tga`) wins over its minimap here exactly as
+  // on the loading screen: a poster, so no markers go on it.
+  const poster = info.previewImage ? tgaToCanvas(info.previewImage) : null;
+  const canvas = poster ?? (info.minimap ? blpToCanvas(info.minimap) : null);
+  if (canvas && !poster && preview) drawPreviewMarkers(canvas, info, preview, icons, colorOf);
   canvas?.classList.add("ow3-minimap");
   minimapPictures.set(info, { preview, icons, colors, canvas });
   return canvas;
