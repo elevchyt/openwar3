@@ -445,6 +445,9 @@ export class Viewpoint {
   onTreeFelled(x: number, y: number, radius: number): void {
     this.vision.removeTreeBlocker(x, y, radius);
   }
+  onTreePlanted(x: number, y: number, radius: number): void {
+    this.vision.addTreeBlocker(x, y, radius);
+  }
 
   setFogEnabled(on: boolean): void {
     this.vision.setFogEnabled(on);
@@ -729,6 +732,10 @@ export class VisionSet {
   /** A tree was felled — it stops blocking sight for everyone. */
   onTreeFelled(x: number, y: number, radius: number): void {
     for (const vp of this.byPlayer.values()) vp.onTreeFelled(x, y, radius);
+  }
+  /** …and a planted one starts again (MapViewerScene.plantSimTree). */
+  onTreePlanted(x: number, y: number, radius: number): void {
+    for (const vp of this.byPlayer.values()) vp.onTreePlanted(x, y, radius);
   }
 
   /** The lobby's fog mode. A MATCH setting, so it applies to every viewpoint and is

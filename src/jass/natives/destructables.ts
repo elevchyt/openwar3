@@ -74,33 +74,44 @@ export function destructableForUnit(c: NativeCtx, unitV: JassValue): JassValue {
 
 export function registerDestructableNatives(rt: Runtime): void {
   // --- create / remove ------------------------------------------------------
-  const create = (c: NativeCtx, typeInt: number, x: number, y: number, dead: boolean): JassValue => {
-    const typeId = intToRawcode(typeInt);
-    const found = c.rt.hooks?.findDestructable?.(typeId, x, y) ?? 0;
+  // CreateDestructable(objectid, x, y, face, scale, variation) and the …Z twin, which puts the
+  // height before the facing. A record the World Editor left at exactly this spot is ADOPTED
+  // (findDestructable); anything else is a new destructible, made through the engine.
+  const create = (c: NativeCtx, a: JassValue[], withZ: boolean, dead: boolean): JassValue => {
+    const typeId = intToRawcode(asInt(a[0]));
+    const x = asNum(a[1]);
+    const y = asNum(a[2]);
+    const z = withZ ? asNum(a[3]) : null;
+    const o = withZ ? 4 : 3; // face, scale, variation
+    let found = c.rt.hooks?.findDestructable?.(typeId, x, y) ?? 0;
+    if (found > 0) {
+      // CreateDeadDestructable places one already destroyed — an arch that starts collapsed.
+      if (dead) c.rt.hooks?.killDestructable?.(found, "death");
+    } else {
+      found = c.rt.hooks?.createDestructable?.(typeId, x, y, z, asNum(a[o]), asNum(a[o + 1]), asInt(a[o + 2]), dead) ?? 0;
+    }
     const snap = found > 0 ? c.rt.hooks?.destructableInfo?.(found) ?? null : null;
-    // CreateDeadDestructable places one already destroyed — an arch that starts collapsed.
-    if (dead && found > 0) c.rt.hooks?.killDestructable?.(found, "death");
     return handleFor(c, found, {
       mapId: found,
       typeId,
       x: snap?.x ?? x,
       y: snap?.y ?? y,
-      life: dead ? 0 : snap?.life ?? 1,
+      life: snap?.life ?? (dead ? 0 : 1),
       maxLife: snap?.maxLife ?? 0,
     });
   };
-  def(rt, "CreateDestructable", (c, a) => create(c, asInt(a[0]), asNum(a[1]), asNum(a[2]), false));
-  def(rt, "CreateDestructableZ", (c, a) => create(c, asInt(a[0]), asNum(a[1]), asNum(a[2]), false));
-  def(rt, "CreateDeadDestructable", (c, a) => create(c, asInt(a[0]), asNum(a[1]), asNum(a[2]), true));
-  def(rt, "CreateDeadDestructableZ", (c, a) => create(c, asInt(a[0]), asNum(a[1]), asNum(a[2]), true));
+  def(rt, "CreateDestructable", (c, a) => create(c, a, false, false));
+  def(rt, "CreateDestructableZ", (c, a) => create(c, a, true, false));
+  def(rt, "CreateDeadDestructable", (c, a) => create(c, a, false, true));
+  def(rt, "CreateDeadDestructableZ", (c, a) => create(c, a, true, true));
   // …and their 1.31 twins, which take a Reforged HD skin id on the end (declared in our own
   // compat prelude — src/compat/prelude.ts). We draw SD out of an SD install, so the skin is
   // read and dropped and the destructible is made exactly as its skinless twin would be.
   // A Lua map uses these in place of the originals, which is where they turn up.
-  def(rt, "BlzCreateDestructableWithSkin", (c, a) => create(c, asInt(a[0]), asNum(a[1]), asNum(a[2]), false));
-  def(rt, "BlzCreateDestructableZWithSkin", (c, a) => create(c, asInt(a[0]), asNum(a[1]), asNum(a[2]), false));
-  def(rt, "BlzCreateDeadDestructableWithSkin", (c, a) => create(c, asInt(a[0]), asNum(a[1]), asNum(a[2]), true));
-  def(rt, "BlzCreateDeadDestructableZWithSkin", (c, a) => create(c, asInt(a[0]), asNum(a[1]), asNum(a[2]), true));
+  def(rt, "BlzCreateDestructableWithSkin", (c, a) => create(c, a, false, false));
+  def(rt, "BlzCreateDestructableZWithSkin", (c, a) => create(c, a, true, false));
+  def(rt, "BlzCreateDeadDestructableWithSkin", (c, a) => create(c, a, false, true));
+  def(rt, "BlzCreateDeadDestructableZWithSkin", (c, a) => create(c, a, true, true));
   def(rt, "RemoveDestructable", (c, a) => {
     const d = dest(c, a[0]);
     if (d) {

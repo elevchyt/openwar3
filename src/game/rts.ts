@@ -2232,6 +2232,10 @@ export class RtsController {
   onTreeFelled(x: number, y: number, radius: number): void {
     this.viewpoints.onTreeFelled(x, y, radius);
   }
+  /** …and a tree a script planted or regrew starts blocking it again. */
+  onTreePlanted(x: number, y: number, radius: number): void {
+    this.viewpoints.onTreePlanted(x, y, radius);
+  }
 
   /** Is this unit off screen for `vp` — for ANY reason, not just fog?
    *
