@@ -280,6 +280,10 @@ export interface AbilityDef {
    *  …\\PASBTNHumanLumberUpgrade2.blp"), which read as one path names a file that does not exist.
    *  `icon` is the first; the command card shows the one for the unit's level (iconAt). */
   icons?: string[];
+  /** `Researchart` — the hero skill page's icon. A passive's `Art` is its PASBTN (the frameless
+   *  face the command card shows), and its learn button is the framed BTN named here instead
+   *  ([AHbh] Art=PASBTNBash, Researchart=BTNBash). Empty: the page falls back on `icon`. */
+  researchIcon?: string;
   hotkey: string; // Hotkey — the letter that CASTS it from the command card
   /** Researchhotkey — the letter that LEARNS it on the hero's skill page. A separate
    *  string in AbilityStrings, and for a passive it is the ONLY one: Bash ([AHbh]),
@@ -1486,6 +1490,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       name: (s && str(s, "Name")) || id,
       icon: f ? artList(str(f, "art"))[0] ?? "" : "",
       icons: f ? artList(str(f, "art")) : [],
+      researchIcon: f ? artList(str(f, "Researchart"))[0] ?? "" : "",
       hotkey: (s ? (str(s, "Hotkey").trim()[0] ?? "") : "").toUpperCase(),
       researchHotkey: (s ? (str(s, "Researchhotkey").trim()[0] ?? str(s, "Hotkey").trim()[0] ?? "") : "").toUpperCase(),
       buttonX: bx,
