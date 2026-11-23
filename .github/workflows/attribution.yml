@@ -6,11 +6,15 @@
 # (.claude/settings.json). This is the backstop for everything else, e.g. a fork whose branch
 # we cannot rewrite: the contributor strips it with the command printed below.
 #
-# It reads the PR's commits through the API and runs nothing from the PR's own tree.
+# It reads the PR's commits through the API and runs nothing from the PR's own tree, which is
+# what makes `pull_request_target` safe here — and that trigger is needed: it runs THIS file as
+# the base branch has it (a plain `pull_request` takes the copy in the PR's test merge, which
+# lags a change to this file), and it runs on a PR that conflicts with the base, where
+# `pull_request` runs nothing and the required check would sit at "Expected" for ever.
 name: Attribution
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened, edited]
 
 permissions:
