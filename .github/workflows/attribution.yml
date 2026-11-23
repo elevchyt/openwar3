@@ -41,9 +41,11 @@ jobs:
             sort -u hits.txt | sed 's/^/    /'
             cat <<EOF
 
-          Remove it before merging. In your branch (no other change to the commits):
+          Remove it before merging. On your branch (only the messages change):
 
-            git filter-branch -f --msg-filter 'node tools/strip-ai-attribution.mjs' origin/$BASE..HEAD
+            git fetch https://github.com/${{ github.repository }} $BASE
+            git show FETCH_HEAD:tools/strip-ai-attribution.mjs > /tmp/strip-ai-attribution.mjs
+            git filter-branch -f --msg-filter 'node /tmp/strip-ai-attribution.mjs' FETCH_HEAD..HEAD
             git push --force-with-lease
 
           and run \`pnpm install\` once so .husky/commit-msg keeps it out of your next commits.
