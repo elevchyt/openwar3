@@ -241,11 +241,15 @@ export function registerCameraNatives(rt: Runtime): void {
   // arrival — but the setter is honoured all the same, because a map that NARROWS the bounds
   // mid-cinematic means it, and because the map is the authority on its own camera.
   //
-  // The eight reals are four CORNERS (bottom-left, top-right, top-left, bottom-right), not a
-  // rect: the first four already carry min/max on both axes, and the last four repeat them.
-  // WC3's bounds are axis-aligned, so the first pair is the whole of it.
+  // The eight reals are four CORNERS, not a rect, and their ORDER is the caller's: a map's
+  // main() writes (bottom-left, top-right, top-left, bottom-right), while blizzard.j's own
+  // SetCameraBoundsToRect writes (minX,minY, minX,maxY, maxX,maxY, maxX,minY) — read as the
+  // first pair, that gave a scenario a camera rect zero units wide and pinned its focus to the
+  // left edge. WC3's bounds are axis-aligned, so the rect is the extent of the four points.
   def(rt, "SetCameraBounds", (c, a) => {
-    c.rt.hooks?.setCameraBounds?.({ minX: asNum(a[0]), minY: asNum(a[1]), maxX: asNum(a[2]), maxY: asNum(a[3]) });
+    const xs = [0, 2, 4, 6].map((i) => asNum(a[i]));
+    const ys = [1, 3, 5, 7].map((i) => asNum(a[i]));
+    c.rt.hooks?.setCameraBounds?.({ minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) });
     return JNULL;
   });
   // CAMERA_MARGIN_LEFT/RIGHT/TOP/BOTTOM = 0..3 — and they are plain `constant integer`s in
