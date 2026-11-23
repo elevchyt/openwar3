@@ -21858,6 +21858,19 @@ export class SimWorld {
    *  spot that fits (the snap teleportUnit always takes); a ghost (`SetUnitPathing` off) refuses
    *  nothing, exactly as everywhere else. The body is then settled WHERE IT STANDS. */
   private scriptPlace(u: SimUnit, x: number, y: number, pathed: boolean): void {
+    // Nothing is set down past the edge of the WORLD. SetUnitPosition keeps a unit inside it,
+    // and a SetUnitX/Y out there is the classic crash of the original (Jassbot: SetUnitX "is a
+    // low level call"; hiveworkshop's standing advice is to clamp it to the world bounds first),
+    // so the edge is the one answer that is safe for both. Maps park units "out of play" with a
+    // huge coordinate, and a body a billion units out is one every path search and distance
+    // test in the world then has to reach.
+    if (this.grid) {
+      const [ox, oy] = this.grid.origin;
+      const maxX = ox + this.grid.width * PATHING_CELL - 1;
+      const maxY = oy + this.grid.height * PATHING_CELL - 1;
+      x = Math.min(Math.max(x, ox), maxX);
+      y = Math.min(Math.max(y, oy), maxY);
+    }
     u.teleports++; // a missile in the air at it is disjointed, as by any teleport (missileDisjointed)
     this.teleportedFrom.set(u.id, { x: u.x, y: u.y });
     this.popFromMine(u);
