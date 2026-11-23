@@ -808,9 +808,14 @@ export class LanLobby {
     });
   }
 
-  /** HOST: a joiner has the whole map now. */
+  /** HOST: a joiner has the whole map now — and, since every joiner says so once its lobby
+   *  screen is LISTENING (ui/fdfLanLobby.ts), that is also when it can take the seating. The
+   *  broadcast sent when it joined may have landed before that screen existed (a slow machine, a
+   *  map read off the disk first) and been dropped, so a joiner we sent nothing still gets the
+   *  lobby re-announced: `onChange` is what the host's lobby screen re-seats and broadcasts on. */
   private mapArrived(from: number): void {
     if (this.mapSent.delete(from)) this.publishDownloads();
+    else if (this.state.phase === "hosting") this.onChange(this.state);
   }
 
   /** Re-published only when a whole percent moves — a map is hundreds of pieces, and every
