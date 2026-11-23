@@ -233,8 +233,8 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   are drawn**, and so the one a weak GPU cares most about: it sizes the world's drawing buffer,
   which CSS then scales into the stage, so the camera sees the same world at every rung and the
   DOM HUD stays sharp (`GAME_WIDTH`/`GAME_HEIGHT` remain the LOGICAL frame). Every rung is NAMED
-  at 16:9 and fixes the HEIGHT: the stage follows the window between 4:3 and 16:9 (never wider —
-  that hands the player more map), and the buffer takes the stage's aspect or the world stretches. Measured on a fill-bound frame it halves it (6.8 → 3.1 ms at 800×450); on a
+  at 16:9 and fixes the HEIGHT: the stage follows the window from 4:3 up (PAST 16:9 too, unlike
+  1.30.4 — a 21:9 screen is filled and sees more map, PR #326, no option), and the buffer takes the stage's aspect or the world stretches. Measured on a fill-bound frame it halves it (6.8 → 3.1 ms at 800×450); on a
   CPU-bound one it does almost nothing, which is the whole point of who it is for. **VERTICAL SYNC** (the
   last row, ours, on by default) is a Chromium LAUNCH switch in the desktop app, so the SHELL's
   `settings.json` owns it and OK offers to RELAUNCH the game to apply it (nothing in Electron
@@ -353,7 +353,7 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   `buttonWidthScale`, the map-info nudges) were measured at 16:9 — a 4:3 screen has none of that
   extra width, so each is stated at 16:9 and blended back to the file's own value through
   `widescreen()`. Applied flat, the right-hand chrome ran over the left-hand panel (issue #151).
-  The match stage (`ui/stage.ts`) likewise takes the window's aspect between 4:3 and 16:9, and a
+  The match stage (`ui/stage.ts`) likewise takes the window's aspect from 4:3 up (an ultrawide one is filled), and a
   window narrower than 4:3 boxes the menus as well as the match.
 - **Editions:** read [`docs/editions.md`](docs/editions.md) before touching
   [`src/data/edition.ts`](src/data/edition.ts), [`src/vfs/edition.ts`](src/vfs/edition.ts), a

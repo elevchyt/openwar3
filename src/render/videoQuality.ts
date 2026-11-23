@@ -228,7 +228,7 @@ function resolution(v: unknown): [number, number] {
  * every rung.
  *
  * A rung is named by its 16:9 size, and what it really fixes is the HEIGHT: the stage takes the
- * window's aspect between 4:3 and 16:9 (issue #151), and the buffer has to take the same one or
+ * window's aspect from 4:3 up (issue #151, PR #326), and the buffer has to take the same one or
  * the world is drawn stretched — so "1920 x 1080" on a 4:3 screen draws 1440 × 1080. The lens is
  * vertical, so the height is the dimension that decides how sharp the world is.
  *

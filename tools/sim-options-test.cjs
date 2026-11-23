@@ -196,9 +196,9 @@ console.log("\nResolution picks the size of the buffer the world is drawn into")
   check("a chosen rung is the buffer size", renderSize(), { width: 1280, height: 720 });
   check("…and the same rung as a factor", +renderScale().toFixed(4), +(720 / 1080).toFixed(4));
 
-  // On a NARROWER stage the rung keeps its height and takes the stage's width (issue #151): the
-  // stage follows the window between 4:3 and 16:9, and a buffer of any other shape is drawn
-  // stretched into it. Past either end the stage stops, and so does the buffer.
+  // On any stage but 16:9 the rung keeps its height and takes the stage's width (issue #151): the
+  // stage follows the window from 4:3 up — past 16:9 too (PR #326, an ultrawide screen is filled)
+  // — and a buffer of any other shape is drawn stretched into it. Below 4:3 the stage stops.
   applyVideoOptions(defaultOptions());
   // At devicePixelRatio 2, so the stage is taller than the rung and the ceiling below stays out
   // of it: these four are about the SHAPE of the buffer, not its height.
@@ -212,20 +212,21 @@ console.log("\nResolution picks the size of the buffer the world is drawn into")
   windowAt(1280, 1024);
   check("…a 5:4 one is held at 4:3", renderSize(), { width: 1440, height: 1080 });
   windowAt(2560, 1080);
-  check("…and an ultrawide one at 16:9", renderSize(), { width: 1920, height: 1080 });
+  check("…and an ultrawide one at its own 21:9", renderSize(), { width: 2560, height: 1080 });
 
   // The rung is a CEILING: never more lines than the screen shows. A 1366x768 laptop drew the
-  // default 1080 lines and threw half of them away in the downscale.
+  // default 1080 lines and threw half of them away in the downscale. (1366x768 is a hair wider
+  // than 16:9, and the stage fills it, so the width is the window's own.)
   windowAt(1366, 768, 1);
-  check("a 768-line screen draws 768 lines at the default rung", renderSize(), { width: 1365, height: 768 });
+  check("a 768-line screen draws 768 lines at the default rung", renderSize(), { width: 1366, height: 768 });
   applyVideoOptions({ ...defaultOptions(), resolution: "1280x720" });
-  check("…and a rung under the screen is drawn as chosen", renderSize(), { width: 1280, height: 720 });
+  check("…and a rung under the screen is drawn as chosen", renderSize(), { width: 1281, height: 720 });
   applyVideoOptions(defaultOptions());
   windowAt(1280, 720, 1.5);
   check("…a 150% scaled laptop counts DEVICE pixels", renderSize(), { width: 1920, height: 1080 });
   delete globalThis.window;
 
-  // EVERY rung is NAMED at 16:9 — the widest stage, where the rung is exactly the buffer — so
+  // EVERY rung is NAMED at 16:9 — the stage where the rung is exactly the buffer — so
   // the label says what is drawn on a 16:9 screen and the height on every other one.
   const res = OPTION_DEFS.find((d) => d.key === "resolution");
   const offRatio = (res.choices ?? []).filter((c) => {

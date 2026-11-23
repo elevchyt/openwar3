@@ -2,10 +2,15 @@
 //
 // Warcraft III 1.30 draws its frame at the screen's own aspect, from 4:3 up to 16:9, and lays
 // its UI out inside it, so we do the same: the map renders into a buffer of the stage's aspect,
-// and CSS scales that into the largest box of an aspect in [4:3, 16:9] the window allows,
-// letterboxing only what is outside that range (see `.stage-box` in style.css). Fullscreen on a
+// and CSS scales that into the largest box of an aspect of 4:3 or wider the window allows,
+// letterboxing only a window narrower than 4:3 (see `.stage-box` in style.css). Fullscreen on a
 // 4:3, 16:10 or 16:9 display makes the box the whole screen and the bars vanish (issue #151 —
 // the frame used to be 16:9 whatever the screen, so a 4:3 monitor lost a quarter of its height).
+//
+// PAST 16:9 we go further than 1.30.4 did (PR #326, the developer's call): a 21:9 or 32:9 screen
+// is filled edge to edge rather than pillarboxed, with no option to turn it off. The lens is
+// vertical (docs/camera.md), so the extra width is extra map at the sides; the console's side
+// panels are laid again further out to reach the edges (ui/consoleUi.ts).
 //
 // The trap this module exists to close: an overlay that is positioned from CANVAS coordinates
 // but parented to the WINDOW. While the canvas filled the window those were the same thing, so
@@ -16,50 +21,30 @@
 // the canvas's, and anything laid out as UI is fitted to the element it is mounted in (which
 // CSS has already sized to the stage). Nothing measures `window` any more.
 
-/** The LOGICAL game frame at 16:9 — the widest the stage gets, and what the Resolution rungs
- *  are named by (render/videoQuality.ts). A narrower stage keeps the height. */
+/** The LOGICAL game frame at 16:9 — what the Resolution rungs are named by
+ *  (render/videoQuality.ts). A narrower or wider stage keeps the height. */
 export const GAME_WIDTH = 1920;
 export const GAME_HEIGHT = 1080;
-/** The widest stage: 16:9. Past it the lens would hand the player more map than WC3 does. */
+/** 16:9, the widest aspect 1.30.4 itself draws at. The stage is NOT capped there (a wider
+ *  window is filled — see the header); this is the fallback aspect of a stage with no height. */
 export const GAME_ASPECT = GAME_WIDTH / GAME_HEIGHT;
 /** The narrowest stage: 4:3, the aspect the console and every FDF file are authored at. */
 export const MIN_GAME_ASPECT = 4 / 3;
 
-/** The game frame's on-screen size in CSS px — the largest box of an aspect in [4:3, 16:9]
- *  that fits the window. Mirrors the `--stage-w` / `--stage-h` custom properties CSS lays the
+/** The game frame's on-screen size in CSS px — the largest box of an aspect of 4:3 or wider
+ *  that fits the window: the window itself, unless it is narrower than 4:3. Mirrors the `--stage-w` / `--stage-h` custom properties CSS lays the
  *  box out with. */
 export function stageSize(): { w: number; h: number } {
   // No window is a headless test (tools/sim-options-test.cjs): the widest stage, the one the
   // Resolution rungs are named by.
   if (typeof window === "undefined") return { w: GAME_WIDTH, h: GAME_HEIGHT };
   return {
-    w: wideStage ? window.innerWidth : Math.min(window.innerWidth, window.innerHeight * GAME_ASPECT),
+    w: window.innerWidth,
     h: Math.min(window.innerHeight, window.innerWidth / MIN_GAME_ASPECT),
   };
 }
 
-/**
- * Options -> Video -> "Wide Screen" (ours, off by default): the 16:9 cap is lifted and the stage
- * takes the window's own width, so a 21:9 or 32:9 monitor is filled edge to edge instead of
- * pillarboxed. The camera keeps its vertical angle (docs/camera.md), so the extra width is extra
- * map at the sides — exactly what the cap is there to refuse, which is why it is a choice. The
- * height rule is unchanged, and so is everything measured off `--stage-h` (the whole HUD).
- */
-let wideStage = false;
-export function setWideStage(on: boolean): void {
-  if (typeof document === "undefined") return; // headless (the options test compiles this file)
-  if (on === wideStage) return;
-  wideStage = on;
-  document.body.classList.toggle("stage-wide", on);
-  window.dispatchEvent(new Event("resize"));
-}
-
-/** The Options row's applier — `wideStage` in data/options.ts. */
-export function applyStageOptions(opts: { wideStage?: unknown }): void {
-  setWideStage(opts.wideStage === true);
-}
-
-/** The stage's aspect (width / height): within [4:3, 16:9], or wider under "Wide Screen". */
+/** The stage's aspect (width / height), never narrower than 4:3. */
 export function stageAspect(): number {
   const { w, h } = stageSize();
   return h > 0 ? w / h : GAME_ASPECT;

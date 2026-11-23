@@ -54,31 +54,26 @@ html, body {
   color: #e8e2d0;
 }
 
-/* The STAGE: the game frame takes the window's own aspect between 4:3 and 16:9 — the two
-   Warcraft III 1.30 renders at — and is letterboxed in black only outside that range. The lens
-   is VERTICAL (docs/camera.md), so the height of the world on screen is the same at every
-   aspect and the width is what varies: a 4:3 screen sees less map at the sides, exactly as it
-   does in the real client. Past 16:9 the width stops growing, because a wider box would hand the
-   player more map than the real game ever gives; narrower than 4:3 (a 5:4 monitor) the height
-   stops, because the console is authored 0.8 wide and has nothing to fill a narrower screen
-   with. A fixed 16:9 frame used to letterbox a 4:3 monitor too, throwing a quarter of its
+/* The STAGE: the game frame takes the window's own aspect from 4:3 up — Warcraft III 1.30
+   renders between 4:3 and 16:9, and past 16:9 we keep going (PR #326: a 21:9 or 32:9 screen is
+   filled rather than pillarboxed, with no option) — and is letterboxed in black only below 4:3.
+   The lens is VERTICAL (docs/camera.md), so the height of the world on screen is the same at
+   every aspect and the width is what varies: a 4:3 screen sees less map at the sides, exactly as
+   it does in the real client, and an ultrawide one sees more. Narrower than 4:3 (a 5:4 monitor)
+   the height stops, because the console is authored 0.8 wide and has nothing to fill a narrower
+   screen with. A fixed 16:9 frame used to letterbox a 4:3 monitor too, throwing a quarter of its
    height away for no gain (issue #151).
    The HUD rides the same box (it is the game's console, not the browser's), so it stays
    welded to the bottom of the frame rather than to the bottom of the window. */
 :root {
-  /* The stage's on-screen size — the largest box of an aspect in [4:3, 16:9] the window holds:
-     the width is capped at 16:9 of the height, the height at 3:4 of the width. ONE pair, and the
+  /* The stage's on-screen size — the largest box of an aspect of 4:3 or wider the window holds:
+     the whole width, and the height capped at 3:4 of it. ONE pair, and the
      interface measures itself against the same one the canvas is drawn into: every length in
      the HUD is a fraction of `--stage-h` (ui/hud.ts `uiPx`), which is what makes the console
      hold its shape on a small screen by itself. Options -> Video -> Resolution does NOT reach
      these — it sizes the world's backing buffer, which this box then scales. */
-  --stage-w: min(100vw, calc(100vh * 16 / 9));
-  --stage-h: min(100vh, calc(100vw * 3 / 4));
-}
-
-/* Options -> Video -> "Wide Screen" (ui/stage.ts `setWideStage`): no 16:9 cap on the width. */
-body.stage-wide {
   --stage-w: 100vw;
+  --stage-h: min(100vh, calc(100vw * 3 / 4));
 }
 
 /* WebGL scenes (terrain / model / map) sit behind the UI. One shows at a time. */
@@ -3619,7 +3614,7 @@ body.in-game #ui {
 /* Options -> Video -> "4:3 Menus": the same box on ANY window, so a wide screen gets black bars
    at the sides — how 1.30.4 draws its menus there (ui/widescreen.ts `setFixedMenuAspect`, which
    also hands the box's aspect to the corrections that would otherwise widen the chrome). Its own
-   pair of lengths, because out of a match on a wide window --stage-w is the 16:9 one. */
+   pair of lengths, because out of a match --stage-w is the whole window's width. */
 body.menus-4x3:not(.in-game) {
   background: #000;
 }

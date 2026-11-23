@@ -20731,11 +20731,11 @@ export class MapViewerScene {
   }
 }
 
-// The game renders at the STAGE's aspect (ui/stage.ts) — the window's own between 4:3 and 16:9,
-// the range Warcraft III itself draws at. The CSS stage scales this buffer into the largest box
-// of that aspect the window allows and letterboxes only what is outside the range: 1:1
-// fullscreen on a 1080p display, cleanly scaled everywhere else. Past 16:9 it must stop — the
-// lens is vertical, so a wider box quietly hands the player more map than the real game gives.
+// The game renders at the STAGE's aspect (ui/stage.ts) — the window's own from 4:3 up (WC3 draws
+// between 4:3 and 16:9; past 16:9 we fill the window too, PR #326). The CSS stage scales this
+// buffer into the largest box of that aspect the window allows and letterboxes only a window
+// narrower than 4:3: 1:1 fullscreen on a 1080p display, cleanly scaled everywhere else. The lens
+// is vertical, so an ultrawide window sees more map at the sides.
 //
 // HOW BIG that buffer is, though, is the player's (Options → Video → Resolution;
 // render/videoQuality.ts). Nothing about the framing moves with it — the stage scales whatever

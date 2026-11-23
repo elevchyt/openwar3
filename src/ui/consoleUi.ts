@@ -559,7 +559,7 @@ export class ConsoleUi {
       side(`${edge}5`, 0.176, 0.3125, 1, "BOTTOMLEFT", -0.256);
       side(`${edge}6`, 0.176, 0.3125, 1, "BOTTOMRIGHT", 0.256);
     }
-    // Past 16:9 ("Wide Screen", ui/stage.ts) the stage is wider than the two side panels reach
+    // Past 16:9 (a 21:9 or 32:9 window, which the stage fills — ui/stage.ts) the stage is wider than the two side panels reach
     // (0.8 + 2 × 0.256 = an aspect of 2.19 at 0.6 tall), so the same panels are laid again
     // further out, three more a side — wide enough for 32:9 and past it. Inside 16:9 they are
     // all outside the stage and clipped with it. The panel is a run of masonry, so the copies

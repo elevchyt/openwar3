@@ -291,19 +291,6 @@ Frame "GLUETEXTBUTTON" "GamepadButton" INHERITS WITHCHILDREN "StandardButtonTemp
 }
 
 // ---------------------------------------------------------------------------------------------
-// Gameplay panel: "Wide Screen" (src/data/options.ts `wideStage`, src/ui/stage.ts), a checkbox
-// on the "Detect Gamepad" row, after the button. Ours: 1.30.4 caps the match at 16:9, and this
-// lifts the cap for a 21:9 or 32:9 screen. The Video panel has no room left for a row.
-Frame "GLUECHECKBOX" "WideStageCheckBox" INHERITS WITHCHILDREN "StandardCheckBoxTemplate" {
-    SetPoint LEFT, "GamepadButton", RIGHT, 0.02, 0.0,
-}
-
-Frame "TEXT" "WideStageLabel" INHERITS "StandardInfoTextTemplate" {
-    SetPoint LEFT, "WideStageCheckBox", RIGHT, 0.01, 0.0,
-    Text "WIDE_SCREEN",
-}
-
-// ---------------------------------------------------------------------------------------------
 // Gameplay panel: "Voice Control", between "Show hotkeys on command buttons" and "Detect
 // Gamepad". Push-to-talk on the "." key: hold it, say a command ("train three footmen",
 // "attack move here", "group one"), let go. Nothing in 1.30.4 listens, so the row is ours, and

@@ -80,10 +80,10 @@ frame; this is only how many pixels are drawn into it.
 at runtime rather than writing into the FDF — the `MENU` frame under `ResolutionMenu` is empty in
 the file, because the game enumerated the display modes the hardware offered. A browser has no
 display modes, so the analogue is the ladder of buffer sizes. The stage takes the window's aspect
-between 4:3 and 16:9 (`ui/stage.ts`, issue #151) — never wider, because a wider box quietly hands
-the player more map than the real game gives (unless the player ticks Options → Gameplay →
-"Wide Screen", ours and off by default, which lets a 21:9 or 32:9 window fill — `setWideStage`) —
-and the buffer has to take the same aspect or the world is drawn stretched. So `renderSize` keeps the rung's height and takes the stage's width:
+from 4:3 up (`ui/stage.ts`, issue #151). The real client stops at 16:9; we do not (PR #326, the
+developer's call, with no option): a 21:9 or 32:9 window is filled edge to edge and sees more map
+at the sides, and the console's side panels are laid again further out to reach its edges
+(`ui/consoleUi.ts`). The buffer has to take the same aspect or the world is drawn stretched. So `renderSize` keeps the rung's height and takes the stage's width:
 "1920 x 1080" is 1920×1080 on a 16:9 screen, 1728×1080 on 16:10 and 1440×1080 on 4:3 (and on
 5:4, whose stage is held at 4:3 and letterboxed). The lens is vertical, so the height is the
 dimension that decides how sharp the world is. The test asserts both: that every rung is named

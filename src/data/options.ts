@@ -10,7 +10,7 @@ import { SOUND_GROUP, type SoundBoard } from "../audio/sounds";
 // every widget generically instead of naming each one twice. Defaults match Warcraft III's.
 //
 // Not every option the FDF carries maps to something this engine does — the resolution list is
-// meaningless to a client that renders into a fixed 16:9 buffer (ui/stage.ts), and two of the
+// meaningless to a client that renders into a buffer of the window's aspect (ui/stage.ts), and two of the
 // video rows describe features we do not have. Those are kept as remembered UI state rather than
 // faked behaviour, and are marked `applied:false` with the reason next to them. The rest have a
 // live backend: the Sound panel through `applyAudioOptions` here, the Video panel through
@@ -75,11 +75,10 @@ const ON_OFF = [
  * under `ResolutionMenu` is empty in the file), because it enumerated the display modes the
  * hardware would give it. A browser has no display modes: the page renders into a canvas and CSS
  * scales it into the window. So the analogue is the ladder of buffer sizes, and the frame it is
- * scaled into is unchanged — which is why every rung here is named EXACTLY 16:9. The stage is
- * at most 16:9 (ui/stage.ts: a wider one quietly hands the player more map than the real game
- * gives), and a narrower one — a 4:3 or 16:10 screen — draws the rung's HEIGHT at its own
- * aspect (render/videoQuality.ts `renderSize`), so a rung names what a 16:9 screen draws and
- * how many lines every other one does. A 4:3 rung off the 2003 list would name a width that
+ * scaled into is unchanged — which is why every rung here is named EXACTLY 16:9. A stage of any
+ * other aspect — a 4:3 or 16:10 screen, or a 21:9 one, which the stage fills (ui/stage.ts) —
+ * draws the rung's HEIGHT at its own aspect (render/videoQuality.ts `renderSize`), so a rung
+ * names what a 16:9 screen draws and how many lines every other one does. A 4:3 rung off the 2003 list would name a width that
  * only some screens draw.
  *
  * Ascending, as the game's own list was. Labels are plain text rather than GlobalStrings keys —
@@ -189,12 +188,6 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   // here the row is a download button instead — ui/voiceOptions.ts). Live through
   // `applyVoiceOptions`.
   { key: "voiceControl", frame: "VoiceControlCheckBox", kind: "bool", panel: "gameplay", def: false },
-  // "Wide Screen": a match fills a screen wider than 16:9 (21:9, 32:9) instead of being
-  // pillarboxed — ui/stage.ts `setWideStage`. Not a WC3 row: 1.30.4 caps its frame at 16:9, and
-  // the extra width is extra map at the sides, which is why it is a choice and OFF by default.
-  // On the Gameplay panel, beside "Detect Gamepad", for that reason (and because the Video
-  // panel has no room left). Live through `applyStageOptions`.
-  { key: "wideStage", frame: "WideStageCheckBox", kind: "bool", panel: "gameplay", def: false },
 
   // --- Video (applied through render/videoQuality.ts, which documents what each rung does) ---
   // Gamma opens at 46 — the developer's pick, read off a screenshot of this panel: the thumb a
