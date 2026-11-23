@@ -546,6 +546,21 @@ console.log("\nan undroppable item cannot leave the inventory");
   check("…and now it drops", world.dropItem(keeper.id, 0, keeper.x + 10, keeper.y), true);
 }
 {
+  // …and none of that binds a TRIGGER. The flag is the hero's hand, not the script's: a map
+  // parks an inventory off the field with SetItemPosition, or hands every item from one hero to
+  // another with UnitAddItem, its undroppable ones included.
+  world = newWorld();
+  const keeper = give(unit({ isHero: true }), "soul");
+  const soul = keeper.inventory[0].id;
+  check("a script's SetItemPosition moves an undroppable item", world.setItemPosition(soul, keeper.x + 300, keeper.y), true);
+  check("…out of the slot", keeper.inventory[0], null);
+  check("…onto the ground", world.items.has(soul), true);
+  check("…and UnitAddItem puts it back", world.unitAddItem(keeper.id, soul), true);
+  const other = unit({ isHero: true, x: keeper.x + 40, inventory: [null, null, null, null, null, null] });
+  check("a script's UnitAddItem hands it to another hero", world.unitAddItem(other.id, soul) && other.inventory.some((h) => h && h.id === soul), true);
+  check("…and UnitRemoveItem drops it", world.unitRemoveItem(other.id, soul) && world.items.has(soul), true);
+}
+{
   // No script involved: the TYPE's own column is the default.
   world = newWorld();
   const hero = give(unit({ isHero: true }), "soul");
