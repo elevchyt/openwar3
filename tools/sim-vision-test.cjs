@@ -213,12 +213,13 @@ console.log("\nexposure and one-shots resolve per RECIPIENT, not per 'local'");
 
 console.log("\nNeutral Extra shares its sight when the alliance says so  (Viewpoint.rebuild)");
 {
-  // A unit a script made for Neutral Extra (14) keeps that slot as its owner, so
-  // SetPlayerAlliance(Player(14), Player(0), ALLIANCE_SHARED_VISION, true) lends player 0 its
-  // eyes. A Neutral Passive (-1) shop still scouts for nobody.
+  // A unit a script made for Neutral Extra (14) is filed as Neutral Passive (owner -1) but
+  // remembers its slot (SimUnit.neutralSlot), so SetPlayerAlliance(Player(14), Player(0),
+  // ALLIANCE_SHARED_VISION, true) lends player 0 its eyes. A plain Neutral Passive shop still
+  // scouts for nobody.
   const units = new Map([
-    [1, { id: 1, owner: 14, team: -2, x: 300, y: 300, sightDay: 600, sightNight: 600, neutralPassive: true }],
-    [2, { id: 2, owner: -1, team: -2, x: 800, y: 800, sightDay: 600, sightNight: 600, neutralPassive: true }],
+    [1, { id: 1, owner: -1, team: -2, x: 300, y: 300, sightDay: 600, sightNight: 600, neutralPassive: true, neutralSlot: 14 }],
+    [2, { id: 2, owner: -1, team: -2, x: 800, y: 800, sightDay: 600, sightNight: 600, neutralPassive: true, neutralSlot: -1 }],
   ]);
   const world = { units, isDay: true, activeAttackReveals: () => [], activeDeathReveals: () => [], activeItemReveals: () => [], teamDetects: () => false };
   const shares = { sharesVisionWith: (from, to) => from === 14 && to === 0, coAllied: () => false };

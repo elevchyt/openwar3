@@ -169,7 +169,16 @@ export class Viewpoint {
     // `UnitShareVision` lends ONE unit's sight to a player whatever the alliance says — a
     // campaign's way of letting you watch an ally's scout without opening their whole map.
     if (this.player >= 0 && u.visionSharedWith?.includes(this.player)) return true;
+    if (this.slotLendsSight(u)) return true;
     return this.revealsForOwner(u.owner, u.team);
+  }
+
+  /** A Neutral Victim/Extra unit is filed under the anonymous neutral owner, but its SLOT is a
+   *  player the script can ally: `SetPlayerAlliance(Player(14), p, ALLIANCE_SHARED_VISION,
+   *  true)` lends p the sight of everything that slot has (SimUnit.neutralSlot). */
+  private slotLendsSight(u: SimUnit): boolean {
+    const slot = u.neutralSlot ?? -1;
+    return slot >= 0 && this.player >= 0 && this.alliances.sharesVisionWith(slot, this.player);
   }
 
   /** The same question asked of a bare owner/team pair, for sight that has outlived its unit:
@@ -370,9 +379,9 @@ export class Viewpoint {
     this.stampModifiers(modifiers, false);
     for (const u of this.world.units.values()) {
       // Shops/critters don't scout for you — unless a script lent that one unit's sight to us.
-      // A neutral that kept its SLOT (Neutral Victim/Extra, RtsController.createScriptUnit) is a
-      // player the script can make share its sight, and `revealsFor` asks the alliance for it.
-      if (u.neutralPassive && u.owner < 0 && !(this.player >= 0 && u.visionSharedWith?.includes(this.player))) continue;
+      // …or the whole slot's: a Neutral Victim/Extra unit is that player's to the script, and the
+      // script can make it share its sight (SimUnit.neutralSlot, `slotLendsSight`).
+      if (u.neutralPassive && !(this.player >= 0 && u.visionSharedWith?.includes(this.player)) && !this.slotLendsSight(u)) continue;
       if (!this.revealsFor(u)) continue;
       const r = (day ? u.sightDay : u.sightNight) || u.sightDay || 800;
       // The unit id opts this sight into the shared footprint cache: a unit that has not

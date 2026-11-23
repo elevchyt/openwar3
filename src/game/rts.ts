@@ -3104,13 +3104,7 @@ export class RtsController {
     // 13/14/15 — never a fighting slot. And ONLY those: 16–23 are real players on a map saved
     // for the 24-player table (enums.ts isNeutralSlot).
     const passive = isNeutralSlot(player) && !creep;
-    // Neutral Victim (13) and Neutral Extra (14) keep their SLOT as the sim owner: a script can
-    // grant either one's sight to the players (`SetPlayerAlliance(Player(14), p,
-    // ALLIANCE_SHARED_VISION, true)` is how a scenario shows a player set pieces it builds on
-    // those slots), and sight is shared by owner, never by the anonymous -1 every other neutral
-    // is filed under. They stay passive (`neutralPassive`, the passive team).
-    const keepSlot = passive && player !== neutralSlot(PlayerSlot.NeutralPassive);
-    const owner = creep ? NEUTRAL_HOSTILE_OWNER : keepSlot ? player : passive ? NEUTRAL_PASSIVE_OWNER : player;
+    const owner = creep ? NEUTRAL_HOSTILE_OWNER : passive ? NEUTRAL_PASSIVE_OWNER : player;
     const team = creep ? NEUTRAL_HOSTILE_TEAM : passive ? NEUTRAL_PASSIVE_TEAM : teamOf(player);
     const simId = this.reserveUnitId();
     this.addSimUnit(def, x, y, facing, owner, team, 0, simId); // exists NOW
@@ -3138,6 +3132,11 @@ export class RtsController {
       su.canSleep = def.canSleep;
     } else if (su && passive) {
       su.neutralPassive = true;
+      // Neutral Victim (13) and Neutral Extra (14) are filed as Neutral Passive but stay their
+      // own players to the script — GetOwningPlayer, and whose shared vision the unit lends
+      // (SimUnit.neutralSlot). A scenario builds set pieces on Neutral Extra and grants its
+      // sight with `SetPlayerAlliance(Player(14), p, ALLIANCE_SHARED_VISION, true)`.
+      if (player !== neutralSlot(PlayerSlot.NeutralPassive)) su.neutralSlot = player;
     }
     this.scriptSpawns.push({ typeId, x, y, facing, player: owner, team, simId }); // …gets a body later
     return simId;
