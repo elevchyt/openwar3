@@ -1494,6 +1494,9 @@ export class MapViewerScene {
   /** Does the script watch a player-state threshold (EVENT_PLAYER_STATE_LIMIT)? Polled per tick
    *  like the unit-state one, and the event a tower defence's round loop hangs on. */
   private scriptWatchesPlayerState = false;
+  private scriptWatchesGameState = false;
+  /** The time of day at the last game-state pump (pumpGameStates compares the two). */
+  private lastScriptClock: number | null = null;
   /** Does the script watch SELECTION (EVENT_PLAYER_UNIT_SELECTED/…)? Raised by the RTS's own
    *  diff of the local selection rather than by the sim — see pumpSelectionEvents. */
   private scriptWatchesSelection = false;
@@ -5992,6 +5995,7 @@ export class MapViewerScene {
     // wave clock is this event and nothing else: "Player(10)'s food used == 0" is how Azure
     // Tower Defense learns the round is over and starts the next one.
     this.scriptWatchesPlayerState = rt.triggerRegs.some((r) => r.kind === "playerState");
+    this.scriptWatchesGameState = rt.triggerRegs.some((r) => r.kind === "gameStateEvent");
     this.scriptRegCount = rt.triggerRegs.length;
 
     // A creep whose DEATH the script watches drops its loot through the SCRIPT, not through
@@ -6092,6 +6096,12 @@ export class MapViewerScene {
       if (this.scriptWatchesUnitState) engine.interp.pumpUnitStates();
       // Player-resource thresholds (EVENT_PLAYER_STATE_LIMIT) — polled for the same reason.
       if (this.scriptWatchesPlayerState) engine.interp.pumpPlayerStates();
+      // …and the game-state ones (the time of day) — polled off the sim's clock.
+      if (this.scriptWatchesGameState && this.rts) {
+        const now = this.rts.simView.timeOfDay;
+        engine.interp.pumpGameStates(this.lastScriptClock ?? now, now);
+        this.lastScriptClock = now;
+      }
       // Enter/leave-region — only snapshot the world if some trigger watches a region.
       // `unitInRange` is one of those regions: a circle that walks about with a unit
       // (pumpRegions), so leaving it out of this gate switches the whole event off.
