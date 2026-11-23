@@ -68,6 +68,25 @@ export interface SaveHeader {
   localPlayer: number;
 }
 
+/** One script-made destructible: its placement and state, and the ids of its other half in the
+ *  saved world — the sim tree that is a tree's harvestable half, or the unit a crate fights as
+ *  (-1 for none). */
+export interface SavedScriptDestructible {
+  id: number;
+  typeId: string;
+  x: number;
+  y: number;
+  z: number;
+  angle: number;
+  scale: [number, number, number];
+  variation: number;
+  life: number;
+  removed: boolean;
+  invulnerable: boolean;
+  tree: number;
+  body: number;
+}
+
 /** What only the SCENE knows about a match (MapViewerScene.captureScene) — what a script put on
  *  the screen, and where the player was looking. */
 export interface SavedScene {
@@ -87,6 +106,10 @@ export interface SavedScene {
   /** Every map destructible's life, by its .doo id — the scene keeps it, the script reads it. */
   destructibles?: Array<[number, number]>;
   destSimIds?: Array<[number, number]>;
+  /** The destructibles a SCRIPT made (`CreateDestructable`), which the map's layout does not
+   *  have — see MapViewerScene.restoreScriptDestructibles. */
+  scriptDestructibles?: SavedScriptDestructible[];
+  nextScriptDestructible?: number;
   matchDecided?: boolean;
   questFlashesSeen?: number;
   /** Further presentation a script put up — see MapViewerScene.captureScene. */

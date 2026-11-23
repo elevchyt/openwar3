@@ -14,7 +14,8 @@ import { SkyDome, skyModelPath, type SkyViewer } from "./sky";
 import { CAMERA_MARGIN, CELL, cameraBoundsOf, parseW3E, playableRect, type TerrainData, type WorldRect } from "../world/terrain";
 import { brushPoints, parseCellRarity, pickCell } from "./terrainBrush";
 import { parseDoo } from "../world/doodads";
-import { collectMapDestructibles, findDestructibleAt, type MapDestructible } from "../world/mapDestructibles";
+import { collectMapDestructibles, destructibleRecord, findDestructibleAt, SCRIPT_DESTRUCTIBLE_BASE, type MapDestructible } from "../world/mapDestructibles";
+import Doodad from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/doodad";
 import { destructibleUnitDef } from "../data/units";
 import { PathingGrid, parseWpm, footprintCells, PATHING_CELL, BUILD_CELL, BUILD_CELL_CELLS } from "../sim/pathing";
 import { AllianceType } from "../sim/alliances";
@@ -26,7 +27,7 @@ import { decodeGraph, encodeGraph, newEncodeStats, type DecodeReport, type Encod
 import { registerSaveClasses } from "../game/save/classes";
 import { isRenderObject, registerGameSaveClasses } from "../game/save/gameClasses";
 import { externalResolver, externalsFor, type SaveRegistries } from "../game/save/matchSave";
-import type { SaveFile, SavedScene } from "../game/save/saveFile";
+import type { SaveFile, SavedScene, SavedScriptDestructible } from "../game/save/saveFile";
 import { saveFileName, saveSink } from "../game/save/saveSink";
 import { mintedOrders, restoreMintedOrders } from "../jass/orders";
 import { jStr, JNULL, type JassValue } from "../jass/values";
@@ -1882,6 +1883,21 @@ export class MapViewerScene {
   // src/world/mapDestructibles.ts; the live half (which collider is stamped right now, and the
   // scene-animated stand-in playing its clips) is tracked here.
   private destructibles: MapDestructible[] = [];
+  /** The records a SCRIPT made (`CreateDestructable` where the map placed nothing), by id — they
+   *  sit past the .doo's own in `destructibles`, where the by-index lookup cannot reach them. */
+  private readonly scriptDestructibles = new Map<number, MapDestructible>();
+  /** …and the model variation each was made with: the one thing the record does not carry that
+   *  a saved game needs to draw it again (captureScene / restoreScriptDestructibles). */
+  private readonly scriptDestVariation = new Map<number, number>();
+  private nextScriptDestructible = SCRIPT_DESTRUCTIBLE_BASE;
+  /** A script-made record's OWN doodad widget. The .doo's records are matched to theirs by
+   *  position (nearestDoodadWidget), which is safe for an editor's layout and not for 750 trees
+   *  dropped at random, two of which may stand closer than a tree's width. */
+  private readonly destWidgets = new Map<number, HideableWidget>();
+  /** A TREE record and the sim tree that is its harvestable, sight-blocking half — both ways. A
+   *  script that kills, removes or regrows a tree has to move that half with the picture. */
+  private readonly simTreeOfDest = new Map<number, number>();
+  private readonly destOfSimTree = new Map<number, number>();
   // Fog footprint half-extent of each tree, keyed by its rounded world position — the
   // doodad widgets stream in async, so we can't hold instance refs here. Lets fogWidgets
   // light a tree from ANY cell it covers rather than one self-shadowed origin cell (#43).
@@ -2595,29 +2611,41 @@ export class MapViewerScene {
     this.destSimIds.clear();
     this.destSimByDoo.clear();
     this.destAwaitingBody.clear();
-    for (const d of this.destructibles) {
-      if (d.isTree || !d.selectable || d.life <= 0) continue;
-      if (!MapViewerScene.ATTACKABLE_TARG.has(d.targType)) continue;
-      let def = this.destDefs.get(d.typeId);
-      if (!def) {
-        def = destructibleUnitDef({
-          typeId: d.typeId,
-          name: this.westring(d.name),
-          maxLife: d.maxLife,
-          radius: d.radius,
-          selCircle: d.selCircle,
-          armorSound: d.armorSound,
-          targType: d.targType,
-          portraitModel: this.destructiblePortrait(d),
-        });
-        this.destDefs.set(d.typeId, def);
-      }
-      const simId = rts.addDestructible(def, d.x, d.y, d.angle, d.life);
-      this.destSimIds.set(simId, d.id);
-      this.destSimByDoo.set(d.id, simId);
-      this.destAwaitingBody.add(simId);
-      if (d.invulnerable) rts.simWorld.setInvulnerable(simId, true);
+    for (const d of this.destructibles) this.seedDestructible(d);
+  }
+
+  /** Give ONE destructible its sim unit, if it is a thing a weapon can be pointed at (see
+   *  seedDestructibles for which). Also how a crate a script makes mid-match gets one. */
+  private seedDestructible(d: MapDestructible): void {
+    const rts = this.rts;
+    if (!rts) return;
+    if (d.isTree || !d.selectable || d.life <= 0) return;
+    if (!MapViewerScene.ATTACKABLE_TARG.has(d.targType)) return;
+    const def = this.destDefFor(d);
+    const simId = rts.addDestructible(def, d.x, d.y, d.angle, d.life);
+    this.destSimIds.set(simId, d.id);
+    this.destSimByDoo.set(d.id, simId);
+    this.destAwaitingBody.add(simId);
+    if (d.invulnerable) rts.simWorld.setInvulnerable(simId, true);
+  }
+
+  /** The unit row a destructible's body fights as, made once per type. */
+  private destDefFor(d: MapDestructible): UnitDef {
+    let def = this.destDefs.get(d.typeId);
+    if (!def) {
+      def = destructibleUnitDef({
+        typeId: d.typeId,
+        name: this.westring(d.name),
+        maxLife: d.maxLife,
+        radius: d.radius,
+        selCircle: d.selCircle,
+        armorSound: d.armorSound,
+        targType: d.targType,
+        portraitModel: this.destructiblePortrait(d),
+      });
+      this.destDefs.set(d.typeId, def);
     }
+    return def;
   }
 
   /** The bust the selection panel shows. The data ships one (`portraitmodel`) because the
@@ -2701,7 +2729,7 @@ export class MapViewerScene {
         this.destAwaitingBody.delete(simId);
         continue;
       }
-      const w = this.nearestDoodadWidget(d.x, d.y, doodads);
+      const w = this.destWidget(d, doodads);
       if (!w?.instance?.model) continue; // the pass has not reached this one yet
       this.rts.attachDestructibleBody(simId, def, w.instance as unknown as RtsInstance);
       this.destAwaitingBody.delete(simId);
@@ -2772,7 +2800,7 @@ export class MapViewerScene {
   }
   /** Feed harvestable trees and gold mines into the headless sim, remembering
    *  each node's stamped footprint so it can be unstamped on removal. */
-  private registerResourceNodes(nodes: { trees: Array<{ x: number; y: number; angle: number; pathTex: string }>; mines: Array<{ x: number; y: number; gold: number }> }): void {
+  private registerResourceNodes(nodes: { trees: Array<{ x: number; y: number; angle: number; pathTex: string; destId?: number }>; mines: Array<{ x: number; y: number; gold: number }> }): void {
     const world = this.rts?.simWorld;
     if (!world) return;
     this.nodeFootprints.clear();
@@ -2785,6 +2813,10 @@ export class MapViewerScene {
       const tree = world.addTree(t.x, t.y, undefined, blockRadius);
       this.treeFogRadius.set(fogKey(t.x, t.y), blockRadius);
       if (fp) this.nodeFootprints.set(tree.id, { fp, x: t.x, y: t.y });
+      if (t.destId !== undefined) {
+        this.simTreeOfDest.set(t.destId, tree.id);
+        this.destOfSimTree.set(tree.id, t.destId);
+      }
     }
     const minePathTex = this.registry.get("ngol")?.pathTex || "";
     const mineFp = minePathTex ? this.footprintFor(minePathTex) : null;
@@ -2878,9 +2910,9 @@ export class MapViewerScene {
   private stampMapPathing(
     grid: PathingGrid,
     archive: MpqDataSource,
-  ): { trees: Array<{ x: number; y: number; angle: number; pathTex: string }>; mines: Array<{ x: number; y: number; gold: number }>; neutral: Array<{ x: number; y: number }>; creeps: CreepSeed[]; players: Array<{ x: number; y: number; owner: number }>; placedFootprints: PlacedFootprint[]; placedOrder: PlacedRef[] } {
+  ): { trees: Array<{ x: number; y: number; angle: number; pathTex: string; destId?: number }>; mines: Array<{ x: number; y: number; gold: number }>; neutral: Array<{ x: number; y: number }>; creeps: CreepSeed[]; players: Array<{ x: number; y: number; owner: number }>; placedFootprints: PlacedFootprint[]; placedOrder: PlacedRef[] } {
     const placedFootprints: PlacedFootprint[] = []; // each map building's stamp, handed to its unit at seed time
-    const trees: Array<{ x: number; y: number; angle: number; pathTex: string }> = [];
+    const trees: Array<{ x: number; y: number; angle: number; pathTex: string; destId?: number }> = [];
     const mines: Array<{ x: number; y: number; gold: number }> = [];
     const neutral: Array<{ x: number; y: number }> = []; // Neutral Passive (player 15) sites
     const creeps: CreepSeed[] = []; // Neutral Hostile (player 12+) guard + drop data
@@ -2921,6 +2953,13 @@ export class MapViewerScene {
 
     // Destructibles (trees, rocks) from war3map.doo.
     this.propFogRadius.clear(); // …outside the branch: a map with no .doo has no props either
+    this.destructibles = []; // …and no records left over from the last map
+    this.scriptDestructibles.clear();
+    this.scriptDestVariation.clear();
+    this.nextScriptDestructible = SCRIPT_DESTRUCTIBLE_BASE;
+    this.destWidgets.clear();
+    this.simTreeOfDest.clear();
+    this.destOfSimTree.clear();
     const dooBytes = archive.rawBytes("war3map.doo");
     if (dooBytes) {
       const doodads = parseDoo(dooBytes, buildVersion);
@@ -2978,7 +3017,7 @@ export class MapViewerScene {
       }
       // A tree placed dead is a stump: scenery, not something a wisp can chop.
       for (const d of this.destructibles) {
-        if (d.isTree && d.life > 0) trees.push({ x: d.x, y: d.y, angle: d.angle, pathTex: d.pathTex });
+        if (d.isTree && d.life > 0) trees.push({ x: d.x, y: d.y, angle: d.angle, pathTex: d.pathTex, destId: d.id });
       }
     }
 
@@ -3806,6 +3845,15 @@ export class MapViewerScene {
       userControl: this.userControl,
       destructibles: this.destructibles.map((d) => [d.id, d.life] as [number, number]),
       destSimIds: [...this.destSimIds],
+      // The ones a SCRIPT made (`CreateDestructable`): a load lays out the MAP, which never had
+      // them, and does not run `main` again — so each is written down whole, with the sim tree
+      // or the body that is its other half in the saved world (restoreScriptDestructibles).
+      scriptDestructibles: [...this.scriptDestructibles.values()].map((d): SavedScriptDestructible => ({
+        id: d.id, typeId: d.typeId, x: d.x, y: d.y, z: d.z, angle: d.angle, scale: [d.scale[0], d.scale[1], d.scale[2]],
+        variation: this.scriptDestVariation.get(d.id) ?? 0, life: d.life, removed: !!d.removed, invulnerable: !!d.invulnerable,
+        tree: this.simTreeOfDest.get(d.id) ?? -1, body: this.destSimByDoo.get(d.id) ?? -1,
+      })),
+      nextScriptDestructible: this.nextScriptDestructible,
       matchDecided: this.matchDecided,
       questFlashesSeen: this.questFlashesSeen,
       looks: rts.captureLooks(),
@@ -3874,7 +3922,11 @@ export class MapViewerScene {
     // --- the picture ------------------------------------------------------------------------------
     const { needBody, retyped } = rts.reconcileAfterLoad();
     for (const r of retyped) void this.remodelUnit(r.id, r.to);
+    this.restoreScriptDestructibles(scene, world);
     for (const u of needBody) {
+      // A crate's or a gate's body is its DOODAD, handed over by bodyDestructibles — never a
+      // unit model (its def's `model` is only the selection portrait).
+      if (this.destSimIds.has(u.id)) continue;
       const def = this.registry.get(u.typeId) ?? this.destDefs.get(u.typeId);
       if (!def) continue;
       // The record, its stamp and its seat are the save's; only the BODY is new.
@@ -3962,7 +4014,7 @@ export class MapViewerScene {
   /** A destructible that is dead in a loaded game: its death clip's last frame, at once. */
   private poseDestructibleDead(d: MapDestructible): void {
     const map = this.viewer.map;
-    const w = map ? this.nearestDoodadWidget(d.x, d.y, map.doodads as unknown as HideableWidget[]) : null;
+    const w = map ? this.destWidget(d, map.doodads as unknown as HideableWidget[]) : null;
     if (!w) return;
     const a = this.doodadActor(w);
     if (!a) {
@@ -5017,6 +5069,7 @@ export class MapViewerScene {
       // Presentation-side because the map's destructibles ARE renderer state: the .doo records
       // it drew, the footprints it stamped, and the stand-in instances that play their clips.
       findDestructable: (typeId, x, y) => findDestructibleAt(this.destructibles, typeId, x, y)?.id ?? 0,
+      createDestructable: (typeId, x, y, z, facing, scale, variation, dead) => this.spawnDestructible(typeId, x, y, z, facing, scale, variation, dead),
       destructableInfo: (id) => this.destructibleSnapshot(id),
       // The sim unit a gate or crate fights as — what `IssueTargetOrder` aims at when its
       // widget is a destructable (jass/natives/orderTarget.ts). 0 for a tree or a bridge.
@@ -5030,7 +5083,7 @@ export class MapViewerScene {
       showDestructable: (id, show) => this.showDestructible(id, show),
       enumDestructables: (minX, minY, maxX, maxY) =>
         this.destructibles
-          .filter((d) => d.x >= minX && d.x <= maxX && d.y >= minY && d.y <= maxY)
+          .filter((d) => !d.removed && d.x >= minX && d.x <= maxX && d.y >= minY && d.y <= maxY)
           .map((d) => this.snapshotOf(d)),
       // --- the trigger's on-screen output (7.19) ---
       // GetLocalizedString → the game's own GlobalStrings.fdf table. Not cosmetic: the
@@ -10100,8 +10153,34 @@ export class MapViewerScene {
     // later script KillDestructable on the same tree can't unstamp a footprint that is
     // already off the grid (the stamps are counted — a double release would punch a hole).
     // Not deferred with the picture: it is the same fact the footprint above is.
-    const rec = this.destructibles.find((r) => r.isTree && r.life > 0 && r.x === x && r.y === y);
-    if (rec) rec.life = 0;
+    const destId = this.destOfSimTree.get(nodeId);
+    const rec = destId !== undefined
+      ? this.destructibleById(destId)
+      : this.destructibles.find((r) => r.isTree && r.life > 0 && r.x === x && r.y === y);
+    if (destId !== undefined) {
+      this.destOfSimTree.delete(nodeId);
+      this.simTreeOfDest.delete(destId);
+    }
+    if (rec) {
+      rec.life = 0;
+      // …and the SCRIPT hears it: a tree is a widget, and the axe that felled it killed it.
+      this.destructibleDeaths.push(rec.id);
+    }
+    // A tree the script planted is drawn by its own widget, not by whatever stands nearest.
+    const own = rec && rec.id >= SCRIPT_DESTRUCTIBLE_BASE ? this.destWidgets.get(rec.id) : undefined;
+    if (own) {
+      if (!this.treeVisible(x, y)) {
+        this.pendingFellWidgets.add(own);
+        return;
+      }
+      const a = this.doodadActor(own);
+      if (a) this.playActorDeath(a, false);
+      else {
+        own.instance.hide();
+        this.removedWidgets.add(own);
+      }
+      return;
+    }
     if (!this.treeVisible(x, y)) {
       this.pendingFells.push({ x, y });
       return;
@@ -10176,8 +10255,8 @@ export class MapViewerScene {
       // ITS widget, at its exact spot — never `nearestDoodadWidget`'s 96-unit reach: until
       // this record's own model streams in, the nearest thing could be a rock beside it, and
       // that is what would have been turned into a stump.
-      let w: (HideableWidget & { row?: DestructableRowLike }) | undefined;
-      for (const c of doodads) {
+      let w = this.destWidgets.get(id) as (HideableWidget & { row?: DestructableRowLike }) | undefined;
+      if (!w) for (const c of doodads) {
         const loc = c.instance?.localLocation;
         if (loc && Math.abs(loc[0] - d.x) < 1 && Math.abs(loc[1] - d.y) < 1) {
           w = c;
@@ -10209,7 +10288,7 @@ export class MapViewerScene {
   /** Vision moved (updateFog): take down any tree that was felled in the dark and is now
    *  being looked at. Straight to the stump — see `dropTreeModel`. */
   private flushPendingFells(): void {
-    if (!this.pendingFells.length) return;
+    if (!this.pendingFells.length && !this.pendingFellWidgets.size) return;
     const doodads = this.viewer.map?.doodads;
     if (!doodads) return;
     const held: Array<{ x: number; y: number }> = [];
@@ -10218,12 +10297,27 @@ export class MapViewerScene {
       else held.push(t);
     }
     this.pendingFells = held;
+    for (const w of this.pendingFellWidgets) {
+      const loc = w.instance.localLocation;
+      if (!loc || !this.treeVisible(loc[0], loc[1])) continue;
+      this.pendingFellWidgets.delete(w);
+      const a = this.doodadActor(w);
+      if (a) this.playActorDeath(a, true);
+    }
   }
 
   // --- destructibles: a gate opens by dying (7.x; see src/world/mapDestructibles.ts) --------
 
   private destructibleById(id: number): MapDestructible | undefined {
+    if (id >= SCRIPT_DESTRUCTIBLE_BASE) return this.scriptDestructibles.get(id);
     return this.destructibles[id - 1]?.id === id ? this.destructibles[id - 1] : this.destructibles.find((d) => d.id === id);
+  }
+
+  /** The doodad widget that draws this record: a script-made one's own (destWidgets), else the
+   *  .doo doodad standing at its spot. */
+  private destWidget(d: MapDestructible, doodads: HideableWidget[]): HideableWidget | null {
+    if (d.id >= SCRIPT_DESTRUCTIBLE_BASE) return this.destWidgets.get(d.id) ?? null;
+    return this.nearestDoodadWidget(d.x, d.y, doodads);
   }
 
   private snapshotOf(d: MapDestructible): DestructableSnapshot {
@@ -10232,7 +10326,7 @@ export class MapViewerScene {
 
   private destructibleSnapshot(id: number): DestructableSnapshot | null {
     const d = this.destructibleById(id);
-    return d ? this.snapshotOf(d) : null;
+    return d && !d.removed ? this.snapshotOf(d) : null;
   }
 
   // Where DestructableData's `Name` column points ("Gate", "Crates") — and it is TWO files,
@@ -10290,7 +10384,7 @@ export class MapViewerScene {
   private playDestructibleClip(d: MapDestructible, re: RegExp, hold: boolean): void {
     const map = this.viewer.map;
     if (!map) return;
-    const w = this.nearestDoodadWidget(d.x, d.y, map.doodads as unknown as HideableWidget[]);
+    const w = this.destWidget(d, map.doodads as unknown as HideableWidget[]);
     if (!w) return;
     const a = this.doodadActor(w);
     if (!a) {
@@ -10332,7 +10426,7 @@ export class MapViewerScene {
     // either (updateTreeActors): a gate flinching on ground nobody can see is somebody else's
     // fight, drawn for us.
     if (!this.pointVisible(d.x, d.y)) return;
-    const w = this.nearestDoodadWidget(d.x, d.y, map.doodads as unknown as HideableWidget[]);
+    const w = this.destWidget(d, map.doodads as unknown as HideableWidget[]);
     const existing = w ? this.doodadActors.get(w) : undefined;
     const sequences = existing?.inst.model.sequences ?? w?.instance?.model?.sequences;
     if (!w || !sequences || this.seqByName(sequences, /stand hit/i) < 0) return;
@@ -10377,6 +10471,7 @@ export class MapViewerScene {
     d.life = 0;
     this.syncDestructibleToSim(d);
     this.restampDestructible(d, true);
+    this.uprootSimTree(d);
     this.playDestructibleClip(d, clip, true);
     this.playDestructibleDeathSound(d);
     // …and the map is told. A destructable is a WIDGET, and `TriggerRegisterDeathEvent` takes
@@ -10387,6 +10482,156 @@ export class MapViewerScene {
     this.destructibleDeaths.push(id);
   }
 
+  /** Script-planted trees felled in the dark, posed as stumps when next seen (flushPendingFells). */
+  private pendingFellWidgets = new Set<HideableWidget>();
+
+  /** A TREE record's harvestable, sight-blocking half leaves the world with it (the script
+   *  killed or removed the tree). Its collider is the record's business (restampDestructible),
+   *  so the node's own copy of the footprint is dropped, never released a second time. */
+  private uprootSimTree(d: MapDestructible): void {
+    const treeId = this.simTreeOfDest.get(d.id);
+    if (treeId === undefined) return;
+    this.simTreeOfDest.delete(d.id);
+    this.destOfSimTree.delete(treeId);
+    this.nodeFootprints.delete(treeId);
+    const world = this.rts?.simWorld;
+    const tree = world?.trees.get(treeId);
+    if (!world || !tree) return;
+    world.trees.delete(treeId);
+    this.rts?.onTreeFelled(tree.x, tree.y, tree.blockRadius);
+  }
+
+  /** …and comes back with it (`DestructableRestoreLife`, or a tree a script plants alive). */
+  private plantSimTree(d: MapDestructible): void {
+    const world = this.rts?.simWorld;
+    if (!world || !d.isTree || d.life <= 0 || this.simTreeOfDest.has(d.id)) return;
+    const fp = d.pathTex ? this.footprintFor(d.pathTex, d.angle) : null;
+    const blockRadius = fp ? footprintRadius(fp) || 64 : 64;
+    const tree = world.addTree(d.x, d.y, undefined, blockRadius);
+    this.treeFogRadius.set(fogKey(d.x, d.y), blockRadius);
+    if (fp) this.nodeFootprints.set(tree.id, { fp, x: d.x, y: d.y });
+    this.simTreeOfDest.set(d.id, tree.id);
+    this.destOfSimTree.set(tree.id, d.id);
+    this.rts?.onTreePlanted(d.x, d.y, blockRadius);
+  }
+
+  /**
+   * `CreateDestructable` with nothing placed at the spot: a NEW destructible, made the way the
+   * .doo's are — its record off `DestructableData` (with the map's own w3b edits), its collider
+   * stamped, a tree's sim half planted, a crate's sim body seeded, and its model drawn as a doodad
+   * of the map. A scenario can grow its entire forest so, and clear a glade in it with
+   * `EnumDestructablesInCircleBJ` + `RemoveDestructable`.
+   */
+  private spawnDestructible(typeId: string, x: number, y: number, z: number | null, facingDeg: number, scale: number, variation: number, dead: boolean): number {
+    const row = this.viewer.doodadsData.getRow(typeId);
+    if (!row || !row.string("HP")) return 0; // a plain doodad, or nothing at all
+    const id = this.nextScriptDestructible++;
+    const groundZ = z ?? (this.heightSampler ? this.heightSampler(x, y) : 0);
+    const s = scale > 0 ? scale : 1;
+    const d = destructibleRecord(id, {
+      id: typeId, x, y, z: groundZ, angle: (facingDeg * Math.PI) / 180, scale: [s, s, s], life: dead ? 0 : 100,
+    }, row, row.string("selectable") === "1");
+    if (dead) d.life = 0;
+    this.destructibles.push(d);
+    this.scriptDestructibles.set(id, d);
+    this.scriptDestVariation.set(id, variation);
+    const fp = this.destructibleFootprint(d, d.life > 0);
+    if (fp && this.grid) stampFootprint(this.grid, fp, x, y);
+    const body = d.pathTex ? this.footprintFor(d.pathTex, d.angle) : null;
+    if (body) {
+      const half = (Math.max(body.w, body.h) * PATHING_CELL) / 2;
+      if (half > 0) this.propFogRadius.set(fogKey(x, y), half);
+    }
+    if (d.life > 0) {
+      this.plantSimTree(d);
+      this.seedDestructible(d);
+    } else this.deadPlacedAwaitingPose.add(id);
+    void this.spawnDestructibleModel(d, row, variation);
+    return id;
+  }
+
+  /**
+   * A saved game's script-made destructibles, put back over the map the load has just laid out
+   * (applySave). Only the PICTURE half is made here: the collider is already in the saved
+   * pathing grid, a tree's sim half is already in the saved world (under the id the save
+   * names), and so is a crate's body — they are linked up, never planted or seeded again, or
+   * the grid would be stamped twice and the world would hold a second tree.
+   */
+  private restoreScriptDestructibles(scene: SavedScene, world: SimWorld): void {
+    if (typeof scene.nextScriptDestructible === "number") this.nextScriptDestructible = scene.nextScriptDestructible;
+    for (const s of scene.scriptDestructibles ?? []) {
+      const row = this.viewer.doodadsData.getRow(s.typeId);
+      if (!row) continue;
+      const d = destructibleRecord(s.id, { id: s.typeId, x: s.x, y: s.y, z: s.z, angle: s.angle, scale: s.scale, life: 100 }, row, row.string("selectable") === "1");
+      d.life = s.life;
+      if (s.invulnerable) d.invulnerable = true;
+      if (s.removed) {
+        d.removed = true;
+        d.pathTexDeath = ""; // as removeDestructible leaves it
+      }
+      this.destructibles.push(d);
+      this.scriptDestructibles.set(d.id, d);
+      this.scriptDestVariation.set(d.id, s.variation);
+      const body = d.pathTex ? this.footprintFor(d.pathTex, d.angle) : null;
+      if (body && !d.removed) {
+        const half = (Math.max(body.w, body.h) * PATHING_CELL) / 2;
+        if (half > 0) this.propFogRadius.set(fogKey(d.x, d.y), half);
+      }
+      const tree = s.tree >= 0 ? world.trees.get(s.tree) : undefined;
+      if (tree) {
+        this.simTreeOfDest.set(d.id, tree.id);
+        this.destOfSimTree.set(tree.id, d.id);
+        this.treeFogRadius.set(fogKey(d.x, d.y), tree.blockRadius);
+        if (body) this.nodeFootprints.set(tree.id, { fp: body, x: d.x, y: d.y });
+      }
+      if (s.body >= 0 && world.units.has(s.body)) {
+        this.destDefFor(d);
+        this.destSimIds.set(s.body, d.id);
+        this.destSimByDoo.set(d.id, s.body);
+        this.destAwaitingBody.add(s.body);
+      }
+      if (d.life <= 0 && !d.removed) this.deadPlacedAwaitingPose.add(d.id);
+      void this.spawnDestructibleModel(d, row, s.variation);
+    }
+  }
+
+  /** Draw a script-made destructible: the doodad pass's own recipe (mdx-m3-viewer's
+   *  `loadDoodadsAndDestructibles`) for one record — the variation's model, then the plain one,
+   *  and the row's replaceable texture (a tree's canopy) laid over it. */
+  private async spawnDestructibleModel(d: MapDestructible, row: { string(c: string): string | undefined; number(c: string): number }, variation: number): Promise<void> {
+    const map = this.viewer.map;
+    let file = row.string("file");
+    if (!map || !file) return;
+    file = file.replace(/\.mdl$/i, "");
+    const numVar = row.number("numVar");
+    const plain = `${file}.mdx`;
+    const varied = numVar > 1 ? `${file}${Math.min(Math.max(0, variation), numVar - 1)}.mdx` : plain;
+    let model = await map.load(varied);
+    if (!model && varied !== plain) model = await map.load(plain);
+    if (!model || this.viewer.map !== map || this.scriptDestructibles.get(d.id) !== d) return;
+    const widget = new Doodad(map as never, model as never, row as never, {
+      location: new Float32Array([d.x, d.y, d.z]),
+      angle: d.angle,
+      scale: new Float32Array(d.scale),
+    } as never);
+    (map.doodads as unknown[]).push(widget);
+    const w = widget as unknown as HideableWidget;
+    this.destWidgets.set(d.id, w);
+    const texId = row.number("texID");
+    const texFile = row.string("texFile");
+    if (texId && texFile && texFile !== "_") {
+      const index = (model as { textures: Array<{ replaceableId: number }> }).textures.findIndex((t) => t.replaceableId === texId);
+      if (index !== -1) {
+        const texture = await map.load(`${texFile.replace(/\.(blp|tga)$/i, "")}.blp`);
+        if (texture) (widget.instance as unknown as { setTexture(i: number, t: unknown): void }).setTexture(index, texture);
+      }
+    }
+    if (d.removed) {
+      w.instance.hide();
+      this.removedWidgets.add(w);
+    }
+  }
+
   /** Destructibles that died since the last script pump (see killDestructible). */
   private destructibleDeaths: number[] = [];
 
@@ -10394,11 +10639,18 @@ export class MapViewerScene {
    *  model up again (`birth` plays the birth clip, as the native's flag asks). */
   restoreDestructible(id: number, life: number, birth: boolean): void {
     const d = this.destructibleById(id);
-    if (!d) return;
+    if (!d || d.removed) return;
     const wasAlive = d.life > 0;
     d.life = Math.max(0, Math.min(life, d.maxLife || life));
     this.syncDestructibleToSim(d);
     this.restampDestructible(d, wasAlive);
+    if (!wasAlive && d.life > 0) {
+      this.plantSimTree(d);
+      // A crate the script brings back is a crate to break again.
+      if (!this.destSimByDoo.has(d.id)) {
+        this.seedDestructible(d);
+      }
+    }
     if (d.life > 0) this.playDestructibleClip(d, birth ? /^birth$/i : /^stand$/i, false);
   }
 
@@ -10412,6 +10664,10 @@ export class MapViewerScene {
     const wasAlive = d.life > 0;
     if (life <= 0) {
       if (wasAlive) this.killDestructible(id);
+      return;
+    }
+    if (!wasAlive) {
+      this.restoreDestructible(id, life, false);
       return;
     }
     d.life = life;
@@ -10444,10 +10700,21 @@ export class MapViewerScene {
   removeDestructible(id: number): void {
     const d = this.destructibleById(id);
     if (!d) return;
+    if (d.removed) return;
     const fp = this.destructibleFootprint(d, d.life > 0);
     if (fp && this.grid) unstampFootprint(this.grid, fp, d.x, d.y);
+    this.uprootSimTree(d);
+    // …and a crate that could still be hit is gone with its body.
+    const simId = this.destSimByDoo.get(d.id);
+    if (simId !== undefined) {
+      this.destSimIds.delete(simId);
+      this.destSimByDoo.delete(d.id);
+      this.destAwaitingBody.delete(simId);
+      this.rts?.simWorld.removeUnit(simId);
+    }
     d.life = 0;
     d.pathTexDeath = ""; // nothing left to walk around
+    d.removed = true;
     this.hideDestructibleWidget(d);
   }
 
@@ -10462,7 +10729,7 @@ export class MapViewerScene {
   private hideDestructibleWidget(d: MapDestructible): void {
     const map = this.viewer.map;
     if (!map) return;
-    const w = this.nearestDoodadWidget(d.x, d.y, map.doodads as unknown as HideableWidget[]);
+    const w = this.destWidget(d, map.doodads as unknown as HideableWidget[]);
     if (!w) return;
     const a = this.doodadActors.get(w);
     if (a) a.inst.hide();

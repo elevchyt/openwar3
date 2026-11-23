@@ -921,6 +921,11 @@ export interface EngineHooks {
    *  placeholder the World Editor left behind instead of stacking a second gate on it.
    *  0 when nothing matches. */
   findDestructable?(typeId: string, x: number, y: number): number;
+  /** A NEW destructible the script makes where the map placed none — a scenario can grow its
+   *  whole forest this way (hundreds of trees and crates, each at a random spot, facing, scale
+   *  and variation). `z` is null for "on the ground". Answers its record id, 0 if the type is
+   *  unknown. */
+  createDestructable?(typeId: string, x: number, y: number, z: number | null, facingDeg: number, scale: number, variation: number, dead: boolean): number;
   /** Live state of one record (null once it is removed). */
   destructableInfo?(id: number): DestructableSnapshot | null;
   /** KillDestructable — life to 0, collider to the death footprint, `clip` held on the model

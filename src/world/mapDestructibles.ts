@@ -92,6 +92,8 @@ export interface MapDestructible {
   deathSound: string;
   /** Set by the SCRIPT (`SetDestructableInvulnerable`) — nothing in the .doo or the SLK says it. */
   invulnerable?: boolean;
+  /** `RemoveDestructable` took it off the map: no longer enumerated, found or brought back. */
+  removed?: boolean;
   /** The SLK's `Name` — usually a `WESTRING_*` key into `UI\WorldEditStrings.txt`, resolved
    *  by the caller (GetDestructableName is the only thing that reads it). */
   name: string;
@@ -112,47 +114,60 @@ export function collectMapDestructibles(
     const d = doodads[i];
     const row = rowOf(d.id);
     if (!row) continue; // scenery, not a destructible
-    const maxLife = Number(row.string("HP")) || 0;
-    const canPlaceDead = row.string("canPlaceDead") === "1";
-    const pathTex = tex(row.string("pathTex"));
-    const pathTexDeath = tex(row.string("pathTexDeath"));
-    const targType = row.string("targType") || "";
-    out.push({
-      id: i + 1,
-      typeId: d.id,
-      x: d.x,
-      y: d.y,
-      z: d.z,
-      angle: d.angle,
-      scale: d.scale,
-      maxLife,
-      // The .doo's `life` byte is a PERCENT of the type's HP — 100 for everything the editor
-      // places normally, 40/50 for the pre-damaged trees a few maps use, 0 for one placed dead.
-      //
-      // Except that some types CANNOT be placed dead, and the data says which: `canPlaceDead`
-      // ("Editor - Can Place Dead") is 0 on every gate in the game. A 0 percent on one of those
-      // is the map contradicting the table, and the thing standing on the terrain is what the
-      // player sees — so it stands, at full life. Rise of the Naga writes exactly that for the
-      // vertical Elven Gate at (384, -4352): read as dead it kept only the two posts its
-      // `pathTexDeath` leaves, could not be attacked, and had no life to spend, while the
-      // doodad pass went on drawing a closed gate across the path.
-      life: d.life > 0 ? (maxLife * d.life) / 100 : canPlaceDead ? 0 : maxLife,
-      pathTex,
-      pathTexDeath,
-      isTree: targType === "tree",
-      walkable: row.string("walkable") === "1",
-      targType,
-      selectable: selectableOf(d.id),
-      radius: Number(row.string("radius")) || 0,
-      selCircle: Number(row.string("selcircsize")) || 0,
-      armorSound: tex(row.string("armor")),
-      portraitModel: tex(row.string("portraitmodel")),
-      model: mdx(tex(row.string("file"))),
-      deathSound: tex(row.string("deathSnd")),
-      name: row.string("Name") || "",
-    });
+    out.push(destructibleRecord(i + 1, d, row, selectableOf(d.id)));
   }
   return out;
+}
+
+/** One destructible's record, out of its placement and its `DestructableData` row — the .doo's
+ *  own records (`collectMapDestructibles`) and the ones a script makes at run time
+ *  (`CreateDestructable`, MapViewerScene.spawnDestructible) alike. `d.life` is a PERCENT of the
+ *  type's HP, as the .doo writes it. */
+export function destructibleRecord(
+  id: number,
+  d: Pick<DoodadInstance, "id" | "x" | "y" | "z" | "angle" | "scale" | "life">,
+  row: NonNullable<ReturnType<DestructableRow>>,
+  selectable: boolean,
+): MapDestructible {
+  const maxLife = Number(row.string("HP")) || 0;
+  const canPlaceDead = row.string("canPlaceDead") === "1";
+  const pathTex = tex(row.string("pathTex"));
+  const pathTexDeath = tex(row.string("pathTexDeath"));
+  const targType = row.string("targType") || "";
+  return {
+    id,
+    typeId: d.id,
+    x: d.x,
+    y: d.y,
+    z: d.z,
+    angle: d.angle,
+    scale: d.scale,
+    maxLife,
+    // The .doo's `life` byte is a PERCENT of the type's HP — 100 for everything the editor
+    // places normally, 40/50 for the pre-damaged trees a few maps use, 0 for one placed dead.
+    //
+    // Except that some types CANNOT be placed dead, and the data says which: `canPlaceDead`
+    // ("Editor - Can Place Dead") is 0 on every gate in the game. A 0 percent on one of those
+    // is the map contradicting the table, and the thing standing on the terrain is what the
+    // player sees — so it stands, at full life. Rise of the Naga writes exactly that for the
+    // vertical Elven Gate at (384, -4352): read as dead it kept only the two posts its
+    // `pathTexDeath` leaves, could not be attacked, and had no life to spend, while the
+    // doodad pass went on drawing a closed gate across the path.
+    life: d.life > 0 ? (maxLife * d.life) / 100 : canPlaceDead ? 0 : maxLife,
+    pathTex,
+    pathTexDeath,
+    isTree: targType === "tree",
+    walkable: row.string("walkable") === "1",
+    targType,
+    selectable,
+    radius: Number(row.string("radius")) || 0,
+    selCircle: Number(row.string("selcircsize")) || 0,
+    armorSound: tex(row.string("armor")),
+    portraitModel: tex(row.string("portraitmodel")),
+    model: mdx(tex(row.string("file"))),
+    deathSound: tex(row.string("deathSnd")),
+    name: row.string("Name") || "",
+  };
 }
 
 /** SLK's two spellings of "no texture" — a bare `_` and the literal `none`. */
@@ -174,6 +189,10 @@ function mdx(v: string): string {
  *  ADOPT it rather than add a second gate on top of the first. Matched on type and position —
  *  the editor writes the .doo's own coordinates back out, so the match is exact; the tolerance
  *  is only there for the float round-trip through the script's decimal literals. */
+/** Where the ids of the records a SCRIPT makes start (`CreateDestructable` with nothing placed
+ *  at its spot): well clear of any .doo index, so the two never meet. */
+export const SCRIPT_DESTRUCTIBLE_BASE = 1 << 20;
+
 export function findDestructibleAt(
   list: readonly MapDestructible[],
   typeId: string,
@@ -184,7 +203,9 @@ export function findDestructibleAt(
   let best: MapDestructible | undefined;
   let bestD = tolerance;
   for (const d of list) {
-    if (d.typeId !== typeId) continue;
+    // Only the .doo's own records are placeholders to adopt; a script's earlier one at the same
+    // spot is a second destructible, as it is in the game.
+    if (d.typeId !== typeId || d.id >= SCRIPT_DESTRUCTIBLE_BASE || d.removed) continue;
     const dist = Math.hypot(d.x - x, d.y - y);
     if (dist <= bestD) {
       bestD = dist;
