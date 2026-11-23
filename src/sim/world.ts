@@ -1550,8 +1550,11 @@ export interface EventUnitInfo {
  *  that hard: blizzard.j's MeleeClearExcessUnit removes a start-location unit only if its
  *  owner IS one of those two, and countless custom maps spawn "for Player 12". So the
  *  translation happens here, at the one place a sim unit becomes a JASS unit. */
-export function jassOwnerOf(u: { owner: number; neutralPassive: boolean }): number {
+export function jassOwnerOf(u: { owner: number; neutralPassive: boolean; neutralSlot?: number }): number {
   if (u.owner >= 0) return u.owner;
+  // Neutral Victim / Extra: their own slot, never folded into Neutral Passive's (SimUnit.neutralSlot).
+  const slot = u.neutralSlot ?? -1;
+  if (slot >= 0) return slot;
   // The script's number for a neutral: 12/15, or 24/27 on the 24-player table (enums.ts).
   return neutralSlot(u.neutralPassive ? PlayerSlot.NeutralPassive : PlayerSlot.NeutralHostile);
 }
@@ -1711,6 +1714,15 @@ export interface SimUnit {
   race: string; // human|orc|undead|nightelf|… — for spell polarity (Holy Light vs undead)
   typeId: string; // unit-def id (for corpses/Resurrection to re-create the unit)
   neutralPassive: boolean; // Neutral Passive (shops, critters): never hostile, yellow ring
+  /** The NEUTRAL SLOT a neutral unit belongs to when it is not its side's default one: Neutral
+   *  Victim (13) or Neutral Extra (14) — -1 for everything else. The sim files those slots'
+   *  units as Neutral Passive (owner -1, `neutralPassive`), which is what keeps their colour,
+   *  ring, hostility and every AI reading unchanged; but to the SCRIPT they are their own
+   *  players. `GetOwningPlayer` answers this slot (jassOwnerOf), and its alliances decide whose
+   *  sight the unit lends: `SetPlayerAlliance(Player(14), p, ALLIANCE_SHARED_VISION, true)` is
+   *  how a scenario shows a player the set pieces it builds for Neutral Extra
+   *  (Viewpoint.revealsFor). Set by RtsController.createScriptUnit and SetUnitOwner. */
+  neutralSlot: number;
   /** A MECHANICAL CRITTER (`Amec`, issue #194): the player's own unit, which every viewer
    *  NOT on its owner's side sees as the Neutral Passive critter it looks like — yellow ring,
    *  neutral bar, a name and nothing else on the hover, no minimap dot — and which no enemy
@@ -10074,6 +10086,7 @@ export class SimWorld {
       | "inCombat"
       | "neutralPassive"
       | "targetKey"
+      | "neutralSlot"
       | "chaseX"
       | "chaseY"
       | "chaseHX"
@@ -10372,6 +10385,7 @@ export class SimWorld {
       chopSeq: 0,
       inCombat: false,
       neutralPassive: false,
+      neutralSlot: -1,
       targetKey: "",
       path: [],
       waypoint: 0,
@@ -21981,10 +21995,28 @@ export class SimWorld {
   /** JASS SetUnitOwner — reassign owner + team (team decides allegiance/vision). Goes
    *  through changeUnitOwner so a script-driven handover re-tints the model too, exactly as
    *  Charm's does (the native's own `changeColor` argument is what the engine calls it). */
-  setUnitOwner(id: number, owner: number, team: number): void {
+  setUnitOwner(id: number, owner: number, team: number, side?: "creep" | "passive" | "player", slot = -1): void {
     const u = this.units.get(id);
     if (u) {
       this.changeUnitOwner(u, owner, team);
+      if (!side) return;
+      // What the unit IS follows who it now belongs to. A creep handed to a player stops
+      // guarding a camp and walking home to it; a unit handed to Neutral Hostile starts guarding
+      // where it stands, as a creep the script creates does (RtsController.createScriptUnit);
+      // and only the passive slots' units are held out of the fight.
+      u.neutralPassive = side === "passive";
+      u.neutralSlot = side === "passive" ? slot : -1; // Neutral Victim/Extra's own slot (jassOwnerOf)
+      if (side === "creep" && !u.isCreep && !u.isHero) {
+        u.isCreep = true;
+        u.guardX = u.x;
+        u.guardY = u.y;
+        u.guardFacing = u.facing;
+        u.aggroRange = u.weapon?.acquire ?? u.aggroRange;
+      } else if (side !== "creep" && u.isCreep) {
+        u.isCreep = false;
+        u.asleep = false;
+        u.returning = false;
+      }
     }
   }
   /** JASS SetUnitMoveSpeed — the current move speed (buffs recompute from baseSpeed,
