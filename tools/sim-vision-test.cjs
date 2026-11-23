@@ -211,6 +211,29 @@ console.log("\nexposure and one-shots resolve per RECIPIENT, not per 'local'");
   check("…and a bystander viewpoint does not", set.viewpointFor(6).fogHides(victim), true);
 }
 
+console.log("\nNeutral Extra shares its sight when the alliance says so  (Viewpoint.rebuild)");
+{
+  // A unit a script made for Neutral Extra (14) is filed as Neutral Passive (owner -1) but
+  // remembers its slot (SimUnit.neutralSlot), so SetPlayerAlliance(Player(14), Player(0),
+  // ALLIANCE_SHARED_VISION, true) lends player 0 its eyes. A plain Neutral Passive shop still
+  // scouts for nobody.
+  const units = new Map([
+    [1, { id: 1, owner: -1, team: -2, x: 300, y: 300, sightDay: 600, sightNight: 600, neutralPassive: true, neutralSlot: 14 }],
+    [2, { id: 2, owner: -1, team: -2, x: 800, y: 800, sightDay: 600, sightNight: 600, neutralPassive: true, neutralSlot: -1 }],
+  ]);
+  const world = { units, isDay: true, activeAttackReveals: () => [], activeDeathReveals: () => [], activeItemReveals: () => [], teamDetects: () => false };
+  const shares = { sharesVisionWith: (from, to) => from === 14 && to === 0, coAllied: () => false };
+  const set = new VisionSet(world, shares, () => [], 0, 0, 1024, 1024);
+  const zero = set.viewpointFor(0);
+  zero.setTeam(0);
+  const one = set.viewpointFor(1);
+  one.setTeam(1);
+  set.tick(1, []);
+  check("player 0 sees through Neutral Extra's unit", zero.vision.stateAt(300, 300), FogState.Visible);
+  check("…player 1, who was not given it, does not", one.vision.stateAt(300, 300) === FogState.Visible, false);
+  check("…and a Neutral Passive shop scouts for nobody", zero.vision.stateAt(800, 800) === FogState.Visible, false);
+}
+
 console.log("\na one-shot SetFogState reaches whoever renders that player's fog");
 {
   const world = { units: new Map(), isDay: true, activeAttackReveals: () => [], activeDeathReveals: () => [], activeItemReveals: () => [], teamDetects: () => false };
