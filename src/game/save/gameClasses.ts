@@ -26,7 +26,7 @@ export function registerGameSaveClasses(): void {
     // the picture: one entry per model, the corpses being drawn, what the cursor is on
     "entries", "byId", "corpses", "seededInstances", "clearedInstances", "processedInstances", "lastSeenUnitCount",
     "hovered", "hoveredMine", "hoveredItem", "previewIds", "aoeHighlight", "flashRequests", "treePulses", "orderArrows",
-    "forgotten", "settledEntries", "upgradeBoxCache", "buildingTiers", "creepCampView",
+    "forgotten", "settledEntries", "barSpecs", "upgradeBoxCache", "buildingTiers", "creepCampView",
     // input: what is armed on the card, which modifier is down, the last voice clicked
     "orderMode", "armedUnload", "armedShopUser", "armedLoad", "armedCast", "armedItem", "shiftRearmed", "altHeld",
     "lastVoiceId", "voiceStreak",
