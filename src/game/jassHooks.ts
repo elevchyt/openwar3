@@ -7,7 +7,7 @@ import { MELEE } from "../data/gameplayConstants";
 import { fogStateOf, type FogState } from "../sim/vision";
 import { PathingFlag } from "../sim/pathing";
 import type { FogArea } from "./fog";
-import { neutralSlot, PlayerSlot, PrimaryAttribute } from "../data/enums";
+import { isNeutralSlot, neutralSlot, PlayerSlot, PrimaryAttribute } from "../data/enums";
 import type { UnitDef } from "../data/units";
 
 /**
@@ -85,7 +85,19 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     //
     // A headless host spreads this table and declares nothing over it: it gets the world write
     // and there is no model to re-tint, which is the correct behaviour rather than a gap.
-    setUnitOwner: (id, player) => sim.setUnitOwner(id, player, teamOf(player)),
+    // The NEUTRAL slots are filed the way a unit CREATED for them is (RtsController.
+    // createScriptUnit): Neutral Hostile is the creep side (-1/-1), and 13/14/15 the passive
+    // one (-1/-2), with Neutral Victim/Extra remembering their own slot (SimUnit.neutralSlot).
+    // Handed to 12 as a bare player number, a unit was a thirteenth player on a team of its
+    // own, never a creep.
+    setUnitOwner: (id, player) => {
+      const creep = player === neutralSlot(PlayerSlot.NeutralHostile);
+      const passive = isNeutralSlot(player) && !creep;
+      const owner = creep || passive ? -1 : player;
+      const team = creep ? -1 : passive ? -2 : teamOf(player);
+      const slot = passive && player !== neutralSlot(PlayerSlot.NeutralPassive) ? player : -1;
+      sim.setUnitOwner(id, owner, team, creep ? "creep" : passive ? "passive" : "player", slot);
+    },
     setUnitFlyHeight: (id, height, rate) => sim.setUnitFlyHeight(id, height, rate),
     // --- unit lifecycle (7.7) ----------------------------------------------------------------
     //

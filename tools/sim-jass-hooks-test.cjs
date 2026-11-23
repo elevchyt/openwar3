@@ -177,6 +177,24 @@ check("team came from the INJECTED teamOf, not the slot", world.units.get(4242).
 hooks.setUnitFlyHeight(4242, 350);
 check("fly height reached the sim", world.units.get(4242).flyHeight, 350);
 
+// …and the NEUTRAL slots are not players: a unit handed to Neutral Hostile is filed as a map's
+// creeps are (-1/-1) and starts guarding where it stands; one handed to Neutral Passive is the
+// passive pair (-1/-2), out of the fight; and a creep handed to a player stops being one.
+console.log("\nSetUnitOwner to the neutral slots files the unit as a creep or a passive");
+world.units.set(4243, { id: 4243, owner: 0, team: 7, x: 640, y: 512, facing: 1, weapon: { acquire: 500 }, isCreep: false, isHero: false, neutralPassive: false });
+hooks.setUnitOwner(4243, 12);
+const c = world.units.get(4243);
+check("Neutral Hostile: the creep owner/team", [c.owner, c.team], [-1, -1]);
+check("…a creep, guarding where it stands", [c.isCreep, c.guardX, c.guardY, c.aggroRange], [true, 640, 512, 500]);
+hooks.setUnitOwner(4243, 15);
+check("Neutral Passive: the passive pair", [c.owner, c.team, c.neutralPassive], [-1, -2, true]);
+check("…and no longer a creep", c.isCreep, false);
+hooks.setUnitOwner(4243, 14);
+check("Neutral Extra: passive, but its own slot to the script", [c.owner, c.team, c.neutralPassive, c.neutralSlot], [-1, -2, true, 14]);
+hooks.setUnitOwner(4243, 12);
+hooks.setUnitOwner(4243, 2);
+check("a creep handed to a player is the player's", [c.owner, c.team, c.isCreep, c.neutralPassive, c.neutralSlot], [2, 9, false, false, -1]);
+
 // --- gold mines are units, but only to a script ----------------------------------------------
 //
 // A mine lives in SimWorld.mines, not SimWorld.units, and is handed to JASS as
