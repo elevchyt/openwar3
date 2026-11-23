@@ -864,6 +864,22 @@ const ME = { id: 2, name: "Joiner", host: false };
     }
   }
 
+  console.log("\na joiner's mapgot re-announces the lobby, so a seating it missed is sent again");
+  {
+    let t;
+    const lobby = new LanLobby(() => (t = fakeTransport()), memoryStore());
+    await lobby.connect();
+    const HOST = { id: 1, name: "H", host: true };
+    t.onMessage({ t: "created", room: ROOM, you: HOST, token: "tok" });
+    t.onMessage({ t: "peer-join", peer: ME });
+    let told = 0;
+    lobby.onChange = () => { told++; };
+    // The joiner had the map (nothing was sent to it), and says so once its lobby screen listens.
+    t.onMessage({ t: "deliver", from: ME.id, data: { k: "mapgot", path: ROOM.mapPath } });
+    check("the host's lobby hears it (and re-broadcasts the seating)", told, 1);
+    lobby.close();
+  }
+
   console.log(failed === 0 ? "\nlobby: all checks passed" : `\nlobby: ${failed} FAILED`);
   process.exit(failed === 0 ? 0 : 1);
 })();
