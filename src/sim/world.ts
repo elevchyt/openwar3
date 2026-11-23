@@ -21053,11 +21053,15 @@ export class SimWorld {
   }
 
   /**
-   * `AddItemToAllStock` / `AddUnitToAllStock` — the ware goes on the shelf of EVERY building that
-   * sells that kind of thing ("Adds an item … to all shops and marketplaces" — jassdoc), and
-   * `Remove…FromAllStock` takes it off every shelf. A shop is asked the way a purchase asks it
-   * (`isShopUnit`), plus the one shop that is empty by design until a script stocks it: the
-   * Marketplace, which Blizzard.j itself finds by name (`GroupEnumUnitsOfType(g, "marketplace")`).
+   * `AddItemToAllStock` / `AddUnitToAllStock` — the ware goes on the shelf of every building that
+   * keeps a SCRIPTED shelf of that kind, and `Remove…FromAllStock` takes it off every shelf. A
+   * scripted shelf is an ABILITY, not "sells something": `Asid` "Sell Items" / `Asud` "Sell
+   * Units", which the data puts on exactly one stock unit — the Marketplace, `nmrk`
+   * `abilList=Aneu,Asid,Avul,Asud,Apit` (Units\UnitAbilities.slk) — while every shop that sells
+   * off its own `Sellitems`/`Sellunits` row (Goblin Merchant `Aneu,Avul,Apit`, Tavern, Goblin
+   * Laboratory `Ane2,Andt,Avul`) has neither. Asking the data rows instead put a map's rotating
+   * market wares ("Hire Murloc Huntsman") on a custom shop built on the Goblin Laboratory,
+   * which a player reports the original (1.27) never offers there.
    */
   addToAllStock(wareId: string, kind: "item" | "unit", count: number, max: number): void {
     for (const u of this.units.values()) {
@@ -21069,12 +21073,12 @@ export class SimWorld {
   removeFromAllStock(wareId: string): void {
     for (const u of this.units.values()) u.building?.stock?.delete(wareId);
   }
-  /** Does this building keep a shelf of `kind` — by data, or by what a script already put there? */
+  /** Does this building carry the scripted shelf of `kind` — `Asid` / `Asud`, on the unit itself
+   *  (a map may grant one) or in its type's `abilList`? */
   private sellsKind(u: SimUnit, kind: "item" | "unit"): boolean {
-    const w = this.shopWares(u.typeId);
-    if ((kind === "item" ? w.items : w.units).length > 0) return true;
-    for (const s of u.building?.stock?.values() ?? []) if (s.kind === kind) return true;
-    return kind === "item" && u.typeId === "nmrk"; // the Marketplace: no Sellitems row at all
+    const code = kind === "item" ? "Asid" : "Asud";
+    if (u.abilities.some((a) => a.id === code || a.code === code)) return true;
+    return this.unitReg?.get(u.typeId)?.abilities?.includes(code) ?? false;
   }
 
   /**
