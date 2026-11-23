@@ -4,11 +4,13 @@
 // show up on somebody else's map:
 //
 //   • `exactMatchOnly` TRUE  → the message must EQUAL the registered string.
-//   • `exactMatchOnly` FALSE → the registered string is a PREFIX. This is the form that
-//     carries an argument, and `GetEventPlayerChatStringMatched` hands back the prefix so the
-//     action can slice it off and keep the rest ("-kick 3" → "3").
-//   • an EMPTY string with exactMatchOnly false is a prefix of everything, which is the
-//     documented idiom for "give me all of this player's chat".
+//   • `exactMatchOnly` FALSE → the registered string may stand ANYWHERE in the message
+//     (`UI\TriggerData.txt`: `ChatMatchTypeSubstring=0,chatmatchtype,false,…`). This is the
+//     form that carries an argument, and `GetEventPlayerChatStringMatched` hands back the
+//     registered string so the action can cut it out and keep the rest ("-kick 3" → "3", and
+//     a map's number-first cheats, "5000gold" against "gold").
+//   • an EMPTY string with exactMatchOnly false is in everything, which is the documented
+//     idiom for "give me all of this player's chat".
 //   • the registration names ONE player, and must not fire for anybody else.
 //   • the comparison is case-SENSITIVE, as WC3's is.
 //
@@ -100,7 +102,7 @@ console.log("exactMatchOnly = true — equality, nothing else");
   check("another player saying it does not fire it", g("hits")?.n, 0);
 }
 
-console.log("\nexactMatchOnly = false — a prefix, and the argument survives");
+console.log("\nexactMatchOnly = false — a substring, and the argument survives");
 {
   interp.callFunction("SetupPrefix", []);
   reset();
@@ -112,7 +114,11 @@ console.log("\nexactMatchOnly = false — a prefix, and the argument survives");
 
   reset();
   say(0, "-kic");
-  check("a message shorter than the prefix does not fire", g("hits")?.n, 0);
+  check("a message shorter than the registered string does not fire", g("hits")?.n, 0);
+
+  reset();
+  say(0, "please -kick 3");
+  check("a substring, not only a prefix, fires it", g("hits")?.n, 1);
 }
 
 console.log("\nan empty prefix catches everything that player says");
