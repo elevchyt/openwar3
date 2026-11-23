@@ -12,9 +12,17 @@
 
 const SCRIMS = ".fdf-dialog-scrim, .glue-dialog-scrim";
 
+// The same question as two LIVE collections, because the game asks it every frame (the camera
+// does not move under a panel). `querySelector` with a selector LIST misses the browser's
+// single-class fast path and matches every element against both selectors: measured on a match's
+// 5,700-node document, 115 µs a call — 2.3% of all CPU in a profile of Bleach vs One Piece — where
+// a live `getElementsByClassName` collection the browser keeps current answers in under 1 µs.
+const fdfScrims = typeof document === "undefined" ? null : document.getElementsByClassName("fdf-dialog-scrim");
+const glueScrims = typeof document === "undefined" ? null : document.getElementsByClassName("glue-dialog-scrim");
+
 /** Anything modal on screen at all. What the GAME asks — the world underneath a panel takes no
  *  commands, and its camera does not move. */
-export const anyModalOpen = (): boolean => document.querySelector(SCRIMS) !== null;
+export const anyModalOpen = (): boolean => (fdfScrims?.length ?? 0) > 0 || (glueScrims?.length ?? 0) > 0;
 
 /**
  * A modal over THIS element — a scrim that does not contain it.

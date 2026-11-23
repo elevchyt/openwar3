@@ -8,9 +8,13 @@
 //   |cAARRGGBB   open a colour span (alpha byte is ignored, as in-game)
 //   |r           close the innermost colour span
 //   |n           line break
+//   a REAL newline is a line break too: the World Editor's text box writes one for every Enter
+//   (`\r\n` in the w3t/w3a string), and a custom map's tooltips are laid out with them — Bleach
+//   vs One Piece's recipes are a "Gives:" list and a "Requires:" list, one line each, with not
+//   one `|n` in them. The game's text frame breaks on both.
 // `|C`/`|R`/`|N` occur in the data too (GlobalStrings uses both cases).
 
-const CODE = /\|([cC])([0-9a-fA-F]{8})|\|[rR]|\|[nN]/g;
+const CODE = /\|([cC])([0-9a-fA-F]{8})|\|[rR]|\|[nN]|\r\n?|\n/g;
 
 export function escapeHtml(s: string): string {
   return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] ?? c);
@@ -29,7 +33,7 @@ export function wc3ToHtml(raw: string): string {
     if (m[1]) {
       html += `<span style="color:#${m[2].slice(2)}">`; // drop the leading alpha byte
       open++;
-    } else if (m[0][1] === "r" || m[0][1] === "R") {
+    } else if (m[0] === "|r" || m[0] === "|R") {
       if (open > 0) {
         html += "</span>";
         open--;

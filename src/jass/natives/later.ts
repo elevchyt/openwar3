@@ -211,7 +211,7 @@ export function registerLaterNatives(rt: Runtime): void {
   // the meta key a bit set (METAKEY_SHIFT 1, CTRL 2, ALT 4, META 8).
   def(rt, "BlzTriggerRegisterPlayerKeyEvent", (c, a) => {
     const t = c.rt.data<TriggerObj>(a[0]);
-    if (t) c.rt.triggerRegs.push({ kind: "playerKey", trigId: t.handleId, params: a.slice(1) });
+    if (t) c.rt.addTriggerReg({ kind: "playerKey", trigId: t.handleId, params: a.slice(1) });
     return jHandle(0, "event");
   });
   def(rt, "BlzGetTriggerPlayerKey", (c) => c.rt.eventResponse("TriggerPlayerKey"));
@@ -231,7 +231,7 @@ export function registerLaterNatives(rt: Runtime): void {
   // triggers registered for that player and prefix.
   def(rt, "BlzTriggerRegisterPlayerSyncEvent", (c, a) => {
     const t = c.rt.data<TriggerObj>(a[0]);
-    if (t) c.rt.triggerRegs.push({ kind: "playerSync", trigId: t.handleId, params: a.slice(1) });
+    if (t) c.rt.addTriggerReg({ kind: "playerSync", trigId: t.handleId, params: a.slice(1) });
     return jHandle(0, "event");
   });
   def(rt, "BlzSendSyncData", (c, a) => {
@@ -424,7 +424,7 @@ export function registerLaterNatives(rt: Runtime): void {
   for (const [name, kind] of [["TriggerRegisterCommandEvent", "commandEvent"], ["TriggerRegisterUpgradeCommandEvent", "upgradeCommandEvent"]] as const) {
     def(rt, name, (c, a) => {
       const t = c.rt.data<TriggerObj>(a[0]);
-      if (t) c.rt.triggerRegs.push({ kind, trigId: t.handleId, params: a.slice(1) });
+      if (t) c.rt.addTriggerReg({ kind, trigId: t.handleId, params: a.slice(1) });
       return jHandle(0, "event");
     });
   }

@@ -12,6 +12,10 @@
 //                 `TRIGSTR_` into the map's war3map.wts. Read through `FdfLibrary.strings`
 //                 (ui/fdf/library.ts), so every string the game's own frames and our HUD look up
 //                 by key picks it up.
+//   [Errors]      over the [Errors] block of Units\\CommandStrings.txt — the gold line the console
+//                 flashes on a refusal (`Nomana`, `Cooldown`, `Nolumber`), keyed as that file
+//                 keys them. Read by `CommandStrings.get`. Bleach vs One Piece rewords
+//                 "Not enough lumber." to "Not enough Medal.", its lumber being a medal count.
 //
 // Test of Balance uses it to turn the food counter into "Difficulty Level:", the upkeep label into
 // Balanced / Average / Not Balanced, and the idle-worker button into "Traits (F8)" with a stat-up
@@ -27,13 +31,16 @@ export interface MapSkin {
   skins: Map<string, string>;
   /** [FrameDef]: FrameDef string key → text, TRIGSTR_ already resolved. */
   strings: Map<string, string>;
+  /** [Errors]: CommandStrings error key, LOWERCASED (that table is matched case-insensitively)
+   *  → text, TRIGSTR_ already resolved. */
+  errors: Map<string, string>;
 }
 
 /** Parse the file. `resolve` turns a `TRIGSTR_nnn` into the map's own text (the same lookup a
  *  trigger's strings take); a value that is not one passes through. Keys are kept as written —
  *  both tables they override are looked up by exact key. Unknown sections are ignored. */
 export function parseMapSkin(src: string, resolve: (s: string) => string = (s) => s): MapSkin {
-  const out: MapSkin = { skins: new Map(), strings: new Map() };
+  const out: MapSkin = { skins: new Map(), strings: new Map(), errors: new Map() };
   let into: Map<string, string> | null = null;
   for (const raw of src.split(/\r?\n|\r/)) {
     const line = raw.trim();
@@ -41,14 +48,16 @@ export function parseMapSkin(src: string, resolve: (s: string) => string = (s) =
     const head = /^\[(.+)\]$/.exec(line);
     if (head) {
       const name = head[1].trim().toLowerCase();
-      into = name === "customskin" ? out.skins : name === "framedef" ? out.strings : null;
+      into = name === "customskin" ? out.skins : name === "framedef" ? out.strings : name === "errors" ? out.errors : null;
       continue;
     }
     const eq = line.indexOf("=");
     if (!into || eq <= 0) continue;
     let value = line.slice(eq + 1).trim();
     if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
-    into.set(line.slice(0, eq).trim(), into === out.strings ? resolve(value) : value);
+    const key = line.slice(0, eq).trim();
+    if (into === out.errors) into.set(key.toLowerCase(), resolve(value));
+    else into.set(key, into === out.strings ? resolve(value) : value);
   }
   return out;
 }
@@ -57,7 +66,7 @@ let overlay: MapSkin | null = null;
 
 /** Put a map's layer up (or `null` to take it down). */
 export function setMapSkinOverlay(skin: MapSkin | null): void {
-  overlay = skin && (skin.skins.size || skin.strings.size) ? skin : null;
+  overlay = skin && (skin.skins.size || skin.strings.size || skin.errors.size) ? skin : null;
 }
 
 /** The layer that is up now — so a scene can take down only the one IT put up. */
@@ -68,6 +77,11 @@ export function mapSkinOverlay(): MapSkin | null {
 /** The map's own value for a war3skins key, or undefined. */
 export function mapSkinValue(key: string): string | undefined {
   return overlay?.skins.get(key);
+}
+
+/** The map's own wording of a CommandStrings [Errors] line, or undefined. */
+export function mapErrorString(key: string): string | undefined {
+  return overlay?.errors.get(key.toLowerCase());
 }
 
 /** The map's own text for a FrameDef string key, or undefined. */

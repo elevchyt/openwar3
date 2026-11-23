@@ -88,12 +88,12 @@ export function registerDialogNatives(rt: Runtime): void {
   // clicked button and Interpreter.fireDialogClick matches on it.
   def(rt, "TriggerRegisterDialogButtonEvent", (c, a) => {
     const t = c.rt.data<TriggerObj>(a[0]);
-    if (t) c.rt.triggerRegs.push({ kind: "dialogButton", trigId: t.handleId, params: [a[1]] });
+    if (t) c.rt.addTriggerReg({ kind: "dialogButton", trigId: t.handleId, params: [a[1]] });
     return JNULL;
   });
   def(rt, "TriggerRegisterDialogEvent", (c, a) => {
     const t = c.rt.data<TriggerObj>(a[0]);
-    if (t) c.rt.triggerRegs.push({ kind: "dialogEvent", trigId: t.handleId, params: [a[1]] });
+    if (t) c.rt.addTriggerReg({ kind: "dialogEvent", trigId: t.handleId, params: [a[1]] });
     return JNULL;
   });
   def(rt, "GetClickedButton", (c) => c.rt.eventResponse("ClickedButton"));

@@ -428,7 +428,7 @@ export function registerFrameNatives(rt: Runtime): void {
     const f = frame(c, a[1] ?? JNULL);
     if (!t || !f) return JNULL;
     const eventIndex = c.rt.enumIndex(a[2] ?? JNULL);
-    c.rt.triggerRegs.push({ kind: "frameEvent", trigId: t.handleId, params: [a[1], a[2] ?? JNULL] });
+    c.rt.addTriggerReg({ kind: "frameEvent", trigId: t.handleId, params: [a[1], a[2] ?? JNULL] });
     const m = model(c);
     let set = m.events.get(f.handleId);
     if (!set) m.events.set(f.handleId, (set = new Set()));

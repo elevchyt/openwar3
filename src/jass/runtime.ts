@@ -388,6 +388,8 @@ export interface TriggerReg {
   edge?: boolean;
 }
 
+const NO_REGS: readonly TriggerReg[] = [];
+
 /** Apply a common.j `limitop` (a ConvertLimitOp index) to a value/limit pair — the
  *  comparison behind the unit-state / player-state threshold events.
  *  0 LESS_THAN, 1 LESS_THAN_OR_EQUAL, 2 EQUAL, 3 GREATER_THAN_OR_EQUAL, 4 GREATER_THAN,
@@ -1790,6 +1792,95 @@ export class Runtime {
   /** Event→trigger registrations (TriggerRegister*Event) the dispatcher scans when
    *  the sim raises an event, and the live timers advanceTime() pumps. */
   readonly triggerRegs: TriggerReg[] = [];
+  /**
+   * `triggerRegs` SORTED INTO BUCKETS, so a dispatch walks the registrations that could match
+   * its event and not every registration the map ever made.
+   *
+   * The list is flat because that is what a registration is, and a melee map has a few dozen
+   * of them. A custom map does not: Bleach vs One Piece registers **8,085** (607 triggers on
+   * "a unit of player N does X", twelve players each) and runs ~200 timers, forty of them on a
+   * 0.02–0.05 s period. Every timer expiry scanned all 8,085 for its own handle and every unit
+   * event COPIED all 8,085 before testing them — ten million comparisons a second for a map
+   * that was standing still, and the single biggest line in its profile (`expireTimer`).
+   *
+   * A bucket is a PRE-FILTER and never the test: each dispatcher still asks its own predicate
+   * of every reg it is handed, so the only thing a bucket can do wrong is leave a reg out —
+   * which is why the key is taken off nothing but the registration's own, immutable `kind` and
+   * params (`regKeys`). Order is registration order within a bucket and across merged ones
+   * (`pos`), because triggers on one event fire in the order they were registered.
+   *
+   * It is a CACHE of `triggerRegs` (transient in game/save/classes.ts): rebuilt lazily after
+   * `addTriggerReg` / `dropTriggerRegs` bump `regVersion`, and a rebuilt bucket is a NEW array,
+   * so a dispatch iterating one is iterating a snapshot — an action may register or destroy
+   * triggers mid-dispatch, which is what the old `[...triggerRegs]` copies were for.
+   */
+  private regIndex: { ver: number; len: number; buckets: Map<string, TriggerReg[]>; merged: Map<string, TriggerReg[]>; pos: Map<TriggerReg, number> } | null = null;
+  private regVersion = 0;
+
+  /** Record an event registration (every `TriggerRegister*` native ends here). */
+  addTriggerReg(reg: TriggerReg): void {
+    this.triggerRegs.push(reg);
+    this.regVersion++;
+  }
+
+  /** Drop every registration of a trigger — `DestroyTrigger`, so the dispatcher stops handing
+   *  out a dead trigger's events. */
+  dropTriggerRegs(trigId: number): void {
+    const regs = this.triggerRegs;
+    let kept = 0;
+    for (let i = 0; i < regs.length; i++) if (regs[i].trigId !== trigId) regs[kept++] = regs[i];
+    if (kept === regs.length) return;
+    regs.length = kept;
+    this.regVersion++;
+  }
+
+  /** The buckets were built from a list that has since been REPLACED wholesale (a loaded save
+   *  writes the saved registrations into `triggerRegs` without going through the two doors). */
+  invalidateTriggerRegs(): void {
+    this.regVersion++;
+  }
+
+  /** The buckets a registration is filed under: its `kind`, and — for the three kinds a busy map
+   *  registers by the thousand — the one param every dispatch of it names first. */
+  private regKeys(reg: TriggerReg): string[] {
+    if (reg.kind === "unitEvent" || reg.kind === "playerUnitEvent") return [reg.kind, `${reg.kind}#${this.enumIndex(reg.params[1] ?? JNULL)}`];
+    if (reg.kind === "timerExpire") return [reg.kind, `timerExpire#${reg.params[0]?.k === "handle" ? reg.params[0].h : 0}`];
+    return [reg.kind];
+  }
+
+  /**
+   * The registrations filed under `keys`, in registration order: a kind ("playerChat"), a unit
+   * event of one index (`unitEvent#${EVENT_UNIT_DEATH}`, `playerUnitEvent#${…}`), a timer's
+   * (`timerExpire#${handleId}`). Never mutate the array — it is the cache.
+   */
+  regsFor(...keys: string[]): readonly TriggerReg[] {
+    let ix = this.regIndex;
+    if (!ix || ix.ver !== this.regVersion || ix.len !== this.triggerRegs.length) {
+      ix = { ver: this.regVersion, len: this.triggerRegs.length, buckets: new Map(), merged: new Map(), pos: new Map() };
+      for (let i = 0; i < this.triggerRegs.length; i++) {
+        const reg = this.triggerRegs[i];
+        ix.pos.set(reg, i);
+        for (const key of this.regKeys(reg)) {
+          const b = ix.buckets.get(key);
+          if (b) b.push(reg);
+          else ix.buckets.set(key, [reg]);
+        }
+      }
+      this.regIndex = ix;
+    }
+    if (keys.length === 1) return ix.buckets.get(keys[0]) ?? NO_REGS;
+    const name = keys.join("|");
+    let out = ix.merged.get(name);
+    if (!out) {
+      out = [];
+      for (const key of keys) { const b = ix.buckets.get(key); if (b) out.push(...b); }
+      const pos = ix.pos;
+      out.sort((a, b) => pos.get(a)! - pos.get(b)!);
+      ix.merged.set(name, out);
+    }
+    return out;
+  }
+
   readonly timers: TimerObj[] = [];
   /** Live floating text tags (CreateTextTag). The renderer polls this list; dead
    *  entries (DestroyTextTag) are flagged so it can drop them. */

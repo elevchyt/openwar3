@@ -6529,7 +6529,13 @@ export class MapViewerScene {
   private textTagContext(): TextTagContext {
     const rts = this.rts!;
     const scene = this.viewer.map?.worldScene;
-    const dpr = this.canvas.width / this.canvas.clientWidth || 1;
+    // The canvas's CSS box off the cached frame (`syncFrame`), never `clientWidth`: this runs
+    // after the frame's HUD writes, so a layout read here forces a synchronous reflow of the
+    // whole document — 6% of all CPU on a map that floats a damage number over every blow.
+    this.syncFrame();
+    const clientW = this.frame.right - this.frame.left;
+    const clientH = this.frame.bottom - this.frame.top;
+    const dpr = this.canvas.width / clientW || 1;
     const vision = rts.getVision();
     return {
       // The FDF UI space is 0.6 tall (ui/fdf/layout.ts) and is fitted to the GAME frame, so a
@@ -6537,7 +6543,7 @@ export class MapViewerScene {
       // A text tag's height and drift are fractions of the WHOLE screen (a tag of height 1
       // fills it), so this is the viewport height plain — not the FDF `/ UI_HEIGHT` scale
       // the panels are laid out with, which over-set every tag by 1/0.6 (issue #120).
-      uiScale: this.canvas.clientHeight || GAME_HEIGHT,
+      uiScale: clientH || GAME_HEIGHT,
       groundHeight: (x, y) => rts.groundHeightAt(x, y),
       unitAt: (simId) => {
         const u = rts.simView.units.get(simId);
@@ -14934,7 +14940,13 @@ export class MapViewerScene {
     // shelf, their stock counts and their restock clocks for you (SimWorld.canUseShop).
     const foreignShop = sel.isBuilding && sel.owner !== this.localPlayer && world.canUseShop(sel.id, this.localPlayer);
     if (sel.owner !== this.localPlayer && !foreignShop) return [];
-    const btnIcon = (n: string) => this.blpIcon(`ReplaceableTextures\\CommandButtons\\${n}.blp`);
+    // The engine's OWN buttons name their art by KEY, not by path: `Units\\CommandFunc.txt` says
+    // `[CmdMove] Art=CommandMove`, `[CmdSelectSkill] Art=CommandNewSkill`, and the key resolves
+    // through `UI\\war3skins.txt` — the local race's section (which is the whole of why the rally
+    // flag and the Build button differ by race), then [Default], with the running map's
+    // `war3mapSkin.txt` [CustomSkin] above both. Naming the .blp here instead is why Bleach vs
+    // One Piece's `CommandNewSkill=…BTN_cr_RIGHTbooK.blp` never reached the Hero Abilities button.
+    const cmdArt = (key: string) => this.blpIcon(this.skinPath(key));
     const out: CommandButton[] = [];
 
     // TARGET MODE — an order is armed and waiting for the click that aims it (Attack,
@@ -14946,7 +14958,7 @@ export class MapViewerScene {
     // you to select a different order." Escape runs it, as does a right-click on the map.
     if (this.isTargeting()) {
       out.push(this.cmd({
-        id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
+        id: "cancel", icon: cmdArt("CommandCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
         ...this.cmdSection("CmdCancel", "Cancel (|cffffcc00ESC|r)",
           "Drops the current un-issued order and allows you to select a different order."),
       }));
@@ -14956,7 +14968,7 @@ export class MapViewerScene {
     if (sel.underConstruction) {
       // [CmdCancelBuild] — the file gives the half-built structure's Cancel its own section.
       out.push(this.cmd({
-        id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
+        id: "cancel", icon: cmdArt("CommandCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
         ...this.cmdSection("CmdCancelBuild", "Cancel (|cffffcc00ESC|r)",
           "Drops the current un-issued order and allows you to select a different order."),
       }));
@@ -15021,13 +15033,13 @@ export class MapViewerScene {
       if (!foreignShop && su?.weapons.some((w) => w.enabled && w.showUI)) {
         const active = this.activeCommandId();
         out.push(this.cmd({
-          id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A",
+          id: "attack", icon: cmdArt("CommandAttack"), name: "Attack", hotkey: "A",
           col: 3, row: 0, active: active === "attack",
           ...this.cmdSection("CmdAttack", "|cffffcc00A|rttack",
             "Orders your units to move to the target area and attack any enemy units they see on the way. If you order them to attack a specific unit, your units will ignore other enemy units and will attack the targeted unit until it is destroyed."),
         }));
         out.push(this.cmd({
-          id: "stop", icon: btnIcon("BTNStop"), name: "Stop", hotkey: "S",
+          id: "stop", icon: cmdArt("CommandStop"), name: "Stop", hotkey: "S",
           col: 1, row: 0, active: active === "stop",
           ...this.cmdSection("CmdStop", "|cffffcc00S|rtop",
             "Orders your units to stop whatever order they were previously given. Units that have been told to stop will attack enemy units and move to engage nearby enemies."),
@@ -15070,11 +15082,10 @@ export class MapViewerScene {
       // Point sits one above it at (3,1), so it never shares the cancel slot. A neutral shop
       // isn't yours to rally.
       if (wantsRally) {
-        const rallyIcon = { human: "BTNRallyPoint", orc: "BTNOrcRallyPoint", undead: "BTNRallyPointUndead", nightelf: "BTNRallyPointNightElf" }[this.localRace];
         // No active state: placing a rally point is an aim, not an order in flight,
         // and a building has no "current command" to keep it lit afterwards.
         out.push(this.cmd({
-          id: "rally", icon: btnIcon(rallyIcon), name: "Set Rally Point", hotkey: "Y", col: 3, row: 1,
+          id: "rally", icon: cmdArt("CommandRally"), name: "Set Rally Point", hotkey: "Y", col: 3, row: 1,
           ...this.cmdSection("CmdRally", "Set Rall|cffffcc00y|r Point",
             "Orders units that pop out of the building to immediately attack move to the targeted area. You can rally point gold mines or trees to auto-harvest. You can rally point a unit to have new units follow it when they finish building."),
         }));
@@ -15084,7 +15095,7 @@ export class MapViewerScene {
       // different button in the same slot).
       if (sel.queueLength) {
         out.push(this.cmd({
-          id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
+          id: "cancel", icon: cmdArt("CommandCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
           ...this.cmdSection("CmdCancelTrain", "Cancel (|cffffcc00ESC|r)", "Stops training the current unit."),
         }));
       }
@@ -15135,7 +15146,7 @@ export class MapViewerScene {
         }));
       }
       out.push(this.cmd({
-        id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
+        id: "cancel", icon: cmdArt("CommandCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
         ...this.cmdSection("CmdCancel", "Cancel (|cffffcc00ESC|r)",
           "Drops the current un-issued order and allows you to select a different order."),
       }));
@@ -15187,7 +15198,7 @@ export class MapViewerScene {
           }));
         }
         out.push(this.cmd({
-        id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
+        id: "cancel", icon: cmdArt("CommandCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
         ...this.cmdSection("CmdCancel", "Cancel (|cffffcc00ESC|r)",
           "Drops the current un-issued order and allows you to select a different order."),
       }));
@@ -15199,7 +15210,7 @@ export class MapViewerScene {
     if (this.cardPage.startsWith("book:")) {
       this.pushAbilityButtons(sel, out);
       out.push(this.cmd({
-        id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
+        id: "cancel", icon: cmdArt("CommandCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
         ...this.cmdSection("CmdCancel", "Cancel (|cffffcc00ESC|r)",
           "Drops the current un-issued order and allows you to select a different order."),
       }));
@@ -15217,17 +15228,17 @@ export class MapViewerScene {
     const canAttack = this.rts?.selectionCanAttack() ?? false;
     // Every one of these speaks from its own `Units\CommandStrings.txt` section — see cmdSection.
     if (canMove) out.push(this.cmd({
-      id: "move", icon: btnIcon("BTNMove"), name: "Move", hotkey: "M", col: 0, row: 0, active: active === "move",
+      id: "move", icon: cmdArt("CommandMove"), name: "Move", hotkey: "M", col: 0, row: 0, active: active === "move",
       ...this.cmdSection("CmdMove", "|cffffcc00M|rove",
         "Orders your units to move to the target area while ignoring enemy units and attacks. Issuing a move order onto a target unit will cause your unit to follow the target using move orders."),
     }));
     if (canMove || canAttack) out.push(this.cmd({
-      id: "stop", icon: btnIcon("BTNStop"), name: "Stop", hotkey: "S", col: 1, row: 0, active: active === "stop",
+      id: "stop", icon: cmdArt("CommandStop"), name: "Stop", hotkey: "S", col: 1, row: 0, active: active === "stop",
       ...this.cmdSection("CmdStop", "|cffffcc00S|rtop",
         "Orders your units to stop whatever order they were previously given. Units that have been told to stop will attack enemy units and move to engage nearby enemies."),
     }));
     if (canMove) out.push(this.cmd({
-      id: "hold", icon: btnIcon("BTNHoldPosition"), name: "Hold Position", hotkey: "H", col: 2, row: 0, active: active === "hold",
+      id: "hold", icon: cmdArt("CommandHoldPosition"), name: "Hold Position", hotkey: "H", col: 2, row: 0, active: active === "hold",
       ...this.cmdSection("CmdHoldPos", "|cffffcc00H|rold Position",
         "Orders your units to stand where they are and attack units that are within range. When on Hold Position your units will not chase down enemy units that run away, nor move to engage ranged attackers."),
     }));
@@ -15238,7 +15249,7 @@ export class MapViewerScene {
     // Footmen it is about to carry still lets the group attack-move.
     if (canAttack) {
       out.push(this.cmd({
-        id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A", col: 3, row: 0, active: active === "attack",
+        id: "attack", icon: cmdArt("CommandAttack"), name: "Attack", hotkey: "A", col: 3, row: 0, active: active === "attack",
         ...this.cmdSection("CmdAttack", "|cffffcc00A|rttack",
           "Orders your units to move to the target area and attack any enemy units they see on the way. If you order them to attack a specific unit, your units will ignore other enemy units and will attack the targeted unit until it is destroyed."),
       }));
@@ -15248,12 +15259,12 @@ export class MapViewerScene {
     // the data's: [CmdAttackGround] Art=CommandAttackGround (war3skins [Default] →
     // BTNAttackGround.blp — the four race twins are commented out) Buttonpos=3,1, Hotkey=G.
     if (canMove && this.rts?.selectionCanAttackGround()) out.push(this.cmd({
-      id: "attackground", icon: btnIcon("BTNAttackGround"), name: "Attack Ground", hotkey: "G", col: 3, row: 1, active: active === "attackground",
+      id: "attackground", icon: cmdArt("CommandAttackGround"), name: "Attack Ground", hotkey: "G", col: 3, row: 1, active: active === "attackground",
       ...this.cmdSection("CmdAttackGround", "Attack |cffffcc00G|rround",
         "Orders your units to fire at the targeted area of ground until they are told to stop or are given another order."),
     }));
     if (canMove) out.push(this.cmd({
-      id: "patrol", icon: btnIcon("BTNPatrol"), name: "Patrol", hotkey: "P", col: 0, row: 1, active: active === "patrol",
+      id: "patrol", icon: cmdArt("CommandPatrol"), name: "Patrol", hotkey: "P", col: 0, row: 1, active: active === "patrol",
       ...this.cmdSection("CmdPatrol", "|cffffcc00P|ratrol",
         "Orders your units to continually move from their current position to the targeted area until given another command. Units on patrol will move to engage enemy units that come within range. Issuing a patrol order onto a target unit will cause your unit to imitate the targeted unit's behavior."),
     }));
@@ -15276,7 +15287,7 @@ export class MapViewerScene {
     if (sel.isWorker && this.tech.builds(sel.typeId).length) {
       // …and the VERB is the worker's race's: build / create / summon (see buildCmdKey).
       out.push(this.cmd({
-        id: "build", icon: btnIcon("BTNHumanBuild"), name: "Build Structure", hotkey: "B", col: 0, row: 2, active: active === "build",
+        id: "build", icon: cmdArt(this.buildCmdKey(sel.typeId).replace("CmdBuild", "CommandBasicStruct")), name: "Build Structure", hotkey: "B", col: 0, row: 2, active: active === "build",
         ...this.cmdSection(this.buildCmdKey(sel.typeId), "|cffffcc00B|ruild Structure",
           "Brings up a list of the available buildings that you may choose to construct."),
       }));
@@ -15712,7 +15723,7 @@ export class MapViewerScene {
       // unavailable.
       out.push(this.cmd({
         id: "learnpage",
-        icon: this.blpIcon("ReplaceableTextures\\CommandButtons\\BTNSkillz.blp"),
+        icon: this.blpIcon(this.skinPath("CommandNewSkill")),
         name: "Hero Abilities",
         hotkey: "O",
         col: 3, row: 1,
@@ -17028,7 +17039,7 @@ export class MapViewerScene {
     for (const n of FIXED_CARD_ICONS) first.add(`ReplaceableTextures\\CommandButtons\\${n}.blp`);
     // The hero "Hero Abilities" learn-skill book uses the Skillz art (see
     // pushAbilityButtons) — not a registry icon, so warm it explicitly.
-    first.add("ReplaceableTextures\\CommandButtons\\BTNSkillz.blp");
+    first.add(this.skinPath("CommandNewSkill"));
     const rest = new Set<string>();
     for (const d of this.registry.all()) if (d.icon) rest.add(d.icon);
     for (const a of this.abilities.all()) if (a.icon) rest.add(a.icon);

@@ -1,6 +1,7 @@
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import type { DataSource } from "../vfs/types";
 import { layCustomKeys } from "./customKeys";
+import { mapErrorString } from "./mapSkin";
 import type { PlayableRace } from "./races";
 
 // The game's own refusal messages — the gold line the console flashes when it won't
@@ -89,7 +90,7 @@ export class CommandStrings {
   /** One error string by its commandstrings.txt key ("Nogold"). Keys are matched
    *  case-insensitively — the data's own casing is inconsistent ("Targgetmine"). */
   get(key: string): string {
-    return this.errors.get(key.toLowerCase()) ?? "";
+    return mapErrorString(key) ?? this.errors.get(key.toLowerCase()) ?? "";
   }
 
   /** A race-indexed error ("Nofood" → the caller's own supply building). Entries that

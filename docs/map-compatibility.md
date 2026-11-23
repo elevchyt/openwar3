@@ -1089,6 +1089,38 @@ multiboard's corner button wears the skin's `MultiboardMaximizeButton*` down arr
 What is NOT ours to fix: Neliel's and Grimmjow's models and icons (`!Neliel!.mdl`,
 `BTNneliel.blp`, …) are simply not in the archive, so they draw as the missing-model case.
 
+**The interface is the map's too.** Four things one match on it turned up, each a general rule:
+
+* The engine's OWN buttons name their art by KEY: `Units\CommandFunc.txt` says `[CmdSelectSkill]
+  Art=CommandNewSkill`, and the key resolves through `UI\war3skins.txt` with the map's
+  `war3mapSkin.txt` `[CustomSkin]` above it. The card named the `.blp` files itself, so BvO's
+  `CommandNewSkill=…BTN_cr_RIGHTbooK.blp` never reached the Hero Abilities button
+  (`cmdArt` / `skinPath` in `buildCommandCard`). The same file's `[Errors]` section is a layer over
+  `Units\CommandStrings.txt`'s (`mapErrorString`): "Not enough Medal." for its renamed lumber.
+* An ITEM's shop button is three fields it shares with a unit — `utip`, `uhot`, `ubpx`/`ubpy` — and
+  `applyMapItemData` read none of them, so every custom item sold under its BASE's title
+  ("Purchase Tome of Experience" over a recipe whose Tip is "Katen Kyokotsu"). Half a button
+  position is a whole one: a map that writes only `ubpy`=2 means (0,2).
+* A REAL newline in a tooltip is a line break (`wc3ToHtml`). The editor's text box writes `\r\n`
+  for every Enter and a map's recipes are laid out with them, with no `|n` anywhere.
+* A PERSON is called by their own name, and a computer the lobby seated in a slot the map types
+  "user" by the lobby's label (`slotLabel`, `SlotConfig.mapController`). BvO names its twelve
+  player seats "Computer [1]"…"Computer [12]".
+
+**…and it is where three costs that grow with a custom map were found** (docs/perf-logging.md's
+report, on the developer's own replay; 22–37 fps → 113–141 fps headless over the same stretch):
+
+* `Runtime.regsFor` — the event registrations in BUCKETS. BvO makes 8,085 of them and runs ~200
+  timers, forty on a 0.02–0.05 s period; every expiry scanned the whole list and every unit event
+  copied it first. 12% of all CPU → 4%.
+* A creep that cannot get nearer its post than a body's width has ARRIVED (`CREEP_POST_TAKEN`).
+  `CreateNUnitsAtLoc` heaps a dozen creeps on one point, so their posts are a body apart, and the
+  ones crowded out re-ran a failed floor search every tick for GuardReturnTime, gave up, and began
+  again: ~60 failed searches a second.
+* Two per-frame LAYOUT reads: the floating-text pass's `clientWidth` (a forced reflow after the
+  HUD's writes — 6% of CPU on a map that floats a number over every blow) and `anyModalOpen`'s
+  selector-list `querySelector` (115 µs a call on a 5,700-node page; live collections now).
+
 ### Protected archives — what the MPQ reader tolerates
 
 A protector damages the ARCHIVE as well as the script, in ways Storm (the game's reader) shrugs off.

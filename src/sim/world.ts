@@ -3935,6 +3935,13 @@ const CREEP_HOME_EPS = 64; // within this of the guard point counts as "home" (r
 // wider re-trigger threshold an idle creep resting near its post would oscillate
 // finish→snap→return→finish, flickering the walk↔stand clip (the return "jiggle"). So a
 // guarding creep only heads home again once displaced comfortably past the snap noise.
+// A creep that cannot path any nearer its post than THIS has had the post taken by a body
+// standing on it, and stands where it is instead (tickCreepReturn). Ours — the game writes no
+// such number; it is CROWD_ARRIVE's eight cells, the same "the crowd at the goal is the goal"
+// distance a plain move ends at. Farther out than that it is walled off, not crowded out, and
+// keeps trying — every CREEP_RETURN_RETRY seconds rather than every tick.
+const CREEP_POST_TAKEN = PATHING_CELL * 8;
+const CREEP_RETURN_RETRY = 0.5;
 const CREEP_RETURN_TRIGGER = 128; // 4 cells — safely beyond CREEP_HOME_EPS + the settle snap
 // Shooting from the dark gives you away (issue #45). MiscData names no duration for
 // FoggedAttackRevealRadius, so the blow buys the attacker's position one second,
@@ -31105,9 +31112,28 @@ export class SimWorld {
       }
     }
     if (!u.moving) {
-      // Stopped short of home (path blocked when computed) — try again toward it.
-      if (this.pathTo(u, u.guardX, u.guardY)) u.order = "move";
-      else u.desiredFacing = Math.atan2(u.guardY - u.y, u.guardX - u.x);
+      // Stopped short of home (path blocked when computed) — try again toward it. Not on every
+      // tick, though: a search that comes back empty spends its whole floor budget saying so
+      // (~8,000 cells), and a creep with nowhere to go asked sixty times a second for the five
+      // seconds of GuardReturnTime, then gave up, was still off its post, and began again.
+      if (u.returnStuckT > 0 && Math.floor(u.returnStuckT / CREEP_RETURN_RETRY) === Math.floor((u.returnStuckT - dt) / CREEP_RETURN_RETRY)) return;
+      if (this.pathTo(u, u.guardX, u.guardY)) {
+        u.order = "move";
+      } else if (d <= CREEP_POST_TAKEN) {
+        // It cannot get any closer and it is all but there: somebody is STANDING on its post.
+        // That is the ordinary end of a fight for creeps a trigger made in one heap —
+        // `CreateNUnitsAtLoc` puts a dozen on one point and the engine spreads them a body
+        // apart, so their posts are a body apart too, and whoever walks home first is standing
+        // across a camp-mate's (Bleach vs One Piece's arena: 60 of 160 creeps "returning" at
+        // any moment, none able to arrive). Where it has ended up IS its post from now on —
+        // the same ground, one body over — which is also what stops the idle check from
+        // sending it home again the very next tick.
+        u.guardX = u.x;
+        u.guardY = u.y;
+        this.finishCreepReturn(u);
+      } else {
+        u.desiredFacing = Math.atan2(u.guardY - u.y, u.guardX - u.x);
+      }
     }
   }
 

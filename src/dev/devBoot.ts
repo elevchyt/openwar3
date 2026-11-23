@@ -140,6 +140,8 @@ function meleeConfigFor(
     startX: s.startX,
     startY: s.startY,
     name: s.name,
+    // …and what the map types the seat as, as the Custom Game screen says it (slotLabel).
+    ...(s.controller === "user" || s.controller === "computer" ? { mapController: s.controller } : {}),
   }));
   return { slots, fog, seed, localPlayer: player, forces: info.forces.map((f) => ({ allied: f.allied, sharedVision: f.sharedVision })) };
 }

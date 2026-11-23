@@ -136,6 +136,16 @@ function slotNaming(slot: NamedSlot, melee: boolean): { label: string; numbered:
     : slot.playerName?.trim() || `Player ${slot.id + 1}`;
   const human = slot.controller === "user";
   if (melee && seated) return { label: lobby, numbered: human };
+  // A PERSON is called by their own name on every kind of map: the w3i's name for the seat is
+  // the map's label for an empty chair, and WC3 prints the account that sat down in it. And a
+  // computer the LOBBY put in a seat the map leaves to players (`mapController` "user") is the
+  // lobby's too — it reads "Computer (Normal)" in the game, not the chair's name. Bleach vs One
+  // Piece names its twelve player seats "Computer [1]"…"Computer [12]", so the person in seat 0
+  // played a whole match as "Computer [1]" beside five Computer+ seats that said the same.
+  // What keeps the map's name is a side the MAP fields — a slot it types as a computer, or a
+  // campaign's (which says nothing here and so stays as it was).
+  if (human && slot.playerName?.trim()) return { label: lobby, numbered: true };
+  if (slot.controller === "computer" && slot.mapController === "user") return { label: lobby, numbered: false };
   const map = slot.name?.trim();
   if (map) return { label: map, numbered: false };
   return seated ? { label: lobby, numbered: human } : { label: `Player ${slot.id + 1}`, numbered: false };
@@ -188,6 +198,9 @@ export interface NamedSlot {
   controller: Controller;
   /** The MAP's own name for the side (w3i player record). */
   name?: string;
+  /** What the MAP types the slot as (w3i player record) — "user" is a seat it leaves to the
+   *  lobby. Absent where nobody chose who sits there (a campaign chapter). */
+  mapController?: "user" | "computer";
   /** The person in the seat, by the name they play under. */
   playerName?: string;
   /** `MeleeDifficulty()`, on a computer the lobby seated. */

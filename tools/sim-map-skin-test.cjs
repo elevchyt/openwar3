@@ -9,7 +9,8 @@ const { existsSync, readFileSync } = require("node:fs");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const B = (...p) => require(join(REPO, ".sim-build", "src", ...p));
-const { parseMapSkin, setMapSkinOverlay, mapSkinOverlay, OverlaidStrings } = B("data", "mapSkin.js");
+const { parseMapSkin, setMapSkinOverlay, mapSkinOverlay, mapErrorString, OverlaidStrings } = B("data", "mapSkin.js");
+const { wc3ToHtml } = B("ui", "wc3Text.js");
 const { parseWar3Skins, skinValue } = B("data", "war3skins.js");
 const { makeTrigStr } = B("data", "objectData.js");
 
@@ -56,6 +57,17 @@ setMapSkinOverlay(null);
 check("the install's art is back", skinValue(skins, "Human", "IdlePeon"), "ReplaceableTextures\\CommandButtons\\BTNPeasant.blp");
 check("…and the file's words", strings.get("IDLE_PEON"), "Idle Workers (|Cfffed312F8|R)");
 check("an empty file puts up no layer", (setMapSkinOverlay(parseMapSkin("[CustomSkin]\n")), mapSkinOverlay()), null);
+
+// Bleach vs One Piece's file: an [Errors] section over CommandStrings.txt's, keyed as that table
+// is matched — case-insensitively.
+console.log("\n[Errors], and the rest of what one match on Bleach vs One Piece turned up");
+const bvo = parseMapSkin(["[CustomSkin]", "CommandNewSkill=ReplaceableTextures\\CommandButtons\\BTN_cr_RIGHTbooK.blp", "[Errors]", "Nolumber=|CFFFF0303Not enough Medal.|R"].join("\r\n"));
+setMapSkinOverlay(bvo);
+check("the map rewords a refusal", [mapErrorString("Nolumber"), mapErrorString("nolumber"), mapErrorString("Nogold")], ["|CFFFF0303Not enough Medal.|R", "|CFFFF0303Not enough Medal.|R", undefined]);
+check("the engine's own button art is a skin KEY the map may answer", skinValue(skins, "Human", "CommandNewSkill"), "ReplaceableTextures\\CommandButtons\\BTN_cr_RIGHTbooK.blp");
+setMapSkinOverlay(null);
+check("a real newline in a tooltip is a line break, as |n is", wc3ToHtml("|cffffcc00Gives:|r\r\n+20 Agility\n\n|cffff0000Orb|r|nx"),
+  '<span style="color:#ffcc00">Gives:</span><br>+20 Agility<br><br><span style="color:#ff0000">Orb</span><br>x');
 
 const MAP = join(REPO, "Warcraft III", "Maps", "Download", "Test of Balance v1.24-4p.w3x");
 console.log("\nTest of Balance's own war3mapSkin.txt");

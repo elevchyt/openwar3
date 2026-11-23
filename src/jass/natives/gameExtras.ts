@@ -187,7 +187,7 @@ export function registerGameExtraNatives(rt: Runtime): void {
   });
   const registerTrackable = (kind: string): NativeFn => (c, a) => {
     const t = c.rt.data<TriggerObj>(a[0]);
-    if (t && a[1]?.k === "handle") c.rt.triggerRegs.push({ kind, trigId: t.handleId, params: [a[1]] });
+    if (t && a[1]?.k === "handle") c.rt.addTriggerReg({ kind, trigId: t.handleId, params: [a[1]] });
     return jHandle(0, "event");
   };
   def(rt, "TriggerRegisterTrackableHitEvent", registerTrackable("trackableHit"));

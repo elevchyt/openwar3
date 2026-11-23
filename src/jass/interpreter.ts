@@ -1527,7 +1527,7 @@ export class Interpreter {
     const was = asNum(before);
     const now = asNum(after);
     if (was === now) return;
-    const regs = this.rt.triggerRegs.filter((r) => r.kind === "variable" && r.params[0]?.k === "string" && r.params[0].s === name);
+    const regs = this.rt.regsFor("variable").filter((r) => r.params[0]?.k === "string" && r.params[0].s === name);
     for (const reg of regs) {
       if (!compareLimit(this.rt.enumIndex(reg.params[1] ?? JNULL), now, asNum(reg.params[2] ?? JNULL))) continue;
       const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
@@ -1538,10 +1538,10 @@ export class Interpreter {
   /** Dispatch a sim-raised event to every trigger registered for `kind` whose
    *  registration `params` match (the caller supplies both the event responses and
    *  the matcher). Used by the bridge to raise unit-death / enter-region / … from
-   *  the sim tick. Registrations are indexed by kind in runtime.triggerRegs. */
+   *  the sim tick. Registrations are bucketed by kind (Runtime.regsFor). */
   fireEvent(kind: string, responses: Map<string, JassValue>, matches?: (params: JassValue[]) => boolean): void {
     // Snapshot: an action may add/remove registrations mid-dispatch.
-    const regs = this.rt.triggerRegs.filter((r) => r.kind === kind && (!matches || matches(r.params)));
+    const regs = this.rt.regsFor(kind).filter((r) => !matches || matches(r.params));
     for (const reg of regs) {
       const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
       if (trig) this.fireTrigger(trig, this.withTrigger(responses, trig, reg));
@@ -1602,8 +1602,9 @@ export class Interpreter {
       const ts = new Trace();
       this.startThread(`timer#${t.handleId}`, this.callFunctionG(t.handlerFn, [], ts), ts, responses);
     }
-    for (const reg of this.rt.triggerRegs) {
-      if (reg.kind !== "timerExpire") continue;
+    // Only THIS timer's registrations (Runtime.regsFor) — this loop used to walk every
+    // registration in the map once per expiry, of every timer.
+    for (const reg of this.rt.regsFor(`timerExpire#${t.handleId}`)) {
       if (reg.params[0]?.k === "handle" && reg.params[0].h === t.handleId) {
         const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
         // …`withTrigger` like every other dispatch: a timer event is an event, so
@@ -1686,7 +1687,7 @@ export class Interpreter {
    * differs is how membership is computed — the baseline, the filter and the responses
    * are the rect event's. See `inRangeMembers`. */
   pumpRegions(units: ReadonlyArray<UnitSnapshot>): void {
-    for (const reg of this.rt.triggerRegs) {
+    for (const reg of this.rt.regsFor("enterRegion", "leaveRegion", "unitInRange")) {
       const inRange = reg.kind === "unitInRange";
       const entering = inRange || reg.kind === "enterRegion"; // a circle only has an "in"
       if (!entering && reg.kind !== "leaveRegion") continue;
@@ -1822,7 +1823,7 @@ export class Interpreter {
       const victim = this.rt.unitForSim(d.victim);
       const killer = d.killer ? this.rt.unitForSim(d.killer) : JNULL;
       const responses = new Map<string, JassValue>([["DyingUnit", victim], ["TriggerUnit", victim], ["KillingUnit", killer]]);
-      this.dispatchToRegs(responses, (reg) =>
+      this.dispatchToRegs(responses, this.rt.regsFor("unitDeath", `unitEvent#${EVENT_UNIT_DEATH}`, `playerUnitEvent#${EVENT_PLAYER_UNIT_DEATH}`), (reg) =>
         (reg.kind === "unitDeath" && this.paramUnitIs(reg, victim)) ||
         (reg.kind === "unitEvent" && this.unitEventIs(reg, EVENT_UNIT_DEATH) && this.paramUnitIs(reg, victim)) ||
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, EVENT_PLAYER_UNIT_DEATH, d.victim.owner, victim)));
@@ -1853,7 +1854,7 @@ export class Interpreter {
    */
   pumpDestructableDeaths(mapIds: ReadonlyArray<number>): void {
     for (const mapId of mapIds) {
-      for (const reg of [...this.rt.triggerRegs]) {
+      for (const reg of this.rt.regsFor("unitDeath")) {
         if (reg.kind !== "unitDeath") continue;
         const subject = reg.params[0];
         if (!subject || this.rt.data<{ mapId?: number }>(subject)?.mapId !== mapId) continue;
@@ -1872,7 +1873,7 @@ export class Interpreter {
       const target = this.rt.unitForSim(e.target);
       const source = e.source ? this.rt.unitForSim(e.source) : JNULL;
       const responses = new Map<string, JassValue>([["TriggerUnit", target], ["EventDamageSource", source], ["EventDamage", jReal(e.amount)]]);
-      this.dispatchToRegs(responses, (reg) =>
+      this.dispatchToRegs(responses, this.unitEventRegs(EVENT_UNIT_DAMAGED, EVENT_PLAYER_UNIT_DAMAGED), (reg) =>
         (reg.kind === "unitEvent" && this.unitEventIs(reg, EVENT_UNIT_DAMAGED) && this.paramUnitIs(reg, target)) ||
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, EVENT_PLAYER_UNIT_DAMAGED, e.target.owner, target)));
     }
@@ -1893,7 +1894,7 @@ export class Interpreter {
     const playerEvt = phase === "damaging" ? EVENT_PLAYER_UNIT_DAMAGING : EVENT_PLAYER_UNIT_DAMAGED;
     this.rt.damageStack.push({ phase, blow });
     try {
-      this.dispatchToRegs(responses, (reg) =>
+      this.dispatchToRegs(responses, this.unitEventRegs(unitEvt, playerEvt), (reg) =>
         (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, target)) ||
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, blow.target.owner, target)));
     } finally {
@@ -1940,7 +1941,7 @@ export class Interpreter {
       const attacked = this.rt.unitForSim(e.attacked);
       const attacker = this.rt.unitForSim(e.attacker);
       const responses = new Map<string, JassValue>([["TriggerUnit", attacked], ["Attacker", attacker]]);
-      this.dispatchToRegs(responses, (reg) =>
+      this.dispatchToRegs(responses, this.unitEventRegs(EVENT_UNIT_ATTACKED, EVENT_PLAYER_UNIT_ATTACKED), (reg) =>
         (reg.kind === "unitEvent" && this.unitEventIs(reg, EVENT_UNIT_ATTACKED) && this.paramUnitIs(reg, attacked)) ||
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, EVENT_PLAYER_UNIT_ATTACKED, e.attacked.owner, attacked)));
     }
@@ -1966,7 +1967,7 @@ export class Interpreter {
       ]);
       const playerEvt = e.kind === "immediate" ? EVENT_PLAYER_UNIT_ISSUED_ORDER : e.kind === "point" ? EVENT_PLAYER_UNIT_ISSUED_POINT_ORDER : EVENT_PLAYER_UNIT_ISSUED_TARGET_ORDER;
       const unitEvt = e.kind === "immediate" ? EVENT_UNIT_ISSUED_ORDER : e.kind === "point" ? EVENT_UNIT_ISSUED_POINT_ORDER : EVENT_UNIT_ISSUED_TARGET_ORDER;
-      this.dispatchToRegs(responses, (reg) =>
+      this.dispatchToRegs(responses, this.unitEventRegs(unitEvt, playerEvt), (reg) =>
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, e.unit.owner, unit)) ||
         (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, unit)));
     }
@@ -1994,7 +1995,7 @@ export class Interpreter {
       if (phase < 0) continue;
       const playerEvt = EVENT_PLAYER_UNIT_SPELL_CHANNEL + phase;
       const unitEvt = EVENT_UNIT_SPELL_CHANNEL + phase;
-      this.dispatchToRegs(responses, (reg) =>
+      this.dispatchToRegs(responses, this.unitEventRegs(unitEvt, playerEvt), (reg) =>
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, e.caster.owner, caster)) ||
         (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, caster)));
     }
@@ -2012,7 +2013,7 @@ export class Interpreter {
       // common.j declares no unit-scoped CONSTRUCT_START (only 64/65) — so a "start"
       // matches player registrations only.
       const unitEvt = e.phase === "cancel" ? EVENT_UNIT_CONSTRUCT_CANCEL : e.phase === "finish" ? EVENT_UNIT_CONSTRUCT_FINISH : -1;
-      this.dispatchToRegs(responses, (reg) =>
+      this.dispatchToRegs(responses, this.unitEventRegs(unitEvt, playerEvt), (reg) =>
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, e.structure.owner, s)) ||
         (unitEvt >= 0 && reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, s)));
     }
@@ -2039,7 +2040,7 @@ export class Interpreter {
       // that finished and the game's own rule falls out — heroes get one, footmen don't.
       // A start/cancel has no trained unit yet (only a type), so there the building stands.
       const filterSubject = e.trained ? (responses.get("TrainedUnit") as JassValue) : b;
-      this.dispatchToRegs(responses, (reg) =>
+      this.dispatchToRegs(responses, this.unitEventRegs(unitEvt, playerEvt), (reg) =>
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, e.building.owner, b, filterSubject)) ||
         (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, b)));
     }
@@ -2060,7 +2061,7 @@ export class Interpreter {
       ]);
       const playerEvt = e.phase === "start" ? EVENT_PLAYER_UNIT_RESEARCH_START : e.phase === "cancel" ? EVENT_PLAYER_UNIT_RESEARCH_CANCEL : EVENT_PLAYER_UNIT_RESEARCH_FINISH;
       const unitEvt = e.phase === "start" ? EVENT_UNIT_RESEARCH_START : e.phase === "cancel" ? EVENT_UNIT_RESEARCH_CANCEL : EVENT_UNIT_RESEARCH_FINISH;
-      this.dispatchToRegs(responses, (reg) =>
+      this.dispatchToRegs(responses, this.unitEventRegs(unitEvt, playerEvt), (reg) =>
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, e.building.owner, b)) ||
         (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, b)));
     }
@@ -2080,7 +2081,7 @@ export class Interpreter {
       ]);
       const playerEvt = levelling ? EVENT_PLAYER_HERO_LEVEL : EVENT_PLAYER_HERO_SKILL;
       const unitEvt = levelling ? EVENT_UNIT_HERO_LEVEL : EVENT_UNIT_HERO_SKILL;
-      this.dispatchToRegs(responses, (reg) =>
+      this.dispatchToRegs(responses, this.unitEventRegs(unitEvt, playerEvt), (reg) =>
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, e.hero.owner, hero)) ||
         (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, hero)));
     }
@@ -2117,7 +2118,7 @@ export class Interpreter {
       // and a Human buying there is nobody's neutral-passive unit. Match on the seller.
       const owner = e.seller ? e.seller.owner : e.unit.owner;
       const subject = e.seller ? (responses.get("SellingUnit") as JassValue) : unit;
-      this.dispatchToRegs(responses, (reg) =>
+      this.dispatchToRegs(responses, this.unitEventRegs(unitEvt, playerEvt), (reg) =>
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, owner, subject)) ||
         (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, subject)));
     }
@@ -2154,7 +2155,7 @@ export class Interpreter {
         ["SummoningUnit", summoner],
         ["SummonedUnit", summoned],
       ]);
-      this.dispatchToRegs(responses, (reg) =>
+      this.dispatchToRegs(responses, this.unitEventRegs(EVENT_UNIT_SUMMON, EVENT_PLAYER_UNIT_SUMMON), (reg) =>
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, EVENT_PLAYER_UNIT_SUMMON, e.summoner.owner, summoner)) ||
         (reg.kind === "unitEvent" && this.unitEventIs(reg, EVENT_UNIT_SUMMON) && this.paramUnitIs(reg, summoner)));
     }
@@ -2173,7 +2174,7 @@ export class Interpreter {
         // Null for a shop that asks for nobody.
         ["BuyingUnit", e.buyer ? this.rt.unitForSim(e.buyer) : JNULL],
       ]);
-      this.dispatchToRegs(responses, (reg) =>
+      this.dispatchToRegs(responses, this.unitEventRegs(EVENT_UNIT_SELL, EVENT_PLAYER_UNIT_SELL), (reg) =>
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, EVENT_PLAYER_UNIT_SELL, e.shop.owner, shop, sold)) ||
         (reg.kind === "unitEvent" && this.unitEventIs(reg, EVENT_UNIT_SELL) && this.paramUnitIs(reg, shop)));
     }
@@ -2196,7 +2197,7 @@ export class Interpreter {
         ["LoadedUnit", passenger],
         ["TransportUnit", this.rt.unitForSim(e.transport)],
       ]);
-      this.dispatchToRegs(responses, (reg) =>
+      this.dispatchToRegs(responses, this.unitEventRegs(EVENT_UNIT_LOADED, EVENT_PLAYER_UNIT_LOADED), (reg) =>
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, EVENT_PLAYER_UNIT_LOADED, e.unit.owner, passenger)) ||
         (reg.kind === "unitEvent" && this.unitEventIs(reg, EVENT_UNIT_LOADED) && this.paramUnitIs(reg, passenger)));
     }
@@ -2212,7 +2213,7 @@ export class Interpreter {
     for (const e of events) {
       const unit = this.rt.unitForSim(e);
       const responses = new Map<string, JassValue>([["TriggerUnit", unit], ["DecayingUnit", unit]]);
-      this.dispatchToRegs(responses, (reg) =>
+      this.dispatchToRegs(responses, this.unitEventRegs(EVENT_UNIT_DECAY, EVENT_PLAYER_UNIT_DECAY), (reg) =>
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, EVENT_PLAYER_UNIT_DECAY, e.owner, unit)) ||
         (reg.kind === "unitEvent" && this.unitEventIs(reg, EVENT_UNIT_DECAY) && this.paramUnitIs(reg, unit)));
     }
@@ -2231,7 +2232,7 @@ export class Interpreter {
     for (const e of events) {
       const unit = this.rt.unitForSim(e.unit);
       const responses = new Map<string, JassValue>([["TriggerUnit", unit], ["Rescuer", this.rt.unitForSim(e.rescuer)]]);
-      this.dispatchToRegs(responses, (reg) =>
+      this.dispatchToRegs(responses, this.unitEventRegs(EVENT_UNIT_RESCUED, EVENT_PLAYER_UNIT_RESCUED), (reg) =>
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, EVENT_PLAYER_UNIT_RESCUED, e.unit.owner, unit)) ||
         (reg.kind === "unitEvent" && this.unitEventIs(reg, EVENT_UNIT_RESCUED) && this.paramUnitIs(reg, unit)));
     }
@@ -2258,7 +2259,7 @@ export class Interpreter {
       ]);
       const playerEvt = e.selected ? EVENT_PLAYER_UNIT_SELECTED : EVENT_PLAYER_UNIT_DESELECTED;
       const unitEvt = e.selected ? EVENT_UNIT_SELECTED : EVENT_UNIT_DESELECTED;
-      this.dispatchToRegs(responses, (reg) =>
+      this.dispatchToRegs(responses, this.unitEventRegs(unitEvt, playerEvt), (reg) =>
         (reg.kind === "playerUnitEvent"
           && this.rt.enumIndex(reg.params[1] ?? JNULL) === playerEvt
           && this.rt.data<JassPlayer>(reg.params[0])?.index === e.player
@@ -2276,7 +2277,7 @@ export class Interpreter {
    *  under the limit when the trigger is created doesn't fire, but one damaged a moment
    *  later — even in that same tick — does. */
   pumpUnitStates(): void {
-    for (const reg of this.rt.triggerRegs) {
+    for (const reg of this.rt.regsFor("unitState")) {
       if (reg.kind !== "unitState") continue;
       const now = unitStateHolds(this.rt, reg);
       const was = reg.edge ?? now;
@@ -2304,7 +2305,7 @@ export class Interpreter {
    *  every tick of the countdown it just started. (The map guards that case itself with a
    *  `udg_Spawner` flag, which is the tell that Blizzard's own designers expected an edge.) */
   pumpPlayerStates(): void {
-    for (const reg of this.rt.triggerRegs) {
+    for (const reg of this.rt.regsFor("playerState")) {
       if (reg.kind !== "playerState") continue;
       const now = playerStateHolds(this.rt, reg);
       const was = reg.edge ?? now;
@@ -2345,7 +2346,7 @@ export class Interpreter {
       if (!ticked) return false;
       return now >= prev ? prev < limit && limit <= now : limit > prev || limit <= now;
     };
-    for (const reg of [...this.rt.triggerRegs]) {
+    for (const reg of this.rt.regsFor("gameStateEvent")) {
       if (reg.kind !== "gameStateEvent") continue;
       if (this.rt.enumIndex(reg.params[0] ?? JNULL) !== GAME_STATE_TIME_OF_DAY) continue;
       const op = this.rt.enumIndex(reg.params[1] ?? JNULL);
@@ -2379,7 +2380,7 @@ export class Interpreter {
       ["ClickedDialog", jHandle(dialogHandleId, "dialog")],
       ["TriggerPlayer", this.rt.playerHandle(player)],
     ]);
-    this.dispatchToRegs(responses, (reg) =>
+    this.dispatchToRegs(responses, this.rt.regsFor("dialogButton", "dialogEvent"), (reg) =>
       (reg.kind === "dialogButton" && reg.params[0]?.k === "handle" && reg.params[0].h === buttonHandleId) ||
       (reg.kind === "dialogEvent" && reg.params[0]?.k === "handle" && reg.params[0].h === dialogHandleId));
   }
@@ -2396,7 +2397,7 @@ export class Interpreter {
       ["TriggerFrameEvent", this.rt.enumHandle("FrameEventType", eventIndex)],
       ["TriggerPlayer", this.rt.playerHandle(player)],
     ]);
-    this.dispatchToRegs(responses, (reg) =>
+    this.dispatchToRegs(responses, this.rt.regsFor("frameEvent"), (reg) =>
       reg.kind === "frameEvent" && reg.params[0]?.k === "handle" && reg.params[0].h === frameHandleId &&
       this.rt.enumIndex(reg.params[1] ?? JNULL) === eventIndex);
   }
@@ -2424,7 +2425,7 @@ export class Interpreter {
   firePlayerEvent(player: number, eventIndex: number): void {
     this.inputTap?.({ k: "pev", p: player, ev: eventIndex });
     const responses = new Map<string, JassValue>([["TriggerPlayer", this.rt.playerHandle(player)]]);
-    this.dispatchToRegs(responses, (reg) => this.matchesPlayerEvent(reg, player, eventIndex));
+    this.dispatchToRegs(responses, this.rt.regsFor("playerEvent"), (reg) => this.matchesPlayerEvent(reg, player, eventIndex));
   }
 
   /**
@@ -2444,7 +2445,7 @@ export class Interpreter {
       ["TriggerPlayerMetaKey", jInt(meta)],
       ["TriggerPlayerIsKeyDown", jBool(down)],
     ]);
-    this.dispatchToRegs(responses, (reg) => reg.kind === "playerKey"
+    this.dispatchToRegs(responses, this.rt.regsFor("playerKey"), (reg) => reg.kind === "playerKey"
       && this.rt.data<JassPlayer>(reg.params[0])?.index === player
       && this.rt.enumIndex(reg.params[1] ?? JNULL) === key
       && asInt(reg.params[2] ?? JNULL) === meta
@@ -2452,7 +2453,7 @@ export class Interpreter {
   }
   /** Is any key event registered at all? The host only listens to the keyboard when one is. */
   watchesKeys(): boolean {
-    return this.rt.triggerRegs.some((r) => r.kind === "playerKey");
+    return this.rt.regsFor("playerKey").length > 0;
   }
 
   /**
@@ -2467,7 +2468,7 @@ export class Interpreter {
    * uses to say when its cinematic is skippable (see `firePlayerEvent`).
    */
   playerEventAnswered(player: number, eventIndex: number): boolean {
-    return this.rt.triggerRegs.some((reg) => {
+    return this.rt.regsFor("playerEvent").some((reg) => {
       if (!this.matchesPlayerEvent(reg, player, eventIndex)) return false;
       const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
       return !!trig?.enabled;
@@ -2505,7 +2506,7 @@ export class Interpreter {
       ["TriggerPlayer", this.rt.playerHandle(player)],
       ["EventPlayerChatString", { k: "string", s: message }],
     ]);
-    for (const reg of [...this.rt.triggerRegs]) {
+    for (const reg of this.rt.regsFor("playerChat")) {
       if (reg.kind !== "playerChat") continue;
       // params: [player, chatString, exactMatchOnly] — everything after the trigger itself.
       // A registration names WHICH player it listens to. A map that wants everybody's chat
@@ -2524,10 +2525,17 @@ export class Interpreter {
     }
   }
 
-  /** Fire every registration matching `pred` with the given responses. Snapshots the
-   *  reg list first — an action may register/destroy triggers mid-dispatch. */
-  private dispatchToRegs(responses: Map<string, JassValue>, pred: (reg: TriggerReg) => boolean): void {
-    for (const reg of [...this.rt.triggerRegs]) {
+  /** The registrations a UNIT event can reach: `TriggerRegisterUnitEvent` of that unit event,
+   *  `TriggerRegisterPlayerUnitEvent` of its player twin (a negative index names neither). */
+  private unitEventRegs(unitEvt: number, playerEvt: number): readonly TriggerReg[] {
+    return this.rt.regsFor(`unitEvent#${unitEvt}`, `playerUnitEvent#${playerEvt}`);
+  }
+
+  /** Fire every registration in `regs` matching `pred` with the given responses. `regs` is the
+   *  event's own bucket(s) out of `Runtime.regsFor` — a pre-filter, with `pred` still the test —
+   *  and a bucket is a snapshot: an action may register/destroy triggers mid-dispatch. */
+  private dispatchToRegs(responses: Map<string, JassValue>, regs: readonly TriggerReg[], pred: (reg: TriggerReg) => boolean): void {
+    for (const reg of regs) {
       if (!pred(reg)) continue;
       // `TriggerRegisterFilterUnitEvent` is a unit event with a boolexpr on the end (params[2]);
       // the plain `TriggerRegisterUnitEvent` has none, so this asks nothing of it.

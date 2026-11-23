@@ -57,7 +57,7 @@ export function registerEventNatives(rt: Runtime): void {
     if (a[0].k === "handle") {
       c.rt.handles.free(a[0].h);
       // Drop its registrations so the dispatcher stops scanning a dead trigger.
-      for (let i = c.rt.triggerRegs.length - 1; i >= 0; i--) if (c.rt.triggerRegs[i].trigId === a[0].h) c.rt.triggerRegs.splice(i, 1);
+      c.rt.dropTriggerRegs(a[0].h);
     }
     return JNULL;
   });
@@ -122,7 +122,7 @@ export function registerEventNatives(rt: Runtime): void {
   // --- event registration → recorded for the dispatcher (runtime.triggerRegs) ---
   const register = (c: NativeCtx, kind: string, a: JassValue[]): JassValue => {
     const t = trig(c, a[0]);
-    if (t) c.rt.triggerRegs.push({ kind, trigId: t.handleId, params: a.slice(1) });
+    if (t) c.rt.addTriggerReg({ kind, trigId: t.handleId, params: a.slice(1) });
     return jHandle(0, "event");
   };
   // Map each register native to an internal event kind the dispatcher understands.
@@ -171,7 +171,7 @@ export function registerEventNatives(rt: Runtime): void {
     if (!t) return jHandle(0, "event");
     const reg: TriggerReg = { kind: "unitState", trigId: t.handleId, params: a.slice(1) };
     reg.edge = unitStateHolds(c.rt, reg);
-    c.rt.triggerRegs.push(reg);
+    c.rt.addTriggerReg(reg);
     return jHandle(0, "event");
   });
   // TriggerRegisterPlayerStateEvent — EVENT_PLAYER_STATE_LIMIT, the player-scoped twin of the
@@ -185,7 +185,7 @@ export function registerEventNatives(rt: Runtime): void {
     if (!t) return jHandle(0, "event");
     const reg: TriggerReg = { kind: "playerState", trigId: t.handleId, params: a.slice(1) };
     reg.edge = playerStateHolds(c.rt, reg);
-    c.rt.triggerRegs.push(reg);
+    c.rt.addTriggerReg(reg);
     return jHandle(0, "event");
   });
   // TriggerRegisterVariableEvent — EVENT_GAME_VARIABLE_LIMIT, "Value Of Real Variable": raised
@@ -197,7 +197,7 @@ export function registerEventNatives(rt: Runtime): void {
     const t = trig(c, a[0]);
     const name = a[1]?.k === "string" ? a[1].s : "";
     if (!t || c.rt.globalTypes.get(name) !== "real") return jHandle(0, "event");
-    c.rt.triggerRegs.push({ kind: "variable", trigId: t.handleId, params: [a[1], a[2], a[3]] });
+    c.rt.addTriggerReg({ kind: "variable", trigId: t.handleId, params: [a[1], a[2], a[3]] });
     c.rt.watchedGlobals.add(name);
     return jHandle(0, "event");
   });
@@ -208,7 +208,7 @@ export function registerEventNatives(rt: Runtime): void {
     if (!t) return jHandle(0, "event");
     const tm = makeTimer(c.rt, asNum(a[1]), a[2].k === "bool" && a[2].b, null);
     tm.running = true;
-    c.rt.triggerRegs.push({ kind: "timerExpire", trigId: t.handleId, params: [jHandle(tm.handleId, "timer")] });
+    c.rt.addTriggerReg({ kind: "timerExpire", trigId: t.handleId, params: [jHandle(tm.handleId, "timer")] });
     return jHandle(0, "event");
   });
 

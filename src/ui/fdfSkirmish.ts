@@ -574,6 +574,7 @@ function toConfig(
         startX: mapSlot?.startX ?? 0,
         startY: mapSlot?.startY ?? 0,
         name: mapSlot?.name,
+        ...(mapSlot ? { mapController: mapSlot.controller } : {}),
         // Which computer the row picked, and which AI plays it. Only a computer has either
         // — see SlotConfig.
         ...(s.controller === "computer" ? { aiDifficulty: s.ai, aiPlus: opts.computerPlus } : {}),

@@ -1178,7 +1178,26 @@ export function applyMapItemData(registry: ItemRegistry, w3tBytes: Uint8Array, w
       if (m.id === "unam") { def.name = trigStr(s(m.value)); continue; }
       if (m.id === "utub") { def.description = trigStr(s(m.value)); continue; } // Ubertip
       if (m.id === "ides") { def.summary = trigStr(s(m.value)); continue; } // Description (the info panel's line)
+      // The SHOP BUTTON's own words, key and slot — the three string/func columns an item shares
+      // with a unit (`Tip`, `Hotkey`, `Buttonpos`). Unread, a custom item sold under its BASE's
+      // title: Bleach vs One Piece's "Purchase Bow of the Quincy [|cffffcc00G|r]" read "Purchase
+      // Boots of Quel'Thalas +6", and its recipes — whose Tip is the whole title, "Katen
+      // Kyokotsu", with no "Purchase" in it — read "Purchase Tome of Experience". The hotkey is a
+      // string field and may be a TRIGSTR_ like any tip (resolve before taking the letter).
+      if (m.id === "utip") { def.tip = trigStr(s(m.value)); continue; }
+      if (m.id === "uhot") { def.hotkey = (trigStr(s(m.value)).trim()[0] ?? "").toUpperCase(); continue; }
+      if (m.id === "ubpx") { def.buttonX = n(m.value); continue; }
+      if (m.id === "ubpy") { def.buttonY = n(m.value); continue; }
       ITEM_SETTERS[m.id]?.(def, m.value);
+    }
+    // HALF a button position is a whole one. The two halves are two fields, an object file
+    // records only what the map CHANGED, and the editor's default for each is 0 — so a map that
+    // moves an item to the bottom row writes `ubpy`=2 and nothing else (Bleach vs One Piece's
+    // "Moon Armor", on a base with no Buttonpos at all). Left at "declares none" (-1) on the
+    // other axis, that item was unpinned and took the FIRST slot instead of the bottom-left one.
+    if (def.buttonX < 0 !== def.buttonY < 0) {
+      if (def.buttonX < 0) def.buttonX = 0;
+      else def.buttonY = 0;
     }
   };
   // A base row this install does not have (a stock item a later patch added) is an EMPTY row

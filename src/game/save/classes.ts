@@ -51,6 +51,8 @@ export function registerSaveClasses(): void {
     "functions", "natives", "nativeReturns", "hostFunctions", "trigStrings", "recordOnlySpawnFns",
     // The engine bridge, and its muzzled twin — the renderer's and the sim's, not the script's.
     "engineHooks", "muzzled", "worldWritingHooks", "localViewHooks",
+    // A cache of `triggerRegs` (Runtime.regsFor) — rebuilt on the first dispatch after a load.
+    "regIndex", "regVersion",
   ]);
   registerSaveClass("jass.HandleTable", HandleTable);
   registerSaveClass("jass.JassArray", JassArray);
@@ -60,7 +62,10 @@ export function registerSaveClasses(): void {
   // generators are, and rebuilt on load once the runtime they name is back.
   registerSaveClass<Interpreter>("jass.Interpreter", Interpreter, ["globalDecls", "ctx", "waitCache"], {
     save: (vm) => ({ threads: vm.captureThreads() }),
-    load: (vm) => vm.restoreThreads((vm as unknown as { threads: SavedThreads }).threads),
+    load: (vm) => {
+      vm.rt.invalidateTriggerRegs(); // the saved registrations were written in behind the index
+      vm.restoreThreads((vm as unknown as { threads: SavedThreads }).threads);
+    },
   });
 
   // --- the world -----------------------------------------------------------------------------------

@@ -39,6 +39,9 @@ export interface SlotConfig {
    *  "Player 2" — the World Editor's placeholders), so there the SEATING names the slot
    *  instead; `slotLabel` in ui/playerSlots.ts is that rule. */
   name?: string;
+  /** What the MAP types this slot as (w3i player record). Set where a LOBBY seated the slot, so
+   *  `slotLabel` can tell a seat the map leaves to players from a side the map fields itself. */
+  mapController?: "user" | "computer";
   /**
    * WHO is in the seat — the human's own name, as they typed it on the LAN screen or as the
    * profile saved it. Distinct from `name`, which is what the MAP calls the side: on Rise of
