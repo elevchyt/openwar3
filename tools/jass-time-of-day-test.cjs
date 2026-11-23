@@ -34,6 +34,7 @@ globals
     integer dawn = 0
     integer dusk = 0
     integer night = 0
+    integer gone = 0
 endglobals
 function OnDawn takes nothing returns nothing
     set dawn = dawn + 1
@@ -43,6 +44,9 @@ function OnDusk takes nothing returns nothing
 endfunction
 function OnNight takes nothing returns nothing
     set night = night + 1
+endfunction
+function OnGone takes nothing returns nothing
+    set gone = gone + 1
 endfunction
 function Setup takes nothing returns nothing
     local trigger t = CreateTrigger()
@@ -54,6 +58,11 @@ function Setup takes nothing returns nothing
     set t = CreateTrigger()
     call TriggerRegisterGameStateEvent( t, GAME_STATE_TIME_OF_DAY, GREATER_THAN_OR_EQUAL, 18.00 )
     call TriggerAddAction( t, function OnNight )
+    // An INTEGER game state is not the clock: compared against the hour, 'disconnected < 100'
+    // would hold from the first pump.
+    set t = CreateTrigger()
+    call TriggerRegisterGameStateEvent( t, GAME_STATE_DISCONNECTED, LESS_THAN, 100.00 )
+    call TriggerAddAction( t, function OnGone )
 endfunction
 `;
 
@@ -77,6 +86,17 @@ tick(2.0, 7.0);
 check("a jump from 2:00 to 7:00 is not dawn", g("dawn"), 1);
 tick(7.0, 6.0);
 check("…but landing exactly on 6:00 is", g("dawn"), 2);
+
+console.log("\na clock STOPPED on the value has arrived once, not every pump");
+tick(5.5, 6.0);
+check("arriving on 6:00 is dawn", g("dawn"), 3);
+for (let i = 0; i < 60; i++) tick(6.0, 6.0);
+check("…and sixty pumps of a suspended 6:00 are not sixty more", g("dawn"), 3);
+
+console.log("\nonly the TIME OF DAY is a clock");
+tick(1.0, 1.01);
+tick(1.01, 1.02);
+check("a GAME_STATE_DISCONNECTED registration is not compared against the hour", g("gone"), 0);
 
 console.log("\nthe other comparisons fire on their rising edge");
 tick(17.9, 17.95);
