@@ -161,6 +161,14 @@ hooks.suspendTimeOfDay(false);
 world.tick(1);
 check("…and runs again when released, at the scale it was given", world.timeOfDay > 19 && world.timeOfDay < 19.1, true);
 
+// A DEAD hero is off the field (SimWorld.fallen) until it is revived, and a map's death handler
+// reads its level then — a "you lose level − 1 attributes" penalty read 0 off a body that is gone.
+world.fallen.set(9001, { id: 9001, level: 7, xp: 1234, skillPoints: 2 });
+check("GetHeroLevel reads a fallen hero", hooks.getUnitLevel(9001), 7);
+check("…and its experience", hooks.getHeroXp(9001), 1234);
+check("…and its unspent points", hooks.getHeroSkillPoints(9001), 2);
+world.fallen.delete(9001);
+
 // --- the dual-writers ------------------------------------------------------------------------
 //
 // SetUnitOwner and SetUnitFlyHeight each write the world AND the model. Only the world half is

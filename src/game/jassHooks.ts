@@ -268,12 +268,16 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     drainHeroEvents: () => sim.drainHeroEvents(),
     drainItemEvents: () => sim.drainItemEvents(), // NativeCtx.flushItemEvents, the same way
     resetUnitCooldown: (id) => sim.resetCooldowns(id),
-    getUnitLevel: (id) => sim.units.get(id)?.level ?? 0,
+    // A DEAD hero keeps its level, its experience and its points: it is off the field
+    // (SimWorld.fallen) until it is revived, and a map's death handler reads them then —
+    // a scenario charges a fallen hero "level − 1" attributes and "level × difficulty" percent of
+    // its gold, and read off a body that is gone those were −1 and 0.
+    getUnitLevel: (id) => sim.units.get(id)?.level ?? sim.fallen.get(id)?.level ?? 0,
     setHeroLevel: (id, level, eyeCandy) => sim.setHeroLevel(id, level, eyeCandy),
-    getHeroXp: (id) => sim.units.get(id)?.xp ?? 0,
+    getHeroXp: (id) => sim.units.get(id)?.xp ?? sim.fallen.get(id)?.xp ?? 0,
     setHeroXp: (id, xp, eyeCandy) => sim.setHeroXp(id, xp, eyeCandy),
     addHeroXp: (id, xp, eyeCandy) => sim.addHeroXp(id, xp, eyeCandy),
-    getHeroSkillPoints: (id) => sim.units.get(id)?.skillPoints ?? 0,
+    getHeroSkillPoints: (id) => sim.units.get(id)?.skillPoints ?? sim.fallen.get(id)?.skillPoints ?? 0,
     modifySkillPoints: (id, delta) => sim.modifySkillPoints(id, delta),
     getHeroAttribute: (id, attr, includeBonuses) => sim.heroAttribute(id, attr, includeBonuses),
     setHeroAttribute: (id, attr, value, permanent) => sim.setHeroAttribute(id, attr, value, permanent),

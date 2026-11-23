@@ -81,9 +81,22 @@ export function registerAbilityNatives(rt: Runtime): void {
   // Human01 opens with `SetHeroLevel( gg_unit_Huth_0024, 10, false )` — Uther arriving at
   // Strahnbrad already a level-10 paladin — and ignoring it flashed the nova over him in the
   // middle of the cinematic.
+  // A hero raised several levels at once gains them ONE AT A TIME, each raising its own
+  // EVENT_PLAYER_HERO_LEVEL while the hero stands at that level — a handler that reads
+  // GetHeroLevel sees 2, 3, … 10 and not ten times 10. a scenario's "the last hero has reached the
+  // tenth level" announcement (and the doubling of the enemy count behind it) is gated on
+  // exactly that read, and fired once per level gained by its "10level" cheat otherwise.
   def(rt, "SetHeroLevel", (c, a) => {
     const id = simOf(c, a[0]);
-    if (id !== undefined) c.rt.hooks?.setHeroLevel?.(id, asInt(a[1]), truthy(a[2]));
+    const want = asInt(a[1]);
+    if (id !== undefined) {
+      const from = c.rt.hooks?.getUnitLevel?.(id) ?? 0;
+      for (let lv = from + 1; lv < want; lv++) {
+        c.rt.hooks?.setHeroLevel?.(id, lv, truthy(a[2]));
+        c.flushHeroEvents?.();
+      }
+      c.rt.hooks?.setHeroLevel?.(id, want, truthy(a[2]));
+    }
     c.flushHeroEvents?.();
     return JNULL;
   });
