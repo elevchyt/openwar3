@@ -21960,7 +21960,10 @@ export class SimWorld {
     // A unit that cannot turn (turnRate 0 — every structure) would otherwise sit on an
     // unreachable target forever, so the timed form lands instantly too. The trigger still
     // gets what it asked for; only the rotating-there part has no meaning here.
-    if (instant || u.turnRate <= 0) u.facing = rad;
+    // A PAUSED unit is left out of the turning pass, yet war3.exe still turns it (1.27, checked:
+    // a row of paused units turned with SetUnitFacingTimed(…, 0) is drawn facing the new way).
+    // So it lands at once too.
+    if (instant || u.turnRate <= 0 || u.paused) u.facing = rad;
   }
   /** JASS SetUnitOwner — reassign owner + team (team decides allegiance/vision). Goes
    *  through changeUnitOwner so a script-driven handover re-tints the model too, exactly as
