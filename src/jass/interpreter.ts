@@ -172,6 +172,8 @@ const IMPLIED_EVENT: Readonly<Record<string, string>> = {
 };
 const EVENT_UNIT_DEATH = 53;
 const EVENT_PLAYER_UNIT_DEATH = 20;
+/** common.j: `constant fgamestate GAME_STATE_TIME_OF_DAY = ConvertFGameState(2)`. */
+const GAME_STATE_TIME_OF_DAY = 2;
 const EVENT_UNIT_DAMAGED = 52;
 /** The sim's EventUnitInfo, as much of it as the damage raise reads. */
 interface EventUnitInfoLike {
@@ -2313,6 +2315,53 @@ export class Interpreter {
       if (!trig || !p) continue;
       // GetEventPlayerState — the state the registration watches (its 2nd argument).
       this.fireTrigger(trig, this.withTrigger(new Map([["TriggerPlayer", this.rt.playerHandle(p.index)], ["EventPlayerState", reg.params[1] ?? JNULL]]), trig, reg));
+    }
+  }
+
+  /** Pump GAME-state threshold events — `TriggerRegisterGameStateEvent(trig,
+   *  GAME_STATE_TIME_OF_DAY, EQUAL, 6.00)`, i.e. EVENT_GAME_STATE_LIMIT ("Game - The in-game
+   *  time of day becomes Equal to 6.00"). A scenario keys its day on it: a hero picker gives a hero
+   *  for anyone still undecided at dawn, and turns a Werewolf-ring wearer at 18:00. Polled, as
+   *  the unit and player thresholds are; `clock` is the time of day now and at the previous
+   *  pump.
+   *
+   *  The clock is CONTINUOUS, so "equal" is a crossing: the comparison holds the moment the
+   *  clock passes the value — between the two readings, midnight wrap included — and never
+   *  while it merely sits near it. The other comparisons fire on their rising edge, like
+   *  the other thresholds. A clock the script SET (a jump of more than an hour, either way)
+   *  crosses nothing on its way: only landing exactly on the value counts — and only ARRIVING
+   *  there. A clock the script stopped (`SuspendTimeOfDay`) exactly on the value has not
+   *  crossed it again on every pump; read that way, `SetTimeOfDay(18)` + a suspended clock
+   *  howled Blizzard.j's own dusk wolf (InitDNCSounds) sixty times a second.
+   *
+   *  Only GAME_STATE_TIME_OF_DAY is a clock. The two other game states common.j declares
+   *  (`GAME_STATE_DIVINE_INTERVENTION`, `GAME_STATE_DISCONNECTED`) are integer states this
+   *  pump does not read, and a registration on one is not compared against the hour. */
+  pumpGameStates(prev: number, now: number): void {
+    const forward = now >= prev ? now - prev : now + 24 - prev;
+    const ticked = forward > 0 && forward < 1;
+    const crossed = (limit: number): boolean => {
+      if (now === limit) return prev !== limit;
+      if (!ticked) return false;
+      return now >= prev ? prev < limit && limit <= now : limit > prev || limit <= now;
+    };
+    for (const reg of [...this.rt.triggerRegs]) {
+      if (reg.kind !== "gameStateEvent") continue;
+      if (this.rt.enumIndex(reg.params[0] ?? JNULL) !== GAME_STATE_TIME_OF_DAY) continue;
+      const op = this.rt.enumIndex(reg.params[1] ?? JNULL);
+      const limit = asNum(reg.params[2] ?? JNULL);
+      let fire: boolean;
+      if (op === 2) fire = crossed(limit); // EQUAL
+      else {
+        const holds = compareLimit(op, now, limit);
+        const was = reg.edge ?? holds;
+        reg.edge = holds;
+        fire = holds && !was;
+      }
+      if (!fire) continue;
+      const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
+      // GetEventGameState — the state the registration watches (its 1st argument).
+      if (trig) this.fireTrigger(trig, this.withTrigger(new Map([["EventGameState", reg.params[0] ?? JNULL]]), trig, reg));
     }
   }
 
