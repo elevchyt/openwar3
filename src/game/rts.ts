@@ -3132,6 +3132,11 @@ export class RtsController {
       su.canSleep = def.canSleep;
     } else if (su && passive) {
       su.neutralPassive = true;
+      // Neutral Victim (13) and Neutral Extra (14) are filed as Neutral Passive but stay their
+      // own players to the script — GetOwningPlayer, and whose shared vision the unit lends
+      // (SimUnit.neutralSlot). A scenario builds set pieces on Neutral Extra and grants its
+      // sight with `SetPlayerAlliance(Player(14), p, ALLIANCE_SHARED_VISION, true)`.
+      if (player !== neutralSlot(PlayerSlot.NeutralPassive)) su.neutralSlot = player;
     }
     this.scriptSpawns.push({ typeId, x, y, facing, player: owner, team, simId }); // …gets a body later
     return simId;
