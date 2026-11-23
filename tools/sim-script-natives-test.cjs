@@ -209,6 +209,8 @@ console.log("\nthe 24-player table: a neutral is 24/27 to the script, a player k
   const { jassOwnerOf } = require(join(REPO, ".sim-build", "src", "sim", "world.js"));
   const { setWidePlayerTable } = require(join(REPO, ".sim-build", "src", "data", "enums.js"));
   check("1.30.4 table: a creep is 12 and a shop 15", [jassOwnerOf({ owner: -1, neutralPassive: false }), jassOwnerOf({ owner: -1, neutralPassive: true })], [12, 15]);
+  // Neutral Victim/Extra are filed as Neutral Passive but stay their own players to the script.
+  check("…and a Neutral Extra unit is 14, not 15", jassOwnerOf({ owner: -1, neutralPassive: true, neutralSlot: 14 }), 14);
   setWidePlayerTable(true);
   check("wide table: a creep is 24 and a shop 27", [jassOwnerOf({ owner: -1, neutralPassive: false }), jassOwnerOf({ owner: -1, neutralPassive: true })], [24, 27]);
   check("…and player 12's unit is player 12's", jassOwnerOf({ owner: 12, neutralPassive: false }), 12);

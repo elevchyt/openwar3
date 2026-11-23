@@ -33,8 +33,8 @@ const LAND = 0x40; // open land, as a real wpm spells it (NoWater set — no boa
 const grid = new PathingGrid({ width: 64, height: 64, flags: new Uint8Array(64 * 64).fill(LAND) }, [0, 0]);
 const UNITS = {
   hfoo: { id: "hfoo", abilities: [], moveType: "foot" },
-  ngme: { id: "ngme", abilities: [], moveType: "", sellItems: ["stwp"] }, // Goblin Merchant
-  nmrk: { id: "nmrk", abilities: [], moveType: "" }, // Marketplace — no Sellitems row at all
+  ngme: { id: "ngme", abilities: ["Aneu", "Avul", "Apit"], moveType: "", sellItems: ["stwp"] }, // Goblin Merchant
+  nmrk: { id: "nmrk", abilities: ["Aneu", "Asid", "Avul", "Asud", "Apit"], moveType: "" }, // Marketplace — no Sellitems row at all
   hbar: { id: "hbar", abilities: [], moveType: "" }, // Barracks — sells nothing
 };
 const world = new SimWorld(grid, 1, { get: () => undefined }, undefined, { get: (id) => UNITS[id] });
@@ -177,13 +177,15 @@ console.log("\nevery shop at once");
 {
   const shop = (typeId) => unit({ typeId, building: { constructionLeft: 0, queue: [] } });
   const merchant = shop("ngme"), market = shop("nmrk"), barracks = shop("hbar");
-  const sells = world.isShop("ngme");
   hooks.addToAllStock("rat6", "item", 1, 1);
-  check("an item goes on the Marketplace's shelf, which no data row stocks", market.building.stock?.has("rat6") ?? false, true);
-  check("…on a shop that sells items by data", merchant.building.stock?.has("rat6") ?? false, sells);
+  hooks.addToAllStock("nmrr", "unit", 1, 1);
+  check("an item goes on the Marketplace's shelf (Asid)", market.building.stock?.has("rat6") ?? false, true);
+  check("…and a unit too (Asud)", market.building.stock?.has("nmrr") ?? false, true);
+  check("…not on a shop that sells off its own data row", merchant.building.stock?.has("rat6") ?? false, false);
   check("…and not into a Barracks", barracks.building.stock?.has("rat6") ?? false, false);
+  merchant.building.stock = new Map([["rat6", { count: 1, max: 1, regen: 0, timer: Infinity, period: Infinity, kind: "item" }]]);
   hooks.removeFromAllStock("rat6");
-  check("RemoveItemFromAllStock takes it off every shelf", [market.building.stock.has("rat6"), merchant.building.stock?.has("rat6") ?? false], [false, false]);
+  check("RemoveItemFromAllStock takes it off every shelf", [market.building.stock.has("rat6"), merchant.building.stock.has("rat6")], [false, false]);
 }
 
 console.log("\nSetPlayerTaxRate pays a share of gathered income to another player");

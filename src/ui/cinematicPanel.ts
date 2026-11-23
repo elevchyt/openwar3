@@ -50,6 +50,10 @@ const CINEMATIC_FDF = "UI\\FrameDef\\UI\\CinematicPanel.fdf";
 const word = (v: string): Arg => ({ s: v, n: null, str: false });
 const num = (v: number): Arg => ({ s: String(v), n: v, str: false });
 
+/** The world frame's band in the console's 0.8×0.6 UI units (bottom and top edge). */
+const WORLD_FRAME_BOTTOM = 0.13;
+const WORLD_FRAME_TOP = 0.58;
+
 /** common.j blendmode → the CSS blend the filter quad is composited with. WC3's fades all
  *  use BLEND (2, plain alpha); the additive/modulate modes exist for the campaign's coloured
  *  washes and map onto the nearest CSS equivalent. */
@@ -223,6 +227,13 @@ export class CinematicPanelOverlay {
       return;
     }
     this.filterEl.hidden = false;
+    // The filter is laid over the WORLD's viewport, and with the interface up that is not the
+    // screen: the classic client draws the world between the top bar and the console, 0.13 to
+    // 0.58 of the UI's 0.6 height, and a full-screen picture filter (a map's own frame picture,
+    // e.g. a 512×512 RGBA TGA) is stretched over exactly that band — measured off war3.exe 1.27
+    // under Wine. In cinematic mode (letterbox) the world is the whole screen again.
+    st.top = this.letterbox ? "0" : `${(100 * (0.6 - WORLD_FRAME_TOP)) / 0.6}%`;
+    st.bottom = this.letterbox ? "0" : `${(100 * WORLD_FRAME_BOTTOM) / 0.6}%`;
     if (tex) {
       const url = `url("${tex}")`;
       st.background = "";

@@ -1494,6 +1494,15 @@ export class MapViewerScene {
   /** Does the script watch a player-state threshold (EVENT_PLAYER_STATE_LIMIT)? Polled per tick
    *  like the unit-state one, and the event a tower defence's round loop hangs on. */
   private scriptWatchesPlayerState = false;
+  private scriptWatchesGameState = false;
+  /** Does the SCRIPT crow at dawn and howl at dusk? Blizzard.j's InitDNCSounds (run by every
+   *  map's InitBlizzard) registers `GAME_STATE_TIME_OF_DAY EQUAL` bj_TOD_DAWN / bj_TOD_DUSK and
+   *  plays RoosterSound / WolfSound off them, so wherever the script is PUMPED those two are its
+   *  to play — under its own `bj_useDawnDuskSounds` — and `updateClock` stays quiet, or every
+   *  dawn would crow twice. */
+  private scriptCrowsDawn = false;
+  /** The time of day at the last game-state pump (pumpGameStates compares the two). */
+  private lastScriptClock: number | null = null;
   /** Does the script watch SELECTION (EVENT_PLAYER_UNIT_SELECTED/…)? Raised by the RTS's own
    *  diff of the local selection rather than by the sim — see pumpSelectionEvents. */
   private scriptWatchesSelection = false;
@@ -2163,6 +2172,16 @@ export class MapViewerScene {
     return this.assetLayer.files;
   }
   private assetLayer: { epoch: number; files: DataSource } | null = null;
+  /** `assetFiles()` as a DataSource that asks it at every read, for the overlays made once per
+   *  scene before any map is mounted: a cinematic filter (`SetCineFilterTexture` on a
+   *  `war3mapImported\…` mask) and a multiboard icon may be the map's own art. */
+  private readonly liveAssets: DataSource = {
+    label: "map+install",
+    exists: (path) => this.assetFiles().exists(path),
+    read: (path) => this.assetFiles().read(path),
+    rawBytes: (path) => this.assetFiles().rawBytes(path),
+    list: () => this.assetFiles().list(),
+  };
 
   /** Construct the viewer and wait for its base SLK tables (required before loadMap). */
   static async create(canvas: HTMLCanvasElement, vfs: DataSource, sounds: SoundBoard | null = null): Promise<MapViewerScene> {
@@ -5992,6 +6011,8 @@ export class MapViewerScene {
     // wave clock is this event and nothing else: "Player(10)'s food used == 0" is how Azure
     // Tower Defense learns the round is over and starts the next one.
     this.scriptWatchesPlayerState = rt.triggerRegs.some((r) => r.kind === "playerState");
+    this.scriptWatchesGameState = rt.triggerRegs.some((r) => r.kind === "gameStateEvent");
+    this.scriptCrowsDawn = rt.globals.get("bj_dncSoundsDawn")?.k === "handle";
     this.scriptRegCount = rt.triggerRegs.length;
 
     // A creep whose DEATH the script watches drops its loot through the SCRIPT, not through
@@ -6092,6 +6113,12 @@ export class MapViewerScene {
       if (this.scriptWatchesUnitState) engine.interp.pumpUnitStates();
       // Player-resource thresholds (EVENT_PLAYER_STATE_LIMIT) — polled for the same reason.
       if (this.scriptWatchesPlayerState) engine.interp.pumpPlayerStates();
+      // …and the game-state ones (the time of day) — polled off the sim's clock.
+      if (this.scriptWatchesGameState && this.rts) {
+        const now = this.rts.simView.timeOfDay;
+        engine.interp.pumpGameStates(this.lastScriptClock ?? now, now);
+        this.lastScriptClock = now;
+      }
       // Enter/leave-region — only snapshot the world if some trigger watches a region.
       // `unitInRange` is one of those regions: a circle that walks about with a unit
       // (pumpRegions), so leaving it out of this gate switches the whole event off.
@@ -6257,10 +6284,10 @@ export class MapViewerScene {
     this.scriptFrames = new ScriptFrameOverlay(ui, () => this.assetFiles(), skin, (frame, event) => {
       if (!this.replayPlayback) this.mapScript?.interp.fireFrameEvent(frame, event, this.localPlayer);
     });
-    this.multiboard = new MultiboardOverlay(ui, this.vfs, skin);
+    this.multiboard = new MultiboardOverlay(ui, this.liveAssets, skin);
     this.timerDialogs = new TimerDialogOverlay(ui, this.vfs, skin);
     this.suspendDialog = new SuspendDialogOverlay(ui, this.vfs, skin);
-    this.cinematic = new CinematicPanelOverlay(ui, this.vfs, skin);
+    this.cinematic = new CinematicPanelOverlay(ui, this.liveAssets, skin);
     this.dialog = new GameDialogOverlay(ui, this.vfs, skin, {
       // WC3 closes a dialog on ANY button click, and a QUIT button additionally ends the
       // game — both are the engine's doing, which is why blizzard.j's MeleeVictoryDialogBJ
@@ -13117,7 +13144,11 @@ export class MapViewerScene {
     // to midnight and back, and neither is a dusk or a dawn: no wolf going into the night it
     // makes and no rooster when the sun it hid comes back — so a frame on which the eclipse
     // began or ended is never a crossing.
-    if (this.wasDay !== null && this.wasDay !== tod.isDay && tod.eclipse === this.wasEclipse) {
+    //
+    // And not where the SCRIPT crows (`scriptCrowsDawn`): there it is Blizzard.j's to play. A
+    // LAN client runs the script's init but never pumps it, so its rooster is still this one.
+    const scriptCrows = this.scriptCrowsDawn && !!this.mapScript && !this.rts?.frozenClient;
+    if (!scriptCrows && this.wasDay !== null && this.wasDay !== tod.isDay && tod.eclipse === this.wasEclipse) {
       this.sounds?.playAmbience(tod.isDay ? DAWN_SOUND : DUSK_SOUND);
     }
     this.wasDay = tod.isDay;
@@ -17636,6 +17667,7 @@ export class MapViewerScene {
       // …and scaled by the Game Speed, so a clip plays at the rate the sim under it walks.
       const wdt = this.paused ? 0 : dt * this.speedRate;
       this.updateCamera(dt);
+      this.rts?.reprojectBars(); // the bars follow THIS camera, not the one the step saw
       this.metrics.frame(dt, this.rts?.unitCount() ?? 0, this.rts?.pingMs());
       this.hud?.frame(dt);
       this.updateClock(wdt);
