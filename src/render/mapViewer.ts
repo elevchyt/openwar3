@@ -8325,7 +8325,7 @@ export class MapViewerScene {
   private buffFxAnim = new Map<string, string>();
   /** Models playing out their Death clip before leaving the scene — buff art whose buff
    *  ended (dropBuffFx) and script effects a trigger destroyed (destroySpecialFx). */
-  private dyingFx: Array<{ inst: SpawnInstance; ttl: number }> = [];
+  private dyingFx: Array<{ inst: SpawnInstance; ttl: number; tail?: boolean }> = [];
   private abilityByCode: Map<string, AbilityDef> | null = null;
   /** First ability def with the given base code (aura visuals only need its art). */
   private abilityDefByCode(code: string): AbilityDef | undefined {
@@ -8766,7 +8766,9 @@ export class MapViewerScene {
     for (let i = this.dyingFx.length - 1; i >= 0; i--) {
       const d = this.dyingFx[i];
       d.ttl -= dt;
-      if (!d.inst.sequenceEnded && d.ttl > 0) continue;
+      // A `tail` entry is a clip played out with its PARTICLES still to finish (playOutFx):
+      // the clip ending is not the model ending, so only its deadline takes it down.
+      if ((d.tail || !d.inst.sequenceEnded) && d.ttl > 0) continue;
       d.inst.setParent?.(null);
       d.inst.detach();
       this.dyingFx.splice(i, 1);
@@ -9331,8 +9333,13 @@ export class MapViewerScene {
       this.effectModels.set(path, model);
     }
     const map = this.viewer.map;
-    // Destroyed (or the map torn down) while we were loading — never put it on screen.
-    if (!model || !map || fx.doomed || this.specialFx.get(id) !== fx) {
+    // The map torn down (or the effect replaced) while we were loading — never put it on
+    // screen. An effect the SCRIPT destroyed while it loaded is not dropped, though: in the
+    // game the model exists the instant AddSpecialEffect returns, so the commonest effect
+    // idiom there is — `DestroyEffect(AddSpecialEffect…)` on consecutive lines — still
+    // plays (see endSpecialFx). Only its host leaving the game takes it away first.
+    const hostGone = fx.hostId >= 0 && !this.rts?.simView.units.has(fx.hostId);
+    if (!model || !map || (fx.doomed ? hostGone : this.specialFx.get(id) !== fx)) {
       this.specialFx.delete(id);
       return;
     }
@@ -9367,6 +9374,8 @@ export class MapViewerScene {
     // The model may have taken long enough to arrive that the effect is already over, or
     // it may be standing in fog: never show() blind — let the age/fog pass below decide.
     this.updateSpecialFxOne(fx);
+    // Destroyed before it got here: it is born and dies at once, as it would have in the game.
+    if (fx.doomed) this.endSpecialFx(fx);
   }
 
   /** Put an effect where it belongs this frame: parented to its host's attachment node if
@@ -9646,23 +9655,57 @@ export class MapViewerScene {
     return vision.revealed || vision.bestStateAt(x, y, this.treeFogRadius.get(fogKey(x, y)) ?? 0) === FogState.Visible;
   }
 
-  /** DestroyEffect — the model dies where it stands (fadeOutFx plays its Death clip). */
+  /** DestroyEffect — the model dies where it stands (endSpecialFx). */
   private destroySpecialFx(id: number): void {
     const fx = this.specialFx.get(id);
     if (!fx) return;
     this.specialFx.delete(id);
-    fx.doomed = true; // if it's still loading, loadSpecialFx drops it on arrival
-    if (!fx.inst) return;
+    fx.doomed = true; // if it's still loading, loadSpecialFx ends it on arrival
+    this.endSpecialFx(fx);
+  }
+
+  /** The way a destroyed effect leaves, in jassdoc's words on DestroyEffect: "If the model has
+   *  a death animation, plays it …, otherwise finishes current animation."
+   *
+   *  The second half is the one that matters most, because it is the commonest effect idiom in
+   *  the game: create the effect and destroy it on the very next line, which plays a one-shot
+   *  model exactly once. Almost every such model has NO Death clip — the tome glow
+   *  `AIemTarget.mdx` is one `Birth [833, 1733]`, War Stomp's and Revive's are one Stand — so
+   *  taking those down at once made every one of them invisible: Bleach vs One Piece's recipe
+   *  glow (that very tome model, on the hero the moment the item combines) among ~200 calls in
+   *  that one map. "Finishes" is the pass it is in, not another loop of a Stand. */
+  private endSpecialFx(fx: SpecialFx): void {
+    const inst = fx.inst;
+    if (!inst) return; // still loading — loadSpecialFx calls back here on arrival
     // Nobody is watching one that is fogged or already spent, and a hidden instance is not
-    // animated by the scene — so its Death clip would only sit out its deadline unseen.
-    if (fx.hidden) fx.inst.detach();
-    else {
-      // The Death clip plays at the effect's speed — but a held (0) or backwards one would leave
-      // it frozen, or walking out of its clip, until fadeOutFx's deadline popped it. Those die at
-      // normal speed. OURS: no source says what the engine does there.
-      if (fx.timeScale <= 0) fx.inst.timeScale = 1;
-      this.fadeOutFx(fx.inst);
+    // animated by the scene — so its last clip would only sit out its deadline unseen.
+    if (fx.hidden) {
+      inst.detach();
+      return;
     }
+    // The last clip plays at the effect's speed — but a held (0) or backwards one would leave
+    // it frozen, or walking out of its clip, until its deadline popped it. Those die at normal
+    // speed. OURS: no source says what the engine does there.
+    if (fx.timeScale <= 0) inst.timeScale = 1;
+    if (this.sizedSeq(inst, "death") >= 0) this.fadeOutFx(inst);
+    else this.playOutFx(inst);
+  }
+
+  /** "Otherwise finishes current animation": the clip the instance is on runs to its last
+   *  frame and stops there (loop mode 1 — it holds the frame with particle spawning OFF, so a
+   *  Stand authored to loop does not start over), and the model stays up for as long as the
+   *  particles it already threw outlive it (`particleTail`, the same end a fire-and-forget
+   *  spawnEffect gets), then updateDyingFx reaps it. */
+  private playOutFx(inst: SpawnInstance): void {
+    const iv = inst.model.sequences[inst.sequence]?.interval;
+    if (!iv || !(iv[1] > iv[0]) || iv[0] < 0 || iv[0] > 1e7) {
+      inst.setParent?.(null);
+      inst.detach();
+      return;
+    }
+    inst.setSequenceLoopMode(1);
+    const left = Math.max(0, iv[1] - inst.frame) / 1000 / Math.max(inst.timeScale, 1e-3);
+    this.dyingFx.push({ inst, ttl: left + particleTail(inst), tail: true });
   }
 
   // --- Blood Mage orbiting spheres (issue #37) ------------------------------
