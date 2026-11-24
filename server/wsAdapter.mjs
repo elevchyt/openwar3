@@ -55,9 +55,18 @@ export function attachRelay(wss, core, { heartbeatMs = 15_000 } = {}) {
       } catch {
         // A parse failure is a WIRE fault, so it is answered here rather than in the core —
         // the core only ever sees messages that already parsed.
+        core.log?.("relay.malformed", { conn: conn.connId, bytes: raw.length ?? null }, "warn");
         return conn.send({ t: "error", message: "Malformed message." });
       }
-      core.handle(conn, msg);
+      // A throw out of the core would take the whole process — every room on the server — with it
+      // (the held-slot `send` on null once did exactly that). Logged with its stack and the
+      // message kind instead, and the connection told; the next message is handled as usual.
+      try {
+        core.handle(conn, msg);
+      } catch (err) {
+        core.log?.("relay.handler-error", { conn: conn.connId, t: String(msg?.t).slice(0, 32), error: String(err), stack: err?.stack ?? null }, "error");
+        conn.send({ t: "error", message: "The server could not handle that." });
+      }
     });
 
     ws.on("close", () => core.disconnect(conn));

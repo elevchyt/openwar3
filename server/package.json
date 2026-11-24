@@ -10,6 +10,7 @@
     "start": "node relay.mjs"
   },
   "dependencies": {
+    "aws4fetch": "^1.0.20",
     "ws": "^8.21.1"
   }
 }

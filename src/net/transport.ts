@@ -45,6 +45,8 @@ export class WebSocketTransport implements Transport {
   private ws: WebSocket | null = null;
   onMessage: (msg: ServerMessage) => void = () => {};
   onClose: (reason: string) => void = () => {};
+  /** The relay takes `report` (its `hello` said so) — see `Transport.reports`. */
+  reports = false;
 
   get connected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN;
@@ -83,6 +85,7 @@ export class WebSocketTransport implements Transport {
           // First message must be the handshake.
           if (msg.t !== "hello") return;
           settled = true;
+          this.reports = msg.reports === true;
           if (msg.protocol === PROTOCOL_VERSION) {
             // Forwarded as well as consumed: the handshake carries what the relay knows about
             // this machine's reachability (`HostInfo`), and that belongs to the screen, not to

@@ -417,6 +417,52 @@ left, and the box says "Match started before the download could finish." The sea
 "downloading" only when the joiner's LOBBY SCREEN says so (`mapgot`, sent at mount), not when the
 last piece is sent, so a start in between never seats a player with no lobby to start from.
 
+**A request can be lost, and a host can be too old to answer.** Every piece asked for and not
+answered is asked for AGAIN (`fetchMap`: the first piece every 3 s up to five times, the rest
+every 6 s up to four), so one lost relay message no longer stops the download. A failure is a
+`MapFetchError` of a KIND, and the box words each one (`failureLine`): `no-answer` (the host
+never answered piece 0 — with no `RoomInfo.version` from the host, which only 0.4.15+ clients
+send, that is most often an OpenWar3 older than map downloads, v0.3.63, which ignores `mapget`
+without a word: the case found 2026-11-24, a joiner sitting at 0%), `stalled` (with how much
+arrived), `refused` (the host's own reason) and `damaged` (the game's NETERROR_MAPFILEINCOMPLETE).
+A map that arrives whole but will not parse is said in the box too (`readable`), where it used to
+drop the player back on the list without a word. Every outcome is REPORTED (next section).
+
+### The event log
+
+Everything that happens in online play is written down on the OpenWar3 servers and KEPT
+(`server/eventLog.mjs`): one JSON line per event to stdout — Railway's log explorer reads
+`message`/`level` and makes every other key an attribute, so `@event:room.create`,
+`@level:error` or `@mapPath:"Maps\\Download\\X.w3x"` filters work there (7 days on Hobby, 30
+on Pro) — and the same lines, gzip'd NDJSON, into the project's private **`logs` bucket**
+(`relay/<eu|us|asia>/<YYYY-MM-DD>/<HH-MM-SS>_<random>.ndjson.gz`, an object a minute or per
+512 KiB, and on SIGTERM), which has no expiry. Read a day with the bucket's S3 credentials and
+`zcat *.gz | jq`. Only the deployed relay logs (`relay.mjs` passes `log`): the dev plugin, the
+desktop app's own relay and the tests run silent.
+
+What the RELAY writes itself (server/rooms.mjs): `relay.start`/`stop`/`crash` (the uncaught
+exception with its stack, flushed before the process goes) and `relay.stats` every ten minutes;
+`conn.open`/`close`; `room.create` (name, map, edition, speed, the host's version) and
+`room.closed` (why — host left/dropped, empty, hold expired — its age and peak); `peer.join`,
+`peer.leave`, `peer.drop`, `peer.rejoin`, `peer.hold-expired`, `peer.abandon`,
+`peer.dropped-by-host`, `join.refused` (gone/full/dropped); and a malformed or unknown message or
+a handler that threw (`relay.handler-error` — caught now, where the held-slot `send` on null once
+took the whole process down).
+
+What a CLIENT tells it (`LanLobby.report` → `{t:"report"}` → `client.<event>`): `client` first
+on every connection (its version, the ANONYMOUS install id the replay collection files by, desktop
+or web — never a name it did not type or an address), then `map-download-start`/`done`/`failed`
+(kind, detail, how far)/`cancelled` (by the player, the match starting, the room closing),
+`map-send-start`/`done`/`refused`/`abandoned` on the host, `match-start`/`match-end`,
+`connection-lost`/`reconnected`/`reconnect-failed`, and every uncaught `error` or unhandled
+rejection while a LAN session or networked match is up (`net/onlineReports.ts`: each distinct
+message once with its stack, then counted at 10, 100, 1000…). A report goes to the server we play
+on if it logs, else a watched official one — so a game on a friend's machine is still logged —
+and waits in a short queue while neither is reachable. It is sent only to a relay whose `hello`
+said `reports: true`: an older one answers "Unknown message", which a lobby paints as an error.
+The relay prefixes a client's fields `c_`, keeps only flat values, clips strings to 4000
+characters and takes 60 reports a connection a minute.
+
 ### A player who drops
 
 Two ways out of a match, and they are told apart on purpose. A player who CHOSE to go — Quit,

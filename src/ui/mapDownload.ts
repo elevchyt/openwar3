@@ -1,5 +1,5 @@
 import { showPatchDialog } from "./patchDialog";
-import { fetchMap } from "../net/mapTransfer";
+import { fetchMap, MapFetchError, MAP_CHUNK as MAP_PIECE } from "../net/mapTransfer";
 import { keepDownloadedMap } from "../assets/downloadedMaps";
 import type { LanLobby } from "../net/lobby";
 import type { DataSource } from "../vfs/types";
@@ -16,6 +16,12 @@ import type { DataSource } from "../vfs/types";
 // line the player must not be left guessing at.
 //
 // Cancel or Escape while it runs leaves the room too, and nothing half-downloaded is kept.
+//
+// A failure says WHICH failure (`failureLine`): a host that never answered is most often one
+// whose OpenWar3 predates map downloads, and "There was an error downloading the map file." told
+// the player nothing they could act on. Every outcome is also reported to the OpenWar3 server's
+// event log (LanLobby.report) with the reason in full, since the console it used to go to is on
+// the player's machine.
 
 /** The box's words. The title and the failure are the game's own (`GlobalStrings.fdf`
  *  DOWNLOADING_MAP, `NetworkStrings.fdf` NETERROR_MAPFILEINCOMPLETE), asked of the screen's
@@ -27,7 +33,29 @@ const TEXT = {
   started: "Match started before the download could finish.",
   titleFailed: "Download Failed",
   closed: "The game is no longer available.",
+  noAnswerOld: "The host did not answer. Their OpenWar3 may be too old to send maps — ask them to update, then join again.",
+  noAnswer: "The host did not answer the request for the map. Their game may have frozen or lost its connection.",
+  refused: "The host could not send the map:",
+  unreadable: "The map arrived, but it is not a map this game can read.",
 };
+
+/** The line a failed download leaves in the box — one per way it can fail. */
+function failureLine(err: unknown, hostVersion: string | undefined, string: (key: string) => string | null): string {
+  if (err instanceof MapFetchError) {
+    const mb = (n: number): string => (n / (1024 * 1024)).toFixed(1);
+    switch (err.kind) {
+      // A host that SAID its version is new enough to send maps, so its silence is something else.
+      case "no-answer": return hostVersion ? TEXT.noAnswer : TEXT.noAnswerOld;
+      case "refused": return `${TEXT.refused} ${err.message}`;
+      case "stalled": {
+        const got = Math.min(err.size, err.received * MAP_PIECE);
+        return `The host stopped sending the map (${mb(got)} of ${mb(err.size)} MB arrived).`;
+      }
+      case "damaged": return string("NETERROR_MAPFILEINCOMPLETE") ?? TEXT.failed;
+    }
+  }
+  return err instanceof Error && err.message ? err.message : string("NETERROR_MAPFILEINCOMPLETE") ?? TEXT.failed;
+}
 
 export interface MapDownloadOptions {
   container: HTMLElement;
@@ -37,6 +65,11 @@ export interface MapDownloadOptions {
   mapPath: string;
   mapName: string;
   hostName: string;
+  /** The host's OpenWar3 version, if its room said (RoomInfo.version) — words a host's silence. */
+  hostVersion?: string;
+  /** Can this game read what arrived? Asked before the box closes, so a map that downloaded but
+   *  will not open says so here rather than dropping the player back on the list without a word. */
+  readable?: (key: string, file: File) => Promise<boolean>;
   /** A string out of the screen's FDF tables, or null. */
   string: (key: string) => string | null;
 }
@@ -49,6 +82,10 @@ export interface MapDownloadOptions {
 export async function showMapDownload(opts: MapDownloadOptions): Promise<{ key: string; file: File } | null> {
   const { lobby } = opts;
   const abort = new AbortController();
+  const began = Date.now();
+  /** How far it got, for the reports. */
+  let got = { fraction: 0, bytes: 0 };
+  lobby.report("map-download-start", { hostVersion: opts.hostVersion ?? null });
   /** Still fetching: the button is Cancel and the room is ours to leave. */
   let running = true;
   let settle: (got: { key: string; file: File } | null) => void = () => {};
@@ -70,6 +107,7 @@ export async function showMapDownload(opts: MapDownloadOptions): Promise<{ key: 
     onClose: () => {
       if (running) {
         running = false;
+        lobby.report("map-download-cancelled", { by: "player", fraction: got.fraction, bytes: got.bytes, ms: Date.now() - began });
         abort.abort();
         lobby.leave();
       }
@@ -79,19 +117,20 @@ export async function showMapDownload(opts: MapDownloadOptions): Promise<{ key: 
   });
 
   /** It is over and it did not work: leave the room, and say so in the box until OK. */
-  const stop = (title: string, why: string): void => {
+  const stop = (title: string, why: string, report: { event: string; detail: Record<string, string | number | boolean | null> }): void => {
     if (!running) return;
     running = false;
+    lobby.report(report.event, { ...report.detail, fraction: got.fraction, bytes: got.bytes, ms: Date.now() - began }, "warn");
     abort.abort();
     if (lobby.snapshot.phase === "joined") lobby.leave();
     dialog.finish(title, why, false);
   };
 
   // The host said go — and left us out, since a seat still downloading is not in the match.
-  lobby.onStart = () => stop(TEXT.titleStarted, `|cffff8080${TEXT.started}|r`);
+  lobby.onStart = () => stop(TEXT.titleStarted, `|cffff8080${TEXT.started}|r`, { event: "map-download-cancelled", detail: { by: "match-started" } });
   // The room went away under us: the host left, or the relay dropped it.
   lobby.onChange = (st) => {
-    if (st.phase !== "joined") stop(TEXT.titleFailed, st.error ?? TEXT.closed);
+    if (st.phase !== "joined") stop(TEXT.titleFailed, st.error ?? TEXT.closed, { event: "map-download-cancelled", detail: { by: "room-closed", why: st.error ?? null } });
   };
 
   try {
@@ -102,10 +141,18 @@ export async function showMapDownload(opts: MapDownloadOptions): Promise<{ key: 
         dialog.setInfo(line(opts.mapName, opts.hostName, total));
       }
       dialog.setProgress(fraction);
+      got = { fraction, bytes: Math.round(fraction * total) };
     }, abort.signal);
     if (!running) return closed;
     const kept = await keepDownloadedMap(opts.mapPath, bytes);
     if (!running) return closed;
+    if (opts.readable && !(await opts.readable(kept.key, kept.file).catch(() => false))) {
+      if (!running) return closed;
+      stop(TEXT.titleFailed, TEXT.unreadable, { event: "map-download-failed", detail: { kind: "unreadable", size: bytes.length } });
+      return closed;
+    }
+    if (!running) return closed;
+    lobby.report("map-download-done", { size: bytes.length, ms: Date.now() - began, saved: kept.saveError === null, saveError: kept.saveError });
     // Kept in memory for this session either way; a write that failed only means the next game
     // on this map downloads it again.
     if (kept.saveError) console.warn(`[OpenWar3] the downloaded map was not saved: ${kept.saveError}`);
@@ -125,7 +172,18 @@ export async function showMapDownload(opts: MapDownloadOptions): Promise<{ key: 
     if (running) {
       // The box says it in the game's own one line; the why is for the console.
       console.warn("[OpenWar3] map download failed:", err);
-      stop(TEXT.titleFailed, opts.string("NETERROR_MAPFILEINCOMPLETE") ?? TEXT.failed);
+      const f = err instanceof MapFetchError ? err : null;
+      stop(TEXT.titleFailed, failureLine(err, opts.hostVersion, opts.string), {
+        event: "map-download-failed",
+        detail: {
+          kind: f?.kind ?? "error",
+          detail: err instanceof Error ? err.message : String(err),
+          received: f?.received ?? null,
+          total: f?.total ?? null,
+          size: f?.size ?? null,
+          hostVersion: opts.hostVersion ?? null,
+        },
+      });
     }
   }
   return closed;

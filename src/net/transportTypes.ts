@@ -12,4 +12,6 @@ export interface Transport {
   readonly connected: boolean;
   onMessage: (msg: ServerMessage) => void;
   onClose: (reason: string) => void;
+  /** The relay's `hello` said it keeps an event log and takes `report` (server/rooms.mjs). */
+  readonly reports?: boolean;
 }

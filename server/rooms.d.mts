@@ -11,7 +11,7 @@ export interface RelayConn {
 }
 
 export class RelayCore {
-  constructor(opts?: { describeHost?: (() => unknown) | null; holdMs?: number });
+  constructor(opts?: { describeHost?: (() => unknown) | null; holdMs?: number; log?: ((event: string, fields?: Record<string, unknown>, level?: "info" | "warn" | "error") => void) | null });
   readonly rooms: Map<unknown, unknown>;
   readonly conns: Set<RelayConn>;
   listing(): unknown[];

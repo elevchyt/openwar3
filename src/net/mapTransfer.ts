@@ -49,8 +49,49 @@ export const MAP_CHUNK = 48 * 1024;
  *  internet, and it leaves the wire to the lobby between them. */
 const WINDOW = 8;
 
-/** How long a piece may take before the host is taken to have stopped sending. */
-const STALL_MS = 20_000;
+/**
+ * How long a piece may go unanswered before it is ASKED FOR AGAIN, and how many times. A request
+ * is a relay message like any other and can be lost with the socket it went out on (a relay
+ * restart, a host whose tab was frozen for a moment); without a resend ONE lost piece stopped the
+ * whole download dead until the stall ran out (issue: a joiner sat at 0% and was then told only
+ * "There was an error downloading the map file."). Ours.
+ *
+ * The FIRST piece is asked for sooner and given up on sooner: until it is answered the joiner
+ * does not know the host is listening at all, and the common reason it never is — a host whose
+ * OpenWar3 predates map downloads ignores the request — will not change by waiting. 5 × 3 s.
+ */
+const FIRST_RETRY_MS = 3_000;
+const FIRST_TRIES = 5;
+/** …and every later piece: 4 × 6 s, ~24 s of a host that has stopped answering. */
+const RETRY_MS = 6_000;
+const TRIES = 4;
+/** How often the resend clock is looked at. */
+const TICK_MS = 500;
+
+/** Why a download ended without the map. The dialog words each one differently (ui/mapDownload.ts). */
+export type MapFetchFailure =
+  /** The host answered with a refusal (its own words are the message). */
+  | "refused"
+  /** The host never answered the first piece. */
+  | "no-answer"
+  /** The host answered, then stopped. */
+  | "stalled"
+  /** What arrived does not add up to the map the host described. */
+  | "damaged";
+
+export class MapFetchError extends Error {
+  constructor(
+    readonly kind: MapFetchFailure,
+    message: string,
+    /** How far it got: pieces in, pieces in the whole map (0 before the first answer), bytes. */
+    readonly received: number,
+    readonly total: number,
+    readonly size: number,
+  ) {
+    super(message);
+    this.name = "MapFetchError";
+  }
+}
 
 /** The largest map a host will hand out — what the 1.30+ editor allows a map to be (128 MB),
  *  so nothing a real map can be is refused, and nothing larger is pushed through a relay. */
@@ -121,8 +162,13 @@ export interface MapWire {
 }
 
 /**
- * Pull the host's map, piece by piece. Resolves with the whole file; rejects on a refusal, a host
- * that stops answering, or `signal` — the player's Cancel, or the match starting without them.
+ * Pull the host's map, piece by piece. Resolves with the whole file; rejects with a
+ * `MapFetchError` (a refusal, a host that never answers or stops answering, a map that does not
+ * add up) or an AbortError on `signal` — the player's Cancel, or the match starting without them.
+ *
+ * Every piece asked for and not yet answered is asked for AGAIN after `RETRY_MS` (the first after
+ * `FIRST_RETRY_MS`), up to `TRIES` times; a second answer to a piece that was asked twice is
+ * simply not wanted any more (`pending`).
  */
 export function fetchMap(
   wire: MapWire,
@@ -130,43 +176,65 @@ export function fetchMap(
   /** How much is in, and the whole map's size in bytes. */
   onProgress: (fraction: number, size: number) => void,
   signal: AbortSignal,
+  /** The resend clock, for tests (tools/map-transfer-test.cjs) — a game always takes the defaults. */
+  timing: { firstRetryMs?: number; firstTries?: number; retryMs?: number; tries?: number; tickMs?: number } = {},
 ): Promise<Uint8Array> {
+  const { firstRetryMs = FIRST_RETRY_MS, firstTries = FIRST_TRIES, retryMs = RETRY_MS, tries: maxTries = TRIES, tickMs = TICK_MS } = timing;
   return new Promise((resolve, reject) => {
     let out: Uint8Array | null = null;
     let total = 0;
     let next = 0;
     let received = 0;
-    const pending = new Set<number>();
-    let stall: ReturnType<typeof setTimeout> | null = null;
+    /** Piece → when it was last asked for, and how many times. */
+    const pending = new Map<number, { at: number; tries: number }>();
+    let done = false;
+    let clock: ReturnType<typeof setInterval> | null = null;
 
+    const fail = (kind: MapFetchFailure, message: string): void =>
+      finish(new MapFetchError(kind, message, received, total, out?.length ?? 0));
     const finish = (err: Error | null): void => {
+      if (done) return;
+      done = true;
       wire.listen(null);
-      if (stall !== null) clearTimeout(stall);
+      if (clock !== null) clearInterval(clock);
       signal.removeEventListener("abort", onAbort);
       if (err) reject(err);
       else resolve(out!);
     };
     const onAbort = (): void => finish(new DOMException("Download cancelled.", "AbortError"));
-    const armStall = (): void => {
-      if (stall !== null) clearTimeout(stall);
-      stall = setTimeout(() => finish(new Error("The host stopped sending the map.")), STALL_MS);
-    };
-    const request = (chunk: number): void => {
-      pending.add(chunk);
+    const request = (chunk: number, tries = 1): void => {
+      pending.set(chunk, { at: Date.now(), tries });
       wire.ask({ k: "mapget", path, chunk });
     };
     /** Keep `WINDOW` pieces asked for, once the first answer has said how many there are. */
     const fill = (): void => {
       while (pending.size < WINDOW && next < total) request(next++);
     };
+    /** Ask again for what has gone unanswered too long; give up on what has been asked enough. */
+    const resend = (): void => {
+      const now = Date.now();
+      const first = out === null;
+      const wait = first ? firstRetryMs : retryMs;
+      const tries = first ? firstTries : maxTries;
+      for (const [chunk, ask] of pending) {
+        if (now - ask.at < wait) continue;
+        if (ask.tries >= tries) {
+          return first
+            ? fail("no-answer", "The host never answered the request for the map.")
+            : fail("stalled", `The host stopped sending the map after ${received} of ${total} pieces.`);
+        }
+        request(chunk, ask.tries + 1);
+      }
+    };
 
     if (signal.aborted) return onAbort();
     signal.addEventListener("abort", onAbort);
+    clock = setInterval(resend, tickMs);
     wire.listen((part) => {
-      if (part.path !== path || !pending.has(part.chunk)) return; // a stale answer, or not ours
-      if (part.error || part.data === undefined) return finish(new Error(part.error ?? "The host refused to send the map."));
+      if (done || part.path !== path || !pending.has(part.chunk)) return; // a stale or repeated answer, or not ours
+      if (part.error || part.data === undefined) return fail("refused", part.error ?? "The host refused to send the map.");
       if (!out) {
-        if (!(part.size > 0 && part.size <= MAX_MAP_BYTES)) return finish(new Error("The host's map is not a size a map can be."));
+        if (!(part.size > 0 && part.size <= MAX_MAP_BYTES)) return fail("damaged", `The host's map is not a size a map can be (${part.size} bytes).`);
         out = new Uint8Array(part.size);
         total = chunkCount(part.size);
         next = Math.max(next, 1);
@@ -174,17 +242,15 @@ export function fetchMap(
       const bytes = fromBase64(part.data);
       const at = part.chunk * MAP_CHUNK;
       if (part.size !== out.length || bytes.length !== Math.min(MAP_CHUNK, out.length - at)) {
-        return finish(new Error("The map arrived damaged."));
+        return fail("damaged", `Piece ${part.chunk} arrived the wrong size.`);
       }
       out.set(bytes, at);
       pending.delete(part.chunk);
       received += 1;
       onProgress(received / total, out.length);
       if (received === total) return finish(null);
-      armStall();
       fill();
     });
-    armStall();
     // The first piece alone: its answer carries the size, and with it how many more to ask for.
     request(next++);
   });

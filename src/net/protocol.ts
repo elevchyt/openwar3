@@ -50,13 +50,17 @@ export interface RoomInfo {
    *  an older relay or host, and read as Fast then. The MATCH takes its speed from `start`'s
    *  `advanced`, never from this. */
   speed?: number;
+  /** The host's OpenWar3 version, as its client said in `create` (0.4.15+). Absent from an older
+   *  host or relay. Read only to word a map download that got no answer (ui/mapDownload.ts): a
+   *  host that never said may predate map downloads altogether. */
+  version?: string;
 }
 
 // --- client → relay ---------------------------------------------------------------
 
 export type ClientMessage =
   /** Announce a game. The sender becomes the room's host, hence its authority. */
-  | { t: "create"; name: string; playerName: string; mapName: string; mapPath: string; maxPlayers: number; observers?: boolean; edition?: "roc" | "tft"; speed?: number }
+  | { t: "create"; name: string; playerName: string; mapName: string; mapPath: string; maxPlayers: number; observers?: boolean; edition?: "roc" | "tft"; speed?: number; version?: string }
   /** Ask for the game list. The relay also pushes `rooms` unprompted when it changes. */
   | { t: "list" }
   /** Join a room. `token` is a REJOIN token from an earlier `created`/`joined` in this room —
@@ -72,13 +76,18 @@ export type ClientMessage =
   /** …and the player's No to reconnecting: give that held seat up now (a leave, to the room). */
   | { t: "abandon"; roomId: string; token: string }
   /** Opaque game traffic. `to` omitted = everyone else in the room. */
-  | { t: "relay"; to?: number; data: unknown };
+  | { t: "relay"; to?: number; data: unknown }
+  /** Something this client SAW, for the relay's event log (server/rooms.mjs `report`,
+   *  server/eventLog.mjs): a map download that failed, an error thrown in a match, a match
+   *  started or ended. Sent only to a relay whose `hello` said `reports` (an older one answers
+   *  "Unknown message"); never answered. `data` is flat — strings, numbers, booleans. */
+  | { t: "report"; event: string; level?: "info" | "warn" | "error"; data?: Record<string, string | number | boolean | null> };
 
 // --- relay → client ---------------------------------------------------------------
 
 export type ServerMessage =
   /** Handshake: sent once on connect, before anything else. */
-  | { t: "hello"; protocol: number; host?: HostInfo }
+  | { t: "hello"; protocol: number; host?: HostInfo; reports?: boolean }
   /** `token` is this peer's OWN rejoin token — secret, sent only to it, never in a peer list.
    *  Stash it; presenting it on a later `join` reclaims this exact slot (item 11). */
   | { t: "created"; room: RoomInfo; you: PeerInfo; token: string }

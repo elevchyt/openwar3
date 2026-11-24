@@ -205,7 +205,7 @@ export async function mountLanScreen(
   /** We are in a room whose map this install lacks: fetch it from the host, then go on to the
    *  lobby with it. Cancelled, failed or overtaken by the match, the room has been left and this
    *  screen takes the lobby back. */
-  async function download(room: { mapPath: string; mapName: string; hostName: string }): Promise<void> {
+  async function download(room: { mapPath: string; mapName: string; hostName: string; version?: string }): Promise<void> {
     const got = await showMapDownload({
       container,
       vfs,
@@ -213,6 +213,10 @@ export async function mountLanScreen(
       mapPath: room.mapPath,
       mapName: room.mapName || baseName(room.mapPath),
       hostName: room.hostName,
+      hostVersion: room.version,
+      // Tried on a copy of the list with the map in it, so a map that will not open is said in
+      // the box — and never joins the list.
+      readable: async (key, file) => (await readMapInfo(new Map([...maps, [key, file]]), key).catch(() => null)) !== null,
       // The table answers a key it does not hold with the key itself — NetworkStrings.fdf is not
       // mounted on this screen — and that is "no string", not a line to print.
       string: (key) => {

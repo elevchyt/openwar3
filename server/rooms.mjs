@@ -45,6 +45,10 @@ const roomInfo = (r) => ({
   edition: r.edition,
   // The host's Game Speed rung (src/data/gameSpeed.ts), for the join screen's "Game Speed:" row.
   speed: r.speed,
+  // The host's OpenWar3 version, when its client said (0.4.15+). A joiner that gets no answer to
+  // a map request words its error off this (src/ui/mapDownload.ts): a host that never said is
+  // older than the field, and may be older than map downloads too.
+  ...(r.version ? { version: r.version } : {}),
 });
 
 const peerInfo = (p) => ({ id: p.id, name: p.name, host: p.host });
@@ -75,6 +79,34 @@ const HOLD_MS = 120_000;
  *  src/net/protocol.ts — the client tells it apart from every other refusal by this text. */
 const DROPPED = "You were dropped from the game.";
 
+/** A client `report` (src/net/lobby.ts `report`): what is kept of it. Every report is written to
+ *  the log as it came, so these bound what one client can put there. */
+const REPORT_MAX_KEYS = 32;
+const REPORT_MAX_STRING = 4000;
+/** Reports per connection per minute. A client in a crash loop reports the same error forever;
+ *  the client de-duplicates (src/net/lobby.ts) and this is the backstop. */
+const REPORTS_PER_MINUTE = 60;
+
+/** A report's `data`, flattened to what a log line can hold: primitives only, strings clipped,
+ *  keys clipped, at most REPORT_MAX_KEYS of them. Anything else is dropped rather than trusted. */
+function cleanReport(data) {
+  const out = {};
+  if (!data || typeof data !== "object") return out;
+  let n = 0;
+  for (const [k, v] of Object.entries(data)) {
+    if (n >= REPORT_MAX_KEYS) break;
+    const key = String(k).replace(/[^\w.-]/g, "_").slice(0, 40);
+    // Prefixed: a client's field can never overwrite one the relay itself writes (level, room…).
+    if (typeof v === "string") out[`c_${key}`] = v.slice(0, REPORT_MAX_STRING);
+    else if (typeof v === "number" && Number.isFinite(v)) out[`c_${key}`] = v;
+    else if (typeof v === "boolean" || v === null) out[`c_${key}`] = v;
+    else continue;
+    n++;
+  }
+  return out;
+}
+
+const word = (v, max = 64) => (typeof v === "string" ? v.slice(0, max) : undefined);
 export class RelayCore {
   /**
    * `describeHost` is asked, per connection, what this machine looks like from the network —
@@ -83,13 +115,58 @@ export class RelayCore {
    * addresses say nothing about how a player reaches the game. Asked per connection rather than
    * captured once, since an address can appear or vanish while the game sits on the menu.
    */
-  constructor({ describeHost = null, holdMs = HOLD_MS } = {}) {
+  constructor({ describeHost = null, holdMs = HOLD_MS, log = null } = {}) {
     /** Rooms live only in memory. Losing them on restart loses lobbies, not matches. */
     this.rooms = new Map();
     this.conns = new Set();
     this.nextRoomId = 1;
     this.describeHost = describeHost;
     this.holdMs = holdMs;
+    /**
+     * The event log (server/eventLog.mjs) — `log(event, fields, level)`. Only the deployed relay
+     * passes one (relay.mjs); the dev plugin, the desktop app and the tests run silent.
+     */
+    this.log = log ?? (() => {});
+    this.logging = log !== null;
+    this.nextConnId = 1;
+    if (log) {
+      // Who is on, every ten minutes — the line that says the server was alive and how busy.
+      const stats = setInterval(() => this.log("relay.stats", this.stats()), 10 * 60_000);
+      stats.unref?.();
+    }
+  }
+
+  /** How busy the server is: connections, rooms, and the players in them. */
+  stats() {
+    let players = 0;
+    let held = 0;
+    for (const r of this.rooms.values()) for (const p of r.peers.values()) (p.disconnected ? held++ : players++);
+    return { conns: this.conns.size, rooms: this.rooms.size, players, held };
+  }
+
+  /** The fields every line about a room carries. */
+  roomFields(room) {
+    return {
+      room: room.id,
+      roomName: room.name,
+      map: room.mapName,
+      mapPath: room.mapPath,
+      edition: room.edition,
+      hostVersion: room.version ?? null,
+      players: [...room.peers.values()].filter((p) => !p.disconnected).length,
+      maxPlayers: room.maxPlayers,
+      ageS: Math.round((Date.now() - room.createdAt) / 1000),
+    };
+  }
+
+  /** …and every line about a connection: which client, as it introduced itself. */
+  connFields(conn) {
+    return { conn: conn.connId, version: conn.client?.version ?? null, install: conn.client?.install ?? null };
+  }
+
+  /** A room is gone: one line with how it ended and how long it lived. */
+  logRoomClosed(room, why) {
+    this.log("room.closed", { ...this.roomFields(room), why, peak: room.peak });
   }
 
   listing() {
@@ -115,9 +192,22 @@ export class RelayCore {
   connect(conn) {
     conn.roomId = null;
     conn.peerId = 0;
+    conn.connId = this.nextConnId++;
+    conn.openedAt = Date.now();
+    conn.reports = { minute: 0, count: 0, dropped: 0 };
     this.conns.add(conn);
+    this.log("conn.open", { conn: conn.connId, conns: this.conns.size });
     const host = this.describeHost?.() ?? null;
-    conn.send(host ? { t: "hello", protocol: PROTOCOL_VERSION, host } : { t: "hello", protocol: PROTOCOL_VERSION });
+    // `reports`: this relay KEEPS a log and takes the `report` message (below). Said only by one
+    // that logs — the deployed relay, never the dev plugin or the desktop app's own, whose reports
+    // would go nowhere — so a client sends its reports to a server that writes them down
+    // (src/net/lobby.ts `reportWire`). An older relay answers `report` with "Unknown message",
+    // which a lobby would paint as an error, and is never sent one. No protocol bump: older
+    // clients ignore the field.
+    const hello = this.logging
+      ? { t: "hello", protocol: PROTOCOL_VERSION, reports: true }
+      : { t: "hello", protocol: PROTOCOL_VERSION };
+    conn.send(host ? { ...hello, host } : hello);
     conn.send({ t: "rooms", rooms: this.listing() });
   }
 
@@ -135,7 +225,8 @@ export class RelayCore {
    * a drop that empties the room of live connections.
    */
   disconnect(conn) {
-    this.conns.delete(conn);
+    if (!this.conns.delete(conn)) return; // `close` and `error` can both arrive for one socket
+    this.log("conn.close", { ...this.connFields(conn), secs: Math.round((Date.now() - conn.openedAt) / 1000), inRoom: conn.roomId ?? null, conns: this.conns.size });
     const room = this.rooms.get(conn.roomId);
     if (!room) return;
     const peer = room.peers.get(conn.peerId);
@@ -149,6 +240,7 @@ export class RelayCore {
       this.inRoom(room, { t: "room-closed", reason: peer.host ? "The host left the game." : "Empty." });
       for (const p of room.peers.values()) if (p.conn) p.conn.roomId = null;
       this.rooms.delete(room.id);
+      this.logRoomClosed(room, peer.host ? "host-dropped" : "everyone-dropped");
       this.broadcastRooms();
       return;
     }
@@ -160,6 +252,7 @@ export class RelayCore {
     // With the hold's length, so a TEAM game can count down "Time to reconnect" off the
     // relay's own clock rather than a copy of the number that might disagree with it.
     this.inRoom(room, { t: "peer-drop", peerId: peer.id, holdMs: this.holdMs });
+    this.log("peer.drop", { ...this.roomFields(room), ...this.connFields(conn), peer: peer.id, name: peer.name, holdMs: this.holdMs }, "warn");
     this.broadcastRooms();
     // …but not for ever (HOLD_MS). The seat is let go exactly as a chosen `leave` would let it
     // go, so every peer — the host above all — hears the same `peer-leave` either way.
@@ -168,9 +261,11 @@ export class RelayCore {
       peer.dropTimer = null;
       if (!peer.disconnected || this.rooms.get(room.id) !== room || room.peers.get(peer.id) !== peer) return;
       room.peers.delete(peer.id);
+      this.log("peer.hold-expired", { ...this.roomFields(room), peer: peer.id, name: peer.name }, "warn");
       const anyLive = [...room.peers.values()].some((p) => !p.disconnected);
       if (!anyLive) {
         this.rooms.delete(room.id);
+        this.logRoomClosed(room, "hold-expired");
       } else {
         this.inRoom(room, { t: "peer-leave", peerId: peer.id });
       }
@@ -187,6 +282,7 @@ export class RelayCore {
     const peer = room.peers.get(conn.peerId);
     room.peers.delete(conn.peerId);
     conn.roomId = null;
+    this.log("peer.leave", { ...this.roomFields(room), ...this.connFields(conn), peer: conn.peerId, name: peer?.name, host: !!peer?.host });
 
     // No host migration in v1 (docs/multiplayer.md "What we are accepting"): the host owns
     // the only copy of game state, so its departure ends the room for everyone.
@@ -194,6 +290,7 @@ export class RelayCore {
       this.inRoom(room, { t: "room-closed", reason: peer?.host ? "The host left the game." : "Empty." });
       for (const p of room.peers.values()) if (p.conn) p.conn.roomId = null;
       this.rooms.delete(room.id);
+      this.logRoomClosed(room, peer?.host ? "host-left" : "empty");
     } else {
       this.inRoom(room, { t: "peer-leave", peerId: conn.peerId });
     }
@@ -221,13 +318,18 @@ export class RelayCore {
           edition: msg.edition === "roc" ? "roc" : "tft",
           // 0 Slow … 3 Fastest; anything else (an older client's silence) is Fast, 2.
           speed: Number.isInteger(msg.speed) && msg.speed >= 0 && msg.speed <= 3 ? msg.speed : 2,
+          // The host's OpenWar3 version (roomInfo's `version`), as its client sent it.
+          version: word(msg.version, 32),
           peers: new Map([[peer.id, peer]]),
           nextPeerId: 2,
+          createdAt: Date.now(),
+          peak: 1,
         };
         this.rooms.set(id, room);
         conn.roomId = id;
         conn.peerId = peer.id;
         conn.send({ t: "created", room: roomInfo(room), you: peerInfo(peer), token: peer.token });
+        this.log("room.create", { ...this.roomFields(room), ...this.connFields(conn), hostName: room.hostName, observers: room.observers, speed: room.speed });
         this.broadcastRooms();
         return;
       }
@@ -235,7 +337,10 @@ export class RelayCore {
       case "join": {
         if (conn.roomId) return conn.send({ t: "error", message: "Already in a game." });
         const room = this.rooms.get(msg.roomId);
-        if (!room) return conn.send({ t: "error", message: "That game is no longer available." });
+        if (!room) {
+          this.log("join.refused", { ...this.connFields(conn), room: msg.roomId ?? null, why: "gone" });
+          return conn.send({ t: "error", message: "That game is no longer available." });
+        }
 
         // RECONNECT (item 11): a `token` matching a slot this room is HOLDING for a dropped
         // player reclaims that exact slot — same peer id, same token — rather than minting a
@@ -259,6 +364,7 @@ export class RelayCore {
             token: held.token,
           });
           this.inRoom(room, { t: "peer-rejoin", peer: peerInfo(held) }, held.id);
+          this.log("peer.rejoin", { ...this.roomFields(room), ...this.connFields(conn), peer: held.id, name: held.name, awayS: Math.round((Date.now() - held.droppedAt) / 1000) });
           this.broadcastRooms();
           return;
         }
@@ -268,8 +374,14 @@ export class RelayCore {
         // somebody who was in this game and is not any more, and seating them as a new peer
         // would put them in the middle of a match that has already ruled them out. Refused, and
         // the client takes this answer to mean "you were disconnected".
-        if (msg.token) return conn.send({ t: "error", message: DROPPED });
-        if (room.peers.size >= room.maxPlayers) return conn.send({ t: "error", message: "That game is full." });
+        if (msg.token) {
+          this.log("join.refused", { ...this.roomFields(room), ...this.connFields(conn), why: "dropped" });
+          return conn.send({ t: "error", message: DROPPED });
+        }
+        if (room.peers.size >= room.maxPlayers) {
+          this.log("join.refused", { ...this.roomFields(room), ...this.connFields(conn), why: "full" });
+          return conn.send({ t: "error", message: "That game is full." });
+        }
         const peer = { id: room.nextPeerId++, name: msg.playerName || "Player", host: false, conn, token: mkToken(), disconnected: false };
         room.peers.set(peer.id, peer);
         conn.roomId = room.id;
@@ -282,6 +394,8 @@ export class RelayCore {
           token: peer.token,
         });
         this.inRoom(room, { t: "peer-join", peer: peerInfo(peer) }, peer.id);
+        room.peak = Math.max(room.peak, room.peers.size);
+        this.log("peer.join", { ...this.roomFields(room), ...this.connFields(conn), peer: peer.id, name: peer.name });
         this.broadcastRooms();
         return;
       }
@@ -310,8 +424,12 @@ export class RelayCore {
         clearTimeout(held.dropTimer);
         held.dropTimer = null;
         room.peers.delete(held.id);
+        this.log("peer.abandon", { ...this.roomFields(room), ...this.connFields(conn), peer: held.id, name: held.name });
         if ([...room.peers.values()].some((p) => !p.disconnected)) this.inRoom(room, { t: "peer-leave", peerId: held.id });
-        else this.rooms.delete(room.id);
+        else {
+          this.rooms.delete(room.id);
+          this.logRoomClosed(room, "abandoned");
+        }
         this.broadcastRooms();
         return;
       }
@@ -329,8 +447,36 @@ export class RelayCore {
         clearTimeout(held.dropTimer);
         held.dropTimer = null;
         room.peers.delete(held.id);
+        this.log("peer.dropped-by-host", { ...this.roomFields(room), peer: held.id, name: held.name }, "warn");
         this.inRoom(room, { t: "peer-leave", peerId: held.id });
         this.broadcastRooms();
+        return;
+      }
+
+      // What a CLIENT saw (src/net/lobby.ts `report`): a map that would not download, an error
+      // thrown in a match, a match started or ended. Written to the log as it came — prefixed and
+      // clipped (`cleanReport`) — beside who sent it and the room it is in. The first one a client
+      // sends is `client`, which says who it is; that is kept on the connection and stamped on
+      // every line about it afterwards. Never answered: a report is fire-and-forget.
+      case "report": {
+        const minute = Math.floor(Date.now() / 60_000);
+        const quota = conn.reports;
+        if (quota.minute !== minute) {
+          if (quota.dropped) this.log("report.throttled", { ...this.connFields(conn), dropped: quota.dropped }, "warn");
+          quota.minute = minute;
+          quota.count = 0;
+          quota.dropped = 0;
+        }
+        if (++quota.count > REPORTS_PER_MINUTE) { quota.dropped++; return; }
+        const event = word(msg.event, 48)?.replace(/[^\w.-]/g, "_") || "unnamed";
+        const data = cleanReport(msg.data);
+        if (event === "client") {
+          conn.client = { version: word(msg.data?.version, 32) ?? null, install: word(msg.data?.install, 40) ?? null };
+        }
+        const level = msg.level === "error" || msg.level === "warn" ? msg.level : "info";
+        const room = this.rooms.get(conn.roomId);
+        const peer = room?.peers.get(conn.peerId);
+        this.log(`client.${event}`, { ...(room ? this.roomFields(room) : {}), ...this.connFields(conn), peer: peer?.id ?? null, name: peer?.name ?? null, ...data }, level);
         return;
       }
 
@@ -367,6 +513,7 @@ export class RelayCore {
       }
 
       default:
+        this.log("relay.unknown-message", { ...this.connFields(conn), t: word(String(msg.t), 32) }, "warn");
         return conn.send({ t: "error", message: `Unknown message: ${String(msg.t)}` });
     }
   }

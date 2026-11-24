@@ -26,7 +26,7 @@ import { defineRailway, github, project, service } from "railway/iac";
  * way; only the region (and the generated domain, which IaC does not manage) differ. The client
  * watches all three (src/net/officialServer.ts) and merges their game lists.
  */
-function relay(name: string, region: string) {
+function relay(name: string, region: string, short: string) {
   return service(name, {
     // The repo, and only its `server/` folder: a relay whose one dependency is `ws`. The repo
     // root's install would pull an Electron binary.
@@ -52,6 +52,16 @@ function relay(name: string, region: string) {
       // The port the relay listens on (server/relay.mjs reads PORT) and the port each generated
       // domain targets. IaC does not manage generated domains, so the two are kept equal by hand.
       PORT: "8787",
+      // The EVENT LOG (server/eventLog.mjs; docs/multiplayer.md "The event log"): RELAY_NAME
+      // names the server in every line and in the bucket path, and the LOGS_ variables are the
+      // project's private `logs` bucket (ams, created 2026-11-24) referenced onto the relay — the
+      // replay collection's own pattern. Without them a relay logs to stdout alone.
+      RELAY_NAME: short,
+      LOGS_ENDPOINT: "${{logs.ENDPOINT}}",
+      LOGS_BUCKET: "${{logs.BUCKET}}",
+      LOGS_REGION: "${{logs.REGION}}",
+      LOGS_ACCESS_KEY_ID: "${{logs.ACCESS_KEY_ID}}",
+      LOGS_SECRET_ACCESS_KEY: "${{logs.SECRET_ACCESS_KEY}}",
     },
   });
 }
@@ -60,9 +70,9 @@ export default defineRailway(() => {
   // Region identifiers: docs.railway.com/deployments/regions. The EU one is the original server
   // and the client's default; the domains are `openwar3-eu`, `openwar3-us` and `openwar3-asia`
   // `.up.railway.app` (the EU one was `openwar3.up.railway.app` until 0.3.61).
-  const eu = relay("openwar3-eu", "europe-west4-drams3a");       // EU West, Amsterdam
-  const us = relay("openwar3-us", "us-east4-eqdc4a");           // US East, Virginia
-  const asia = relay("openwar3-asia", "asia-southeast1-eqsg3a"); // Southeast Asia, Singapore
+  const eu = relay("openwar3-eu", "europe-west4-drams3a", "eu");       // EU West, Amsterdam
+  const us = relay("openwar3-us", "us-east4-eqdc4a", "us");           // US East, Virginia
+  const asia = relay("openwar3-asia", "asia-southeast1-eqsg3a", "asia"); // Southeast Asia, Singapore
 
   return project("openwar3", { resources: [eu, us, asia] });
 });

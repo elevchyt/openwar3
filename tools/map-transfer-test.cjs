@@ -94,6 +94,80 @@ async function room(mapBytes) {
     check("Cancel rejects at once", await p.catch((e) => e.name), "AbortError");
   }
 
+  console.log("\na lost request is asked for again; a silent or stopped host says which it was");
+  const FAST = { firstRetryMs: 30, firstTries: 3, retryMs: 30, tries: 3, tickMs: 5 };
+  /** A MapWire straight onto a host function, dropping whatever `drop` says to. */
+  const wireTo = (bytes, drop) => {
+    let listener = null;
+    const asked = [];
+    const wire = {
+      ask: (msg) => {
+        asked.push(msg.chunk);
+        if (drop(msg, asked)) return;
+        const n = msg.chunk;
+        const part = { k: "mappart", path: msg.path, chunk: n, size: bytes.length, data: Buffer.from(bytes.subarray(n * MAP_CHUNK, (n + 1) * MAP_CHUNK)).toString("base64") };
+        setTimeout(() => listener?.(part), 1);
+      },
+      listen: (fn) => { listener = fn; },
+      arrived: () => {},
+    };
+    return { wire, asked };
+  };
+  {
+    const bytes = new Uint8Array(MAP_CHUNK * 12 + 5);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 13) & 0xff;
+    // The first ask for piece 0 and for piece 5 go nowhere — a socket that blinked.
+    const lost = new Set();
+    const { wire, asked } = wireTo(bytes, (m) => {
+      if ((m.chunk === 0 || m.chunk === 5) && !lost.has(m.chunk)) { lost.add(m.chunk); return true; }
+      return false;
+    });
+    const got = await fetchMap(wire, PATH, () => {}, new AbortController().signal, FAST);
+    check("the map still arrives whole", got.length === bytes.length && got.every((b, i) => b === bytes[i]), true);
+    check("…the lost pieces were asked for twice", [asked.filter((c) => c === 0).length, asked.filter((c) => c === 5).length], [2, 2]);
+  }
+  {
+    const { wire, asked } = wireTo(new Uint8Array(10), () => true);
+    const err = await fetchMap(wire, PATH, () => {}, new AbortController().signal, FAST).catch((e) => e);
+    check("a host that never answers: no-answer", [err.name, err.kind, err.received, err.total], ["MapFetchError", "no-answer", 0, 0]);
+    check("…after asking firstTries times", asked.length, 3);
+  }
+  {
+    const bytes = new Uint8Array(MAP_CHUNK * 20);
+    const { wire } = wireTo(bytes, (m) => m.chunk >= 6);
+    const err = await fetchMap(wire, PATH, () => {}, new AbortController().signal, FAST).catch((e) => e);
+    check("a host that stops: stalled, with how far it got", [err.kind, err.received, err.total, err.size], ["stalled", 6, 20, bytes.length]);
+  }
+  {
+    const { joiner } = await room(new Uint8Array(10));
+    const err = await fetchMap(joiner.mapWire(), "war3.mpq", () => {}, new AbortController().signal).catch((e) => e);
+    check("a refusal is kind refused, in the host's words", [err.kind, err.message], ["refused", "The host only sends the map of its own game."]);
+  }
+
+  console.log("\nthe event log hears both ends");
+  {
+    const bytes = new Uint8Array(MAP_CHUNK * 3);
+    const { host, joiner, ht, jt } = await room(bytes);
+    const reports = { host: [], joiner: [] };
+    for (const [t, who] of [[ht, "host"], [jt, "joiner"]]) {
+      t.reports = true;
+      const send = t.send;
+      t.send = (m) => { if (m.t === "report") reports[who].push(m); else send(m); };
+    }
+    joiner.clientInfo = { version: "9.9.9", install: "abc" };
+    await fetchMap(joiner.mapWire(), PATH, () => {}, new AbortController().signal);
+    joiner.mapWire().arrived(PATH);
+    joiner.report("map-download-done", { size: bytes.length });
+    await tick();
+    check("the host reports the send's start and end", reports.host.map((r) => r.event), ["map-send-start", "map-send-done"]);
+    check("…stamped with the room", reports.host[0].data.mapPath, PATH);
+    check("a client says who it is first, once", reports.joiner.map((r) => r.event), ["client", "map-download-done"]);
+    check("…by version and install id", reports.joiner[0].data, { version: "9.9.9", install: "abc" });
+    const quiet = await room(bytes);
+    quiet.joiner.report("x");
+    check("a relay that keeps no log is sent no report", quiet.jt.reports, undefined);
+  }
+
   console.log("\na leaver is forgotten by the host");
   {
     const bytes = new Uint8Array(MAP_CHUNK * 40);

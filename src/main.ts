@@ -38,6 +38,8 @@ import { localMapPath } from "./assets/downloadedMaps";
 import { mountLanCreateScreen } from "./ui/fdfLanCreate";
 import { mountLanLobbyScreen } from "./ui/fdfLanLobby";
 import { LanLobby } from "./net/lobby";
+import { watchOnlineErrors } from "./net/onlineReports";
+import { installId } from "./game/replayUpload";
 import { OFFICIAL_SERVERS } from "./net/officialServer";
 import { observerSlots } from "./net/lobbySetup";
 import type { AdvancedOptions } from "./net/advancedOptions";
@@ -295,6 +297,7 @@ let reconnectAsking = false;
 async function offerReconnect(vfs: DataSource): Promise<void> {
   if (reconnectAsking || matchLink) return;
   const lobby = new LanLobby(() => new WebSocketTransport());
+  lobby.clientInfo = clientInfo();
   const session = lobby.pendingMatch();
   if (!session?.match) return;
   reconnectAsking = true;
@@ -440,9 +443,28 @@ onShellClosing(async () => {
   await new Promise((resolve) => setTimeout(resolve, 150));
 });
 
+/** This client as the server's event log knows it: the version and the anonymous install id the
+ *  replay collection files by (game/replayUpload.ts) — never a name or an address. */
+function clientInfo(): { version: string; install: string; platform: string } {
+  return { version: __OW3_VERSION__, install: installId(), platform: navigator.userAgent.includes("Electron") ? "desktop" : "web" };
+}
+
+/** The lobby a networked match or the LAN screens are on, for the event log — the match's own
+ *  wire when it has one (a reconnect from the menu is not `lan`), else the LAN session's. */
+function onlineLobby(): LanLobby | null {
+  const channel = matchLink?.channel;
+  if (channel instanceof LanLobby) return channel;
+  return lan?.lobby ?? null;
+}
+/** When the networked match on screen started, for its `match-end` report. */
+let matchBegan: number | null = null;
+watchOnlineErrors(onlineLobby);
+
 function lanSession(): { lobby: LanLobby; connected: Promise<void> } {
   if (!lan) {
     const lobby = new LanLobby(() => new WebSocketTransport());
+    // Who we are, for the OpenWar3 server's event log (LanLobby.report, server/eventLog.mjs).
+    lobby.clientInfo = clientInfo();
     // A joiner without our map is sent it (net/mapTransfer.ts) — out of the install's own list,
     // asked at the moment of the request, so it is whatever the room is hosting right then.
     lobby.mapSource = (path) => installMaps.get(path) ?? null;
@@ -1109,6 +1131,18 @@ async function startGame(
 ): Promise<void> {
   meleeConfig = config;
   matchLink = link ?? null;
+  matchBegan = null;
+  if (matchLink) {
+    matchBegan = Date.now();
+    onlineLobby()?.report("match-start", {
+      map: info.name,
+      mapPath: mapPath ?? null,
+      players: config.slots.filter((s) => s.controller === "user").length,
+      computers: config.slots.filter((s) => s.controller === "computer").length,
+      rejoin: !!rejoin,
+      loadSave: !!restore,
+    });
+  }
   // WHICH OBJECT TABLES THIS MATCH PLAYS ON, before a byte of the map is read and before any
   // table is parsed. The install keeps four complete sets and the map's own w3i melee flag
   // picks between two of them (src/data/edition.ts, src/vfs/edition.ts): a melee map plays on
@@ -1475,6 +1509,8 @@ function endMatch(): void {
   // The match owned the relay connection from the moment the LAN screen handed it over, so
   // leaving the match is what closes it. Skipping this would leave the room listed and the
   // socket open behind a player who is back at the main menu.
+  if (matchLink && matchBegan !== null) onlineLobby()?.report("match-end", { secs: Math.round((Date.now() - matchBegan) / 1000) });
+  matchBegan = null;
   matchLink?.channel.close?.();
   matchLink = null;
   lan = null; // the wire the match owned is closed; a fresh LAN session opens a fresh one

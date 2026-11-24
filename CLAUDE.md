@@ -187,6 +187,13 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   is ORDERED (a `cut` marker over the relay; direct traffic is held until it lands), because a
   direct message overtakes a relayed one and the host counts commands. Do not make the lane
   unreliable while a snapshot still carries one-shot EVENTS (fx, notices, felled trees).
+- **Online event log:** read [`docs/multiplayer.md`](docs/multiplayer.md) "The event log" before
+  touching `server/eventLog.mjs`, a relay `this.log(...)` line or `LanLobby.report`. The deployed
+  relays write every room, join, drop, crash and client report as one JSON line to stdout
+  (Railway's log explorer, `@event:…`) AND into the project's private `logs` bucket, kept for
+  good; clients report map downloads, match start/end, lost connections and uncaught errors
+  during online play, but only to a relay whose `hello` says `reports: true`. Never log an
+  address; a player is the name they typed and the anonymous install id.
 - **Dropped players:** read [`docs/multiplayer.md`](docs/multiplayer.md) "A player who drops"
   before touching `peer-drop`/`drop`/`seat`/`abandon`, `LanLobby.onLost` or `waitingFor` in
   `mapViewer.ts`. A CHOSEN exit (Quit, Exit Program, closing the window or tab) is a `leave` and

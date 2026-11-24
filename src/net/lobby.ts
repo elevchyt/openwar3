@@ -24,6 +24,12 @@ import { answerMapGet, chunkCount, type MapGet, type MapPart, type MapWire } fro
  *  in-process transport does not have but a socket-backed one does. */
 export type LobbyTransport = Transport & { connect(url?: string): Promise<void> };
 
+/** A report's level and its flat data (protocol.ts `report`). */
+export type ReportLevel = "info" | "warn" | "error";
+export type ReportData = Record<string, string | number | boolean | null>;
+/** Reports kept while no logging server is reachable (`LanLobby.report`). */
+const REPORT_QUEUE = 30;
+
 export type LobbyPhase = "offline" | "browsing" | "hosting" | "joined";
 
 /**
@@ -294,6 +300,21 @@ export class LanLobby {
    * install's map list (main.ts); the path asked of it is always the room's own.
    */
   mapSource: ((path: string) => File | null) | null = null;
+  /**
+   * Who this client is, for the relay's event log (`report`): the OpenWar3 version and the
+   * ANONYMOUS install id (game/replayUpload.ts `installId`, the replay collection's). Set once by
+   * main.ts; injected rather than imported so the lobby stays headless-testable. Null sends none.
+   */
+  clientInfo: { version: string; install: string; platform?: string } | null = null;
+  /** Reports made while no logging server was reachable — a lost connection, an error thrown on
+   *  the way out of a match — sent once one is (`flushReports`). Oldest dropped past REPORT_QUEUE. */
+  private reportQueue: { event: string; level: ReportLevel; data: ReportData }[] = [];
+  /** The connections that have been told who we are (`client`), so each is told exactly once. */
+  private introduced = new WeakSet<LobbyTransport>();
+  /** When the wire dropped and why, for the `reconnected` report once it is back. */
+  private lostAt: { at: number; reason: string } | null = null;
+  /** HOST: when each downloading peer asked for its first piece. */
+  private mapStarted = new Map<number, number>();
   /** JOINER: the host's answers while we fetch its map (`mapWire`). */
   private onMapPart: ((part: MapPart) => void) | null = null;
   /** HOST: per downloading peer, how many pieces it has been sent of how many — `downloads`
@@ -351,6 +372,7 @@ export class LanLobby {
     // instead — flipping to "browsing" would blink the roster away for the beat between the
     // socket opening and the rejoin completing (item 11a-client). `tryRejoin` takes it from here.
     if (!this.reconnecting) this.set({ phase: "browsing", error: null });
+    this.flushReports();
   }
 
   /**
@@ -364,6 +386,8 @@ export class LanLobby {
    */
   private onLost(reason: string): void {
     this.transport = null;
+    this.lostAt = { at: Date.now(), reason };
+    this.report("connection-lost", { reason, phase: this.state.phase }, "warn");
     if (!this.store.load()) {
       this.reconnecting = false;
       this.state = { ...EMPTY, error: reason };
@@ -414,6 +438,8 @@ export class LanLobby {
   /** The reconnect is over and we are not back in. The match hears it as "You were
    *  disconnected."; the LAN screen as `reason`. */
   private giveUp(reason: string, keepSession = false): void {
+    this.report("reconnect-failed", { reason, keptSeat: keepSession, awayMs: this.lostAt ? Date.now() - this.lostAt.at : null }, "error");
+    this.lostAt = null;
     this.reconnecting = false;
     this.keepSession = keepSession;
     if (!keepSession) this.store.save(null);
@@ -439,7 +465,7 @@ export class LanLobby {
       if (!entry?.connected || !entry.transport) throw new Error("That server is not answering.");
       this.promote(on);
     }
-    this.transport?.send({ t: "create", name, playerName, mapName, mapPath, maxPlayers, observers, edition: edition(), speed });
+    this.transport?.send({ t: "create", name, playerName, mapName, mapPath, maxPlayers, observers, edition: edition(), speed, ...(this.clientInfo ? { version: this.clientInfo.version } : {}) });
   }
 
   /** Every place a game could be announced right now: the connection we stand on, then each
@@ -579,6 +605,7 @@ export class LanLobby {
         // there is. `host` and `join` both promote the server's connection, so nothing needs ours.
         if (this.state.phase === "offline" && !this.transport) this.state = { ...this.state, phase: "browsing" };
         this.mergeRooms();
+        this.flushReports();
       },
       again,
     );
@@ -687,6 +714,7 @@ export class LanLobby {
     this.transport?.send({ t: "leave" });
     this.store.save(null); // a chosen departure — forget the token so we do not try to crawl back
     this.mapSent.clear();
+    this.mapStarted.clear();
     this.set({ phase: "browsing", room: null, peers: [], you: null, downloads: {} });
   }
 
@@ -799,8 +827,15 @@ export class LanLobby {
       // Who is still fetching: a peer is downloading from its first piece until it says the map
       // is in (`mapgot`) — not merely sent, or a start in that last moment would seat a player
       // whose map is still on the wire. A refusal ends it.
-      if (part.error !== undefined) this.mapSent.delete(from);
-      else {
+      if (part.error !== undefined) {
+        this.mapSent.delete(from);
+        this.mapStarted.delete(from);
+        this.report("map-send-refused", { peer: from, chunk: msg.chunk, error: part.error }, "warn");
+      } else {
+        if (!this.mapSent.has(from) && !this.mapStarted.has(from)) {
+          this.mapStarted.set(from, Date.now());
+          this.report("map-send-start", { peer: from, bytes: part.size });
+        }
         const was = this.mapSent.get(from);
         this.mapSent.set(from, { sent: Math.min((was?.sent ?? 0) + 1, chunkCount(part.size)), total: chunkCount(part.size) });
       }
@@ -814,6 +849,9 @@ export class LanLobby {
    *  map read off the disk first) and been dropped, so a joiner we sent nothing still gets the
    *  lobby re-announced: `onChange` is what the host's lobby screen re-seats and broadcasts on. */
   private mapArrived(from: number): void {
+    const started = this.mapStarted.get(from);
+    this.mapStarted.delete(from);
+    if (started !== undefined) this.report("map-send-done", { peer: from, ms: Date.now() - started });
     if (this.mapSent.delete(from)) this.publishDownloads();
     else if (this.state.phase === "hosting") this.onChange(this.state);
   }
@@ -828,6 +866,53 @@ export class LanLobby {
     if (keys.length !== Object.keys(was).length || keys.some((k) => was[Number(k)] !== now[Number(k)])) {
       this.set({ downloads: now });
     }
+  }
+
+  /**
+   * Tell the OpenWar3 server's EVENT LOG something this client saw (server/rooms.mjs `report`,
+   * server/eventLog.mjs): a map download that failed and why, an error thrown during online
+   * play, a match started or ended, a connection lost and got back. Fire-and-forget, never
+   * answered, and never a reason for anything to fail.
+   *
+   * It goes to a server that KEEPS a log (`reportWire`): the connection we play on if it does,
+   * else a watched official server — so a game on a friend's machine is still logged somewhere.
+   * With neither (offline, or between a drop and its re-dial) it waits in a short queue.
+   * Repeats of one error are folded (`ReportGate`, in the caller) — this sends what it is given.
+   */
+  report(event: string, data: ReportData = {}, level: ReportLevel = "info"): void {
+    // Stamped with the room as it is NOW — by the time a queued report is sent we may be in none.
+    this.reportQueue.push({ event, level, data: { ...this.roomReport(), ...data } });
+    if (this.reportQueue.length > REPORT_QUEUE) this.reportQueue.shift();
+    this.flushReports();
+  }
+
+  /** The room's identity, for a report's `data`: the relay knows its own rooms, but a report may
+   *  go to ANOTHER server than the one the room is on. */
+  private roomReport(): ReportData {
+    const room = this.state.room;
+    if (!room) return {};
+    return { roomName: room.name, map: room.mapName, mapPath: room.mapPath, isHost: this.isHost, hostVersion: room.version ?? null };
+  }
+
+  /** The connection a report goes over, or null (see `report`). */
+  private reportWire(): LobbyTransport | null {
+    if (this.transport?.connected && this.transport.reports) return this.transport;
+    for (const url of this.officialList) {
+      const t = this.remotes.get(url)?.transport;
+      if (t?.connected && t.reports) return t;
+    }
+    return null;
+  }
+
+  private flushReports(): void {
+    if (this.reportQueue.length === 0) return;
+    const wire = this.reportWire();
+    if (!wire) return;
+    if (!this.introduced.has(wire) && this.clientInfo) {
+      this.introduced.add(wire);
+      wire.send({ t: "report", event: "client", data: { ...this.clientInfo } });
+    }
+    for (const r of this.reportQueue.splice(0)) wire.send({ t: "report", event: r.event, level: r.level, data: r.data });
   }
 
   /** Host only: tell the room to load the map and play. */
@@ -884,6 +969,7 @@ export class LanLobby {
     this.reconnecting = false;
     this.handedToMatch = false;
     this.mapSent.clear();
+    this.mapStarted.clear();
     this.onMapPart = null;
     this.state = { ...EMPTY };
   }
@@ -911,13 +997,22 @@ export class LanLobby {
         const match = was?.roomId === m.room.id ? was.match : undefined;
         this.store.save({ roomId: m.room.id, token: m.token, playerName: m.you.name, ...(match ? { match } : {}) });
         this.set({ phase: "joined", room: m.room, you: m.you, peers: m.peers, error: null });
-        if (rejoined) this.onRejoined();
+        if (rejoined) {
+          this.report("reconnected", { awayMs: this.lostAt ? Date.now() - this.lostAt.at : null, reason: this.lostAt?.reason ?? null });
+          this.lostAt = null;
+          this.onRejoined();
+        }
         return;
       }
       case "peer-join":
         return this.set({ peers: [...this.state.peers, m.peer] });
       case "peer-leave":
+        if (this.mapSent.has(m.peerId)) {
+          const s = this.mapSent.get(m.peerId)!;
+          this.report("map-send-abandoned", { peer: m.peerId, sent: s.sent, total: s.total }, "warn");
+        }
         this.mapSent.delete(m.peerId); // a joiner that gave up on the map — or never got it
+        this.mapStarted.delete(m.peerId);
         this.set({
           peers: this.state.peers.filter((p) => p.id !== m.peerId),
           downloads: Object.fromEntries(Object.entries(this.state.downloads).filter(([p]) => Number(p) !== m.peerId)),
@@ -945,6 +1040,7 @@ export class LanLobby {
         this.store.save(null); // the game is gone; nothing to rejoin
         this.reconnecting = false;
         this.mapSent.clear();
+        this.mapStarted.clear();
         this.set({ phase: "browsing", room: null, peers: [], you: null, error: m.reason, downloads: {} });
         // Then the match, AFTER the state settles — the same order `peer-rejoin` uses, so
         // anything reading the lobby in response sees the room already gone.
