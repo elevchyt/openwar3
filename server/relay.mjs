@@ -38,7 +38,7 @@ const HEARTBEAT_MS = Number(process.env.RELAY_HEARTBEAT_MS) || 15_000;
 const events = createEventLog({ relay: process.env.RELAY_NAME || "local" });
 const wss = new WebSocketServer({ port: PORT });
 attachRelay(wss, new RelayCore({ log: events.log }), { heartbeatMs: HEARTBEAT_MS });
-events.log("relay.start", { port: PORT, toBucket: events.toBucket, node: process.version });
+events.log("relay.start", { port: PORT, toBucket: events.toBucket, retentionDays: events.retentionDays, node: process.version });
 
 // The way out. A redeploy is a SIGTERM, and the last minute of lines is still in memory; a crash
 // is logged with its stack BEFORE the process goes, since a relay that dies takes every room on it

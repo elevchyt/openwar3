@@ -50,7 +50,7 @@
     "release:win": "pnpm build && node tools/make-icon.mjs && electron-builder --win -c.electronVersion=43.7.0 --publish always",
     "relay": "node server/relay.mjs",
     "relay-kill": "node server/relay-kill.mjs",
-    "relay:test": "tsc -p tools/tsconfig.sim.json && node tools/relay-test.mjs && node tools/loopback-test.mjs",
+    "relay:test": "tsc -p tools/tsconfig.sim.json && node tools/relay-test.mjs && node tools/loopback-test.mjs && node tools/relay-log-sweep-test.mjs",
     "loopback:test": "node tools/loopback-test.mjs"
   },
   "dependencies": {

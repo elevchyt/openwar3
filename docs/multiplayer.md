@@ -436,7 +436,10 @@ Everything that happens in online play is written down on the OpenWar3 servers a
 `@level:error` or `@mapPath:"Maps\\Download\\X.w3x"` filters work there (7 days on Hobby, 30
 on Pro) — and the same lines, gzip'd NDJSON, into the project's private **`logs` bucket**
 (`relay/<eu|us|asia>/<YYYY-MM-DD>/<HH-MM-SS>_<random>.ndjson.gz`, an object a minute or per
-512 KiB, and on SIGTERM), which has no expiry. Read a day with the bucket's S3 credentials and
+512 KiB, and on SIGTERM), KEPT 30 DAYS: each relay sweeps its own `relay/<name>/` once a minute
+after it starts and daily after that, deleting every day folder older than `LOGS_RETENTION_DAYS`
+(30, the developer's figure; `log.sweep` says what went). Measured: ~100 bytes a line as stored
+(small gzip'd objects), so 100 players' month — about 360 000 lines — is ~36 MB. Read a day with the bucket's S3 credentials and
 `zcat *.gz | jq`. Only the deployed relay logs (`relay.mjs` passes `log`): the dev plugin, the
 desktop app's own relay and the tests run silent.
 

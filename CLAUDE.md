@@ -190,8 +190,8 @@ data, or asset behaviour, **consult our sources** and cite what you used.
 - **Online event log:** read [`docs/multiplayer.md`](docs/multiplayer.md) "The event log" before
   touching `server/eventLog.mjs`, a relay `this.log(...)` line or `LanLobby.report`. The deployed
   relays write every room, join, drop, crash and client report as one JSON line to stdout
-  (Railway's log explorer, `@event:…`) AND into the project's private `logs` bucket, kept for
-  good; clients report map downloads, match start/end, lost connections and uncaught errors
+  (Railway's log explorer, `@event:…`) AND into the project's private `logs` bucket, kept 30
+  days (each relay sweeps its own prefix daily, `LOGS_RETENTION_DAYS`); clients report map downloads, match start/end, lost connections and uncaught errors
   during online play, but only to a relay whose `hello` says `reports: true`. Never log an
   address; a player is the name they typed and the anonymous install id.
 - **Dropped players:** read [`docs/multiplayer.md`](docs/multiplayer.md) "A player who drops"
