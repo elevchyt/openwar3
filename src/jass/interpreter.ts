@@ -17,7 +17,7 @@
 
 import type { BinOp, Expr, FunctionDecl, JassProgram, Stmt, VarDecl } from "./ast";
 import { rawcodeToInt } from "./lexer";
-import { Runtime, JassArray, compareLimit, playerStateHolds, ThreadAbort, unitStateHolds, type BoolExpr, type HostFunction, type JassPlayer, type JassUnit, type NativeCtx, type RectObj, type RegionObj, type SoundObj, type TimerObj, type TriggerObj, type TriggerReg, type UnitSnapshot } from "./runtime";
+import { Runtime, JassArray, compareLimit, evalBoolExpr, playerStateHolds, ThreadAbort, unitStateHolds, type BoolExpr, type HostFunction, type JassPlayer, type JassUnit, type NativeCtx, type RectObj, type RegionObj, type SoundObj, type TimerObj, type TriggerObj, type TriggerReg, type UnitSnapshot } from "./runtime";
 import {
   asInt, asNum, asStr, defaultForType, jassEquals, jBool, jHandle, jInt, jReal, jStr, JNULL, truthy, type JassValue,
 } from "./values";
@@ -1137,7 +1137,7 @@ export class Interpreter {
   /** Evaluate a trigger's conditions (synchronously — WC3 can't wait in a condition). */
   private conditionsPass(trig: TriggerObj): boolean {
     trig.evals++; // GetTriggerEvalCount — every weighing, passed or not
-    return trig.conditions.every(({ fn }) => truthy(this.callFunction(fn, [])));
+    return trig.conditions.every(({ be }) => evalBoolExpr(be, (fn) => this.callFunction(fn, [])));
   }
 
   private arrayFor(name: string, frame: Frame | null): JassArray {
@@ -1936,10 +1936,10 @@ export class Interpreter {
   private eventFilterPasses(filter: JassValue | undefined, unit: JassValue): boolean {
     if (!filter || filter.k !== "handle") return true;
     const be = this.rt.handles.get(filter.h) as BoolExpr | undefined;
-    if (!be?.fn) return true;
+    if (!be) return true;
     this.rt.eventStack.push(new Map([["FilterUnit", unit]]));
     try {
-      return truthy(this.callFunction(be.fn, []));
+      return evalBoolExpr(be, (fn) => this.callFunction(fn, []));
     } finally {
       this.rt.eventStack.pop();
     }

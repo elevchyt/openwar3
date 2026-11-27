@@ -21,8 +21,8 @@
 
 import { neutralSlot, PlayerSlot } from "../../data/enums";
 import { intToRawcode, rawcodeToInt } from "../lexer";
-import type { BoolExpr, ItemSnapshot, JassItem, JassPlayer, JassUnit, NativeCtx, RectObj, Runtime } from "../runtime";
-import { asInt, asNum, jBool, jHandle, jInt, JNULL, jReal, jStr, truthy, type JassValue } from "../values";
+import { evalBoolExpr, type BoolExpr, type ItemSnapshot, type JassItem, type JassPlayer, type JassUnit, type NativeCtx, type RectObj, type Runtime } from "../runtime";
+import { asInt, asNum, jBool, jHandle, jInt, JNULL, jReal, jStr, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -320,11 +320,11 @@ export function registerItemNatives(rt: Runtime): void {
     for (const snap of c.rt.hooks?.enumItems?.() ?? []) {
       if (snap.x < r.minx || snap.x > r.maxx || snap.y < r.miny || snap.y > r.maxy) continue;
       const handle = c.rt.itemForSim(snap);
-      if (be?.fn) {
+      if (be) {
         c.rt.eventStack.push(new Map([["FilterItem", handle]]));
         let passed = false;
         try {
-          passed = truthy(c.call(be.fn, []));
+          passed = evalBoolExpr(be, (fn) => c.call(fn, []));
         } finally {
           c.rt.eventStack.pop();
         }

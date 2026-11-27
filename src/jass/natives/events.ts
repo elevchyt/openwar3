@@ -14,7 +14,7 @@
 // the interpreter (it needs to call user functions) — see Interpreter.fireTrigger /
 // advanceTime. Registration here + firing there keeps natives free of the eval loop.
 
-import { playerStateHolds, ThreadAbort, unitStateHolds, type BoolExpr, type NativeCtx, type Runtime, type TimerObj, type TriggerObj, type TriggerReg } from "../runtime";
+import { evalBoolExpr, playerStateHolds, ThreadAbort, unitStateHolds, type BoolExpr, type NativeCtx, type Runtime, type TimerObj, type TriggerObj, type TriggerReg } from "../runtime";
 import { asNum, jBool, jHandle, jInt, JNULL, jReal, type JassValue } from "../values";
 import { ATTACK_TYPES } from "../../data/unitFieldCodes";
 import type { AttackType } from "../../data/enums";
@@ -79,7 +79,7 @@ export function registerEventNatives(rt: Runtime): void {
     const t = trig(c, a[0]);
     const be = c.rt.data<BoolExpr>(a[1]);
     if (!t || !be) return jHandle(0, "triggercondition");
-    const entry = { id: 0, fn: be.fn };
+    const entry = { id: 0, be };
     entry.id = c.rt.handles.alloc(entry);
     t.conditions.push(entry);
     return jHandle(entry.id, "triggercondition");
@@ -112,9 +112,19 @@ export function registerEventNatives(rt: Runtime): void {
   // --- boolexpr constructors ---
   def(rt, "Condition", (c, a) => (a[0].k === "code" ? jHandle(c.rt.handles.alloc({ fn: a[0].fn } as BoolExpr), "boolexpr") : JNULL));
   def(rt, "Filter", (c, a) => (a[0].k === "code" ? jHandle(c.rt.handles.alloc({ fn: a[0].fn } as BoolExpr), "boolexpr") : JNULL));
-  def(rt, "And", (_c, a) => a[0] ?? JNULL);
-  def(rt, "Or", (_c, a) => a[0] ?? JNULL);
-  def(rt, "Not", (_c, a) => a[0] ?? JNULL);
+  // The combinators make a NODE over the boolexprs they are given (runtime.ts `BoolExpr`),
+  // evaluated by `evalBoolExpr` wherever a filter or condition is weighed. They used to hand
+  // back their first argument, so `Not(f)` was `f` and `And(f, g)` never asked `g` — which a
+  // custom map's `GroupEnumUnitsInRange(g, x, y, r, And(f1, f2))` reads as "every unit f1
+  // admits". The operands are held as OBJECTS: `DestroyBoolExpr` destroys nothing here.
+  const node = (c: NativeCtx, op: "and" | "or" | "not", a: JassValue | undefined, b?: JassValue): JassValue => {
+    const be: BoolExpr = { op, a: a ? c.rt.data<BoolExpr>(a) ?? null : null };
+    if (op !== "not") be.b = b ? c.rt.data<BoolExpr>(b) ?? null : null;
+    return jHandle(c.rt.handles.alloc(be), "boolexpr");
+  };
+  def(rt, "And", (c, a) => node(c, "and", a[0], a[1]));
+  def(rt, "Or", (c, a) => node(c, "or", a[0], a[1]));
+  def(rt, "Not", (c, a) => node(c, "not", a[0]));
   def(rt, "DestroyBoolExpr", () => JNULL);
   def(rt, "DestroyCondition", () => JNULL);
   def(rt, "DestroyFilter", () => JNULL);
@@ -459,10 +469,7 @@ export function registerEventNatives(rt: Runtime): void {
   };
   const conditionsPass = (c: NativeCtx, t: TriggerObj): boolean => {
     t.evals++; // GetTriggerEvalCount — see TriggerObj
-    return t.conditions.every(({ fn }) => {
-      const r = c.call(fn, []);
-      return r.k === "bool" ? r.b : true;
-    });
+    return t.conditions.every(({ be }) => evalBoolExpr(be, (fn) => c.call(fn, [])));
   };
   const runActions = (c: NativeCtx, t: TriggerObj): void => {
     t.execs++; // GetTriggerExecCount — the actions RAN

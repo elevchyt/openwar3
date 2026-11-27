@@ -23,7 +23,7 @@
 // 31 of its script-created records match a .doo record position for position.
 
 import { intToRawcode, rawcodeToInt } from "../lexer";
-import type { BoolExpr, DestructableSnapshot, NativeCtx, RectObj, Runtime } from "../runtime";
+import { evalBoolExpr, type BoolExpr, type DestructableSnapshot, type NativeCtx, type RectObj, type Runtime } from "../runtime";
 import { asInt, asNum, asStr, jBool, jHandle, jInt, JNULL, jReal, jStr, truthy, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
@@ -218,7 +218,7 @@ export function registerDestructableNatives(rt: Runtime): void {
       const be = a[1] ? c.rt.data<BoolExpr>(a[1]) : undefined;
       c.rt.eventStack.push(new Map([["FilterDestructable", h], ["EnumDestructable", h]]));
       try {
-        if (be?.fn && !truthy(c.call(be.fn, []))) continue;
+        if (be && !evalBoolExpr(be, (fn) => c.call(fn, []))) continue;
         if (a[2]?.k === "code") c.call(a[2].fn, []);
       } catch {
         /* one match's callback throwing must not abort the whole scan */

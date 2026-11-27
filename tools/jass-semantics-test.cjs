@@ -61,5 +61,83 @@ endfunction
   check('a real operand does not wrap', call('RealStaysReal'), 4294967294);
 }
 
+// --- #371: And / Or / Not are real combinators -------------------------------------------------
+{
+  console.log('--- And / Or / Not combine their boolexprs (#371) ---');
+  const { call } = boot(`
+globals
+    integer asked = 0
+endglobals
+function T takes nothing returns boolean
+    set asked = asked + 1
+    return true
+endfunction
+function F takes nothing returns boolean
+    set asked = asked + 10
+    return false
+endfunction
+function Eval takes boolexpr be returns boolean
+    local trigger t = CreateTrigger()
+    call TriggerAddCondition(t, be)
+    return TriggerEvaluate(t)
+endfunction
+function NotF takes nothing returns boolean
+    return Eval(Not(Condition(function F)))
+endfunction
+function NotT takes nothing returns boolean
+    return Eval(Not(Condition(function T)))
+endfunction
+function AndTF takes nothing returns boolean
+    return Eval(And(Condition(function T), Condition(function F)))
+endfunction
+function AndTT takes nothing returns boolean
+    return Eval(And(Condition(function T), Condition(function T)))
+endfunction
+function OrFT takes nothing returns boolean
+    return Eval(Or(Condition(function F), Condition(function T)))
+endfunction
+function OrFF takes nothing returns boolean
+    return Eval(Or(Condition(function F), Condition(function F)))
+endfunction
+function Nested takes nothing returns boolean
+    return Eval(Not(And(Condition(function T), Not(Condition(function F)))))
+endfunction
+function AndStops takes nothing returns integer
+    set asked = 0
+    call Eval(And(Condition(function F), Condition(function T)))
+    return asked
+endfunction
+function OrStops takes nothing returns integer
+    set asked = 0
+    call Eval(Or(Condition(function T), Condition(function F)))
+    return asked
+endfunction
+function ForceFilter takes nothing returns integer
+    local force f = CreateForce()
+    local integer n = 0
+    local integer i = 0
+    call ForceEnumPlayers(f, And(Condition(function T), Not(Condition(function T))))
+    loop
+        exitwhen i > 11
+        if IsPlayerInForce(Player(i), f) then
+            set n = n + 1
+        endif
+        set i = i + 1
+    endloop
+    return n
+endfunction
+`);
+  check('Not(false) is true', call('NotF'), true);
+  check('Not(true) is false', call('NotT'), false);
+  check('And(true, false) is false', call('AndTF'), false);
+  check('And(true, true) is true', call('AndTT'), true);
+  check('Or(false, true) is true', call('OrFT'), true);
+  check('Or(false, false) is false', call('OrFF'), false);
+  check('Not(And(T, Not(F))) is false', call('Nested'), false);
+  check('And stops at a false left side', call('AndStops'), 10);
+  check('Or stops at a true left side', call('OrStops'), 1);
+  check('an enumeration filter asks both halves', call('ForceFilter'), 0);
+}
+
 console.log(failures ? `\n${failures} failure(s).` : '\nAll JASS semantics checks passed.');
 process.exit(failures ? 1 : 0);

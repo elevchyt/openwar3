@@ -9,7 +9,7 @@
 // is deliberate — the interpreter must stay engine-agnostic (bridge, not fork).
 
 import type { FunctionDecl } from "./ast";
-import { type JassValue, JNULL, jHandle, defaultForType } from "./values";
+import { type JassValue, JNULL, jHandle, defaultForType, truthy } from "./values";
 import { isNeutralSlot, PlayerSlot, widePlayerTable } from "../data/enums";
 import type { StoredUnitState } from "../sim/world";
 
@@ -24,7 +24,9 @@ export interface TriggerObj {
    *  the other. The handles used to be a shared dummy (`jHandle(0, …)`), which made both
    *  removers un-implementable rather than merely unimplemented. */
   actions: Array<{ id: number; fn: string }>;
-  conditions: Array<{ id: number; fn: string }>;
+  /** A condition is a whole BOOLEXPR, not a function: `TriggerAddCondition(t, And(a, b))`
+   *  is legal and has to keep both halves. */
+  conditions: Array<{ id: number; be: BoolExpr }>;
   enabled: boolean;
   /** `GetTriggerEvalCount` / `GetTriggerExecCount`. Two different counters and not one: the
    *  eval count counts every time this trigger's CONDITIONS were weighed, the exec count only
@@ -36,10 +38,39 @@ export interface TriggerObj {
   waitOnSleeps?: boolean;
 }
 
-/** A `boolexpr` — a condition wrapping a `code` (function ref), from Condition()/
- *  Filter(). We keep only the function name; And/Or/Not compose these later. */
+/** A `boolexpr`: a LEAF wrapping a `code` (function ref) from `Condition()`/`Filter()`, or a
+ *  NODE from `And(a, b)` / `Or(a, b)` / `Not(a)` holding the boolexprs it combines. A tree of
+ *  plain records rather than a closure, because a saved game writes the object graph and a
+ *  closure cannot be written (docs/save-games.md). Never call `fn` directly — a node has none:
+ *  ask `evalBoolExpr`, which every filter, condition and enumeration goes through. */
 export interface BoolExpr {
-  fn: string;
+  /** The leaf's function. Absent on a node. */
+  fn?: string;
+  op?: "and" | "or" | "not";
+  /** The node's operands (`b` unused by `not`). A NULL operand is a filter that admits
+   *  everything, the same as a null filter passed to an enumeration. */
+  a?: BoolExpr | null;
+  b?: BoolExpr | null;
+}
+
+/**
+ * Evaluate a boolexpr, `call` running a leaf's function. `And`/`Or` stop at the operand that
+ * decides them, as the language's own `and`/`or` do; a function that returns anything but a
+ * boolean — one declared `returns nothing`, or a name the script does not define — is FALSE,
+ * which is `truthy`'s rule and so the one every trigger condition is judged by.
+ */
+export function evalBoolExpr(be: BoolExpr | null | undefined, call: (fn: string) => JassValue): boolean {
+  if (!be) return true;
+  switch (be.op) {
+    case "and":
+      return evalBoolExpr(be.a, call) && evalBoolExpr(be.b, call);
+    case "or":
+      return evalBoolExpr(be.a, call) || evalBoolExpr(be.b, call);
+    case "not":
+      return !evalBoolExpr(be.a, call);
+  }
+  if (!be.fn) return true;
+  return truthy(call(be.fn));
 }
 
 /** A floating text tag (CreateTextTag — the "Floating Text" trigger actions). A

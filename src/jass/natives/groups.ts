@@ -28,8 +28,8 @@
 // GetUnitState reads 0), it just has nothing to reject.
 
 import { orderIdToString, orderStringToId } from "../orders";
-import type { BoolExpr, JassPlayer, JassUnit, NativeCtx, RectObj, Runtime, UnitSnapshot } from "../runtime";
-import { asInt, asNum, asStr, jBool, jHandle, jInt, JNULL, truthy, type JassValue } from "../values";
+import { evalBoolExpr, type BoolExpr, type JassPlayer, type JassUnit, type NativeCtx, type RectObj, type Runtime, type UnitSnapshot } from "../runtime";
+import { asInt, asNum, asStr, jBool, jHandle, jInt, JNULL, type JassValue } from "../values";
 import { issueTargetOrder } from "./orderTarget";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
@@ -100,10 +100,10 @@ const simUnits = (c: NativeCtx): ReadonlyArray<UnitSnapshot> => c.rt.hooks?.enum
  *  filter — GetUnitsInRectAll passes one — matches everything. */
 function filterPasses(c: NativeCtx, filterV: JassValue | undefined, unitV: JassValue): boolean {
   const be = filterV ? c.rt.data<BoolExpr>(filterV) : undefined;
-  if (!be?.fn) return true;
+  if (!be) return true;
   c.rt.eventStack.push(new Map([["FilterUnit", unitV]]));
   try {
-    return truthy(c.call(be.fn, []));
+    return evalBoolExpr(be, (fn) => c.call(fn, []));
   } finally {
     c.rt.eventStack.pop();
   }

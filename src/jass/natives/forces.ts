@@ -12,8 +12,8 @@ import { widePlayerTable } from "../../data/enums";
 // InitBlizzardGlobals via CreateForce + ForceEnumPlayers/ForceAddPlayer — so once
 // these natives exist the presets populate for free when main() runs.
 
-import type { JassPlayer, NativeCtx, Runtime } from "../runtime";
-import { asInt, jBool, jHandle, JNULL, truthy, type JassValue } from "../values";
+import { evalBoolExpr, type BoolExpr, type JassPlayer, type NativeCtx, type Runtime } from "../runtime";
+import { asInt, jBool, jHandle, JNULL, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -49,11 +49,11 @@ function enumSlots(rt: Runtime): number[] {
 /** Run a boolexpr `filter` for player `idx`, exposing it as GetFilterPlayer.
  *  A null filter means "match everything". */
 function filterPasses(c: NativeCtx, filterV: JassValue | undefined, idx: number): boolean {
-  const be = filterV ? c.rt.data<{ fn: string }>(filterV) : undefined;
+  const be = filterV ? c.rt.data<BoolExpr>(filterV) : undefined;
   if (!be) return true;
   c.rt.eventStack.push(new Map([["FilterPlayer", c.rt.playerHandle(idx)]]));
   try {
-    return truthy(c.call(be.fn, []));
+    return evalBoolExpr(be, (fn) => c.call(fn, []));
   } finally {
     c.rt.eventStack.pop();
   }
