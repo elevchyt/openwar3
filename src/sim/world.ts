@@ -15424,6 +15424,15 @@ export class SimWorld {
     if (!u.buffs.length) return false;
     let burned = false; // a dot bit this tick — the regeneration items break on it
     let expired = false;
+    // Whose dot took the LAST point: that buff's owner killed the unit, exactly as a direct blow's
+    // does — the experience, the bounty and the score's kill column all read the killer (issue
+    // #348). Without it a creep finished by Shadow Strike, a Flame Strike burn, Doom or Acid Bomb
+    // died to nobody and paid nothing.
+    let lethalSource = 0;
+    // Invulnerable (Divine Shield, Avatar's immune window) and the `whosyourdaddy` cheater take
+    // NOTHING, a tick included — the same two gates every other damage path asks first
+    // (landDamage, tickLightningShields). The buff's clock still runs.
+    const immune = u.invulnerable || this.godProtected(u);
     for (const b of u.buffs) {
       // `delay` gates a heal-over-time the same way it gates Wind Walk's fade: the buff is
       // already on the unit and its clock is already running, the healing just hasn't
@@ -15437,10 +15446,11 @@ export class SimWorld {
       else if (b.kind === "hot" && b.value && b.delay <= 0) u.hp = Math.min(u.maxHp, u.hp + b.value * dt);
       // A non-lethal dot (every poison) whittles and stops: it may take the last point off
       // a unit's health bar's worth of hp but never the last point itself.
-      else if (b.kind === "dot" && b.value) {
+      else if (b.kind === "dot" && b.value && !immune) {
         const before = u.hp;
         const bite = b.value * dt * this.spellTypeMult(u); // a dot is ability damage: DamageBonusSpells (issue #277)
         u.hp = b.nonLethal ? Math.max(1, u.hp - bite) : u.hp - bite;
+        if (before > 0 && u.hp <= 0) lethalSource = b.sourceId;
         // A dot IS "a spell which does damage", so it cancels a salve on the tick it bites —
         // burning under a Rain of Fire is exactly the fight you cannot regenerate through.
         // Flagged rather than dispelled here: we are walking u.buffs, which the break edits.
@@ -15467,7 +15477,7 @@ export class SimWorld {
     if (expired) u.buffs = u.buffs.filter((b) => b.timeLeft > 0);
     if (burned) this.breakItemRegen(u);
     if (u.hp <= 0) {
-      this.kill(u);
+      this.kill(u, lethalSource);
       return true;
     }
     return false;
