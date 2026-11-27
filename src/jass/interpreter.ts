@@ -19,7 +19,7 @@ import type { BinOp, Expr, FunctionDecl, JassProgram, Stmt, VarDecl } from "./as
 import { rawcodeToInt } from "./lexer";
 import { Runtime, JassArray, compareLimit, evalBoolExpr, playerStateHolds, triggerConditionsPass, ThreadAbort, unitStateHolds, type BoolExpr, type HostFunction, type JassPlayer, type JassUnit, type NativeCtx, type RectObj, type RegionObj, type SoundObj, type TimerObj, type TriggerObj, type TriggerReg, type UnitSnapshot } from "./runtime";
 import {
-  asInt, asNum, asStr, defaultForType, jassEquals, jassNotEquals, jBool, jHandle, jInt, jReal, jStr, JNULL, truthy, type JassValue,
+  asInt, asNum, asStr, coerceTo, defaultForType, jassEquals, jassNotEquals, jBool, jHandle, jInt, jReal, jStr, JNULL, truthy, type JassValue,
 } from "./values";
 
 // The sim's live view of a unit (what the pumps and group enumeration are fed) lives in
@@ -315,6 +315,9 @@ const EXIT_MARK: JassValue = Object.freeze({ k: "null" }) as JassValue;
 export class Frame {
   readonly vars = new Map<string, JassValue>();
   readonly arrays = new Map<string, JassArray>();
+  /** The names of this frame's `real` parameters and locals — the only declared type a write
+   *  into a local has to know (values.ts `coerceTo`): an integer `set` into one becomes a real. */
+  readonly reals = new Set<string>();
 }
 
 const MAX_CALL_DEPTH = 3000; // deep enough for blizzard.j; a backstop against runaway recursion
@@ -511,7 +514,7 @@ export class Interpreter {
         this.rt.globalArrays.set(g.name, new JassArray(g.type));
       } else {
         this.rt.globalTypes.set(g.name, g.type);
-        this.rt.globals.set(g.name, g.init ? this.eval(g.init, null) : defaultForType(g.type));
+        this.rt.globals.set(g.name, g.init ? coerceTo(g.type, this.eval(g.init, null)) : defaultForType(g.type));
       }
     }
   }
@@ -703,7 +706,9 @@ export class Interpreter {
     if (!r) {
       const frame = new Frame();
       for (let i = 0; i < fn.params.length; i++) {
-        frame.vars.set(fn.params[i].name, args[i] ?? defaultForType(fn.params[i].type));
+        const p = fn.params[i];
+        if (p.type === "real") frame.reals.add(p.name);
+        frame.vars.set(p.name, args[i] ? coerceTo(p.type, args[i]) : defaultForType(p.type));
       }
       r = { k: "user", fn: fn.name, frame, ph: 0, li: 0 };
     }
@@ -714,11 +719,14 @@ export class Interpreter {
         for (; r.li < fn.locals.length; r.li++) {
           const loc = fn.locals[r.li];
           if (loc.isArray) frame.arrays.set(loc.name, new JassArray(loc.type));
-          else frame.vars.set(loc.name, loc.init ? yield* this.evalG(loc.init, frame, ts) : defaultForType(loc.type));
+          else {
+            if (loc.type === "real") frame.reals.add(loc.name);
+            frame.vars.set(loc.name, loc.init ? coerceTo(loc.type, yield* this.evalG(loc.init, frame, ts)) : defaultForType(loc.type));
+          }
         }
         r.ph = 1;
       }
-      if ((yield* this.execBlockG(fn.body, frame, ts)) === RETURN_MARK) return this.returned;
+      if ((yield* this.execBlockG(fn.body, frame, ts)) === RETURN_MARK) return coerceTo(fn.returns, this.returned);
     } finally {
       ts.recs.pop();
       this.depth--;
@@ -916,7 +924,7 @@ export class Interpreter {
     if (s.index !== undefined) {
       this.arrayFor(s.name, frame).set(idx, value);
     } else if (frame.vars.has(s.name)) {
-      frame.vars.set(s.name, value);
+      frame.vars.set(s.name, frame.reals.has(s.name) ? coerceTo("real", value) : value);
     } else {
       this.rt.assignGlobal(s.name, value); // may raise a variable event, synchronously
     }

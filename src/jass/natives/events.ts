@@ -201,8 +201,8 @@ export function registerEventNatives(rt: Runtime): void {
   // TriggerRegisterVariableEvent — EVENT_GAME_VARIABLE_LIMIT, "Value Of Real Variable": raised
   // by the write itself (Interpreter.fireVariableEvent says when). "This only works for
   // non-array variables of type 'Real'" (UI\TriggerStrings.txt's own hint), so anything else —
-  // an integer, an array, a name no global has — registers nothing. Asked of the DECLARED type:
-  // a real global holds an int after the editor's own `set udg_X=0`.
+  // an integer, an array, a name no global has — registers nothing. Asked of the DECLARED type,
+  // which is the authority (the value's kind follows it — values.ts `coerceTo`).
   def(rt, "TriggerRegisterVariableEvent", (c, a) => {
     const t = trig(c, a[0]);
     const name = a[1]?.k === "string" ? a[1].s : "";

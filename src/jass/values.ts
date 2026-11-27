@@ -127,6 +127,19 @@ export function jassNotEquals(a: JassValue, b: JassValue): boolean {
   return !jassEquals(a, b);
 }
 
+/**
+ * A value as a slot of DECLARED type `type` holds it: an integer written into a `real` IS a
+ * real from then on. JASS widens integer → real implicitly at every typed write — a `set`, a
+ * parameter, a `return`, a global's or local's initialiser, an array slot — and the kind this
+ * runtime carries is what decides `/` (truncating between two integers) and the 32-bit wrap of
+ * `+`/`*`. Without it `Half(5)` with `takes real x … return x / 2` gave 2 instead of 2.5, and a
+ * `real gr = 7` divided as an integer (issue #369). Nothing else is converted: JASS has no
+ * implicit real → integer, so a script that writes one has a type error the game would refuse.
+ */
+export function coerceTo(type: string | undefined, v: JassValue): JassValue {
+  return type === "real" && v.k === "int" ? jReal(v.n) : v;
+}
+
 /** The zero/default value for a JASS type name — what an uninitialised local,
  *  global, array slot, or unimplemented-native return should read as. Integers 0,
  *  reals 0.0, booleans false, strings/handles/code null.

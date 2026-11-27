@@ -9,7 +9,7 @@
 // is deliberate — the interpreter must stay engine-agnostic (bridge, not fork).
 
 import type { FunctionDecl } from "./ast";
-import { type JassValue, JNULL, jHandle, defaultForType, truthy } from "./values";
+import { type JassValue, JNULL, jHandle, coerceTo, defaultForType, truthy } from "./values";
 import { isNeutralSlot, PlayerSlot, widePlayerTable } from "../data/enums";
 import type { StoredUnitState } from "../sim/world";
 
@@ -1745,7 +1745,7 @@ export class JassArray {
     return this.data.get(i) ?? defaultForType(this.elemType);
   }
   set(i: number, v: JassValue): void {
-    this.data.set(i, v);
+    this.data.set(i, coerceTo(this.elemType, v));
   }
 }
 
@@ -1805,6 +1805,7 @@ export class Runtime {
   /** Write a scalar global — the one door for it, so the JASS `set` and a Lua map's `_G` write
    *  (src/compat/lua/host.ts) raise the variable event alike. */
   assignGlobal(name: string, value: JassValue): void {
+    value = coerceTo(this.globalTypes.get(name), value);
     const before = this.globals.get(name);
     this.globals.set(name, value);
     if (this.watchedGlobals.has(name)) this.onWatchedGlobal?.(name, before ?? value, value);

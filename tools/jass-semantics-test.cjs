@@ -332,5 +332,72 @@ endfunction
   check('a flush finds the label in any case', call('CacheFlush'), true);
 }
 
+// --- #369: an integer written into a real IS a real ---------------------------------------------
+{
+  console.log('--- integer -> real at every typed write (#369) ---');
+  const { call, raw } = boot(`
+globals
+    real gr = 7
+    real gs = 0.0
+    real array ra
+    integer gi = 7
+endglobals
+function Half takes real x returns real
+    return x / 2
+endfunction
+function HalfOf5 takes nothing returns real
+    return Half(5)
+endfunction
+function GlobalInit takes nothing returns real
+    return gr / 2
+endfunction
+function GlobalSet takes nothing returns real
+    set gs = 3
+    return gs / 2
+endfunction
+function ArraySlot takes nothing returns real
+    set ra[1] = 3
+    return ra[1] / 2
+endfunction
+function Five takes nothing returns real
+    return 5
+endfunction
+function ReturnIsReal takes nothing returns real
+    return Five() / 2
+endfunction
+function LocalInit takes nothing returns real
+    local real r = 9
+    return r / 2
+endfunction
+function LocalSet takes nothing returns real
+    local real r
+    set r = 11
+    return r / 2
+endfunction
+function NoWrap takes nothing returns real
+    local real r = 2147483647
+    return r + 1
+endfunction
+function IntStaysInt takes nothing returns integer
+    return gi / 2
+endfunction
+function IntLocal takes nothing returns integer
+    local integer i = 7
+    return i / 2
+endfunction
+`);
+  check('Half(5) is 2.5', call('HalfOf5'), 2.5);
+  check('real gr = 7, then / 2', call('GlobalInit'), 3.5);
+  check('set gs = 3, then / 2', call('GlobalSet'), 1.5);
+  check('set ra[1] = 3, then / 2', call('ArraySlot'), 1.5);
+  check('a returns-real function returning 5, then / 2', call('ReturnIsReal'), 2.5);
+  check('local real r = 9, then / 2', call('LocalInit'), 4.5);
+  check('set r = 11 on a real local, then / 2', call('LocalSet'), 5.5);
+  check('a real holding 2147483647 does not wrap on + 1', call('NoWrap'), 2147483648);
+  check('Five() is a real', raw('Five').k, 'real');
+  check('an integer global still truncates', call('IntStaysInt'), 3);
+  check('an integer local still truncates', call('IntLocal'), 3);
+}
+
 console.log(failures ? `\n${failures} failure(s).` : '\nAll JASS semantics checks passed.');
 process.exit(failures ? 1 : 0);
