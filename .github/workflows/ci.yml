@@ -1,12 +1,14 @@
-# The checks that need NO game install (issue #303).
+# The checks that need NO game install (issues #303, #394).
 #
 # OpenWar3 ships zero Blizzard assets, so nothing that reads the Warcraft III data can run
-# here — `pnpm sim:test`, `pnpm jass:test`, `pnpm data:verify` and the rest stay local, where
-# the contributor's own install is. What is left is what a pull request from a fork can be
-# held to: it typechecks, it adds no import cycle, and the test plan still parses.
+# here. What CAN run is `pnpm test` on a checkout with no install: it typechecks the app and
+# the landing page, checks for import cycles and the test plan, runs the relay suite, and runs
+# every sim/JASS test the manifest (tools/tests.mjs) does not mark `data` — 170 of 231 when
+# this was written. The data-backed tests, `data:verify`, `casc:test` and the other
+# install checks skip themselves with a line saying so, and stay the contributor's to run
+# locally. `app:test` is skipped too: it needs a `pnpm build`.
 #
-# `pnpm relay:test` is NOT here yet: its loopback half loads the command router out of
-# `.sim-build/` (tools/tsconfig.sim.json), so it needs a prior build. Add it once it does not.
+# A test that starts needing the data fails here; mark it `data: true` in tools/tests.mjs.
 name: CI
 
 on:
@@ -24,7 +26,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
       # Nothing below launches the desktop app: skip the ~100 MB Electron binary.
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
@@ -38,6 +40,7 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
-      - run: pnpm cycles
-      - run: node tools/test-plan-test.mjs
+      # The landing page is its own package with its own lockfile (web/README.md).
+      - run: pnpm --dir web install --frozen-lockfile
+      # Continues past a failing check and names every one that failed at the end.
+      - run: pnpm test

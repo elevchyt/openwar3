@@ -62,27 +62,39 @@ the rest with a line saying what each one is waiting for.
 pnpm test
 ```
 
-The suites it runs, if you want one on its own. These need no game install (CI runs the first two
-on every pull request, `.github/workflows/ci.yml`):
+CI runs `pnpm test` on every pull request (`.github/workflows/ci.yml`) on a checkout with no
+install, so everything that needs no game data is checked there: the typechecks, the import-cycle
+check, the relay suite and every sim/JASS test that does not read the data — 170 of the 231.
+
+The suites it runs, if you want one on its own:
 
 ```bash
-pnpm typecheck   # tsc over the app and the Node/tooling config
-pnpm cycles      # fails on any import cycle
-pnpm relay:test  # multiplayer relay server + loopback (compiles .sim-build/ first)
+pnpm typecheck      # tsc over the app and the Node/tooling config
+pnpm cycles         # fails on any import cycle
+pnpm web:typecheck  # the landing page (`pnpm --dir web install` first)
+pnpm relay:test     # multiplayer relay server + loopback (compiles .sim-build/ first)
+pnpm sim:test       # simulation, AI, rendering helpers, data overlays, net, saves
+pnpm jass:test      # the JASS / Lua trigger runtime
+pnpm app:test       # desktop shell's local server + LAN beacon — needs `pnpm build` first
 ```
 
-This one needs no install either, but it tests the BUILT desktop app, so run `pnpm build` first:
+The test suites are lists in [`tools/tests.mjs`](tools/tests.mjs), run by
+[`tools/run-tests.mjs`](tools/run-tests.mjs). A failing test does not stop the run: every test
+runs and the summary at the end names each one that failed. Without `pnpm data:extract`, the
+tests marked `data` there are skipped with a line saying so and the rest still run.
 
 ```bash
-pnpm app:test    # desktop shell's local server + LAN beacon
+node tools/run-tests.mjs sim pathing harvest   # only the tests whose file name has one of the words
+node tools/run-tests.mjs sim jass --jobs 6     # six at a time
+node tools/run-tests.mjs sim jass --free       # exactly what CI runs, even with the data here
+node tools/run-tests.mjs sim --list            # the plan, without running it
 ```
 
-And, if you have the install and have run `pnpm data:extract`:
-
-```bash
-pnpm sim:test    # simulation, AI, rendering helpers, data overlays
-pnpm jass:test   # the JASS / Lua trigger runtime
-```
+**Adding a test:** put its file in the right suite in `tools/tests.mjs`, with `data: true` if it
+reads `Warcraft III/` (a test that cannot find the data should stop with
+``Run `pnpm data:extract` first …`` and exit code 2, rather than a stack trace). A test that needs
+the data and is not marked fails CI; `node tools/test-plan-test.mjs` fails if a `tools/*-test.*`
+file is run by nothing.
 
 Run whichever suite covers what you changed; if you touched `src/data/gameplayConstants.ts`, also
 run `pnpm data:verify`.
@@ -97,19 +109,17 @@ a maintainer's next commit catches the table up. `HUSKY=0 git commit …` skips 
 
 | Check | Needs the install? |
 | --- | --- |
-| `pnpm typecheck`, `pnpm cycles`, `pnpm build` | No |
+| `pnpm typecheck`, `pnpm cycles`, `pnpm build`, `pnpm web:typecheck` | No |
 | `pnpm test` | No — it skips whatever your checkout cannot run, and says why |
 | `pnpm relay:test` | No |
 | `pnpm app:test` | No — but it needs `dist/`, so run `pnpm build` first |
-| `pnpm sim:test` | **Yes** — many of its tests read the real tables, models and maps |
-| `pnpm jass:test` | **Yes** — the tests run the install's own `common.j` / `Blizzard.j` |
-| `pnpm data:verify`, `pnpm casc:test`, `pnpm campaign:test`, `pnpm map:compat:test`, `pnpm patches:check` | **Yes** |
+| `pnpm sim:test` | Partly — 24 of its 189 tests read the real tables, models and maps |
+| `pnpm jass:test` | Mostly — 37 of its 42 tests run the install's own `common.j` / `Blizzard.j` |
+| `pnpm data:verify`, `pnpm versions:test`, `pnpm casc:test`, `pnpm campaign:test`, `pnpm map:compat:test`, `pnpm jass:coverage`, `pnpm patches:check` | **Yes** |
 
-A test that needs the game data and cannot find it stops with
-``Run `pnpm data:extract` first …`` (exit code 2) rather than a stack trace. `sim:test` and
-`jass:test` are `&&` chains, so without an install they stop at the first such test. You can still
-run any single test on its own: compile once (`tsc -p tools/tsconfig.sim.json` for `sim-*`/`ai-*`
-tests, `tsc -p tools/tsconfig.jass.json` for `jass-*` tests), then `node tools/<name>-test.cjs`.
+You can still run any single test on its own: compile once (`tsc -p tools/tsconfig.sim.json` for
+`sim-*`/`ai-*` tests, `tsc -p tools/tsconfig.jass.json` for `jass-*` tests), then
+`node tools/<name>-test.cjs`.
 
 If you could not run a suite, just say so in the PR — that is fine.
 

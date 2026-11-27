@@ -104,7 +104,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   itself against the local install. `docs/abilities-audit.md` is GENERATED and kept current by the husky
   **pre-commit hook** (`.husky/pre-commit` → `pnpm data:audit`, only when a commit touches a file the audit scans and
   the unpacked data exists) — never hand-edit it; if a new dispatch shape reads as `todo`, teach
-  `tools/audit-abilities.mjs` to see it.
+  `tools/audit-abilities.mjs` to see it. A NEW TEST goes in the manifest
+  [`tools/tests.mjs`](tools/tests.mjs) (never a package.json `&&` chain), with `data: true` if
+  it reads `Warcraft III/`: CI runs `pnpm test` with no install, i.e. every test NOT so marked
+  (issue #394), and `tools/run-tests.mjs` keeps going past a failure and summarises.
 - **Show your work with screenshots — often.** Anything visual (rendering, HUD, camera, effects, terrain, shadows, fog,
   UI) must be previewed in the REAL running game and the screenshots **sent to the developer** so they can see how it
   looks as you go — don't just describe it or keep the shots to yourself. Drive the app live per the `live-browser-testing`

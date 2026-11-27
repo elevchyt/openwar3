@@ -15,7 +15,7 @@
 - [ ] `pnpm test` (runs everything below your checkout can run, and says what it skipped)
 - [ ] `pnpm typecheck`
 - [ ] `pnpm cycles`
-- [ ] `pnpm sim:test` / `pnpm jass:test` (need a 1.30.4 install + `pnpm data:extract`)
+- [ ] `pnpm sim:test` / `pnpm jass:test` with the data (`pnpm data:extract` on a 1.30.4 install — CI runs only the tests that need none)
 - [ ] `pnpm relay:test`
 - [ ] `pnpm app:test` (needs `pnpm build` first)
 - [ ] Played it in the running game
