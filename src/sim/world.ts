@@ -14650,10 +14650,12 @@ export class SimWorld {
     u.maxMana = u.building && u.building.constructionLeft > 0 ? 0 : newMaxMana;
     if (u.hp > u.maxHp) u.hp = u.maxHp;
     if (u.mana > u.maxMana) u.mana = u.maxMana;
-    // Defend: "While Defend is active, movement is reduced to <DataC1,%>% of normal speed"
-    // (30%) — a stance, not a debuff, so it is derived here rather than carried as a buff.
+    // Defend: "While Defend is active, move speed is reduced BY <Adef,DataC1,%>%"
+    // (`Units\HumanAbilityStrings.txt [Adef]` Ubertip; DataC1 "Movement Speed Factor" = 0.3), so
+    // DataC IS the slow — a Footman walks at 270 × 0.7 = 189, not 81 floored to MinUnitSpeed
+    // (issue #353). A stance, not a debuff, so it is derived here rather than carried as a buff.
     const defend = this.defendStance(u);
-    if (defend) slowMove = Math.max(slowMove, 1 - this.dataOf(defend, 2, 0.3));
+    if (defend) slowMove = Math.max(slowMove, this.dataOf(defend, 2, 0.3));
     // Spiked Carapace (Crypt Lord passive AUts): a flat bonus armour (dataB) while learned.
     const carapace = this.passiveLevelData(u, "AUts");
     const carapaceArmor = carapace ? this.dataOf(carapace, 1) : 0;
