@@ -125,7 +125,12 @@ function doUpgrades(ai: AiPlayer): void {
 
   if (barracksDone >= 1) {
     if (fortressDone >= 1 && ai.count(GRUNT) >= 2) ai.setBuildUpgr(1, UPG_ORC_BERSERK);
-    if (strongholdDone >= 1 && ai.count(HEAD_HUNTER) >= 2) {
+    // orc.ai reads `c_hunter` here, which `init_vars` never assigns (only `c_hunter_done` is,
+    // line 249), so it is always 0 and Blizzard's orc never researches the Berserker Upgrade
+    // or Troll Regeneration from this branch. Kept dead on purpose, as `hunter_code`'s
+    // polarity is kept: a branch in this file is the game's (#381).
+    const cHunter = 0;
+    if (strongholdDone >= 1 && cHunter >= 2) {
       if (forgeDone >= 1) ai.setBuildUpgr(1, UPG_ORC_BERSERKER);
       ai.setBuildUpgr(1, UPG_ORC_REGEN);
     }

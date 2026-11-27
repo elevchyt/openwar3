@@ -328,8 +328,11 @@ export const UPG_WELL_SPRING = "Rews";
 
 export const TAVERN = "ntav";
 export const ALCHEMIST = "Nalc";
-export const NAGA_WITCH = "Nngs";
-export const PIT_LORD = "Nplh";
+// The tavern's two that common.ai ALSO names, for other units: its `NAGA_WITCH` is the Naga
+// Sea Witch CREEP 'nnsw' and its `PIT_LORD` the campaign hero 'Npld'. Named apart so a port of
+// a campaign script that says `PIT_LORD` never quietly reaches the tavern's (#381).
+export const NAGA_SEA_WITCH = "Nngs";
+export const TAVERN_PIT_LORD = "Nplh";
 export const FIRE_LORD = "Nfir";
 export const BEASTMASTER = "Nbst";
 export const DARK_RANGER = "Nbrn";
@@ -437,3 +440,15 @@ export const TOWN_COUNT_EQUIVALENTS: Record<string, string[]> = {
   [DRUID_CLAW]: [DRUID_CLAW_M],
   [DRUID_CLAW_M]: [DRUID_CLAW],
 };
+
+/** The rows of TOWN_COUNT_EQUIVALENTS that are one UNIT in another FORM — a morph (Call to
+ *  Arms, Stone Form, Bear/Storm Crow Form, the Spirit Walker's two) or the Berserker Upgrade's
+ *  replacement — rather than a STRUCTURE's next tier. `AiPlayer.setBuildNext` folds these and
+ *  only these: common.ai's `SetBuildNext` reads the PLAIN `GetUnitCount`, and the one place a
+ *  race script asks it for a tier — undead.ai's `SetBuildNext(Min(c_neclis_done,
+ *  c_halls_done+1), NECROPOLIS_2)` — must not count a Black Citadel as a Halls of the Dead, or
+ *  a Citadel main upgrades its Necropolis expansion where Blizzard's does nothing (#381). */
+export const FORM_EQUIVALENTS: ReadonlySet<string> = new Set([
+  PEASANT, HEAD_HUNTER, SPIRIT_WALKER, SPIRIT_WALKER_M, GARGOYLE,
+  DRUID_TALON, DRUID_TALON_M, DRUID_CLAW, DRUID_CLAW_M,
+]);

@@ -11,7 +11,7 @@ import { PATHING_CELL } from "../sim/pathing";
 import { heroReviveCost, upgradeCost } from "../data/gameplayConstants";
 import { isRoc } from "../data/edition";
 import {
-  BUILD_EXPAND, BUILD_UNIT, BUILD_UPGRADE, ELF_MINE, MELEE_INSANE, MELEE_NEWBIE, TOWN_COUNT_EQUIVALENTS,
+  BUILD_EXPAND, BUILD_UNIT, BUILD_UPGRADE, ELF_MINE, FORM_EQUIVALENTS, MELEE_INSANE, MELEE_NEWBIE, TOWN_COUNT_EQUIVALENTS,
 } from "./ids";
 
 // The melee AI engine: `Scripts\common.ai`'s library, plus the ~150 AI natives that library
@@ -680,16 +680,19 @@ export class AiPlayer {
    *  is finished. (Note it reads `GetUnitCount` for the test and `GetUnitCountDone`+1 for the
    *  ask, which is what keeps it from queueing the whole shortfall at once.)
    *
-   *  Both counts FOLD the unit's other forms (`TOWN_COUNT_EQUIVALENTS`, the `TownCount` fold),
-   *  where common.ai reads the plain counts. The row's ask is answered by `startUnit`, which
-   *  folds — so a plain test and a folded answer disagreed for every soldier that changes form:
-   *  four Head Hunters turned Berserkers by `Robk` read as NONE here, asked for "one", and
-   *  `startUnit` found four and called it met, so not one more Berserker was ever trained (and
-   *  the same for a Druid of the Claw living in Bear Form). No race script asks this row for a
-   *  unit with another form, so this changes nothing for them. */
+   *  Both counts are common.ai's PLAIN ones, except for a UNIT with another FORM
+   *  (`FORM_EQUIVALENTS`), which folds as `TownCount` does. The row's ask is answered by
+   *  `startUnit`, which folds — so a plain test and a folded answer disagreed for every soldier
+   *  that changes form: four Head Hunters turned Berserkers by `Robk` read as NONE here, asked
+   *  for "one", and `startUnit` found four and called it met, so not one more Berserker was
+   *  ever trained (and the same for a Druid of the Claw living in Bear Form, and a Gargoyle in
+   *  Stone Form — undead.ai's `SetBuildNext(4, GARGOYLE)`). A STRUCTURE TIER is not folded:
+   *  undead.ai asks this row for `NECROPOLIS_2`, and counting a Black Citadel as a Halls made a
+   *  Citadel main upgrade its Necropolis expansion where Blizzard's does nothing (#381). */
   setBuildNext(qty: number, item: string): void {
-    if (this.townCount(item) >= qty) return;
-    this.setBuildAll(BUILD_UNIT, this.townCountDone(item) + 1, item, -1);
+    const form = FORM_EQUIVALENTS.has(item);
+    if ((form ? this.townCount(item) : this.count(item)) >= qty) return;
+    this.setBuildAll(BUILD_UNIT, (form ? this.townCountDone(item) : this.countDone(item)) + 1, item, -1);
   }
 
   /** `SecondaryTown(town, qty, id)` / `SecTown`. */
