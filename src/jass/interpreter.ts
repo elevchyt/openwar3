@@ -4,12 +4,12 @@
 // demand (config(), main(), trigger callbacks). Design rules that matter:
 //   • int vs real arithmetic is type-directed (integer/ integer truncates) — see
 //     values.ts. This is why we track the value kind rather than using JS numbers.
-//   • JASS `and`/`or` DO NOT short-circuit — both operands are always evaluated
-//     (a well-known JASS gotcha; it's why generated GUI code nests `if`s instead
-//     of using `and`). We match that so side-effecting operands behave correctly.
+//   • JASS `and`/`or` SHORT-CIRCUIT: the right operand is evaluated only when the left one
+//     has not already decided the answer (evalBinary), and boolexpr `And`/`Or` do the same.
 //   • never hard-crash the map: an unknown function/variable or a failed native
 //     logs once and yields a typed default (CLAUDE.md "safe default" rule). A
-//     runaway loop/recursion is capped rather than hanging the browser.
+//     runaway loop KILLS its thread at the op limit, as the game's does (OP_LIMIT), and
+//     runaway recursion is capped, rather than either hanging the browser.
 //   • trigger actions run on a THREAD that `TriggerSleepAction` can suspend (7.15).
 //     That's why the statement/call layer is written as generators: a wait can occur
 //     anywhere inside a trigger's actions, so every enclosing call must be resumable.
@@ -17,7 +17,7 @@
 
 import type { BinOp, Expr, FunctionDecl, JassProgram, Stmt, VarDecl } from "./ast";
 import { rawcodeToInt } from "./lexer";
-import { Runtime, JassArray, compareLimit, evalBoolExpr, playerStateHolds, triggerConditionsPass, ThreadAbort, unitStateHolds, type BoolExpr, type HostFunction, type JassPlayer, type JassUnit, type NativeCtx, type RectObj, type RegionObj, type SoundObj, type TimerObj, type TriggerObj, type TriggerReg, type UnitSnapshot } from "./runtime";
+import { Runtime, JassArray, compareLimit, evalBoolExpr, playerStateHolds, triggerConditionsPass, ThreadAbort, ThreadCrash, unitStateHolds, type BoolExpr, type HostFunction, type JassPlayer, type JassUnit, type NativeCtx, type RectObj, type RegionObj, type SoundObj, type TimerObj, type TriggerObj, type TriggerReg, type UnitSnapshot } from "./runtime";
 import {
   asInt, asNum, asStr, coerceTo, defaultForType, jassEquals, jassNotEquals, jBool, jHandle, jInt, jReal, jStr, JNULL, truthy, type JassValue,
 } from "./values";
@@ -318,10 +318,26 @@ export class Frame {
   /** The names of this frame's `real` parameters and locals — the only declared type a write
    *  into a local has to know (values.ts `coerceTo`): an integer `set` into one becomes a real. */
   readonly reals = new Set<string>();
+  /** Locals declared with no initialiser and not yet `set`: reading one kills the thread. */
+  readonly unset = new Set<string>();
 }
 
 const MAX_CALL_DEPTH = 3000; // deep enough for blizzard.j; a backstop against runaway recursion
-const MAX_LOOP_ITERS = 2_000_000; // init loops are tiny; this only guards a pathological script
+/**
+ * A thread's op budget. The game runs a thread for a fixed number of bytecode OPERATIONS
+ * (300 000 — Hive's op-limit threads, the reason vJass libraries "reset the op limit" through
+ * ExecuteFunc, TriggerEvaluate or ForForce) and then KILLS it: nothing after the point it ran
+ * out of runs, the rest of the trigger included. We count STATEMENTS (and loop iterations,
+ * for an empty `loop`), each of which is at least one operation, so a thread this kills the
+ * game had already killed — only ever later than the game, never earlier. The budget is per
+ * thread and starts again after a wait and in every new thread: a trigger thread, a timer
+ * handler, ExecuteFunc, TriggerExecute, a condition, a filter, an enumeration's callback. A
+ * call reached from an EXPRESSION is the same thread and spends the caller's.
+ *
+ * It replaced a cap of 2 000 000 iterations PER LOOP, after which execution CONTINUED past
+ * `endloop` — the opposite of the game, where the code after a runaway loop never runs.
+ */
+const OP_LIMIT = 300_000;
 const MAX_THREADS = 4096; // live (sleeping) trigger threads — a backstop against runaway spawning
 
 /** What a running thread yields when it wants to sleep: seconds of game time. */
@@ -539,7 +555,7 @@ export class Interpreter {
     const fn = this.rt.functions.get(name);
     if (fn) {
       const ts = new Trace();
-      return this.runSync(this.callUserG(fn, args, ts), name, adoptWaits, ts);
+      return this.runSync(this.callUserG(fn, args, ts), name, adoptWaits, ts, !adoptWaits);
     }
     return this.missing(name);
   }
@@ -629,7 +645,16 @@ export class Interpreter {
    *     WC3 does not allow a wait there either, and resuming one would fire trigger actions out
    *     of a context that no longer exists.
    */
-  private runSync(gen: ThreadGen, label: string, adoptWaits: boolean, ts: Trace): JassValue {
+  private runSync(gen: ThreadGen, label: string, adoptWaits: boolean, ts: Trace, fresh: boolean): JassValue {
+    // `fresh`: in the game this call is a NEW thread (a condition, a filter, an enumeration's
+    // callback, ExecuteFunc, TriggerExecute), with an op budget of its own and a death of its
+    // own; otherwise it is the caller's thread (a call from an expression) and spends its budget.
+    const savedOps = this.ops;
+    const savedOwner = this.opsOwner;
+    if (fresh) {
+      this.ops = 0;
+      this.opsOwner = label;
+    }
     this.syncDepth++;
     try {
       const r = gen.next();
@@ -638,10 +663,16 @@ export class Interpreter {
       else this.rt.warnOnce(label, "wait outside a trigger thread — callback abandoned");
       return JNULL;
     } catch (err) {
-      if (err instanceof ThreadAbort) return JNULL; // a wait that could not even be adopted
+      // A thread that DIED takes its caller with it when the caller is the same thread.
+      if (err instanceof ThreadCrash && !fresh) throw err;
+      if (err instanceof ThreadAbort) return JNULL; // a wait that could not even be adopted, or a thread killed
       throw err;
     } finally {
       this.syncDepth--;
+      if (fresh) {
+        this.ops = savedOps;
+        this.opsOwner = savedOwner;
+      }
     }
   }
 
@@ -686,6 +717,26 @@ export class Interpreter {
   /** The value of the `return` on its way out of its function (RETURN_MARK). */
   private returned: JassValue = JNULL;
 
+  /** Statements the running thread has spent of its `OP_LIMIT`, and what that thread is (a
+   *  thread's label, or the function a fresh callback thread runs) for the message it dies with. */
+  private ops = 0;
+  private opsOwner = "";
+
+  /** Count one statement against the running thread's budget. The extra per-recipient passes of
+   *  a `GetLocalPlayer` block (`rt.audience` set) are not counted: they are how we answer for
+   *  the OTHER machines, and on each of those the block runs once. */
+  private spend(): void {
+    if (this.rt.audience === null && ++this.ops > OP_LIMIT) {
+      this.crash(`<op-limit>${this.opsOwner}`, `thread "${this.opsOwner}" ran past the op limit (${OP_LIMIT} statements) and was killed`);
+    }
+  }
+
+  /** Kill the running thread as the game does (see ThreadCrash), saying why once. */
+  private crash(key: string, why: string): never {
+    this.rt.warnOnce(key, why);
+    throw new ThreadCrash(why);
+  }
+
   private *callUserG(fn: FunctionDecl, args: JassValue[], ts: Trace): ThreadGen {
     // On a RESUME the frame comes back from the saved trace, so `args` are not looked at; the
     // depth and the record-only scope are re-entered exactly as the first time (a restored
@@ -721,6 +772,7 @@ export class Interpreter {
           if (loc.isArray) frame.arrays.set(loc.name, new JassArray(loc.type));
           else {
             if (loc.type === "real") frame.reals.add(loc.name);
+            if (!loc.init) frame.unset.add(loc.name);
             frame.vars.set(loc.name, loc.init ? coerceTo(loc.type, yield* this.evalG(loc.init, frame, ts)) : defaultForType(loc.type));
           }
         }
@@ -750,6 +802,7 @@ export class Interpreter {
   }
 
   private *exec(s: Stmt, frame: Frame, ts: Trace): ThreadGen {
+    this.spend();
     switch (s.kind) {
       case "call": {
         // The thread-aware natives, intercepted here so a wait inside them can suspend
@@ -896,10 +949,8 @@ export class Interpreter {
         try {
           while (true) {
             if (!r.mid) {
-              if (++r.iters > MAX_LOOP_ITERS) {
-                this.rt.warnOnce("<loop>", "iteration cap hit");
-                return JNULL;
-              }
+              r.iters++;
+              this.spend(); // an iteration costs an op even when the body is empty
               r.mid = true;
             }
             for (; r.j < s.body.length; r.j++) {
@@ -924,6 +975,7 @@ export class Interpreter {
     if (s.index !== undefined) {
       this.arrayFor(s.name, frame).set(idx, value);
     } else if (frame.vars.has(s.name)) {
+      frame.unset.delete(s.name);
       frame.vars.set(s.name, frame.reals.has(s.name) ? coerceTo("real", value) : value);
     } else {
       this.rt.assignGlobal(s.name, value); // may raise a variable event, synchronously
@@ -1041,7 +1093,7 @@ export class Interpreter {
     if (name === "ExecuteFunc") {
       if (args[0]?.k === "string") {
         const t = new Trace();
-        this.runSync(this.callFunctionG(args[0].s, [], t), `ExecuteFunc:${args[0].s}`, true, t);
+        this.runSync(this.callFunctionG(args[0].s, [], t), `ExecuteFunc:${args[0].s}`, true, t, true);
       }
       return JNULL;
     }
@@ -1101,7 +1153,7 @@ export class Interpreter {
       // (`if TriggerExecuteBJ(…)`), which has adopted since the campaign trigger queue needed
       // it — the two were never meant to differ.
       const tr = new Trace();
-      this.runSync(this.runActionsG(t, tr), `trigger#${t.handleId}`, true, tr);
+      this.runSync(this.runActionsG(t, tr), `trigger#${t.handleId}`, true, tr, true);
     } finally {
       // Pop OUR frame specifically. A suspension inside the actions is resumed by
       // `resumeThread`, which restores the same frames in the same order, so the top of the
@@ -1178,7 +1230,12 @@ export class Interpreter {
       case "var": {
         // One lookup a scope: a stored value is never `undefined`, so a miss is the answer.
         const l = frame?.vars.get(e.name);
-        if (l !== undefined) return l;
+        if (l !== undefined) {
+          // A local that was declared and never given a value: the game kills the thread that
+          // reads it (it does not hand back a default), so nothing after this line runs.
+          if (frame!.unset.size && frame!.unset.has(e.name)) this.crash(`<unset>${e.name}`, `read of uninitialised local "${e.name}" — thread killed`);
+          return l;
+        }
         const g = this.rt.globals.get(e.name);
         if (g !== undefined) return g;
         this.rt.warnOnce(e.name, "undefined variable");
@@ -1420,7 +1477,11 @@ export class Interpreter {
     const savedDepth = this.depth;
     const savedSync = this.syncDepth;
     const savedThread = this.currentThread;
+    const savedOps = this.ops;
+    const savedOwner = this.opsOwner;
     const base = this.rt.eventStack.length;
+    this.ops = 0; // a fresh budget at every resume: the game's runs again after a wait
+    this.opsOwner = t.label;
     this.depth = t.depth;
     this.syncDepth = 0;
     this.currentThread = t;
@@ -1437,7 +1498,8 @@ export class Interpreter {
       if (!(err instanceof ThreadAbort)) {
         this.rt.warnOnce(t.label, `trigger thread threw: ${(err as Error).message}`);
       }
-      t.done = true;
+      t.done = true; // a ThreadCrash was said once where it was thrown
+
     } finally {
       // Whatever frames the thread pushed and hasn't popped are ITS event responses —
       // lift them off the shared stack and carry them to the next resume.
@@ -1447,6 +1509,8 @@ export class Interpreter {
       this.depth = savedDepth;
       this.syncDepth = savedSync;
       this.currentThread = savedThread;
+      this.ops = savedOps;
+      this.opsOwner = savedOwner;
     }
   }
 
@@ -1621,8 +1685,13 @@ export class Interpreter {
   /** Advance game time by `dt` seconds (pumped from the sim tick): expire timers, then
    *  resume any trigger thread whose `TriggerSleepAction` has run out (7.15). An expired
    *  timer runs its TimerStart handler code and fires any trigger registered on it
-   *  (TriggerRegisterTimerExpireEvent); periodic timers re-arm. The inner guard
-   *  stops a zero/negative-timeout periodic timer from looping forever in one tick. */
+   *  (TriggerRegisterTimerExpireEvent); periodic timers re-arm.
+   *
+   *  Expiries within one step happen in DUE-TIME order, not in the order the timers were
+   *  created: a 0.01 s timer started after a 0.02 s one still fires first, and a periodic timer
+   *  shorter than the step fires each of its periods in their place among the others. A
+   *  PERIODIC timer with a timeout of 0 fires once every step — the game fires it every frame;
+   *  it used to fire once and stop. */
   advanceTime(dt: number): void {
     this.rt.gameTime += dt;
     // Iterate a SNAPSHOT. An expiring timer's handler routinely mutates rt.timers — the
@@ -1633,30 +1702,45 @@ export class Interpreter {
     // lost that tick, every time. (It cost the whole map: MarkGameStarted fires 0.01 s in,
     // and the next timer created after it never advanced again.) DestroyTimer clears
     // `running` before it splices, so the guard below still drops anything removed mid-pump.
+    const due: TimerObj[] = [];
     for (const t of [...this.rt.timers]) {
       if (!t.running) continue;
       t.remaining -= dt;
       t.elapsedTotal += dt;
-      let guard = 0;
-      while (t.running && t.remaining <= 0 && guard++ < 10000) {
-        // The timer's own state is settled BEFORE its handler runs, because the handler reads
-        // and writes it. A ONE-SHOT is spent at exactly zero: the step's overshoot is our
-        // clock's granularity, not time the timer has left, and `TimerGetRemaining == 0` is how
-        // a map asks "has it run out" — DotA's game start is `if TimerGetRemaining(PL4)==0`
-        // polled every 0.25 s, so a remainder of −0.0067 meant no game, no creep waves, ever.
-        // And it is switched off FIRST so the handler may re-arm it: `TimerStart(GetExpiredTimer(),
-        // …)` inside its own callback is a standard idiom, and clearing `running` afterwards
-        // stopped the timer the handler had just started.
-        const periodic = t.periodic && t.timeout > 0;
-        if (periodic) t.remaining += t.timeout;
-        else {
-          t.elapsedTotal = t.timeout; // …and its elapsed stops at its timeout, not past it
-          t.remaining = 0;
-          t.running = false;
-        }
-        this.expireTimer(t);
-        if (!periodic) break;
+      if (t.remaining <= 0) due.push(t);
+    }
+    // Each pass takes the timer that came due EARLIEST — the most negative remainder; a tie
+    // goes to the one created first (the list is in creation order and the scan keeps the
+    // first minimum). A timer re-armed still inside this step goes back in; one whose timeout
+    // is 0 fires once a step and no more (`spent`), or it would fire for ever.
+    const spent = new Set<TimerObj>();
+    let guard = 0;
+    while (due.length && guard++ < 100_000) {
+      let at = 0;
+      for (let k = 1; k < due.length; k++) if (due[k].remaining < due[at].remaining) at = k;
+      const t = due[at];
+      due.splice(at, 1);
+      if (!t.running || t.remaining > 0 || spent.has(t)) continue;
+      // The timer's own state is settled BEFORE its handler runs, because the handler reads
+      // and writes it. A ONE-SHOT is spent at exactly zero: the step's overshoot is our
+      // clock's granularity, not time the timer has left, and `TimerGetRemaining == 0` is how
+      // a map asks "has it run out" — DotA's game start is `if TimerGetRemaining(PL4)==0`
+      // polled every 0.25 s, so a remainder of −0.0067 meant no game, no creep waves, ever.
+      // And it is switched off FIRST so the handler may re-arm it: `TimerStart(GetExpiredTimer(),
+      // …)` inside its own callback is a standard idiom, and clearing `running` afterwards
+      // stopped the timer the handler had just started.
+      if (t.periodic && t.timeout > 0) t.remaining += t.timeout;
+      else if (t.periodic) {
+        t.remaining = 0;
+        spent.add(t);
+      } else {
+        t.elapsedTotal = t.timeout; // …and its elapsed stops at its timeout, not past it
+        t.remaining = 0;
+        t.running = false;
+        if (t.timeout <= 0) spent.add(t); // restarted at 0 by its own handler: next step
       }
+      this.expireTimer(t);
+      if (t.running && t.remaining <= 0 && !spent.has(t)) due.push(t);
     }
     this.pumpThreads(); // waits come due AFTER the clock moved (so a 0s wait costs one tick)
     // Floating text ages on GAME time too (7.19), so tags freeze with a paused game and

@@ -179,14 +179,24 @@ class Parser {
         this.next();
         locals.push(this.parseVarDecl(false));
       } else {
-        body.push(this.parseStatement());
+        const st = this.parseStatement();
+        if (st) body.push(st);
       }
     }
     return { name, params, returns, isConstant, locals, body };
   }
 
-  private parseStatement(): Stmt {
-    if (this.isKw("debug")) this.next(); // `debug` prefix — run the following statement normally
+  /** One statement, or null for one that does not exist outside debug mode. */
+  private parseStatement(): Stmt | null {
+    // `debug` marks a statement — a `set`, a `call`, or a whole `if`/`loop` block — that only
+    // runs in debug mode, which the game never runs in. It is parsed (so a malformed one is
+    // still an error and the block's `endif`/`endloop` is consumed) and then dropped. It used
+    // to be run like any other line.
+    if (this.isKw("debug")) {
+      this.next();
+      this.parseStatement();
+      return null;
+    }
     if (this.isKw("set")) return this.parseSet();
     if (this.isKw("call")) return this.parseCall();
     if (this.isKw("if")) return this.parseIf();
@@ -262,7 +272,8 @@ class Parser {
       } else if (this.peek().kind === "eof") {
         break;
       } else {
-        current.push(this.parseStatement());
+        const st = this.parseStatement();
+        if (st) current.push(st);
       }
     }
     return { kind: "if", branches, elseBody };
@@ -280,7 +291,8 @@ class Parser {
         break;
       }
       if (this.peek().kind === "eof") break;
-      body.push(this.parseStatement());
+      const st = this.parseStatement();
+      if (st) body.push(st);
     }
     return { kind: "loop", body };
   }

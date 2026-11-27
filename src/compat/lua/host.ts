@@ -65,7 +65,7 @@ const MAX_RESUMES = 100000;
 /**
  * The CPU a map's Lua may spend in one go — from the moment the engine calls into it until it
  * returns or yields — counted in VM instructions. JASS has the same kind of ceiling
- * (`MAX_LOOP_ITERS`, `MAX_CALL_DEPTH`); without one here `while true do end` in `war3map.lua`
+ * (`OP_LIMIT`, `MAX_CALL_DEPTH`); without one here `while true do end` in `war3map.lua`
  * hung the tab, and since the host hands its map to everyone who joins, a host could hang every
  * machine in the room. Generous on purpose: a whole map's `main()` is a few million, and this is
  * tens of millions (fengari runs on the order of 10^7 a second, so a few seconds at most). Ours.

@@ -540,7 +540,13 @@ export function registerEventNatives(rt: Runtime): void {
   });
   def(rt, "PauseTimer", (c, a) => (timer(c, a[0]) && (timer(c, a[0])!.running = false), JNULL));
   def(rt, "ResumeTimer", (c, a) => (timer(c, a[0]) && (timer(c, a[0])!.running = true), JNULL));
-  def(rt, "TimerGetElapsed", (c, a) => jReal(timer(c, a[0])?.elapsedTotal ?? 0));
+  // A PERIODIC timer's elapsed time is into its CURRENT period — it runs 0 → timeout and
+  // starts again, as the countdown does — not the time since TimerStart, which grew for ever.
+  def(rt, "TimerGetElapsed", (c, a) => {
+    const t = timer(c, a[0]);
+    if (!t) return jReal(0);
+    return jReal(t.periodic ? Math.min(t.timeout, Math.max(0, t.timeout - t.remaining)) : t.elapsedTotal);
+  });
   def(rt, "TimerGetRemaining", (c, a) => jReal(timer(c, a[0])?.remaining ?? 0));
   def(rt, "TimerGetTimeout", (c, a) => jReal(timer(c, a[0])?.timeout ?? 0));
 }

@@ -14,10 +14,13 @@
 //   }
 
 /** Parse a war3map.wts into id → text. Tolerant of comment lines between the
- *  `STRING n` header and its `{`, of a leading BOM, and of CRLF line endings. */
+ *  `STRING n` header and its `{`, of a leading BOM, and of all three line endings — a bare
+ *  `\r` included, which a map protector's rewrite writes (the lexer's lesson: CLAUDE.md "A bare
+ *  `\r` is a JASS line terminator"); split on `\r?\n` such a table held no strings at all. A
+ *  multi-line string's lines are joined with `\n` whatever ended them. */
 export function parseWts(text: string): Map<number, string> {
   const out = new Map<number, string>();
-  const lines = text.replace(/^﻿/, "").split(/\r?\n/);
+  const lines = text.replace(/^﻿/, "").split(/\r\n|\r|\n/);
   let i = 0;
   while (i < lines.length) {
     const m = /^STRING\s+(\d+)/.exec(lines[i]);

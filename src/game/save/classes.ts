@@ -60,7 +60,7 @@ export function registerSaveClasses(): void {
   registerSaveClass("jass.Frame", Frame);
   // The VM itself: its threads are written as their TRACES (interpreter.ts `TraceRec`) where the
   // generators are, and rebuilt on load once the runtime they name is back.
-  registerSaveClass<Interpreter>("jass.Interpreter", Interpreter, ["globalDecls", "ctx", "waitCache", "stmtWaitCache", "returned", "regionGen", "regionPos", "regionSeen", "regionMoved", "regionGone"], {
+  registerSaveClass<Interpreter>("jass.Interpreter", Interpreter, ["globalDecls", "ctx", "waitCache", "stmtWaitCache", "returned", "ops", "opsOwner", "regionGen", "regionPos", "regionSeen", "regionMoved", "regionGone"], {
     save: (vm) => ({ threads: vm.captureThreads() }),
     load: (vm) => {
       vm.rt.invalidateTriggerRegs(); // the saved registrations were written in behind the index

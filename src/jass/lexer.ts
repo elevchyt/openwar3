@@ -163,7 +163,9 @@ export function tokenize(src: string): Token[] {
       }
       const text = src.slice(start, i);
       if (isReal) push("real", text, { num: parseFloat(text) });
-      else push("int", text, { num: parseInt(text, 10) });
+      // A leading zero makes an integer OCTAL, as in C: `010` is 8. Only a run of octal digits
+      // reads that way — `09` has no octal reading and stays the decimal it was written as.
+      else push("int", text, { num: /^0[0-7]+$/.test(text) ? parseInt(text, 8) : parseInt(text, 10) });
       continue;
     }
     // Identifier / keyword.

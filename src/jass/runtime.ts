@@ -1733,6 +1733,18 @@ export class HandleTable {
  *  answer — the interpreter catches this at the synchronous-call boundary (runSync). */
 export class ThreadAbort {}
 
+/** Thrown where the GAME kills the running thread outright — its op budget is spent, or it read
+ *  a local that was never given a value (Interpreter `crash`). Nothing after it on that thread
+ *  runs: not the rest of the function, not the caller, not the trigger's remaining actions. A
+ *  ThreadAbort so that every boundary that already lets one pass lets this one pass too; the
+ *  difference is that it also crosses a call made from an EXPRESSION (runSync), which is the
+ *  same thread in the game, where a plain abort stops at it. */
+export class ThreadCrash extends ThreadAbort {
+  constructor(readonly why: string) {
+    super();
+  }
+}
+
 /** A boxed JASS array (fixed 8192 slots in the real engine — JASS_MAX_ARRAY_SIZE).
  *  Sparse map + a per-type default so unset slots read as 0/0.0/false/null. */
 export class JassArray {

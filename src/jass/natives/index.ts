@@ -90,6 +90,30 @@ const CONVERT_NATIVES = [
   "ConvertAbilityBooleanLevelArrayField", "ConvertAbilityStringLevelArrayField",
 ];
 
+const ASCII = /^[\x00-\x7f]*$/;
+const utf8In = new TextEncoder();
+const utf8Out = new TextDecoder("utf-8");
+
+/** `StringLength`: the string's length in UTF-8 bytes. */
+export function stringBytes(s: string): number {
+  return ASCII.test(s) ? s.length : utf8In.encode(s).length;
+}
+
+/** `SubString(s, start, end)` over UTF-8 bytes. A cut through the middle of a character decodes
+ *  that character's stray bytes as U+FFFD — we keep text, not bytes, so that is the nearest
+ *  answer to the game's half-character. */
+export function subStringBytes(s: string, start: number, end: number): string {
+  if (ASCII.test(s)) {
+    const from = Math.max(0, Math.min(start, s.length));
+    const to = Math.max(0, Math.min(end, s.length));
+    return to > from ? s.slice(from, to) : "";
+  }
+  const b = utf8In.encode(s);
+  const from = Math.max(0, Math.min(start, b.length));
+  const to = Math.max(0, Math.min(end, b.length));
+  return to > from ? utf8Out.decode(b.subarray(from, to)) : "";
+}
+
 /** Cheap, pure utility natives (string/number conversions, RNG, camera/env
  *  no-ops). Safe to run anywhere; they make blizzard.j run more faithfully and cut
  *  down "safe default" log noise. */
@@ -101,8 +125,14 @@ function registerUtilNatives(rt: Runtime): void {
   def(rt, "R2I", (_c, a) => jInt(Math.trunc(asNum(a[0]))));
   def(rt, "S2I", (_c, a) => jInt(parseInt(asStr(a[0]), 10) || 0));
   def(rt, "S2R", (_c, a) => jReal(parseFloat(asStr(a[0])) || 0));
-  def(rt, "SubString", (_c, a) => jStr(asStr(a[0]).substring(asInt(a[1]), asInt(a[2]))));
-  def(rt, "StringLength", (_c, a) => jInt(asStr(a[0]).length));
+  // A JASS string is BYTES (UTF-8, as every string the game keeps is), so a length and an
+  // offset count bytes: "é" is 2 and a CJK character 3, where JavaScript counts UTF-16 units
+  // (1 and 1). And `SubString` takes (start, end) as given: an end before the start is the
+  // empty string, where JS `substring` quietly swaps them (`SubString("abcdef", 4, 2)` was
+  // "cd"). Offsets outside the string are pulled onto it. An ASCII string — nearly every one a
+  // script slices — is its own bytes and skips the encoding.
+  def(rt, "SubString", (_c, a) => jStr(subStringBytes(asStr(a[0]), asInt(a[1]), asInt(a[2]))));
+  def(rt, "StringLength", (_c, a) => jInt(stringBytes(asStr(a[0]))));
   def(rt, "StringCase", (_c, a) => jStr(a[1].k === "bool" && a[1].b ? asStr(a[0]).toUpperCase() : asStr(a[0]).toLowerCase()));
   // StringHash lives in natives/text.ts (a real 32-bit hash, not a 0 stub).
   // GetHandleId. A `Convert…` constant (an attack type, a damage type, a player state …) is not

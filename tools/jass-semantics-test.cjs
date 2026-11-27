@@ -18,6 +18,8 @@ if (!existsSync(join(BUILD, 'headless.js'))) {
 }
 writeFileSync(join(REPO, '.jass-build', 'package.json'), '{"type":"commonjs"}');
 const { buildInterpreter } = require(join(BUILD, 'headless.js'));
+const { tokenize } = require(join(BUILD, 'lexer.js'));
+const { parseWts } = require(join(BUILD, 'wts.js'));
 
 let failures = 0;
 const check = (name, got, want) => {
@@ -260,23 +262,20 @@ function SlotNull takes nothing returns boolean
     return sa[7] == null
 endfunction
 function LocalNull takes nothing returns boolean
-    local string s
-    return s == null
+    local string array la
+    return la[0] == null
 endfunction
 function EmptyIsNotNull takes nothing returns boolean
     return "" == null
 endfunction
 function NullConcat takes nothing returns string
-    local string s
-    return s + "a" + sa[2]
+    return gs + "a" + sa[2]
 endfunction
 function NullLength takes nothing returns integer
     return StringLength(gs)
 endfunction
 function NullPlusNull takes nothing returns string
-    local string a
-    local string b
-    return a + b
+    return sa[3] + sa[4]
 endfunction
 function StoredMiss takes nothing returns boolean
     return GetStoredString(InitGameCache("x.w3v"), "m", "k") == null
@@ -291,7 +290,7 @@ endfunction
   check('equal reals are not !=', call('ExactNe'), false);
   check('an unset string global is null', call('GlobalNull'), true);
   check('an unset string array slot is null', call('SlotNull'), true);
-  check('an unset string local is null', call('LocalNull'), true);
+  check('an unset local string array slot is null', call('LocalNull'), true);
   check('"" is still not null', call('EmptyIsNotNull'), false);
   check('a null string concatenates as ""', call('NullConcat'), 'a');
   check('StringLength(null) is 0', call('NullLength'), 0);
@@ -397,6 +396,148 @@ endfunction
   check('Five() is a real', raw('Five').k, 'real');
   check('an integer global still truncates', call('IntStaysInt'), 3);
   check('an integer local still truncates', call('IntLocal'), 3);
+}
+
+// --- #375: the op limit, `debug`, zero-timeout timers, SubString, octal, .wts endings ---------
+{
+  console.log('--- small semantic gaps (#375) ---');
+  const { interp, call } = boot(`
+globals
+    integer after = 0
+    integer reached = 0
+    integer ticks = 0
+    string order = ""
+    timer pt = null
+    real elapsedSeen = -1.0
+endglobals
+function Forever takes nothing returns nothing
+    loop
+    endloop
+    set after = 1
+endfunction
+function RunsPastLimit takes nothing returns integer
+    set after = 0
+    call Forever()
+    return 7
+endfunction
+function Caller takes nothing returns integer
+    set reached = 0
+    call ExecuteFunc("Forever")
+    set reached = 1
+    return reached
+endfunction
+function Unset takes nothing returns integer
+    local integer i
+    set reached = 1
+    set reached = i + 2
+    return 99
+endfunction
+function UnsetLater takes nothing returns integer
+    local integer i
+    set i = 5
+    return i
+endfunction
+function Spin takes nothing returns nothing
+    local integer i = 0
+    loop
+        exitwhen i == 50000
+        set i = i + 1
+    endloop
+    set reached = reached + 1
+endfunction
+function LimitResets takes nothing returns integer
+    set reached = 0
+    call ExecuteFunc("Spin")
+    call ExecuteFunc("Spin")
+    call ExecuteFunc("Spin")
+    call ExecuteFunc("Spin")
+    return reached
+endfunction
+function Debugged takes nothing returns integer
+    local integer n = 1
+    debug set n = 100
+    debug call ExecuteFunc("Forever")
+    debug if true then
+        set n = n + 1000
+    endif
+    return n
+endfunction
+function Sub1 takes nothing returns string
+    return SubString("abcdef", 4, 2)
+endfunction
+function Sub2 takes nothing returns string
+    return SubString("abcdef", 2, 4)
+endfunction
+function Sub3 takes nothing returns string
+    return SubString("abc", -5, 99)
+endfunction
+function Len takes string s returns integer
+    return StringLength(s)
+endfunction
+function SubU takes nothing returns string
+    return SubString("héllo", 0, 3)
+endfunction
+function Octal takes nothing returns integer
+    return 010 + 0 + 09
+endfunction
+function Tick takes nothing returns nothing
+    set ticks = ticks + 1
+endfunction
+function StartZero takes nothing returns nothing
+    call TimerStart(CreateTimer(), 0.0, true, function Tick)
+endfunction
+function A takes nothing returns nothing
+    set order = order + "a"
+endfunction
+function B takes nothing returns nothing
+    set order = order + "b"
+endfunction
+function StartOrdered takes nothing returns nothing
+    call TimerStart(CreateTimer(), 0.03, false, function A)
+    call TimerStart(CreateTimer(), 0.01, false, function B)
+endfunction
+function StartPeriodic takes nothing returns nothing
+    set pt = CreateTimer()
+    call TimerStart(pt, 1.0, true, null)
+endfunction
+function Elapsed takes nothing returns real
+    return TimerGetElapsed(pt)
+endfunction
+`);
+  check('a runaway loop kills its thread (nothing after it runs)', call('RunsPastLimit'), 'null');
+  check('...the statement after the loop never ran', interp.rt.globals.get('after').n, 0);
+  check('ExecuteFunc is a new thread: its death leaves the caller running', call('Caller'), 1);
+  check('reading an uninitialised local kills the thread', call('Unset'), 'null');
+  check('...the line before it ran, the line with it did not', interp.rt.globals.get('reached').n, 1);
+  check('a local set before it is read is fine', call('UnsetLater'), 5);
+  check('each ExecuteFunc thread has its own budget', call('LimitResets'), 4);
+  check('debug statements (and blocks) are skipped', call('Debugged'), 1);
+  check('SubString("abcdef", 4, 2) is ""', call('Sub1'), '');
+  check('SubString("abcdef", 2, 4)', call('Sub2'), 'cd');
+  check('out-of-range offsets clamp', call('Sub3'), 'abc');
+  const len = (s) => call('Len', [{ k: 'string', s }]);
+  check('StringLength counts bytes: "é" is 2', len('é'), 2);
+  check('StringLength counts bytes: a CJK character is 3', len('中'), 3);
+  check('StringLength of ASCII', len('hello'), 5);
+  check('SubString cuts bytes: "h" + "é" is 3 bytes', call('SubU'), 'hé');
+  check('010 is octal 8, 09 stays decimal', call('Octal'), 17);
+  check('the lexer reads 0777 as 511', tokenize('0777').find((t) => t.kind === 'int').num, 511);
+
+  interp.callFunction('StartZero', []);
+  for (let i = 0; i < 5; i++) interp.advanceTime(0.05);
+  check('a periodic timer of timeout 0 fires every step', interp.rt.globals.get('ticks').n, 5);
+  interp.callFunction('StartOrdered', []);
+  interp.advanceTime(0.05);
+  check('timers due in one step expire in due-time order', interp.rt.globals.get('order').s, 'ba');
+  interp.callFunction('StartPeriodic', []);
+  for (let i = 0; i < 25; i++) interp.advanceTime(0.1);
+  check('TimerGetElapsed on a periodic timer is into its current period', Math.round(call('Elapsed') * 1000) / 1000, 0.5);
+
+  const wts = (nl) => ['STRING 1', '{', 'first line', 'second', '}', 'STRING 2', '// comment', '{', 'two', '}'].join(nl);
+  for (const [name, nl] of [['LF', '\n'], ['CRLF', '\r\n'], ['CR', '\r']]) {
+    const t = parseWts(wts(nl));
+    check(`.wts with ${name} endings`, `${t.size}|${JSON.stringify(t.get(1))}|${t.get(2)}`, '2|"first line\\nsecond"|two');
+  }
 }
 
 console.log(failures ? `\n${failures} failure(s).` : '\nAll JASS semantics checks passed.');
