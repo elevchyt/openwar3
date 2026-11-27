@@ -15233,6 +15233,7 @@ export class SimWorld {
         }
       }
       u.uprooted = false;
+      this.uprootedIds.delete(u.id);
       u.footprint = n;
       u.rootedFootprint = 0;
       // Its own armour class back — Fortified for every stock Ancient (UnitBalance `defType`).
@@ -15257,6 +15258,7 @@ export class SimWorld {
       if (!u.entanglePending) this.autoEntangle(u);
     } else {
       u.uprooted = true;
+      this.uprootedIds.add(u.id);
       // A walking Ancient is not armoured like a building: `Aroo` DataD is "Uprooted Defense
       // Type" (AbilityMetaData `Roo4`, typed `defenseTypeInt`), 2 on both stock rows
       // (`Aro1`/`Aro2`) — LARGE, the Heavy class — so it takes Pierce ×1.00 and Magic ×2.00 on
@@ -31817,6 +31819,11 @@ export class SimWorld {
    */
   private attackers = new Set<number>();
   private attackersTracked = false;
+  /** The Ancients standing UPROOTED, by id — added and taken out where `uprooted` is written
+   *  (toggleRoot; snapshotApply on a client), so the renderer can lift and re-lay their
+   *  foundation decals without walking every unit every frame (issue #392). A superset: a unit
+   *  that died walking is not taken out, so a reader still asks the unit itself. */
+  readonly uprootedIds = new Set<number>();
   private campHasFighter(u: SimUnit): boolean {
     for (const id of this.attackers) {
       const c = this.units.get(id);

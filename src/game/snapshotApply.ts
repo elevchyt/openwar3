@@ -37,6 +37,9 @@ export interface ApplyWorld {
    *  decay clock and the `raised` latch (`tickCorpses`), so writing it is what makes a
    *  client's bodies rot on the host's schedule and vanish when a spell consumes one. */
   readonly corpses?: Map<number, SimCorpse>;
+  /** SimWorld.uprootedIds, kept in step with each unit's `uprooted` as it is written. Optional
+   *  for the stub worlds tests pass. */
+  readonly uprootedIds?: Set<number>;
   timeOfDay: number;
   dawnDusk: boolean;
   eclipse?: boolean;
@@ -304,6 +307,8 @@ export function applyWorldSnapshot(world: ApplyWorld, snap: WorldSnapshot, creat
     }
     if (!fresh && u.owner !== s.owner && !s.remembered) recoloured.push({ id: s.id, owner: s.owner });
     writeUnitSnapshot(u, s);
+    if (u.uprooted) world.uprootedIds?.add(u.id);
+    else world.uprootedIds?.delete(u.id);
   }
   const removed: number[] = [];
   for (const id of world.units.keys()) if (!sent.has(id)) removed.push(id);

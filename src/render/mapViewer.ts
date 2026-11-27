@@ -443,6 +443,13 @@ const SHOP_ARROW_FX: BuffFx = { path: "Abilities\\Spells\\Other\\Aneu\\AneuTarge
  *  hand rather than attached: they belong on the GROUND at the stations, not on the building's
  *  origin bone. */
 const MINE_CIRCLE_FX: BuffFx = { path: "Abilities\\Spells\\Undead\\UndeadMine\\UndeadMineCircle.mdx", attach: [] };
+/** How many persistent-FX key strings MapViewerScene.fxKey keeps before it drops them all and
+ *  starts again — the only way a dead unit's names leave. OURS: far above a busy frame's count. */
+const FX_KEY_CAP = 20000;
+/** attachLink's answer for a type with no link words, one list for every such unit. */
+const NO_LINK: readonly string[] = Object.freeze([]);
+/** attachLink's alternate set, one per type's own list — so the same words are the same list. */
+const ALT_LINKS = new WeakMap<readonly string[], readonly string[]>();
 /** The ability that IS "this creep is asleep" — `Units\NeutralAbilityFunc.txt`'s own
  *  `[ACsp]`, commented "creeps sleeping":
  *
@@ -1998,6 +2005,9 @@ export class MapViewerScene {
   // (built, cancelled, re-tasked, the worker dead) is not placed at all, rather than standing
   // for a frame on the hope that the next rebuild notices.
   private pendingGhostWanted = new Set<string>();
+  /** updatePendingBuildGhosts' per-frame collections, kept and cleared (issue #392). */
+  private readonly ghostDesired = new Map<string, { defId: string; x: number; y: number; blocked: boolean }>();
+  private readonly ghostClaimed = new Set<number>();
   // Workers waiting for their build site to clear of units → seconds waited so far.
   private buildWait = new Map<number, number>();
   // Workers that STOPPED short of their build site and have been re-sent to its centre once
@@ -8323,7 +8333,7 @@ export class MapViewerScene {
    *  changes when the unit changes form (Metamorphosis swaps "Origin Ref" for "Origin
    *  Alternate Ref", and a morph onto another model swaps the whole instance), and a model
    *  left hanging off the old node is drawn under a switched-off node or a detached body. */
-  private buffFxParented = new Map<string, { host: SpawnInstance; link: string }>();
+  private buffFxParented = new Map<string, { host: SpawnInstance; link: readonly string[] }>();
   /** A PLANTED buff model's facing (BuffFx.planted): the world rotation it landed with, held
    *  against its holder's turning by `plantBuffFx` every frame. */
   private buffFxPlanted = new Map<string, Float32Array>();
@@ -8361,19 +8371,76 @@ export class MapViewerScene {
   /** updateAuraEffects' per-unit dedupe set (cleared, never re-made) and its group → aura-code
    *  memo — a buff group string names the same ability for the whole match. */
   private readonly auraSeenScratch = new Set<string>();
+  private readonly buffSeenScratch = new Set<string>();
   private readonly auraCodeOfGroup = new Map<string, string>();
+  /** The pass's set of live keys, cleared rather than made each frame. */
+  private readonly fxActive = new Set<string>();
+  /**
+   * The persistent-FX keys, kept rather than built (issue #392): the pass names every effect on
+   * every buffed unit every frame, and each name was a template string — a couple of hundred
+   * allocations a frame in a late-game army, for strings that are the same ones every frame.
+   * `mid` → unit → [the `o` key, then the numbered ones]. A key is only ever a key (nothing
+   * parses one), so the cache may be dropped whole whenever it grows — a dead unit's names are
+   * never asked for again, and that is how they leave.
+   */
+  private readonly fxKeys = new Map<string, Map<number, string[]>>();
+  private fxKeyCount = 0;
+  private fxKey(id: number, mid: string, i: number, tag = ""): string {
+    let byUnit = this.fxKeys.get(mid);
+    if (!byUnit) this.fxKeys.set(mid, (byUnit = new Map()));
+    let slots = byUnit.get(id);
+    if (!slots) byUnit.set(id, (slots = []));
+    const at = i + 1; // -1 is the `o` key
+    let key = slots[at];
+    if (key === undefined) {
+      if (++this.fxKeyCount > FX_KEY_CAP) {
+        this.fxKeys.clear();
+        this.fxKeyCount = 0;
+      }
+      key = slots[at] = i < 0 ? `${id}|${mid}|o` : `${id}|${mid}|${tag}${i}`;
+    }
+    return key;
+  }
+  /** A root's buff art made PLANTED (BuffFx.planted), once per fx row rather than a spread a frame. */
+  private readonly plantedFx = new WeakMap<BuffFx, BuffFx>();
+  /** An aura's BROADCASTER model (`Targetart`) as a BuffFx, once per row and path. */
+  private readonly auraOwnerFx = new WeakMap<AbilityDef, BuffFx>();
+  private plantedOf(fx: BuffFx): BuffFx {
+    let p = this.plantedFx.get(fx);
+    if (!p) this.plantedFx.set(fx, (p = { ...fx, planted: true }));
+    return p;
+  }
+  private auraOwnerFxOf(def: AbilityDef): BuffFx {
+    let fx = this.auraOwnerFx.get(def);
+    if (!fx || fx.path !== def.targetArt) this.auraOwnerFx.set(def, (fx = { path: def.targetArt, attach: [] }));
+    return fx;
+  }
+
   private updateAuraEffects(): void {
     const world = this.rts?.simWorld;
     const map = this.viewer.map;
     if (!world || !map) return;
-    const active = new Set<string>();
+    const active = this.fxActive;
+    active.clear();
     // Every frame, over every buffed unit in the world — so the per-unit set is one set cleared,
     // not one set made, and a group's aura code is split out once per group string for the match
     // rather than once per buff per frame (a late-game army wears a couple of hundred of them).
     const seen = this.auraSeenScratch;
+    const seenBuff = this.buffSeenScratch;
+    // ONE walk over the world for every per-unit kind of persistent art (issue #392) — the buffs
+    // here, then the orbs, a Moon Well's water, a haunted mine's circles, a sleeper's Zs and a
+    // tree's upgrade, each of which used to walk the whole map again on its own. Keys are
+    // per-unit and per-kind, so the order they are named in decides nothing.
     for (const u of world.units.values()) {
-      if (u.hp <= 0 || !u.buffs.length) continue;
+      if (u.hp <= 0) continue;
+      if (u.inventory.length) this.collectOrbAttachments(active, u);
+      if (u.maxMana > 0) this.collectMoonWellWater(active, u);
+      if (u.mineId) this.collectMineCircles(active, u);
+      if (u.asleep) this.collectSleepFx(active, u);
+      if (u.building?.queue.length) this.collectTreeUpgradeFx(active, u);
+      if (!u.buffs.length) continue;
       seen.clear();
+      seenBuff.clear();
       for (const b of u.buffs) {
         // Aura buffs are grouped "code:kind". A colon alone does NOT make one, though:
         // the item buffs are grouped "item:invuln" / "item:regen" too, and treating those
@@ -8389,27 +8456,27 @@ export class MapViewerScene {
         }
         const def = auraCode ? this.abilityDefByCode(auraCode) : undefined;
         if (def) {
-          if (seen.has("a:" + auraCode)) continue;
-          seen.add("a:" + auraCode);
+          if (seen.has(auraCode)) continue;
+          seen.add(auraCode);
           // Small swirl on every affected unit; big model on whoever is BROADCASTING it. Not on
           // whoever's copy the unit happens to be wearing: two auras of one group share a single
           // buff (the strongest wins), so a Kodo Beast walking up to a hero who carries the
           // Warsong Battle Drums — both `Aakb` — left the hero wearing the KODO's copy, and the
           // drums' art went out on the hero still beating them (issue #196).
-          def.buffFx.forEach((fx, i) => this.trackBuffFx(active, `${u.id}|${auraCode}|s${i}`, fx, u.id));
-          if (b.sourceId === u.id || this.broadcastsAura(u, auraCode)) this.trackBuffFx(active, `${u.id}|${auraCode}|o`, { path: def.targetArt, attach: [] }, u.id);
+          for (let i = 0; i < def.buffFx.length; i++) this.trackBuffFx(active, this.fxKey(u.id, auraCode, i, "s"), def.buffFx[i], u.id);
+          if (b.sourceId === u.id || this.broadcastsAura(u, auraCode)) this.trackBuffFx(active, this.fxKey(u.id, auraCode, -1), this.auraOwnerFxOf(def), u.id);
         } else if (b.fx.length) {
           // Key off the models themselves, not `art`: a buff whose fx came from its own
           // [B….] row (the regeneration items) leaves `art` empty, so two such buffs on one
           // unit would share the key "b:" and the second would be dropped as a duplicate.
           const key = b.art || b.fx[0].path;
-          if (seen.has("b:" + key)) continue;
-          seen.add("b:" + key);
-          b.fx.forEach((fx, i) =>
-            fx.carry
-              ? this.trackCarrier(active, `${u.id}|${key}|${i}`, fx, u.id, b.timeLeft, b.total)
-              : this.trackBuffFx(active, `${u.id}|${key}|${i}`, b.kind === "root" && !fx.planted ? { ...fx, planted: true } : fx, u.id),
-          );
+          if (seenBuff.has(key)) continue;
+          seenBuff.add(key);
+          for (let i = 0; i < b.fx.length; i++) {
+            const fx = b.fx[i];
+            if (fx.carry) this.trackCarrier(active, this.fxKey(u.id, key, i), fx, u.id, b.timeLeft, b.total);
+            else this.trackBuffFx(active, this.fxKey(u.id, key, i), b.kind === "root" && !fx.planted ? this.plantedOf(fx) : fx, u.id);
+          }
         }
       }
     }
@@ -8417,11 +8484,6 @@ export class MapViewerScene {
     this.collectTeleportFx(active);
     this.collectFieldCasterFx(active);
     this.collectFieldCenterFx(active);
-    this.collectOrbAttachments(active);
-    this.collectMoonWellWater(active);
-    this.collectMineCircles(active);
-    this.collectSleepFx(active);
-    this.collectTreeUpgradeFx(active);
     this.updateSummonLoops();
     for (const [key, inst] of this.buffFx) {
       if (!active.has(key)) this.dropBuffFx(key, inst);
@@ -8448,13 +8510,10 @@ export class MapViewerScene {
    * wearing one asks nothing of the priority ladder (src/sim/orbs.ts). The Mask of Death is
    * the deliberate blank — its row writes `Targetart=` with nothing after it.
    */
-  private collectOrbAttachments(active: Set<string>): void {
+  private collectOrbAttachments(active: Set<string>, u: SimUnit): void {
     const world = this.rts?.simWorld;
-    if (!world) return;
-    for (const u of world.units.values()) {
-      if (u.hp <= 0 || !u.inventory.length) continue;
-      world.orbAttachments(u).forEach((fx, i) => this.trackBuffFx(active, `orb|${u.id}|${i}|${fx.path}`, fx, u.id));
-    }
+    if (!world || u.hp <= 0 || !u.inventory.length) return;
+    world.orbAttachments(u).forEach((fx, i) => this.trackBuffFx(active, `orb|${u.id}|${i}|${fx.path}`, fx, u.id));
   }
 
   /**
@@ -8478,12 +8537,12 @@ export class MapViewerScene {
    * rising), hold while it stands, and play their Death when the record goes — mined out, or
    * knocked down by an enemy and left as the bare rock it was.
    */
-  private collectMineCircles(active: Set<string>): void {
+  private collectMineCircles(active: Set<string>, u: SimUnit): void {
     const world = this.rts?.simWorld;
     if (!world) return;
-    for (const u of world.units.values()) {
-      if (u.hp <= 0 || !u.mineId) continue;
-      if (u.building && u.building.constructionLeft > 0) continue; // still being haunted
+    {
+      if (u.hp <= 0 || !u.mineId) return;
+      if (u.building && u.building.constructionLeft > 0) return; // still being haunted
       const stations = world.mineRingStations(u);
       for (let i = 0; i < stations.length; i++) {
         const key = `minering|${u.id}|${i}`;
@@ -8544,16 +8603,16 @@ export class MapViewerScene {
    * or cancelled alike (dropBuffFx keeps the anim, so the Death is the same upgrade's). The
    * tree's own body is held still underneath (RtsController.upgradePose).
    */
-  private collectTreeUpgradeFx(active: Set<string>): void {
+  private collectTreeUpgradeFx(active: Set<string>, u: SimUnit): void {
     const world = this.rts?.simWorld;
     if (!world) return;
-    for (const u of world.units.values()) {
+    {
       const job = u.building?.queue[0];
-      if (u.hp <= 0 || job?.kind !== "upgrade") continue;
+      if (u.hp <= 0 || job?.kind !== "upgrade") return;
       // The TYPE's `abilList`: a row with no behaviour is never seated on the sim unit.
       const abil = this.registry.get(u.typeId)?.abilities.find((id) => this.abilities.get(id)?.code === TREE_UPGRADE_ABILITY);
       const def = abil ? this.abilities.get(abil) : undefined;
-      if (!def?.targetArts.length) continue;
+      if (!def?.targetArts.length) return;
       const anim = (this.registry.get(job.unitId)?.animProps ?? []).join(" ");
       def.targetArts.forEach((path, i) =>
         this.trackBuffFx(active, `tolup|${u.id}|${job.unitId}|${i}`, { path, attach: def.targetAttaches?.[i] ?? [], anim }, u.id),
@@ -8580,14 +8639,14 @@ export class MapViewerScene {
    * camp you have not scouted, and a row of Zzz floating over black ground would be a map hack
    * with a nice animation. `unitHidden` is the same answer the creep's body already gets.
    */
-  private collectSleepFx(active: Set<string>): void {
+  private collectSleepFx(active: Set<string>, u: SimUnit): void {
     const world = this.rts?.simWorld;
     if (!world) return;
     const def = this.abilities.get(CREEP_SLEEP_ABILITY);
     if (!def?.casterArt) return;
-    for (const u of world.units.values()) {
-      if (u.hp <= 0 || !u.asleep) continue;
-      if (this.rts?.unitHidden(u.id)) continue; // fogged — the camp is not there to be seen
+    {
+      if (u.hp <= 0 || !u.asleep) return;
+      if (this.rts?.unitHidden(u.id)) return; // fogged — the camp is not there to be seen
       this.trackBuffFx(active, `sleep|${u.id}`, { path: def.casterArt, attach: def.casterAttach }, u.id);
     }
   }
@@ -8617,12 +8676,12 @@ export class MapViewerScene {
    * construction has no mana and no water (recomputeStats withholds the pool until it is
    * finished), which is also what the game shows.
    */
-  private collectMoonWellWater(active: Set<string>): void {
+  private collectMoonWellWater(active: Set<string>, u: SimUnit): void {
     const world = this.rts?.simWorld;
     if (!world) return;
-    for (const u of world.units.values()) {
-      if (u.hp <= 0 || u.maxMana <= 0) continue;
-      if (u.building && u.building.constructionLeft > 0) continue;
+    {
+      if (u.hp <= 0 || u.maxMana <= 0) return;
+      if (u.building && u.building.constructionLeft > 0) return;
       // THE WATER IS A GAUGE, AND A GAUGE MAY NOT BE READ THROUGH THE FOG.
       //
       // The well itself keeps its image once explored — WC3 leaves the last thing you saw
@@ -8632,10 +8691,10 @@ export class MapViewerScene {
       // drunk. Live sight, like every other thing that moves: no eyes on the well, no water.
       // The pool tidies the instance away and the next look re-fills it at whatever level it
       // has really reached.
-      if (!this.pointVisible(u.x, u.y)) continue;
+      if (!this.pointVisible(u.x, u.y)) return;
       const ab = u.abilities.find((a) => a.code === "Ambt" && a.level >= 1);
       const art = ab && this.abilities.get(ab.id)?.effectArt;
-      if (!art) continue;
+      if (!art) return;
       // AN EMPTY WELL HAS NO WATER IN IT. The model is a solid sheet of water at any height
       // you put it, so the bottom of the ramp is still a puddle lying on the stone — and a
       // drained well left shimmering down there reads exactly like one that still has a heal
@@ -8644,7 +8703,7 @@ export class MapViewerScene {
       // cost of drinking from it. So zero mana is not a level to draw — it is no model, and
       // the pool tidies the instance away (the key is simply left out of `active`) until the
       // well has water again.
-      if (u.mana <= 0) continue;
+      if (u.mana <= 0) return;
       const key = `well|${u.id}`;
       // Unattached, and placed by hand below. The model is a flat hexagon of rippling water
       // that carries its own height above wherever it is put, so it wants the well's CENTRE
@@ -8653,7 +8712,7 @@ export class MapViewerScene {
       // feet it sits inside the stone, drawn and invisible.
       this.trackBuffFx(active, key, { path: art, attach: [] }, u.id, undefined, true);
       const inst = this.buffFx.get(key);
-      if (!inst) continue;
+      if (!inst) return;
       // Centred on the well and lifted into the basin, AS FAR AS ITS MANA HAS FILLED IT. The
       // building's OWN drawn height is the reference rather than the terrain: a structure is
       // seated above the ground it stands on (seatHalfExtents), and its water has to rise with
@@ -9104,7 +9163,9 @@ export class MapViewerScene {
       if (parent) {
         // Rides its attachment node — unless the unit has changed form under it since.
         const host = this.rts?.unitInstance(simId) as unknown as SpawnInstance | undefined;
-        const link = this.attachLink(simId).join(",");
+        // `attachLink` hands back the SAME list for the same words (see there), so a form change
+        // is an identity change — no joined string a parented model a frame.
+        const link = this.attachLink(simId);
         if (host && (host !== parent.host || link !== parent.link)) {
           const node = this.attachmentNode(host, fx.attach, simId);
           if (node) {
@@ -9158,7 +9219,7 @@ export class MapViewerScene {
     const node = host ? this.attachmentNode(host, fx.attach, simId) : undefined;
     if (node && host) {
       inst.setParent?.(node); // ride the unit's own animated attachment point
-      this.buffFxParented.set(key, { host, link: this.attachLink(simId).join(",") });
+      this.buffFxParented.set(key, { host, link: this.attachLink(simId) });
       if (fx.planted) {
         this.buffFxPlanted.set(key, Float32Array.from(host.localRotation));
         this.plantBuffFx(key, inst, host);
@@ -9287,11 +9348,16 @@ export class MapViewerScene {
    *  holds on the same type (a rooted Ancient, a burrowed Crypt Fiend: SimUnit.altModel) wears
    *  the alternate half of its model and so its alternate points too, as animPropsFor gives it
    *  the alternate clips. */
-  private attachLink(simId: number): string[] {
+  private attachLink(simId: number): readonly string[] {
     const u = this.rts?.simView.units.get(simId);
-    if (!u) return [];
-    const own = this.registry.get(u.hexForm || u.typeId)?.attachLinkProps ?? [];
-    return u.altModel && !own.includes("alternate") ? [...own, "alternate"] : own;
+    if (!u) return NO_LINK;
+    const own = this.registry.get(u.hexForm || u.typeId)?.attachLinkProps ?? NO_LINK;
+    if (!u.altModel || own.includes("alternate")) return own;
+    // The alternate set is made once per type's list, so the same words are the same list —
+    // trackBuffFx compares them by identity every frame (issue #392).
+    let alt = ALT_LINKS.get(own);
+    if (!alt) ALT_LINKS.set(own, (alt = [...own, "alternate"]));
+    return alt;
   }
 
   // --- Special effects: a trigger puts a model in the world (7.26 — issue #68) ------
@@ -16631,8 +16697,11 @@ export class MapViewerScene {
     // Collect every desired build site (keyed by defId + snapped position, unique per
     // footprint) from the local player's workers, in order, each judged against the ground
     // and against the sites already claimed ahead of it.
-    const desired = new Map<string, { defId: string; x: number; y: number; blocked: boolean }>();
-    const claimed = new Set<number>();
+    // Every frame, so the two collections are kept and cleared rather than made (issue #392).
+    const desired = this.ghostDesired;
+    desired.clear();
+    const claimed = this.ghostClaimed;
+    claimed.clear();
     // What the still-unpaid sites have to come out of, drawn down as they are walked in order.
     const stash = this.rts.stashFor(this.localPlayer);
     let gold = stash.gold;
@@ -16662,7 +16731,12 @@ export class MapViewerScene {
       // death — SimWorld clears the queue there — and this keeps a stale view honest too).
       if (u.owner !== this.localPlayer || u.hp <= 0) continue;
       if (u.buildPending) note(u.buildPending.defId, u.buildPending.x, u.buildPending.y, u.buildPending.paid);
-      for (const o of u.orderQueue) if (o.kind === "buildnew") note(o.defId, o.x, o.y, o.paid);
+      if (u.orderQueue.length) for (const o of u.orderQueue) if (o.kind === "buildnew") note(o.defId, o.x, o.y, o.paid);
+    }
+    // Nothing pending and no ghost standing: the rest of the pass has nothing to do.
+    if (!desired.size && !this.pendingGhosts.size) {
+      this.pendingGhostWanted.clear();
+      return;
     }
     this.pendingGhostWanted.clear();
     for (const key of desired.keys()) this.pendingGhostWanted.add(key);
@@ -18461,20 +18535,29 @@ export class MapViewerScene {
         // walks, and re-laid where it plants again — which is a NEW spot, because toggleRoot
         // snaps it onto the build grid wherever it stopped. It is the only building in the
         // game that moves, so this is the only place a splat is ever re-sited.
-        for (const u of world.units.values()) {
-          if (!u.ancient) continue;
-          if (u.uprooted) {
-            if (this.liftedSplats.has(u.id)) continue;
-            this.liftedSplats.add(u.id);
-            if (this.simBuildingSplats.delete(u.id)) this.splats.remove(u.id);
-            // A map-PLACED Ancient's decal is keyed by its .doo index instead (see
-            // stampMapPathing), so it has to be found by the sim id it was tracked against.
-            for (const [key, s] of this.mapBuildingSplats) {
-              if (s.simId !== u.id) continue;
-              this.mapBuildingSplats.delete(key);
-              this.splats.remove(key);
-            }
-          } else if (this.liftedSplats.delete(u.id)) {
+        // Asked of the uprooted Ancients and the lifted decals, not of every unit on the map
+        // (issue #392): an Ancient can only be lifted while it is in `uprootedIds`, and only
+        // re-laid while its decal is in `liftedSplats`. Each is decided by the unit alone.
+        for (const id of world.uprootedIds) {
+          const u = world.units.get(id);
+          if (!u || !u.ancient || !u.uprooted) continue;
+          if (this.liftedSplats.has(u.id)) continue;
+          this.liftedSplats.add(u.id);
+          if (this.simBuildingSplats.delete(u.id)) this.splats.remove(u.id);
+          // A map-PLACED Ancient's decal is keyed by its .doo index instead (see
+          // stampMapPathing), so it has to be found by the sim id it was tracked against.
+          for (const [key, s] of this.mapBuildingSplats) {
+            if (s.simId !== u.id) continue;
+            this.mapBuildingSplats.delete(key);
+            this.splats.remove(key);
+          }
+        }
+        // …and one that has planted again gets its decal back where it planted. (Deleting the
+        // entry a Set walk stands on is safe.)
+        for (const id of this.liftedSplats) {
+          const u = world.units.get(id);
+          if (!u || !u.ancient || u.uprooted) continue;
+          if (this.liftedSplats.delete(u.id)) {
             const def = this.registry.get(u.typeId);
             if (def?.uberSplat) {
               this.simBuildingSplats.add(u.id);
