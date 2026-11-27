@@ -15487,7 +15487,25 @@ export class SimWorld {
   /** Who `killerId` is, for crediting a kill: the live unit, else a Lightning Shield's dead
    *  caster (`shieldCasters`). */
   private killerUnit(killerId: number): SimUnit | undefined {
-    return this.units.get(killerId) ?? this.shieldCasters.get(killerId);
+    return this.units.get(killerId) ?? this.shieldCasters.get(killerId) ?? this.missileCasters.get(killerId);
+  }
+
+  /**
+   * The casters of every SPELL MISSILE still in the air — a Storm Bolt's hammer, a Death
+   * Coil, a Shockwave's wave — kept for as long as one of their missiles flies, dead or alive
+   * (issue #350). A missile that has left the hand lands as its caster's: the same owner, the
+   * same allegiance, the same kill credit. Without this a dead caster's hammer resolved with
+   * its VICTIM as the caster (`hostile(t, t)` — a Death Coil in the air when the Death Knight
+   * fell dealt nothing, a Storm Bolt's kill paid its owner nothing), and a dead Tauren's
+   * Shockwave hit nobody at all. `shieldCasters` is the same idea for Lightning Shield; this
+   * one is filled at the launch (`spawnSpellProjectile`/`spawnWaveProjectile`) and a caster
+   * is let go with its last missile (`removeProjectile`).
+   */
+  private missileCasters = new Map<number, SimUnit>();
+
+  /** Who a spell missile lands as — its caster, alive or (`missileCasters`) not. */
+  private spellCasterOf(p: SimProjectile): SimUnit | undefined {
+    return this.units.get(p.sourceId) ?? this.missileCasters.get(p.sourceId);
   }
 
   /** Lightning Shield (Alsh): the shielded unit itself is unharmed, but every OTHER unit
@@ -18171,6 +18189,7 @@ export class SimWorld {
       sourceTeam: u.team,
       targetTeleports: t?.teleports ?? 0,
     };
+    this.missileCasters.set(u.id, u); // it lands as his even if he falls first (issue #350)
     this.projectiles.set(id, proj);
     this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y, z: proj.z });
   }
@@ -18276,6 +18295,7 @@ export class SimWorld {
         trail: o.trail ? { art: o.trail.art, step: o.trail.step, next: 0 } : undefined,
       },
     };
+    this.missileCasters.set(u.id, u); // the wave sweeps on as his (issue #350)
     this.projectiles.set(id, proj);
     this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y, z: proj.z });
     return true;
@@ -18298,7 +18318,7 @@ export class SimWorld {
       this.spellEffects.push({ art: trail.art, x: w.ox + w.dirX * trail.next, y: w.oy + w.dirY * trail.next, targetId: 0, z: 0 });
       trail.next += Math.max(1, trail.step); // never zero — a zero step would spin here forever
     }
-    const caster = this.units.get(p.sourceId); // may have died — the wave carries on regardless
+    const caster = this.spellCasterOf(p); // may have died — the wave carries on as his (missileCasters)
     const def = this.abilities?.get(p.spell!.abilityId);
     if (caster && def) {
       for (const t of this.unitsInAreaInternal(p.x, p.y, w.halfWidth + WAVE_SWEEP_MARGIN)) {
@@ -25133,9 +25153,10 @@ export class SimWorld {
         } else if (p.spell) {
           // Spell missile (Storm Bolt/Death Coil): run the ability effect on impact.
           // Resolve the exact ability by id (several abilities share a base code).
-          const caster = this.units.get(p.sourceId) ?? t; // caster may have died mid-flight
+          // The caster may have died mid-flight; the missile still lands as his (missileCasters).
+          const caster = this.spellCasterOf(p);
           const def = this.abilities?.get(p.spell.abilityId);
-          this.applySpellEffect(p.spell.code, p.spell.rank, caster, { targetId: t.id, x: t.x, y: t.y }, def);
+          if (caster) this.applySpellEffect(p.spell.code, p.spell.rank, caster, { targetId: t.id, x: t.x, y: t.y }, def);
         } else {
           // Orb of Corruption strips armour BEFORE the blow it rode in on (Liquipedia,
           // Orb of Corruption: "the armor reduction happens before the damage of the hero is
@@ -25489,7 +25510,16 @@ export class SimWorld {
   }
 
   private removeProjectile(id: number): void {
-    if (this.projectiles.delete(id)) this.removedProjectiles.push(id);
+    const p = this.projectiles.get(id);
+    if (!p) return;
+    this.projectiles.delete(id);
+    this.removedProjectiles.push(id);
+    // A spell missile's caster is let go with his LAST missile in the air (missileCasters).
+    if (p.spell && this.missileCasters.has(p.sourceId)) {
+      let flying = false;
+      for (const q of this.projectiles.values()) if (q.spell && q.sourceId === p.sourceId) { flying = true; break; }
+      if (!flying) this.missileCasters.delete(p.sourceId);
+    }
   }
 
   // Path toward the target; repath only when the target strays from the path
@@ -28184,13 +28214,13 @@ export class SimWorld {
     // A destructible's body (`targetKey`) dies as a DESTRUCTABLE — the renderer raises that
     // (MapViewerScene.reapDestructibles) — never as a Neutral Passive unit.
     if (this.captureDeaths && !u.targetKey) {
-      const killer = killerId ? this.units.get(killerId) : undefined;
+      const killer = killerId ? this.killerUnit(killerId) : undefined; // a dead caster's missile still kills as him
       this.deathEvents.push({ victim: eventInfo(u), killer: killer ? eventInfo(killer) : null });
     }
     // …and the MATCH LOG's (src/game/matchLog.ts), which only wants to hear it — a call, not a
     // queue, so it can never fall behind the trigger engine's drain or compete with it.
-    this.deathObserver?.(u, killerId ? this.units.get(killerId) : undefined);
-    this.deathTap?.(u, killerId ? this.units.get(killerId) : undefined);
+    this.deathObserver?.(u, killerId ? this.killerUnit(killerId) : undefined);
+    this.deathTap?.(u, killerId ? this.killerUnit(killerId) : undefined);
     this.unitDrops.delete(u.id);
   }
 
