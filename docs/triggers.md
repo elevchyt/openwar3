@@ -136,7 +136,7 @@ or vfs** (bridge, not fork) — so it's testable headlessly and stays engine-agn
 | `parser.ts` | recursive-descent → `JassProgram`. Precedence: `or` < `and` < comparisons < `+ -` < `* /` < unary |
 | `values.ts` | value model — **int and real are separate kinds** (JASS `int/int` truncates!); handles, code refs, null; `defaultForType` |
 | `runtime.ts` | handle table (interned player/enum handles), `MapSetup`, globals/arrays, function+native registries, seeded RNG, `EngineHooks` bridge |
-| `interpreter.ts` | tree-walker: call frames, `and`/`or` **do not short-circuit** (JASS gotcha), type-directed arithmetic, safe defaults, loop/recursion caps — plus the **trigger-thread scheduler** (7.15): statements are generators, so `TriggerSleepAction` can suspend a trigger mid-action and `pumpThreads` resumes it on game time |
+| `interpreter.ts` | tree-walker: call frames, `and`/`or` short-circuit (`or` binds tighter than `and`, measured on the client — issue #375), type-directed arithmetic, safe defaults, loop/recursion caps — plus the **trigger-thread scheduler** (7.15): statements are generators, so `TriggerSleepAction` can suspend a trigger mid-action and `pumpThreads` resumes it on game time |
 | `natives/config.ts` | `config()` + player-setup natives → `MapSetup` |
 | `natives/world.ts` | `CreateUnit` (+ bridge), resource/state setters, unit queries, unit-mutation effects (7.13), orders (7.14), per-unit flags/animation/user-data (7.17) |
 | `natives/abilities.ts` | **abilities + heroes** (7.17): `UnitAdd/RemoveAbility`, `Get`/`SetUnitAbilityLevel`, `SetHeroLevel`/`AddHeroXP`/`SetHeroXP`, skill points, `SelectHeroSkill` — all through the sim's trigger-effect API |

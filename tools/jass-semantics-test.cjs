@@ -540,5 +540,106 @@ endfunction
   }
 }
 
+{
+  console.log('--- `or` binds tighter than `and` (#375) ---');
+  // Every expectation here is what the REAL 1.30.4 client printed for the same expression: a
+  // probe map (Echo Isles with these functions merged into its war3map.j, called at the end of
+  // main) wrote each result out through Preload/PreloadGenEnd, run under Wine. `or` is the
+  // TIGHTER of the two — neither C's order nor one left-associative level fits
+  // `false and true or true` = false. The trace is which operands ran, in order.
+  const { interp, call } = boot(`
+globals
+    string trace = ""
+    boolean bT = true
+    boolean bF = false
+endglobals
+function T takes string s returns boolean
+    set trace = trace + s
+    return true
+endfunction
+function F takes string s returns boolean
+    set trace = trace + s
+    return false
+endfunction
+function L1 takes nothing returns boolean
+    return true or false and false
+endfunction
+function L2 takes nothing returns boolean
+    return true or true and false
+endfunction
+function L3 takes nothing returns boolean
+    return false and true or true
+endfunction
+function L4 takes nothing returns boolean
+    return false and false or true
+endfunction
+function L5 takes nothing returns boolean
+    return true or false or false and false
+endfunction
+function V1 takes nothing returns boolean
+    return bT or bF and bF
+endfunction
+function V2 takes nothing returns boolean
+    return bF and bT or bT
+endfunction
+function S1 takes nothing returns boolean
+    return T("a") or F("b") and F("c")
+endfunction
+function S2 takes nothing returns boolean
+    return F("a") and T("b") or T("c")
+endfunction
+function S3 takes nothing returns boolean
+    return T("a") or T("b") and F("c")
+endfunction
+function S4 takes nothing returns boolean
+    return F("a") or T("b") and F("c")
+endfunction
+function I1 takes nothing returns boolean
+    local boolean v = true or false and false
+    return v
+endfunction
+function I2 takes nothing returns boolean
+    if true or false and false then
+        return true
+    endif
+    return false
+endfunction
+function P1 takes nothing returns boolean
+    return (true or false) and false
+endfunction
+function P2 takes nothing returns boolean
+    return true or (false and false)
+endfunction
+function N2 takes nothing returns boolean
+    return not true or true
+endfunction
+function N3 takes nothing returns boolean
+    return not false and false
+endfunction
+`);
+  const traced = (fn) => {
+    interp.rt.globals.set('trace', { k: 'string', s: '' });
+    const v = call(fn);
+    return `${v} ${interp.rt.globals.get('trace').s}`;
+  };
+  check('true or false and false', call('L1'), false);
+  check('true or true and false', call('L2'), false);
+  check('false and true or true', call('L3'), false);
+  check('false and false or true', call('L4'), false);
+  check('true or false or false and false', call('L5'), false);
+  check('bT or bF and bF', call('V1'), false);
+  check('bF and bT or bT', call('V2'), false);
+  check('T(a) or F(b) and F(c)', traced('S1'), 'false ac');
+  check('F(a) and T(b) or T(c)', traced('S2'), 'false a');
+  check('T(a) or T(b) and F(c)', traced('S3'), 'false ac');
+  check('F(a) or T(b) and F(c)', traced('S4'), 'false abc');
+  check('a local initialised with true or false and false', call('I1'), false);
+  check('if true or false and false', call('I2'), false);
+  check('(true or false) and false', call('P1'), false);
+  check('true or (false and false)', call('P2'), true);
+  check('not true or true', call('N2'), true);
+  check('not false and false', call('N3'), false);
+}
+
 console.log(failures ? `\n${failures} failure(s).` : '\nAll JASS semantics checks passed.');
 process.exit(failures ? 1 : 0);

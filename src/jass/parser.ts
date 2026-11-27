@@ -4,8 +4,9 @@
 // stream. The grammar is the full JASS2 language — small enough to hand-write:
 // globals blocks, native/function declarations, and the six statement forms
 // (set/call/if/loop/exitwhen/return) over a standard precedence-climbing
-// expression grammar. Operator precedence (low→high): or, and, comparisons,
-// +/-, *//, unary (-,+,not). See the JASS Manual BNF in docs/REFERENCES.md.
+// expression grammar. Operator precedence (low→high): and, or, comparisons,
+// +/-, *//, unary (-,+,not) — `or` binds TIGHTER than `and`, measured on the real
+// client (see parseAnd). See the JASS Manual BNF in docs/REFERENCES.md.
 
 import type { BinOp, Expr, FunctionDecl, JassProgram, NativeDecl, Param, Stmt, VarDecl } from "./ast";
 import { tokenize, type Token } from "./lexer";
@@ -308,21 +309,29 @@ class Parser {
 
   // --- expressions (precedence climbing) ------------------------------------
   private parseExpr(): Expr {
-    return this.parseOr();
+    return this.parseAnd();
   }
-  private parseOr(): Expr {
-    let left = this.parseAnd();
-    while (this.isKw("or")) {
+  // `or` binds TIGHTER than `and` — the opposite of C, and of what this parser assumed until
+  // issue #375. Measured on the real 1.30.4 client with a probe map that wrote each result out
+  // through Preload/PreloadGenEnd: `true or false and false` is FALSE (so not `and`-first) and
+  // `false and true or true` is FALSE too (so not one left-associative level either) — every
+  // case read `a and (b or c)`, for literals, variables, a `set` and an `if` alike. Both still
+  // short-circuit: `T(a) or F(b) and F(c)` evaluates a, skips b, then evaluates c. `not` binds
+  // tighter than both (`not true or true` is true). Blizzard's own common.j / Blizzard.j / *.ai
+  // never mix the two without parentheses, so none of their meaning moves with this.
+  private parseAnd(): Expr {
+    let left = this.parseOr();
+    while (this.isKw("and")) {
       this.next();
-      left = { kind: "binary", op: "or", left, right: this.parseAnd() };
+      left = { kind: "binary", op: "and", left, right: this.parseOr() };
     }
     return left;
   }
-  private parseAnd(): Expr {
+  private parseOr(): Expr {
     let left = this.parseCmp();
-    while (this.isKw("and")) {
+    while (this.isKw("or")) {
       this.next();
-      left = { kind: "binary", op: "and", left, right: this.parseCmp() };
+      left = { kind: "binary", op: "or", left, right: this.parseCmp() };
     }
     return left;
   }
