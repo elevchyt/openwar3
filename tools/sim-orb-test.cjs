@@ -50,7 +50,12 @@ const Afbk = abil("Afbk", "Afbk", { castRange: 20, data: [20, 1, 4, 1, 0] }, { t
 // for DataC 80 s, Dur 2 — `targs1` air,ground,enemy,organic,neutral.
 const ANba = abil("ANba", "ANba", { cost: 6, castRange: 600, duration: 2, data: [2, 1, 80], summon: "ndr1" }, { targetFlags: ["air", "ground", "enemy", "organic", "neutral"] });
 
-const ABILITIES = Object.fromEntries([AIfb, AIob, AIcb, AIva, AHfa, AHca, Aspo, Afbk, ANba].map((a) => [a.id, a]));
+// Orb of Annihilation (`Afak`, Destroyer): DataA 15 bonus, DataB 0.45 "Medium Damage Factor",
+// DataC 0.25 "Small Damage Factor", DataD 1 "Full Damage Radius", DataE 75 "Half Damage
+// Radius", Area1 150.
+const Afak = abil("Afak", "Afak", { area: 150, data: [15, 0.45, 0.25, 1, 75] }, { targetFlags: ["air", "ground", "structure", "enemy", "neutral"] });
+
+const ABILITIES = Object.fromEntries([AIfb, AIob, AIcb, AIva, AHfa, AHca, Aspo, Afbk, ANba, Afak].map((a) => [a.id, a]));
 const ITEMS = {
   ofir: { abilities: ["AIfb"] },
   ofro: { abilities: ["AIob"] },
@@ -383,6 +388,23 @@ console.log("\nFrost Armor: 45 seconds of armour, and a slow for whoever swings 
   w.applyFrostArmorChill(grunt, ogre);
   check("the creep Frost Armor (ACf2) slows for ITS Dur1 = 5 s", grunt.buffs.find((b) => b.kind === "slow").timeLeft, 5);
   check("the plain code AUfa (the creeps' ACfa) has the same handler", typeof require(join(REPO, ".sim-build", "src", "sim", "spells.js")).SPELL_HANDLERS.AUfa, "function");
+}
+
+console.log("\nOrb of Annihilation splashes in three bands (issue #366)");
+{
+  const w = world();
+  const destroyer = unit(w, { abilities: [{ id: "Afak", code: "Afak", level: 1, cooldownLeft: 0, autocastOn: true }] });
+  const foe = unit(w, { owner: 1, team: 1, x: 500, radius: 16 });
+  const half = unit(w, { owner: 1, team: 1, x: 500 + 16 + 60, radius: 16 }); // hull 60 out: inside DataE 75
+  const small = unit(w, { owner: 1, team: 1, x: 500 + 16 + 120, radius: 16 }); // hull 120 out: inside Area1 150
+  const out = unit(w, { owner: 1, team: 1, x: 500 + 16 + 200, radius: 16 }); // past the outer ring
+  const orb = w.resolveOrb(destroyer, foe);
+  check("the Destroyer's blow carries the orb", orb?.def?.id ?? orb?.id ?? null, "Afak");
+  w.applyOrbEffect(destroyer, foe, orb, 20);
+  check("the target takes DataA 15", 1000 - foe.hp, 15);
+  check("…inside DataE 75, DataB 0.45 of it", Math.round((1000 - half.hp) * 100) / 100, 6.75);
+  check("…out to Area1 150, DataC 0.25 of it", Math.round((1000 - small.hp) * 100) / 100, 3.75);
+  check("…and nothing past it", 1000 - out.hp, 0);
 }
 
 console.log(`\n${failed ? `${failed} FAILED` : "orbs: all checks passed"}`);

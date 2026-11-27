@@ -26765,16 +26765,30 @@ export class SimWorld {
         }
         break;
       }
-      // --- Orb of Annihilation (Destroyer): `DataA` bonus damage on the target plus a
-      // falloff splash — `fak2`/`fak3` are the Medium and Small Damage Factors, `Area1` the
-      // radius the medium band reaches.
+      // --- Orb of Annihilation (Destroyer; the Quill Beast's `ANak` on the same code): `DataA`
+      // bonus damage on the target plus a falloff splash in THREE bands, the same shape as a
+      // splash weapon's rings (UnitWeapons Farea/Harea/Qarea with Hfact/Qfact). The columns
+      // are AbilityMetaData `fak1..fak5` → WorldEditStrings: DataB "Medium Damage Factor",
+      // DataC "Small Damage Factor", DataD "Full Damage Radius", DataE "Half Damage Radius" —
+      // and `Area1` the outer ring the small band reaches. On the Destroyer's row that is full
+      // inside 1 (nobody but the target), 0.45 out to 75 and 0.25 out to 150; the 0.25 band
+      // used to be paid at 0.45 (issue #366). Measured hull to hull, as burstRings does.
       case "Afak": {
         const bonus = this.dataOf(lvl, 0, 15);
         this.landDamage(target, bonus, attacker.id, false);
-        const radius = lvl.area || 150;
-        for (const o of this.unitsInAreaInternal(target.x, target.y, radius)) {
+        const rings: SplashRings = {
+          full: this.dataOf(lvl, 3, 1),
+          half: this.dataOf(lvl, 4, 75),
+          quarter: lvl.area || 150,
+          halfFactor: this.dataOf(lvl, 1, 0.45),
+          quarterFactor: this.dataOf(lvl, 2, 0.25),
+          targets: [],
+        };
+        const outer = Math.max(rings.full, rings.half, rings.quarter);
+        for (const o of this.unitsInAreaInternal(target.x, target.y, outer)) {
           if (o === target || o === attacker || !this.hostile(attacker, o)) continue;
-          this.landDamage(o, bonus * this.dataOf(lvl, 1, 0.45), attacker.id, false);
+          const share = ringShare(rings, Math.hypot(o.x - target.x, o.y - target.y) - o.radius);
+          if (share > 0) this.landDamage(o, bonus * share, attacker.id, false);
         }
         break;
       }
