@@ -6076,6 +6076,13 @@ export class MapViewerScene {
     // is Rescuable or a unit is made so (TryInitRescuableTriggersBJ), and that registration is
     // what switches the proximity test on at all (SimWorld.tickRescue).
     sw.captureRescues = any("playerUnitEvent", 19) || any("unitEvent", 63);
+    // The hero's trip through the altar (REVIVABLE, REVIVE_START/CANCEL/FINISH: 43–46 player,
+    // 80–83 unit), a unit's own choice of target (ACQUIRED_TARGET 60, TARGET_IN_RANGE 61 —
+    // unit events only) and an invisible unit uncovered (DETECTED: 22 player, 55 unit).
+    sw.captureRevives = any("playerUnitEvent", 43, 46) || any("unitEvent", 80, 83);
+    sw.captureAcquires = any("unitEvent", 60);
+    sw.captureInRange = any("unitEvent", 61);
+    sw.captureDetects = any("playerUnitEvent", 22) || any("unitEvent", 55);
     // SELECTED / DESELECTED — 24/25 player, 57/58 unit. Not a sim capture: a selection is
     // not world state, so the RTS diffs its own (see RtsController.drainSelectionEvents) and
     // this flag only decides whether we bother asking.
@@ -6161,6 +6168,9 @@ export class MapViewerScene {
       if (decays.length) engine.interp.pumpDecayEvents(decays);
       const rescues = sw.drainRescueEvents();
       if (rescues.length) engine.interp.pumpRescueEvents(rescues);
+      // Heroes through the altar, units choosing targets, invisible units uncovered (#376).
+      const news = sw.drainUnitNews();
+      if (news.length) engine.interp.pumpUnitNews(news);
       // What the player selected or deselected this frame. The RTS owns the selection, so
       // this drain is off the controller rather than the world (the one non-sim event kind).
       // Drained every tick even when nothing listens — it is the drain that advances the

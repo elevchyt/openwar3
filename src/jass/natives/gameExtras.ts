@@ -251,7 +251,7 @@ export function registerGameExtraNatives(rt: Runtime): void {
     ["GetDecayingUnit", "DecayingUnit"], // EVENT_PLAYER_UNIT_DECAY
     ["GetRescuer", "Rescuer"], // EVENT_PLAYER_UNIT_RESCUED — Blizzard.j 6739
     ["GetSpellTargetItem", "SpellTargetItem"],
-    // Raised by nothing yet — the hero-revive, acquire and detect events are not pumped:
+    // The hero-revive, acquire and detect events (Interpreter.pumpUnitNews):
     ["GetRevivableUnit", "RevivableUnit"], // EVENT_PLAYER_HERO_REVIVABLE
     ["GetRevivingUnit", "RevivingUnit"], // EVENT_PLAYER_HERO_REVIVE_START/CANCEL/FINISH
     ["GetEventTargetUnit", "EventTargetUnit"], // EVENT_UNIT_ACQUIRED_TARGET / _TARGET_IN_RANGE

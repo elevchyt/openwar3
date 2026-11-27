@@ -1,6 +1,8 @@
 // Natives that were registered but did nothing, or only part of their job (issue #376):
-// IsPlayerObserver, Get/SetIntegerGameState, GetSpellAbility, and GetOrderTargetDestructable /
-// GetSpellTargetDestructable on a TREE. (The handicap's half is the sim's — see
+// IsPlayerObserver, Get/SetIntegerGameState, GetSpellAbility, GetOrderTargetDestructable /
+// GetSpellTargetDestructable on a TREE, and the events nothing raised — the hero-revive four,
+// ACQUIRED_TARGET / TARGET_IN_RANGE and DETECTED (Interpreter.pumpUnitNews; the sim half is
+// tools/sim-unit-news-test.cjs). (The handicap's half is the sim's — see
 // tools/sim-script-natives-test.cjs.)
 //
 //   npx tsc -p tools/tsconfig.jass.json && node tools/jass-native-stubs-test.cjs
@@ -46,7 +48,50 @@ globals
     integer spellTreeType = 0
     real orderTreeX = 0.0
     boolean sameHandle = false
+    constant playerunitevent EVENT_PLAYER_HERO_REVIVABLE = ConvertPlayerUnitEvent(43)
+    constant playerunitevent EVENT_PLAYER_HERO_REVIVE_FINISH = ConvertPlayerUnitEvent(46)
+    constant playerunitevent EVENT_PLAYER_UNIT_DETECTED = ConvertPlayerUnitEvent(22)
+    constant unitevent EVENT_UNIT_ACQUIRED_TARGET = ConvertUnitEvent(60)
+    constant unitevent EVENT_UNIT_TARGET_IN_RANGE = ConvertUnitEvent(61)
+    unit watched = null
+    string heard = ""
 endglobals
+function Revivable takes nothing returns nothing
+    set heard = heard + "revivable:" + I2S(GetUnitUserData(GetRevivableUnit())) + ";"
+endfunction
+function Revived takes nothing returns nothing
+    set heard = heard + "revived:" + I2S(GetUnitUserData(GetRevivingUnit())) + ";"
+endfunction
+function Acquired takes nothing returns nothing
+    set heard = heard + "acquired:" + I2S(GetUnitUserData(GetEventTargetUnit())) + ";"
+endfunction
+function InRange takes nothing returns nothing
+    set heard = heard + "inrange:" + I2S(GetUnitUserData(GetEventTargetUnit())) + ";"
+endfunction
+function Detected takes nothing returns nothing
+    set heard = heard + "detected:" + I2S(GetUnitUserData(GetDetectedUnit())) + " by " + I2S(GetPlayerId(GetEventDetectingPlayer())) + ";"
+endfunction
+function Label takes unit u, integer n returns nothing
+    call SetUnitUserData(u, n)
+endfunction
+function SetupNews takes unit w returns nothing
+    local trigger t = CreateTrigger()
+    set watched = w
+    call TriggerRegisterPlayerUnitEvent(t, Player(1), EVENT_PLAYER_HERO_REVIVABLE, null)
+    call TriggerAddAction(t, function Revivable)
+    set t = CreateTrigger()
+    call TriggerRegisterPlayerUnitEvent(t, Player(1), EVENT_PLAYER_HERO_REVIVE_FINISH, null)
+    call TriggerAddAction(t, function Revived)
+    set t = CreateTrigger()
+    call TriggerRegisterUnitEvent(t, w, EVENT_UNIT_ACQUIRED_TARGET)
+    call TriggerAddAction(t, function Acquired)
+    set t = CreateTrigger()
+    call TriggerRegisterUnitEvent(t, w, EVENT_UNIT_TARGET_IN_RANGE)
+    call TriggerAddAction(t, function InRange)
+    set t = CreateTrigger()
+    call TriggerRegisterPlayerUnitEvent(t, Player(1), EVENT_PLAYER_UNIT_DETECTED, null)
+    call TriggerAddAction(t, function Detected)
+endfunction
 function Observer takes integer i returns boolean
     return IsPlayerObserver(Player(i))
 endfunction
@@ -106,6 +151,25 @@ check('GetOrderTargetDestructable is the record the tree was planted from', [g('
 check('…the same handle each time it is asked', g('sameHandle'), true);
 interp.pumpSpellEvents([{ caster: snap(21), abilityId: 'Aeat', phase: 'effect', target: null, x: 64, y: 128, tree: 900 }]);
 check('GetSpellTargetDestructable likewise', g('spellTreeType'), LTlt);
+
+console.log('\nthe hero-revive, acquire and detect events');
+{
+  const label = (id, n) => { const u = rt.unitForSim(snap(id)); interp.callFunction('Label', [u, { k: 'int', n }]); return u; };
+  const watched = label(31, 31);
+  label(32, 32);
+  label(33, 33);
+  interp.callFunction('SetupNews', [watched]);
+  interp.pumpUnitNews([
+    { kind: 'revivable', unit: snap(32), other: null, player: 1 },
+    { kind: 'reviveFinish', unit: snap(32), other: null, player: 1 },
+    { kind: 'acquired', unit: snap(31), other: snap(33), player: 1 },
+    { kind: 'acquired', unit: snap(33), other: snap(31), player: 1 }, // not the watched unit
+    { kind: 'inRange', unit: snap(31), other: snap(33), player: 1 },
+    { kind: 'detected', unit: snap(33), other: null, player: 4 },
+  ]);
+  check('each event reaches its registration with its own responses', rt.globals.get('heard').s,
+    'revivable:32;revived:32;acquired:33;inrange:33;detected:33 by 4;');
+}
 
 console.log(failures ? `\n${failures} failure(s).` : '\nAll native-stub checks passed.');
 process.exit(failures ? 1 : 0);

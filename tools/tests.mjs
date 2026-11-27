@@ -42,6 +42,7 @@ export const SUITES = {
     "sim-collision-grid-test.cjs",
     { file: "sim-scan-shortcuts-test.cjs", data: true },
     { file: "sim-acquire-stagger-test.cjs", data: true },
+    { file: "sim-unit-news-test.cjs", data: true },
     "sim-unstick-test.cjs",
     "sim-detour-test.cjs",
     "sim-follow-detour-test.cjs",

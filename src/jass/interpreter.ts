@@ -104,6 +104,24 @@ export interface SummonEvent {
   summoner: UnitSnapshot;
   summoned: UnitSnapshot;
 }
+/** The hero-revive, acquire and detect events (issue #376) — mirrors SimWorld's UnitNewsEvent. */
+export interface UnitNewsEvent {
+  kind: "revivable" | "reviveStart" | "reviveCancel" | "reviveFinish" | "acquired" | "inRange" | "detected";
+  unit: UnitSnapshot;
+  other: UnitSnapshot | null;
+  player: number;
+}
+/** Per kind: the ConvertPlayerUnitEvent index (-1: there is none) and the ConvertUnitEvent
+ *  index, both from common.j, and the response key the subject answers to. */
+const UNIT_NEWS: Record<UnitNewsEvent["kind"], { player: number; unit: number; key: string }> = {
+  revivable: { player: 43, unit: 80, key: "RevivableUnit" }, // EVENT_(PLAYER_)HERO_REVIVABLE
+  reviveStart: { player: 44, unit: 81, key: "RevivingUnit" }, // …_REVIVE_START
+  reviveCancel: { player: 45, unit: 82, key: "RevivingUnit" }, // …_REVIVE_CANCEL
+  reviveFinish: { player: 46, unit: 83, key: "RevivingUnit" }, // …_REVIVE_FINISH
+  acquired: { player: -1, unit: 60, key: "" }, // EVENT_UNIT_ACQUIRED_TARGET
+  inRange: { player: -1, unit: 61, key: "" }, // EVENT_UNIT_TARGET_IN_RANGE
+  detected: { player: 22, unit: 55, key: "DetectedUnit" }, // EVENT_(PLAYER_)UNIT_DETECTED
+};
 /** A hero levelling up or learning a skill (7.17). */
 export interface HeroEvent {
   hero: UnitSnapshot;
@@ -2380,6 +2398,25 @@ export class Interpreter {
    * triggering unit (hiveworkshop 264641). So `GetTriggerUnit` is the summoner, a unit-scoped
    * registration matches the summoner, and the player event is filed under the summoner's owner.
    */
+  /** Pump the hero-revive, acquire and detect events (`UnitNewsEvent`). The subject is
+   *  GetTriggerUnit and its own response (GetRevivableUnit, GetRevivingUnit, GetDetectedUnit);
+   *  an acquire's target is GetEventTargetUnit; a detection's detector is
+   *  GetEventDetectingPlayer. A player-unit event is filed under the SUBJECT's owner — the hero's,
+   *  or the detected unit's — and the two acquire events have only a unit form. */
+  pumpUnitNews(events: ReadonlyArray<UnitNewsEvent>): void {
+    for (const e of events) {
+      const ev = UNIT_NEWS[e.kind];
+      const unit = this.rt.unitForSim(e.unit);
+      const responses = new Map<string, JassValue>([["TriggerUnit", unit]]);
+      if (ev.key) responses.set(ev.key, unit);
+      if (e.other) responses.set("EventTargetUnit", this.rt.unitForSim(e.other));
+      if (e.kind === "detected" && e.player >= 0) responses.set("EventDetectingPlayer", this.rt.playerHandle(e.player));
+      this.dispatchToRegs(responses, this.unitEventRegs(ev.unit, ev.player), (reg) =>
+        (ev.player >= 0 && reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, ev.player, e.unit.owner, unit)) ||
+        (reg.kind === "unitEvent" && this.unitEventIs(reg, ev.unit) && this.paramUnitIs(reg, unit)));
+    }
+  }
+
   pumpSummonEvents(events: ReadonlyArray<SummonEvent>): void {
     for (const e of events) {
       const summoner = this.rt.unitForSim(e.summoner);

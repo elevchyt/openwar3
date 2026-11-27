@@ -1569,6 +1569,19 @@ export function jassOwnerOf(u: { owner: number; neutralPassive: boolean; neutral
 
 const eventInfo = (u: SimUnit): EventUnitInfo => ({ id: u.id, typeId: u.typeId, owner: jassOwnerOf(u), x: u.x, y: u.y, facing: u.facing });
 
+/**
+ * One of the unit events the engine raised for nothing until issue #376 — the hero's trip
+ * through the altar, a unit's automatic choice of target, and an invisible unit uncovered.
+ * `unit` is the subject (the hero; the unit that acquired; the unit that was detected),
+ * `other` the target an acquire is about, `player` the side that did the detecting.
+ */
+export interface UnitNewsEvent {
+  kind: "revivable" | "reviveStart" | "reviveCancel" | "reviveFinish" | "acquired" | "inRange" | "detected";
+  unit: EventUnitInfo;
+  other: EventUnitInfo | null;
+  player: number;
+}
+
 /** Where a cast is in its lifecycle, for the trigger engine's spell events (7.17).
  *  WC3 raises five, in this order: CHANNEL (the caster begins), CAST (the spell is
  *  committed), EFFECT (it goes off — the one most GUI triggers use), FINISH (the
@@ -2296,6 +2309,11 @@ export interface SimUnit {
    *  under the effect but hasn't vanished yet: it has the movement speed already and is still
    *  perfectly targetable, which is the vulnerability window every invisibility has. */
   invisible: boolean;
+  /** EVENT_UNIT_TARGET_IN_RANGE's memory: the target this unit last came within range of. */
+  inRangeOf?: number;
+  /** EVENT_(PLAYER_)UNIT_DETECTED's memory: the TEAMS that currently have this invisible unit
+   *  under true sight (`tickDetections`). */
+  detectedBy?: number[];
   /** Under an invisibility effect AT ALL, transition included — a superset of `invisible`.
    *  This, not `invisible`, is what stops the unit picking its own fights and what a strike
    *  breaks: attacking during the transition has to cancel the vanish too, or Wind Walk
@@ -3036,6 +3054,7 @@ const FOLLOW_GAP = 64; // edge-to-edge distance a follower keeps behind its lead
 const FOLLOW_LEASH = 48;
 const FOLLOW_SLOT_ARRIVE = 24; // how close a fanned follower parks to its formation slot
 const ACQUIRE_PERIOD = 0.5; // seconds between idle auto-acquire scans
+const DETECT_SWEEP = 0.25; // seconds between detection sweeps (tickDetections) — ours
 /** How many sim steps a crowd's auto-acquire scans are spread over — see `acquireT`'s seed in
  *  `add()`. ACQUIRE_PERIOD is 30 steps at SIM_DT, so 30 phases puts a thirtieth of the world's
  *  idle scans on each step instead of all of them on one (issue #386). */
@@ -4439,6 +4458,13 @@ export class SimWorld {
   altMinimapIcon = "";
   captureDecays = false; // EVENT_PLAYER_UNIT_DECAY (21)
   captureRescues = false; // EVENT_PLAYER_UNIT_RESCUED (19) / EVENT_UNIT_RESCUED (63)
+  captureRevives = false; // EVENT_PLAYER_HERO_REVIVABLE … _REVIVE_FINISH (43–46) / EVENT_UNIT_HERO_* (80–83)
+  captureAcquires = false; // EVENT_UNIT_ACQUIRED_TARGET (60)
+  captureInRange = false; // EVENT_UNIT_TARGET_IN_RANGE (61)
+  captureDetects = false; // EVENT_PLAYER_UNIT_DETECTED (22) / EVENT_UNIT_DETECTED (55)
+  private unitNews: UnitNewsEvent[] = [];
+  /** The detection sweep's clock (`tickDetections`). */
+  private detectT = 0;
   private deathEvents: Array<{ victim: EventUnitInfo; killer: EventUnitInfo | null }> = [];
   /** The last `HERO_KILL_LOG` hero deaths, oldest first, each numbered — read, never drained, by
    *  the Computer+ hero AI (src/ai/plus/candy/). See the push in `kill`. */
@@ -6347,6 +6373,19 @@ export class SimWorld {
       x: u.x, y: u.y, revivingAt: 0,
       bodyLeft: heroBodyTime(this.unitReg?.get(u.typeId)?.deathTime ?? 0),
     });
+    // EVENT_(PLAYER_)HERO_REVIVABLE — the hero is now on its owner's altar roster.
+    if (this.captureRevives) this.unitNews.push({ kind: "revivable", unit: eventInfo(u), other: null, player: jassOwnerOf(u) });
+  }
+
+  /** A fallen hero as the trigger engine sees it: it has no SimUnit while it lies dead, but it
+   *  keeps its id, which is what lets the script's own handle for it answer. */
+  private fallenInfo(f: FallenHero): EventUnitInfo {
+    return { id: f.id, typeId: f.typeId, owner: f.owner, x: f.x, y: f.y, facing: 0 };
+  }
+
+  /** EVENT_(PLAYER_)HERO_REVIVE_START / _CANCEL — the altar took the hero up, or let it go. */
+  private noteRevive(f: FallenHero, kind: "reviveStart" | "reviveCancel"): void {
+    if (this.captureRevives) this.unitNews.push({ kind, unit: this.fallenInfo(f), other: null, player: f.owner });
   }
 
   /**
@@ -6449,6 +6488,7 @@ export class SimWorld {
     const f = this.fallen.get(heroId);
     if (!u || !b || !f || f.revivingAt || b.queue.length >= MAX_BUILD_QUEUE) return false;
     f.revivingAt = buildingId;
+    this.noteRevive(f, "reviveStart");
     if (time <= 0) {
       this.completeRevive(u, b, f, buyer);
       return true;
@@ -6654,7 +6694,10 @@ export class SimWorld {
     // it again. (The gold goes back in full: ReviveRefundRate = 1.0.)
     if (job.kind === "revive") {
       const f = this.fallen.get(job.heroId);
-      if (f) f.revivingAt = 0;
+      if (f) {
+        f.revivingAt = 0;
+        this.noteRevive(f, "reviveCancel");
+      }
     }
     if (job.kind === "unit") {
       this.noteTrain(buildingId, job.unitId, "cancel");
@@ -11478,6 +11521,9 @@ export class SimWorld {
     const b = this.units.get(buildingId);
     const t = this.units.get(trainedId);
     if (!b || !t) return;
+    // EVENT_(PLAYER_)HERO_REVIVE_FINISH — the hero is standing at the altar again, under the
+    // same id, so the script's handle for it is this unit.
+    if (revive && this.captureRevives) this.unitNews.push({ kind: "reviveFinish", unit: eventInfo(t), other: null, player: t.owner });
     // Units Produced and its value (sim/matchStats.ts) — every birth through this drain but a
     // revive, whose hero was counted the first time it arrived.
     if (!revive) this.stats.gained(t.owner, this.scoreValue(t.typeId), !!t.building);
@@ -11510,6 +11556,61 @@ export class SimWorld {
     const a = this.units.get(summonerId);
     const b = this.units.get(summonedId);
     if (a && b) this.summonEvents.push({ summoner: eventInfo(a), summoned: eventInfo(b) });
+  }
+
+  /** The unit-news events since the last drain (`UnitNewsEvent`). */
+  drainUnitNews(): UnitNewsEvent[] {
+    if (!this.unitNews.length) return this.unitNews;
+    const out = this.unitNews;
+    this.unitNews = [];
+    return out;
+  }
+
+  /**
+   * EVENT_(PLAYER_)UNIT_DETECTED — an INVISIBLE unit came under an enemy side's true sight.
+   * Detection is a TEAM property (`teamDetects`), so each team is a separate crossing: the
+   * event is raised when a team that could not see the unit now can, and `GetEventDetectingPlayer`
+   * is the owner of whatever does the seeing on that team. Swept every `DETECT_SWEEP` seconds
+   * (ours) and only while a script listens, because each ask walks the whole army.
+   */
+  private tickDetections(dt: number): void {
+    this.detectT -= dt;
+    if (this.detectT > 0) return;
+    this.detectT = DETECT_SWEEP;
+    const teams = new Set<number>();
+    for (const d of this.units.values()) if (d.hp > 0 && d.owner >= 0) teams.add(d.team);
+    for (const u of this.units.values()) {
+      if (u.hp <= 0 || !u.invisible || isOffField(u)) {
+        if (u.detectedBy) u.detectedBy = undefined;
+        continue;
+      }
+      const now: number[] = [];
+      for (const team of teams) {
+        if (team === u.team || !this.teamDetects(team, u.x, u.y, u)) continue;
+        now.push(team);
+        if (u.detectedBy?.includes(team)) continue;
+        this.unitNews.push({ kind: "detected", unit: eventInfo(u), other: null, player: this.detectorOf(team, u) });
+      }
+      u.detectedBy = now.length ? now : undefined;
+    }
+  }
+
+  /** Who on `team` is doing the detecting of `u`: the owner of the nearest true-sight unit that
+   *  covers it, else of the reveal that does, else (a dusting) of any of the team's units. */
+  private detectorOf(team: number, u: SimUnit): number {
+    let best = -1;
+    let bestD = Infinity;
+    for (const d of this.units.values()) {
+      if (d.team !== team || d.hp <= 0 || d.detectRadius <= 0) continue;
+      const dist = Math.hypot(d.x - u.x, d.y - u.y);
+      if (dist <= d.detectRadius && dist < bestD) { bestD = dist; best = d.owner; }
+    }
+    if (best >= 0) return best;
+    for (const r of this.itemReveals) {
+      if (r.detect && r.team === team && r.delay <= 0 && Math.hypot(r.x - u.x, r.y - u.y) <= r.radius) return r.owner;
+    }
+    for (const d of this.units.values()) if (d.team === team && d.owner >= 0) return d.owner;
+    return -1;
   }
 
   drainSummonEvents(): SummonEvent[] {
@@ -22801,6 +22902,7 @@ export class SimWorld {
     this.longSearchIn--; // the escalation allowance ages one step — see pathTo
     simProfile.begin("sim.world.pre");
     this.tickAttackReveals(dt);
+    if (this.captureDetects) this.tickDetections(dt);
     this.tickDeathReveals(dt); // …and the eyes a body keeps while it falls (issue #126)
     this.tickItemReveals(dt); // …and the ground a Crystal Ball / flare / Far Sight is holding open
     this.tickDelayedEffects(dt); // …and a flare still falling onto it
@@ -23603,6 +23705,13 @@ export class SimWorld {
     if (gap <= band && !this.meleeApart(u, t, w)) {
       u.stallT = 0;
       u.attackStalls = 0; // in the fight — clear the stall streak
+      // EVENT_UNIT_TARGET_IN_RANGE — the target it is after has come inside the band it strikes
+      // from. Once per target (`inRangeOf`): it stands in range for the whole fight. When the
+      // game raises it is not written down anywhere; this is ours.
+      if (this.captureInRange && u.inRangeOf !== t.id) {
+        u.inRangeOf = t.id;
+        this.unitNews.push({ kind: "inRange", unit: eventInfo(u), other: eventInfo(t), player: jassOwnerOf(u) });
+      }
       return;
     }
     // A PINNED unit is not failing to close, it is held (see engage): no headway is the
@@ -31056,6 +31165,9 @@ export class SimWorld {
       // Only from IDLE: an attack-move or a patrol already has somewhere to be, and planting
       // a post under one would have the unit walk "home" instead of resuming its route.
       if (!u.isCreep && u.order === "idle") this.setAutoGuardPost(u);
+      // EVENT_UNIT_ACQUIRED_TARGET — the unit picked a target by itself. Raised for a NEW one
+      // only: this scan re-confirms the target it already has every ACQUIRE_PERIOD.
+      if (this.captureAcquires && u.targetId !== best.id) this.unitNews.push({ kind: "acquired", unit: eventInfo(u), other: eventInfo(best), player: jassOwnerOf(u) });
       this.issueAttack(u.id, best.id);
       if (u.isCreep) {
         u.campHelper = false; // saw it with its own eyes, inside its own aggro range
