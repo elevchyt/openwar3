@@ -3102,6 +3102,14 @@ const BUILD_RAMP_HP_FRAC = 1 - BUILD_START_HP_FRAC;
 // column falls. Cancelling always gives the Wisp back, because nothing was finished; and a
 // half-built ANCIENT knocked down takes the Wisp inside it with it, while a half-built Moon
 // Well lets it go (Warcraft Wiki, Wisp). See finishConstruction / releaseBuilders.
+/** Something a repair job may stand on: a living FINISHED building (a scaffold is
+ *  powerbuilt, not repaired) or a living mechanical unit — commandstrings.txt [Errors]
+ *  `Targetrepair` "Must target a building or a mechanical unit." (SimWorld.repairRefusal). */
+function repairable(b: SimUnit): boolean {
+  if (b.hp <= 0) return false;
+  return b.building ? b.building.constructionLeft <= 0 : b.mechanical;
+}
+
 function buildsFromInside(u: SimUnit): boolean {
   return u.race === "orc" || u.race === "nightelf";
 }
@@ -8286,12 +8294,12 @@ export class SimWorld {
     w.constructing = 0;
   }
 
-  /** Order a worker to repair a damaged friendly building. Params (rate + cost
-   *  per HP) are computed by the caller from the building's build cost/time. */
+  /** Order a worker to repair a damaged friendly building or MECHANICAL UNIT (`Targetrepair`,
+   *  see repairRefusal). Params (rate + cost per HP) come from `repairRates`. */
   issueRepair(id: number, buildingId: number, hpPerSec: number, goldPerHp: number, lumberPerHp: number): boolean {
     const u = this.units.get(id);
     const b = this.units.get(buildingId);
-    if (!u || !u.worker || !b?.building || b.building.constructionLeft > 0 || b.hp >= b.maxHp) return false;
+    if (!u || !u.worker || !b || !repairable(b) || b.hp >= b.maxHp) return false;
     if (this.hasLiquidFire(b)) return false; // Liquid Fire prevents repair while it burns
     if (this.castLocked(u)) return false;
     this.detachBuilder(id); // clears any prior repair/build first
@@ -8320,8 +8328,8 @@ export class SimWorld {
       return;
     }
     const b = this.units.get(r.targetId);
-    if (!b?.building || b.hp >= b.maxHp) {
-      this.stop(u.id); // repaired to full, or the building is gone
+    if (!b || !repairable(b) || b.hp >= b.maxHp) {
+      this.stop(u.id); // repaired to full, or the building (or the Siege Engine) is gone
       return;
     }
     // IN RANGE, and nothing else. Repair states its own reach — `Ahrp`/`Arep`/`Arst`/`Aren`
@@ -15798,15 +15806,26 @@ export class SimWorld {
   }
 
   /** Why `worker` may not repair `target`, in the game's own [Errors] key, or null if it may.
-   *  A worker whose type ships no repair ability at all is refused outright. */
+   *  A worker whose type ships no repair ability at all is refused outright.
+   *
+   *  The KIND is one rule the rows cannot state: a repair target is "a building or a
+   *  mechanical unit" — commandstrings.txt [Errors] `Targetrepair`, the line that exists for
+   *  exactly this, and the Ubertips' own words ("Repairs mechanical units and structures",
+   *  `[Ahrp]`; Renew "…allied buildings, and friendly mechanical units"). Renew's `targs1`
+   *  names no `mechanical` at all, and Repair's names it beside `structure`, so neither list
+   *  read as an allow-list says it. Everything else — ALLEGIANCE (`friend`, which is an ally's
+   *  too) and `nonancient` — is the row's own Targets Allowed through `targetError`, which is
+   *  why an ally's Town Hall and a Siege Engine are mended and an enemy's never is (#382). */
   repairRefusal(workerId: number, buildingId: number): string | null {
     const w = this.units.get(workerId);
     const b = this.units.get(buildingId);
     if (!w || !b) return "Cantrepair";
+    if (!b.building && !b.mechanical) return "Targetrepair";
     const ab = this.repairAbility(w);
     // No repair row on the type: nothing to check the target against, and nothing to do the
-    // repairing. (Kept permissive for a bare test/sim world with no ability registry.)
-    if (!ab || !this.abilities) return this.abilities ? "Cantrepair" : null;
+    // repairing. (Kept permissive for a bare test/sim world with no ability registry — save
+    // for allegiance, which the row would have asked: nobody mends an enemy.)
+    if (!ab || !this.abilities) return this.abilities ? "Cantrepair" : this.allied(w, b) ? null : "Cantrepair";
     const def = this.abilityDefOf(ab);
     if (!def) return null;
     return this.targetError(w, b, def.targetFlags, def.code);
@@ -15827,7 +15846,8 @@ export class SimWorld {
     let best: SimUnit | null = null;
     let bestD = Infinity;
     for (const b of this.units.values()) {
-      if (!b.building || b.building.constructionLeft > 0 || b.hp <= 0 || b.hp >= b.maxHp) continue;
+      // A building or a mechanical unit — Renew's Ubertip names both (repairRefusal).
+      if (!repairable(b) || b.hp >= b.maxHp) continue;
       if (!this.allied(u, b)) continue;
       const d = Math.hypot(b.x - u.x, b.y - u.y);
       if (d > range || d >= bestD) continue;

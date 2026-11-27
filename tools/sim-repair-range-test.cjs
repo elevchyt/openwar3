@@ -167,5 +167,30 @@ console.log("\nKABOOM — `Rng1` = 0 is a reach, and it means 'touching'");
   check("…and the blast landed on the building", b.hp < 1000, `hp ${b.hp}`);
 }
 
+console.log("\nREPAIR TARGETS — an ally's building and a mechanical unit, never an enemy or flesh (#382)");
+{
+  // `[Arst]`'s real Targets Allowed, so allegiance and `nonancient` come from the row.
+  const ARST = { code: "Arst", target: "unit", targetFlags: ["mechanical", "friend", "nonancient", "ground", "air", "structure", "bridge", "alive", "dead", "invu", "vuln"], levelData: [{ castRange: 50, data: [0.35, 1.5] }] };
+  const world = makeWorld();
+  world.abilities = registry("Arst", ARST);
+  const ally = addBuilding(world, 500);
+  ally.owner = 1; // a teammate's Barracks (team 0, like the worker)
+  const w = addBody(world, 1, SITE[0] - 300, SITE[1], WORKER);
+  const engine = addBody(world, 2, SITE[0] - 400, SITE[1] + 300, { typeId: "hmtt", mechanical: true, hp: 300, maxHp: 700, radius: 32, collisionSize: 32 });
+  const footman = addBody(world, 3, SITE[0] - 400, SITE[1] - 300, { typeId: "hfoo", hp: 200, maxHp: 420 });
+  engine.mechanical = true; // `add` takes the flag as an option, not off the spawn row
+  const foe = addBody(world, 4, SITE[0] - 600, SITE[1] + 300, { owner: 2, team: 1, typeId: "hmtt", mechanical: true, hp: 300, maxHp: 700, radius: 32, collisionSize: 32 });
+  foe.mechanical = true;
+  check("an ALLY's building may be repaired", world.repairRefusal(w.id, ally.id) === null, String(world.repairRefusal(w.id, ally.id)));
+  check("our own Siege Engine may be repaired", world.repairRefusal(w.id, engine.id) === null, String(world.repairRefusal(w.id, engine.id)));
+  check("a Footman is 'Must target a building or a mechanical unit.'", world.repairRefusal(w.id, footman.id) === "Targetrepair", String(world.repairRefusal(w.id, footman.id)));
+  check("an ENEMY's Siege Engine is refused", world.repairRefusal(w.id, foe.id) !== null, String(world.repairRefusal(w.id, foe.id)));
+  check("…and so is the order, at the sim", !world.issueRepair(w.id, footman.id, ...REPAIR_RATES));
+  world.stashOf(0).gold = 1000;
+  check("the Siege Engine order is accepted", world.issueRepair(w.id, engine.id, ...REPAIR_RATES));
+  for (let t = 0; t < 10 / DT; t++) world.tick(DT);
+  check("…and the Siege Engine gains hit points", engine.hp > 330, `hp ${engine.hp.toFixed(0)}`);
+}
+
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");
 process.exit(failed ? 1 : 0);

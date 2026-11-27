@@ -1059,16 +1059,24 @@ export class Authority {
       }
       case "repair": {
         // Everything the old call site checked CLIENT-side is re-checked here, because none of
-        // it survives a trip over the wire: that it is your worker, that it is your building,
-        // that the building is finished and actually damaged.
-        if (!this.ownedBy(player, cmd.unitId) || !this.ownedBy(player, cmd.buildingId)) return false;
+        // it survives a trip over the wire: that it is your worker, and that the target is
+        // finished and actually damaged.
+        //
+        // The TARGET need not be yours: Repair's rows are `mechanical,friend,nonancient,…` and
+        // `friend` is an ally's too ("Renews … allied buildings", Renew's Ubertip), and it need
+        // not be a building — a Siege Engine or a Glaive Thrower is "a mechanical unit", which
+        // is what [Errors] `Targetrepair` names beside "a building" (issue #382). Requiring
+        // both here refused every one of those before the data was asked.
+        if (!this.ownedBy(player, cmd.unitId)) return false;
         if (!this.sim.units.get(cmd.unitId)?.worker) return false;
         const target = this.sim.units.get(cmd.buildingId);
-        if (!target?.building || target.building.constructionLeft > 0 || target.hp >= target.maxHp) return false;
-        // …and that this worker's own repair ability allows that target. The four races'
-        // repair rows differ in exactly one thing and this is it: every one of them lists
-        // `nonancient` except the night elf's Renew, so a Wisp may mend an Ancient of War and
-        // an allied Peasant may not. See SimWorld.repairRefusal.
+        if (!target || target.hp <= 0 || target.hp >= target.maxHp) return false;
+        if (target.building && target.building.constructionLeft > 0) return false;
+        // …and that this worker's own repair ability allows that target: kind (a building or a
+        // mechanical unit), allegiance, and `nonancient`. The four races' repair rows differ in
+        // exactly one thing and this is it: every one of them lists `nonancient` except the
+        // night elf's Renew, so a Wisp may mend an Ancient of War and an allied Peasant may
+        // not. See SimWorld.repairRefusal.
         if (this.sim.repairRefusal(cmd.unitId, cmd.buildingId) !== null) return false;
         // The rates come from the sim, which derives them from the target's own repair basis
         // (`goldRep`/`lumberRep`/`reptm`) and the worker's repair ABILITY (`Arep` DataA/DataB)
