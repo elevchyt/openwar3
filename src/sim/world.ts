@@ -16411,7 +16411,27 @@ export class SimWorld {
 
   /** Can a unit target another with a (harmful) spell right now? */
   private castableTarget(caster: SimUnit, target: SimUnit, flags: string[] = [], code = ""): boolean {
-    return this.targetError(caster, target, flags, code) === null;
+    return !this.unseenEnemy(caster, target) && this.targetError(caster, target, flags, code) === null;
+  }
+
+  /**
+   * Is `target` an ENEMY the caster's side cannot see — invisible, and under no True Sight of
+   * theirs (`teamDetects`: a detector's circle, a detecting reveal, Dust of Appearance)? Such a
+   * unit is not drawn, so a player cannot click it, and a cast at it is refused for everyone
+   * else too — a computer, a script's order, a command off the wire — or "a computer is gated
+   * exactly as your own click is" is not true (issue #378: a Wind Walking Blademaster was
+   * Storm Bolted by the Mountain King he walked past). The same side test the disjoint asks of
+   * a missile in flight (`missileDisjointed`), so a wind-up whose target fades before it fires stops
+   * (tickCast re-asks `castableTarget` until the effect lands).
+   *
+   * Asked at the AIMED doors — `castError`, `castableTarget`, the item doors — and NOT inside
+   * `targetError`, because an AURA asks that too (`applyAuras`), and an aura is no aim: the
+   * Tornado's slow reaches a Wind Walker standing in it. Never one's own side's: a unit is
+   * never hidden from its own team, so an ally's Death Coil still heals a Wind Walking Ghoul.
+   */
+  private unseenEnemy(caster: SimUnit, target: SimUnit): boolean {
+    return target.invisible && target.id !== caster.id && this.hostile(caster, target)
+      && !this.teamDetects(caster.team, target.x, target.y, target);
   }
 
   /** WHY a unit may not target another with an ability — a commandstrings.txt [Errors]
@@ -16902,6 +16922,9 @@ export class SimWorld {
     // "Must target an item." / "Must target a unit with this action." — clicked bare ground
     if (!t) return this.aimsAtItems(def, true) ? "Targetitem" : "Targetunit";
     if (this.aimsAtItems(def, true)) return "Targetitem"; // a unit, for a spell that takes items alone
+    // An enemy the caster's side cannot see is no target (`unseenEnemy`). The game has no line
+    // for it, because nobody can click one.
+    if (this.unseenEnemy(u, t)) return SILENT_REFUSAL;
     return this.targetError(u, t, def.targetFlags, code);
   }
 
@@ -29244,7 +29267,7 @@ export class SimWorld {
           // the guard for the paths that do not — a trigger's UnitUseItemTarget, and the AI.
           if (ad.target === "unit") {
             const t = this.units.get(targetId);
-            if (!t || this.targetError(u, t, ad.targetFlags, ad.code) !== null) break;
+            if (!t || this.unseenEnemy(u, t) || this.targetError(u, t, ad.targetFlags, ad.code) !== null) break;
           }
           this.applySpellEffect(ad.code, 1, u, { targetId, x, y }, ad);
           fired = true;
@@ -29406,6 +29429,7 @@ export class SimWorld {
       if (ad.target !== "unit") continue;
       const t = this.units.get(targetId);
       if (!t) return "Targetunit";
+      if (this.unseenEnemy(u, t)) return SILENT_REFUSAL; // not drawn, so not aimed at (`unseenEnemy`)
       const flagErr = this.targetError(u, t, ad.targetFlags, ad.code);
       if (flagErr !== null) return flagErr;
       const range = ad.levelData[0]?.castRange ?? 0;

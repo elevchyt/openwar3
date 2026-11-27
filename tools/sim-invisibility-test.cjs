@@ -270,5 +270,27 @@ function fighter(over = {}) {
   check("a Wind Walker's backstab swing is the slam", wk.swingSlam, true);
 }
 
+// --- an enemy nobody on our side can see is aimed at by nobody (issue #378) ---------------
+//
+// A Wind Walking Blademaster beside a Mountain King with no detector near: not drawn, so a
+// player cannot click him — and the cast doors refuse a computer and a script the same way.
+// `castableTarget` is what issueCast and a wind-up (tickCast) ask; `castError` the click's.
+{
+  const STORM_BOLT = ["air", "ground", "enemy", "neutral", "organic", "vuln"];
+  const mk = fighter({ id: 20, team: 0, order: "idle", targetId: null });
+  const bm = fighter({ id: 21, owner: 1, team: 1, x: 300, order: "idle", targetId: null, cloaked: true, invisible: true });
+  check("an undetected invisible enemy cannot be targeted", world.castableTarget(mk, bm, STORM_BOLT, "AHtb"), false);
+  const shade = fighter({ id: 22, team: 0, x: 250, order: "idle", targetId: null, detectRadius: 900 });
+  check("…but can once a detector of ours covers him", world.castableTarget(mk, bm, STORM_BOLT, "AHtb"), true);
+  world.units.delete(shade.id);
+  // …and a unit is never hidden from its OWN side: an ally may still aim at it.
+  const ghoul = fighter({ id: 23, team: 1, x: 320, order: "idle", targetId: null });
+  check("a friend's spell still reaches an invisible ally", world.castableTarget(ghoul, bm, ["air", "ground", "friend"], "Ainf"), true);
+  // …and a visible enemy is untouched by the rule.
+  bm.invisible = false;
+  check("a visible enemy can be targeted", world.castableTarget(mk, bm, STORM_BOLT, "AHtb"), true);
+  for (const id of [20, 21, 23]) world.units.delete(id);
+}
+
 console.log(`\n${failed ? `${failed} FAILED` : "all passed"}`);
 process.exit(failed ? 1 : 0);

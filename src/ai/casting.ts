@@ -407,6 +407,19 @@ const CAST_RULES: Record<string, CastRule> = {
 /** The world and the player, as the caster needs them. Kept narrow on purpose: everything
  *  here is either a read of the sim or the one door out (`AiPlayer.order` →
  *  `RtsController.execute`), so a computer's cast is gated exactly as your own click is. */
+/**
+ * The foes this side can SEE: an invisible enemy under none of our True Sight is not drawn for
+ * a player, so a caster must not aim at it either — not a unit spell (`SimWorld.castError`
+ * refuses that anyway, issue #378) and not a POINT spell dropped where it stands, which would
+ * be the fog bypass by another door. Shared with the Computer+ caster. `own` names the side:
+ * detection is a TEAM's (`SimWorld.teamDetects`), and a player with no units casts nothing.
+ */
+export function seenFoes(world: Pick<SimWorld, "teamDetects">, own: readonly SimUnit[], foes: SimUnit[]): SimUnit[] {
+  const team = own[0]?.team;
+  if (team === undefined || !foes.some((f) => f.invisible)) return foes;
+  return foes.filter((f) => !f.invisible || world.teamDetects(team, f.x, f.y, f));
+}
+
 export interface CasterView {
   world: SimWorld;
   player: number;
@@ -456,12 +469,13 @@ export class AiCaster {
 
   pass(): void {
     const own: SimUnit[] = [];
-    const foes: SimUnit[] = [];
+    let foes: SimUnit[] = [];
     for (const u of this.view.world.units.values()) {
       if (u.hp <= 0) continue;
       if (u.owner === this.view.player) own.push(u);
       else if (this.view.hostile(u)) foes.push(u);
     }
+    foes = seenFoes(this.view.world, own, foes);
     for (const u of own) {
       if (!this.canAct(u)) continue;
       this.armAutocasts(u);

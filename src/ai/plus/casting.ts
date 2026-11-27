@@ -1,7 +1,7 @@
 import { isRepairCode, NO_AOE_CURSOR, targetFlagSet, type AbilityDef, type AbilityLevel } from "../../data/abilities";
 import type { SimUnit } from "../../sim/world";
 import { DISPEL_CODES, POLARITY_SPELLS, worthDispelling } from "../../sim/spells";
-import { friendlySpell, near, stripsOwnShield, treeAim, treeSpots, waveDistance, waveHalfWidth, type CasterView } from "../casting";
+import { friendlySpell, near, seenFoes, stripsOwnShield, treeAim, treeSpots, waveDistance, waveHalfWidth, type CasterView } from "../casting";
 import { damageMultiplier, MELEE } from "../../data/gameplayConstants";
 import { AttackType } from "../../data/enums";
 import { MELEE_INSANE, MELEE_NEWBIE, WIND_WALK } from "../ids";
@@ -914,7 +914,7 @@ export class PlusCaster {
     this.now = now;
     this.ctx = ctx;
     const own: SimUnit[] = [];
-    const foes: SimUnit[] = [];
+    let foes: SimUnit[] = [];
     // OURS, AND OUR ALLIES'. The two lists are different questions and were one: `own` is who
     // this player gives ORDERS to, and `friends` is who its friendly spells may LAND on. A
     // Paladin may Holy Light his ally's Footman and a Death Knight may Coil his ally's Ghoul —
@@ -929,6 +929,9 @@ export class PlusCaster {
       } else if (this.view.hostile(u)) foes.push(u);
       else if (this.view.allied?.(u)) friends.push(u);
     }
+    // …and only the foes we can SEE — an undetected invisible enemy is aimed at by no door
+    // (`seenFoes`, issue #378).
+    foes = seenFoes(this.view.world, own, foes);
     this.backstabPass(own);
     this.townBell(own, foes);
     this.douseImmolation(own, foes);
