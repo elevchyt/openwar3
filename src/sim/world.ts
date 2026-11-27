@@ -19,6 +19,8 @@ import {
   slowedAttack,
   slowedMove,
   STACK_DAMAGE,
+  STACK_MOVEMENT,
+  STACK_ATTACKRATE,
   abilityOrbTier,
   isArrowOrb,
   isOrbCode,
@@ -38,6 +40,7 @@ import {
   damageMultiplier,
   etherealDamageMultiplier,
   etherealSpellBonus,
+  etherealHealBonus,
   grantedXp,
   heroReviveVitals,
   upkeepBandIndex,
@@ -594,6 +597,11 @@ export interface SimBuff {
    *  are checked in tickMeld; everything else (attack, cast) reveals it through the shared
    *  breakInvisibility path, same as Wind Walk. */
   meld?: boolean;
+  /** A SLOW whose ability's Stacking Types column (orbs.ts STACK_*) has the Movement (2)
+   *  and/or Attack Rate (4) bit: on that axis it ADDS to the other stacking slows on the
+   *  unit instead of only the strongest counting (recomputeStats). Laid per ATTACKER, so two
+   *  sources are two buffs; one source's re-hit still only refreshes its own. */
+  stacks?: number;
   /** A `dot` that cannot land the killing blow: it stops at 1 hp. Every WC3 POISON is one —
    *  "the poison damage is 8 damage per second and is non-lethal" (Liquipedia, Orb of Venom)
    *  — which is why a Dryad's Slow Poison whittles a fleeing unit down and never finishes it.
@@ -14560,6 +14568,8 @@ export class SimWorld {
     let damageBonus = 0;
     let slowMove = 0;
     let slowAttack = 0;
+    let stackedMove = 0; // the slows that ADD (SimBuff.stacks), folded into the two above
+    let stackedAttack = 0;
     let hasteMove = 0;
     let hasteAttack = 0;
     let damagePct = 0;
@@ -14599,8 +14609,11 @@ export class SimWorld {
       }
       else if (b.kind === "thorns") thorns = Math.max(thorns, b.value); // Thorns Aura
       else if (b.kind === "slow") {
-        slowMove = Math.max(slowMove, b.value);
-        slowAttack = Math.max(slowAttack, b.value2);
+        // A slow whose Stacking Types bit is set for an axis ADDS on that axis (SimBuff.stacks);
+        // everything else is the strongest one.
+        const st = b.stacks ?? 0;
+        if (st & STACK_MOVEMENT) stackedMove += b.value; else slowMove = Math.max(slowMove, b.value);
+        if (st & STACK_ATTACKRATE) stackedAttack += b.value2; else slowAttack = Math.max(slowAttack, b.value2);
       } else if (b.kind === "haste") {
         hasteMove = Math.max(hasteMove, b.value);
         hasteAttack = Math.max(hasteAttack, b.value2);
@@ -14641,6 +14654,9 @@ export class SimWorld {
       else if (b.kind === "magicImmune") magicImmuneBuff = true; // Anti-magic Potion's 15 seconds
       else if (b.kind === "maxHp") maxHpBonus += b.value; // Metamorphosis' alternate-form pool
     }
+    // The stacking slows are one sum; against the strongest of the rest it is again the larger.
+    slowMove = Math.max(slowMove, stackedMove);
+    slowAttack = Math.max(slowAttack, stackedAttack);
     // Masonry-style `rhpo` is a PERCENTAGE of the base pool, applied before the flat `rhpx`
     // adds (Animal War Training's +150).
     // Snapped, because the percentage step is the only place a pool picks up a fraction and
@@ -15477,7 +15493,7 @@ export class SimWorld {
       // heals the receiving end for exactly what came off the other (issue #357), so neither
       // half bites or heals here.
       if (b.group === DRAIN_GROUP) { /* tickDrains moves it */ }
-      else if (b.kind === "hot" && b.value && b.delay <= 0) u.hp = Math.min(u.maxHp, u.hp + b.value * dt);
+      else if (b.kind === "hot" && b.value && b.delay <= 0) this.healLife(u, b.value * dt);
       // A non-lethal dot (every poison) whittles and stops: it may take the last point off
       // a unit's health bar's worth of hp but never the last point itself.
       else if (b.kind === "dot" && b.value && !immune) {
@@ -16401,6 +16417,16 @@ export class SimWorld {
     }
   }
 
+  /** HEALING landed on a unit — a spell's, an item's, a heal-over-time's — clamped at its
+   *  pool. A Banished (ethereal) body takes it ×`EtherealHealBonus` (MiscGame, 1.66), the
+   *  same +66% its Magic and Spells damage rows give it (issue #368): the trade Banish makes
+   *  is "untouchable by weapons, fragile to and mendable by magic". Regeneration, life steal,
+   *  a drain's transfer and repair are not heals and do not come through here. */
+  private healLife(t: SimUnit, amount: number): void {
+    if (!(amount > 0)) return;
+    t.hp = Math.min(t.maxHp, t.hp + (t.ethereal ? amount * etherealHealBonus() : amount));
+  }
+
   /** Add/refresh a buff. Grouped buffs (auras, Inner Fire) don't stack — the
    *  strongest wins and its timer refreshes. Ungrouped buffs are independent. */
   private applyBuffInternal(u: SimUnit, init: SimBuffInit): void {
@@ -16434,7 +16460,7 @@ export class SimWorld {
       }
     }
     const art = init.art ?? "";
-    u.buffs.push({ kind: init.kind, group, timeLeft: init.timeLeft, total: init.timeLeft, sourceId: init.sourceId, value: init.value ?? 0, value2: init.value2 ?? 0, art, fx: init.fx ?? (art ? [{ path: art, attach: [] }] : []), buffId: init.buffId ?? "", delay: init.delay ?? 0, meld: init.meld, nonLethal: init.nonLethal, untilHealed: init.untilHealed, undispellable: init.undispellable, aura: init.aura, procAbility: init.procAbility, procRank: init.procRank });
+    u.buffs.push({ kind: init.kind, group, timeLeft: init.timeLeft, total: init.timeLeft, sourceId: init.sourceId, value: init.value ?? 0, value2: init.value2 ?? 0, art, fx: init.fx ?? (art ? [{ path: art, attach: [] }] : []), buffId: init.buffId ?? "", delay: init.delay ?? 0, meld: init.meld, nonLethal: init.nonLethal, untilHealed: init.untilHealed, undispellable: init.undispellable, aura: init.aura, procAbility: init.procAbility, procRank: init.procRank, stacks: init.stacks });
   }
 
   private interruptForStun(u: SimUnit): void {
@@ -20973,7 +20999,7 @@ export class SimWorld {
     const each = cap > 0 && reached.length * per > cap ? cap / reached.length : per;
     for (const t of reached) {
       const share = t.building && (f.buildingReduction ?? 0) > 0 ? f.buildingReduction! : 1;
-      t.hp = Math.min(t.maxHp, t.hp + each * share);
+      this.healLife(t, each * share);
       // …and HEARD on that unit: the flash carries its own sound, `SNDXAHEA` on frame 0 of
       // HealTarget.mdx's Birth (AnimLookups AHEA → "Heal" → HealTarget.wav), so every unit a wave
       // mends chimes as its flash is born — the sound the engine plays off the model, rather than
@@ -21616,9 +21642,7 @@ export class SimWorld {
     // the armour class lets through, so the pool is spent on the smaller number.
     spellDamage: (t, amount, src) =>
       t.magicImmune ? 0 : this.landDamage(t, this.absorbSpellDamage(t, (t.ethereal ? amount * etherealSpellBonus() : amount) * this.spellTypeMult(t) * (1 - t.magicReduction) * t.magicTaken), src, false),
-    spellHeal: (t, amount) => {
-      t.hp = Math.min(t.maxHp, t.hp + amount);
-    },
+    spellHeal: (t, amount) => this.healLife(t, amount),
     applyBuff: (t, buff) => {
       // A debuff landing on an enemy is the same provocation the cast itself is (see
       // applySpellEffect), and this is where the ones the cast could not name arrive: Acid
@@ -26967,7 +26991,9 @@ export class SimWorld {
    * Damage bit set — which the whole poison family carries — the DoT is keyed per ATTACKER,
    * so two Wind Riders' poison adds up while one Wind Rider's re-hit merely refreshes. The
    * slow half is keyed per ability either way: our slow model takes the strongest rather
-   * than summing, so a per-source key there would change nothing.
+   * than summing, so a per-source key there would change nothing — UNLESS the row also sets
+   * the Movement (2) or Attack Rate (4) bit, which no stock poison does and a map may: then
+   * the slow is keyed per attacker too and ADDS on that axis (SimBuff.stacks, recomputeStats).
    *
    * NOTE the group names carry no colon. A colon in a buff group means "aura, and the first
    * half is its ability code" to the renderer's persistent-FX pass, and a poison is not one.
@@ -26983,7 +27009,12 @@ export class SimWorld {
     if (moveFactor > 0 || attackFactor > 0) {
       // Same buff row as the damage half above (`BSpo` IS "Slow Poison"), split in two only
       // because our buffs carry one kind each — so the Status row shows it once.
-      this.applyBuffInternal(target, { kind: "slow", group: `poison-${def.code}-slow`, timeLeft: t, value: moveFactor, value2: attackFactor, sourceId: attacker.id, buffId: buffIdOf(def), undispellable: true });
+      const slowStack = stack & (STACK_MOVEMENT | STACK_ATTACKRATE);
+      this.applyBuffInternal(target, {
+        kind: "slow", group: `poison-${def.code}-slow` + (slowStack ? `-${attacker.id}` : ""), timeLeft: t,
+        value: moveFactor, value2: attackFactor, sourceId: attacker.id, buffId: buffIdOf(def), undispellable: true,
+        stacks: slowStack || undefined,
+      });
     }
   }
 
@@ -29393,7 +29424,7 @@ export class SimWorld {
             if (seconds > 0) {
               this.applyBuffInternal(t, { kind: "hot", group: ITEM_REGEN_GROUP, timeLeft: seconds, sourceId: u.id, value: heal / seconds, value2: 0, fx, buffId });
             } else {
-              t.hp = Math.min(t.maxHp, t.hp + heal);
+              this.healLife(t, heal);
             }
           }
           fired = true;
@@ -29706,7 +29737,7 @@ export class SimWorld {
     const mana = val(manaIdx);
     let did = false;
     for (const t of this.itemAreaTargets(u, ad)) {
-      if (hp > 0 && t.hp < t.maxHp) { t.hp = Math.min(t.maxHp, t.hp + hp); did = true; }
+      if (hp > 0 && t.hp < t.maxHp) { this.healLife(t, hp); did = true; }
       if (mana > 0 && t.mana < t.maxMana) { t.mana = Math.min(t.maxMana, t.mana + mana); did = true; }
     }
     return did;

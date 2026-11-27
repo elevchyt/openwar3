@@ -163,9 +163,12 @@ type **`stackFlags`**, and WorldEditStrings names the bits:
 
 That `1` is exactly what Liquipedia's Orb of Venom page states independently — *"The poison
 damage stacks, if the orbs are carried by different Heroes."* So `applyPoison` keys the DoT
-per ATTACKER when the Damage bit is set, and per ability otherwise. (The slow half is keyed
-per ability regardless: our slow model takes the strongest rather than summing, so a
-per-source key would change nothing there.)
+per ATTACKER when the Damage bit is set, and per ability otherwise. The slow half is keyed
+per ability unless the row sets the Movement (2) or Attack Rate (4) bit — no stock poison
+does, a map may — and then it is keyed per attacker as well and carries those bits
+(`SimBuff.stacks`): `recomputeStats` ADDS the stacking slows on each flagged axis and takes
+the larger of that sum and the strongest of the rest (issue #368). Without the bits the
+slows take the strongest, as before. Cold Arrows' `7` is read by its own handler, not here.
 
 Buff group names for orbs carry **no colon** — a colon means "aura, and the first half is its
 ability code" to the renderer's persistent-FX pass, and none of these are auras.

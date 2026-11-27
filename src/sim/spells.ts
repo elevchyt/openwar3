@@ -389,6 +389,8 @@ export interface SimBuffInit {
   /** The ability (and rank) whose row a PROC of this buff reads. See SimBuff.procAbility. */
   procAbility?: string;
   procRank?: number;
+  /** A SLOW's Stacking Types bits (STACK_MOVEMENT / STACK_ATTACKRATE). See SimBuff.stacks. */
+  stacks?: number;
 }
 
 /** The art half of an applyBuff: spread into a SimBuffInit (`...fx(def)`).

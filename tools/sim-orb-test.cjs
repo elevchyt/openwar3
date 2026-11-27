@@ -235,6 +235,39 @@ console.log("\nwhat the winning orb actually does");
   check("no buff group contains a colon (that would read as an aura)", foe.buffs.filter((x) => x.group.includes(":")).length, 0);
 }
 {
+  // The two slow bits no stock poison sets, as a map may set them (issue #368): a row with
+  // Damage + Movement (3) lays the slow per ATTACKER too, marked to ADD on the movement axis
+  // and to take the strongest on attack rate, which the row leaves unstacked.
+  const w = world();
+  const Aspo3 = abil("Asp3", "Aspo", { duration: 5, heroDuration: 1, data: [4, 0.2, 0.25, 3] }, { targetFlags: ["air", "ground", "organic"] });
+  ABILITIES.Asp3 = Aspo3;
+  const a = unit(w, { abilities: [{ id: "Asp3", code: "Aspo", level: 1, cooldownLeft: 0, autocastOn: false }] });
+  const b2 = unit(w, { abilities: [{ id: "Asp3", code: "Aspo", level: 1, cooldownLeft: 0, autocastOn: false }] });
+  const foe = unit(w, { owner: 1, team: 1 });
+  w.applyOrbEffect(a, foe, w.resolveOrb(a, foe), 5);
+  w.applyOrbEffect(a, foe, w.resolveOrb(a, foe), 5);
+  check("one attacker's stacking slow is still one buff", foe.buffs.filter((x) => x.kind === "slow").length, 1);
+  w.applyOrbEffect(b2, foe, w.resolveOrb(b2, foe), 5);
+  const slows = foe.buffs.filter((x) => x.kind === "slow");
+  check("a second attacker's is a second buff (the Movement bit is set)", slows.length, 2);
+  check("…both carrying the row's slow bits and no Damage bit", slows.map((x) => x.stacks), [2, 2]);
+  delete ABILITIES.Asp3;
+}
+
+console.log("\nhealing a Banished body is ×EtherealHealBonus");
+{
+  // `Units\MiscGame.txt` EtherealHealBonus = 1.66 (issue #368): the heal is scaled before the clamp.
+  const w = world();
+  const banished = unit(w, { hp: 100, maxHp: 1000, ethereal: true });
+  const plain = unit(w, { hp: 100, maxHp: 1000, ethereal: false });
+  w.healLife(banished, 100);
+  w.healLife(plain, 100);
+  check("an ethereal unit gains 166 of a 100 heal", Math.round(banished.hp), 266);
+  check("…an ordinary one 100", plain.hp, 200);
+  w.healLife(banished, 10000);
+  check("…and the pool still caps it", banished.hp, 1000);
+}
+{
   // A blow that did not connect carries nothing ("Missing an Attack does not trigger the
   // reduction" — Liquipedia, Orb of Corruption).
   const w = world();
