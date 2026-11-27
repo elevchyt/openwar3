@@ -18636,6 +18636,9 @@ export class MapViewerScene {
     // handler a dead match left on `window` still answers keys typed at the main menu.
     for (const off of this.detachers) off();
     this.detachers = [];
+    // The frame-box observer holds `this` in its callback as the window listeners did (#390).
+    this.frameBoxObserver?.disconnect();
+    this.frameBoxObserver = null;
     this.voiceChat.dispose();
     if (this.voiceTimer) clearInterval(this.voiceTimer);
     this.voiceTimer = 0;
@@ -19981,9 +19984,11 @@ export class MapViewerScene {
       if (!this.frameBoxListening && typeof window !== "undefined") {
         this.frameBoxListening = true;
         // A resize the observer sees as well; a SCROLL it does not, and the box is in viewport
-        // coordinates. Passive, and they only set a flag.
-        window.addEventListener("resize", () => { this.frameBoxDirty = true; }, { passive: true });
-        window.addEventListener("scroll", () => { this.frameBoxDirty = true; }, { passive: true, capture: true });
+        // coordinates. Passive, and they only set a flag. Through `on`, so `dispose` takes them
+        // back: both close over `this`, and left on `window` they held every finished match's
+        // scene — viewer, models, icon cache — for the life of the page (issue #390).
+        this.on(window, "resize", () => { this.frameBoxDirty = true; }, { passive: true });
+        this.on(window, "scroll", () => { this.frameBoxDirty = true; }, { passive: true, capture: true });
       }
     }
     // No observer to keep it fresh (an old browser, a headless test) — behave as it used to.
