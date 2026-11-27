@@ -465,11 +465,14 @@ const rejuvenating = (u: SimUnit): boolean => u.buffs.some((b) => b.group === "r
 
 /**
  * Autocasts that are ON against a player's army and OFF against a creep camp — the developer's
- * rule for the Sea Witch's Frost Arrows (`ANfa`): each arrow costs mana that a camp is not worth
+ * rule for the Sea Witch's Frost Arrows: each arrow costs mana that a camp is not worth
  * and the slow is what a fight against a player is decided by. Flipped every pass by
- * `armAutocasts` off `playerInReach`, at every difficulty.
+ * `armAutocasts` off `playerInReach`, at every difficulty. Keyed on the BASE code, as every
+ * test of it reads `def.code`: the Sea Witch's row is `ANfa` but its code is **`AHca`**
+ * (`AbilityData.slk`: `ANfa,AHca,Sea Witch - Frost Arrows`), and keyed on the alias the set
+ * matched nothing, so the arrows were armed for good and spent at every camp (issue #377).
  */
-const PLAYERS_ONLY_AUTOCAST = new Set<string>(["ANfa"]);
+const PLAYERS_ONLY_AUTOCAST = new Set<string>(["AHca"]);
 
 /** The share of its mana pool a caster whose autocast slot is a HEAL keeps back from the
  *  autocasts it presses by hand (`armAutocasts`): a Priest stops buffing with Inner Fire (35)

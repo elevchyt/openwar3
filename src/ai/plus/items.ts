@@ -189,11 +189,12 @@ const REGEN = "AIrg";
  * Both are pressed only in a fight with an OPPONENT PLAYER (`playerFight`), never at a creep camp
  * (`ItemCtx.creeping`, and creeps are not a player's). `NOT_COMBAT` is what the rule must never
  * reach for: items whose press is a decision about the map, the economy or the hero's own build,
- * not about the fight in front of it. All ours.
+ * not about the fight in front of it. All ours. Tested on `ad.code`, so every entry is a BASE
+ * code: the Dagger's row `AIbk` is code `AEbl` and the Staff's `AImt` is `AHmt` (issue #377).
  */
 const NOT_COMBAT: ReadonlySet<string> = new Set([
-  "AIbk", // Kelen's Dagger of Escape — a blink wants a WHERE
-  "AImt", "AIrt", // Staff of Teleportation, Amulet of Recall — leave the fight
+  "AEbl", // Kelen's Dagger of Escape (`AIbk`) — a blink wants a WHERE
+  "AHmt", "AIrt", // Staff of Teleportation (`AImt`), Amulet of Recall — leave the fight
   "AIta", "Aeye", "AItb", "Ashs", "AIfa", "AIrv", // the reveals: crystal ball, wards, dust, shadowsight, flare, omniscience
   "AIbl", "Amec", "AImo", "AIpm", "Ablp", // tiny buildings, the critter, the lure, the mines, the skull's blight
   "Aret", // Tome of Retraining — it UNLEARNS the hero

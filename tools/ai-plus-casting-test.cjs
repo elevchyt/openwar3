@@ -127,6 +127,10 @@ const ABILS = {
   //          — Inner Fire
   Ahea: { code: "Ahea", target: "unit", autocast: true, targetFlags: ["air", "ground", "friend", "vuln", "invu", "self", "organic", "nonancient", "neutral"], levelData: [lvl({ castRange: 250, cost: 5, data: [25, 0], buffs: ["Bhea"] })] },
   Ainf: { code: "Ainf", target: "unit", autocast: true, targetFlags: ["air", "ground", "friend", "neutral", "self"], levelData: [lvl({ castRange: 500, cost: 35, duration: 60, heroDuration: 60, buffs: ["Binf"], data: [0.1, 0] })] },
+  // FROST ARROWS on the Sea Witch, with its real row: `ANfa,AHca,Sea Witch - Frost Arrows`
+  // (`Units\AbilityData.slk`) — the ROW is `ANfa` and the CODE is `AHca`, which is the whole of
+  // issue #377: the players-only rule was keyed on the alias and matched nothing.
+  ANfa: { code: "AHca", target: "unit", autocast: true, targetFlags: ["air", "ground", "enemy", "neutral"], levelData: [lvl({ castRange: 700, cost: 10 })] },
   AOmi: { code: "AOmi", target: "none", autocast: false, targetFlags: [], levelData: [lvl({ area: 1000, castRange: 128, cost: 100, duration: 60, heroDuration: 60, buffs: ["BOmi"], data: [1, 0, 2, 0.5] })] },
 };
 
@@ -1118,6 +1122,43 @@ console.log("\n-- The Priest: Heal holds the autocast slot, Inner Fire is presse
   p3.abilities[0].autocastOn = true;
   const low = allOrders([p3, unit({ x: 100 }), unit({ owner: 1, x: 300 }), unit({ owner: 1, x: 330 })]).filter((o) => o.c === "cast");
   check("…and not below a quarter of the bar", low.some((o) => o.code === "Ainf"), false);
+}
+
+// ==========================================================================================
+console.log("\n-- Frost Arrows: armed against a player, never at a creep camp ------------------");
+// ==========================================================================================
+// `PLAYERS_ONLY_AUTOCAST` is keyed on the BASE code (`AHca`); the Sea Witch's row id is `ANfa`.
+{
+  const witch = (o = {}) => unit({
+    typeId: "Nngs", isHero: true, mana: 300, maxMana: 300, weapon: { acquire: 600 },
+    abilities: [{ id: "ANfa", code: "AHca", level: 1, cooldownLeft: 0, autocastOn: false }],
+    ...o,
+  });
+  const toggles = (units) => {
+    const orders = [];
+    const world = { units: new Map(units.map((u) => [u.id, u])), nearestTrees: () => [], techMeets: () => true, unitMeets: () => true, castUseError: () => null, targsAdmit: () => true, castError: () => null };
+    const c = new PlusCaster({ world, player: 0, def: (id) => ABILS[id], hostile: (u) => u.owner === 1 || u.owner >= 24, allied: (u) => u.owner === 2,
+      order: (cmd) => {
+        orders.push(cmd);
+        if (cmd.c === "autocast") {
+          const u = units.find((x) => x.id === cmd.unitId);
+          for (const ab of u?.abilities ?? []) ab.autocastOn = ab.code === cmd.code ? !ab.autocastOn : false;
+        }
+        return true;
+      } }, PLUS_INSANE, () => 0);
+    for (let i = 0; i < 3; i++) c.pass(100 + i * 10, { holdsPortal: () => false, home: { x: 0, y: 0 } });
+    return orders.filter((o) => o.c === "autocast");
+  };
+  const w1 = witch();
+  toggles([w1, unit({ owner: 24, isCreep: true, x: 300 }), unit({ owner: 24, isCreep: true, x: 330 })]);
+  check("at a creep camp the Sea Witch's Frost Arrows stay OFF", w1.abilities[0].autocastOn, false);
+  const w2 = witch();
+  toggles([w2, unit({ owner: 1, x: 300 }), unit({ owner: 1, x: 330 })]);
+  check("…and against a player's army they are switched ON", w2.abilities[0].autocastOn, true);
+  const w3 = witch();
+  w3.abilities[0].autocastOn = true;
+  toggles([w3, unit({ owner: 24, isCreep: true, x: 300 })]);
+  check("…and a camp switches them back off", w3.abilities[0].autocastOn, false);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");
