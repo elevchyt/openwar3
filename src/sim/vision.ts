@@ -746,10 +746,14 @@ export class VisionMap {
    *  `SetFogStateRect`. Re-stamped over the freshly-rebuilt grid each vision update,
    *  so a *running* modifier keeps winning over what the units can actually see. */
   stampRect(minX: number, minY: number, maxX: number, maxY: number, state: FogState): void {
+    // The upper bounds are INCLUSIVE cell indices, so the last cell is the one the high
+    // edge falls in: `ceil(...) - 1`. A bare `ceil` stamped one extra column and row past
+    // a rect whose edge sits on a cell boundary — which every grid-snapped editor rect
+    // does — and a unit standing in that strip passed `visibleToTeam` (issue #364).
     const x0 = Math.max(0, Math.floor((minX - this.originX) / VISION_CELL));
-    const x1 = Math.min(this.width - 1, Math.ceil((maxX - this.originX) / VISION_CELL));
+    const x1 = Math.min(this.width - 1, Math.ceil((maxX - this.originX) / VISION_CELL) - 1);
     const y0 = Math.max(0, Math.floor((minY - this.originY) / VISION_CELL));
-    const y1 = Math.min(this.height - 1, Math.ceil((maxY - this.originY) / VISION_CELL));
+    const y1 = Math.min(this.height - 1, Math.ceil((maxY - this.originY) / VISION_CELL) - 1);
     for (let cy = y0; cy <= y1; cy++) {
       for (let cx = x0; cx <= x1; cx++) this.stampCell(cy * this.width + cx, state);
     }

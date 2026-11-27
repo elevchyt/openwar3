@@ -83,6 +83,24 @@ console.log("\nfog modifiers follow the same split");
   check("…and forgets the buildings on it", w.hasSeen(cellOf(128), cellOf(128)), false);
 }
 
+console.log("\na rect stamps exactly the cells it covers  (issue #364)");
+{
+  // (0,0)-(256,256) is cells 0..3 on both axes; its high edges sit ON the 4th boundary.
+  const v = map();
+  v.stampRect(0, 0, 256, 256, FogState.Visible);
+  check("its last column is lit", v.cellState(3, 0), FogState.Visible);
+  check("its last row is lit", v.cellState(0, 3), FogState.Visible);
+  check("the column past its +X edge is not", v.cellState(4, 0), FogState.Unexplored);
+  check("the row past its +Y edge is not", v.cellState(0, 4), FogState.Unexplored);
+  check("nor the corner cell past both", v.cellState(4, 4), FogState.Unexplored);
+  // An edge INSIDE a cell still takes that whole cell.
+  const w = map();
+  w.stampRect(100, 100, 300, 300, FogState.Visible);
+  check("a partly covered low cell is lit", w.cellState(1, 1), FogState.Visible);
+  check("a partly covered high cell is lit", w.cellState(4, 4), FogState.Visible);
+  check("the cell beyond it is not", w.cellState(5, 5), FogState.Unexplored);
+}
+
 console.log("\niseedeadpeople still shows everything");
 {
   const v = map();
