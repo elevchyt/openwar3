@@ -78,7 +78,7 @@ const step = (w, seconds, dt = 0.05) => { for (let i = 0; i < Math.round(seconds
   w.killUnit(dk.id);
   check("the Death Knight is gone from the world", w.units.has(dk.id), false);
   step(w, 1.5);
-  check("…and his coil still lands", victim.hp < 500, true);
+  check("…and his coil still lands, for half its 200 (issue #351)", victim.hp, 400);
   check("…and lets its caster go once nothing of his is in the air", w.missileCasters.size, 0);
 }
 

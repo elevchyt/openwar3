@@ -3395,10 +3395,11 @@ spell (as wasting two Frost Novas on a peon would be a huge waste of mana)."*
 
 The arithmetic is one a player does without thinking, and the game's own numbers make it stark.
 A Peasant has 220 hit points, an Acolyte 230, a Peon 250 and even a Wisp 120
-(`UnitBalance.slk`); Death Coil's `DataA` is 200 at rank 1 and **Frost Nova's `DataB` — the share
-the unit the missile hits takes — is 100 at every one of its three ranks** (the scaling 50/100/150
-in `DataA` is the ring around it). So neither spell finishes a healthy worker of any race, at any
-rank, and what a cast buys is a hurt peon that walks back to the mine while the caster stands
+(`UnitBalance.slk`); Death Coil's `DataA` is 200 at rank 1 and it DEALS half of that to the
+living — 100/200/300 ("or deal half damage to an enemy living unit", `[AUdc]` Ubertip) — and
+**Frost Nova's `DataB` — the share the unit the missile hits takes — is 100 at every one of its
+three ranks** (the scaling 50/100/150 in `DataA` is the ring around it). So neither spell
+finishes a healthy worker of any race below Death Coil's third rank, and what a cast buys is a hurt peon that walks back to the mine while the caster stands
 there with no mana and a cooldown.
 
 `nukeWorthIt` ([`plus/casting.ts`](../src/ai/plus/casting.ts)) is the whole rule and it is

@@ -151,7 +151,9 @@ console.log("\n-- a nuke is not spent on a worker it cannot finish -------------
 
 // `nukeWorthIt` (plus/casting.ts), applied as a LEGALITY gate in `PlusCaster.pickTarget`.
 // What is Warcraft III's here are the ability columns and the hit points: `Units\AbilityData.slk`
-// gives Death Coil `DataA` = 200/400/600 and Frost Nova `DataB` = 100 at every rank (its share
+// gives Death Coil `DataA` = 200/400/600 — of which it DEALS half to the living, 100/200/300
+// ("…or deal half damage to an enemy living unit", UndeadAbilityStrings [AUdc]; issue #351) —
+// and Frost Nova `DataB` = 100 at every rank (its share
 // to the unit the missile hits — the scaling `DataA` 50/100/150 is the ring around it), and
 // `UnitBalance.slk` gives a Peasant 220 hit points, an Acolyte 230, a Peon 250 and a Wisp 120.
 // The RULE is the developer's: two Frost Novas on a peon is two novas spent on nothing.
@@ -160,10 +162,11 @@ const rank = (...data) => ({ ...nine(), data: [...data, ...new Array(9 - data.le
 
 const DEATH_COIL_1 = rank(200);
 const DEATH_COIL_2 = rank(400);
+const DEATH_COIL_3 = rank(600);
 const FROST_NOVA_1 = rank(50, 100);   // DataA ring, DataB primary
 const TRANSMUTE = rank(1.25, 0);
 
-check("Death Coil rank 1 reads its DataA", nukeBurst("AUdc", DEATH_COIL_1), 200);
+check("Death Coil rank 1 deals half its DataA", nukeBurst("AUdc", DEATH_COIL_1), 100);
 check("Frost Nova reads DataB, not DataA", nukeBurst("AUfn", FROST_NOVA_1), 100);
 check("an unpriced nuke scores nothing", nukeBurst("AUnknown", DEATH_COIL_1), 0);
 
@@ -174,14 +177,15 @@ const wisp = () => worker(120);
 const grunt = () => unit({ hp: 700, maxHp: 700, magicImmune: false, magicReduction: 0 });
 
 check("Frost Nova is NOT thrown at a healthy peasant", nukeWorthIt("AUfn", FROST_NOVA_1, peasant()), false);
-check("Death Coil rank 1 is not either — 200 does not finish 220",
-  nukeWorthIt("AUdc", DEATH_COIL_1, peasant()), false);
-check("…but rank 2 does, so it is", nukeWorthIt("AUdc", DEATH_COIL_2, peasant()), true);
-check("…and rank 1 finishes one already down to 150", nukeWorthIt("AUdc", DEATH_COIL_1, worker(150, 220)), true);
+check("Death Coil rank 2 is not either — 200 does not finish 220",
+  nukeWorthIt("AUdc", DEATH_COIL_2, peasant()), false);
+check("…but rank 3 does, so it is", nukeWorthIt("AUdc", DEATH_COIL_3, peasant()), true);
+check("…and rank 1 finishes one already down to 90", nukeWorthIt("AUdc", DEATH_COIL_1, worker(90, 220)), true);
 // Frost Nova's primary share never scales, so it does not finish even the flimsiest worker in
 // the game at full health — which is exactly the cast the developer asked us to stop making.
 check("Frost Nova does not finish a full-health Wisp either", nukeWorthIt("AUfn", FROST_NOVA_1, wisp()), false);
-check("…but Death Coil does", nukeWorthIt("AUdc", DEATH_COIL_1, wisp()), true);
+check("…and neither does a rank-1 Death Coil (100 of 120)", nukeWorthIt("AUdc", DEATH_COIL_1, wisp()), false);
+check("…but a rank-2 one does", nukeWorthIt("AUdc", DEATH_COIL_2, wisp()), true);
 check("Transmute takes the body whatever is left of it", nukeWorthIt("ANtm", TRANSMUTE, peasant()), true);
 check("a damage-over-time 'nuke' never finishes a worker now", nukeWorthIt("ANso", rank(7.81), peasant()), false);
 
@@ -191,9 +195,9 @@ check("nor is a hero", nukeWorthIt("AUfn", FROST_NOVA_1, unit({ hp: 900, maxHp: 
 
 // …and it cannot promise a kill the sim will not deliver: magic immunity takes the whole cast
 // and magic reduction takes a share of it, exactly as `SimWorld.spellDamage` does.
-check("a magic-immune worker is never nuked", nukeWorthIt("AUdc", DEATH_COIL_2, worker(220, 220, { magicImmune: true })), false);
+check("a magic-immune worker is never nuked", nukeWorthIt("AUdc", DEATH_COIL_3, worker(220, 220, { magicImmune: true })), false);
 check("…and reduction is netted off before the comparison",
-  nukeWorthIt("AUdc", DEATH_COIL_1, worker(150, 220, { magicReduction: 0.5 })), false);
+  nukeWorthIt("AUdc", DEATH_COIL_2, worker(150, 220, { magicReduction: 0.5 })), false);
 
 // ==========================================================================================
 console.log("\n-- a heal goes on the HERO first ---------------------------------------------");

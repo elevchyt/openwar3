@@ -86,6 +86,33 @@ const round = (n) => Math.round(n * 1000) / 1000;
   check("…for the row's duration", log.buffs[0].timeLeft, 45);
 }
 
+// Holy Light / Death Coil — heal for dataA, DEAL HALF of it on the other polarity (issue #351):
+// "…heal a friendly living unit for <AHhb,DataA1> or deal half damage to an enemy Undead unit"
+// (HumanAbilityStrings [AHhb]), "…heal a friendly Undead unit for <AUdc,DataA1> hit points, or
+// deal half damage to an enemy living unit" (UndeadAbilityStrings [AUdc]). DataA1 = 200.
+{
+  const paladin = unit({ id: 1, team: 0, race: "human" });
+  const footman = unit({ id: 2, team: 0, race: "human" });
+  const ghoul = unit({ id: 3, team: 1, race: "undead" });
+  const { api, log } = harness([paladin, footman, ghoul]);
+  const hl = def({ code: "AHhb", data: [200] });
+  SPELL_HANDLERS.AHhb(api, paladin, hl, 1, { targetId: 2, x: 0, y: 0 });
+  SPELL_HANDLERS.AHhb(api, paladin, hl, 1, { targetId: 3, x: 0, y: 0 });
+  check("Holy Light heals the living for dataA", log.heals, [{ id: 2, amount: 200 }]);
+  check("…and deals HALF of it to an enemy Undead unit", log.damage, [{ id: 3, amount: 100 }]);
+}
+{
+  const dk = unit({ id: 1, team: 0, race: "undead" });
+  const ghoul = unit({ id: 2, team: 0, race: "undead" });
+  const footman = unit({ id: 3, team: 1, race: "human" });
+  const { api, log } = harness([dk, ghoul, footman]);
+  const dc = def({ code: "AUdc", data: [200] });
+  SPELL_HANDLERS.AUdc(api, dk, dc, 1, { targetId: 2, x: 0, y: 0 });
+  SPELL_HANDLERS.AUdc(api, dk, dc, 1, { targetId: 3, x: 0, y: 0 });
+  check("Death Coil heals the Undead for dataA", log.heals, [{ id: 2, amount: 200 }]);
+  check("…and deals HALF of it to an enemy living unit", log.damage, [{ id: 3, amount: 100 }]);
+}
+
 // Fire Bolt — dataA "Damage" = 100 plus a 2s stun.
 {
   const caster = unit({ id: 1, team: 0 });

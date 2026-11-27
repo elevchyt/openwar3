@@ -760,6 +760,10 @@ export function dur(lvl: AbilityLevel, target: SimUnit): number {
   const resistant = target.isHero || target.resistant || (target.isCreep && target.level >= CREEP_HERO_RESIST_LEVEL);
   return resistant && lvl.heroDuration > 0 ? lvl.heroDuration : lvl.duration;
 }
+/** The share of its heal that Holy Light / Death Coil DEALS on the other polarity — "or deal
+ *  half damage to an enemy Undead unit" (`[AHhb]`), "or deal half damage to an enemy living
+ *  unit" (`[AUdc]`). The tooltip's word, not a column: the row has only the one DataA. */
+export const POLARITY_DAMAGE_SHARE = 0.5;
 /** The creep level from which a creep takes a spell's HERO duration — see `dur`. */
 const CREEP_HERO_RESIST_LEVEL = 6;
 /** Read dataX (a=0..i=8); NaN-safe default. */
@@ -1449,21 +1453,23 @@ const frostArmor: Handler = (api, caster, def, rank, ctx) => {
 };
 
 export const SPELL_HANDLERS: Record<string, Handler> = {
-  // Holy Light — heal a friendly living unit for dataA, or smite an enemy Undead
-  // unit for dataA (the projectile/impact carries this on units with a missile;
-  // Holy Light itself is instant). Half damage vs the living is not applicable —
-  // it only harms the Undead.
+  // Holy Light — heal a friendly living unit for dataA, or smite an enemy Undead unit for
+  // HALF of it: "A holy light that can heal a friendly living unit for <AHhb,DataA1> or deal
+  // half damage to an enemy Undead unit" (`Units\HumanAbilityStrings.txt [AHhb]` Ubertip) —
+  // rank 1 heals 200 and deals 100 (issue #351). Instant; nothing flies.
   AHhb: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
     const lvl = def.levelData[rank - 1];
     if (api.ally(caster, t) && t.race !== "undead") api.spellHeal(t, d(lvl, 0));
-    else if (api.hostile(caster, t) && t.race === "undead") api.spellDamage(t, d(lvl, 0), caster.id);
+    else if (api.hostile(caster, t) && t.race === "undead") api.spellDamage(t, d(lvl, 0) * POLARITY_DAMAGE_SHARE, caster.id);
     if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
   },
 
-  // Death Coil — the inverse: heal a friendly Undead unit, or harm an enemy
-  // living unit, for dataA.
+  // Death Coil — the inverse: heal a friendly Undead unit for dataA, or harm an enemy living
+  // unit for HALF of it — "heal a friendly Undead unit for <AUdc,DataA1> hit points, or deal
+  // half damage to an enemy living unit" (`Units\UndeadAbilityStrings.txt [AUdc]` Ubertip):
+  // 200 healed, 100 dealt at rank 1 (issue #351).
   //
   // Its art is the standing trap of docs/spell-fx.md in miniature: `[AUdc]` names NO
   // Targetart at all (UndeadAbilityFunc.txt: Missileart, Specialart, and nothing else), so
@@ -1477,7 +1483,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     if (!t) return;
     const lvl = def.levelData[rank - 1];
     if (api.ally(caster, t) && t.race === "undead") api.spellHeal(t, d(lvl, 0));
-    else if (api.hostile(caster, t) && t.race !== "undead") api.spellDamage(t, d(lvl, 0), caster.id);
+    else if (api.hostile(caster, t) && t.race !== "undead") api.spellDamage(t, d(lvl, 0) * POLARITY_DAMAGE_SHARE, caster.id);
     const art = def.specialArt || def.targetArt;
     if (art) api.emitEffect(art, t.x, t.y, t.id, 0, def.specialAttach, { sound: true, anim: "stand" });
   },

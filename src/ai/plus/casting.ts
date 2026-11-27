@@ -1,6 +1,6 @@
 import { isRepairCode, NO_AOE_CURSOR, targetFlagSet, type AbilityDef, type AbilityLevel } from "../../data/abilities";
 import type { SimUnit } from "../../sim/world";
-import { DISPEL_CODES, POLARITY_SPELLS, worthDispelling } from "../../sim/spells";
+import { DISPEL_CODES, POLARITY_DAMAGE_SHARE, POLARITY_SPELLS, worthDispelling } from "../../sim/spells";
 import { friendlySpell, near, seenFoes, stripsOwnShield, treeAim, treeSpots, waveDistance, waveHalfWidth, type CasterView } from "../casting";
 import { damageMultiplier, MELEE } from "../../data/gameplayConstants";
 import { AttackType } from "../../data/enums";
@@ -248,7 +248,8 @@ const ROLES: Partial<Record<Role, readonly string[]>> = {
  * second, and an ability a later patch or a custom map adds is not something to guess about.
  */
 const NUKE_BURST: Record<string, (lvl: AbilityLevel) => number> = {
-  AUdc: (l) => dat(l, 0, 100), // Death Coil — DataA (200/400/600)
+  // Death Coil — HALF of DataA on the living (100/200/300 of 200/400/600: POLARITY_DAMAGE_SHARE)
+  AUdc: (l) => dat(l, 0, 200) * POLARITY_DAMAGE_SHARE,
   // Frost Nova — DataB, the share the unit the missile HITS takes, and it is 100 at all three
   // ranks (the scaling DataA 50/100/150 is the ring around it). Which is why this spell is the
   // developer's own example: it never grows into finishing a worker, at any rank.
