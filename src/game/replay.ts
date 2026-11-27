@@ -163,6 +163,10 @@ export type ReplayEvent =
    *  both are inputs of their own. */
   | { k: "ally"; t: number; ph: Phase; p: number; other: number; type: number; on: boolean }
   | { k: "give"; t: number; ph: Phase; p: number; other: number; gold: number; lumber: number }
+  /** A SAVE was taken and it landed a path search early (SimWorld.settleForSave): the world
+   *  that was saved — and the one that carried on — is not the one that would have been, so
+   *  playback lands the same search at the same point (issue #365). */
+  | { k: "settle"; t: number; ph: Phase }
   /** NOTES, not inputs — nothing is done with them on playback, where the pace and the pause are
    *  the watcher's: a player paused or resumed the match, and the Game Speed (or the dev tools'
    *  Sim Speed `boost`) changed. Kept because how a match was PLAYED includes when it stood still. */

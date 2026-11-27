@@ -3567,6 +3567,9 @@ export class MapViewerScene {
       case "give":
         this.transferResources(e.p, e.other, e.gold, e.lumber);
         return;
+      case "settle":
+        rts.simWorld.settleForSave(); // a save was taken here, and it landed a path search
+        return;
       // Notes: the pace and the pause of a replay are the watcher's own.
       case "pause":
       case "speed":
@@ -3818,8 +3821,9 @@ export class MapViewerScene {
     if (why) throw new Error(`cannot save ${why}`);
     registerSaveClasses();
     registerGameSaveClasses();
-    // A path search half-way through cannot be written down: land it now (SimWorld.settleForSave).
-    this.rts!.simWorld.settleForSave();
+    // A path search half-way through cannot be written down: land it now (SimWorld.settleForSave)
+    // — which changes the match, so the replay is told (`settle`, issue #365).
+    if (this.rts!.simWorld.settleForSave()) this.replayRecorder?.push({ k: "settle" });
     const ext = externalsFor(this.saveRegistries());
     const stats = newEncodeStats();
     const state = encodeGraph(this.saveRoots(), { externalKey: ext.keyOf, opaque: isRenderObject }, stats);

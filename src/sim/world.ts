@@ -32127,9 +32127,16 @@ export class SimWorld {
    * half-way through is not something it can write: its working set is a scratch buffer and its
    * walkability test a closure. The unit takes its route a few steps sooner than it would have —
    * in the match that was saved and in the one loaded from it alike, which is what matters.
+   *
+   * That makes TAKING A SAVE an input: the match it was taken in is not the match it would have
+   * been. So a settle that landed something answers true, and the scene records it into the
+   * replay (`settle`, game/replay.ts) for playback to land the same search at the same point of
+   * the same step (issue #365).
    */
-  settleForSave(): void {
-    if (this.pathJob) this.pumpPathJob(Infinity);
+  settleForSave(): boolean {
+    if (!this.pathJob) return false;
+    this.pumpPathJob(Infinity);
+    return true;
   }
 
   private pumpPathJob(budget = PathSlicing.sliceExpansions): void {

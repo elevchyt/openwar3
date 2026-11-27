@@ -39,6 +39,7 @@ An INPUT is anything that changes the match and does not come out of the match:
 | `cheat` / `cheatsel` | `RtsController.onCheat` / `onCheatSelected` | `cheat(kind, player)` / `cheatSelected(kind, ids)` |
 | `lock` | `summonBirth` — a summon's spawn lock, read off its MODEL | written straight onto the unit |
 | `ally` / `give` | the F11 Allies menu — it writes onto the match directly, never through `execute` | `setPlayerAlliance` / `transferResources` |
+| `settle` | `captureSave`, when taking a save landed a path search early (`SimWorld.settleForSave`) | `settleForSave` at the same step and phase |
 
 A `cmd` the authority REFUSED is recorded too, marked `no` (replayed, it is refused again). Two
 kinds are NOTES rather than inputs and do nothing on playback, where the pace is the watcher's:

@@ -48,6 +48,12 @@ load. Three kinds of thing in the graph are not state:
 - **opaque / transient** — a WeakMap, a GPU instance, a DOM node; and per class the fields
   `classes.ts` lists (a cache, a static table, the controller's picture and input state).
 
+One thing in flight cannot be written at all: a sliced PATH SEARCH (its working set is a scratch
+buffer, its walkability test a closure). `SimWorld.settleForSave` lands it before the graph is
+taken, so the unit gets its route a few steps early in the match that was saved and in every load
+of it alike. That makes taking a save an INPUT of the match, and it is recorded into the replay as
+one (`settle`, docs/replays.md; issue #365).
+
 ## Loading writes INTO a match
 
 A save is loaded into the map's own start: the same file, the same resolved config (seed and

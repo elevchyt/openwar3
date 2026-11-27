@@ -223,6 +223,60 @@ const HEADER = {
   reseeded.header.config.seed = 8;
   check("on another seed the checks fail", (await play(reseeded)).player.divergedAt !== null);
 
+  // ---- a SAVE taken mid-match is an input (issue #365) ---------------------------------------
+  // `settleForSave` lands a path search in flight early, so the match a save was taken in is not
+  // the match it would have been. Four Footmen walk round a 300-cell treeline (the escalated,
+  // sliced detour of tools/sim-detour-test.cjs); a save is taken while that search is running,
+  // and the recording carries a `settle` that playback must honour.
+  {
+    const { PathingFlag } = B("sim", "pathing.js");
+    const SIDE = 768, WALL = SIDE >> 1, WALL_TOP = 300, N = 4, TREK = 1800;
+    const trek = () => {
+      const flags = new Uint8Array(SIDE * SIDE);
+      for (let y = 0; y < WALL_TOP; y++) for (let k = 0; k < 6; k++) flags[y * SIDE + WALL + k] = PathingFlag.Unwalkable;
+      const w = new SimWorld(new PathingGrid({ width: SIDE, height: SIDE, flags }, [0, 0]), 3);
+      for (let i = 0; i < N; i++) {
+        addUnit(w, i + 1, 0, (WALL - 40) * 32 + i * 40, 20 * 32);
+        w.units.get(i + 1).weapons = [];
+      }
+      const stub = { get: () => undefined };
+      return { w, auth: new Authority(w, stub, stub, stub, stub) };
+    };
+    const goal = { kind: "move", x: (WALL + 40) * 32, y: 20 * 32 };
+    let st = 0;
+    const srec = new ReplayRecorder(structuredClone(HEADER), () => ({ t: st, ph: PRE }));
+    const live = trek();
+    live.auth.onCommand = (player, cmd) => { srec.push({ k: "cmd", p: player, cmd }); return () => {}; };
+    let saved = false;
+    for (st = 1; st <= TREK; st++) {
+      if (st === 1) for (let i = 1; i <= N; i++) live.auth.execute(0, { c: "order", unitId: i, order: goal, queued: false });
+      // The save: the first step a detour is half-way through (MapViewerScene.captureSave).
+      if (!saved && live.w.pathJob && live.w.settleForSave()) {
+        srec.push({ k: "settle" });
+        saved = true;
+      }
+      live.w.tick(SIM_DT);
+      if (st % CHECK_EVERY === 0) srec.check(st, stateHash(live.w));
+    }
+    check("a save was taken while a detour search was in flight", saved);
+    const sreplay = await decodeReplay(await srec.finish());
+    const replayTrek = async (honour) => {
+      const b = trek();
+      const player = new ReplayPlayer(sreplay);
+      for (let s = 1; s <= TREK; s++) {
+        for (const e of player.take(s, PRE)) {
+          if (e.k === "cmd") b.auth.execute(e.p, e.cmd);
+          else if (e.k === "settle" && honour) b.w.settleForSave(); // MapViewerScene.replayApply
+        }
+        b.w.tick(SIM_DT);
+        if (s % CHECK_EVERY === 0) player.verify(s, () => stateHash(b.w));
+      }
+      return player.divergedAt;
+    };
+    check("…played back WITH the settle, every check passes", (await replayTrek(true)) === null);
+    check("…and WITHOUT it the match parts (the settle is observable)", (await replayTrek(false)) !== null);
+  }
+
   // ---- the state track -----------------------------------------------------------------------
   let last = null;
   for (const s of expandStates(replay.states)) last = s;
