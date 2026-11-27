@@ -171,5 +171,29 @@ function check(what, got, want) {
   check("a unit that is not there has none", world.getUnitAcquireRange(9999), undefined);
 }
 
+// --- 8. Defend slows a Footman BY 30%, not TO 30% (issue #353) ---------------------------
+// The Ubertip says move speed is "reduced by <DataC1,%>%", and DataC1 is 0.3 — so a
+// 270-speed Footman defends at 189. The old code fed `1 - 0.3` into slowMove, which
+// reads as a 70% slow and left the Footman at 81, floored to MinUnitSpeed 150.
+{
+  // One rank of Defend, with the real numbers from AbilityData.slk: DataA 0.5 (the
+  // fraction of a piercing blow that gets through), DataC 0.3 (the speed lost),
+  // DataF 30 (the reflect chance).
+  const defendLevel = {
+    cost: 0, cooldown: 0, duration: 0, heroDuration: 0, castRange: 0, area: 0, castTime: 0,
+    data: [0.5, NaN, 0.3, NaN, NaN, 30, NaN, NaN, NaN], dataStr: new Array(9).fill(""),
+    buffs: [], summon: "",
+  };
+  const defend = (on) => ({
+    id: "Adef", code: "Adef", level: 1, cooldownLeft: 0, autocastOn: on,
+    def: { levelData: [defendLevel] },
+  });
+  const footman = unit({ abilities: [defend(false)] });
+  check("a Footman not defending moves at full speed", footman.speed, 270);
+  footman.abilities[0].autocastOn = true;
+  world.recomputeStats(footman);
+  check("a defending Footman moves at 270 × (1 − 0.3) = 189", footman.speed, 189);
+}
+
 console.log(failed ? `\n${failed} FAILED` : "\nall unit-stat checks passed");
 process.exit(failed ? 1 : 0);
