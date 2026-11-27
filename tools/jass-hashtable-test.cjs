@@ -60,13 +60,15 @@ function HaveIsPerType takes nothing returns boolean
     return HaveSavedInteger(ht, 9, 9) and not HaveSavedReal(ht, 9, 9)
 endfunction
 
-// A miss is 0 / "" / false / null — never an error.
+// A miss is 0 / null / false / null — never an error.
 function MissIsDefault takes nothing returns integer
     return LoadInteger(ht, 999, 999)
 endfunction
 
-function MissStrIsEmpty takes nothing returns boolean
-    return LoadStr(ht, 999, 999) == ""
+// A missing STRING is null, as an unset string variable is (issue #374) — and still
+// concatenates as "".
+function MissStrIsNull takes nothing returns boolean
+    return LoadStr(ht, 999, 999) == null and LoadStr(ht, 999, 999) + "x" == "x"
 endfunction
 
 // Every typed handle saver shares ONE slot: save through one name, load through another.
@@ -115,7 +117,7 @@ check('the key is a pair', call('PairKeys'), 1122);
 check('int and real coexist at one pair', call('Namespaces'), 6.5);
 check('HaveSaved is per type', callBool('HaveIsPerType'), true);
 check('a miss reads 0', call('MissIsDefault'), 0);
-check('a missing string reads ""', callBool('MissStrIsEmpty'), true);
+check('a missing string reads null', callBool('MissStrIsNull'), true);
 check('every typed handle saver is one slot', callBool('OneHandleSlot'), true);
 check('RemoveSavedInteger leaves the real', callBool('RemoveOne'), true);
 check('FlushChildHashtable clears one parent', callBool('FlushChild'), true);

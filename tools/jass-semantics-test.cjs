@@ -223,5 +223,81 @@ endfunction
   check('a fired trigger runs both conditions and no action', interp.callFunction('Result', []).n, 1010);
 }
 
+// --- #374: real == is tolerant, != exact; an unset string is null -----------------------------
+{
+  console.log('--- real == has a tolerance, != does not; strings default to null (#374) ---');
+  const { call } = boot(`
+globals
+    string gs
+    string array sa
+    real gr = 1.0
+endglobals
+function Sum takes nothing returns boolean
+    return 0.1 + 0.2 == 0.3
+endfunction
+function Near takes nothing returns boolean
+    return 1.0001 == 1.0
+endfunction
+function NearNe takes nothing returns boolean
+    return 1.0001 != 1.0
+endfunction
+function Far takes nothing returns boolean
+    return 1.01 == 1.0
+endfunction
+function IntReal takes nothing returns boolean
+    return 1 == 1.0005
+endfunction
+function IntInt takes nothing returns boolean
+    return 1 == 2
+endfunction
+function ExactNe takes nothing returns boolean
+    return gr != 1.0
+endfunction
+function GlobalNull takes nothing returns boolean
+    return gs == null
+endfunction
+function SlotNull takes nothing returns boolean
+    return sa[7] == null
+endfunction
+function LocalNull takes nothing returns boolean
+    local string s
+    return s == null
+endfunction
+function EmptyIsNotNull takes nothing returns boolean
+    return "" == null
+endfunction
+function NullConcat takes nothing returns string
+    local string s
+    return s + "a" + sa[2]
+endfunction
+function NullLength takes nothing returns integer
+    return StringLength(gs)
+endfunction
+function NullPlusNull takes nothing returns string
+    local string a
+    local string b
+    return a + b
+endfunction
+function StoredMiss takes nothing returns boolean
+    return GetStoredString(InitGameCache("x.w3v"), "m", "k") == null
+endfunction
+`);
+  check('0.1 + 0.2 == 0.3', call('Sum'), true);
+  check('1.0001 == 1.0', call('Near'), true);
+  check('1.0001 != 1.0 (exact)', call('NearNe'), true);
+  check('1.01 == 1.0 is false', call('Far'), false);
+  check('an integer against a near real', call('IntReal'), true);
+  check('two integers stay exact', call('IntInt'), false);
+  check('equal reals are not !=', call('ExactNe'), false);
+  check('an unset string global is null', call('GlobalNull'), true);
+  check('an unset string array slot is null', call('SlotNull'), true);
+  check('an unset string local is null', call('LocalNull'), true);
+  check('"" is still not null', call('EmptyIsNotNull'), false);
+  check('a null string concatenates as ""', call('NullConcat'), 'a');
+  check('StringLength(null) is 0', call('NullLength'), 0);
+  check('null + null is a string', call('NullPlusNull'), '');
+  check('GetStoredString on a miss is null', call('StoredMiss'), true);
+}
+
 console.log(failures ? `\n${failures} failure(s).` : '\nAll JASS semantics checks passed.');
 process.exit(failures ? 1 : 0);

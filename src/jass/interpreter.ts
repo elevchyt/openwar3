@@ -19,7 +19,7 @@ import type { BinOp, Expr, FunctionDecl, JassProgram, Stmt, VarDecl } from "./as
 import { rawcodeToInt } from "./lexer";
 import { Runtime, JassArray, compareLimit, evalBoolExpr, playerStateHolds, triggerConditionsPass, ThreadAbort, unitStateHolds, type BoolExpr, type HostFunction, type JassPlayer, type JassUnit, type NativeCtx, type RectObj, type RegionObj, type SoundObj, type TimerObj, type TriggerObj, type TriggerReg, type UnitSnapshot } from "./runtime";
 import {
-  asInt, asNum, asStr, defaultForType, jassEquals, jBool, jHandle, jInt, jReal, jStr, JNULL, truthy, type JassValue,
+  asInt, asNum, asStr, defaultForType, jassEquals, jassNotEquals, jBool, jHandle, jInt, jReal, jStr, JNULL, truthy, type JassValue,
 } from "./values";
 
 // The sim's live view of a unit (what the pumps and group enumeration are fed) lives in
@@ -1322,7 +1322,7 @@ export class Interpreter {
       case "==":
         return jBool(jassEquals(l, r));
       case "!=":
-        return jBool(!jassEquals(l, r));
+        return jBool(jassNotEquals(l, r));
       case "<":
         return jBool(asNum(l) < asNum(r));
       case ">":
@@ -1333,6 +1333,9 @@ export class Interpreter {
         return jBool(asNum(l) >= asNum(r));
       case "+":
         if (l.k === "string" || r.k === "string") return jStr(asStr(l) + asStr(r));
+        // Two NULL operands can only be two strings — a number is never null and a handle
+        // cannot be added — now that an unset string is null (values.ts `defaultForType`).
+        if (l.k === "null" && r.k === "null") return jStr("");
         return this.arith(l, r, (a, b) => a + b);
       case "-":
         return this.arith(l, r, (a, b) => a - b);

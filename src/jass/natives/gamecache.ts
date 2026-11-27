@@ -151,11 +151,12 @@ export function registerGameCacheNatives(rt: Runtime): void {
   def(rt, "GetStoredInteger", (c, a) => jInt(read(c, a, "int") ?? 0));
   def(rt, "GetStoredReal", (c, a) => jReal(read(c, a, "real") ?? 0));
   def(rt, "GetStoredBoolean", (c, a) => jBool(read(c, a, "bool") ?? false));
-  // The string is the odd one: the native answers `null` on a miss and `GetStoredStringBJ`
-  // exists to turn that into "". Answering "" straight away is the same thing to every caller
-  // — `"" == null` is false, so the wrapper's else branch hands the "" back unchanged — and it
-  // keeps a raw `GetStoredString` out of trouble in a concatenation.
-  def(rt, "GetStoredString", (c, a) => jStr(read(c, a, "str") ?? ""));
+  // The string is the odd one: the native answers `null` on a miss, and `GetStoredStringBJ`
+  // exists to turn that into "". A raw `GetStoredString` concatenates as "" anyway (`asStr`).
+  def(rt, "GetStoredString", (c, a) => {
+    const s = read(c, a, "str");
+    return s !== undefined ? jStr(s) : JNULL;
+  });
 
   def(rt, "HaveStoredInteger", (c, a) => jBool(read(c, a, "int") !== undefined));
   def(rt, "HaveStoredReal", (c, a) => jBool(read(c, a, "real") !== undefined));

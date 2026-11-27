@@ -73,8 +73,21 @@ export function asHandle(v: JassValue): number {
   return v.k === "handle" ? v.h : -1;
 }
 
-/** JASS `==` equality. Numbers compare by value across int/real; handles by id;
- *  null equals null, any null-valued handle, `false`, `0` and `0.0`. Strings/bools by value. */
+/**
+ * How far apart two reals may be and still be `==`. The game's `==` on reals is TOLERANT while
+ * its `!=` is EXACT — so `0.1 + 0.2 == 0.3` and `1.0001 == 1.0` are both true and `!=` is not
+ * the negation of `==` — which is long-standing community knowledge of the VM (the Hive JASS
+ * threads on comparing reals; issue #374) rather than anything in a file, and the value is the
+ * one those threads give. Not yet measured on the client. It is what makes
+ * `GetUnitState(u, UNIT_STATE_LIFE) == GetUnitState(u, UNIT_STATE_MAX_LIFE)` and the GUI's
+ * "Real Comparison – Equal to" hold for a unit whose life is a hair under its maximum.
+ */
+export const REAL_EQUALS_EPSILON = 0.001;
+
+/** JASS `==` equality. Numbers compare by value across int/real — two integers exactly, and
+ *  with a real on either side within `REAL_EQUALS_EPSILON`; handles by id; null equals null,
+ *  any null-valued handle, `false`, `0` and `0.0`. Strings/bools by value. `!=` is NOT this
+ *  negated: see `jassNotEquals`. */
 export function jassEquals(a: JassValue, b: JassValue): boolean {
   if (a.k === "null" || b.k === "null") {
     // In the game's VM null is a raw 0, so a boolean, integer or real compares against it by
@@ -96,7 +109,10 @@ export function jassEquals(a: JassValue, b: JassValue): boolean {
     // only other true case here.
     return a.k === "null" && b.k === "null";
   }
-  if ((a.k === "int" || a.k === "real") && (b.k === "int" || b.k === "real")) return a.n === b.n;
+  if ((a.k === "int" || a.k === "real") && (b.k === "int" || b.k === "real")) {
+    if (a.k === "int" && b.k === "int") return a.n === b.n;
+    return Math.abs(a.n - b.n) < REAL_EQUALS_EPSILON;
+  }
   if (a.k === "bool" && b.k === "bool") return a.b === b.b;
   if (a.k === "string" && b.k === "string") return a.s === b.s;
   if (a.k === "handle" && b.k === "handle") return a.h === b.h;
@@ -104,9 +120,21 @@ export function jassEquals(a: JassValue, b: JassValue): boolean {
   return false;
 }
 
+/** JASS `!=`: the negation of `==` everywhere EXCEPT two numbers with a real among them, which
+ *  differ whenever they are not bit-for-bit the same value (see `REAL_EQUALS_EPSILON`). */
+export function jassNotEquals(a: JassValue, b: JassValue): boolean {
+  if ((a.k === "real" && (b.k === "int" || b.k === "real")) || (b.k === "real" && a.k === "int")) return a.n !== b.n;
+  return !jassEquals(a, b);
+}
+
 /** The zero/default value for a JASS type name — what an uninitialised local,
  *  global, array slot, or unimplemented-native return should read as. Integers 0,
- *  reals 0.0, booleans false, strings/handles/code null. */
+ *  reals 0.0, booleans false, strings/handles/code null.
+ *
+ *  A STRING is null too, not "": an uninitialised `string` global, local or array slot is
+ *  `== null` in the game, and vJass struct string members are tested exactly that way. Every
+ *  reader that wants text goes through `asStr`, which reads null as "", so a null string still
+ *  prints and concatenates as empty. */
 export function defaultForType(type: string): JassValue {
   switch (type) {
     case "integer":
@@ -115,8 +143,6 @@ export function defaultForType(type: string): JassValue {
       return jReal(0);
     case "boolean":
       return jBool(false);
-    case "string":
-      return jStr("");
     case "nothing":
       return JNULL;
     default:

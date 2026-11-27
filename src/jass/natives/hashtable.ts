@@ -116,7 +116,9 @@ export function registerHashtableNatives(rt: Runtime): void {
   load("LoadInteger", (s) => jInt(s?.int ?? 0));
   load("LoadReal", (s) => jReal(s?.real ?? 0));
   load("LoadBoolean", (s) => jBool(s?.bool ?? false));
-  load("LoadStr", (s) => jStr(s?.str ?? ""));
+  // A miss is NULL, not "" — as an unset string variable is (values.ts `defaultForType`), so a
+  // map's `LoadStr(ht, k, k) == null` test of "nothing saved here" holds.
+  load("LoadStr", (s) => (s?.str !== undefined ? jStr(s.str) : JNULL));
   for (const kind of HANDLE_TYPES) {
     load(`Load${kind}Handle`, (s) => s?.handle ?? JNULL);
   }
