@@ -54,6 +54,8 @@ export interface OrderEvent {
   target: UnitSnapshot | null;
   /** The ITEM the order was aimed at (`GetOrderTargetItem`), when it was aimed at one. */
   item?: { id: number; typeId: string; charges: number; x: number; y: number } | null;
+  /** The sim id of the TREE it was aimed at (`GetOrderTargetDestructable`). */
+  tree?: number;
 }
 /** One spell event (7.17): the caster, the ability rawcode, which phase of the cast,
  *  and what it was aimed at. Mirrors SimWorld's SpellEvent (the sim raises it). */
@@ -66,6 +68,8 @@ export interface SpellEvent {
   y: number;
   /** GetSpellTargetItem — an item-aimed cast's item (SimWorld.castItemTarget). */
   item?: { id: number; typeId: string; charges: number; x: number; y: number } | null;
+  /** GetSpellTargetDestructable — the sim id of the TREE a tree-aimed cast named. */
+  tree?: number;
 }
 /** A construction milestone (7.17): the structure + which phase. */
 export interface ConstructEvent {
@@ -2192,6 +2196,7 @@ export class Interpreter {
         ["OrderPointY", jReal(e.y)],
         ["OrderTargetUnit", target],
         ["OrderTargetItem", e.item ? this.rt.itemForSim(e.item) : JNULL],
+        ["OrderTargetTree", e.tree ? jInt(e.tree) : JNULL],
       ]);
       const playerEvt = e.kind === "immediate" ? EVENT_PLAYER_UNIT_ISSUED_ORDER : e.kind === "point" ? EVENT_PLAYER_UNIT_ISSUED_POINT_ORDER : EVENT_PLAYER_UNIT_ISSUED_TARGET_ORDER;
       const unitEvt = e.kind === "immediate" ? EVENT_UNIT_ISSUED_ORDER : e.kind === "point" ? EVENT_UNIT_ISSUED_POINT_ORDER : EVENT_UNIT_ISSUED_TARGET_ORDER;
@@ -2216,6 +2221,7 @@ export class Interpreter {
         ["SpellAbilityId", jInt(rawcodeToInt(e.abilityId))],
         ["SpellTargetUnit", target],
         ["SpellTargetItem", e.item ? this.rt.itemForSim(e.item) : JNULL],
+        ["SpellTargetTree", e.tree ? jInt(e.tree) : JNULL],
         ["SpellTargetX", jReal(e.x)],
         ["SpellTargetY", jReal(e.y)],
       ]);

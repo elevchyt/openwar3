@@ -67,6 +67,17 @@ const levelOf = (c: NativeCtx, v: JassValue | undefined): number => asInt(v ?? J
 
 export function registerAbilityFieldNatives(rt: Runtime): void {
   // --- the instance handles ---
+  // GetSpellAbility — the ability being cast, as the CASTER's instance of it: the same handle
+  // `BlzGetUnitAbility(GetSpellAbilityUnit(), GetSpellAbilityId())` answers, so a map can read
+  // or set the very fields of the spell in flight. Null outside a spell event, or once the
+  // caster no longer has the ability (an item's cast whose item was used up).
+  def(rt, "GetSpellAbility", (c) => {
+    const id = unitSim(c, c.rt.eventResponse("SpellAbilityUnit"));
+    const raw = c.rt.eventResponse("SpellAbilityId");
+    if (id === undefined || raw.k !== "int") return JNULL;
+    const abil = intToRawcode(raw.n);
+    return c.rt.hooks?.unitHasAbility?.(id, abil) ? abilityHandle(c, { kind: "unit", owner: id, abilId: abil }) : JNULL;
+  });
   def(rt, "BlzGetUnitAbility", (c, a) => {
     const id = unitSim(c, a[0]);
     const abil = abilCode(a[1]);

@@ -1622,6 +1622,51 @@ export class AiPlayer {
   }
 
   /**
+   * `GetExpansionX()` / `GetExpansionY()` — where the expansion `GetNextExpansion` chose
+   * stands: its mine, the first town with a mine and no hall yet. Null — the scripts' `-1` —
+   * when none is chosen. common.ai's `ExpansionAttack` reads it to attack-move onto an
+   * expansion site with nobody on it (`if x != -1 then call AttackMoveXYA(x, GetExpansionY())`).
+   * Asks; registers nothing (that is `nextExpansion`'s job, and StartExpansion has run it).
+   */
+  expansionSite(): { x: number; y: number } | null {
+    for (let t = 1; t < this.towns.length; t++) {
+      if (this.townHasMine(t) && !this.townHasHall(t)) return { x: this.towns[t].x, y: this.towns[t].y };
+    }
+    return null;
+  }
+
+  /**
+   * `GetExpansionPeon()` — a worker to send to that site: the one of ours nearest it that is
+   * not putting anything up, or null when there is no site or no worker. Like
+   * `expansionFoe`, a C++ native the scripts only call, so "nearest free worker" is ours.
+   */
+  expansionPeon(): SimUnit | null {
+    const site = this.expansionSite();
+    if (!site) return null;
+    let best: SimUnit | null = null;
+    let bestD = Infinity;
+    for (const u of this.host.world.units.values()) {
+      if (u.owner !== this.player || u.hp <= 0 || !u.worker) continue;
+      if (u.buildPending || u.insideBuild || u.constructing) continue;
+      const d = Math.hypot(u.x - site.x, u.y - site.y);
+      if (d < bestD) { bestD = d; best = u; }
+    }
+    return best;
+  }
+
+  /**
+   * `SetExpansion(peon, id)` — put hall `id` up at the chosen expansion. Goes through
+   * `setProduce` like the native StartExpansion above, so placement and the worker are chosen
+   * the one way they always are (the worker `placeStructure` picks is the nearest free one,
+   * which is what `expansionPeon` handed the script too). False when there is no site.
+   */
+  setExpansion(id: string): boolean {
+    const town = this.nextExpansion();
+    if (town < 0) return false;
+    return this.setProduce(1, id, town);
+  }
+
+  /**
    * `GetExpansionFoe()` — whoever is sitting on the expansion we want.
    *
    * The whole point of the answer is that it holds the hall back: `startExpansion` returns

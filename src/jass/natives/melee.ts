@@ -73,12 +73,13 @@ export function registerMeleeNatives(rt: Runtime): void {
   def(rt, "GetFloatGameState", (c, a) =>
     jReal(c.rt.enumIndex(a[0]) === GAME_STATE_TIME_OF_DAY ? c.rt.hooks?.getTimeOfDay?.() ?? 0 : 0),
   );
-  // Answers 0 to every igamestate query, which reads correctly for the ones that matter:
-  // GAME_STATE_DISCONNECTED (1) → 0, nobody has dropped. (The comment here used to name
-  // DISCONNECTED as index 0; common.j numbers DIVINE_INTERVENTION 0 and DISCONNECTED 1 —
-  // harmless, since the stub ignores its argument, but the 7.25 enum gate exists because
-  // that kind of miscount is exactly what went wrong with `mapcontrol`.)
-  def(rt, "GetIntegerGameState", () => jInt(0));
+  // The integer game states (common.j: GAME_STATE_DIVINE_INTERVENTION = 0, GAME_STATE_DISCONNECTED
+  // = 1) answer what `SetIntegerGameState` last wrote, and 0 before that — which is the right
+  // reading of DISCONNECTED for a machine that has not lost the game (blizzard.j's
+  // MeleeDoLeave and GameOverDialogBJ branch on it to say "you were disconnected"). Kept on
+  // the runtime (`integerGameState`), so a saved game carries a value a script wrote.
+  def(rt, "GetIntegerGameState", (c, a) => jInt(c.rt.integerGameState.get(c.rt.enumIndex(a[0])) ?? 0));
+  def(rt, "SetIntegerGameState", (c, a) => (c.rt.integerGameState.set(c.rt.enumIndex(a[0]), asInt(a[1])), JNULL));
   // How fast the clock runs, and whether it runs at all — the sim owns both, beside the clock
   // itself. The scale used to be parked on the runtime and multiplied by nothing, so a map
   // that asked for a slow night got a normal one: Rise of the Naga opens at 19:00 with

@@ -1,6 +1,6 @@
 // Headless check of the natives the two rebalance maps reach only THROUGH blizzard.j — the
 // ones a map's own call list does not show (docs/map-compatibility.md): UnitStripHeroLevel
-// (SetHeroLevelBJ going down), the XP handicap, UnitPauseTimedLife, UnitAddType /
+// (SetHeroLevelBJ going down), the XP handicap and the life handicap, UnitPauseTimedLife, UnitAddType /
 // UnitRemoveType, the buff filters, UnitDamagePoint, CreateCorpse and ChooseRandomCreep.
 //
 // Each rule is jassbot's documentation, or the measurement the sim cites beside the code.
@@ -95,6 +95,23 @@ console.log("\nthe XP handicap");
   world.awardKillXp(v1, full.id);
   world.awardKillXp(v2, half.id);
   check("the same kill pays the halved player half", [full.xp > 0, half.xp * 2], [true, full.xp]);
+}
+
+console.log("\nthe handicap scales maximum life (#376)");
+{
+  check("a player's handicap is 100 % until a script says otherwise", world.playerHandicap(5), 1);
+  const grunt = unit({ owner: 5, team: 5, x: 3000, y: 3000 });
+  const hero = unit({ owner: 5, team: 5, isHero: true, x: 3100, y: 3000 });
+  const other = unit({ owner: 6, team: 6, x: 9000, y: 9000 });
+  world.setPlayerHandicap(5, 0.5);
+  world.tick(0.05);
+  check("a 50 % handicap halves a unit's maximum life", grunt.maxHp, 500);
+  check("…and keeps it at full health", grunt.hp, 500);
+  check("a hero takes half the reduction (UI\\TriggerStrings.txt: 'less affected')", hero.maxHp, 750);
+  check("another player's units are untouched", other.maxHp, 1000);
+  world.setPlayerHandicap(5, 1);
+  world.tick(0.05);
+  check("back at 100 % the pool is whole again", [grunt.maxHp, grunt.hp], [1000, 1000]);
 }
 
 console.log("\nUnitPauseTimedLife");

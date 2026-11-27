@@ -353,7 +353,7 @@ export class Authority {
     let ok = false;
     if (s === "smart" || s === "harvest") ok = this.sim.issueHarvest(unitId, "lumber", tree.id);
     else if (s === "attack") ok = this.sim.issueAttackTree(unitId, tree.id);
-    if (ok) this.sim.noteOrder(unitId, orderId, "target", tree.x, tree.y, 0);
+    if (ok) this.sim.noteOrder(unitId, orderId, "target", tree.x, tree.y, 0, 0, tree.id);
     return ok;
   }
 

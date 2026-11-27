@@ -121,7 +121,6 @@ export function registerDialogNatives(rt: Runtime): void {
   // victory"/"no defeat" CHEATS being off — which they are; we implement no cheat codes.
   def(rt, "IsNoVictoryCheat", () => jBool(false));
   def(rt, "IsNoDefeatCheat", () => jBool(false));
-  def(rt, "SetIntegerGameState", () => JNULL); // GAME_STATE_DISCONNECTED etc. — nothing to set
   // RestartGame — the defeat dialog's Restart (and its Reduce Difficulty, which is the same
   // button with a lower difficulty set in front of it). See Runtime.restartGame.
   def(rt, "RestartGame", (c, a) => {

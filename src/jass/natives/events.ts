@@ -18,7 +18,7 @@ import { playerStateHolds, triggerConditionsPass, ThreadAbort, unitStateHolds, t
 import { asNum, jBool, jHandle, jInt, JNULL, jReal, type JassValue } from "../values";
 import { ATTACK_TYPES } from "../../data/unitFieldCodes";
 import type { AttackType } from "../../data/enums";
-import { destructableForUnit } from "./destructables";
+import { destructableForTree, destructableForUnit } from "./destructables";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -349,21 +349,27 @@ export function registerEventNatives(rt: Runtime): void {
   // …and the destructable, when the order was aimed at one. A gate or a crate fights as a sim
   // unit (docs/selection.md), so an order at one arrives as a UNIT target; this hands back the
   // destructable that unit stands in for, and null for an ordinary unit. A TREE is not a unit in
-  // the sim and an order at one carries only its position, so it answers null.
-  def(rt, "GetOrderTargetDestructable", (c) => destructableForUnit(c, resp(c, "OrderTargetUnit")));
-  def(rt, "GetSpellTargetDestructable", (c) => destructableForUnit(c, resp(c, "SpellTargetUnit")));
+  // the sim: the event carries the tree's sim id (`OrderTargetTree`/`SpellTargetTree`), which the
+  // engine maps back to the destructable record it was planted from.
+  const targetDest = (c: NativeCtx, unitKey: string, treeKey: string): JassValue => {
+    const d = destructableForUnit(c, resp(c, unitKey));
+    if (d.k === "handle") return d;
+    const tree = resp(c, treeKey);
+    return tree.k === "int" ? destructableForTree(c, tree.n) : JNULL;
+  };
+  def(rt, "GetOrderTargetDestructable", (c) => targetDest(c, "OrderTargetUnit", "OrderTargetTree"));
+  def(rt, "GetSpellTargetDestructable", (c) => targetDest(c, "SpellTargetUnit", "SpellTargetTree"));
   def(rt, "GetOrderTargetUnit", (c) => resp(c, "OrderTargetUnit"));
   def(rt, "GetOrderedUnit", (c) => resp(c, "OrderedUnit"));
 
   // Spell responses (EVENT_(PLAYER_)UNIT_SPELL_* — 7.17). GetSpellAbilityId is the
-  // ability's rawcode as an int; GetSpellAbility (the `ability` handle) has no object
-  // behind it in our engine, so it stays null rather than fake one.
+  // ability's rawcode as an int; GetSpellAbility (the `ability` HANDLE) is the caster's own
+  // ability instance and lives with the other instance natives (natives/abilityFields.ts).
   def(rt, "GetSpellAbilityUnit", (c) => resp(c, "SpellAbilityUnit"));
   def(rt, "GetSpellAbilityId", (c) => {
     const v = resp(c, "SpellAbilityId");
     return v.k === "int" ? v : jInt(0);
   });
-  def(rt, "GetSpellAbility", () => JNULL);
   def(rt, "GetSpellTargetUnit", (c) => resp(c, "SpellTargetUnit"));
   def(rt, "GetSpellTargetX", (c) => {
     const v = resp(c, "SpellTargetX");

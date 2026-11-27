@@ -1587,6 +1587,8 @@ export interface SpellEvent {
   target: EventUnitInfo | null; // unit target (null for point/no-target casts)
   /** GetSpellTargetItem — the item an item-aimed cast named (SimWorld.castItemTarget). */
   item?: { id: number; typeId: string; charges: number; x: number; y: number } | null;
+  /** GetSpellTargetDestructable — the sim id of the TREE a tree-aimed cast named (noteSpell). */
+  tree?: number;
   x: number; // target point (the unit's position for a unit target)
   y: number;
 }
@@ -4444,7 +4446,7 @@ export class SimWorld {
   private heroKillSeq = 0;
   private damageEvents: Array<{ target: EventUnitInfo; source: EventUnitInfo | null; amount: number }> = [];
   private attackEvents: Array<{ attacked: EventUnitInfo; attacker: EventUnitInfo }> = [];
-  private orderEvents: Array<{ unit: EventUnitInfo; orderId: number; kind: "immediate" | "point" | "target"; x: number; y: number; target: EventUnitInfo | null; item: { id: number; typeId: string; charges: number; x: number; y: number } | null }> = [];
+  private orderEvents: Array<{ unit: EventUnitInfo; orderId: number; kind: "immediate" | "point" | "target"; x: number; y: number; target: EventUnitInfo | null; item: { id: number; typeId: string; charges: number; x: number; y: number } | null; tree?: number }> = [];
   private spellEvents: SpellEvent[] = [];
   private constructEvents: ConstructEvent[] = [];
   private trainEvents: TrainEvent[] = [];
@@ -11387,7 +11389,7 @@ export class SimWorld {
    *  (trigger IssueXOrder + the player command router), never the internal-AI issue* calls,
    *  so auto-acquisition retargeting stays silent, matching WC3. `kind` picks the event
    *  family; `target` is the ordered unit (target orders) else null. */
-  noteOrder(unitId: number, orderId: number, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number, itemId = 0): void {
+  noteOrder(unitId: number, orderId: number, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number, itemId = 0, treeId = 0): void {
     if (!this.captureOrders) return;
     const u = this.units.get(unitId);
     if (!u) return;
@@ -11397,7 +11399,9 @@ export class SimWorld {
     // is pumped.
     const it = itemId ? this.items.get(itemId) : undefined;
     const item = it ? { id: it.id, typeId: it.itemId, charges: it.charges, x: it.x, y: it.y } : null;
-    this.orderEvents.push({ unit: eventInfo(u), orderId, kind, x, y, target: t ? eventInfo(t) : null, item });
+    // …and one aimed at a TREE (harvest it, attack it): `GetOrderTargetDestructable()`, the tree's
+    // sim id, which the engine maps back to its destructable record.
+    this.orderEvents.push({ unit: eventInfo(u), orderId, kind, x, y, target: t ? eventInfo(t) : null, item, ...(treeId ? { tree: treeId } : {}) });
   }
   /** Issued-order events since the last drain — only when a script registered one
    *  (`captureOrders`). Same shape/lifecycle as the death/damage/attack drains. */
@@ -11415,7 +11419,12 @@ export class SimWorld {
     const t = pc.targetId ? this.units.get(pc.targetId) : undefined;
     const it = pc.itemId ? this.castItemTarget(u, pc.itemId) : null;
     const item = it ? { id: it.id, typeId: it.itemId, charges: it.charges, x: it.x, y: it.y } : null;
-    this.spellEvents.push({ caster: eventInfo(u), abilityId: pc.abilityId, phase, target: t ? eventInfo(t) : null, item, x: pc.x, y: pc.y });
+    // A TREE target (`GetSpellTargetDestructable`): a cast with no unit or item under it whose
+    // Targets Allowed names `tree` (Eat Tree, War Club) was aimed at the tree standing on its
+    // point. Both are cast at the TREE'S position (grabTree, eatTree), so the trunk within a
+    // pathing cell of the point is the one; the 32 is ours, as in Authority.issueTreeOrder.
+    const tree = !t && !it && this.abilities?.get(pc.abilityId)?.targetFlags.includes("tree") ? this.nearestTree(pc.x, pc.y, 32) : null;
+    this.spellEvents.push({ caster: eventInfo(u), abilityId: pc.abilityId, phase, target: t ? eventInfo(t) : null, item, x: pc.x, y: pc.y, ...(tree ? { tree: tree.id } : {}) });
   }
   /** Spell events since the last drain (`captureSpells`). */
   drainSpellEvents(): SpellEvent[] {
@@ -14773,7 +14782,8 @@ export class SimWorld {
     // Masonry'd building stood a whole point above its own maximum at EVERY health it had
     // ("1651 / 1650"). Six decimals clears the noise and leaves a real fraction (the Arcane
     // Vault's 485 x 1.1 = 533.5) exactly where the data puts it.
-    const newMaxHp = snapPool((u.baseMaxHp + HP_PER_STR() * dStr) * (1 + upg.hpPct) + upg.hp + item.maxHp + maxHpBonus);
+    // …and the whole pool is scaled by the owner's HANDICAP (`unitHandicap`).
+    const newMaxHp = snapPool(((u.baseMaxHp + HP_PER_STR() * dStr) * (1 + upg.hpPct) + upg.hp + item.maxHp + maxHpBonus) * this.unitHandicap(u));
     const newMaxMana = snapPool(u.baseMaxMana + MANA_PER_INT() * dInt + upg.mana + item.maxMana);
     // Moving the ceiling keeps the unit's RELATIVE pool, in both directions: "Increasing the
     // maximum amount of Hit Points of a unit does not change its relative Hit Points"
@@ -19764,16 +19774,28 @@ export class SimWorld {
     this.xpRates.set(player, Math.max(0, rate));
   }
 
-  /** `SetPlayerHandicap` / `GetPlayerHandicap` — the lobby's handicap, 1 = 100 %. STORED and
-   *  ANSWERED only: blizzard.j's `GetPlayerHandicapBJ` is this × 100, and with the setter a
-   *  no-op and no getter at all a script read 0 % where the game says 100 %. The handicap is
-   *  not yet applied to anything (in the game it scales a player's units' maximum life). */
+  /** `SetPlayerHandicap` / `GetPlayerHandicap` — the lobby's handicap, 1 = 100 %. blizzard.j's
+   *  `GetPlayerHandicapBJ` is this × 100. It scales the maximum life of every unit the player
+   *  owns (recomputeStats), keeping each unit's relative health as any ceiling move does. */
   private handicaps = new Map<number, number>();
   playerHandicap(player: number): number {
     return this.handicaps.get(player) ?? 1;
   }
   setPlayerHandicap(player: number, handicap: number): void {
     this.handicaps.set(player, Math.max(0, handicap));
+  }
+  /**
+   * What the owner's handicap multiplies this unit's maximum life by. `UI\TriggerStrings.txt`
+   * says the whole rule in two sentences: "Handicaps apply to the max life of all units owned
+   * or created for the player. Heroes are less affected by handicaps than non-Hero units."
+   * HOW much less is in no file, so a hero takes HALF the reduction (a 50 % handicap leaves
+   * it 75 %) — that fraction is ours. Applied to the finished pool (base, upgrades, items),
+   * which is also ours; at 100 %, every lobby that sets none, it is exactly 1.
+   */
+  private unitHandicap(u: SimUnit): number {
+    const h = this.handicaps.get(u.owner);
+    if (h === undefined || h === 1) return 1;
+    return u.isHero ? 1 - (1 - h) / 2 : h;
   }
 
   /** `UnitPauseTimedLife` — stop (or restart) a unit's timed-life clock. */

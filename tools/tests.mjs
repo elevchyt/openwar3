@@ -261,6 +261,7 @@ export const SUITES = {
     { file: "jass-frames-test.cjs", data: true },
     "jass-line-endings-test.cjs",
     "jass-semantics-test.cjs",
+    "jass-native-stubs-test.cjs",
     { file: "jass-melee-test.cjs", data: true },
     { file: "jass-selection-test.cjs", data: true },
     { file: "jass-order-ids-test.cjs", data: true },

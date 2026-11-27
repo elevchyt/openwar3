@@ -72,6 +72,15 @@ export function destructableForUnit(c: NativeCtx, unitV: JassValue): JassValue {
   return handleFor(c, mapId, { mapId, typeId: snap.typeId, x: snap.x, y: snap.y, life: snap.life, maxLife: snap.maxLife });
 }
 
+/** The `destructable` a sim TREE was planted from (an order or a cast aimed at it), or null when
+ *  there is no engine or the tree came from no record. */
+export function destructableForTree(c: NativeCtx, treeId: number): JassValue {
+  const mapId = c.rt.hooks?.destructableOfTree?.(treeId) ?? 0;
+  const snap = mapId > 0 ? c.rt.hooks?.destructableInfo?.(mapId) ?? null : null;
+  if (!snap) return JNULL;
+  return handleFor(c, mapId, { mapId, typeId: snap.typeId, x: snap.x, y: snap.y, life: snap.life, maxLife: snap.maxLife });
+}
+
 export function registerDestructableNatives(rt: Runtime): void {
   // --- create / remove ------------------------------------------------------
   // CreateDestructable(objectid, x, y, face, scale, variation) and the …Z twin, which puts the

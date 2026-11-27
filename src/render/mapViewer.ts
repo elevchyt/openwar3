@@ -5473,6 +5473,7 @@ export class MapViewerScene {
         for (const [doo, sim] of this.destSimByDoo) if (sim === unitId) return doo;
         return 0;
       },
+      destructableOfTree: (treeId) => this.destOfSimTree.get(treeId) ?? 0,
       setDoodadAnimation: (area, doodadId, nearestOnly, animation, animRandom) =>
         this.setDoodadAnimation(area, doodadId, nearestOnly, animation, animRandom),
       // DisplayLoadDialog — the F10 menu, already on its Load Game face. "Singleplayer only …

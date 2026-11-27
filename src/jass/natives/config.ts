@@ -170,7 +170,13 @@ export function registerConfigNatives(rt: Runtime): void {
   // The race the player actually plays (a lobby "random" already resolved) — what
   // MeleeStartingUnits branches on. ConvertRace: 1 human, 2 orc, 3 undead, 4 night elf.
   def(rt, "GetPlayerRace", (c, a) => c.rt.enumHandle("Race", player(c, a[0])?.raceIndex ?? 0));
-  def(rt, "IsPlayerObserver", () => jBool(false)); // no observer slots (GetPlayerName lives in natives/text.ts)
+  // An observer is a player who holds no seat and only watches — our WATCHERS (Runtime.watchers:
+  // this machine once it got up to watch, a LAN game's Observers bench). (GetPlayerName lives in
+  // natives/text.ts.)
+  def(rt, "IsPlayerObserver", (c, a) => {
+    const p = player(c, a[0]);
+    return jBool(!!p && c.rt.watchers.has(p.index));
+  });
   def(rt, "GetPlayerTeam", (c, a) => jInt(player(c, a[0])?.team ?? 0));
   def(rt, "GetPlayerColor", (c, a) => c.rt.enumHandle("PlayerColor", player(c, a[0])?.color ?? 0));
   def(rt, "GetPlayerStartLocation", (c, a) => jInt(player(c, a[0])?.startLocation ?? -1));

@@ -931,7 +931,10 @@ function registerAiNatives(rt: Runtime, seat: ScriptSeat, host: AiHost): void {
   def("GetMegaTarget", () => JNULL);
   def("GetEnemyPower", () => jInt(0));
   def("GetBuilding", () => JNULL);
-  def("GetExpansionPeon", () => JNULL);
+  def("GetExpansionPeon", (c) => unitValue(c.rt, ai.expansionPeon()));
+  def("GetExpansionX", () => jInt(Math.round(ai.expansionSite()?.x ?? -1)));
+  def("GetExpansionY", () => jInt(Math.round(ai.expansionSite()?.y ?? -1)));
+  def("SetExpansion", (_c, a) => jBool(ai.setExpansion(id(a[1]))));
   def("SetAllianceTarget", (_c, a) => ((seat.allianceTarget = simUnit(a[0])?.id ?? 0), JNULL));
   def("GetAllianceTarget", (c) => unitValue(c.rt, seat.allianceTarget ? host.world.units.get(seat.allianceTarget) : null));
   def("TownThreatened", () => jBool(ai.townThreatened()));

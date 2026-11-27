@@ -789,6 +789,8 @@ export interface EngineHooks {
   destructableUnit?(id: number): number;
   /** …and the other way round: the map destructable a sim unit stands in for, or 0. */
   destructableOfUnit?(unitId: number): number;
+  /** …and the map destructable a sim TREE was planted from, or 0 (GetOrderTargetDestructable). */
+  destructableOfTree?(treeId: number): number;
   /** IssueNeutral*OrderById — an order to a neutral building on `player`'s behalf (a purchase:
    *  `orderId` is the ware's rawcode). True when the sale went through. */
   issueNeutralOrder?(player: number, shopId: number, orderId: number, kind: "immediate" | "point" | "target"): boolean;
@@ -2087,6 +2089,8 @@ export class Runtime {
    * reply to their own command, `GetForceOfPlayer(p)` — stays theirs.
    */
   watchers = new Set<number>();
+  /** `SetIntegerGameState` / `GetIntegerGameState`, by igamestate index (natives/melee.ts). */
+  readonly integerGameState = new Map<number, number>();
   /** The lines `DisplayTextToPlayer` handed out this instant, and to whom (see `watchers`). */
   private echoAt = -1;
   private readonly echoSeen = new Map<string, { first: number; told: boolean }>();
