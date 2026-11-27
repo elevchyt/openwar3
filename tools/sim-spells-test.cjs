@@ -321,21 +321,23 @@ const round = (n) => Math.round(n * 1000) / 1000;
   const { api, log } = harness([sapper, inner, outer, escort]);
   let died = 0;
   api.killUnit = () => died++;
-  SPELL_HANDLERS.Asds(api, sapper, def({ data: [100, 250, 250, 100, 100] }), 1, { targetId: 2, x: 0, y: 0 });
+  SPELL_HANDLERS.Asds(api, sapper, def({ data: [100, 250, 250, 100, 3] }), 1, { targetId: 2, x: 0, y: 0 });
   check("Kaboom! deals dataB inside dataA and dataD beyond it", log.damage, [
     { id: 2, amount: 250 }, { id: 3, amount: 100 }, { id: 4, amount: 250 },
   ]);
   check("…and the sapper dies", died, 1);
 }
 // …and only what its `targs1` names (issue #360): "ground,structure,debris,tree,ward" hits a
-// building and spares a flyer overhead.
+// building and spares a flyer overhead. A building takes dataE "Building Damage Factor" times
+// the ring's damage — `[Asds]` DataE1 = 3 (issue #355): 750 full, 300 partial.
 {
   const sapper = unit({ id: 1, team: 0, x: 0, y: 0 });
   const hall = unit({ id: 2, team: 1, x: 50, y: 0, building: {} });
   const gryphon = unit({ id: 3, team: 1, x: 40, y: 0, flying: true });
-  const { api, log } = harness([sapper, hall, gryphon]);
-  SPELL_HANDLERS.Asds(api, sapper, def({ data: [100, 250, 250, 100, 100], targetFlags: ["ground", "structure", "debris", "tree", "ward"] }), 1, { targetId: 2, x: 0, y: 0 });
-  check("Kaboom! hits the building and spares the flyer", log.damage, [{ id: 2, amount: 250 }]);
+  const farm = unit({ id: 4, team: 1, x: 200, y: 0, building: {} });
+  const { api, log } = harness([sapper, hall, gryphon, farm]);
+  SPELL_HANDLERS.Asds(api, sapper, def({ data: [100, 250, 250, 100, 3], targetFlags: ["ground", "structure", "debris", "tree", "ward"] }), 1, { targetId: 2, x: 0, y: 0 });
+  check("Kaboom! hits the buildings three times over and spares the flyer", log.damage, [{ id: 2, amount: 750 }, { id: 4, amount: 300 }]);
 }
 
 // Thunder Clap / Slam — the row's Targets Allowed, not a hand-written "not flying" (issue #360).

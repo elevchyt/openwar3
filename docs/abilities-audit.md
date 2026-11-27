@@ -56,10 +56,11 @@ Two standing rules that have already earned their keep:
 - **`abilList` membership is not availability.** Check the ability's `Requires` — that is
   what makes Ultravision an upgrade rather than a night elf racial.
 - **Do not invent a number.** Where the MPQ and a reference disagree, implement what the
-  data says and record the conflict. Open ones: Kaboom!'s dataE "Building Damage Factor"
-  (reads 100, Liquipedia says 3x vs buildings) and Cannibalize's dataB "Max Hit Points"
-  (800, which cannot bind at the stock rate). Both want a measurement against the real
-  client to settle — see the wc3-ground-truth memory. Two more have joined them:
+  data says and record the conflict. Open ones: Cannibalize's dataB "Max Hit Points"
+  (800, which cannot bind at the stock rate), which wants a measurement against the real
+  client to settle — see the wc3-ground-truth memory. (Kaboom!'s dataE "Building Damage
+  Factor" was once on this list as "100"; it is 3, the 100 is dataD — issue #355.) Two
+  more have joined it:
   Shadow Meld's dataB "Day/Night Duration" (2.5) and dataC "Action Duration" (0.5),
   which have NAMES but no source saying what either measures, and Root's dataD
   "Uprooted Defense Type" (2) — an index into a defense-type ordering our string

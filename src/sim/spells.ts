@@ -1991,13 +1991,12 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // structure,debris,tree,ward` with no allegiance flag at all, and a sapper pack really does
   // kill its own escort if it detonates among them — but never a flyer.
   //
-  // NOT applied: the extra damage a sapper is famous for doing to BUILDINGS. dataE is
-  // "Building Damage Factor" (AbilityMetaData Sds1, data=5) and its value is 100, while
-  // Liquipedia states the ability does "3 times as much damage against buildings". 100 is
-  // neither 3 nor a percentage that yields 3, so the two sources do not reconcile and
-  // neither reading can be called verified. Rather than invent a multiplier, the blast lands
-  // as written and this is left for a measurement against the real client (see the
-  // wc3-ground-truth memory) — the one source that can settle it.
+  // …and a BUILDING takes dataE times as much: dataE is "Building Damage Factor"
+  // (AbilityMetaData Sds1, data=5), and `[Asds]` DataE1 is **3** in all four data sets —
+  // the row reads `…,100,250,250,100,3,…`, so the 100 that once read as this column is DataD.
+  // Liquipedia says the same in words ("3 times as much damage against buildings"), so a
+  // Sapper's blast is 750 full / 300 partial on a structure (issue #355). The Clockwerk
+  // Goblins' `Asd2`/`Asd3`/`Asdg` are the same code with a factor of 1.
   Asds: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
     const t = api.getUnit(ctx.targetId);
@@ -2007,12 +2006,14 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const full = d(lvl, 1, 250);
     const partR = d(lvl, 2, 250);
     const part = d(lvl, 3, 100);
+    const buildingFactor = d(lvl, 4, 1);
     for (const e of api.unitsInArea(cx, cy, Math.max(fullR, partR))) {
       if (e === caster) continue; // he dies below, not to his own blast
       // …and only what `targs1` names: "ground,structure,debris,tree,ward" — a flyer
       // overhead is untouched (issue #360).
       if (!api.admits(def, e)) continue;
-      const amount = Math.hypot(e.x - cx, e.y - cy) <= fullR ? full : part;
+      const ring = Math.hypot(e.x - cx, e.y - cy) <= fullR ? full : part;
+      const amount = e.building ? ring * buildingFactor : ring;
       if (amount > 0) api.spellDamage(e, amount, caster.id);
     }
     if (def.specialArt) api.emitEffect(def.specialArt, cx, cy, 0);
