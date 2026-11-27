@@ -1337,6 +1337,11 @@ export class Interpreter {
       case "-":
         return this.arith(l, r, (a, b) => a - b);
       case "*":
+        // integer * integer WRAPS at 32 bits, as the game's VM does. The product of two int32s
+        // can reach 2^62, past the 2^53 a double holds exactly, so `(a * b) | 0` drops the low
+        // bits it is meant to keep (1103515245 * 2147483647 came out 1043968512, not
+        // 1043968403) — and the low bits are the whole of a map's LCG, string hash or save code.
+        if (l.k === "int" && r.k === "int") return jInt(Math.imul(l.n, r.n));
         return this.arith(l, r, (a, b) => a * b);
       case "/":
         return this.divide(l, r);
