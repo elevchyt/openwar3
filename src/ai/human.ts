@@ -177,7 +177,7 @@ function buildSequence(ai: AiPlayer): void {
     if (!newbie) {
       ai.guardSecondary(1, 2, WATCH_TOWER);
       if (ai.countDone(LUMBER_MILL) >= 1) ai.guardSecondary(1, 1, GUARD_TOWER);
-      if (ai.countDone(WATCH_TOWER) >= 1) ai.guardSecondary(1, 1, ARCANE_TOWER);
+      if (ai.townCountDone(WATCH_TOWER) >= 1) ai.guardSecondary(1, 1, ARCANE_TOWER);
     }
 
     ai.setBuildUnit(1, KEEP);
@@ -193,9 +193,9 @@ function buildSequence(ai: AiPlayer): void {
     ai.setBuildUnit(1, CASTLE);
 
     ai.guardSecondary(0, 2, WATCH_TOWER);
-    if (ai.countDone(WATCH_TOWER) >= 3) {
+    if (ai.townCountDone(WATCH_TOWER) >= 3) {
       ai.guardSecondary(0, 1, GUARD_TOWER);
-      if (ai.countDone(WATCH_TOWER) >= 4) ai.guardSecondary(0, 1, ARCANE_TOWER);
+      if (ai.townCountDone(WATCH_TOWER) >= 4) ai.guardSecondary(0, 1, ARCANE_TOWER);
     }
 
     ai.setBuildUpgr(1, UPG_RANGED);
@@ -238,7 +238,7 @@ function buildSequence(ai: AiPlayer): void {
     ai.basicExpansion(mines < 2, TOWN_HALL);
     if (!newbie) {
       ai.guardSecondary(1, 2, WATCH_TOWER);
-      if (ai.count(WATCH_TOWER) >= 2) {
+      if (ai.townCount(WATCH_TOWER) >= 2) {
         ai.guardSecondary(1, 1, GUARD_TOWER);
         ai.guardSecondary(1, 1, ARCANE_TOWER);
       }
@@ -281,7 +281,10 @@ function buildSequence(ai: AiPlayer): void {
   ai.setBuildUnit(1, WORKSHOP);
   ai.setBuildUnit(2, MORTAR);
 
-  ai.setBuildUnit(ai.countDone(WATCH_TOWER) - ai.count(ARCANE_TOWER), GUARD_TOWER);
+  // human.ai's `c_watch_done` is `TownCountDone(WATCH_TOWER)`, so a Guard, Cannon or Arcane
+  // Tower still counts as a Scout Tower here — read plain, the upgraded towers drop out of
+  // the count and the Scout Towers left standing are never armed (issue #379).
+  ai.setBuildUnit(ai.townCountDone(WATCH_TOWER) - ai.count(ARCANE_TOWER), GUARD_TOWER);
 
   // if we have a lot of gold then advance the tech tree
   if (gold > 1000) {
