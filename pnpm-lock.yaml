@@ -16,22 +16,16 @@ importers:
 
   .:
     dependencies:
-      '@huggingface/transformers':
-        specifier: 4.3.1
-        version: 4.3.1(@types/node@24.13.3)
       electron-updater:
         specifier: ^6.6.2
         version: 6.8.9
-      lucide:
-        specifier: ^1.75.0
-        version: 1.75.0
-      onnxruntime-web:
-        specifier: 1.31.0-dev.20260914-8d85527a0
-        version: 1.31.0-dev.20260914-8d85527a0
       ws:
         specifier: ^8.21.1
         version: 8.21.1
     devDependencies:
+      '@huggingface/transformers':
+        specifier: 4.3.1
+        version: 4.3.1(@types/node@24.13.3)
       '@openwar3/ui':
         specifier: link:packages/ui
         version: link:packages/ui
@@ -56,9 +50,15 @@ importers:
       husky:
         specifier: ^9.1.7
         version: 9.1.7
+      lucide:
+        specifier: ^1.75.0
+        version: 1.75.0
       mdx-m3-viewer:
         specifier: ^5.12.0
         version: 5.12.0(patch_hash=a69f5a15807679da465afa41b55097b98b0ece8ea6de46753f8b45dfa7a15461)
+      onnxruntime-web:
+        specifier: 1.31.0-dev.20260914-8d85527a0
+        version: 1.31.0-dev.20260914-8d85527a0
       pako:
         specifier: ^3.0.1
         version: 3.0.1
