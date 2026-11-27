@@ -80,7 +80,7 @@ interface AiCommand {
 }
 
 /** Who else may hold a unit — the seat answers for the other captain and the guard posts. */
-type Holder = "attack" | "defense" | "guard" | "ignored" | null;
+type Holder = "attack" | "defense" | "guard" | "ignored" | "locked" | null;
 
 /**
  * A CAPTAIN — the engine half of common.ai's `Captain*` / `AddAssault` / `AddDefenders` natives.
@@ -138,8 +138,10 @@ export class ScriptCaptain {
     return u && u.hp > 0 && u.owner === this.ai.player ? u : null;
   }
 
+  /** Drop the dead — and anything a map has since LOCKED where it stands (`SimUnit.creepGuard`,
+   *  see ScriptSeat.heldBy), which is how a captain that already had such a unit lets go. */
   prune(): void {
-    for (const id of [...this.members]) if (!this.alive(id)) this.members.delete(id);
+    for (const id of [...this.members]) if (!this.alive(id) || this.world.units.get(id)?.creepGuard) this.members.delete(id);
   }
 
   private countOf(id: string): number {
@@ -531,6 +533,11 @@ export class GuardPosts {
     this.posts.push({ typeId, x, y, unitId: 0, refills: 0, filled: false });
   }
 
+  /** `SimUnit.creepGuard` — the map locked this unit where it stands (ScriptSeat.heldBy). */
+  locks(id: number): boolean {
+    return !!this.host.world.units.get(id)?.creepGuard;
+  }
+
   holder(id: number): GuardPost | undefined {
     return id ? this.posts.find((p) => p.unitId === id) : undefined;
   }
@@ -680,6 +687,13 @@ export class ScriptSeat {
 
   /** Who holds this unit, if anybody. */
   heldBy(id: number): Holder {
+    // A LOCKED unit first (`SimUnit.creepGuard`, SetUnitCreepGuard — Blizzard.j's
+    // LockGuardPosition, which "prevents the AI from changing the guard position of a unit",
+    // UI\TriggerStrings.txt): neither captain may take it, guard post or not, and one that
+    // already had it lets go (ScriptCaptain.prune). HumanX03 locks its four ghostly Archmagi, HEROES
+    // with no post at all, which are meant to stay where the map stood them. Kept on the UNIT
+    // because the map locks them at its init, before this computer's seat may exist.
+    if (this.guards.locks(id)) return "locked";
     if (this.captain.members.has(id)) return "attack";
     if (this.defense.members.has(id)) return "defense";
     if (this.guards.ignored.has(id)) return "ignored";

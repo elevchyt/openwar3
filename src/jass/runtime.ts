@@ -609,6 +609,8 @@ export interface JassItem {
   y: number;
   /** SetItemUserData — pure script state (the engine never reads it), like a unit's. */
   userData?: number;
+  /** SetItemDropID — the unit TYPE this item dropped from (natives/items.ts). */
+  dropId?: string;
   /** Per-instance flags WC3 keeps on the item itself. Our sim models none of them (an
    *  item on the ground is neither hideable nor destructible here), so they live on the
    *  handle: set and read back faithfully, but only the script observes them (the
@@ -1169,6 +1171,9 @@ export interface EngineHooks {
    *  trigger telling the unit's computer to leave it alone, or to take it back. `unitId` is the
    *  sim id. */
   guardPosition?(unitId: number, op: "ignore" | "recycle"): void;
+  /** `SetUnitCreepGuard(u, flag)` — Blizzard.j's LockGuardPosition: the owning computer's AI
+   *  may no longer take the unit from where it stands. */
+  lockGuardPosition?(unitId: number, flag: boolean): void;
   /** `RemoveAllGuardPositions(p)`. */
   removeAllGuardPositions?(player: number): void;
   /** GetPlayerStructureCount / GetPlayerUnitCount — melee defeat is "my team owns no
@@ -1534,6 +1539,10 @@ export interface EngineHooks {
   /** SetUnitAnimationWithRarity — the named clip, taking the RARE variant (true) or the common
    *  one (false) where the model has both. */
   setUnitAnimationWithRarity?(unitId: number, animation: string, rare: boolean): void;
+  /** SetUnitLookAt / ResetUnitLookAt / SetUnitBlendTime — the picture's (RtsController). */
+  setUnitLookAt?(unitId: number, bone: string, targetId: number, ox: number, oy: number, oz: number): void;
+  resetUnitLookAt?(unitId: number): void;
+  setUnitBlendTime?(unitId: number, seconds: number): void;
   /** UnitShareVision — this ONE unit's sight lent to (or taken back from) a player. */
   shareUnitVision?(unitId: number, player: number, share: boolean): void;
   /** UnitSuspendDecay — stop / restart the clock on a dead unit's body. */

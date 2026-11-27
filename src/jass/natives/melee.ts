@@ -279,8 +279,15 @@ export function registerMeleeNatives(rt: Runtime): void {
     return JNULL;
   });
   def(rt, "RemoveAllGuardPositions", (c, a) => (c.rt.hooks?.removeAllGuardPositions?.(playerIndex(c, a[0])), JNULL));
+  // SetUnitCreepGuard(u, flag) — the native under Blizzard.j's LockGuardPosition, "prevents the
+  // AI from changing the guard position of a unit" (UI\TriggerStrings.txt). See GuardPosts.locked.
+  def(rt, "SetUnitCreepGuard", (c, a) => {
+    const id = simOf(c, a[0]);
+    if (id >= 0) c.rt.hooks?.lockGuardPosition?.(id, truthy(a[1]));
+    return JNULL;
+  });
   for (const name of [
-    "SetUnitCreepGuard", "Preloader", "Preload",
+    "Preloader", "Preload",
     "PreloadStart", "PreloadEnd", "PreloadEndEx", "PreloadRefresh", "PreloadGenClear", "PreloadGenStart",
   ]) {
     def(rt, name, () => JNULL);

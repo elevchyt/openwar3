@@ -490,7 +490,8 @@ export type ScriptInput =
   | { k: "dlg"; p: number; button: number; dialog: number }
   | { k: "frame"; p: number; frame: number; ev: number }
   | { k: "pev"; p: number; ev: number }
-  | { k: "key"; p: number; key: number; meta: number; down: boolean };
+  | { k: "key"; p: number; key: number; meta: number; down: boolean }
+  | { k: "trk"; p: number; h: number; hit: boolean };
 
 export class Interpreter {
   /**
@@ -2708,6 +2709,21 @@ export class Interpreter {
    *
    * A script INPUT, tapped like the rest (game/replay.ts): what the map hears from a player.
    */
+  /**
+   * The mouse on a TRACKABLE (`CreateTrackable`): `hit` a click on it
+   * (TriggerRegisterTrackableHitEvent — "when a player clicks on the given trackable"), else the
+   * pointer moving onto it (…TrackEvent — "when a player hovers over"; jassdoc both). The one
+   * response is GetTriggeringTrackable: the game names NO player for either event (jassdoc on
+   * CreateTrackable: the triggering player cannot be identified), so none is set, and `player`
+   * is only the replay's note of whose mouse it was. A script INPUT, tapped like the rest.
+   */
+  fireTrackable(player: number, handle: number, hit: boolean): void {
+    this.inputTap?.({ k: "trk", p: player, h: handle, hit });
+    const responses = new Map<string, JassValue>([["TriggeringTrackable", jHandle(handle, "trackable")]]);
+    this.dispatchToRegs(responses, this.rt.regsFor(hit ? "trackableHit" : "trackableTrack"), (reg) =>
+      reg.params[0]?.k === "handle" && reg.params[0].h === handle);
+  }
+
   firePlayerKey(player: number, key: number, meta: number, down: boolean): void {
     this.inputTap?.({ k: "key", p: player, key, meta, down });
     const responses = new Map<string, JassValue>([

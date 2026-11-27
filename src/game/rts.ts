@@ -46,7 +46,8 @@ import { SnapshotIndex } from "./renderView";
 import type { FogArea, FogModifier } from "./fog";
 import { AllianceTable, AllianceType } from "../sim/alliances";
 import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
-import { modelPickVolumes, rayVolume, rebaseVolumes, type CollisionShapeNode, type PickVolume } from "../render/modelCollision";
+import { lookAtBone } from "./lookAt";
+import { modelPickVolumes, rayVolume, rebaseVolumes, type CollisionHost, type CollisionShapeNode, type PickVolume } from "../render/modelCollision";
 import { autoArmed, type UnitRegistry, type UnitDef } from "../data/units";
 import { ArmorType, AttackType, isNeutralSlot, MoveType, neutralSlot, PlayerSlot, PrimaryAttribute } from "../data/enums";
 import { MELEE, dataNum, gameNum, xpToReachLevel } from "../data/gameplayConstants";
@@ -108,6 +109,12 @@ export interface Instance {
   setUniformScale(s: number): unknown;
   setTeamColor?(id: number): unknown; // re-tint team-coloured parts (SetUnitColor/SetUnitOwner)
   setBlendTime?(seconds: number): unknown; // per-unit animation cross-fade (UnitUI `blend`)
+  /** `SetUnitLookAt`'s bone lock, read by the viewer patch's node walk (`ow3LookAt` in
+   *  mdx/modelinstance.js): the bone's index in HIERARCHY order (`sortedGenericObjects`), the
+   *  world point it turns to face, and `on` — false eases the bone back to its animation and the
+   *  patch drops the record when it has. Null for nothing locked. */
+  ow3LookAt?: { node: number; x: number; y: number; z: number; on: boolean } | null;
+  worldLocation?: ArrayLike<number>;
   hide(): void;
   show(): void;
   vertexColor?: Float32Array; // MDX tint; multiplied by fog brightness to dim in fog
@@ -126,6 +133,8 @@ export interface Instance {
     /** The model's own click volumes. Optional because a placed doodad body we have only
      *  borrowed, or a stub in a test, need not carry any. */
     collisionShapes?: ArrayLike<CollisionShapeNode>;
+    /** The skeleton in HIERARCHY order — what `SetUnitLookAt` matches a bone name against. */
+    sortedGenericObjects?: ArrayLike<{ name: string }>;
   };
 }
 interface MapUnit {
@@ -4835,7 +4844,7 @@ export class RtsController {
     // Per-unit animation blending: cross-fade between sequences over this unit's
     // own UnitUI `blend` time (0.15s for most WC3 units) so walk↔stand↔attack
     // transitions ease instead of hard-cutting (issue #8).
-    instance.setBlendTime?.(def.animBlend);
+    instance.setBlendTime?.(this.scriptBlend.get(simId) ?? def.animBlend);
     // The TYPE's own size (UnitUI `modelScale`), stated on the body HERE. A map-placed unit
     // had it — mdx-m3-viewer's w3x `Unit` calls `uniformScale(row.modelScale)` when it builds
     // the .doo instance — but every body WE mint (trained, bought, script-spawned) was handed
@@ -5051,7 +5060,7 @@ export class RtsController {
     if (skin && !entry.skinPath) entry.ownBody = { instance: old, modelPath: entry.modelPath };
     else if (!skin) entry.ownBody = undefined;
     old.hide(); // drop the old body
-    instance.setBlendTime?.((skin ?? def).animBlend);
+    instance.setBlendTime?.(this.scriptBlend.get(simId) ?? (skin ?? def).animBlend);
     entry.unit = { instance, state: WidgetState.IDLE };
     if (!this.retype(simId, def, skin)) return false;
     entry.altModel = this.sim.units.get(simId)?.altModel ?? false;
@@ -5275,6 +5284,76 @@ export class RtsController {
    * through the same door as a named clip (the hold, the queue reset, the wait for a body still
    * loading), spelled `#<index>` — a form no sequence NAME can take.
    */
+  /** `SetUnitBlendTime` — seconds, per unit, held here so a body that arrives later or a morph
+   *  keeps the script's number rather than the type's UnitUI `blend` (see `scriptBlendTime`). */
+  private readonly scriptBlend = new Map<number, number>();
+  /** `SetUnitLookAt` — the bone lock each unit's script asked for (see `updateLookAts`). */
+  private readonly scriptLook = new Map<number, { tokens: string[]; targetId: number; ox: number; oy: number; oz: number; inst: Instance | null; node: number }>();
+
+  /**
+   * JASS SetUnitBlendTime(u, seconds). The animation CROSS-FADE (the viewer patch's
+   * `setBlendTime`, fed otherwise from UnitUI `blend`), which is also how fast a `SetUnitLookAt`
+   * bone turns: "A unit's blend time determines how quickly the unit's body parts turn to face a
+   * direction" (UI\TriggerStrings.txt, SetUnitBlendTimeBJHint), and jassdoc's "SetUnitLookAt is
+   * affected by animation speed and blend time". Blizzard.j sets 0 on a permanent corpse
+   * (CreatePermanentCorpseLocBJ) so its decay clip cuts in.
+   */
+  setUnitBlendTime(simId: number, seconds: number): void {
+    const s = Math.max(0, seconds);
+    this.scriptBlend.set(simId, s);
+    this.byId.get(simId)?.unit.instance.setBlendTime?.(s);
+  }
+
+  /**
+   * JASS SetUnitLookAt(u, bone, target, ox, oy, oz) — lock one bone to face `target`'s origin
+   * plus the offsets "until ResetUnitLookAt is called" (jassdoc). One bone at a time: a second
+   * call replaces the first. The bone is chosen from the model by `lookAtBone` (module level).
+   */
+  setUnitLookAt(simId: number, bone: string, targetId: number, ox: number, oy: number, oz: number): void {
+    const tokens = bone.toLowerCase().split(/\s+/).filter(Boolean);
+    this.scriptLook.set(simId, { tokens, targetId, ox, oy, oz, inst: null, node: -1 });
+  }
+
+  /** JASS ResetUnitLookAt(u) — "Unlocks the bone oriented by SetUnitLookAt, allowing it to move in
+   *  accordance to the unit's regular animations" (jassdoc). The bone eases back over the same
+   *  blend time it turned in (`on` false; the patch drops the record once it is home). */
+  resetUnitLookAt(simId: number): void {
+    this.scriptLook.delete(simId);
+    const inst = this.byId.get(simId)?.unit.instance;
+    if (inst?.ow3LookAt) inst.ow3LookAt.on = false;
+  }
+
+  /** Each locked bone's target this frame — the target unit's origin as it is DRAWN plus the
+   *  script's offsets ("taken from the target's origin", the Z offset over a Z that "already
+   *  factors in the terrain Z", jassdoc) — handed to the patch on the instance. A unit whose body
+   *  changed is matched again; a target that is gone lets the bone go. */
+  private updateLookAts(): void {
+    for (const [simId, look] of this.scriptLook) {
+      const e = this.byId.get(simId);
+      if (!e) {
+        if (!this.sim.units.has(simId)) this.scriptLook.delete(simId);
+        continue;
+      }
+      const inst = e.unit.instance;
+      if (look.inst !== inst) {
+        look.inst = inst;
+        const objects = inst.model.sortedGenericObjects;
+        look.node = objects ? lookAtBone(Array.from(objects, (o) => o.name), look.tokens) : -1;
+      }
+      const t = this.byId.get(look.targetId)?.unit.instance.worldLocation;
+      if (look.node < 0 || !t) {
+        if (inst.ow3LookAt) inst.ow3LookAt.on = false;
+        continue;
+      }
+      const l = inst.ow3LookAt ?? (inst.ow3LookAt = { node: look.node, x: 0, y: 0, z: 0, on: true });
+      l.node = look.node;
+      l.x = t[0] + look.ox;
+      l.y = t[1] + look.oy;
+      l.z = t[2] + look.oz;
+      l.on = true;
+    }
+  }
+
   setUnitAnimationByIndex(simId: number, index: number): void {
     if (index >= 0) this.setUnitAnimation(simId, `#${Math.floor(index)}`);
   }
@@ -6085,6 +6164,7 @@ export class RtsController {
       for (const e of this.forgotten) this.dropEntry(e);
       this.forgotten.length = 0;
     }
+    if (this.scriptLook.size) this.updateLookAts(); // after the bodies moved, so a target is aimed where it is drawn
     perfLog.end("sim.entries");
     perfLog.begin("sim.overlays");
     this.updateHealthBars();
@@ -6144,6 +6224,8 @@ export class RtsController {
    *  (flesh → bone) in place until it's fully removed (see tickCorpses). */
   private onDeath(simId: number): void {
     this.pendingLook.delete(simId); // a look still waiting for a body that never came
+    this.scriptLook.delete(simId);
+    this.scriptBlend.delete(simId);
     this.pendingAnim.delete(simId);
     this.pendingAnimQueue.delete(simId);
     const e = this.byId.get(simId);
@@ -11783,6 +11865,49 @@ export class RtsController {
       }
     }
     return best ?? bestBuilding;
+  }
+
+  /**
+   * Which of `candidates` the cursor is on — the same ray, the same ground cut-off and the same
+   * pixel slack as `pickAt`, against models that are not units: a script's TRACKABLES
+   * (`CreateTrackable`, MapViewerScene.trackableAt). Each is tested by its model's own collision
+   * shapes and, for a model with none, by its bounding sphere where the instance stands. The
+   * nearest hit wins; `key` of the winner, or null.
+   */
+  pickModelsAt(
+    cssX: number,
+    cssY: number,
+    candidates: ReadonlyArray<{ key: number; inst: CollisionHost & { worldLocation: ArrayLike<number>; worldScale: ArrayLike<number>; model: { bounds?: { x: number; y: number; z: number; r: number } } } }>,
+  ): number | null {
+    if (!candidates.length) return null;
+    const dpr = this.dpr();
+    this.screen[0] = cssX * dpr;
+    this.screen[1] = cssY * dpr;
+    this.host.camera.screenToWorldRay(this.ray, this.screen, this.host.viewport());
+    const ground = this.groundHit();
+    const ox = this.ray[0], oy = this.ray[1], oz = this.ray[2];
+    const dx = this.ray[3] - ox, dy = this.ray[4] - oy, dz = this.ray[5] - oz;
+    const tGround = ground ? this.groundT + PICK_GROUND_SLACK / Math.hypot(dx, dy, dz) : Infinity;
+    const pad = ground ? PICK_PAD_PX * this.worldPerPixel(ground[0], ground[1]) : 0;
+    let best: number | null = null;
+    let bestT = Infinity;
+    for (const c of candidates) {
+      this.volumes.length = 0;
+      if (modelPickVolumes(c.inst, this.volumes) === 0) {
+        const b = c.inst.model.bounds;
+        const s = Math.max(c.inst.worldScale[0], c.inst.worldScale[1], c.inst.worldScale[2]);
+        if (!b || b.r <= 0) continue;
+        const l = c.inst.worldLocation;
+        this.volumes.push({ kind: "sphere", x: l[0] + b.x * s, y: l[1] + b.y * s, z: l[2] + b.z * s, r: b.r * s });
+      }
+      for (const v of this.volumes) {
+        const t = rayVolume(v, ox, oy, oz, dx, dy, dz, pad);
+        if (t < 0 || t > tGround || t >= bestT) continue;
+        bestT = t;
+        best = c.key;
+      }
+    }
+    return best;
   }
 
   /**

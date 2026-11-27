@@ -153,6 +153,8 @@ export type ReplayEvent =
   | { k: "pev"; t: number; ph: Phase; p: number; ev: number; left?: boolean }
   /** A key the map's script was listening for (BlzTriggerRegisterPlayerKeyEvent). */
   | { k: "key"; t: number; ph: Phase; p: number; key: number; meta: number; down: boolean }
+  /** The mouse on a script's TRACKABLE: a click (`hit`) or a hover (Interpreter.fireTrackable). */
+  | { k: "trk"; t: number; ph: Phase; p: number; h: number; hit: boolean }
   | { k: "cheat"; t: number; ph: Phase; p: number; kind: string }
   | { k: "cheatsel"; t: number; ph: Phase; kind: string; ids: number[] }
   /** A summon's SPAWN LOCK, which the sim reads off its model when the body arrives — a fact

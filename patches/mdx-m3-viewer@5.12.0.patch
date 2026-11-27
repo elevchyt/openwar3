@@ -1486,10 +1486,10 @@ index 5f2c0c2ffbfae107c42070fe99e41669814924ef..3101fe8514c3933b217efeeaa2f1397b
              solverParams.hd = true;
              // mdxHandler.loadEnv(viewer);
 diff --git a/dist/cjs/viewer/handlers/mdx/modelinstance.js b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-index 020a99b949ec1634579d439261027e00b6da23ac..777464e48a5645f8382870ee4324b0f4216bf5b0 100644
+index 020a99b949ec1634579d439261027e00b6da23ac..39cedf30eed3a3da3651b291eea3906a3709e5ba 100644
 --- a/dist/cjs/viewer/handlers/mdx/modelinstance.js
 +++ b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-@@ -15,12 +15,610 @@ const eventobjectubremitter_1 = require("./eventobjectubremitter");
+@@ -15,12 +15,655 @@ const eventobjectubremitter_1 = require("./eventobjectubremitter");
  const eventobjectsndemitter_1 = require("./eventobjectsndemitter");
  const geometryemitterfuncs_1 = require("./geometryemitterfuncs");
  const visibilityHeap = new Float32Array(1);
@@ -1948,7 +1948,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..777464e48a5645f8382870ee4324b0f4
 +    }
 +    const pose = instance.ow3LodPose;
 +    if (pose === null || pose === undefined || !instance.ow3LocalPose || instance.ow3PoseReset
-+        || instance.blendRemaining > 0 || instance.ow3LodSeq !== instance.sequence
++        || instance.blendRemaining > 0 || instance.ow3LodSeq !== instance.sequence || instance.ow3LookAt
 +        || instance.ow3PoseGen !== ow3PoseGeneration || !ow3SharePoses(instance.model)) {
 +        return false;
 +    }
@@ -2078,6 +2078,51 @@ index 020a99b949ec1634579d439261027e00b6da23ac..777464e48a5645f8382870ee4324b0f4
 +}
 +/** Which of this instance's nodes have ever had a WORLD matrix composed into them — the set the
 + *  composer of a bucket has to redo before its matrices become everybody's. Grown once. */
++/**
++ * OpenWar3 (issue #376): `SetUnitLookAt` — turn ONE bone to face a world point, `amount` of the
++ * way (0..1, eased over the instance's blend time by updateNodes). Called on the bone right after
++ * it was composed, so its world rotation and pivot are this frame's; its children are composed
++ * after it in hierarchy order and follow by themselves.
++ *
++ * A bone's forward is the MODEL's forward (+X): MDX bones carry no bind rotation, their geometry
++ * is in model space and a node at rest is an identity about its pivot. The turn is the shortest
++ * rotation taking the bone's current forward onto the direction of the point, applied ON TOP of
++ * the animated orientation (so a head still nods inside its look) and written back as the LOCAL
++ * rotation the parent's world rotation makes it — which is why the untouched local is saved in
++ * `ow3LookRest` and put back before the next frame samples, or the turn would compound wherever
++ * the clip has no rotation track to overwrite it.
++ */
++const ow3LookFwd = gl_matrix_1.vec3.create();
++const ow3LookDir = gl_matrix_1.vec3.create();
++const ow3LookTurn = gl_matrix_1.quat.create();
++const ow3LookWant = gl_matrix_1.quat.create();
++const ow3LookParent = gl_matrix_1.quat.create();
++const OW3_NO_TURN = gl_matrix_1.quat.create();
++const OW3_MODEL_FORWARD = gl_matrix_1.vec3.fromValues(1, 0, 0);
++function ow3AimBone(instance, node, look, amount) {
++    ow3LookDir[0] = look.x - node.worldLocation[0];
++    ow3LookDir[1] = look.y - node.worldLocation[1];
++    ow3LookDir[2] = look.z - node.worldLocation[2];
++    if (gl_matrix_1.vec3.length(ow3LookDir) < 1e-3 || amount <= 0) {
++        return;
++    }
++    gl_matrix_1.vec3.normalize(ow3LookDir, ow3LookDir);
++    gl_matrix_1.vec3.transformQuat(ow3LookFwd, OW3_MODEL_FORWARD, node.worldRotation);
++    gl_matrix_1.quat.rotationTo(ow3LookTurn, ow3LookFwd, ow3LookDir);
++    if (amount < 1) {
++        gl_matrix_1.quat.slerp(ow3LookTurn, OW3_NO_TURN, ow3LookTurn, amount);
++    }
++    gl_matrix_1.quat.mul(ow3LookWant, ow3LookTurn, node.worldRotation);
++    let rest = instance.ow3LookRest;
++    if (rest === undefined || rest === null) {
++        rest = instance.ow3LookRest = gl_matrix_1.quat.create();
++    }
++    gl_matrix_1.quat.copy(rest, node.localRotation);
++    instance.ow3LookRestNode = node;
++    gl_matrix_1.quat.invert(ow3LookParent, node.parent.worldRotation);
++    gl_matrix_1.quat.mul(node.localRotation, ow3LookParent, ow3LookWant);
++    node.recalculateTransformation(instance);
++}
 +function ow3WorldWritten(instance) {
 +    let flags = instance.ow3WorldWritten;
 +    if (flags === undefined || flags.length < instance.nodes.length) {
@@ -2100,7 +2145,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..777464e48a5645f8382870ee4324b0f4
  /**
   * An MDX model instance.
   */
-@@ -48,12 +646,60 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -48,12 +691,60 @@ class MdxModelInstance extends modelinstance_1.default {
          // Any later non-forced update can then use variancy to skip updating things.
          // It is set to true every time the sequence is set with setSequence().
          this.forced = true;
@@ -2161,7 +2206,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..777464e48a5645f8382870ee4324b0f4
          for (let i = 0, l = model.geosets.length; i < l; i++) {
              this.geosetColors[i] = new Float32Array(4);
          }
-@@ -216,45 +862,193 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -216,45 +907,222 @@ class MdxModelInstance extends modelinstance_1.default {
       * Updates all of this instance internal nodes and objects.
       * Nodes that are determined to not be visible will not be updated, nor will any of their children down the hierarchy.
       */
@@ -2180,6 +2225,29 @@ index 020a99b949ec1634579d439261027e00b6da23ac..777464e48a5645f8382870ee4324b0f4
 +        // every node must be re-evaluated each frame (like a forced update), so
 +        // variancy-skipping is disabled — otherwise a node whose new sequence
 +        // has no track for a channel would never re-blend off the snapshot.
++        // OpenWar3 (issue #376): the SetUnitLookAt bone. Last frame's aimed local rotation is
++        // put back first (see ow3AimBone), the turn eases in or out over the blend time — "A
++        // unit's blend time determines how quickly the unit's body parts turn to face a
++        // direction" (UI\TriggerStrings.txt) — and a lock that has eased all the way out is
++        // dropped. While there is one this instance samples and composes for itself, as a
++        // cross-fade does: the turn is this body's alone.
++        if (this.ow3LookRestNode) {
++            gl_matrix_1.quat.copy(this.ow3LookRestNode.localRotation, this.ow3LookRest);
++            this.ow3LookRestNode = null;
++        }
++        const ow3Look = this.ow3LookAt || null;
++        let ow3LookNode = -1;
++        if (ow3Look !== null) {
++            const step = this.blendTime > 0 ? (dt * 1000) / this.blendTime : 1;
++            this.ow3LookAmt = Math.min(1, Math.max(0, (this.ow3LookAmt || 0) + (ow3Look.on ? step : -step)));
++            if (!ow3Look.on && this.ow3LookAmt <= 0) {
++                this.ow3LookAt = null;
++                forced = true; // the bone's own clip pose comes back in full on this pass
++            }
++            else {
++                ow3LookNode = ow3Look.node;
++            }
++        }
 +        const snapshot = this.blendSnapshot;
 +        let blending = false;
 +        let blendInv = 0; // weight on the snapshot pose = 1 - blendT
@@ -2198,7 +2266,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..777464e48a5645f8382870ee4324b0f4
 +        // per instance, mixing in a snapshot only it has — and neither does a forced update,
 +        // which is the one pass that must write every node whatever the tracks say.
 +        let pose = null;
-+        if (!this.ow3PoseReset && !blending && sequence !== -1 && ow3SharePoses(model) && ow3Shareable(model)) {
++        if (!this.ow3PoseReset && !blending && ow3LookNode < 0 && sequence !== -1 && ow3SharePoses(model) && ow3Shareable(model)) {
 +            pose = ow3PoseFor(model, sequence, frame);
 +        }
 +        // OpenWar3 (issue #161): …and whether the COMPOSED skeleton is shared too, which is the
@@ -2351,11 +2419,17 @@ index 020a99b949ec1634579d439261027e00b6da23ac..777464e48a5645f8382870ee4324b0f4
 +                    pose.dirty[i] = 1;
                  }
              }
++            if (i === ow3LookNode) {
++                wasDirty = true; // OpenWar3 (issue #376): aimed every frame, the target moves
++            }
              node.wasDirty = wasDirty;
              // If this is a forced update, or this node's local data was updated, or the parent node was updated, do a full world update.
              if (wasDirty) {
 +                anyDirty = true; // OpenWar3
                  node.recalculateTransformation(this);
++                if (i === ow3LookNode) {
++                    ow3AimBone(this, node, ow3Look, this.ow3LookAmt);
++                }
              }
              // If there is an instance object associated with this node (emitter/attachment), and it is visible, update it.
 -            if (node.object) {
@@ -2368,7 +2442,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..777464e48a5645f8382870ee4324b0f4
                  // If the attachment/emitter is visible, update it.
                  if (visibilityHeap[0] > 0) {
                      node.object.update(dt);
-@@ -262,13 +1056,60 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -262,13 +1130,60 @@ class MdxModelInstance extends modelinstance_1.default {
              }
              // Recalculate and update child nodes.
              // Note that this only affects normal nodes such as instances, and not skeletal nodes.
@@ -2430,7 +2504,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..777464e48a5645f8382870ee4324b0f4
      }
      /**
       * If a model has no sequences or is running no sequence, it will only update once since it will never be forced to update.
-@@ -362,24 +1203,192 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -362,24 +1277,192 @@ class MdxModelInstance extends modelinstance_1.default {
              }
          }
      }
@@ -2456,22 +2530,22 @@ index 020a99b949ec1634579d439261027e00b6da23ac..777464e48a5645f8382870ee4324b0f4
 +        // to send — the texture was filled once, by whoever composed it (`ow3CaptureSkeleton`).
 +        if (this.ow3SharedTexture) {
 +            return;
-         }
++        }
 +        if (this.boneTexture && (this.ow3BonesDirty || !this.ow3BonesUploaded)) {
 +            // …or from `ow3LocalBones` when this instance wears a shared pose with billboarded
 +            // subtrees of its own in it (ow3FixBillboards).
 +            this.boneTexture.bindAndUpdate(this.ow3LocalBones && this.ow3LocalPose ? this.ow3LocalBones : this.worldMatrices);
 +            this.ow3BonesUploaded = true;
 +            this.ow3BonesDirty = false;
-+        }
-+    }
+         }
+     }
 +    // OpenWar3 (issue #66): a faded instance (vertex-colour alpha < 1 — Wind Walk,
 +    // Banish, SetUnitVertexColor) has no opaque geometry left. Its "opaque" groups
 +    // move to the translucent pass so they blend over a finished depth buffer instead
 +    // of over whatever the opaque pass happened to have drawn so far.
 +    isFaded() {
 +        return this.vertexColor[3] < 1;
-     }
++    }
      renderOpaque() {
          const model = this.model;
 +        if (this.isFaded()) {
@@ -2625,7 +2699,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..777464e48a5645f8382870ee4324b0f4
          const model = this.model;
          const sequenceId = this.sequence;
          if (sequenceId !== -1) {
-@@ -405,7 +1414,20 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -405,7 +1488,20 @@ class MdxModelInstance extends modelinstance_1.default {
                  this.sequenceEnded = false;
              }
          }
@@ -2646,7 +2720,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..777464e48a5645f8382870ee4324b0f4
          if (sequenceId !== -1 || forced) {
              // Update the nodes
              this.updateNodes(dt, forced);
-@@ -421,6 +1443,12 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -421,6 +1517,12 @@ class MdxModelInstance extends modelinstance_1.default {
       */
      setTeamColor(id) {
          this.teamColor = id;
@@ -2659,7 +2733,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..777464e48a5645f8382870ee4324b0f4
          return this;
      }
      /**
-@@ -436,6 +1464,7 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -436,6 +1538,7 @@ class MdxModelInstance extends modelinstance_1.default {
      setSequence(id) {
          const model = this.model;
          const sequences = model.sequences;
@@ -2667,7 +2741,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..777464e48a5645f8382870ee4324b0f4
          this.sequence = id;
          if (id < 0 || id > sequences.length - 1) {
              this.sequence = -1;
-@@ -445,11 +1474,86 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -445,11 +1548,86 @@ class MdxModelInstance extends modelinstance_1.default {
          else {
              this.frame = sequences[id].interval[0];
          }

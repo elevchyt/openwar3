@@ -63,6 +63,9 @@ const EXPECTED = [
   // SetPlayerAbilityAvailable — per-player availability, stored on TechState beside the tech
   // cap it sits next to (pass 8; sim-ability-available-test.cjs).
   "setPlayerAbilityAvailable",
+  // SetUnitCreepGuard — Blizzard.j's LockGuardPosition, a flag on the unit the computer's AI
+  // reads (issue #376; sim-unit-news-test.cjs).
+  "lockGuardPosition",
   // The Blz… per-unit stat accessors (pass 3; sim-unit-stats-test.cjs).
   "unitStat", "setUnitStat",
   // Pass 9's world half (sim-ability-script-test.cjs). The words and icons are NOT here — they

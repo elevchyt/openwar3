@@ -5,7 +5,12 @@
 //     EVENT_UNIT_TARGET_IN_RANGE when that target first comes inside its strike band;
 //   * EVENT_(PLAYER_)UNIT_DETECTED when an invisible unit comes under an ENEMY team's true
 //     sight, once per crossing, naming who did the seeing.
-// The JASS half (Interpreter.pumpUnitNews) is tools/jass-native-stubs-test.cjs.
+// …and the rest of #376's sim half:
+//   * SetUnitPropWindow: a unit walks only while facing within the window, and 0 stops it walking
+//     and swinging (jassdoc);
+//   * SetUnitCreepGuard (Blizzard.j's LockGuardPosition) marks the unit for the computer's AI;
+//   * SetUnitLookAt's bone, chosen by jassdoc's token rule (game/lookAt.ts).
+// The JASS half (Interpreter.pumpUnitNews and the natives) is tools/jass-native-stubs-test.cjs.
 //
 // Reads the install's own unit and ability tables. Run: pnpm sim:test
 const { join } = require("node:path");
@@ -16,6 +21,7 @@ const { SimWorld, weaponsFromDef } = require(join(REPO, ".sim-build", "src", "si
 const { PathingGrid } = require(join(REPO, ".sim-build", "src", "sim", "pathing.js"));
 const { loadAbilityRegistry, KNOWN_ABILITIES } = require(join(REPO, ".sim-build", "src", "data", "abilities.js"));
 const { loadUnitRegistry, autoArmed } = require(join(REPO, ".sim-build", "src", "data", "units.js"));
+const { lookAtBone } = require(join(REPO, ".sim-build", "src", "game", "lookAt.js"));
 
 const EXTRACT = join(REPO, "Warcraft III", "ExtractedData", "merged");
 if (!fs.existsSync(join(EXTRACT, "Units", "AbilityData.slk"))) {
@@ -145,6 +151,57 @@ console.log("\na hero through the altar");
   w.units.set(hero.id, hero);
   w.noteTrainFinish(altar.id, hero.id, true);
   check("standing again: REVIVE_FINISH, under its own id", news(w), [["reviveFinish", hero.id, null, 0]]);
+}
+
+console.log("\nthe propulsion window (SetUnitPropWindow)");
+{
+  const w = world();
+  const a = spawn(w, "hfoo", 3000, 3000, 0, 0);
+  const b = spawn(w, "hfoo", 3000, 3400, 0, 0);
+  for (const u of [a, b]) u.facing = u.desiredFacing = 0; // both facing EAST
+  w.setPropWindow(a.id, Math.PI / 4);
+  w.issueMove(a.id, 2000, 3000); // straight BEHIND it
+  w.issueMove(b.id, 2000, 3400);
+  for (let i = 0; i < 4; i++) w.tick(0.05);
+  // (≤ 8 units either way is the sub-cell settle onto the path's first waypoint, not a step.)
+  check("for its first 0.2 s the windowed unit turns on the spot", a.x >= 2992, true);
+  check("…while one with no window set walks off as it turns", b.x < 2970, true);
+  run(w, 3);
+  check("once it faces within the window it walks", a.x < 2900, true);
+  const c = spawn(w, "hfoo", 5000, 5000, 0, 0);
+  const at = [c.x, c.y];
+  w.setPropWindow(c.id, 0);
+  w.issueMove(c.id, 5600, 5000);
+  run(w, 3);
+  check("a window of 0 never moves at all", [c.x, c.y], at);
+  const foe = spawn(w, "ogru", 5080, 5000, 1, 1);
+  const hp = foe.hp;
+  w.issueAttack(c.id, foe.id, true, true);
+  run(w, 4);
+  check("…and never lands a blow (jassdoc: it 'will prevent it from attacking')", foe.hp, hp);
+}
+
+console.log("\nSetUnitCreepGuard marks the unit for the computer's AI");
+{
+  const w = world();
+  const g = spawn(w, "hfoo", 1000, 1000, 0, 0);
+  w.setCreepGuard(g.id, true);
+  check("locked", g.creepGuard, true);
+  w.setCreepGuard(g.id, false);
+  check("and unlocked", g.creepGuard, undefined);
+}
+
+console.log("\nSetUnitLookAt's bone (jassdoc's token rule)");
+{
+  const N = ["Bone_Root", "Bone_Pelvis", "Bone_Foot_L", "Bone_Foot_R", "Bone_Chest", "Bone_Arm1_R", "Bone_Hand_R", "Bone_Hand_L", "Bone_Head", "Bone_Turret"];
+  const pick = (t) => N[lookAtBone(N, t.split(" "))] ?? null;
+  check("bone_head", pick("bone_head"), "Bone_Head");
+  check("bone_chest", pick("bone_chest"), "Bone_Chest");
+  check("two tokens beat one: bone_hand right", pick("bone_hand right"), "Bone_Hand_R");
+  check("…and left", pick("bone_hand left"), "Bone_Hand_L");
+  check("a tie goes to the first found", pick("bone_foot"), "Bone_Foot_L");
+  check("an unknown token counts as bone_head", pick("nonsense"), "Bone_Head");
+  check("no match locks nothing", pick("mount"), null);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall unit-news checks passed");

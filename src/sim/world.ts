@@ -2740,6 +2740,9 @@ export interface SimUnit {
   rescueRange?: number;
   /** `SetUnitPropWindow` — the propulsion window, RADIANS. Undefined = the type's `propWin`. */
   propWindow?: number;
+  /** `SetUnitCreepGuard(u, true)` — Blizzard.j's LockGuardPosition: the owning computer's AI may
+   *  not take this unit from where it stands (ai/scriptAi.ts ScriptSeat.heldBy). */
+  creepGuard?: boolean;
   /** Players a rescue event has already been raised for (tickRescue). */
   rescueRaised?: number[];
   asleep: boolean; // currently asleep (won't auto-acquire; wakes on damage/proximity/camp)
@@ -17730,7 +17733,7 @@ export class SimWorld {
       // Divine Shield, Avatar) keep the current facing so the caster doesn't spin
       // to face east — and so the summon appears in front of where it's looking.
       if (Math.hypot(tx - u.x, ty - u.y) > 1) u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
-      if (!this.facesTarget(u, FACING_CAST_EPS)) return; // still turning
+      if (!this.facesTarget(u, FACING_CAST_EPS, false)) return; // still turning
       // Gate on affordability up front so the caster never winds up a spell it
       // can't pay for. Mana/cooldown are only COMMITTED at the effect (below), so
       // interrupting the wind-up cancels the spell for free.
@@ -21585,8 +21588,14 @@ export class SimWorld {
     if (u) u.rescueRange = Math.max(0, range);
   }
 
-  /** `SetUnitPropWindow(u, radians)` — stored and read back (SimUnit.propWindow). The sim turns
-   *  a unit on the spot before it walks and has no propulsion-window rule to feed it to yet. */
+  /** `SetUnitPropWindow(u, radians)` — the window a walking unit must face within before it steps
+   *  (tickMovement), and that its weapon must face within before it swings (`facesTarget`):
+   *  jassdoc's "setting a unit's prop window to 0 will prevent it from attacking". */
+  setCreepGuard(id: number, flag: boolean): void {
+    const u = this.units.get(id);
+    if (u) u.creepGuard = flag || undefined;
+  }
+
   setPropWindow(id: number, radians: number): void {
     const u = this.units.get(id);
     if (u) u.propWindow = Math.max(0, radians);
@@ -23965,7 +23974,11 @@ export class SimWorld {
    * Upgrade Second"), which is the model's business, not the sim's. Without this a tower
    * would be gated forever on a heading it can never reach, and never fire at all.
    */
-  private facesTarget(u: SimUnit, eps: number): boolean {
+  private facesTarget(u: SimUnit, eps: number, swing = true): boolean {
+    // A script's propulsion window of 0 disarms the unit too (jassdoc on SetUnitPropWindow:
+    // "setting a unit's prop window to 0 will prevent it from attacking"). A SWING only — a
+    // cast passes `swing` false, as nothing says the window stops a spell.
+    if (swing && u.propWindow !== undefined && u.propWindow <= 0) return false;
     return u.turnRate <= 0 || Math.abs(angleDiff(u.facing, u.desiredFacing)) <= eps;
   }
 
@@ -33221,6 +33234,8 @@ export class SimWorld {
         // parked there for good. The snap goes through claimStep like any other move — a
         // body that has since taken the cell blocks it, exactly as it would the step.
         if (dist <= ARRIVE_EPS) {
+          // A script's propulsion window of 0 holds even this settle: "unable to move at all".
+          if (dist > 0 && u.propWindow !== undefined && u.propWindow <= 0 && u.turnRate > 0) break;
           if (dist > 0 && !this.claimStep(u, wx, wy)) {
             blocked = true;
             break;
@@ -33230,6 +33245,16 @@ export class SimWorld {
         }
         const ux = dx / dist;
         const uy = dy / dist;
+        // The PROPULSION WINDOW a script set (`SetUnitPropWindow`): the unit walks only while it
+        // faces within that angle of where it is going, and turns on the spot until it does.
+        // jassdoc: "A propulsion window of 0 makes the unit unable to move at all", and one of
+        // 180° (π) "will force it to start moving as soon as the command is given". Only a
+        // SCRIPT's window is enforced: the type's own `propWin` is the default the sim's steering
+        // was tuned without, and laying it over every unit is a change to every walk in the game.
+        if (u.propWindow !== undefined && u.turnRate > 0) {
+          u.desiredFacing = Math.atan2(uy, ux); // …so the turning pass brings it round
+          if (u.propWindow <= 0 || Math.abs(angleDiff(u.facing, u.desiredFacing)) > u.propWindow) break;
+        }
         const step = Math.min(budget, dist);
         // The tile has to be OURS before we glide onto it (issue #108). claimStep takes the
         // block the step would land us in and only then moves us; if another unit holds it,

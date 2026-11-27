@@ -9,12 +9,9 @@
 //   * ORDERS       — a build order by type, the "instant" order pair, a player's whole army
 //                    handed to another, a unit made by its type NAME.
 //
-// Three families are deliberately NOT behaviour, and say so where they are registered rather
-// than being left to the default:
+// Two are deliberately NOT behaviour, and say so where they are registered rather than being
+// left to the default:
 //
-//   * `SetUnitLookAt` / `ResetUnitLookAt` / `SetUnitBlendTime` turn a BONE toward a target and
-//     set how long two clips cross-fade. Neither exists in the model viewer we draw with, and
-//     neither changes anything a script can read back.
 //   * `SetUnitFog` — "Unknown, unused" (jassdoc); common.j gives it five unnamed reals.
 //   * `GetUnitRallyDestructable` — a rally flag in this engine rests on a point, a unit or a
 //     gold mine (BuildingState.rallyKind); one planted on a tree keeps the point.
@@ -59,8 +56,27 @@ export function registerUnitExtraNatives(rt: Runtime): void {
     if (id >= 0) c.rt.hooks?.setUnitAnimationWithRarity?.(id, asStr(a[1]), c.rt.enumIndex(a[2]) === 1);
     return JNULL;
   });
-  // See the header: bone look-at and clip blending have nothing behind them in our renderer.
-  for (const name of ["SetUnitLookAt", "ResetUnitLookAt", "SetUnitBlendTime", "SetUnitFog"]) def(rt, name, () => JNULL);
+  // SetUnitLookAt(u, bone, target, ox, oy, oz) / ResetUnitLookAt(u) / SetUnitBlendTime(u, secs) —
+  // one bone turned to face a unit, and how fast a body's clips cross-fade and its parts turn.
+  // The picture's: RtsController picks the bone and aims it, the viewer patch turns it
+  // (`ow3LookAt` in mdx/modelinstance.js).
+  def(rt, "SetUnitLookAt", (c, a) => {
+    const id = simOf(c, a[0]);
+    const target = simOf(c, a[2]);
+    if (id >= 0 && target >= 0) c.rt.hooks?.setUnitLookAt?.(id, asStr(a[1]), target, asNum(a[3]), asNum(a[4]), asNum(a[5]));
+    return JNULL;
+  });
+  def(rt, "ResetUnitLookAt", (c, a) => {
+    const id = simOf(c, a[0]);
+    if (id >= 0) c.rt.hooks?.resetUnitLookAt?.(id);
+    return JNULL;
+  });
+  def(rt, "SetUnitBlendTime", (c, a) => {
+    const id = simOf(c, a[0]);
+    if (id >= 0) c.rt.hooks?.setUnitBlendTime?.(id, asNum(a[1]));
+    return JNULL;
+  });
+  def(rt, "SetUnitFog", () => JNULL); // see the header
 
   // The "special minimap icon" (UI\TriggerStrings.txt: "Turn Special Minimap Icon On/Off" and
   // "Change Special Minimap Icon" — "must be exactly 16x16 pixels"). ONE icon for the whole
@@ -184,16 +200,28 @@ export function registerUnitExtraNatives(rt: Runtime): void {
   def(rt, "IssueBuildOrder", (c, a) => build(c, a[0], c.rt.hooks?.unitTypeByName?.(asStr(a[1])) ?? "", asNum(a[2]), asNum(a[3])));
 
   // The "instant" orders carry a SECOND widget (`instantTargetWidget`) beside the ordinary
-  // target. No source says what the engine does with it — jassdoc documents the four with a
-  // patch number and nothing else, and no map in the install calls one — so the order itself is
-  // issued and the extra widget is not used. That much is certain to be wanted; the rest is not
-  // guessed at.
+  // target. jassdoc documents the four with a patch number and nothing else, and no map in the
+  // install calls one; what the widget IS comes from the order protocol the engine speaks to
+  // itself. A replay's actions have ONE kind that carries a target and an ITEM together — the
+  // "give item to a unit / drop item on the ground" action, the inventory's `dropitem`
+  // (852001) — and that is the order these natives are the script's door to: `dropitem` with
+  // an item as the instant target puts that item down at the point, or hands it to the target
+  // unit. Both go through the same natives a script's own UnitDropItemPoint / UnitDropItemTarget
+  // do, so the walk, the range and the refusals are theirs. Any other order, or a widget that
+  // is not an item, is issued as the ordinary order it names, which is what it always was here.
   const orderStr = (v: JassValue): string => (v.k === "string" ? v.s.trim().toLowerCase() : "");
+  const DROP_ITEM = orderStringToId("dropitem");
+  const instantItem = (orderId: number, widget: JassValue | undefined): JassValue | null =>
+    orderId === DROP_ITEM && widget?.k === "handle" && widget.ty === "item" ? widget : null;
   const instantPoint = (c: NativeCtx, a: JassValue[], order: string, orderId: number): JassValue => {
+    const it = instantItem(orderId, a[4]);
+    if (it) return c.rt.natives.get("UnitDropItemPoint")?.(c, [a[0], it, a[2], a[3]]) ?? jBool(false);
     const id = simOf(c, a[0]);
     return jBool(id >= 0 && (c.rt.hooks?.issueUnitOrder?.(id, orderId, order, "point", asNum(a[2]), asNum(a[3]), 0) ?? false));
   };
   const instantTarget = (c: NativeCtx, a: JassValue[], order: string, orderId: number): JassValue => {
+    const it = instantItem(orderId, a[3]);
+    if (it && a[2]?.k === "handle" && a[2].ty === "unit") return c.rt.natives.get("UnitDropItemTarget")?.(c, [a[0], it, a[2]]) ?? jBool(false);
     const id = simOf(c, a[0]);
     return jBool(id >= 0 && issueTargetOrder(c, id, orderId, order, a[2] ?? JNULL));
   };

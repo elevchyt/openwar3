@@ -3550,6 +3550,9 @@ export class MapViewerScene {
       case "key":
         interp?.firePlayerKey(e.p, e.key, e.meta, e.down);
         return;
+      case "trk":
+        interp?.fireTrackable(e.p, e.h, e.hit);
+        return;
       case "pev":
         if (e.left) {
           // A player who LEFT (a LAN seat going, `seatLeft`): the slot state the victory check
@@ -5404,6 +5407,9 @@ export class MapViewerScene {
       setUnitAnimation: (id, animation) => this.rts?.setUnitAnimation(id, animation),
       setUnitAnimationByIndex: (id, index) => this.rts?.setUnitAnimationByIndex(id, index),
       setUnitAnimationWithRarity: (id, animation, rare) => this.rts?.setUnitAnimationWithRarity(id, animation, rare),
+      setUnitLookAt: (id, bone, targetId, ox, oy, oz) => this.rts?.setUnitLookAt(id, bone, targetId, ox, oy, oz),
+      resetUnitLookAt: (id) => this.rts?.resetUnitLookAt(id),
+      setUnitBlendTime: (id, seconds) => this.rts?.setUnitBlendTime(id, seconds),
       queueUnitAnimation: (id, animation) => this.rts?.queueUnitAnimation(id, animation),
       addUnitAnimationProperties: (id, props, add) => this.rts?.addUnitAnimationProperties(id, props, add),
       // --- items (7.18) ---
@@ -5507,6 +5513,40 @@ export class MapViewerScene {
         if (at) this.setDoodadAnimation({ x: at.x, y: at.y, radius: 1 }, at.id, true, animation, animRandom);
       },
     };
+  }
+
+  /** The trackable the pointer is over (`trackableMouse`), so a hover is raised on ARRIVING at
+   *  one rather than on every move across it. */
+  private trackableHovered: number | null = null;
+
+  /**
+   * The script's TRACKABLES under the pointer (`CreateTrackable` — natives/gameExtras.ts lists
+   * them on the runtime by handle and effect). Tested by the click ray against each one's
+   * model, as a unit is (RtsController.pickModelsAt): its collision shapes, else its bounds. A
+   * `hit` is a left click; otherwise this is a pointer move, and the TRACK event goes off when
+   * the pointer comes onto a trackable it was not already on. Raised on this machine for the
+   * local player, as a frame event or a key is; a replay hears the recorded ones (`trk`).
+   * Free for every map that made none: one empty-table test.
+   */
+  private trackableMouse(cssX: number, cssY: number, hit: boolean): void {
+    const interp = this.mapScript?.interp;
+    if (!interp || this.replayPlayback || !this.rts) return;
+    const table = interp.rt.nativeTable<number, number>("trackable");
+    if (!table.size) return;
+    const candidates: Parameters<RtsController["pickModelsAt"]>[2][number][] = [];
+    for (const [handle, fxId] of table) {
+      const fx = this.specialFx.get(fxId);
+      if (!fx?.inst || fx.hidden || fx.doomed) continue;
+      candidates.push({ key: handle, inst: fx.inst as unknown as Parameters<RtsController["pickModelsAt"]>[2][number]["inst"] });
+    }
+    const at = this.rts.pickModelsAt(cssX, cssY, candidates);
+    if (hit) {
+      if (at !== null) interp.fireTrackable(this.localPlayer, at, true);
+      return;
+    }
+    if (at === this.trackableHovered) return;
+    this.trackableHovered = at;
+    if (at !== null) interp.fireTrackable(this.localPlayer, at, false);
   }
 
   /**
@@ -20792,6 +20832,9 @@ export class MapViewerScene {
         // A drag cancelled out from under us (e.g. by a right-click) consumes this
         // left-up without selecting anything.
         if (!this.rts || !wasDragging) return;
+        // A click on a script's TRACKABLE is its HIT event — asked before the selection gate,
+        // because a map built on trackables routinely takes selection away (EnableSelect).
+        if (this.userControl && Math.hypot(e.offsetX - this.downX, e.offsetY - this.downY) <= DRAG_SLOP) this.trackableMouse(e.offsetX, e.offsetY, true);
         // A script that called EnableSelect(false, …) has taken selection away altogether.
         if (!this.scriptSelect) return;
         // Box vs click is decided by where the button came UP, not by whether the
@@ -20844,7 +20887,10 @@ export class MapViewerScene {
       // EnableUserControl(false) — a cinematic owns the mouse (7.24). It already owned the
       // CLICK; the hover is just as much an interaction, and leaving it live let the player
       // light units up and read their tooltips right through a cinematic.
-      if (!this.dragging && this.userControl) this.rts?.hoverAt(e.offsetX, e.offsetY);
+      if (!this.dragging && this.userControl) {
+        this.rts?.hoverAt(e.offsetX, e.offsetY);
+        this.trackableMouse(e.offsetX, e.offsetY, false);
+      }
     });
     // Where the pointer is, in VIEWPORT coords, ALWAYS — over the map, over the HUD, out in
     // the letterbox. Everything drawn AT the cursor (the reticle, the carried item, the

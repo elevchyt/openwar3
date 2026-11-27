@@ -391,6 +391,7 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     setUnitRescuable: (id, player, flag) => sim.setUnitRescuable(id, player, flag),
     setUnitRescueRange: (id, range) => sim.setRescueRange(id, range),
     setUnitPropWindow: (id, radians) => sim.setPropWindow(id, radians),
+    lockGuardPosition: (id, flag) => sim.setCreepGuard(id, flag),
     // A script's own window, else undefined — the native then answers the TYPE's (rosterHooks).
     getUnitPropWindow: (id) => sim.units.get(id)?.propWindow,
     // The pathing radius: what the unit takes up on the ground, not its click volume.

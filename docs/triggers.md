@@ -960,8 +960,9 @@ those `.doo` widgets sat there forever as undeletable scenery).
 > **What items still can't do:** be **bought** — we have no shop purchasing, so nothing raises
 > `SELL_ITEM` yet (the registration, responses and dispatch are wired and waiting for a purchase path).
 > A ground item is also neither destructible nor hideable in the sim, so `SetItemVisible` /
-> `SetItemInvulnerable` / `SetItemDropOnDeath` / `SetItemDropID` / `SetItemPlayer` are recorded on the
-> handle rather than acted on.
+> `SetItemInvulnerable` / `SetItemPlayer` are recorded on the handle rather than acted on, and so is
+> `SetItemDropID` — the unit type a creep drop came from (Blizzard.j's `UnitDropItem` is its one
+> caller), which nothing in common.j or Blizzard.j reads back. `SetItemDropOnDeath` reaches the sim.
 
 ## The trigger's on-screen output (7.19 — done, live)
 
@@ -2249,7 +2250,14 @@ Things the install settles that are easy to get backwards:
 - **The propulsion window is an asymmetric trio.** Blizzard.j converts degrees→radians before
   `SetUnitPropWindow` and radians→degrees after `GetUnitPropWindow`, and passes
   `GetUnitDefaultPropWindow` straight through — so the default is already in DEGREES (UnitData
-  `propWin`). The sim has no propulsion rule to feed it to yet: the value is stored and read back.
+  `propWin`). A window a SCRIPT set is enforced: the unit walks only while it faces within it and
+  turns on the spot until it does, and a window of 0 holds it still and stops its swings
+  (jassdoc). The type's own `propWin` is not laid over every unit — the sim's steering was tuned
+  without it, and that would change every walk in the game.
+- **`SetUnitCreepGuard(u, true)` is Blizzard.j's `LockGuardPosition`**, which "prevents the AI
+  from changing the guard position of a unit" (`UI\TriggerStrings.txt`): a flag on the unit that
+  keeps it out of both of the computer's captains (`ScriptSeat.heldBy`). HumanX03 locks four heroes
+  with it, which have no guard post at all.
 - **`UnitGenerateAlarms(u, generate)` IS `UnitIgnoreAlarm(u, not generate)`** (Blizzard.j 3570).
 - **`SetPlayerUnitsOwner`'s second argument is an INTEGER** player index, not a player handle.
 - **`BlzUnitCancelTimedLife` kills the unit** — "Removes a unit's timed life, therefore killing
@@ -2273,20 +2281,32 @@ Four of them are the SCREEN's, and each has one place it lands:
 - **`SetReservedLocalHeroButtons(n)`** leaves the top `n` places of the hero bar empty; the
   heroes keep their order, F-keys and click indices and hang lower.
 
+What used to be listed here as NOT behaviour, and now is (issue #376):
+
+- **Bone look-at and clip blending.** `SetUnitBlendTime` sets the body's clip cross-fade (the viewer
+  patch's `setBlendTime`, otherwise UnitUI `blend`), and it is also how fast a looking bone turns —
+  "A unit's blend time determines how quickly the unit's body parts turn to face a direction"
+  (`SetUnitBlendTimeBJHint`). `SetUnitLookAt` picks the bone by jassdoc's token rule
+  (`game/lookAt.ts`) and the patch turns it (`ow3AimBone` in mdx/modelinstance.js): the shortest
+  rotation taking the bone's forward (+X — MDX bones carry no bind rotation) onto the target's
+  origin plus the offsets, on top of the animated pose, eased over the blend time. An instance
+  with a look does not share poses, as a cross-fading one does not. Verify it numerically:
+  measured live, the Footman's `Bone_Head` points within 0.0013° of its target.
+- **Events.** The hero-revive four, `EVENT_UNIT_ACQUIRED_TARGET`/`_TARGET_IN_RANGE` and
+  `EVENT_PLAYER_UNIT_DETECTED` are raised (`SimWorld.unitNews`, `Interpreter.pumpUnitNews`), and so
+  are a trackable's HIT and TRACK: the click ray against its model (`RtsController.pickModelsAt`),
+  on this machine for the local player, recorded into a replay (`trk`). An invisible trackable
+  (`""`) has nothing to point at and is never hit — ours; jassdoc says only that it is invisible.
+- **Tree targets.** `GetOrderTargetDestructable`/`GetSpellTargetDestructable` answer for a TREE too:
+  the event carries its sim id and the engine maps it back to the record it was planted from.
+- **The "instant" orders.** The extra widget is the ITEM of the one order kind that carries a
+  target and an item together — the replay protocol's "give item to a unit / drop item on the
+  ground", the inventory's `dropitem`: it is put down at the point or handed to the target. Any
+  other order is issued as the plain order it names.
+
 What is still NOT behaviour, so nobody mistakes a `✓` for it:
 
-- **Bone look-at and clip blending** (`SetUnitLookAt`, `ResetUnitLookAt`, `SetUnitBlendTime`) —
-  nothing in the model viewer we draw with does either.
-- **Events declared but not raised:** the hero-revive four (`GetRevivableUnit`/`GetRevivingUnit`),
-  `EVENT_UNIT_ACQUIRED_TARGET`/`_TARGET_IN_RANGE` (`GetEventTargetUnit`), `EVENT_PLAYER_UNIT_DETECTED`,
-  the 1.29 mouse events (the four `BlzGetTriggerPlayerMouse…` getters answer zero outside one), and
-  a trackable's hit/track (the object, its model and its registrations are real; no pointer is
-  tested against it).
-- **`GetSpellTargetItem`** is always null (a cast carries no item target here), and
-  `GetOrderTargetDestructable`/`GetSpellTargetDestructable` answer for a gate or a crate — which
-  fight as sim units — and null for a TREE, which an order knows only by position.
-- **The "instant" orders** issue the order and do not use the extra `instantTargetWidget`; no source
-  says what the engine does with it.
+- **The 1.29 mouse events** — the four `BlzGetTriggerPlayerMouse…` getters answer zero outside one.
 - **`TriggerExecuteWait`** runs the callee as `TriggerExecute` does and does not park the caller.
 - **`EnableSelect`/`EnableDragSelect`'s `ui` flag** (draw the indicator or not) and `EnablePreSelect`
   are not modelled; the `state` half of the first two is.

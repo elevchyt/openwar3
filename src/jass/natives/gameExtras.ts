@@ -172,9 +172,12 @@ export function registerGameExtraNatives(rt: Runtime): void {
 
   // --- trackables ---
   // CreateTrackable(modelPath, x, y, facing) — a spot that "register[s] mouse clicks or hovers"
-  // (jassdoc). The object, its model ("" is an invisible one) and its two registrations are
-  // real; what is NOT raised yet is the event itself — no pointer is tested against a
-  // trackable — so a trigger registered on one never fires. Stated here rather than hidden.
+  // (jassdoc). Its model is a special effect, and every trackable is listed on the runtime by
+  // handle → effect (`nativeTable("trackable")`, so a saved game carries the list), which is
+  // what the engine tests the mouse against (MapViewerScene.trackableAt) before raising the two
+  // events through Interpreter.fireTrackable. An invisible one ("" for a path) has no model and
+  // so nothing to point at: it is created, and never hit. That reading is ours — jassdoc says
+  // only that it is invisible.
   def(rt, "CreateTrackable", (c, a) => {
     const path = asStr(a[0]);
     const t: TrackableObj = { handleId: 0, x: asNum(a[1]), y: asNum(a[2]), facing: asNum(a[3]), effectId: -1 };
@@ -183,6 +186,7 @@ export function registerGameExtraNatives(rt: Runtime): void {
       if (t.effectId >= 0) c.rt.hooks?.setSpecialEffectOrientation?.(t.effectId, (t.facing * Math.PI) / 180, null, null);
     }
     t.handleId = c.rt.handles.alloc(t);
+    if (t.effectId >= 0) c.rt.nativeTable<number, number>("trackable").set(t.handleId, t.effectId);
     return jHandle(t.handleId, "trackable");
   });
   const registerTrackable = (kind: string): NativeFn => (c, a) => {
