@@ -1418,7 +1418,10 @@ const thunderClap: Handler = (api, caster, def, rank, ctx) => {
   // ("ThunderClap", ReplaceableTextures\Splats\ThunderClapUbersplat.blp).
   api.emitSplat("THND", caster.x, caster.y);
   for (const t of api.unitsInArea(ctx.x, ctx.y, lvl.area)) {
-    if (t === caster || !api.hostile(caster, t) || t.flying) continue;
+    // The row says who the clap reaches (issue #360): `[AHtc] targs1` "ground,neutral,organic"
+    // spares a flyer, a building AND a mechanical unit, while the creeps' Slam (`[ACtc]`
+    // "ground,neutral", no `organic`) may hit a Siege Engine but still never a building.
+    if (t === caster || !api.hostile(caster, t) || !api.admits(def, t)) continue;
     api.spellDamage(t, d(lvl, 0), caster.id);
     // fx(def) → the slow buff BHtc's own Targetart, StasisTotemTarget.mdx worn
     // `overhead` (the amber swirl — the same rig as the blue stun one). UNDISPELLABLE: it
@@ -1967,9 +1970,9 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // Damage Amount" (100). Those four are shared with the other death-blast abilities
   // (AbilityMetaData rows Dda1..Dda4, useSpecific = Adda,Amnx,Amnz,Asds,Auco).
   //
-  // Everything in range is hit, friend and foe alike: `targs1` is `ground,structure,debris,
-  // tree,ward` with no allegiance flag at all, and a sapper pack really does kill its own
-  // escort if it detonates among them.
+  // Everything in range that `targs1` names is hit, friend and foe alike: it is `ground,
+  // structure,debris,tree,ward` with no allegiance flag at all, and a sapper pack really does
+  // kill its own escort if it detonates among them — but never a flyer.
   //
   // NOT applied: the extra damage a sapper is famous for doing to BUILDINGS. dataE is
   // "Building Damage Factor" (AbilityMetaData Sds1, data=5) and its value is 100, while
@@ -1989,6 +1992,9 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const part = d(lvl, 3, 100);
     for (const e of api.unitsInArea(cx, cy, Math.max(fullR, partR))) {
       if (e === caster) continue; // he dies below, not to his own blast
+      // …and only what `targs1` names: "ground,structure,debris,tree,ward" — a flyer
+      // overhead is untouched (issue #360).
+      if (!api.admits(def, e)) continue;
       const amount = Math.hypot(e.x - cx, e.y - cy) <= fullR ? full : part;
       if (amount > 0) api.spellDamage(e, amount, caster.id);
     }

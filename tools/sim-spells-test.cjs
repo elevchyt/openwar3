@@ -283,6 +283,39 @@ const round = (n) => Math.round(n * 1000) / 1000;
   ]);
   check("…and the sapper dies", died, 1);
 }
+// …and only what its `targs1` names (issue #360): "ground,structure,debris,tree,ward" hits a
+// building and spares a flyer overhead.
+{
+  const sapper = unit({ id: 1, team: 0, x: 0, y: 0 });
+  const hall = unit({ id: 2, team: 1, x: 50, y: 0, building: {} });
+  const gryphon = unit({ id: 3, team: 1, x: 40, y: 0, flying: true });
+  const { api, log } = harness([sapper, hall, gryphon]);
+  SPELL_HANDLERS.Asds(api, sapper, def({ data: [100, 250, 250, 100, 100], targetFlags: ["ground", "structure", "debris", "tree", "ward"] }), 1, { targetId: 2, x: 0, y: 0 });
+  check("Kaboom! hits the building and spares the flyer", log.damage, [{ id: 2, amount: 250 }]);
+}
+
+// Thunder Clap / Slam — the row's Targets Allowed, not a hand-written "not flying" (issue #360).
+// `[AHtc] targs1` "ground,neutral,organic"; `[ACtc]` "ground,neutral" (Units\AbilityData.slk).
+{
+  const mk = () => {
+    const mk1 = unit({ id: 1, team: 0, isHero: true });
+    return [mk1,
+      unit({ id: 2, team: 1, x: 50 }), // a Grunt
+      unit({ id: 3, team: 1, x: 60, mechanical: true }), // a Demolisher
+      unit({ id: 4, team: 1, x: 70, building: {} }), // a Watch Tower
+      unit({ id: 5, team: 1, x: 80, flying: true }), // a Wind Rider
+      unit({ id: 6, team: 0, x: 90 }), // his own Footman
+    ];
+  };
+  const clap = (flags) => {
+    const us = mk();
+    const { api, log } = harness(us);
+    SPELL_HANDLERS.AHtc(api, us[0], def({ area: 300, duration: 5, data: [60, 0, 0.5, 0.5], targetFlags: flags }), 1, { targetId: 0, x: 0, y: 0 });
+    return log.damage.map((x) => x.id);
+  };
+  check("Thunder Clap hits only the organic ground enemy", clap(["ground", "neutral", "organic"]), [2]);
+  check("…and Slam, with no `organic`, the mechanical one too — never the building", clap(["ground", "neutral"]), [2, 3]);
+}
 
 // Cannibalize — a corpse is worth dataA hp/sec for the duration, and NOTHING happens with
 // no corpse to eat (the whole ability is the meal).
