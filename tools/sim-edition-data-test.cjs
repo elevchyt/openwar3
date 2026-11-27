@@ -25,7 +25,7 @@ fs.writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}'
 const { EditionDataSource } = require(join(REPO, ".sim-build", "src", "vfs", "edition.js"));
 const { setEdition, isRoc, ROC_DATA_SET, setMapDataSet, mapDataSet, dataSetFolder } = require(join(REPO, ".sim-build", "src", "data", "edition.js"));
 const { loadUnitRegistry } = require(join(REPO, ".sim-build", "src", "data", "units.js"));
-const { damageTable, damageMultiplier } = require(join(REPO, ".sim-build", "src", "data", "gameplayConstants.js"));
+const { damageTable, damageMultiplier, setMapMiscOverlay } = require(join(REPO, ".sim-build", "src", "data", "gameplayConstants.js"));
 const { setPatchLevel, BASE_PATCH, LATEST_PATCH } = require(join(REPO, ".sim-build", "src", "patches", "index.js"));
 
 const EXTRACT = join(REPO, "Warcraft III", "ExtractedData", "merged");
@@ -151,6 +151,15 @@ console.log("\nthe damage table is the edition's too");
     ["small", "medium", "large", "fort", "hero"].map((a) => damageMultiplier("chaos", a)), [1, 1, 1, 1, 1]);
   const rows = Object.keys(damageTable());
   check("every attack class has a row", rows.length, 7);
+  // The table is KEPT between blows (issue #384), so it must also be dropped when a map's own
+  // war3mapMisc.txt restates a row, and again when that overlay comes down.
+  setEdition("tft");
+  setMapDataSet("melee");
+  const before = damageMultiplier("pierce", "small");
+  setMapMiscOverlay(new Map([["DamageBonusPierce", "1.00,0.25,0.50,0.50,1.00,0.50,1.00,0.50"]]));
+  check("a map that restates Piercing is graded by its own row at once", damageMultiplier("pierce", "medium"), 0.25);
+  setMapMiscOverlay(null);
+  check("…and the data set's row is back once the overlay is down", damageMultiplier("pierce", "small"), before);
 }
 
 // The switch must be read at the LOOKUP, not baked in when the source was made: the menu flips

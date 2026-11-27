@@ -488,6 +488,7 @@ const patchParsed = new Map<string, Shaped | null>();
 onPatchLevelChange(() => {
   patchParsed.clear();
   gameMemo.clear(); // a kept row may be a patched one (miscGame)
+  damageMemo = null; // …and so may the damage table built from them (damageTable)
 });
 
 function patchValue(key: string, base: unknown): Shaped | undefined {
@@ -1053,6 +1054,31 @@ export const DAMAGE_TABLE_CUSTOM: DamageTable = unpackDamageTable(MISC_GAME_CUST
 /** The damage table of the data set this match is on — edition, then map kind
  *  (data/edition.ts). */
 export function damageTable(): DamageTable {
+  // Asked on every blow and every damage-over-time tick (`damageMultiplier`), and a function of
+  // the same four things `miscGame`'s memo is — the overlay, the map kind, the edition and the
+  // patch level — none of which moves during a match (issue #384). So the answer is kept, and
+  // dropped the moment one of them is not what it was; the patch level drops it outright
+  // (onPatchLevelChange above).
+  if (MiscMemo.enabled) {
+    const epoch = overlayEpoch;
+    const set = mapDataSet();
+    const roc = isRoc();
+    if (damageMemo && epoch === damageMemoEpoch && set === damageMemoSet && roc === damageMemoRoc) return damageMemo;
+    damageMemo = resolveDamageTable();
+    damageMemoEpoch = epoch;
+    damageMemoSet = set;
+    damageMemoRoc = roc;
+    return damageMemo;
+  }
+  return resolveDamageTable();
+}
+let damageMemo: DamageTable | null = null;
+let damageMemoEpoch = -1;
+let damageMemoSet: ReturnType<typeof mapDataSet> | undefined;
+let damageMemoRoc: boolean | undefined;
+
+/** `damageTable` without the memo: the chain itself. */
+function resolveDamageTable(): DamageTable {
   const base = isRoc() ? DAMAGE_TABLE_V0 : mapDataSet() === "custom" ? DAMAGE_TABLE_CUSTOM : DAMAGE_TABLE; // RoC states the same five rows in both its copies
   if (!mapStatesAny(DAMAGE_ROWS) && (isRoc() || mapDataSet() === "custom" || !patchStatesAny(DAMAGE_ROWS))) return base;
   // A MAP that restates a DamageBonus row (war3mapMisc.txt — Balanced Hero Survival rewrites
