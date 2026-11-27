@@ -440,6 +440,25 @@ const round = (n) => Math.round(n * 1000) / 1000;
     SPELL_HANDLERS.AUcs(api, caster, swarm, 1, { targetId: 2, x: 400, y: 0, wave });
     check("…then the tail of the swarm has nothing left to give", log.damage.map((d) => d.amount), [75, 25]);
   }
+  {
+    // Shock Wave spends ITS dataB the same way (issue #358): `Osh2` "Maximum Damage" 900 at
+    // rank 1 is twelve bodies' worth of 75, so a front through twenty deals 900, not 1500.
+    const { api, log } = harness([caster, foe]);
+    const wave = { budget: 900 };
+    for (let i = 0; i < 20; i++) SPELL_HANDLERS.AOsh(api, caster, shockwave(), 1, { targetId: 2, x: 400, y: 0, wave });
+    check("Shock Wave stops dealing damage once its Maximum Damage is spent",
+      [log.damage.length, log.damage.reduce((n, d) => n + d.amount, 0)], [12, 900]);
+    // …and the artless sweep keeps a budget of its own.
+    const crowd = [caster, ...Array.from({ length: 20 }, (_, i) => unit({ id: 10 + i, team: 1, x: 100 + i * 30, y: 0, radius: 0 }))];
+    const { api: api2, log: log2 } = harness(crowd);
+    SPELL_HANDLERS.AOsh(api2, caster, shockwave({ missileArt: "", missileSpeed: 0 }), 1, { targetId: 0, x: 800, y: 0 });
+    check("…in the instant sweep too", log2.damage.reduce((n, d) => n + d.amount, 0), 900);
+    // A row with no maximum (0) caps nothing, as Rain of Fire's 0 per wave does.
+    const { api: api3, log: log3 } = harness([caster, foe]);
+    const open = { budget: 0 };
+    for (let i = 0; i < 20; i++) SPELL_HANDLERS.AOsh(api3, caster, shockwave({ data: [75, 0, 800] }), 1, { targetId: 2, x: 400, y: 0, wave: open });
+    check("…while a Maximum Damage of 0 caps nothing", log3.damage.length, 20);
+  }
 }
 
 // Impale is the one wave whose art is not a missile. `[AUim]` names no Missileart at all,
@@ -563,11 +582,17 @@ const round = (n) => Math.round(n * 1000) / 1000;
   const bf = def({ code: "ANbf", missileArt: "BreathOfFireMissile", data: [65, 480, 375, 300, 5], duration: 5, area: 125,
     levelData: [{ cost: 75, cooldown: 10, duration: 5, heroDuration: 5, castRange: 375, area: 125, castTime: 0, data: [65, 480, 375, 300, 5], buffs: ["BNbf"], summon: "" }] });
   // The wave reaching each body is the handler re-entered with that body (SpellApi.launchWave).
-  for (const id of [2, 3, 4]) SPELL_HANDLERS.ANbf(api, brewer, bf, 1, { targetId: id, x: 0, y: 0, wave: { budget: 480 } });
+  const breath = { budget: 480 };
+  for (const id of [2, 3, 4]) SPELL_HANDLERS.ANbf(api, brewer, bf, 1, { targetId: id, x: 0, y: 0, wave: breath });
   check("Breath of Fire deals dataA to every body it reaches", log.damage.map((d) => [d.id, d.amount]), [[2, 65], [3, 65], [4, 65]]);
   check("…and ignites only the hazed ones, for dataE a second", log.buffs.map((b) => [b.id, b.kind, b.group, b.value]),
     [[2, "dot", "breathoffire", 5], [4, "dot", "breathoffire", 5]]);
   check("…for the row's own duration — on a hero too, whose HeroDur1 is the same 5 s", log.buffs.map((b) => b.timeLeft), [5, 5]);
+  check("…out of the wave's Maximum Damage (issue #358)", breath.budget, 480 - 3 * 65);
+  // A breath whose maximum is spent deals no more damage to the bodies it reaches after.
+  log.damage.length = 0;
+  SPELL_HANDLERS.ANbf(api, brewer, bf, 1, { targetId: 2, x: 0, y: 0, wave: { budget: 0 } });
+  check("…and a spent breath deals nothing more", log.damage, []);
 }
 
 console.log(`\n${failed ? `${failed} FAILED` : "all passed"}`);

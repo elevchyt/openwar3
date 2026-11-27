@@ -777,6 +777,27 @@ function d(lvl: AbilityLevel, i: number, def = 0): number {
 }
 
 /**
+ * The line-wave family's "Maximum Damage" — DataB on Shock Wave (`Osh2`) and on Carrion
+ * Swarm and Breath of Fire, which share one meta row (`Ucs2` "Max Damage", `useSpecific =
+ * AUcs,ANbf,…` in AbilityMetaData), named in `UI\WorldEditStrings.txt`: the
+ * TOTAL one wave may deal across everything it reaches (900 at Shock Wave's rank 1 — twelve
+ * units' worth). `allowance` is the wave's own (`ctx.wave`, which the world carries from body
+ * to body), or a local one for the artless fallback's sweep; what is left is spent body by
+ * body in the order the front reaches them, and a unit reached after it is gone takes nothing
+ * (issue #358 — Shock Wave and Breath of Fire never spent theirs). A row with NO maximum (0)
+ * caps nothing, as a Rain of Fire's "Maximum Damage per Wave" of 0 does.
+ */
+function waveAllowance(ctx: CastContext, cap: number): { budget: number } {
+  return ctx.wave ?? { budget: cap };
+}
+function spendWave(allowance: { budget: number }, cap: number, dmg: number): number {
+  if (cap <= 0) return dmg;
+  const dealt = Math.min(dmg, Math.max(0, allowance.budget));
+  allowance.budget -= dealt;
+  return dealt;
+}
+
+/**
  * What a 0.00 Transition Time actually costs — the engine's own reaction delay, and the
  * shortest window in which a unit that has pressed an invisibility is still standing there to
  * be hit.
@@ -2096,16 +2117,19 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // and Forked Lightning name no missile and stay instant.
   AOsh: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
+    // dataB is the family's total-damage cap, `Osh2` "Maximum Damage" (spendWave).
+    const cap = d(lvl, 1, 0);
+    const allowance = waveAllowance(ctx, cap);
     const hit = (t: SimUnit) => {
-      if (api.hostile(caster, t)) api.spellDamage(t, d(lvl, 0, 75), caster.id);
+      if (!api.hostile(caster, t)) return;
+      const dmg = spendWave(allowance, cap, d(lvl, 0, 75));
+      if (dmg > 0) api.spellDamage(t, dmg, caster.id);
     };
     const swept = api.getUnit(ctx.targetId);
     if (swept) return hit(swept); // the wave has just reached this one
     const dist = d(lvl, 2, 800);
     const half = lvl.area || 125;
-    // dataB is the family's total-damage cap — `UI\WorldEditStrings.txt` calls `Osh2`
-    // "Maximum Damage" (900 at rank 1, i.e. twelve units' worth), and `Ucs2` "Max Damage".
-    if (api.launchWave(caster, def, rank, { tx: ctx.x, ty: ctx.y, dist, halfWidth: half, budget: d(lvl, 1, 0) })) return;
+    if (api.launchWave(caster, def, rank, { tx: ctx.x, ty: ctx.y, dist, halfWidth: half, budget: cap })) return;
     for (const t of lineTargets(api, caster, def, ctx.x, ctx.y, dist, half)) hit(t); // artless fallback
   },
 
@@ -2115,19 +2139,20 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // the swarm reaches wears the Specialart (`CarrionSwarmDamage.mdl`) as it is bitten.
   AUcs: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    const budget = ctx.wave ?? { budget: d(lvl, 1, 300) };
+    const cap = d(lvl, 1, 300); // `Ucs2` "Max Damage" (spendWave)
+    const allowance = waveAllowance(ctx, cap);
     const hit = (t: SimUnit) => {
-      if (!api.hostile(caster, t) || budget.budget <= 0) return;
-      const dmg = Math.min(d(lvl, 0, 75), budget.budget);
+      if (!api.hostile(caster, t)) return;
+      const dmg = spendWave(allowance, cap, d(lvl, 0, 75));
+      if (dmg <= 0) return; // the swarm has nothing left to bite with
       api.spellDamage(t, dmg, caster.id);
-      budget.budget -= dmg;
       if (def.specialArt) api.emitEffect(def.specialArt, t.x, t.y, t.id);
     };
     const swept = api.getUnit(ctx.targetId);
     if (swept) return hit(swept);
     const dist = d(lvl, 2, 700);
     const half = lvl.area || 100;
-    if (api.launchWave(caster, def, rank, { tx: ctx.x, ty: ctx.y, dist, halfWidth: half, budget: budget.budget })) return;
+    if (api.launchWave(caster, def, rank, { tx: ctx.x, ty: ctx.y, dist, halfWidth: half, budget: cap })) return;
     for (const t of lineTargets(api, caster, def, ctx.x, ctx.y, dist, half)) hit(t);
   },
 
@@ -2188,10 +2213,17 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // `BreathOfFireDamage.mdl`). A unit with no haze on it takes the initial damage only.
   ANbf: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
+    // dataB is Carrion Swarm's `Ucs2` "Max Damage" (the meta row is shared, `useSpecific =
+    // AUcs,ANbf,…`; 480/720/1080 in 1.30.4) — the family's cap (spendWave).
+    // The cap is on the breath's own blow; the burn it lights is a buff of its own and is not
+    // spent out of it.
+    const cap = d(lvl, 1, 0);
+    const allowance = waveAllowance(ctx, cap);
     const hit = (t: SimUnit) => {
       if (!api.hostile(caster, t)) return;
       const soaked = t.buffs.some((b) => b.group === "haze" && b.timeLeft > 0);
-      api.spellDamage(t, d(lvl, 0, 65), caster.id);
+      const dmg = spendWave(allowance, cap, d(lvl, 0, 65));
+      if (dmg > 0) api.spellDamage(t, dmg, caster.id);
       const dps = d(lvl, 4, 0);
       if (soaked && dps > 0 && t.hp > 0) {
         api.applyBuff(t, { kind: "dot", group: "breathoffire", timeLeft: dur(lvl, t) || 5, sourceId: caster.id, value: dps, ...fx(def) });
@@ -2202,7 +2234,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const dist = d(lvl, 2, 375);
     const half = lvl.area || 125;
     // `[ANbf] Missileart = BreathOfFireMissile.mdl, Missilespeed = 1050` — the breath, again.
-    if (api.launchWave(caster, def, rank, { tx: ctx.x, ty: ctx.y, dist, halfWidth: half, budget: d(lvl, 1, 0) })) return;
+    if (api.launchWave(caster, def, rank, { tx: ctx.x, ty: ctx.y, dist, halfWidth: half, budget: cap })) return;
     for (const t of lineTargets(api, caster, def, ctx.x, ctx.y, dist, half)) hit(t);
   },
 
