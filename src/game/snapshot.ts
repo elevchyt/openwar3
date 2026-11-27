@@ -710,7 +710,16 @@ export interface WorldSnapshot {
 
 function weaponOf(w: SimUnit["weapon"]): WeaponSnapshot | null {
   if (!w) return null;
-  return {
+  // The same sim weapon gives the same snapshot OBJECT for as long as its nine numbers hold
+  // (issue #389): an army's weapons are config, rebuilt for every recipient on every send, and
+  // the wire keeps the encoded form beside the object (snapshotWire `writeWeapon`). Exact — the
+  // fields are compared each time — and safe because nothing writes into a WeaponSnapshot: the
+  // client COPIES one into its own weapon (snapshotApply `mergeWeapon`).
+  const kept = weaponSnaps.get(w);
+  if (kept && kept.damage === w.damage && kept.dice === w.dice && kept.sides === w.sides && kept.range === w.range
+    && kept.cooldown === w.cooldown && kept.damagePoint === w.damagePoint && kept.backswing === w.backswing
+    && kept.baseDamagePoint === w.baseDamagePoint && kept.baseBackswing === w.baseBackswing) return kept;
+  const snap: WeaponSnapshot = {
     damage: w.damage,
     dice: w.dice,
     sides: w.sides,
@@ -721,7 +730,10 @@ function weaponOf(w: SimUnit["weapon"]): WeaponSnapshot | null {
     baseDamagePoint: w.baseDamagePoint,
     baseBackswing: w.baseBackswing,
   };
+  weaponSnaps.set(w, snap);
+  return snap;
 }
+const weaponSnaps = new WeakMap<NonNullable<SimUnit["weapon"]>, WeaponSnapshot>();
 
 /**
  * A last-seen image: what the player is entitled to remember about a structure nobody is

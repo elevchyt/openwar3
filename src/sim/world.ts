@@ -52,7 +52,7 @@ import {
 import { perfNow, simProfile } from "./profile";
 import { flyHeight, type MissileFlight } from "./missile";
 import { HERO_KILL_VALUE, MatchStats } from "./matchStats";
-import { SPELL_HANDLERS, ITEM_INVULN_GROUP, AURA_BUFFS, SELF_INVIS_GROUP, BLADESTORM_GROUP, FIELD_PIERCES_SPELL_IMMUNITY, POLARITY_SPELLS, HEAL_SPELLS, SLOWED_BUFF, FROST_ARMOR_GROUP, dur as debuffDuration, FIGHTER_BUFFS, DISPEL_CODES, REPLENISH_BAR, replenishRefusal, survivesDispel, clockedBuff, worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, spellShieldBuff, drainTag, burningOilField, spellStealPlan, DRAIN_GROUP, CANNIBALIZE_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
+import { SPELL_HANDLERS, ITEM_INVULN_GROUP, AURA_BUFFS, SELF_INVIS_GROUP, BLADESTORM_GROUP, FIELD_PIERCES_SPELL_IMMUNITY, POLARITY_SPELLS, HEAL_SPELLS, SLOWED_BUFF, FROST_ARMOR_GROUP, dur as debuffDuration, FIGHTER_BUFFS, DISPEL_CODES, REPLENISH_BAR, replenishRefusal, survivesDispel, clockedBuff, worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, spellShieldBuff, drainTag, burningOilField, spellStealPlan, DRAIN_GROUP, CANNIBALIZE_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type AuraEffect, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
 /** The buff group a Tornado's toss is applied under — both halves, so the invulnerability's wipe
  *  spares the stun it came with (clearStatusForInvulnerable). See tickTornado. */
 const TORNADO_SPIN_GROUP = "tornadoSpin";
@@ -3753,6 +3753,40 @@ const IMMEDIATE = new Set(["AHds", "ACds", "AOwk", "Amil", "Amic", "AEim"]);
 const PERMANENT_IMMOLATION = new Set(["ANpi", "Apig"]);
 /** The detector codes an ITEM can carry (recomputeStats' True Sight, the carried half). */
 const CARRIED_DETECTORS = ["Atru", "Adet", "Adts"] as const;
+/** The tech census's walk (TechState): one row a unit, written into ONE object that is handed out
+ *  again for the next — `recount` reads each row and keeps nothing of it (issue #389), where this
+ *  used to copy the whole unit map into an array and a fresh object per unit, every step. */
+function* techCensus(units: ReadonlyMap<number, SimUnit>): Generator<{ owner: number; typeId: string; alive: boolean; underConstruction: boolean }> {
+  const row = { owner: 0, typeId: "", alive: false, underConstruction: false };
+  for (const u of units.values()) {
+    row.owner = u.owner;
+    row.typeId = u.typeId;
+    row.alive = u.hp > 0;
+    row.underConstruction = !!u.building && u.building.constructionLeft > 0;
+    yield row;
+  }
+}
+
+/** One ability an aura may broadcast from (SimWorld.auraSources). */
+type AuraSource = { id: string; code: string; level: number; def?: AbilityDef };
+/** The aura pass's scratch list of a source's abilities — module scratch, never saved. */
+const AURA_SOURCES: AuraSource[] = [];
+/** An aura level's effects, kept per level row (SimWorld.auraEffectsOf). */
+const AURA_EFFECTS = new WeakMap<AbilityLevel, { code: string; data: number[]; effects: AuraEffect[]; groups: string[] }>();
+/** Two number lists the same, field for field — NaN equal to NaN (an empty data cell is NaN). */
+function sameNumbers(a: readonly number[], b: readonly number[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (!Object.is(a[i], b[i])) return false;
+  return true;
+}
+/** A row's buff ids lower-cased, once per row (the autocast asks per unit per pass): a level's
+ *  `buffs` array is the row's own and never rewritten in place — a map edit replaces it. */
+const LOWER_IDS = new WeakMap<readonly string[], string[]>();
+function lowerIds(ids: readonly string[]): string[] {
+  let hit = LOWER_IDS.get(ids);
+  if (hit === undefined) LOWER_IDS.set(ids, (hit = ids.map((b) => b.toLowerCase())));
+  return hit;
+}
 
 /** The abilities a CARRIED item puts on its carrier's command card (see
  *  SimWorld.syncCarriedAbilities): `[clsd] abilList = Ashm`, the Cloak of Shadows — `AIhm`
@@ -4699,14 +4733,7 @@ export class SimWorld {
     this.startRng(seed);
     this.tech =
       techReg && upgradeReg
-        ? new TechState(techReg, upgradeReg, () =>
-            [...this.units.values()].map((u) => ({
-              owner: u.owner,
-              typeId: u.typeId,
-              alive: u.hp > 0,
-              underConstruction: !!u.building && u.building.constructionLeft > 0,
-            })),
-          )
+        ? new TechState(techReg, upgradeReg, () => techCensus(this.units))
         : null;
   }
 
@@ -13837,7 +13864,7 @@ export class SimWorld {
     }
     let depot: SimUnit | null = null;
     let bestD = Infinity;
-    for (const d of this.units.values()) {
+    for (const d of this.depotsInOrder()) {
       // takesLoad, not just the depot flag: a Graveyard (or a hall, a Lumber Mill) still under
       // construction carries `depotLumber` from the moment it is placed, and Ghouls walked their
       // lumber to the scaffold. A depot takes a load only once it is FINISHED — as in the game,
@@ -13850,6 +13877,24 @@ export class SimWorld {
       }
     }
     return depot;
+  }
+
+  /** Every unit that is a DEPOT of either kind, in the units' own order (ties go to the first met,
+   *  as they did over the whole map). Asked per returning worker per step, and it walked every
+   *  unit (issue #389); the flags are the unit's from its birth, so the list is rebuilt only when
+   *  the set of units changes — `unitsVersion` and the size, as `unitsInOrder` does. Whether a
+   *  depot TAKES the load (alive, finished, ours, the right kind) is still asked of each. */
+  private depotList: SimUnit[] = [];
+  private depotListVersion = -1;
+  private depotListSize = -1;
+  private depotsInOrder(): readonly SimUnit[] {
+    if (this.depotListVersion !== this.unitsVersion || this.depotListSize !== this.units.size) {
+      this.depotList = [];
+      for (const d of this.units.values()) if (d.depotGold || d.depotLumber) this.depotList.push(d);
+      this.depotListVersion = this.unitsVersion;
+      this.depotListSize = this.units.size;
+    }
+    return this.depotList;
   }
 
   /** Would `d` take the load `u` is carrying — a finished, living depot of the worker's OWN, of
@@ -16216,7 +16261,8 @@ export class SimWorld {
       if (src.devouredBy > 0) continue; // a meal in a Kodo's belly is no aura's source (castLocked)
       if (!this.bestowsAuras(src)) continue; // MiscGame's six `*BestowAuras` switches
       if (!src.abilities.length && !src.inventory.length) continue; // nothing to broadcast with
-      for (const ab of this.auraSources(src)) {
+      let auraData: ReadonlyArray<readonly [string, number]> | null = null; // the source's `raud` research, read once
+      for (const ab of this.auraSources(src, AURA_SOURCES)) {
         const make = AURA_BUFFS[ab.code];
         if (!make) continue;
         const def = this.abilityDefOf(ab);
@@ -16224,16 +16270,16 @@ export class SimWorld {
         let lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
         // …raised by any `raud` research its owner has (Improved War Drums — see
         // sumUpgradeBonuses), which adds to the aura's own first column.
-        for (const [abilityId, add] of this.upgradeBonuses(src).auraData) {
+        auraData ??= [...this.upgradeBonuses(src).auraData];
+        for (const [abilityId, add] of auraData) {
           if (abilityId === ab.id) lvl = { ...lvl, data: [(lvl.data[0] ?? 0) + add, ...lvl.data.slice(1)] };
         }
         const radius = lvl.area || 900;
-        const effects = make(lvl);
+        const { effects, groups } = this.auraEffectsOf(ab.code, make, lvl);
         // What every target of this source is handed, worked out once rather than per target:
         // the buff's group key and its id are the source's, and a source reaches dozens of
         // bodies a step where a crowd stands (a hero-select ring: 6 000 refreshes a step).
         const buffId = buffIdOf(def, ab.level);
-        const groups = effects.map((e) => this.auraGroup(ab.code, e.kind));
         // Which side an aura lands on is the ability's own business, read off `targs1`, and
         // there are THREE answers, not two:
         //   • `friend` and not `enemy` — the hero auras (`air,ground,friend,self,vuln,invu`).
@@ -16455,16 +16501,33 @@ export class SimWorld {
    *  here made all fourteen do nothing whatever for anybody — including their bearer.
    *
    *  An item ability has no ranks (`levels = 1`), hence level 1. */
-  private *auraSources(u: SimUnit): Iterable<{ id: string; code: string; level: number }> {
-    for (const ab of u.abilities) if (ab.level >= 1) yield ab;
-    if (!u.inventory.length || !this.itemReg || !this.abilities) return;
+  private auraSources(u: SimUnit, out: AuraSource[]): AuraSource[] {
+    // Into a scratch list rather than out of a generator (issue #389): the pass asks it of every
+    // unit that has an ability, and a generator object apiece was most of what it cost.
+    out.length = 0;
+    for (const ab of u.abilities) if (ab.level >= 1) out.push(ab);
+    if (!u.inventory.length || !this.itemReg || !this.abilities) return out;
     for (const held of u.inventory) {
       if (!held) continue;
       for (const abilId of this.itemReg.get(held.itemId)?.abilities ?? []) {
         const def = this.itemAbilityDefOf(held.id, abilId);
-        if (def && AURA_BUFFS[def.code]) yield { id: abilId, code: def.code, level: 1 };
+        if (def && AURA_BUFFS[def.code]) out.push({ id: abilId, code: def.code, level: 1 });
       }
     }
+    return out;
+  }
+
+  /** An aura level's effects and their buff groups, kept per level row (issue #389). The row is
+   *  the type's — or a unit's own copy a script has written into (`BlzSetAbilityRealLevelField`
+   *  rewrites its `data` in place) — so the kept answer is checked against the data it was made
+   *  from, every field, and made again the moment one differs. */
+  private auraEffectsOf(code: string, make: (lvl: AbilityLevel) => AuraEffect[], lvl: AbilityLevel): { effects: AuraEffect[]; groups: string[] } {
+    const kept = AURA_EFFECTS.get(lvl);
+    if (kept && kept.code === code && sameNumbers(kept.data, lvl.data)) return kept;
+    const effects = make(lvl);
+    const made = { code, data: [...lvl.data], effects, groups: effects.map((e) => this.auraGroup(code, e.kind)) };
+    AURA_EFFECTS.set(lvl, made);
+    return made;
   }
 
   /** HEALING landed on a unit — a spell's, an item's, a heal-over-time's — clamped at its
@@ -17853,7 +17916,7 @@ export class SimWorld {
       // Liquipedia's Autocast: an autocast "can cause it to move in order to cast their
       // spell"). It is what makes Get Corpse work at all — `[Amel] Rng1 = 100, Area1 = 600`,
       // and Liquipedia prints both, because the wagon drives to the body.
-      if (def.target === "none" && def.targetFlags.some((f) => f.toLowerCase() === "dead")) {
+      if (def.target === "none" && F.has("dead")) { // (Targets Allowed is normalised: lower-cased at the SLK boundary)
         const reach = lvl.castRange || lvl.area || 600;
         const look = Math.max(reach, lvl.area || 0);
         if (!this.corpseAutocastWants(u, def, lvl, reach)) {
@@ -17881,7 +17944,7 @@ export class SimWorld {
       // counts as a fight for a creep is its camp's (above); for anyone else it is an enemy
       // inside its own acquisition. OURS: nothing states when the engine fires this one.
       if (def.target === "none" && !F.has("enemy") && F.has("self") && !F.has("friend")) {
-        const worn = lvl.buffs.map((b) => b.toLowerCase());
+        const worn = lowerIds(lvl.buffs);
         if (worn.length && u.buffs.some((b) => b.buffId && worn.includes(b.buffId.toLowerCase()))) continue;
         if (!u.isCreep && !u.inCombat && !this.nearestEnemy(u, this.autocastSearchRange(u, 0), true)) continue;
         return this.issueCast(u.id, def.code, 0, u.x, u.y, true);
@@ -17933,7 +17996,7 @@ export class SimWorld {
         if (best) return this.issueCast(u.id, def.code, best.id, 0, 0, true);
         continue;
       }
-      const target = this.autocastTarget(u, range, friendly, def.code, F.has("self"), def.targetFlags, lvl.buffs.map((b) => b.toLowerCase()), claimed);
+      const target = this.autocastTarget(u, range, friendly, def.code, F.has("self"), def.targetFlags, lowerIds(lvl.buffs), claimed);
       if (target) return this.issueCast(u.id, def.code, target.id, 0, 0, true);
     }
     return false;
@@ -18139,18 +18202,25 @@ export class SimWorld {
     // Bloodlust is FOR, and at full health they scored below the bar and were never eligible at
     // all. Outside the fight it is the most hurt, as before. A HEAL keeps its own reading: the
     // most wounded, whoever is on it.
-    const fight = friendly && !HEAL_SPELLS.has(code) ? this.fightSides() : null;
+    // Both fight readings are a walk over the world, so each is made the first time a candidate
+    // that passed every other test needs it (issue #389) — the walk reads only the world, which
+    // nothing in this loop writes, so it is the same set it would have been up front.
+    const wantFight = friendly && !HEAL_SPELLS.has(code);
+    let fight: Set<number> | null = null;
     // A CREEP's hostile autocast goes on the fight its camp is IN before anything merely
     // nearer: first the body it is itself swinging at — the camp's focus, which is the one that
     // walked in or opened on the camp — then anybody else in the fight, and only then the nearest
     // (issue #176: the Kobold Geomancer "will immediately cast Slow on the very first enemy unit
     // that enters its acquisition range or attacks its camp"). A slowed body is then the camp's
     // to chase (threatTier's CREEP_SLOWED_TIER), so the debuff and the focus come together.
-    const campFight = !friendly && u.isCreep ? this.fightSides() : null;
+    const wantCampFight = !friendly && u.isCreep;
+    let campFight: Set<number> | null = null;
     for (const t of this.autocastPool()) {
       if (autocastOutOfReach(u, t, range)) continue;
       if (claimed?.has(t.id)) continue;
       if (!this.autocastWants(u, t, friendly, code, selfOk, flags, buffs)) continue;
+      if (wantFight) fight ??= this.fightSides();
+      if (wantCampFight) campFight ??= this.fightSides();
       if (friendly) {
         // heal the most-hurt ally; a buff, the one in the fight (then the most hurt)
         const frac = t.hp / t.maxHp + (fight && !fight.has(t.id) ? 1 : 0);

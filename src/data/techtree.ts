@@ -226,13 +226,25 @@ export class TechRegistry {
   /** The requirements for the `tier`-th copy of a unit / the `tier`-th level of an upgrade
    *  (both 0-based). Tiers past the last declared one clamp to it. Returns the tech ids and
    *  the level each must be at (parallel arrays). */
-  requirements(id: string, tier = 0): Array<{ tech: string; level: number }> {
+  requirements(id: string, tier = 0): ReadonlyArray<{ tech: string; level: number }> {
     const def = this.get(id);
     const tiers = def.requiresTiers;
-    const list = tiers[Math.min(Math.max(tier, 0), tiers.length - 1)] ?? [];
-    return list.map((tech, i) => ({ tech, level: def.requiresAmount[i] ?? 1 }));
+    const list = tiers[Math.min(Math.max(tier, 0), tiers.length - 1)];
+    if (!list || !list.length) return NO_REQUIREMENTS;
+    // Kept per tier list (issue #389): `meets` asks this for every button, every unit and every
+    // AI row, and it was a fresh array of fresh objects each time. Both lists it reads are only
+    // ever REPLACED by a map's edits (objectData's techtree applier), so the pair of identities
+    // says whether the kept answer is still the one.
+    const kept = REQUIREMENTS.get(list);
+    if (kept && kept.amounts === def.requiresAmount) return kept.out;
+    const out = list.map((tech, i) => ({ tech, level: def.requiresAmount[i] ?? 1 }));
+    REQUIREMENTS.set(list, { amounts: def.requiresAmount, out });
+    return out;
   }
 }
+
+const NO_REQUIREMENTS: ReadonlyArray<{ tech: string; level: number }> = Object.freeze([]);
+const REQUIREMENTS = new WeakMap<readonly string[], { amounts: readonly number[]; out: ReadonlyArray<{ tech: string; level: number }> }>();
 
 // The tech fields live in the per-race Func profiles, and every id space declares them the
 // same way, so all four are loaded into one graph:

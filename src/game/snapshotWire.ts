@@ -267,7 +267,14 @@ const F_DEVOURED = 1 << 31; // devouredBy
 // hundred identical weapons dedupe to ONE string-table entry and a u16 per unit. Cheaper
 // than a fixed 22-byte block the moment three units share a weapon, and exact (JSON round-
 // trips numbers losslessly, so damage keeps its float where a fixed layout would round it).
-const writeWeapon = (w: Writer, wp: WeaponSnapshot): void => w.u16(w.intern(JSON.stringify(wp)));
+// The JSON is kept beside the snapshot object (issue #389): `weaponOf` hands every recipient the
+// same object for an unchanged weapon, so it is stringified once rather than per unit per peer.
+const writeWeapon = (w: Writer, wp: WeaponSnapshot): void => {
+  let json = weaponJson.get(wp);
+  if (json === undefined) weaponJson.set(wp, (json = JSON.stringify(wp)));
+  w.u16(w.intern(json));
+};
+const weaponJson = new WeakMap<WeaponSnapshot, string>();
 const readWeapon = (r: Reader): WeaponSnapshot => JSON.parse(r.str());
 
 function writeUnit(w: Writer, s: UnitSnapshot): void {
@@ -409,7 +416,7 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
     w.u32(b.rallyTargetId);
     // The production queue is a discriminated union (BuildJob) and the shelf is already the
     // -1-encoded JSON-safe shape — both ride the string table as the small JSON they are.
-    w.u16(w.intern(JSON.stringify(b.queue)));
+    w.u16(w.intern(b.queue.length ? JSON.stringify(b.queue) : "[]")); // an idle building's, unstringified
     if (b.stock) w.u16(w.intern(JSON.stringify(b.stock)));
     if (b.mineId) w.u32(b.mineId);
   }
