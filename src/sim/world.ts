@@ -3266,6 +3266,12 @@ const BODY_GAP_CELLS = 4;
  *  off to compare a camp's behaviour against the plain walk over every unit. */
 export const CampFighters = { enabled: true };
 
+/** `t` holds an attack — or an attack-move — with somebody named: the cheap half of
+ *  SimWorld.fightsCamp, and the test campQuiet's walk rejects most units on. */
+function holdsAttack(t: SimUnit): boolean {
+  return t.targetId !== null && (t.order === "attack" || t.order === "attackmove");
+}
+
 /** The aura pass's cells (SimWorld.auraCells). On, unless a test or a live A/B turns it off to
  *  compare the pass against the plain walk over every unit. OURS: a cell is 512 world units —
  *  about half the common 900 aura radius, so a circle touches a dozen cells — and a circle
@@ -11608,6 +11614,7 @@ export class SimWorld {
     if (!this.canPursue(u)) return false;
     this.clearGuardPost(u);
     u.order = "attackmove";
+    this.campStirred.add(u.id); // see campQuiet
     u.targetId = null;
     u.inCombat = false;
     u.noCollision = false;
@@ -12162,6 +12169,7 @@ export class SimWorld {
     }
     u.order = "attack";
     this.attackers.add(u.id); // the one place an attack order is given — see campHasFighter
+    this.campStirred.add(u.id); // …and one of the four that can disturb a camp's sleep (campQuiet)
     u.targetId = targetId;
     u.attackTeleId = targetId; // where the target stands NOW is where it was told to go (issue #173)
     u.attackTeleports = t.teleports;
@@ -17227,6 +17235,7 @@ export class SimWorld {
     u.inCombat = false;
     u.targetId = null;
     u.order = "cast";
+    this.campStirred.add(u.id); // see campQuiet
     // Cannibalize aims its no-target press at a BODY (mealFor) and walks there like a point
     // cast: to within the `Rng1` its handler eats from, then the channel faces the meal.
     const meal = code === "Acan" ? this.mealFor(u, def, lvl) : null;
@@ -24484,7 +24493,7 @@ export class SimWorld {
   /** Is `t` fighting `u`'s CAMP — its attack (its own, or an attack-move's engagement) on `u`
    *  or on a camp-mate of `u`? The creep-side reading of `attackingCreeps`, narrowed to one camp. */
   private fightsCamp(u: SimUnit, t: SimUnit): boolean {
-    if (t.targetId === null || (t.order !== "attack" && t.order !== "attackmove")) return false;
+    if (!holdsAttack(t) || t.targetId === null) return false;
     const v = this.units.get(t.targetId);
     return v !== undefined && v.isCreep && v.hp > 0 && (v === u || this.sameCamp(v, u));
   }
@@ -24502,21 +24511,56 @@ export class SimWorld {
    *   • no member of it has been struck for CREEP_SLEEP_CALM (3 s) — OURS: no file states a
    *     sleep delay, and the maintainer set it short so a camp still dozes off quickly.
    * A camp whose fight has really ended still dozes off on the very next tick of that calm.
+   *
+   * It is asked for every SLEEPING creep on every step, all night, and it is a walk over the
+   * world (issue #383), so the walk asks the two cheap questions FIRST: a unit that is neither
+   * struck lately nor fighting (`campBusy`) nor holding an attack (`fightsCamp`'s own first test)
+   * can make neither branch say "not quiet", whichever camp it is in — and that is nearly every
+   * unit at night. Only a unit that passes one of them pays for `sameCamp`'s cluster lookup.
+   * And it need not WALK the world to find them: a unit can pass one of those two only while it
+   * holds an attack, an attack-move or a cast, or was struck inside the calm — and all four are
+   * written in one place each (`issueAttack`, `issueAttackMove`, `issueCast`,
+   * `provoke`), which add it to `campStirred`. So the walk is over that SET: a superset, pruned
+   * here of whatever no longer holds any of the four (a strike only ages, so once past the calm it
+   * can come back only through `provoke` again). Exact: the answer is a pure OR over the units,
+   * and a unit not walked returned nothing in the full walk either — `CampFighters.enabled` off is
+   * that walk, compared step for step by tools/sim-scan-shortcuts-test.cjs. A world that does not
+   * STEP (a LAN client's, written off a snapshot) never trusts the set, as campHasFighter does not.
    */
+  private campStirred = new Set<number>();
   private campQuiet(u: SimUnit): boolean {
     const calm = this.elapsed - CREEP_SLEEP_CALM;
     // `wokenAt` is asked of THIS creep alone: a script waking one creep (wakeUnit) is not a fight,
     // so it must not hold — or, through tickCreep's sleeper branch, rouse — its camp-mates.
     if (u.struckAt > calm || u.wokenAt > calm) return false;
-    for (const c of this.units.values()) {
-      if (c.hp <= 0) continue;
-      if (c.isCreep && (c === u || this.sameCamp(c, u))) {
-        if (c !== u && (c.struckAt > calm || this.creepAggroed(c))) return false;
-      } else if (this.fightsCamp(u, c) && this.hostile(u, c)) {
+    if (CampFighters.enabled && this.attackersTracked) {
+      // The full walk's first `sameCamp` is what checks the camp clusters for this tick; asking
+      // here keeps that check at the same point whether or not anybody is stirred.
+      this.campClusters();
+      for (const id of this.campStirred) {
+        const c = this.units.get(id);
+        if (!c || !(c.order === "attack" || c.order === "attackmove" || c.order === "cast" || c.struckAt > calm)) {
+          this.campStirred.delete(id); // deleting the entry a Set walk stands on is safe
+          continue;
+        }
+        if (!this.campNotQuiet(u, c, calm)) continue;
         return false;
       }
+      return true;
     }
+    for (const c of this.units.values()) if (this.campNotQuiet(u, c, calm)) return false;
     return true;
+  }
+
+  /** Does `c` keep `u`'s camp from being quiet — campQuiet's question about one unit. */
+  private campNotQuiet(u: SimUnit, c: SimUnit, calm: number): boolean {
+    if (c.hp <= 0) return false;
+    const busy = c.isCreep && c !== u && (c.struckAt > calm || this.creepAggroed(c));
+    // Neither busy nor holding an attack: no branch below can answer yes, whatever its camp,
+    // so the cluster lookup is not paid — which is nearly every unit at night.
+    if (!busy && !holdsAttack(c)) return false;
+    if (c.isCreep && (c === u || this.sameCamp(c, u))) return busy;
+    return this.fightsCamp(u, c) && this.hostile(u, c);
   }
 
   /** Advance an in-progress attack swing; when it reaches the weapon's damage
@@ -27765,6 +27809,7 @@ export class SimWorld {
       target.asleep = false;
       target.strayT = 0;
       target.struckAt = this.elapsed; // …and the camp is not quiet enough to doze off (campQuiet)
+      this.campStirred.add(target.id);
       target.campHelper = false; // being hit makes it an originator: it may now call for help
       // …and a HIDING one gets up (unhideCreep). Before `passive` below is read, deliberately:
       // a cloaked unit never returns fire, which is right for a hero walking past under Wind

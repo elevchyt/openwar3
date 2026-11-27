@@ -114,9 +114,11 @@ const CAMPS = [
   ["nsth", "nsty", "nsat", "nsat"],
 ];
 
-function build() {
+function build(night = false) {
   nextId = 1;
   const w = world();
+  // At NIGHT the camps doze off, and every sleeper asks campQuiet every step (issue #383).
+  if (night) w.timeOfDay = 22;
   const r = rng(0xa07a);
   const mine = { creeps: [], raiders: [] };
   // A 6 x 6 field of camps 2400 apart: far enough that one camp's shout never reaches the next.
@@ -156,10 +158,10 @@ function digest(w) {
 const SIM_DT = 1 / 60; // must match render/mapViewer.ts SIM_DT
 const STEPS = 60 * 75;
 
-function runArm(on, sink) {
+function runArm(on, sink, night = false) {
   CampFighters.enabled = on;
   AuraCells.enabled = on;
-  const { w, raiders } = build();
+  const { w, raiders } = build(night);
   const seen = { fights: 0, buffed: 0, asleep: 0, adopted: 0 };
   const t0 = process.hrtime.bigint();
   let spent = 0n;
@@ -191,15 +193,16 @@ function runArm(on, sink) {
   return { ms: Number(spent) / 1e6, seen, units: w.units.size };
 }
 
-console.log("the same raid across 36 camps, short cuts on and off");
-{
+for (const night of [false, true]) {
+  console.log(`the same raid across 36 camps, short cuts on and off, by ${night ? "night" : "day"}`);
   const want = [];
-  const off = runArm(false, (step, d) => want.push(d));
+  const off = runArm(false, (step, d) => want.push(d), night);
   let firstDiff = -1;
   const on = runArm(true, (step, d) => {
     if (firstDiff < 0 && d !== want[step]) firstDiff = step;
-  });
+  }, night);
   check("the world is the same on every step", firstDiff, -1);
+  if (night) check("camps slept", on.seen.asleep > 500, true);
   // …and the scenario is one that could have told them apart: camps fought and auras landed.
   // (The patron list has no off switch — it is the same walk in the same order — and what a
   // shop adopts is sim-shop-test's.)
