@@ -3796,13 +3796,24 @@ export class RtsController {
     return { kind: null, ids: [] };
   }
 
-  /** Living members of a group, pruning any that died (lazy cleanup). */
-  private livingGroup(key: string): number[] {
+  /** A group as STORED, pruned of the ids that are gone for good (lazy cleanup). A FALLEN HERO
+   *  of ours is not gone: a revived hero comes back under the id it died under, "still in the
+   *  control group you put it in" (mapViewer's revive path), so its id stays in the group while
+   *  it lies dead and only the recall skips it (issue #380). */
+  private storedGroup(key: string): number[] {
     const g = this.groups.get(key);
     if (!g) return [];
-    const alive = g.filter((id) => this.sim.units.has(id));
-    if (alive.length !== g.length) this.groups.set(key, alive);
-    return alive;
+    const kept = g.filter((id) => this.sim.units.has(id) || this.sim.fallen.get(id)?.owner === this.localPlayer);
+    if (kept.length !== g.length) this.groups.set(key, kept);
+    return kept;
+  }
+
+  /** The members of a group a recall SELECTS: on the field and still OURS. Ownership is asked
+   *  here rather than pruned, so a unit taken by Charm or Possession is never pulled into a
+   *  selection beside our army (issue #380), while one a trigger merely lends and hands back
+   *  returns to its group. */
+  private livingGroup(key: string): number[] {
+    return this.storedGroup(key).filter((id) => this.sim.units.get(id)?.owner === this.localPlayer);
   }
 
   /** Ctrl+N: bind the current own selection to control group N (overwrite). An
@@ -3842,9 +3853,13 @@ export class RtsController {
   /** Shift+N: append the current selection to group N, keeping the group's kind
    *  (units XOR buildings), skipping duplicates. No size cap (issue #109). */
   appendGroup(key: string): void {
-    const existing = this.livingGroup(key);
+    // The STORED group, so a fallen hero in it keeps its place through the append (#380).
+    const existing = this.storedGroup(key);
+    const live = existing.filter((id) => this.sim.units.has(id));
     const sel = this.ownSelectionByKind();
-    const kind = existing.length ? (this.sim.units.get(existing[0])?.building ? "building" : "unit") : sel.kind;
+    // A group of nothing but fallen heroes is a group of UNITS.
+    const kind = live.length ? (this.sim.units.get(live[0])?.building ? "building" : "unit")
+      : existing.length ? "unit" : sel.kind;
     // Nothing of ours to add is the same refusal Ctrl+N gives (assignGroup); a selection of
     // the group's OTHER kind is merely skipped, as it always was.
     if (!sel.ids.length) this.refuseGroup();
