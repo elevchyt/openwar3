@@ -16579,7 +16579,7 @@ export class SimWorld {
 
   /** Would casting `code` on this target HEAL it? For a polarity spell the friendly half
    *  of its rule is the healing half (Holy Light heals the friendly living and smites the
-   *  enemy Undead), so allegiance decides; polarityOk has already vouched for the race. */
+   *  enemy Undead), so allegiance decides; polarityOk has already vouched for the class. */
   private wouldHeal(caster: SimUnit, target: SimUnit, code: string): boolean {
     if (POLARITY_SPELLS[code]) return !this.hostile(caster, target);
     return HEAL_SPELLS.has(code);
@@ -16590,7 +16590,7 @@ export class SimWorld {
    *  Kept beside the spell handlers' own polarity check (sim/spells.ts) — that's what
    *  decides heal vs. damage once the cast lands; this decides whether it may start. */
   private polarityOk(caster: SimUnit, target: SimUnit, healsUndead: boolean): boolean {
-    const undead = target.race === "undead";
+    const undead = this.undeadClassified(target); // the classification, not the race (issue #352)
     if (!this.hostile(caster, target)) return undead === healsUndead; // friendly
     return undead !== healsUndead; // enemy
   }
@@ -21460,6 +21460,7 @@ export class SimWorld {
     unitsInArea: (x, y, r) => this.unitsInAreaInternal(x, y, r),
     hostile: (a, b) => this.hostile(a, b),
     ally: (a, b) => this.allied(a, b),
+    undead: (u) => this.undeadClassified(u),
     admits: (def, t) => this.targsAdmit(t, def.targetFlags),
     allows: (caster, def, t) => this.allegianceAdmits(caster, t, def.targetFlags),
     launchWave: (caster, def, rank, opts) => this.spawnWaveProjectile(caster, def, rank, opts),

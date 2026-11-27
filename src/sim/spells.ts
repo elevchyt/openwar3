@@ -41,6 +41,10 @@ export interface SpellApi {
   hostile(a: SimUnit, b: SimUnit): boolean;
   /** Same team (friendly). */
   ally(a: SimUnit, b: SimUnit): boolean;
+  /** common.j's UNIT_TYPE_UNDEAD: the unit's UnitBalance `type` CLASSIFICATION (as a script's
+   *  `UnitAddType`/`UnitRemoveType` left it), NOT its race — what Holy Light and Death Coil's
+   *  polarity asks (issue #352; the same reading as targetRules' `undead` rule). */
+  undead(u: SimUnit): boolean;
   /** Does this ability's own Targets Allowed (`targs1`) admit this unit as a KIND — air,
    *  ground, structure, organic, hero, ancient? The one place that question is answered
    *  (World.targsAdmit), shared with single-target casts, spell fields and orbs, so a
@@ -1072,6 +1076,13 @@ const SUMMON_FALLBACK: Record<string, string> = {
  *  error string in commandstrings.txt (Holybolttarget/Deathcoiltarget), which is how we
  *  know the rule is the ability's and not the data's. `healsUndead` says which side the
  *  Undead are on; the handlers below apply the same split to decide heal vs. damage.
+ *
+ *  "Undead" is the CLASSIFICATION (`SpellApi.undead`), never the race (issue #352): 26 units
+ *  carry `undead` in UnitBalance's `type` with a race that is not — the creep Skeletons and
+ *  Ghosts (`nske`, `ngh1`…), the Revenants, the Draenei ghosts `ndr1..3` — and a Holy Light
+ *  smites them; while the 21 race-undead types whose `type` lacks the word are machines
+ *  (Meat Wagon, Obsidian Statue, the ships — refused by `organic` anyway), the Plague ward,
+ *  and a few campaign heroes and critters the classification itself says are not Undead.
  *  Verified in the real game data: AHhb targs1 = "air,ground,organic,notself,invu,vuln,
  *  nonancient" — no allegiance flag at all, so the flags alone would let a Paladin
  *  Holy Light an enemy Footman, which the real game refuses. */
@@ -1461,8 +1472,8 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
     const lvl = def.levelData[rank - 1];
-    if (api.ally(caster, t) && t.race !== "undead") api.spellHeal(t, d(lvl, 0));
-    else if (api.hostile(caster, t) && t.race === "undead") api.spellDamage(t, d(lvl, 0) * POLARITY_DAMAGE_SHARE, caster.id);
+    if (api.ally(caster, t) && !api.undead(t)) api.spellHeal(t, d(lvl, 0));
+    else if (api.hostile(caster, t) && api.undead(t)) api.spellDamage(t, d(lvl, 0) * POLARITY_DAMAGE_SHARE, caster.id);
     if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
   },
 
@@ -1482,8 +1493,8 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
     const lvl = def.levelData[rank - 1];
-    if (api.ally(caster, t) && t.race === "undead") api.spellHeal(t, d(lvl, 0));
-    else if (api.hostile(caster, t) && t.race !== "undead") api.spellDamage(t, d(lvl, 0) * POLARITY_DAMAGE_SHARE, caster.id);
+    if (api.ally(caster, t) && api.undead(t)) api.spellHeal(t, d(lvl, 0));
+    else if (api.hostile(caster, t) && !api.undead(t)) api.spellDamage(t, d(lvl, 0) * POLARITY_DAMAGE_SHARE, caster.id);
     const art = def.specialArt || def.targetArt;
     if (art) api.emitEffect(art, t.x, t.y, t.id, 0, def.specialAttach, { sound: true, anim: "stand" });
   },

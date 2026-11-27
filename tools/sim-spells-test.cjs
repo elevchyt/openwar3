@@ -38,6 +38,8 @@ function harness(units) {
     unitsInArea: () => units,
     hostile: (a, b) => a.team !== b.team,
     ally: (a, b) => a.team === b.team,
+    // UNIT_TYPE_UNDEAD is the CLASSIFICATION (issue #352); a stub unit states it outright.
+    undead: (u) => !!u.undeadClass,
     admits: (d, t) => targsAdmit(t, d.targetFlags),
     allows: () => true,
     // The wave launch: records the request the way the world would act on it, and answers
@@ -93,7 +95,7 @@ const round = (n) => Math.round(n * 1000) / 1000;
 {
   const paladin = unit({ id: 1, team: 0, race: "human" });
   const footman = unit({ id: 2, team: 0, race: "human" });
-  const ghoul = unit({ id: 3, team: 1, race: "undead" });
+  const ghoul = unit({ id: 3, team: 1, race: "undead", undeadClass: true });
   const { api, log } = harness([paladin, footman, ghoul]);
   const hl = def({ code: "AHhb", data: [200] });
   SPELL_HANDLERS.AHhb(api, paladin, hl, 1, { targetId: 2, x: 0, y: 0 });
@@ -102,8 +104,8 @@ const round = (n) => Math.round(n * 1000) / 1000;
   check("…and deals HALF of it to an enemy Undead unit", log.damage, [{ id: 3, amount: 100 }]);
 }
 {
-  const dk = unit({ id: 1, team: 0, race: "undead" });
-  const ghoul = unit({ id: 2, team: 0, race: "undead" });
+  const dk = unit({ id: 1, team: 0, race: "undead", undeadClass: true });
+  const ghoul = unit({ id: 2, team: 0, race: "undead", undeadClass: true });
   const footman = unit({ id: 3, team: 1, race: "human" });
   const { api, log } = harness([dk, ghoul, footman]);
   const dc = def({ code: "AUdc", data: [200] });
@@ -111,6 +113,21 @@ const round = (n) => Math.round(n * 1000) / 1000;
   SPELL_HANDLERS.AUdc(api, dk, dc, 1, { targetId: 3, x: 0, y: 0 });
   check("Death Coil heals the Undead for dataA", log.heals, [{ id: 2, amount: 200 }]);
   check("…and deals HALF of it to an enemy living unit", log.damage, [{ id: 3, amount: 100 }]);
+}
+
+// …and "Undead" is the CLASSIFICATION, not the race (issue #352): a creep Skeleton Warrior
+// (`nske`: UnitData race "creeps", UnitBalance type "undead") is smitten by Holy Light and
+// healed by a friendly Death Coil, and a script's UnitAddType(UNIT_TYPE_UNDEAD) counts too.
+{
+  const paladin = unit({ id: 1, team: 0, race: "human" });
+  const skeleton = unit({ id: 2, team: 1, race: "creeps", undeadClass: true });
+  const { api, log } = harness([paladin, skeleton]);
+  SPELL_HANDLERS.AHhb(api, paladin, def({ code: "AHhb", data: [200] }), 1, { targetId: 2, x: 0, y: 0 });
+  check("Holy Light smites a creep Skeleton, whose race is not undead", log.damage, [{ id: 2, amount: 100 }]);
+  const lich = unit({ id: 3, team: 1, race: "undead", undeadClass: true });
+  const { api: api2, log: log2 } = harness([lich, skeleton]);
+  SPELL_HANDLERS.AUdc(api2, lich, def({ code: "AUdc", data: [200] }), 1, { targetId: 2, x: 0, y: 0 });
+  check("…and a friendly Death Coil heals it rather than harming it", [log2.heals, log2.damage], [[{ id: 2, amount: 200 }], []]);
 }
 
 // Fire Bolt — dataA "Damage" = 100 plus a 2s stun.
