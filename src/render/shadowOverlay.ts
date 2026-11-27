@@ -168,12 +168,17 @@ export class ShadowOverlay {
    * offset is stated by a file: 32 and (48, 32) are the best of the candidates rendered against a
    * Town Hall and an Altar of Kings. Centred, the Altar cast left while the Hall cast right.
    */
-  addBuilding(x: number, y: number, texture: string): void {
+  addBuilding(x: number, y: number, texture: string, cull?: { overlaps(x0: number, y0: number, x1: number, y1: number): boolean } | null): void {
     const canvas = this.cached(texture).canvas;
     if (!canvas) return;
     const w = canvas.width * BUILDING_SHADOW_TEXEL;
     const h = canvas.height * BUILDING_SHADOW_TEXEL;
-    this.add(x + BUILDING_SHADOW_OFFSET_X, y + BUILDING_SHADOW_OFFSET_Y, w, h, w / 2, h / 2, texture);
+    const cx = x + BUILDING_SHADOW_OFFSET_X;
+    const cy = y + BUILDING_SHADOW_OFFSET_Y;
+    // …and only one lying on ground the camera can see, as the unit blobs are (issue #392): a
+    // building shadow is tessellated over the terrain under it every frame like any other.
+    if (cull && !cull.overlaps(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)) return;
+    this.add(cx, cy, w, h, w / 2, h / 2, texture);
   }
 
   private cached(texture: string): CachedTexture {

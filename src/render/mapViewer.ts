@@ -9133,6 +9133,9 @@ export class MapViewerScene {
     let model = this.effectModels.get(path);
     if (model === undefined) {
       model = ((await this.viewer.load(path, this.solver)) as SpawnModel | undefined) ?? null;
+      // The scene may have been torn down while the model loaded (a quit, a map change): an
+      // instance added now would land in a scene nobody draws or frees (issue #392).
+      if (this.disposed) return;
       this.effectModels.set(path, model);
     }
     this.buffFxLoading.delete(key);
@@ -18450,7 +18453,8 @@ export class MapViewerScene {
         // see it" too, but an unseen dynamic building's splat SHOULD be gone there as well:
         // its image never earned a memory (a remembered one keeps its record, so it stays).
         this.splats.reconcile(this.simBuildingSplats, (id) => world.units.has(id as number));
-        for (const id of [...this.simBuildingSplats]) if (!this.splats.has(id)) this.simBuildingSplats.delete(id);
+        // (Deleting the entry a Set walk stands on is safe — no copy of the set a frame.)
+        for (const id of this.simBuildingSplats) if (!this.splats.has(id)) this.simBuildingSplats.delete(id);
         for (const id of this.simBuildingSplats) this.splats.setVisible(id, this.rts.buildingImageShown(id));
         // An UPROOTED Ancient takes its foundation with it. The decal is the mark the roots
         // leave in the ground, so it belongs where the roots are: lifted while the Ancient
@@ -19025,7 +19029,7 @@ export class MapViewerScene {
       if (this.rts!.unitHidden(u.id)) continue; // fogged / in a gold mine — don't draw its shadow
       if (u.building) {
         // Into the SEPARATE overlay that draws after the foundation decals. The file is its own size.
-        if (def.buildingShadow) this.buildingShadows.addBuilding(u.x, u.y, MapViewerScene.SHADOW_DIR + def.buildingShadow + ".blp");
+        if (def.buildingShadow) this.buildingShadows.addBuilding(u.x, u.y, this.shadowPath(def.buildingShadow), cull);
         continue;
       }
       if (!def.unitShadow || def.shadowW <= 0 || def.shadowH <= 0) continue;
@@ -19034,9 +19038,17 @@ export class MapViewerScene {
       const sx = u.x - def.shadowX;
       const sy = u.y - def.shadowY;
       if (cull && !cull.overlaps(sx, sy, sx + def.shadowW, sy + def.shadowH)) continue;
-      this.shadows.add(u.x, u.y, def.shadowW, def.shadowH, def.shadowX, def.shadowY, MapViewerScene.SHADOW_DIR + def.unitShadow + ".blp");
+      this.shadows.add(u.x, u.y, def.shadowW, def.shadowH, def.shadowX, def.shadowY, this.shadowPath(def.unitShadow));
     }
   }
+
+  /** A shadow file's path, built once per name rather than once per unit per frame. */
+  private shadowPath(name: string): string {
+    let p = this.shadowPaths.get(name);
+    if (p === undefined) this.shadowPaths.set(name, (p = MapViewerScene.SHADOW_DIR + name + ".blp"));
+    return p;
+  }
+  private readonly shadowPaths = new Map<string, string>();
 
   /** Ground items cast a shadow too (issue #60) — the chest/tome/rune sitting in the
    *  grass was the one widget class floating without one. An item has no shadow columns

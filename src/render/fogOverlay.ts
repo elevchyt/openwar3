@@ -136,6 +136,13 @@ export class FogOverlay {
   private indexType: number; // UNSIGNED_SHORT or UNSIGNED_INT (large maps)
   private maxAttribs: number; // GL_MAX_VERTEX_ATTRIBS, cached for the per-frame attrib sweep
   private vx: Float32Array; // per-vertex world X (for sampling the vision map)
+  /** The corners are a LATTICE, so the vision map is asked once for the whole of it
+   *  (VisionMap.statesAtGrid, issue #392): its columns' X and rows' Y — read back out of `vx`/`vy`,
+   *  so they are the very float32 values the per-corner `stateAt` was asked with — and the
+   *  answers. */
+  private gridXs: Float64Array;
+  private gridYs: Float64Array;
+  private gridStates: Uint8Array;
   private vy: Float32Array;
   private dark: Float32Array; // per-vertex darkness as drawn (uploaded when it changes)
   private shown: Float32Array; // per-vertex darkness before the boundary floor, easing toward `blurred`
@@ -197,6 +204,9 @@ export class FogOverlay {
         pos[i * 3 + 2] = cornerHeight(corners[i]) * CELL + LIFT;
       }
     }
+    this.gridXs = Float64Array.from({ length: width }, (_, cx) => this.vx[cx]);
+    this.gridYs = Float64Array.from({ length: height }, (_, cy) => this.vy[cy * width]);
+    this.gridStates = new Uint8Array(n);
     // Two triangles per cell, split on the SAME diagonal as the viewer's terrain
     // (BR–TL): faces [BL,BR,TL, BR,TR,TL]. Large maps overflow Uint16 vertex indices
     // (257² = 66049 > 65535) → use OES_element_index_uint when available.
@@ -343,8 +353,10 @@ export class FogOverlay {
    *  the vision itself only changes a few times a second. `fade` does the drawing's half. */
   update(vision: VisionMap): void {
     // 1) Raw per-corner darkness from the hard fog states.
+    const states = this.gridStates;
+    vision.statesAtGrid(this.gridXs, this.gridYs, states); // states[cy * width + cx], as rawDark is laid out
     for (let i = 0; i < this.rawDark.length; i++) {
-      const state = vision.stateAt(this.vx[i], this.vy[i]);
+      const state = states[i];
       this.rawDark[i] = state === FogState.Visible ? 0 : state === FogState.Explored ? EXPLORED_DARK : 1;
     }
     // 2) Soften the hard cell edges into gradients (separable box blur) → this.blurred.

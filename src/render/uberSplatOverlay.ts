@@ -91,6 +91,8 @@ interface SplatEntry {
    *  hides with it. Distinct from `remove`: a fogged building still exists; a dead one does
    *  not. Default false; driven per frame by the splat-visibility sync in mapViewer. */
   hidden: boolean;
+  /** What the geometry was built from — `add` keeps the buffers when these are all the same. */
+  at: { x: number; y: number; scale: number; halfY: number; floor: number | undefined };
 }
 
 /** Per-splat options. `tint` recolours the texture (default white), or is the ring
@@ -165,13 +167,31 @@ export class UberSplatOverlay {
    *  splat covers only a handful of cells. */
   add(id: string | number, x: number, y: number, scale: number, texture: string, opts?: SplatOptions): void {
     const key = String(id);
+    const halfY = opts?.halfY ?? scale;
+    const floor = opts?.floor;
+    // The same square at the same place is the same geometry — the terrain's heights never
+    // change in a match (RtsController.floorEpoch says why) — so only the look is replaced. A
+    // selection ring is re-added every frame, and this was two GL buffers made and deleted per
+    // ring per frame (issue #392).
+    const prev = this.entries.get(key);
+    if (prev && prev.at.x === x && prev.at.y === y && prev.at.scale === scale && prev.at.halfY === halfY && prev.at.floor === floor) {
+      prev.texture = texture;
+      prev.tint = opts?.tint ?? [1, 1, 1];
+      prev.additive = opts?.additive ?? false;
+      prev.mask = opts?.mask ?? false;
+      prev.half = scale;
+      prev.alpha = opts?.alpha ?? 1;
+      prev.hidden = false;
+      if (!this.textures.has(texture)) this.textures.set(texture, { canvas: this.loader(texture), tex: null });
+      return;
+    }
     this.remove(key); // drop any prior geometry for this id
-    const { pos, uv, count } = this.buildGeometry(x, y, scale, opts?.halfY ?? scale, opts?.floor);
+    const { pos, uv, count } = this.buildGeometry(x, y, scale, halfY, floor);
     if (count === 0) return;
     const gl = this.gl;
     const posBuf = createBuffer(gl, gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
     const uvBuf = createBuffer(gl, gl.ARRAY_BUFFER, uv, gl.STATIC_DRAW);
-    this.entries.set(key, { posBuf, uvBuf, count, texture, tint: opts?.tint ?? [1, 1, 1], additive: opts?.additive ?? false, mask: opts?.mask ?? false, half: scale, alpha: opts?.alpha ?? 1, hidden: false });
+    this.entries.set(key, { posBuf, uvBuf, count, texture, tint: opts?.tint ?? [1, 1, 1], additive: opts?.additive ?? false, mask: opts?.mask ?? false, half: scale, alpha: opts?.alpha ?? 1, hidden: false, at: { x, y, scale, halfY, floor } });
     // Decode the BLP once (synchronous); the GL texture is uploaded lazily in render().
     if (!this.textures.has(texture)) {
       this.textures.set(texture, { canvas: this.loader(texture), tex: null });

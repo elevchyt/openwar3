@@ -179,7 +179,10 @@ let dpadHeld: { button: number; next: number } | null = null;
 export function startGamepad(): void {
   if (started || typeof navigator === "undefined" || !("getGamepads" in navigator)) return;
   started = true;
-  window.addEventListener("gamepadconnected", () => refreshPrompt());
+  window.addEventListener("gamepadconnected", () => {
+    refreshPrompt();
+    wake(); // a pad the page can see: start polling it
+  });
   window.addEventListener("gamepaddisconnected", (e) => {
     const idx = (e as GamepadEvent).gamepad.index;
     prevButtons.delete(idx);
@@ -223,8 +226,27 @@ export function startGamepad(): void {
       { capture: true },
     );
   }
-  requestAnimationFrame(tick);
+  wake(); // one look, for a pad the page has already been shown; it sleeps again if there is none
   refreshPrompt(); // a pad the page has already been shown
+}
+
+/**
+ * The poll runs only while there is something to poll for (issue #392): a pad the page can see,
+ * a paired one, a Detect window, a toast whose stack has to keep its seat. Otherwise it SLEEPS —
+ * a frame callback for the page's whole life was paid by every player who never owned a pad —
+ * and `gamepadconnected`, Detect Gamepad and a toast wake it. The browser shows a pad to a page
+ * only once one of its buttons is pressed, and that is exactly when `gamepadconnected` fires.
+ */
+let ticking = false;
+let sawPad = false;
+function wake(): void {
+  if (ticking) return;
+  ticking = true;
+  lastTick = 0; // no dt across the sleep
+  requestAnimationFrame(tick);
+}
+function keepTicking(): boolean {
+  return sawPad || paired !== null || detectUntil !== 0 || holds.size > 0 || !!stackEl?.childElementCount;
 }
 
 /** Is a pad paired? The HUD shows the command-card selector only then. */
@@ -248,7 +270,16 @@ export function isHovered(el: Element): boolean {
 }
 
 function tick(now: number): void {
-  requestAnimationFrame(tick);
+  try {
+    poll(now);
+  } finally {
+    if (keepTicking()) requestAnimationFrame(tick);
+    else ticking = false;
+  }
+}
+
+function poll(now: number): void {
+  sawPad = false;
   const dt = lastTick ? Math.min(now - lastTick, 100) / 1000 : 0;
   lastTick = now;
   let pads: ReadonlyArray<Gamepad | null>;
@@ -271,6 +302,7 @@ function tick(now: number): void {
 
   for (const pad of pads) {
     if (!pad || !pad.connected) continue;
+    sawPad = true;
     // A pad seen for the FIRST time has just had a button pressed: the browser shows a page a
     // controller only after one of its buttons goes down, and the snapshot that first carries
     // it does not carry that press (measured with an 8BitDo SN30 Pro+ on Chromium/Linux, turned
@@ -1070,6 +1102,7 @@ function toast(text: string): void {
   el.className = "gamepad-toast";
   el.textContent = text;
   stack().appendChild(el);
+  wake(); // the stack keeps its seat over the fps strip while it is up (poll)
   setTimeout(() => {
     el.classList.add("leaving");
     setTimeout(() => el.remove(), 400);
@@ -1150,6 +1183,7 @@ export function gamepadButtonPressed(): void {
   }
   if (detectUntil) return;
   detectUntil = performance.now() + DETECT_MS;
+  wake();
   toast("Press any button on your gamepad…");
   paintDetect();
 }
