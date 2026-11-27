@@ -18,8 +18,9 @@
 // base `code` (so an item's row, a creep's twin and a map's own ability built on the same base
 // all inherit it), and is answered once, for every door.
 //
-// What is NOT here: a rule that needs the caster's side as well as the target (the polarity
-// spells — POLARITY_SPELLS in spells.ts, which the AI also reads to decide heal-or-harm), and
+// What is NOT here: a rule that is the caster's side and nothing else (the polarity spells —
+// POLARITY_SPELLS in spells.ts, which the AI also reads to decide heal-or-harm; the drain's
+// mana rule below asks the side too, but only to know whether a pool is being ROBBED), and
 // the "would this achieve anything" refusals (a heal at full health, a replenish with nobody to
 // restore), which are about the cast's effect rather than about who may be picked.
 
@@ -40,7 +41,13 @@ export type TargetRule =
   /** A CREEP (anything Neutral Hostile owns) above the level in this Data column of the
    *  ability's own row is "too powerful" — read off the row rather than a constant, so a map
    *  that retunes the column retunes the cap. 0 in the column means no cap. */
-  | { kind: "creepLevel"; column: number; error: string };
+  | { kind: "creepLevel"; column: number; error: string }
+  /** A DRAIN that takes MANA from an ENEMY — its row's own Data `column` ("Mana Points
+   *  Drained") above 0 — needs a pool on that enemy. Asked of the CASTER's row and side, because
+   *  the Blood Mage's Siphon Mana and the Dark Ranger's Drain are one base code (`AHdr`): her
+   *  life drain (DataB 0) may take a Footman, his mana drain may not, and either may FEED an ally
+   *  whatever it carries. */
+  | { kind: "manaDrainPool"; column: number; error: string };
 
 const manaPool = (error: string): TargetRule => ({ kind: "manaPool", error });
 const undeadClass = (error: string): TargetRule => ({ kind: "undeadClass", error });
@@ -65,6 +72,11 @@ export const TARGET_RULES: Readonly<Record<string, readonly TargetRule[]>> = {
   // mana." The Moon Well, which has a pool, stays a legal target (the developer's observation of
   // the real client: the wand drains a Moon Well and hands the mana to the hero).
   Aste: [manaPool("Targetmanauser")],
+  // SIPHON MANA — "Drains <AHdr,DataB1> mana per second from an enemy" (HumanAbilityStrings
+  // [AHdr] Ubertip): an enemy with no mana bar has nothing to drain, and the Blood Mage siphoned
+  // a Footman for the full rate (issue #357). `targs1` is `air,ground,organic,notself`, so it is
+  // this rule that refuses him — with the same `Targetmanauser` line the wand uses.
+  AHdr: [{ kind: "manaDrainPool", column: 1, error: "Targetmanauser" }],
 
   // ── needs an Undead ───────────────────────────────────────────────────────────────────────
   // The sacrifices take a "friendly Undead unit" (both Ubertips, word for word), and both rows

@@ -238,5 +238,79 @@ const step = (w, seconds, dt = 0.05) => { for (let i = 0; i < Math.round(seconds
   DRAIN.targetFlags = ["air", "ground", "organic", "enemy"];
 }
 
+// --- a drain moves what it TAKES, and nothing else (issue #357) ---------------------------
+//
+// The two halves used to be independent buffs, so the receiving end gained the full rate
+// whatever the other end had: a Blood Mage could siphon a Footman, or a caster already dry, and
+// fill his own bar. `SimWorld.drainTransfer` now moves `min(rate · dt, what is there)`.
+const siphon = (data) => {
+  const w = world();
+  const mage = add(w, { x: 0, y: 0, mana: 0, maxMana: 300, name: "Blood Mage" });
+  mage.abilities = [{ id: "ANdr", code: "AHdr", level: 1, cooldownLeft: 0, autocastOn: false }];
+  DRAIN.levelData[0].data = data;
+  DRAIN.levelData[0].cost = 0;
+  return { w, mage };
+};
+{
+  // A Footman has no mana bar: the cast is refused ("Must target a unit with mana.").
+  const { w, mage } = siphon([0, 15]);
+  const footman = add(w, { x: 200, y: 0, team: 1, owner: 1, mana: 0, maxMana: 0, name: "Footman" });
+  check("Siphon Mana may not be aimed at an enemy with no mana bar", w.issueCast(mage.id, "AHdr", footman.id), false);
+  check("…with the wand's own line", w.targetError(mage, footman, DRAIN.targetFlags, "AHdr"), "Targetmanauser");
+  // …while the Dark Ranger's LIFE drain, the same base code, still takes him.
+  DRAIN.levelData[0].data = [25, 0];
+  check("…but a life drain on the same code still may", w.targetError(mage, footman, DRAIN.targetFlags, "AHdr"), null);
+  // …and even forced past the gate (a script's order), the siphon gives the caster nothing.
+  DRAIN.levelData[0].data = [0, 15];
+  w.applySpellEffect("AHdr", 1, mage, { targetId: footman.id, x: footman.x, y: footman.y }, DRAIN);
+  w.tick(0.05);
+  check("…and forced through, it moves nothing", mage.mana, 0);
+}
+{
+  // A caster with a pool and almost nothing in it: the Blood Mage gets what was THERE, and the
+  // channel stops when the bar is dry.
+  const { w, mage } = siphon([0, 15]);
+  const sorc = add(w, { x: 200, y: 0, team: 1, owner: 1, mana: 10, maxMana: 300, name: "Sorceress" });
+  w.issueCast(mage.id, "AHdr", sorc.id);
+  step(w, 0.5);
+  check("an emptied caster may still be siphoned", drainBuffs(sorc).length > 0 || sorc.mana === 0, true);
+  step(w, 1.5);
+  check("…but the Blood Mage gains only the 10 she had", Math.round(mage.mana), 10);
+  check("…her bar is dry", sorc.mana, 0);
+  check("…and the siphon STOPS when it is", [mage.order !== "cast", drainBuffs(sorc), drainBuffs(mage)], [true, [], []]);
+}
+{
+  // Fed to an ALLY, the siphon stops when the ally is full, and costs the Blood Mage only what
+  // the ally had room for.
+  const { w, mage } = siphon([0, 15, 1, 0, 30]);
+  mage.mana = 300;
+  DRAIN.targetFlags = ["air", "ground", "organic", "notself"];
+  const friend = add(w, { x: 200, y: 0, mana: 280, maxMana: 300, name: "Friend" });
+  w.issueCast(mage.id, "AHdr", friend.id);
+  step(w, 2);
+  check("an ally is filled to the brim and no further", friend.mana, 300);
+  check("…for only the 20 it had room for", Math.round(300 - mage.mana), 20);
+  check("…and the siphon stops there", [mage.order !== "cast", drainBuffs(friend)], [true, []]);
+  DRAIN.targetFlags = ["air", "ground", "organic", "enemy"];
+}
+{
+  // LIFE: the Dark Ranger heals for what came off, not for the rate — a victim at 10 hp is worth
+  // 10 — and the kill is hers.
+  const { w, ranger, victim } = pair();
+  DRAIN.levelData[0].data = [25, 0];
+  DRAIN.levelData[0].cost = 75;
+  ranger.mana = 300;
+  ranger.hp = 100;
+  victim.hp = 10;
+  let killer = null;
+  w.deathObserver = (u, k) => { if (u === victim) killer = k ? k.id : null; };
+  w.issueCast(ranger.id, "AHdr", victim.id);
+  step(w, 2);
+  check("a life drain heals the caster for no more than it took", Math.round(ranger.hp), 110);
+  check("…and the body it finishes is the caster's kill", killer, ranger.id);
+}
+DRAIN.levelData[0].data = [25, 0];
+DRAIN.levelData[0].cost = 75;
+
 console.log(`\n${failed ? `${failed} FAILED` : "all passed"}`);
 process.exit(failed ? 1 : 0);

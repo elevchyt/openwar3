@@ -3477,9 +3477,12 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     // (which is what put a life drain's swirl on a mana drain's victim).
     const casterFx = api.buffFxOf(DRAIN_BUFFS.caster[flavour]);
     const targetFx = api.buffFxOf(DRAIN_BUFFS.target[flavour]);
-    // A drain TRANSFERS: what leaves `from` arrives in `to`, at the same rate, for the same
-    // seconds. Life is a damage-over-time paired with a heal-over-time; mana is the same shape
-    // with the mana-regen buff, negative on the giver. The ART stays with the role either way —
+    // A drain TRANSFERS: what leaves `from` arrives in `to`, for the same seconds. Life is a
+    // damage-over-time paired with a heal-over-time; mana is the same shape with the mana-regen
+    // buff, negative on the giver. The pair carries the RATES; the moving is the world's
+    // (`SimWorld.drainTransfer`), which pays the receiving end only what actually left the
+    // other — nothing off a Footman with no mana, nothing onto an ally already full — and ends
+    // a mana drain once there is nothing left to move (issue #357). The ART stays with the role either way —
     // the caster wears the caster's model and the target the target's, whichever way it flows.
     // A hostile row that names neither (a custom ability with no data) falls back to a small
     // life drain rather than doing nothing at all; an ally's zero is a real zero (the Dark

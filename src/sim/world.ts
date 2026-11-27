@@ -14564,7 +14564,9 @@ export class SimWorld {
     for (const b of u.buffs) {
       if (b.group === SELF_INVIS_GROUP.AOwk) windWalk = true; // either half — see SimUnit.windWalk
       if (b.kind === "armor") armorBonus += b.value;
-      else if (b.kind === "manaRegen") manaRegenBonus += b.value;
+      // A DRAIN's mana half is moved by tickDrains, which pays out only what it took — never
+      // as regeneration (issue #357); the buff stays for its art and its clock.
+      else if (b.kind === "manaRegen") { if (b.group !== DRAIN_GROUP) manaRegenBonus += b.value; }
       else if (b.kind === "damage") damageBonus += b.value;
       else if (b.kind === "damagePct") damagePct += b.value; // Command/Trueshot Aura
       else if (b.kind === "hpRegen") hpRegenBonus += b.value; // Unholy Aura
@@ -15427,7 +15429,12 @@ export class SimWorld {
       // already on the unit and its clock is already running, the healing just hasn't
       // engaged yet. Only the Staff of Sanctuary sets one (its "Hero/Unit Regeneration
       // Delay", 1s and 5s) — every other hot lands with delay 0 and is unaffected.
-      if (b.kind === "hot" && b.value && b.delay <= 0) u.hp = Math.min(u.maxHp, u.hp + b.value * dt);
+      //
+      // A DRAIN's pair (DRAIN_GROUP) is the exception: its life is MOVED by tickDrains, which
+      // heals the receiving end for exactly what came off the other (issue #357), so neither
+      // half bites or heals here.
+      if (b.group === DRAIN_GROUP) { /* tickDrains moves it */ }
+      else if (b.kind === "hot" && b.value && b.delay <= 0) u.hp = Math.min(u.maxHp, u.hp + b.value * dt);
       // A non-lethal dot (every poison) whittles and stops: it may take the last point off
       // a unit's health bar's worth of hp but never the last point itself.
       else if (b.kind === "dot" && b.value) {
@@ -16564,6 +16571,12 @@ export class SimWorld {
           const lvl = this.passiveLevelData(caster, code);
           const cap = lvl ? this.dataOf(lvl, rule.column, 0) : 0;
           if (cap > 0 && target.level > cap) return rule.error;
+          break;
+        }
+        case "manaDrainPool": {
+          if (target.maxMana > 0 || !this.hostile(caster, target)) break;
+          const lvl = this.passiveLevelData(caster, code);
+          if (lvl && this.dataOf(lvl, rule.column, 0) > 0) return rule.error;
           break;
         }
       }
@@ -18896,7 +18909,7 @@ export class SimWorld {
     return u.hp > 0 && !u.stunned && u.order === "cast" && !!pc && pc.code === code && pc.fired && pc.channelLeft > 0;
   }
 
-  private tickDrains(): void {
+  private tickDrains(dt: number): void {
     if (!this.drains.length) return;
     let w = 0;
     for (const dr of this.drains) {
@@ -18909,7 +18922,7 @@ export class SimWorld {
       // The leash is measured the way the cast range was (castGap, hull to hull), so a link
       // made at the edge of `Rng1` has exactly `Area1 - Rng1` of slack before it snaps.
       const leashed = !caster || !target || dr.leash <= 0 || this.castGap(caster, target.x, target.y, target) <= dr.leash;
-      if (channelling && target && target.hp > 0 && leashed) {
+      if (channelling && target && target.hp > 0 && leashed && this.drainTransfer(caster, target, dt)) {
         this.drains[w++] = dr; // still draining
         continue;
       }
@@ -18930,6 +18943,59 @@ export class SimWorld {
       this.spellLightningStops.push(drainTag(dr.casterId));
     }
     this.drains.length = w;
+  }
+
+  /**
+   * One step of a drain's TRANSFER (issue #357). The handler lays a pair of DRAIN_GROUP buffs —
+   * a `dot` and a negative `manaRegen` on the end that PAYS, a `hot` and a positive one on the
+   * end that receives — and those carry the rates, the art and the clock; the moving is done
+   * here, so the receiving end gains exactly what left the other and nothing it did not:
+   *
+   *   • LIFE: the payer loses `rate × dt` through the spell cell of the damage table (a dot is
+   *     ability damage), and the receiver is healed for the hit points that actually came off —
+   *     a bite that was reduced, or that met a body already at 0, heals for no more than it took.
+   *   • MANA: what moves is `min(rate × dt, payer's mana)`, and onto an ALLY no more than the
+   *     room left in its bar — a Blood Mage siphoning a Footman or an emptied caster gains
+   *     nothing at all.
+   *
+   * A pure MANA drain ends when there is nothing left to move: the victim's bar is dry, or (fed
+   * to an ally) the ally is full or the Blood Mage has nothing left to give — "when the target's
+   * mana runs out, Siphon Mana is stopped", the developer's rule in the issue. Returns false then,
+   * and the caller ends the channel exactly as it does for a broken leash.
+   */
+  private drainTransfer(caster: SimUnit, target: SimUnit, dt: number): boolean {
+    const mine = (u: SimUnit, kind: string) => u.buffs.find((b) => b.group === DRAIN_GROUP && b.kind === kind && b.sourceId === caster.id && b.timeLeft > 0);
+    const out = (u: SimUnit) => mine(u, "dot") ?? u.buffs.find((b) => b.group === DRAIN_GROUP && b.kind === "manaRegen" && b.value < 0 && b.sourceId === caster.id && b.timeLeft > 0);
+    // Which way it flows is on the buffs, as the handler laid them: the end wearing the dot (or
+    // the negative mana) pays.
+    const from = out(target) ? target : out(caster) ? caster : null;
+    if (!from) return true; // nothing to move (a Magic Leash, or a drain whose buffs have run out)
+    const to = from === target ? caster : target;
+    const lifeRate = mine(from, "dot")?.value ?? 0;
+    const manaRate = -(from.buffs.find((b) => b.group === DRAIN_GROUP && b.kind === "manaRegen" && b.value < 0 && b.sourceId === caster.id && b.timeLeft > 0)?.value ?? 0);
+    if (lifeRate > 0 && from.hp > 0) {
+      const before = from.hp;
+      from.hp -= lifeRate * dt * this.spellTypeMult(from); // ability damage: DamageBonusSpells (issue #277)
+      const taken = before - Math.max(0, from.hp);
+      if (taken > 0) {
+        to.hp = Math.min(to.maxHp, to.hp + taken);
+        this.breakItemRegen(from); // a dot is "a spell which does damage" (see tickBuffs)
+      }
+      if (from.hp <= 0) {
+        // A drained ENEMY dies to the caster; a Dark Ranger who gives herself away dies to nobody.
+        this.kill(from, from === target ? caster.id : 0);
+        return false;
+      }
+    }
+    if (manaRate > 0) {
+      const room = from === caster ? Math.max(0, to.maxMana - to.mana) : Infinity;
+      const moved = Math.max(0, Math.min(manaRate * dt, from.mana, room));
+      from.mana -= moved;
+      to.mana = Math.min(to.maxMana, to.mana + moved);
+      // A drain that moves only mana is over once there is none left to move.
+      if (lifeRate <= 0 && (from.mana <= 0 || (from === caster && to.mana >= to.maxMana))) return false;
+    }
+    return true;
   }
 
   /** Take the drain buffs (and their art) off one end of a broken channel. */
@@ -22728,7 +22794,7 @@ export class SimWorld {
     simProfile.begin("sim.world.spells");
     this.tickSpellFields(dt); // Blizzard-style repeating area effects
     this.tickLocustSwarms(dt); // …and the Locust Swarms: release, bite, carry home
-    this.tickDrains(); // a broken Drain channel takes its buffs and its beam down with it
+    this.tickDrains(dt); // a drain moves what it takes, and a broken channel takes its buffs and beam down
     this.tickPossessions(dt); // …and a Possession that survived its 4.5s changes hands
     this.tickConversions(dt); // …and a Dark Conversion's villager waking up a zombie
     this.tickTaunts(dt); // …and a Mountain Giant's Taunt pulsing again
