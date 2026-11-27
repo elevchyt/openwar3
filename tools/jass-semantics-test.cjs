@@ -299,5 +299,38 @@ endfunction
   check('GetStoredString on a miss is null', call('StoredMiss'), true);
 }
 
+// --- #373: StringHash is the game's (lookup2 over the folded string) --------------------------
+{
+  console.log('--- StringHash is the game\'s hash, case- and slash-insensitive (#373) ---');
+  const { call } = boot(`
+function H takes string s returns integer
+    return StringHash(s)
+endfunction
+function Cache takes nothing returns integer
+    local gamecache gc = InitGameCache("semantics.w3v")
+    call StoreInteger(gc, "Human02", "Arthas", 7)
+    call StoreInteger(gc, "a/b", "k", 3)
+    return GetStoredInteger(gc, "HUMAN02", "arthas") * 10 + GetStoredInteger(gc, "A\\\\B", "K")
+endfunction
+function CacheFlush takes nothing returns boolean
+    local gamecache gc = InitGameCache("semantics.w3v")
+    call StoreString(gc, "M", "Key", "v")
+    call FlushStoredString(gc, "m", "KEY")
+    return not HaveStoredString(gc, "M", "Key")
+endfunction
+`);
+  const h = (s) => call('H', [{ k: 'string', s }]);
+  check('StringHash("A") is the published -1587459251', h('A'), -1587459251);
+  check('case does not matter', h('Hello') === h('hello') && h('-AR') === h('-ar'), true);
+  check('"/" hashes as "\\"', h('a/b') === h('A\\B'), true);
+  check('different strings differ', h('hello') !== h('world'), true);
+  // One length past each of lookup2's twelve-byte blocks and through every tail case.
+  const lens = new Set(Array.from({ length: 26 }, (_v, n) => h('x'.repeat(n))));
+  check('every length 0..25 hashes distinctly', lens.size, 26);
+  check('a 30-byte string', h('abcdefghijklmnopqrstuvwxyz0123') === h('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123'), true);
+  check('game-cache labels are case- and slash-insensitive', call('Cache'), 73);
+  check('a flush finds the label in any case', call('CacheFlush'), true);
+}
+
 console.log(failures ? `\n${failures} failure(s).` : '\nAll JASS semantics checks passed.');
 process.exit(failures ? 1 : 0);

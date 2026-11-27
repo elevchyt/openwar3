@@ -161,10 +161,11 @@ export function registerTextNatives(rt: Runtime): void {
   def(rt, "GetHeroProperName", (c, a) => jStr(unitName(c, unit(c, a[0]))));
 
   // --- text logic: string hashing + localization ---
-  // StringHash — a deterministic 32-bit hash (FNV-1a). Not bit-identical to
-  // Blizzard's (theirs is an internal detail), but stable within a run, which is all
-  // maps rely on: it keys gamecache/hashtable slots via StringHashBJ.
-  def(rt, "StringHash", (_c, a) => jInt(fnv1a(asStr(a[0]))));
+  // StringHash — the GAME's hash, bit for bit (`stringHash` below), because maps depend on the
+  // exact number and not only on its being stable: a chat command compared by hash (`-AR`
+  // against `-ar`), a precomputed hash literal in a map's script, a save code with a hash in
+  // it. It used to be a case-sensitive FNV-1a, which answered every one of those wrongly.
+  def(rt, "StringHash", (_c, a) => jInt(stringHash(asStr(a[0]))));
   // GetLocalizedString is a lookup in the GAME's own string table, not a no-op: the whole
   // victory/defeat screen is written in its keys (GAMEOVER_VICTORY_MSG → "Victory!",
   // GAMEOVER_QUIT_GAME → "|CFFFFFFFFQ|Ruit Game"), and blizzard.j never spells the text
@@ -195,12 +196,69 @@ export function localizedHotkey(text: string): number {
   return ch ? ch.charCodeAt(0) : 0;
 }
 
-/** FNV-1a 32-bit, returned as a signed int (JASS `integer` is 32-bit signed). */
-function fnv1a(s: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i) & 0xff;
-    h = Math.imul(h, 0x01000193);
+/**
+ * The game's string folding: ASCII letters upper-cased and `/` read as `\`, so "a/b", "A\B"
+ * and "a\b" are one string. It is Storm's path-name rule (the same function hashes archive
+ * paths) and why `StringHash` and the game cache ignore case. Only ASCII is folded — the
+ * jassbot documentation of StringHash notes that multi-byte characters hash differently from
+ * one patch to the next (1.30.0 / 1.31.1), and 1.30.4 is the one we answer for.
+ */
+export function foldStormString(s: string): string {
+  return s.replace(/[a-z/]/g, (ch) => (ch === "/" ? "\\" : String.fromCharCode(ch.charCodeAt(0) - 32)));
+}
+
+/** lookup2's mixing step (Bob Jenkins, lookup2.c, 1996, public domain), on three int32s. */
+function mix(r: Int32Array): void {
+  let a = r[0], b = r[1], c = r[2];
+  a = (a - b - c) | 0; a ^= c >>> 13;
+  b = (b - c - a) | 0; b ^= a << 8;
+  c = (c - a - b) | 0; c ^= b >>> 13;
+  a = (a - b - c) | 0; a ^= c >>> 12;
+  b = (b - c - a) | 0; b ^= a << 16;
+  c = (c - a - b) | 0; c ^= b >>> 5;
+  a = (a - b - c) | 0; a ^= c >>> 3;
+  b = (b - c - a) | 0; b ^= a << 10;
+  c = (c - a - b) | 0; c ^= b >>> 15;
+  r[0] = a; r[1] = b; r[2] = c;
+}
+
+const utf8 = new TextEncoder();
+
+/**
+ * `StringHash` as the game computes it. The native is Storm's `SStrHash2`, which jassbot's
+ * documentation of StringHash (lep.duckdns.org/jassbot/doc/StringHash) and the Hive thread
+ * "bits of interest" (hiveworkshop 213272) describe as the hash of the 1997 Dr. Dobb's article
+ * — Bob Jenkins' lookup2, his public-domain "My Hash" — over the FOLDED string's UTF-8 bytes
+ * with an initial value of 0. Written here from lookup2.c, not from anything of Blizzard's. The
+ * check that it is the same function is a number the community publishes:
+ * `StringHash("A") = -1587459251`, which this reproduces (tools/jass-semantics-test.cjs).
+ */
+export function stringHash(s: string): number {
+  const k = utf8.encode(foldStormString(s));
+  const r = new Int32Array([0x9e3779b9 | 0, 0x9e3779b9 | 0, 0]);
+  const word = (i: number): number => k[i] | (k[i + 1] << 8) | (k[i + 2] << 16) | (k[i + 3] << 24);
+  let i = 0;
+  let len = k.length;
+  for (; len >= 12; i += 12, len -= 12) {
+    r[0] += word(i);
+    r[1] += word(i + 4);
+    r[2] += word(i + 8);
+    mix(r);
   }
-  return h | 0;
+  r[2] += k.length;
+  // The tail, as lookup2's fall-through switch adds it: c's low byte is the length's, so the
+  // last three bytes land one byte up in c.
+  if (len >= 11) r[2] += k[i + 10] << 24;
+  if (len >= 10) r[2] += k[i + 9] << 16;
+  if (len >= 9) r[2] += k[i + 8] << 8;
+  if (len >= 8) r[1] += k[i + 7] << 24;
+  if (len >= 7) r[1] += k[i + 6] << 16;
+  if (len >= 6) r[1] += k[i + 5] << 8;
+  if (len >= 5) r[1] += k[i + 4];
+  if (len >= 4) r[0] += k[i + 3] << 24;
+  if (len >= 3) r[0] += k[i + 2] << 16;
+  if (len >= 2) r[0] += k[i + 1] << 8;
+  if (len >= 1) r[0] += k[i];
+  mix(r);
+  return r[2];
 }

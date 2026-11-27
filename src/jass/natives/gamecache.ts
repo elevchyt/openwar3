@@ -43,6 +43,13 @@
 // see the same data. The persistence is `data/gameCache.ts`, which puts it in the player's own
 // PROFILE — two profiles are two campaigns, with their own heroes, levels and belts.
 //
+// The mission and key LABELS are case-insensitive and read `/` as `\`, as `StringHash` is
+// (`foldStormString`, natives/text.ts — Storm's string rule, which the game cache is keyed by):
+// `StoreInteger(gc, "Human02", "Arthas", …)` is found by `GetStoredInteger(gc, "HUMAN02",
+// "arthas")`. Every label is folded on the way in (`label`), and a cache read back from the
+// profile is folded once as it is opened (`foldCache`), so a blob written before this rule
+// still answers.
+//
 // `Sync*` is the one group that does nothing. It exists to push a cached value from the host
 // to the other machines in a multiplayer game; blizzard.j has every call to it commented out,
 // and a campaign has nobody to sync to.
@@ -51,6 +58,7 @@ import type { GameCacheObj, NativeCtx, Runtime } from "../runtime";
 import type { StoredUnitState } from "../../sim/world";
 import { readGameCache, writeGameCache } from "../../data/gameCache";
 import { mintUnitHandle } from "./world";
+import { foldStormString } from "./text";
 import { asInt, asNum, asStr, jBool, jHandle, jInt, jReal, jStr, JNULL, truthy, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
@@ -68,6 +76,23 @@ interface CacheSlot {
 
 const cache = (c: NativeCtx, v: JassValue): GameCacheObj | undefined => c.rt.data<GameCacheObj>(v);
 
+/** A mission or key label as the cache files it (see the header). */
+const label = (v: JassValue | undefined): string => foldStormString(v ? asStr(v) : "");
+
+/** A cache's data with every label folded. Two labels that fold together merge, the later
+ *  slot's fields over the earlier's — the one answer a case-insensitive store could give. */
+function foldCache(data: GameCacheObj["data"]): GameCacheObj["data"] {
+  const out: GameCacheObj["data"] = {};
+  for (const [mission, rows] of Object.entries(data)) {
+    const into = (out[foldStormString(mission)] ??= {});
+    for (const [key, slot] of Object.entries(rows)) {
+      const k = foldStormString(key);
+      into[k] = { ...(into[k] as object | undefined), ...(slot as object) } as typeof slot;
+    }
+  }
+  return out;
+}
+
 /** The slot at (missionKey, key), minting the rows on the way down when `create`. */
 function slotOf(g: GameCacheObj, mission: string, key: string, create: boolean): CacheSlot | undefined {
   const rows = g.data[mission] ?? (create ? (g.data[mission] = {}) : undefined);
@@ -83,14 +108,14 @@ function slotOf(g: GameCacheObj, mission: string, key: string, create: boolean):
 function read<K extends keyof CacheSlot>(c: NativeCtx, a: JassValue[], field: K): CacheSlot[K] | undefined {
   const g = cache(c, a[0]);
   if (!g) return undefined;
-  return slotOf(g, asStr(a[1]), asStr(a[2]), false)?.[field];
+  return slotOf(g, label(a[1]), label(a[2]), false)?.[field];
 }
 
 /** Write one typed field. */
 function write<K extends keyof CacheSlot>(c: NativeCtx, a: JassValue[], field: K, value: CacheSlot[K]): boolean {
   const g = cache(c, a[0]);
   if (!g) return false;
-  const slot = slotOf(g, asStr(a[1]), asStr(a[2]), true);
+  const slot = slotOf(g, label(a[1]), label(a[2]), true);
   if (!slot) return false;
   slot[field] = value;
   return true;
@@ -99,11 +124,12 @@ function write<K extends keyof CacheSlot>(c: NativeCtx, a: JassValue[], field: K
 /** Drop one typed field, and the slot with it once nothing is left in it. */
 function flush(c: NativeCtx, a: JassValue[], field: keyof CacheSlot): void {
   const g = cache(c, a[0]);
-  const mission = asStr(a[1]);
-  const slot = g ? slotOf(g, mission, asStr(a[2]), false) : undefined;
+  const mission = label(a[1]);
+  const key = label(a[2]);
+  const slot = g ? slotOf(g, mission, key, false) : undefined;
   if (!g || !slot) return;
   delete slot[field];
-  if (!Object.keys(slot).length) delete g.data[mission][asStr(a[2])];
+  if (!Object.keys(slot).length) delete g.data[mission][key];
 }
 
 export function registerGameCacheNatives(rt: Runtime): void {
@@ -116,7 +142,7 @@ export function registerGameCacheNatives(rt: Runtime): void {
     const key = file.toLowerCase();
     const existing = c.rt.gameCaches.get(key);
     if (existing) return jHandle(existing.handleId, "gamecache");
-    const g: GameCacheObj = { handleId: 0, file, data: readGameCache(file) };
+    const g: GameCacheObj = { handleId: 0, file, data: foldCache(readGameCache(file)) };
     g.handleId = c.rt.handles.alloc(g);
     c.rt.gameCaches.set(key, g);
     return jHandle(g.handleId, "gamecache");
@@ -128,7 +154,7 @@ export function registerGameCacheNatives(rt: Runtime): void {
   // "Reload all game cache data from disk" — every cache this session has open goes back to
   // what the profile holds, throwing away anything stored since the last save.
   def(rt, "ReloadGameCachesFromDisk", (c) => {
-    for (const g of c.rt.gameCaches.values()) g.data = readGameCache(g.file);
+    for (const g of c.rt.gameCaches.values()) g.data = foldCache(readGameCache(g.file));
     return jBool(true);
   });
 
@@ -196,7 +222,7 @@ export function registerGameCacheNatives(rt: Runtime): void {
   });
   def(rt, "FlushStoredMission", (c, a) => {
     const g = cache(c, a[0]);
-    if (g) delete g.data[asStr(a[1])];
+    if (g) delete g.data[label(a[1])];
     return JNULL;
   });
   def(rt, "FlushStoredInteger", (c, a) => { flush(c, a, "int"); return JNULL; });
