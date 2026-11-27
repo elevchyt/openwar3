@@ -3034,6 +3034,10 @@ const FOLLOW_GAP = 64; // edge-to-edge distance a follower keeps behind its lead
 const FOLLOW_LEASH = 48;
 const FOLLOW_SLOT_ARRIVE = 24; // how close a fanned follower parks to its formation slot
 const ACQUIRE_PERIOD = 0.5; // seconds between idle auto-acquire scans
+/** How many sim steps a crowd's auto-acquire scans are spread over — see `acquireT`'s seed in
+ *  `add()`. ACQUIRE_PERIOD is 30 steps at SIM_DT, so 30 phases puts a thirtieth of the world's
+ *  idle scans on each step instead of all of them on one (issue #386). */
+const ACQUIRE_PHASES = 30;
 // How often an attack-moving unit whose target has stepped OUT OF REACH asks whether a nearer
 // enemy is worth turning on instead (tickAttackMove). Ours, and the same 0.2 s tickAttack's
 // in-strike-range switch runs on — the two are one rule for the two orders.
@@ -3047,7 +3051,7 @@ const ARMY_TIER = 2;
 // wider than a unit's own acquisition range (~500) so a back-rank unit rallies to a
 // nearby melee instead of standing idle a few paces behind it, but bounded so an idle
 // unit doesn't sprint across the map to every distant skirmish. Only enemies actively
-// attacking an ally qualify (see assistTarget), so it never wakes a peaceful creep camp.
+// attacking an ally qualify (see acquireOrAssist), so it never wakes a peaceful creep camp.
 const ASSIST_RANGE = 800;
 // A mover that cannot take the next tile waits this long before recalculating a route
 // AROUND whoever holds it (issue #108's "path-finding disruption"). Short enough that
@@ -10529,7 +10533,16 @@ export class SimWorld {
       amDestY: unit.y,
       patrolX: unit.x,
       patrolY: unit.y,
-      acquireT: 0,
+      // Staggered, not zero — the repollT lesson again (docs/perf-logging.md). Every unit used
+      // to start its scan clock at 0 and re-arm it to ACQUIRE_PERIOD, so every map-placed unit
+      // and everything born on one step scanned on the SAME step for the rest of the match: 600
+      // idle units were a 3.6–7 ms step every half second over a 0.55 ms median (issue #386).
+      // The phase comes off the sim's own id counter, so it is identical on every client; an
+      // ORDER still zeroes the clock (issueAttack, the stop, a lost target), so a unit told to
+      // fight still looks at once. Only a fresh unit's first look moves, by under ACQUIRE_PERIOD.
+      // Each phase sits HALF A STEP into its slot: on a step boundary, float rounding in the
+      // `-= dt` count decided which step a slot fired on, and neighbouring slots merged.
+      acquireT: ((unit.id % ACQUIRE_PHASES) + 0.5) * (ACQUIRE_PERIOD / ACQUIRE_PHASES),
       stuckT: 0,
       stuckRetries: 0,
       corpseT: 0,
@@ -24534,6 +24547,11 @@ export class SimWorld {
       if (distSkip(u, t, range, true)) continue;
       if (!this.hostile(u, t)) continue;
       if (!this.canAttack(u, t)) continue; // a ground-only creep ignores the flyer overhead
+      // …nor a tower it is too hurt to fight: it would only break off again (fleesTower). Every
+      // other door already asked — the provoke, the call for help, the retarget, the camp's
+      // anchor — and this one, the idle scan at its post, turned it straight back on the tower
+      // whose fire it had just walked home under, the moment its next look came round.
+      if (this.fleesTower(u, t)) continue;
       if (!this.canSee(u, t)) continue; // a creep aggroes only what it can see (issue #45)
       if (idle && t.flying && t.moving && t.order !== "attackmove" && t.order !== "attack") continue;
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
@@ -31010,7 +31028,7 @@ export class SimWorld {
       ? this.bestCreepTarget(u, reach, true)
       : pinned
         ? this.acquireTarget(u, reach, true)
-        : this.acquireTarget(u, range) ?? this.assistTarget(u, ASSIST_RANGE);
+        : this.acquireOrAssist(u, range, ASSIST_RANGE);
     if (best) {
       // A fight it chose for itself is leashed to where it stands (see setAutoGuardPost).
       // Only from IDLE: an attack-move or a patrol already has somewhere to be, and planting
@@ -31135,34 +31153,69 @@ export class SimWorld {
     return false;
   }
 
-  /** Assist fallback for an idle unit with no enemy in its own acquisition range: rally to
-   *  a fight a friend is already in. Scans our own side for allies currently ATTACKING an
-   *  enemy and returns the nearest such enemy within the wider ASSIST_RANGE (issue #24:
-   *  back-rank units left idle a few paces behind the fight). Keying off "an ally is
-   *  attacking it" — rather than "it is attacking an ally" — is what makes this fire even
-   *  when the enemy is being focused down and isn't hitting back, and it still can't pull a
-   *  peaceful/un-aggroed creep camp (no ally is attacking those). */
-  private assistTarget(u: SimUnit, range: number): SimUnit | null {
-    if (u.swarm) return null; // …and answers nobody's fight but the swarm's
+  /**
+   * `acquireTarget(u, range) ?? <the nearest enemy a friend is fighting>` in ONE walk of the world — the
+   * idle scan's miss used to walk every unit twice (issue #386). Both halves keep their own
+   * clauses and their own running best, in the same Map order, so the answer is exactly the
+   * two calls': the acquire half's pick wins whenever it has one, and the assist half stops
+   * paying the moment it does (its answer can no longer be used). The Gargoyle's PRIORITIZE
+   * flyer pass is acquireTarget's own first step and runs first here too.
+   *
+   * The ASSIST half is the fallback for an idle unit with no enemy in its own acquisition
+   * range: rally to a fight a friend is already in — the nearest enemy that one of our own
+   * side is ATTACKING, measured to the FRIEND within the wider `assistRange` (issue #24:
+   * back-rank units left idle a few paces behind the fight). Keying off "an ally is attacking
+   * it" rather than "it is attacking an ally" is what makes it fire while the enemy is being
+   * focused down and not hitting back, and it still cannot pull a peaceful creep camp (no ally
+   * is attacking those). The distance is to the friend because a unit left behind is near its
+   * comrades even when their enemy is farther off; once it arrives tickAttack's in-strike-range
+   * switch re-targets it to whatever it can reach.
+   */
+  private acquireOrAssist(u: SimUnit, range: number, assistRange: number): SimUnit | null {
+    if (u.swarm) return null; // a locust neither picks nor answers a fight (see both halves)
+    if (this.prioritizesAir(u)) {
+      const air = this.acquireTarget(u, range, false, true);
+      if (air) return air;
+    }
     let best: SimUnit | null = null;
     let bestGap = range;
-    for (const ally of this.units.values()) {
-      if (ally === u || ally.team !== u.team) continue; // one of our own army
-      if (ally.order !== "attack" || ally.targetId === null) continue; // that is fighting
-      const enemy = this.units.get(ally.targetId);
-      if (!enemy || !this.hostile(u, enemy)) continue; // attacking an actual enemy of ours
-      if (!this.canAttack(u, enemy)) continue; // …that we could actually contribute against
-      // Distance to the FRIEND that's fighting, not to its enemy — a unit left behind is
-      // near its comrades even when their enemy is farther off, and it should march up to
-      // help. It then attacks the enemy that friend is engaging (and re-targets to whatever
-      // it can actually reach once it arrives, via the in-strike-range switch in tickAttack).
-      const gap = Math.hypot(ally.x - u.x, ally.y - u.y) - u.radius - ally.radius;
-      if (gap >= bestGap) continue;
-      if (!this.canSee(u, enemy)) continue; // out of sight (fog/night/treeline) → can't join that fight
-      bestGap = gap;
-      best = enemy;
+    let assist: SimUnit | null = null;
+    let assistGap = assistRange;
+    const dz = u.weapon ? this.deadZone(u.weapon) : 0;
+    for (const t of this.units.values()) {
+      if (t === u) continue;
+      // --- the acquire half: acquireTarget's loop body, clause for clause ---
+      if (
+        !distSkip(u, t, bestGap) &&
+        this.hostile(u, t) &&
+        !t.invulnerable &&
+        !t.critterGuise &&
+        !t.magicSleep &&
+        !(t.isCreep && !this.creepAggroed(t)) &&
+        this.canAttack(u, t) &&
+        this.canSee(u, t)
+      ) {
+        const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+        if (!(dz > 0 && gap < dz)) {
+          bestGap = gap;
+          best = t;
+          continue; // the assist half is moot from here on
+        }
+      }
+      if (best) continue;
+      // --- the assist half: the old assistTarget, clause for clause ---
+      if (t.team !== u.team) continue;
+      if (t.order !== "attack" || t.targetId === null) continue;
+      const enemy = this.units.get(t.targetId);
+      if (!enemy || !this.hostile(u, enemy)) continue;
+      if (!this.canAttack(u, enemy)) continue;
+      const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+      if (gap >= assistGap) continue;
+      if (!this.canSee(u, enemy)) continue;
+      assistGap = gap;
+      assist = enemy;
     }
-    return best;
+    return best ?? assist;
   }
 
   /** True while a neutral-hostile creep is in its aggroed (fighting) state — it has

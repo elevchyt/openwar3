@@ -255,7 +255,9 @@ console.log("\nthe Kobold Geomancer runs BOTH autocasts and Slows the camp's fig
     if (ok && id === geo.id && code === "Aslo") slowCasts.push(tid);
     return ok;
   };
-  for (let i = 0; i < 2 * 20; i++) { caster.tick(0.05); w.tick(0.05); keep(); }
+  // Two seconds of FIGHT: the camp's first look lands anywhere in its first half-second now
+  // (the acquire scans are phased off the unit id, issue #386), so the window carries it.
+  for (let i = 0; i < 2.5 * 20; i++) { caster.tick(0.05); w.tick(0.05); keep(); }
   check("Slow and Abolish Magic are armed together", geo.abilities.every((a) => a.autocastOn), true);
   check("the first Slow goes on the camp's focus — the puller", slowCasts[0], puller.id);
   for (let i = 0; i < 20 * 20; i++) { caster.tick(0.05); w.tick(0.05); keep(); }
@@ -465,7 +467,7 @@ console.log("\nPermanent Immolation: alight from birth, on a unit with no mana")
   const near = footman(w, 1150, 1000); // inside 220
   const far = footman(w, 1600, 1000); // outside it
   // …and both HELD: the burn makes `near` retaliate, and an idle `far` rallies to the fight
-  // its ally has started (assistTarget) and walks into the circle it is meant to be outside.
+  // its ally has started (acquireOrAssist) and walks into the circle it is meant to be outside.
   w.issueHold(near.id);
   w.issueHold(far.id);
   const b0 = near.hp;

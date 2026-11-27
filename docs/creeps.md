@@ -347,5 +347,5 @@ source says heroes and nothing else.
   `curl --compressed` (it refuses an uncompressed API request outright).
 - A headless check of a damage-over-time field wants the caster DISARMED and the victims on
   HOLD: an Infernal that is also punching makes its own burn unreadable (10 a second read as
-  45), and an idle ally rallies to the fight (`assistTarget`) and walks into the circle it was
+  45), and an idle ally rallies to the fight (`acquireOrAssist`) and walks into the circle it was
   placed outside.

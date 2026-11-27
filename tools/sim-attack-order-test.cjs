@@ -566,6 +566,11 @@ console.log("a crowd on one enemy closes without wiggling");
   let id = 1;
   for (let r = 0; r < 3; r++) for (let c = 0; c < 4; c++) addUnit(w, id++, 0, 400 + c * 64, 400 + r * 64);
   const enemy = addUnit(w, 99, 1, 1200, 500);
+  // The lone enemy looks on its first step, as every unit did before the acquire scans were
+  // phased off the unit id (issue #386). WHEN it first turns on the crowd moves how fast the
+  // ring fills around it — 8 to 12 of 12 at eight seconds across the thirty phases — and this
+  // case is about the crowd closing, not about the enemy's clock.
+  enemy.acquireT = 0;
   for (let i = 1; i < id; i++) w.issueAttack(i, enemy.id, false, true);
   const prev = new Map(); // id -> last displacement
   const reversals = new Map(); // id -> times a unit turned straight back on itself

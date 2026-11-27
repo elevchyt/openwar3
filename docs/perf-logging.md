@@ -126,6 +126,10 @@ viewpoint takes a **phase offset out of its seat number** at its first rebuild
 arrives as eight small ones. The rate is unchanged, and the phase is derived from the slot, so
 nothing about the sim's vision-gated decisions stops being deterministic. **Look for this
 wherever N things share one period**, and read `p95`/`worst` rather than the mean to see it.
+The sim has two more of these, both seeded off the unit id in `SimWorld.add`: the reroute poll
+(`repollT`, `REPATH_POLL_PHASES`) and the idle auto-acquire scan (`acquireT`, `ACQUIRE_PHASES`,
+issue #386 — 600 idle units were a 5 ms p95 step every half second, 2.3 ms spread). Seed a
+phase HALF A STEP into its slot, or float rounding in the `-= dt` countdown merges neighbours.
 
 **In an O(n²) scan, the CHEAPEST predicate goes first.** Every whole-world target scan — the
 sim's `nearestEnemy`/`acquireTarget`/`bestCreepTarget`, `applyAuras`'s inner loop, and the AI's
