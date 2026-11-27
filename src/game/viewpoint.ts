@@ -734,19 +734,30 @@ export class VisionSet {
     return vp;
   }
 
+  /** EVERY viewpoint that holds a grid — the players' and the TEAM-only ones (creeps), the
+   *  latter whether or not a player has since claimed the team (`all()` skips those; a grid
+   *  that is not rebuilt still has to agree about the terrain, or it is wrong the day it is
+   *  asked again). What the terrain says is one fact for all of them: the blockers below are
+   *  handed to every grid, because the creeps' line of sight is cut by the same treeline and
+   *  their casts land in the same shared SightStamps cache a player's fog replays (#363). */
+  private *everyGrid(): Iterable<Viewpoint> {
+    yield* this.byPlayer.values();
+    yield* this.byTeam.values();
+  }
+
   /** Install the fog's line-of-sight height field on every viewpoint, present and future. */
   initBlockers(cliffHeightAt: HeightSampler): void {
     this.cliffHeight = cliffHeightAt;
-    for (const vp of this.byPlayer.values()) vp.initBlockers(cliffHeightAt, this.trees());
+    for (const vp of this.everyGrid()) vp.initBlockers(cliffHeightAt, this.trees());
   }
 
-  /** A tree was felled — it stops blocking sight for everyone. */
+  /** A tree was felled — it stops blocking sight for everyone, the creeps included. */
   onTreeFelled(x: number, y: number, radius: number): void {
-    for (const vp of this.byPlayer.values()) vp.onTreeFelled(x, y, radius);
+    for (const vp of this.everyGrid()) vp.onTreeFelled(x, y, radius);
   }
   /** …and a planted one starts again (MapViewerScene.plantSimTree). */
   onTreePlanted(x: number, y: number, radius: number): void {
-    for (const vp of this.byPlayer.values()) vp.onTreePlanted(x, y, radius);
+    for (const vp of this.everyGrid()) vp.onTreePlanted(x, y, radius);
   }
 
   /** The lobby's fog mode. A MATCH setting, so it applies to every viewpoint and is

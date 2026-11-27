@@ -321,6 +321,50 @@ console.log("\na team is never rebuilt twice");
   check("viewpointForTeam now returns the player's", set.viewpointForTeam(4).player, 0);
 }
 
+console.log("\na felled tree stops blocking a TEAM viewpoint too  (#363)");
+{
+  // A creep looking along a row with a treeline across it, and the same with the trees gone.
+  // The creeps' eyes live in `byTeam`, and the tree events used to reach `byPlayer` alone.
+  const wall = [448, 512, 576].map((y) => ({ x: 512, y, blockRadius: 64 }));
+  for (const early of [false, true]) {
+    const standing = [...wall];
+    const units = new Map([[1, { id: 1, owner: -1, team: 9, x: 256, y: 512, sightDay: 700, sightNight: 700, radius: 16, building: null }]]);
+    const world = { units, isDay: true, activeAttackReveals: () => [], activeDeathReveals: () => [], activeItemReveals: () => [], teamDetects: () => false };
+    const set = new VisionSet(world, noAlliances, () => standing, 0, 0, 1024, 1024);
+    const label = early ? "made BEFORE initBlockers" : "made after initBlockers";
+    let creeps = early ? set.viewpointForTeam(9) : null;
+    set.initBlockers(() => 0);
+    creeps = creeps ?? set.viewpointForTeam(9);
+    set.tick(1, []);
+    check(`creep (${label}): the treeline hides the ground behind it`, creeps.vision.stateAt(768, 512) === FogState.Visible, false);
+    for (const t of wall) { set.onTreeFelled(t.x, t.y, t.blockRadius); standing.splice(standing.indexOf(t), 1); }
+    set.tick(1, []);
+    check(`creep (${label}): …and once it is felled the creep sees through`, creeps.vision.stateAt(768, 512), FogState.Visible);
+    set.onTreePlanted(512, 512, 64);
+    set.tick(1, []);
+    check(`creep (${label}): …and a tree planted there blocks it again`, creeps.vision.stateAt(768, 512) === FogState.Visible, false);
+  }
+  // The second half of #363: the footprint cache is SHARED and keyed on (cell, sight) behind
+  // the unit, so a creep grid still casting the old treeline wrote that footprint where a
+  // player's scout arriving on the same cell, with the same sight, replays it.
+  {
+    const standing = [...wall];
+    const units = new Map([[1, { id: 1, owner: -1, team: 9, x: 256, y: 512, sightDay: 700, sightNight: 700, radius: 16, building: null }]]);
+    const world = { units, isDay: true, activeAttackReveals: () => [], activeDeathReveals: () => [], activeItemReveals: () => [], teamDetects: () => false };
+    const set = new VisionSet(world, noAlliances, () => standing, 0, 0, 1024, 1024);
+    set.initBlockers(() => 0);
+    const creeps = set.viewpointForTeam(9);
+    const mine = set.viewpointFor(0);
+    mine.setTeam(0);
+    set.tick(1, []);
+    for (const t of wall) { set.onTreeFelled(t.x, t.y, t.blockRadius); standing.splice(standing.indexOf(t), 1); }
+    set.tick(1, []); // the camp casts alone — the scout is not there yet
+    units.set(2, { id: 2, owner: 0, team: 0, x: 256, y: 512, sightDay: 700, sightNight: 700, radius: 16, building: null });
+    set.tick(1, []);
+    check("a player's scout arriving at the camp sees through the felled treeline", mine.vision.stateAt(768, 512), FogState.Visible);
+  }
+}
+
 // --- seating every slot at match start (docs/multiplayer.md Phase E item 2) ---------------
 //
 // The bug this exists for is not "a viewpoint is missing" — `viewpointFor` would mint one on
