@@ -341,7 +341,10 @@ Root / Unroot (`Aroo`, aliases `Aro1`/`Aro2`) — `Order=root` / `Unorder=unroot
 two directions. Almost everything about the two states is *derived*: `recomputeStats` reads
 `uprooted` for the walk speed and for which weapon slot is live (`DataA` "Rooted Weapons",
 `DataB` "Uprooted Weapons" — the Ancient Protector's `Aro2` has them the other way round, which
-is why planted it is a 700-range tower and uprooted a 128-range melee unit).
+is why planted it is a 700-range tower and uprooted a 128-range melee unit). The ARMOUR is the
+one thing the toggle writes: `DataD` "Uprooted Defense Type" (`Roo4`, typed `defenseTypeInt`) is
+2 on both rows, LARGE — so a walking Ancient is Heavy, not Fortified, and takes Pierce ×1.00 and
+Magic ×2.00 until it plants and gets its own class back (`SimUnit.rootedArmorType`, issue #356).
 
 What cannot be derived is the physical transition, and the part that bites is which footprint
 is meant. A structure blocks a **stamped `Footprint`** on the grid (`setPathStamp`) — the

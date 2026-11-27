@@ -2247,6 +2247,9 @@ export interface SimUnit {
    *  the resting state for every carrier — an Ancient is BUILT rooted, and a Tree of Life
    *  spends the whole game that way unless something goes badly wrong. See toggleRoot. */
   uprooted: boolean;
+  /** The armour class an uprooted Ancient wore while it stood rooted (its type's Fortified, or
+   *  whatever a script wrote), put back when it plants; null while rooted. See toggleRoot. */
+  rootedArmorType: ArmorType | null;
   /** Seconds until a TIMED alternate form runs out and reverts on its own, or 0 for a form
    *  that holds until something toggles it back. Call to Arms is the timed one: `[Amil]`
    *  Dur1 = 45, and a militia that survives its 45 seconds becomes a Peasant again wherever
@@ -10248,6 +10251,7 @@ export class SimWorld {
       | "resistant"
       | "detectRadius"
       | "uprooted"
+      | "rootedArmorType"
       | "rootedFootprint"
       | "rootedStamp"
       | "altModel"
@@ -10555,6 +10559,7 @@ export class SimWorld {
       resistant: false, // …and Resistant Skin beside it
       detectRadius: 0, // …and True Sight likewise
       uprooted: false, // an Ancient is built rooted (Aroo)
+      rootedArmorType: null, // …so it wears its own armour class until it uproots
       rootedFootprint: 0, // set when it uproots, spent when it plants
       rootedStamp: null, //  …and the building footprint it carries with it while it walks
       altModel: false, // derived: rooted Ancients and burrowed units wear the alternate model
@@ -15103,6 +15108,9 @@ export class SimWorld {
       u.uprooted = false;
       u.footprint = n;
       u.rootedFootprint = 0;
+      // Its own armour class back — Fortified for every stock Ancient (UnitBalance `defType`).
+      if (u.rootedArmorType) u.armorType = u.rootedArmorType;
+      u.rootedArmorType = null;
       // Square with the rest of the base again. A building has ONE facing in WC3 (blizzard.j's
       // `bj_UNIT_FACING`, 270°), so an Ancient that settles keeps none of the direction it
       // happened to be walking in — it turns back to the angle it was raised at.
@@ -15122,6 +15130,16 @@ export class SimWorld {
       if (!u.entanglePending) this.autoEntangle(u);
     } else {
       u.uprooted = true;
+      // A walking Ancient is not armoured like a building: `Aroo` DataD is "Uprooted Defense
+      // Type" (AbilityMetaData `Roo4`, typed `defenseTypeInt`), 2 on both stock rows
+      // (`Aro1`/`Aro2`) — LARGE, the Heavy class — so it takes Pierce ×1.00 and Magic ×2.00 on
+      // the walk instead of Fortified's ×0.35 (issue #356). A row that names no class leaves
+      // the armour alone.
+      const uprootedClass = DEFENSE_TYPE_ORDER[this.abilities?.get(root.id)?.levelData[0]?.data[3] ?? -1];
+      if (uprootedClass) {
+        u.rootedArmorType = u.armorType;
+        u.armorType = uprootedClass;
+      }
       this.unsettle(u); // free the cells before it can take a step out of them
       // …and lift the BUILDING footprint with them. This is the one that matters: a structure's
       // 12×12 block is stamped straight onto the grid (setPathStamp) and is not part of the

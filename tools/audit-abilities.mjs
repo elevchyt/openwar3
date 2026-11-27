@@ -328,12 +328,12 @@ lines.push("- **Do not invent a number.** Where the MPQ and a reference disagree
 lines.push("  data says and record the conflict. Open ones: Cannibalize's dataB \"Max Hit Points\"");
 lines.push("  (800, which cannot bind at the stock rate), which wants a measurement against the real");
 lines.push("  client to settle — see the wc3-ground-truth memory. (Kaboom!'s dataE \"Building Damage");
-lines.push("  Factor\" was once on this list as \"100\"; it is 3, the 100 is dataD — issue #355.) Two");
-lines.push("  more have joined it:");
+lines.push("  Factor\" was once on this list as \"100\"; it is 3, the 100 is dataD — issue #355.) One");
+lines.push("  more has joined it:");
 lines.push("  Shadow Meld's dataB \"Day/Night Duration\" (2.5) and dataC \"Action Duration\" (0.5),");
-lines.push("  which have NAMES but no source saying what either measures, and Root's dataD");
-lines.push("  \"Uprooted Defense Type\" (2) — an index into a defense-type ordering our string");
-lines.push("  ArmorType enum does not carry.");
+lines.push("  which have NAMES but no source saying what either measures. (Root's dataD \"Uprooted");
+lines.push("  Defense Type\" (2) was on this list too; it is `defenseTypeInt` LARGE and is spent —");
+lines.push("  issue #356.)");
 lines.push("");
 lines.push("The morph family is one mechanism, not seven. Every two-form ability names both units");
 lines.push("outright — DataA \"Normal Form Unit\" and an \"Alternate Form Unit\" column — so morphing");

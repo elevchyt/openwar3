@@ -9,7 +9,7 @@
 //   DataA "Rooted Weapons"        Aroo/Aro1 = 1, Aro2 = 2   (same bitmask as weapsOn)
 //   DataB "Uprooted Weapons"      Aroo/Aro1 = 2, Aro2 = 1
 //   DataC "Rooted Turning"        0
-//   DataD "Uprooted Defense Type" 2  — unspent, see the handler
+//   DataD "Uprooted Defense Type" 2  — `defenseTypeInt` LARGE: a walking Ancient is Heavy (#356)
 //
 // Run: pnpm sim:test
 const { join } = require("node:path");
@@ -51,7 +51,7 @@ function ancient(abilId, over = {}) {
     // Raised facing south (bj_UNIT_FACING) but currently looking east: an Ancient that plants
     // has to TURN back, and the two angles have to differ for that turn to be visible at all.
     facing: 0, desiredFacing: 0, builtFacing: 4.71238898038469, morphT: 0,
-    rootPending: null, rootSettle: null, radius: 72, turnRate: 0.5,
+    rootPending: null, rootSettle: null, radius: 72, turnRate: 0.5, armorType: "fort", rootedArmorType: null,
     abilities: [{ id: abilId, code: "Aroo", level: 1, cooldownLeft: 0, autocastOn: false }],
     // Slot 0 = a 128-range melee; slot 1 = the Protector's 700-range attack that also hits air.
     weapons: [
@@ -88,6 +88,7 @@ const settled = (u) => { u.morphT = 0; world.tickRootSettle(u); world.recomputeS
   settled(u);
   check("uprooted, it walks at its UnitBalance speed", u.speed, 40);
   check("…and swaps to DataB \"Uprooted Weapons\" = slot 2", liveSlots(u), [1]);
+  check("…and walks in DataD's armour class, Large (Heavy)", u.armorType, "large");
 
   check("it roots again", world.toggleRoot(u), true);
   // The turn back to `builtFacing` is part of the root GESTURE, not something that happens on
@@ -98,6 +99,7 @@ const settled = (u) => { u.morphT = 0; world.tickRootSettle(u); world.recomputeS
   check("planted again, it is immobile once more", u.speed, 0);
   check("…facing the way it was raised", u.facing, u.builtFacing);
   check("…back on the rooted slot", liveSlots(u), [0]);
+  check("…and Fortified again", [u.armorType, u.rootedArmorType], ["fort", null]);
 }
 
 // --- while its roots are in the ground, an Ancient is a TOWER ---------------------------

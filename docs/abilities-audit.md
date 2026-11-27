@@ -59,12 +59,12 @@ Two standing rules that have already earned their keep:
   data says and record the conflict. Open ones: Cannibalize's dataB "Max Hit Points"
   (800, which cannot bind at the stock rate), which wants a measurement against the real
   client to settle — see the wc3-ground-truth memory. (Kaboom!'s dataE "Building Damage
-  Factor" was once on this list as "100"; it is 3, the 100 is dataD — issue #355.) Two
-  more have joined it:
+  Factor" was once on this list as "100"; it is 3, the 100 is dataD — issue #355.) One
+  more has joined it:
   Shadow Meld's dataB "Day/Night Duration" (2.5) and dataC "Action Duration" (0.5),
-  which have NAMES but no source saying what either measures, and Root's dataD
-  "Uprooted Defense Type" (2) — an index into a defense-type ordering our string
-  ArmorType enum does not carry.
+  which have NAMES but no source saying what either measures. (Root's dataD "Uprooted
+  Defense Type" (2) was on this list too; it is `defenseTypeInt` LARGE and is spent —
+  issue #356.)
 
 The morph family is one mechanism, not seven. Every two-form ability names both units
 outright — DataA "Normal Form Unit" and an "Alternate Form Unit" column — so morphing
