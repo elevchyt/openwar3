@@ -272,6 +272,29 @@ const isRegion = (o: unknown): o is RegionObj => !!o && Array.isArray((o as Regi
 export const inRegionHole = (holes: NonNullable<RegionObj["holes"]>, x: number, y: number): boolean =>
   holes.some((h) => x >= h.minx && x < h.maxx && y >= h.miny && y < h.maxy);
 
+/** The region pump's incremental re-test (Interpreter.pumpRegions). On, unless a test turns it
+ *  off to compare it against re-testing every unit (tools/jass-region-pump-test.cjs). */
+export const RegionDiff = { enabled: true };
+
+/** An enter/leave registration's region, resolved for the pump (Interpreter.regionShape). */
+interface RegionShape {
+  rects: RectObj[];
+  holes: RegionObj["holes"];
+  sig: number[];
+}
+/** Is (x, y) inside the region: in one of its rects, edges included, and in none of its holes
+ *  (RegionClearCell). */
+function inShape(s: RegionShape, x: number, y: number): boolean {
+  if (s.holes && inRegionHole(s.holes, x, y)) return false;
+  for (const r of s.rects) if (x >= r.minx && x <= r.maxx && y >= r.miny && y <= r.maxy) return true;
+  return false;
+}
+function sameShape(a: number[], b: number[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
 class ReturnSignal {
   constructor(readonly value: JassValue) {}
 }
@@ -1687,52 +1710,126 @@ export class Interpreter {
    * differs is how membership is computed — the baseline, the filter and the responses
    * are the rect event's. See `inRangeMembers`. */
   pumpRegions(units: ReadonlyArray<UnitSnapshot>): void {
+    const gen = ++this.regionGen;
+    // Which units MOVED since the last pump (a unit new to the pump counts as moved), and which
+    // are GONE. A rect registration whose rects are as they were, and which was pumped last
+    // time too, then re-tests only those (issue #387): a unit standing still is in exactly the
+    // regions it was in. On a custom map that was every registration × every unit × 60 Hz.
+    const moved = this.regionMoved;
+    moved.length = 0;
+    const pos = this.regionPos;
+    for (let i = 0; i < units.length; i++) {
+      const u = units[i];
+      const p = pos.get(u.id);
+      if (!p) {
+        pos.set(u.id, [u.x, u.y, gen]);
+        moved.push(i);
+      } else {
+        if (p[0] !== u.x || p[1] !== u.y) {
+          p[0] = u.x;
+          p[1] = u.y;
+          moved.push(i);
+        }
+        p[2] = gen;
+      }
+    }
+    const gone = this.regionGone;
+    gone.length = 0;
+    if (pos.size > units.length) {
+      for (const [id, p] of pos) if (p[2] !== gen) { gone.push(id); pos.delete(id); }
+    }
+    let byId: Map<number, UnitSnapshot> | null = null; // the circle's centre, looked up once a pump
+
     for (const reg of this.rt.regsFor("enterRegion", "leaveRegion", "unitInRange")) {
       const inRange = reg.kind === "unitInRange";
       const entering = inRange || reg.kind === "enterRegion"; // a circle only has an "in"
       if (!entering && reg.kind !== "leaveRegion") continue;
-      const cur = inRange ? this.inRangeMembers(reg, units) : this.rectMembers(reg, units);
-      if (!cur) continue; // no region to be inside (an unresolvable rect, or the centre unit is gone)
-
       const prev = this.regionMembers.get(reg);
-      this.regionMembers.set(reg, cur);
-      if (!prev) continue; // baseline tick: seed membership without firing
-
+      // A circle's centre walks, so a circle is always measured whole.
+      if (inRange) {
+        byId ??= new Map(units.map((u) => [u.id, u]));
+        const cur = this.inRangeMembers(reg, units, byId);
+        this.regionSeen.delete(reg);
+        if (!cur) continue; // no region to be inside (the centre unit is gone)
+        this.regionMembers.set(reg, cur);
+        if (prev) this.fireRegionDiff(reg, units, prev, cur, entering);
+        continue;
+      }
+      const shape = this.regionShape(reg);
+      if (!shape) {
+        this.regionSeen.delete(reg);
+        continue; // no region to be inside (an unresolvable rect)
+      }
+      const seen = this.regionSeen.get(reg);
+      const same = RegionDiff.enabled && !!prev && !!seen && seen.gen === gen - 1 && sameShape(seen.sig, shape.sig);
+      this.regionSeen.set(reg, { gen, sig: shape.sig });
+      if (!same) {
+        const cur = new Set<number>();
+        for (const u of units) if (inShape(shape, u.x, u.y)) cur.add(u.id);
+        this.regionMembers.set(reg, cur);
+        if (prev) this.fireRegionDiff(reg, units, prev, cur, entering);
+        continue; // …and with no `prev` this was the baseline: seeded without firing
+      }
+      // Incremental: the crossings are among the moved, in the snapshot's order — the order the
+      // whole-set diff found them in.
+      const members = prev!;
+      for (const id of gone) members.delete(id);
+      let crossed: number[] | null = null;
+      for (const i of moved) {
+        const u = units[i];
+        if (inShape(shape, u.x, u.y) !== members.has(u.id)) (crossed ??= []).push(i);
+      }
+      if (!crossed) continue;
+      for (const i of crossed) {
+        const id = units[i].id;
+        if (members.has(id)) members.delete(id);
+        else members.add(id);
+      }
       const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
       if (!trig || !trig.enabled) continue;
-      if (entering) {
-        for (const u of units) if (cur.has(u.id) && !prev.has(u.id)) this.fireRegionCrossing(reg, trig, u, "EnteringUnit");
-      } else {
-        for (const id of prev) {
-          if (!cur.has(id)) {
-            const u = units.find((x) => x.id === id);
-            if (u) this.fireRegionCrossing(reg, trig, u, "LeavingUnit");
-          }
-        }
+      for (const i of crossed) {
+        const u = units[i];
+        if (members.has(u.id) === entering) this.fireRegionCrossing(reg, trig, u, entering ? "EnteringUnit" : "LeavingUnit");
       }
     }
   }
 
-  /** Which units are inside an enter/leave registration's rect(s) right now. Null when the
-   *  registration names no resolvable rect — there is no region, so there is nothing to be
-   *  inside and nothing to seed a baseline with either. */
-  private rectMembers(reg: TriggerReg, units: ReadonlyArray<UnitSnapshot>): Set<number> | null {
+  /** Fire the crossings between two whole memberships of one registration: entering in the
+   *  snapshot's order, and so is leaving — a unit no longer in the world left nothing. */
+  private fireRegionDiff(reg: TriggerReg, units: ReadonlyArray<UnitSnapshot>, prev: Set<number>, cur: Set<number>, entering: boolean): void {
+    const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
+    if (!trig || !trig.enabled) return;
+    for (const u of units) {
+      if (entering ? cur.has(u.id) && !prev.has(u.id) : prev.has(u.id) && !cur.has(u.id)) {
+        this.fireRegionCrossing(reg, trig, u, entering ? "EnteringUnit" : "LeavingUnit");
+      }
+    }
+  }
+
+  /** The pump's bookkeeping beside `regionMembers` — all of it cache, rebuilt by a whole
+   *  re-test (TRANSIENT in game/save/classes.ts). `regionPos`: each unit's position at the last
+   *  pump and that pump's number; `regionSeen`: the pump a rect registration was last measured
+   *  on and the shape it was measured against. */
+  private regionGen = 0;
+  private regionPos = new Map<number, [number, number, number]>();
+  private regionSeen = new Map<TriggerReg, { gen: number; sig: number[] }>();
+  private regionMoved: number[] = [];
+  private regionGone: number[] = [];
+
+  /** A rect registration's region as the pump tests it, with a SIGNATURE of everything the
+   *  test reads (each rect's bounds, the holes) — two equal signatures are the same region.
+   *  Null when it names no resolvable rect. */
+  private regionShape(reg: TriggerReg): RegionShape | null {
     const rects = this.rectsOf(reg.params[0]);
     if (!rects.length) return null;
     const region = reg.params[0]?.k === "handle" ? this.rt.handles.get(reg.params[0].h) : undefined;
     const holes = isRegion(region) ? region.holes : undefined;
-    const cur = new Set<number>();
-    for (const u of units) {
-      if (holes && inRegionHole(holes, u.x, u.y)) continue; // RegionClearCell
-      for (const r of rects) {
-        if (u.x >= r.minx && u.x <= r.maxx && u.y >= r.miny && u.y <= r.maxy) {
-          cur.add(u.id);
-          break;
-        }
-      }
-    }
-    return cur;
+    const sig: number[] = [rects.length];
+    for (const r of rects) sig.push(r.minx, r.miny, r.maxx, r.maxy);
+    if (holes) for (const h of holes) sig.push(h.minx, h.miny, h.maxx, h.maxy);
+    return { rects, holes, sig };
   }
+
 
   /**
    * Which units are inside a `TriggerRegisterUnitInRange(trigger, whichUnit, range, filter)`
@@ -1751,10 +1848,10 @@ export class Interpreter {
    * at distance 0 for ever, so it could never be a crossing anyway — this only says so out
    * loud instead of leaning on the baseline to hide it.
    */
-  private inRangeMembers(reg: TriggerReg, units: ReadonlyArray<UnitSnapshot>): Set<number> | null {
+  private inRangeMembers(reg: TriggerReg, units: ReadonlyArray<UnitSnapshot>, byId: ReadonlyMap<number, UnitSnapshot>): Set<number> | null {
     const watched = this.rt.data<JassUnit>(reg.params[0] ?? JNULL);
     if (!watched || watched.simId < 0) return null;
-    const centre = units.find((u) => u.id === watched.simId);
+    const centre = byId.get(watched.simId);
     if (!centre) return null;
     const range = asNum(reg.params[1] ?? JNULL);
     const r2 = range * range;

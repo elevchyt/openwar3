@@ -6014,12 +6014,19 @@ export class MapViewerScene {
   private syncEventCaptures(engine: MapScriptEngine): void {
     if (!this.rts) return;
     const rt = engine.interp.rt;
-    const idx = (r: { params: unknown[] }): number => (r.params[1] ? rt.enumIndex(r.params[1] as never) : -1);
     const sw = this.rts.simWorld;
-    /** Does any registration watch an event in [lo, hi] of the given kind? */
-    const any = (kind: string, lo: number, hi = lo): boolean =>
-      rt.triggerRegs.some((r) => r.kind === kind && idx(r) >= lo && idx(r) <= hi);
-    sw.captureDeaths = rt.triggerRegs.some((r) => r.kind === "unitDeath") || any("unitEvent", 53) || any("playerUnitEvent", 20);
+    // Asked of the registrations' own index (Runtime.regsFor), never by walking the list: this
+    // runs whenever the COUNT moves, and a map that makes a trigger per spawned unit moves it
+    // every step — twenty-five walks over thousands of registrations each time (issue #387).
+    /** Does any registration of this kind exist? */
+    const has = (kind: string): boolean => rt.regsFor(kind).length > 0;
+    /** Does any registration watch an event in [lo, hi] of the given kind (`unitEvent` or
+     *  `playerUnitEvent`, which the index files by their event id as well)? */
+    const any = (kind: string, lo: number, hi = lo): boolean => {
+      for (let i = lo; i <= hi; i++) if (rt.regsFor(`${kind}#${i}`).length) return true;
+      return false;
+    };
+    sw.captureDeaths = has("unitDeath") || any("unitEvent", 53) || any("playerUnitEvent", 20);
     // 308 is 1.31's per-PLAYER damage event, which a later-format map registers once instead
     // of once per unit. The index is our own compat prelude's (src/compat/prelude.ts); without
     // it here the trigger registers and the sim never captures a blow to raise it with.
@@ -6063,12 +6070,12 @@ export class MapViewerScene {
     // this flag only decides whether we bother asking.
     this.scriptWatchesSelection = any("playerUnitEvent", 24, 25) || any("unitEvent", 57, 58);
     // EVENT_UNIT_STATE_LIMIT is polled, not raised by the sim (see pumpUnitStates).
-    this.scriptWatchesUnitState = rt.triggerRegs.some((r) => r.kind === "unitState");
+    this.scriptWatchesUnitState = has("unitState");
     // …and EVENT_PLAYER_STATE_LIMIT the same way (see pumpPlayerStates). A tower defence's
     // wave clock is this event and nothing else: "Player(10)'s food used == 0" is how Azure
     // Tower Defense learns the round is over and starts the next one.
-    this.scriptWatchesPlayerState = rt.triggerRegs.some((r) => r.kind === "playerState");
-    this.scriptWatchesGameState = rt.triggerRegs.some((r) => r.kind === "gameStateEvent");
+    this.scriptWatchesPlayerState = has("playerState");
+    this.scriptWatchesGameState = has("gameStateEvent");
     this.scriptCrowsDawn = rt.globals.get("bj_dncSoundsDawn")?.k === "handle";
     this.scriptRegCount = rt.triggerRegs.length;
 
@@ -6080,8 +6087,7 @@ export class MapViewerScene {
     // that counts: it goes through Blizzard.j's UnitDropItem, which also tells
     // UpdateStockAvailability what this map's creeps can drop — and that, and only that, is
     // what a Marketplace ever stocks from.
-    for (const r of rt.triggerRegs) {
-      if (r.kind !== "unitEvent" || idx(r) !== 53) continue; // EVENT_UNIT_DEATH
+    for (const r of rt.regsFor("unitEvent#53")) { // EVENT_UNIT_DEATH
       const u = rt.data<{ simId: number }>(r.params[0] as never);
       if (u && u.simId >= 0) sw.clearUnitDrops(u.simId);
     }
@@ -6179,7 +6185,8 @@ export class MapViewerScene {
       // Enter/leave-region — only snapshot the world if some trigger watches a region.
       // `unitInRange` is one of those regions: a circle that walks about with a unit
       // (pumpRegions), so leaving it out of this gate switches the whole event off.
-      if (engine.interp.rt.triggerRegs.some((r) => r.kind === "enterRegion" || r.kind === "leaveRegion" || r.kind === "unitInRange")) {
+      const regs = engine.interp.rt;
+      if (regs.regsFor("enterRegion").length || regs.regsFor("leaveRegion").length || regs.regsFor("unitInRange").length) {
         engine.interp.pumpRegions(this.rts ? unitSnapshots(this.rts.simView) : []);
       }
       this.pumpScriptSounds(engine.interp.rt); // 7.20
