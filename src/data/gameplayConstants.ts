@@ -191,6 +191,23 @@ export const MISC_GAME = {
    */
   AbolishMagicDispelSmart: 1,
 
+  // --- who may broadcast an aura ----------------------------------------------
+  // Six switches on an aura's SOURCE, all 0 in the stock file: a body in one of these states
+  // carries its aura and hands it to nobody (issue #361). Read by `SimWorld.bestowsAuras` at the
+  // top of `applyAuras`, through `miscGame()` so a map's own `war3mapMisc.txt` may turn one on.
+  /** A Mirror Image / Wand of Illusion copy of an aura hero is not a second emitter. */
+  IllusionsBestowAuras: 0,
+  /** …nor is a unit while its invisibility is in force (Wind Walk, Invisibility, Shadowmeld). */
+  InvisibleUnitsBestowAuras: 0,
+  /** …nor a hexed or polymorphed one (`hexed`). */
+  PolymorphedUnitsBestowAuras: 0,
+  /** …nor one in Burrow's (`Abur`) alternate form. */
+  BurrowedUnitsBestowAuras: 0,
+  /** …nor a body Animate Dead raised (`raisedBy`). */
+  AnimatedUnitsBestowAuras: 0,
+  /** …nor a FLYING hero — none in melee; a map's flying aura hero. */
+  FlyingHeroesBestowAuras: 0,
+
   // --- refunds --------------------------------------------------------------
   ConstructionRefundRate: 0.75, // cancelled construction
   ResearchRefundRate: 1.0, // cancelled research

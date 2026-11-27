@@ -158,9 +158,10 @@ It also drops nothing when it dies: `kill` routes an illusion to `unsummon` → 
 which never reaches `dropInventory` — otherwise three images popping would triple the hero's
 Claws of Attack.
 
-**Item auras do not work on a copy** — and get this for free today rather than by a guard:
-`applyAuras` iterates `src.abilities` (the unit's OWN ability list), and items never feed it.
-If item-granted auras are ever wired up, they must skip `isIllusion` units.
+**A copy broadcasts no aura at all** — neither its original's Devotion Aura nor a carried
+one's. `Units\MiscGame.txt` says so in as many words, `IllusionsBestowAuras=0`, and
+`applyAuras` asks it of every source through `bestowsAuras` (issue #361) beside the file's five
+other `*BestowAuras` switches (invisible, polymorphed, burrowed, animated, flying hero).
 
 ### Levelling
 

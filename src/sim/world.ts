@@ -16121,6 +16121,26 @@ export class SimWorld {
 
   /** Re-apply every active aura's buff to allies in range (short-TTL, so it fades
    *  when a unit leaves the aura). Non-stacking auras keep the strongest. */
+  /**
+   * May this living unit broadcast its auras? `Units\MiscGame.txt` names six states in which a
+   * source carries its aura and hands it to nobody, and sets every one of them to 0 (issue
+   * #361): an ILLUSION (a Wand of Illusion copy of a Paladin is not a second Devotion Aura), an
+   * INVISIBLE unit, a POLYMORPHED one, a BURROWED one, an ANIMATED corpse and a FLYING hero.
+   * Each state is asked first and the row only then, so a unit in none of them costs four field
+   * reads; a map's `war3mapMisc.txt` may set any row to 1 (`miscGame`).
+   */
+  private bestowsAuras(u: SimUnit): boolean {
+    if (u.isIllusion && !miscGame("IllusionsBestowAuras")) return false;
+    // `invisible` is the fade IN FORCE — during Wind Walk's Transition Time the unit is still
+    // perfectly visible, and its aura with it.
+    if (u.invisible && !miscGame("InvisibleUnitsBestowAuras")) return false;
+    if (u.hexed && !miscGame("PolymorphedUnitsBestowAuras")) return false;
+    if (u.altFormAbil && this.abilities?.get(u.altFormAbil)?.code === "Abur" && !miscGame("BurrowedUnitsBestowAuras")) return false;
+    if (u.raisedBy && !miscGame("AnimatedUnitsBestowAuras")) return false;
+    if (u.isHero && u.flying && !miscGame("FlyingHeroesBestowAuras")) return false;
+    return true;
+  }
+
   private applyAuras(): void {
     if (!this.abilities) return;
     this.auraKinds.clear(); // a body's kind can change between passes (a morph, a death), never inside one
@@ -16128,6 +16148,7 @@ export class SimWorld {
     for (const src of this.units.values()) {
       if (src.hp <= 0) continue;
       if (src.devouredBy > 0) continue; // a meal in a Kodo's belly is no aura's source (castLocked)
+      if (!this.bestowsAuras(src)) continue; // MiscGame's six `*BestowAuras` switches
       if (!src.abilities.length && !src.inventory.length) continue; // nothing to broadcast with
       for (const ab of this.auraSources(src)) {
         const make = AURA_BUFFS[ab.code];

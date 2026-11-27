@@ -72,5 +72,31 @@ check("…and the Abomination does not infect itself", plague(abom), []);
   check("Endurance rank 3: +30% move, +15% attack", at(0.3, 0.15), [["haste", 0.3, 0.15]]);
 }
 
+// MiscGame's six `*BestowAuras` switches, all 0 (issue #361): a source in one of those states
+// carries its aura and hands it to nobody.
+{
+  const states = [
+    ["an ILLUSION", { isIllusion: true }],
+    ["an INVISIBLE unit", { invisible: true }],
+    ["a HEXED unit", { hexed: true }],
+    ["an ANIMATED corpse", { raisedBy: "AUan" }],
+    ["a FLYING hero", { isHero: true, flying: true }],
+  ];
+  for (const [what, over] of states) {
+    for (const u of [...world.units.values()]) world.units.delete(u.id);
+    const src = unit({ team: 0, x: 0, y: 0, abilities: [{ id: "Aap1", code: "Aapl", level: 1 }], ...over });
+    const foe = unit({ team: 1, x: 100, y: 0 });
+    world.applyAuras();
+    check(`${what} bestows no aura`, plague(foe), []);
+    void src;
+  }
+  // …and a flying unit that is NOT a hero still does (the switch names heroes).
+  for (const u of [...world.units.values()]) world.units.delete(u.id);
+  unit({ team: 0, x: 0, y: 0, flying: true, abilities: [{ id: "Aap1", code: "Aapl", level: 1 }] });
+  const foe = unit({ team: 1, x: 100, y: 0 });
+  world.applyAuras();
+  check("a flying NON-hero still bestows it", plague(foe).length, 1);
+}
+
 console.log(`\n${failed ? `${failed} FAILED` : "all passed"}`);
 process.exit(failed ? 1 : 0);
