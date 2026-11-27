@@ -54,6 +54,20 @@ export interface BoolExpr {
 }
 
 /**
+ * Weigh a trigger's conditions. EVERY condition is evaluated and the results ANDed — the game
+ * does not stop at the first false, and the vJass "conditions as actions" idiom is built on
+ * that: RegisterPlayerUnitEvent, the damage-detection systems and struct `onInit` dispatchers
+ * hang many callbacks on one trigger with `TriggerAddCondition(t, Filter(c))`, each returning
+ * false, and with `every` only the first of them ever ran. Walked over a COPY, since a
+ * condition may remove itself (`TriggerRemoveCondition`) or add another.
+ */
+export function triggerConditionsPass(trig: TriggerObj, call: (fn: string) => JassValue): boolean {
+  let ok = true;
+  for (const { be } of [...trig.conditions]) ok = evalBoolExpr(be, call) && ok;
+  return ok;
+}
+
+/**
  * Evaluate a boolexpr, `call` running a leaf's function. `And`/`Or` stop at the operand that
  * decides them, as the language's own `and`/`or` do; a function that returns anything but a
  * boolean — one declared `returns nothing`, or a name the script does not define — is FALSE,

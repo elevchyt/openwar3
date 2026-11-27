@@ -139,5 +139,89 @@ endfunction
   check('an enumeration filter asks both halves', call('ForceFilter'), 0);
 }
 
+// --- #370: every trigger condition is evaluated -------------------------------------------------
+{
+  console.log('--- a trigger evaluates EVERY condition (#370) ---');
+  const { call } = boot(`
+globals
+    integer ran = 0
+    integer acted = 0
+endglobals
+function C1 takes nothing returns boolean
+    set ran = ran + 1
+    return false
+endfunction
+function C2 takes nothing returns boolean
+    set ran = ran + 10
+    return false
+endfunction
+function C3 takes nothing returns boolean
+    set ran = ran + 100
+    return true
+endfunction
+function Nothing takes nothing returns nothing
+    set ran = ran + 1000
+endfunction
+function Act takes nothing returns nothing
+    set acted = acted + 1
+endfunction
+function Evaluate takes nothing returns integer
+    local trigger t = CreateTrigger()
+    set ran = 0
+    call TriggerAddCondition(t, Filter(function C1))
+    call TriggerAddCondition(t, Filter(function C2))
+    call TriggerAddCondition(t, Filter(function C3))
+    if TriggerEvaluate(t) then
+        return -1
+    endif
+    return ran
+endfunction
+function AllTrue takes nothing returns boolean
+    local trigger t = CreateTrigger()
+    call TriggerAddCondition(t, Condition(function C3))
+    call TriggerAddCondition(t, Condition(function C3))
+    return TriggerEvaluate(t)
+endfunction
+function NothingIsFalse takes nothing returns boolean
+    local trigger t = CreateTrigger()
+    call TriggerAddCondition(t, Condition(function Nothing))
+    return TriggerEvaluate(t)
+endfunction
+`);
+  check('TriggerEvaluate runs all three and is false', call('Evaluate'), 111);
+  check('two true conditions pass', call('AllTrue'), true);
+  check('a returns-nothing condition is false (both sites agree)', call('NothingIsFalse'), false);
+  const { interp } = boot(`
+globals
+    integer ran = 0
+    integer acted = 0
+endglobals
+function C1 takes nothing returns boolean
+    set ran = ran + 1
+    return false
+endfunction
+function C3 takes nothing returns boolean
+    set ran = ran + 100
+    return true
+endfunction
+function Act takes nothing returns nothing
+    set acted = acted + 1
+endfunction
+function Setup takes nothing returns nothing
+    local trigger t = CreateTrigger()
+    call TriggerAddCondition(t, Filter(function C1))
+    call TriggerAddCondition(t, Filter(function C3))
+    call TriggerAddAction(t, function Act)
+    call TriggerRegisterTimerEvent(t, 0.01, false)
+endfunction
+function Result takes nothing returns integer
+    return ran * 10 + acted
+endfunction
+`);
+  interp.callFunction('Setup', []);
+  for (let i = 0; i < 10; i++) interp.advanceTime(0.05);
+  check('a fired trigger runs both conditions and no action', interp.callFunction('Result', []).n, 1010);
+}
+
 console.log(failures ? `\n${failures} failure(s).` : '\nAll JASS semantics checks passed.');
 process.exit(failures ? 1 : 0);

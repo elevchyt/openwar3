@@ -14,7 +14,7 @@
 // the interpreter (it needs to call user functions) — see Interpreter.fireTrigger /
 // advanceTime. Registration here + firing there keeps natives free of the eval loop.
 
-import { evalBoolExpr, playerStateHolds, ThreadAbort, unitStateHolds, type BoolExpr, type NativeCtx, type Runtime, type TimerObj, type TriggerObj, type TriggerReg } from "../runtime";
+import { playerStateHolds, triggerConditionsPass, ThreadAbort, unitStateHolds, type BoolExpr, type NativeCtx, type Runtime, type TimerObj, type TriggerObj, type TriggerReg } from "../runtime";
 import { asNum, jBool, jHandle, jInt, JNULL, jReal, type JassValue } from "../values";
 import { ATTACK_TYPES } from "../../data/unitFieldCodes";
 import type { AttackType } from "../../data/enums";
@@ -469,7 +469,7 @@ export function registerEventNatives(rt: Runtime): void {
   };
   const conditionsPass = (c: NativeCtx, t: TriggerObj): boolean => {
     t.evals++; // GetTriggerEvalCount — see TriggerObj
-    return t.conditions.every(({ be }) => evalBoolExpr(be, (fn) => c.call(fn, [])));
+    return triggerConditionsPass(t, (fn) => c.call(fn, []));
   };
   const runActions = (c: NativeCtx, t: TriggerObj): void => {
     t.execs++; // GetTriggerExecCount — the actions RAN
