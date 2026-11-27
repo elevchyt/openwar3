@@ -317,6 +317,19 @@ const round = (n) => Math.round(n * 1000) / 1000;
   check("…and Slam, with no `organic`, the mechanical one too — never the building", clap(["ground", "neutral"]), [2, 3]);
 }
 
+// Storm, Earth and Fire — one of EACH pandaren, read off DataA (`[ANef] DataA1` "npn1,npn2,npn3",
+// `UnitID1` empty; issue #359), for the row's Dur1 of 45.
+{
+  const brew = unit({ id: 1, team: 0, facing: 0, isHero: true });
+  const { api } = harness([brew]);
+  const made = [];
+  api.requestSummon = (id, x, y, facing, owner, team, life) => made.push({ id, life });
+  const sef = def({ duration: 45 });
+  sef.levelData[0].dataStr = ["npn1,npn2,npn3", "", "", "", "", "", "", "", ""];
+  SPELL_HANDLERS.ANef(api, brew, sef, 1, { targetId: 0, x: 0, y: 0 });
+  check("Storm, Earth and Fire summons Storm, Earth AND Fire", made, [{ id: "npn1", life: 45 }, { id: "npn2", life: 45 }, { id: "npn3", life: 45 }]);
+}
+
 // Cannibalize — a corpse is worth dataA hp/sec for the duration, and NOTHING happens with
 // no corpse to eat (the whole ability is the meal).
 {

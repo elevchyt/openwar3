@@ -1059,7 +1059,7 @@ function summonArt(def: AbilityDef): { summon: string; unsummon: string } {
  *  (it lives in a data string we parse only as a number). Verified in the MPQ. */
 const SUMMON_FALLBACK: Record<string, string> = {
   AUcb: "ucs1", // Carrion Beetles → Carrion Beetle (dataC string in the SLK)
-  ANef: "npn1", // Storm, Earth & Fire → one of the split pandaren (npn1/2/3)
+  ANef: "npn1", // Storm, Earth & Fire — only for a row whose DataA list is empty (see its handler)
 };
 
 /** The spells whose legal targets are a POLARITY, not a flag list. `targs1` can say
@@ -3732,7 +3732,20 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // Pocket Factory (Tinker) — deploy a factory at the point.
   ANsy: (api, caster, def, rank, ctx) => summonSpell(api, caster, def, rank, { count: 1, atPoint: true }, ctx),
   // Storm, Earth and Fire (Brewmaster, ult) — split into three pandaren.
-  ANef: (api, caster, def, rank) => summonSpell(api, caster, def, rank, { count: 3, atPoint: false }),
+  // The three are three DIFFERENT units, and the row says which: `UnitID1` is empty and DataA
+  // (`Nef1`, a `unitList` in AbilityMetaData.slk) is "npn1,npn2,npn3" — Storm, Earth and Fire,
+  // one of each (issue #359; three copies of the fallback's `npn1` was three Storms).
+  ANef: (api, caster, def, rank) => {
+    const lvl = lv(def, rank);
+    const ids = (lvl.dataStr[0] ?? "").split(",").map((s) => s.trim()).filter((s) => s.length === 4);
+    if (!ids.length) return summonSpell(api, caster, def, rank, { count: 3, atPoint: false });
+    const life = lvl.heroDuration || lvl.duration || 60;
+    const art = summonArt(def);
+    ids.forEach((id, i) => {
+      const facing = caster.facing + (i - (ids.length - 1) / 2) * 0.5; // fanned as summonMany does
+      api.requestSummon(id, caster.x, caster.y, facing, caster.owner, caster.team, life, caster.id, art, false, false);
+    });
+  },
   // Phoenix (Blood Mage, ult) — summon a phoenix beside the caster.
   AHpx: (api, caster, def, rank) => summonSpell(api, caster, def, rank, { count: 1, atPoint: false }),
   // Vengeance (Warden, ult) — "Creates a powerful avatar that summons invulnerable spirits
