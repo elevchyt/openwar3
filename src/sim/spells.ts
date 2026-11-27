@@ -3547,15 +3547,15 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // 200% / 300% conversion". The rank used to be ignored, so every rank healed 100%
   // (issue #287).
   //
-  // WHICH hit points — the sacrifice's maximum or what it has left — no source read for
-  // this states: the tooltip and the classic page both say only "its hit points". It is the
-  // MAXIMUM here, the reading Dark Ritual beside it makes of the same `Udp` column group.
-  // Unverified against the client; if it is measured otherwise, both change together.
+  // WHICH hit points: what the sacrifice has LEFT, not its maximum (issue #367, the
+  // developer's call off the client — the tooltip and the classic page both say only "its
+  // hit points"). A hurt Ghoul is worth less than a whole one, and Dark Ritual beside it
+  // reads the same `Udp` column group the same way, so the two change together.
   AUdp: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t || !api.ally(caster, t) || t.isHero) return;
     const lvl = def.levelData[rank - 1];
-    api.spellHeal(caster, t.maxHp * d(lvl, 1, 1));
+    api.spellHeal(caster, Math.max(0, t.hp) * d(lvl, 1, 1));
     // One model per end of the pact, as UndeadAbilityFunc [AUdp] names them:
     //   Casterart = …\Undead\DeathPact\DeathPactCaster.mdl   the life arriving, on the Death Knight
     //   Targetart = …\Undead\DeathPact\DeathPactTarget.mdl   the sacrifice, at its `origin`
@@ -3570,9 +3570,10 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const t = api.getUnit(ctx.targetId);
     if (!t || !api.ally(caster, t) || t.isHero) return;
     const lvl = def.levelData[rank - 1];
-    // `Udp1 "Life Converted to Mana"` — a FRACTION of the sacrifice's maximum life
-    // (0.33/0.66/1), which is why the Lich wants a full-health Ghoul and not a hurt one.
-    caster.mana = Math.min(caster.maxMana, caster.mana + t.maxHp * d(lvl, 0, 0.33));
+    // `Udp1 "Life Converted to Mana"` — a FRACTION of the life the sacrifice has LEFT
+    // (0.33/0.66/1; issue #367, as Death Pact above), which is why the Lich wants a
+    // full-health Ghoul and not a hurt one.
+    caster.mana = Math.min(caster.maxMana, caster.mana + Math.max(0, t.hp) * d(lvl, 0, 0.33));
     // Two models, one per end of the ritual, and the row names them plainly:
     //   Casterart = …\Undead\DarkRitual\DarkRitualCaster.mdl   the mana arriving
     //   Targetart = …\Undead\DarkRitual\DarkRitualTarget.mdl   the sacrifice going out
