@@ -121,6 +121,17 @@ console.log("\nSpawn Spiders (Aspd): DataA of DataB where it died");
   check("the Brood Mother leaves two Spiders (nspr), her owner's", reqs.map((r) => [r.unitId, r.owner, r.summonLeft]), [["nspr", 2, 0], ["nspr", 2, 0]]);
 }
 
+console.log("\nSpawn Hydra Hatchling (Aspt, base Aspd): the Hydra comes apart (issue #354)");
+{
+  // `nhyd`'s abilList is "Aspo, Aspt" — the one stock row with a space after its comma.
+  check("the Hydra's list is read trimmed", UNITS.get("nhyd")?.abilities, ["Aspo", "Aspt"]);
+  const w = world();
+  const hy = spawn(w, "nhyd", C, C, 2, 2);
+  w.drainSummonRequests();
+  w.kill(hy);
+  check("a dying Hydra leaves two Hydra Hatchlings (nhyh)", w.drainSummonRequests().map((r) => r.unitId), ["nhyh", "nhyh"]);
+}
+
 console.log("\nTaunt (Atau): the nearest enemies attack the Giant, again after DataE");
 {
   const w = world();

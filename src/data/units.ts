@@ -876,8 +876,11 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       // creep-threat/bounty level), which wrongly showed newly-trained heroes as
       // Level 5. With no XP/leveling system yet, pin trained heroes to level 1.
       level: isHero ? 1 : b ? num(b, "level", 0) : 0,
-      abilities: a ? (str(a, "abilList") || "").split(",").filter(Boolean) : [],
-      heroAbilities: a ? (str(a, "heroAbilList") || "").split(",").filter(Boolean) : [],
+      // Trimmed like every other list here: `nhyd` (the Hydra) is `"Aspo, Aspt"`, the one stock
+      // row with a space, and an untrimmed `" Aspt"` misses its row — so the Hydra never split
+      // into its hatchlings on death (issue #354).
+      abilities: a ? (str(a, "abilList") || "").split(",").map((s) => s.trim()).filter(Boolean) : [],
+      heroAbilities: a ? (str(a, "heroAbilList") || "").split(",").map((s) => s.trim()).filter(Boolean) : [],
       autoAbility: a ? str(a, "auto") : "",
       classification: b ? (str(b, "type") || "").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean) : [],
     });
