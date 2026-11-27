@@ -3521,6 +3521,42 @@ const MINE_CLOAK_GROUP = "mine";
 // as the land mine's cloak is: one timeless buff, laid again with its transition whenever it is
 // gone (tickPermanentInvisibility).
 const PERMANENT_INVIS = new Set(["Agho", "Apiv"]);
+
+/**
+ * The units loop's ABILITY GATE (issue #385). Seven of the per-unit, per-step ticks open with a
+ * scan of `u.abilities` for one code and return having done nothing when it is not there — which
+ * is the answer for nearly every unit on the map. So the codes they ask about are read ONCE per
+ * unit per step into a bit mask, and a tick whose bit is clear is not called at all.
+ *
+ * Exact because the mask only ever answers the NEGATIVE: each gated tick, called without its
+ * code on the sheet, returns before it touches anything (tickExhume's one write, clearing
+ * `exhumeLeft`, is done at the gate in its place). A REMOVAL during the step leaves the mask a
+ * superset, which is still exact; an ADDITION is the case that matters, and the five places
+ * that add an ability to a sheet (addAbility, morphUnit, syncCarriedAbilities,
+ * syncBookAbilities, reviveFallenHero) bump `abilityAdds`, so the mask is re-read when any sheet
+ * has grown since — a script answering a damage event mid-step is a real way for that to happen.
+ * Module state rather than world state: it is a scratch of the loop, never saved.
+ */
+const GATE_PERMANENT_INVIS = 1, GATE_EXHUME = 2, GATE_MINE = 4, GATE_PHOENIX_FIRE = 8, GATE_REPLENISH = 16, GATE_REPAIR = 32, GATE_CHAOS = 64;
+const GATE_BITS = new Map<string, number>([
+  ...[...PERMANENT_INVIS].map((c) => [c, GATE_PERMANENT_INVIS] as [string, number]),
+  ["Aexh", GATE_EXHUME], ["Amin", GATE_MINE], ["Apxf", GATE_PHOENIX_FIRE], ["Ambt", GATE_REPLENISH],
+  ["Arep", GATE_REPAIR], ["Arst", GATE_REPAIR], ["Aren", GATE_REPAIR], // isRepairCode's three
+  ["Acha", GATE_CHAOS],
+]);
+let abilityAdds = 0;
+let gateSeen = -1;
+let gateMask = 0;
+/** The gate's bits for `u` (see GATE_BITS); `gateSeen = -1` at the top of each unit's turn. */
+function gateOf(u: SimUnit): number {
+  if (gateSeen !== abilityAdds) {
+    let m = 0;
+    for (const a of u.abilities) m |= GATE_BITS.get(a.code) ?? 0;
+    gateMask = m;
+    gateSeen = abilityAdds;
+  }
+  return gateMask;
+}
 const PERMANENT_INVIS_GROUP = "permInvis";
 /** Mana Flare's own buff on the Faerie Dragon (`Bmfl`), worn for as long as she channels. */
 const MANA_FLARE_GROUP = "manaflare";
@@ -3715,6 +3751,8 @@ const IMMEDIATE = new Set(["AHds", "ACds", "AOwk", "Amil", "Amic", "AEim"]);
 // (Graphic)" — the same Eim1..Eim3 columns (AbilityMetaData lists `AEim,ACim,ANpi,Apmf,Apig`
 // for all three), alight from birth, costing nothing. DotA's Red Dragon Hide is an `Apig`.
 const PERMANENT_IMMOLATION = new Set(["ANpi", "Apig"]);
+/** The detector codes an ITEM can carry (recomputeStats' True Sight, the carried half). */
+const CARRIED_DETECTORS = ["Atru", "Adet", "Adts"] as const;
 
 /** The abilities a CARRIED item puts on its carrier's command card (see
  *  SimWorld.syncCarriedAbilities): `[clsd] abilList = Ashm`, the Cloak of Shadows — `AIhm`
@@ -6425,7 +6463,10 @@ export class SimWorld {
     for (const learned of f.abilities) {
       const ab = u.abilities.find((a) => a.id === learned.id);
       if (ab) ab.level = learned.level;
-      else u.abilities.push({ ...learned });
+      else {
+        u.abilities.push({ ...learned });
+        abilityAdds++; // the units loop's gate (GATE_BITS)
+      }
     }
     u.inventory = f.inventory.map((it) => (it ? { ...it } : null));
     // Tomes: permanent, and they live in the base attributes rather than in the level.
@@ -8805,6 +8846,7 @@ export class SimWorld {
     // ability the NEW form introduces (Robo-Goblin's `ANde` Demolish) still arrives at the
     // level its own list gives it.
     const kept = new Map(u.abilities.map((a) => [a.id, a]));
+    abilityAdds++; // a new sheet — the units loop's gate (GATE_BITS)
     u.abilities = this.buildAbilitiesFor(def).map((a) => {
       const was = kept.get(a.id);
       return was ? { ...a, level: Math.max(a.level, was.level), cooldownLeft: was.cooldownLeft, autocastOn: was.autocastOn } : a;
@@ -14983,7 +15025,7 @@ export class SimWorld {
     // whose comment is literally "Detect (Sentry Ward)" and whose Rng1 = 1100. No unit in
     // the game data lists `Adet` — the gem is the only thing in the game that hands it out, which is
     // why the note above says the code is kept "for custom maps". It was the item's all along.
-    for (const code of ["Atru", "Adet", "Adts"] as const) {
+    for (const code of CARRIED_DETECTORS) {
       const r = this.itemAbilityLevel(u, code)?.castRange;
       if (r !== undefined && !Number.isNaN(r)) u.detectRadius = Math.max(u.detectRadius, r);
     }
@@ -19421,6 +19463,7 @@ export class SimWorld {
     if (!u || !def) return false;
     if (u.abilities.some((a) => a.id === abilityId)) return false;
     u.abilities.push({ id: abilityId, code: def.code, level: 1, cooldownLeft: 0, autocastOn: false });
+    abilityAdds++; // the units loop's gate (GATE_BITS)
     // An INVENTORY given at run time opens its slots ("Item Capacity", DataA) — how a map
     // hands a courier or a dummy a backpack — once its own `Requires` is met, like the type's
     // own packs (recomputeStats → openBackpacks, just below).
@@ -22673,6 +22716,7 @@ export class SimWorld {
     simProfile.end("sim.world.pre");
     simProfile.begin("sim.world.units");
     for (const u of this.units.values()) {
+      gateSeen = -1; // this unit's ability gate is read afresh (GATE_BITS)
       if (this.tickBuffs(u, dt)) continue; // decay timed effects (a DoT may kill)
       if (u.avatarForm) this.tickAvatarForm(u); // the giant shrinks back when its buff is gone
       this.tickRevive(u, dt); // a reincarnating unit counting down to standing up again
@@ -22682,19 +22726,20 @@ export class SimWorld {
       this.tickAutoMeld(u); // …and a unit standing about at night takes it by itself
       this.tickAltForm(u, dt); // a timed form (militia) running out and reverting
       this.tickImmolation(u, dt); // Immolation burns whatever it is standing next to, and pays for it
-      this.tickPermanentInvisibility(u); // Ghost / Permanent Invisibility fades back in after a break
+      if (gateOf(u) & GATE_PERMANENT_INVIS) this.tickPermanentInvisibility(u); // Ghost / Permanent Invisibility fades back in after a break
       this.tickVoodoo(u, dt); // …and Big Bad Voodoo renews its circle for as long as the ritual holds
-      this.tickExhume(u, dt); // …and a Meat Wagon with the upgrade grows its own bodies
+      if (gateOf(u) & GATE_EXHUME) this.tickExhume(u, dt); // …and a Meat Wagon with the upgrade grows its own bodies
+      else u.exhumeLeft = 0; // …what tickExhume itself does with no Exhume on the sheet
       this.tickCarriedItems(u, dt); // …and an Amulet of Spell Shield regrowing its shield
       this.tickTornado(u, dt); // …and a Tornado battering buildings and tossing whoever it passes over
-      this.tickMine(u, dt); // …and a Goblin Land Mine hiding itself, arming, and going off
-      this.tickPhoenixFire(u, dt); // …and a Phoenix throwing its fire at whoever is near
+      if (gateOf(u) & GATE_MINE) this.tickMine(u, dt); // …and a Goblin Land Mine hiding itself, arming, and going off
+      if (gateOf(u) & GATE_PHOENIX_FIRE) this.tickPhoenixFire(u, dt); // …and a Phoenix throwing its fire at whoever is near
       this.tickFlareMark(u); // …and a Faerie Dragon's flare going out with her channel
-      this.tickChaos(u); // …and a unit whose Acha row's research has landed becoming its UnitID
+      if (gateOf(u) & GATE_CHAOS) this.tickChaos(u); // …and a unit whose Acha row's research has landed becoming its UnitID
       if (u.warClub && u.warClub.armT > 0 && (u.warClub.armT -= dt) <= 0) this.recomputeStats(u); // the tree is in hand
       this.recomputeStats(u); // derive armour/speed/damage/regen/stun/invuln
       this.tickRegen(u, dt); // mana + (hero) hp regeneration
-      this.tickReplenish(u, dt); // a Moon Well pouring itself into whoever is drinking
+      if (gateOf(u) & GATE_REPLENISH) this.tickReplenish(u, dt); // a Moon Well pouring itself into whoever is drinking
       if (u.morphT > 0) {
         u.morphT = Math.max(0, u.morphT - dt); // an Ancient mid-root/unroot
         // …and the walk it was told to make while it changed (SimUnit.afterMorph).
@@ -22712,7 +22757,7 @@ export class SimWorld {
       if (u.entanglePending) this.tickEntangleAt(u); // …and a Tree of Life that planted there to take a mine
       if (u.militiaCall) this.tickMilitiaCall(u); // …and a Peasant running to the hall to be armed
       if (u.drinkWellId) this.tickDrinkWalk(u); // …and a unit sent to a Moon Well stopping once it is in reach
-      this.tickRenew(u); // an idle Wisp with Renew on, looking for something to mend
+      if (gateOf(u) & GATE_REPAIR) this.tickRenew(u); // an idle Wisp with Renew on, looking for something to mend
       if (u.cooldownLeft > 0) u.cooldownLeft -= dt;
       // Spirit Link expired — or its BUFF is gone, which is the same thing: the link IS the
       // `[Bspl]` buff the cast hangs on every member (spells.ts Aspl), so whatever took the buff
@@ -24862,6 +24907,7 @@ export class SimWorld {
       const entry = i >= 0 ? u.abilities[i] : undefined;
       if (carried && !entry) {
         u.abilities.push({ id: carried.def.id, code, level: 1, cooldownLeft: 0, autocastOn: false, carried: true });
+        abilityAdds++; // the units loop's gate (GATE_BITS)
       } else if (!carried && entry?.carried) {
         u.abilities.splice(i, 1);
         if (u.pendingCast?.code === code) this.stop(u.id);
@@ -24894,6 +24940,7 @@ export class SimWorld {
       const def = this.abilities?.get(id);
       if (!def || !KNOWN_ABILITIES[def.code]) continue;
       u.abilities.push({ id, code: def.code, level: 1, cooldownLeft: 0, autocastOn: false, book });
+      abilityAdds++; // the units loop's gate (GATE_BITS)
     }
   }
 
