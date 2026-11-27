@@ -17,7 +17,7 @@
 // paths in it speak WC3's `\` separator so they can be used as `InstallFiles` keys verbatim.
 
 import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { mkdir, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 
@@ -124,7 +124,7 @@ export async function writeCustomKeys(root, bytes) {
  * here whatever the page already checked. `Maps` and `Download` are found under whatever case the
  * folder spells them with and made when they are missing.
  */
-export async function writeDownloadedMap(root, name, bytes) {
+export async function writeDownloadedMap(root, name, bytes, { overwrite = true } = {}) {
   if (!root || !existsSync(root)) throw new Error("No Warcraft III folder is selected.");
   if (typeof name !== "string" || !/^[^\\/:*?"<>|\u0000-\u001f]+\.(w3m|w3x)$/i.test(name) || name.startsWith(".")) {
     throw new Error("Not a map file name.");
@@ -137,7 +137,26 @@ export async function writeDownloadedMap(root, name, bytes) {
     return dir;
   };
   const dir = await folder(await folder(root, "Maps"), "Download");
-  await writeFile(join(dir, name), Buffer.from(bytes));
+  const data = Buffer.from(bytes);
+  // `overwrite: false` is for a file a WEB PAGE handed us (electron/mapSitesView.mjs): a map
+  // already there under that name with OTHER bytes is the player's, and a page that offers a
+  // download of the same name must not be able to replace it. The same bytes again is the same
+  // map and is simply kept; different ones are written beside it as "Name (2).w3x".
+  let written = name;
+  if (!overwrite) {
+    const dot = name.lastIndexOf(".");
+    const stem = name.slice(0, dot);
+    const ext = name.slice(dot);
+    for (let n = 2; ; n++) {
+      const existing = await readFile(join(dir, written)).catch(() => null);
+      if (!existing) break;
+      if (existing.equals(data)) return written;
+      if (n > 99) throw new Error("Too many maps of that name in Maps\\Download.");
+      written = `${stem} (${n})${ext}`;
+    }
+  }
+  await writeFile(join(dir, written), data);
+  return written;
 }
 
 /** The build every install is turned INTO (src/vfs/normalize.ts). MUST equal `REQUIRED_VERSION` in src/vfs/version.ts, which states

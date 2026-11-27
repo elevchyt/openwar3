@@ -54,7 +54,108 @@ export interface Seat {
 
 /** Why a command was refused. Returned rather than thrown — a hostile or buggy peer must not be
  *  able to interrupt the host's tick by sending rubbish. */
-export type Refusal = "not-a-command" | "no-seat";
+export type Refusal = "not-a-command" | "no-seat" | "bad-shape";
+
+// --- shape --------------------------------------------------------------------------------------
+//
+// The TYPE of a command is a promise the compiler keeps for the host's own code and nobody
+// else's: what arrives from the wire is whatever JSON a client chose to send. Before this, the
+// host checked `k === "cmd"` and nothing more, so `{ c: "rally", unitId: <mine>, x: "a", y: {} }`
+// stored a string and an object as a rally point, and a move to `NaN` went into the pathfinder —
+// non-numbers in the authoritative sim, its snapshots and its replay. So each command's fields
+// are checked for their KIND here, once, at the door; whether the values are ALLOWED (who owns
+// the unit, what it costs) stays the authority's judgement, as it always was.
+
+type Field = "id" | "int" | "num" | "str" | "bool" | "bool?" | "order" | "rally";
+
+/** Every command, and the kind of each of its fields (`bool?` is optional). Keyed on `Command["c"]`,
+ *  so a new member of `Command` that is not listed here fails to compile. */
+const SHAPES: Record<Command["c"], Record<string, Field>> = {
+  order: { unitId: "id", order: "order", queued: "bool", group: "bool?" },
+  cast: { unitId: "id", code: "str", targetId: "id", x: "num", y: "num", queued: "bool" },
+  garrison: { unitId: "id", buildingId: "id" },
+  drink: { unitId: "id", wellId: "id" },
+  getitem: { unitId: "id", itemId: "id" },
+  useitem: { unitId: "id", slot: "int", targetId: "id", x: "num", y: "num" },
+  dropitem: { unitId: "id", slot: "int", x: "num", y: "num" },
+  sellitem: { unitId: "id", slot: "int", shopId: "id" },
+  giveitem: { unitId: "id", slot: "int", targetId: "id" },
+  shopbuyer: { shopId: "id", unitId: "id" },
+  autocast: { unitId: "id", code: "str", arm: "bool?" },
+  rally: { unitId: "id", x: "num", y: "num", kind: "rally", targetId: "id" },
+  swapitem: { unitId: "id", from: "int", to: "int" },
+  learnskill: { unitId: "id", abilityId: "str" },
+  repair: { unitId: "id", buildingId: "id", queued: "bool" },
+  build: { unitId: "id", defId: "str", x: "num", y: "num", queued: "bool" },
+  train: { buildingId: "id", unitId: "str" },
+  revive: { buildingId: "id", heroId: "id" },
+  research: { buildingId: "id", upgradeId: "str" },
+  upgradebuilding: { buildingId: "id", toTypeId: "str" },
+  cancelbuild: { buildingId: "id" },
+  canceltrain: { buildingId: "id", index: "int" },
+  battlestations: { buildingId: "id" },
+  standdown: { buildingId: "id" },
+  load: { transportId: "id", unitId: "id" },
+  unloadone: { buildingId: "id", unitId: "id" },
+  unloadat: { unitId: "id", x: "num", y: "num" },
+  buyitem: { shopId: "id", itemId: "str" },
+  neutralcast: { shopId: "id", abilityId: "str", x: "num", y: "num" },
+};
+
+const RALLY_KINDS: ReadonlySet<string> = new Set(["none", "point", "mine", "tree", "unit"]);
+
+/**
+ * Order kinds a client may never send inside an `order` command, because they carry what the
+ * engine DERIVES rather than what the player asked for (game/commands.ts). `buildnew` holds the
+ * price it was paid and whether it was paid at all, `repair` its own rates: sent from the wire,
+ * either would let a client set them — a free building, a repair at no cost. The intent-only
+ * `build` and `repair` COMMANDS are how a client asks for both, and the authority builds these
+ * orders itself.
+ */
+const DERIVED_ORDER_KINDS: ReadonlySet<string> = new Set(["buildnew", "repair"]);
+
+/** An ability/unit/item id or code. Generous — a map's own ids are four characters. */
+const MAX_STR = 64;
+
+const isId = (v: unknown): boolean => Number.isSafeInteger(v) && (v as number) >= 0;
+
+/** A queued order: a plain record with a string `kind`, whose fields are finite numbers, short
+ *  strings or booleans — every member of `QueuedOrder` is that shape. */
+function isOrderShape(o: unknown): boolean {
+  if (typeof o !== "object" || o === null || Array.isArray(o)) return false;
+  const r = o as Record<string, unknown>;
+  if (typeof r.kind !== "string" || DERIVED_ORDER_KINDS.has(r.kind)) return false;
+  for (const k of Object.keys(r)) {
+    const v = r[k];
+    if (typeof v === "number") { if (!Number.isFinite(v)) return false; }
+    else if (typeof v === "string") { if (v.length > MAX_STR) return false; }
+    else if (typeof v !== "boolean") return false;
+  }
+  return true;
+}
+
+/** Is `cmd` a `Command` whose every field has the kind the type promises? */
+export function isCommandShape(cmd: unknown): cmd is Command {
+  if (typeof cmd !== "object" || cmd === null || Array.isArray(cmd)) return false;
+  const c = (cmd as { c?: unknown }).c;
+  if (typeof c !== "string" || !Object.prototype.hasOwnProperty.call(SHAPES, c)) return false;
+  const shape = SHAPES[c as Command["c"]];
+  const r = cmd as Record<string, unknown>;
+  for (const [k, f] of Object.entries(shape)) {
+    const v = r[k];
+    switch (f) {
+      case "id": if (!isId(v)) return false; break;
+      case "int": if (!Number.isSafeInteger(v)) return false; break;
+      case "num": if (typeof v !== "number" || !Number.isFinite(v)) return false; break;
+      case "str": if (typeof v !== "string" || v.length === 0 || v.length > MAX_STR) return false; break;
+      case "bool": if (typeof v !== "boolean") return false; break;
+      case "bool?": if (v !== undefined && typeof v !== "boolean") return false; break;
+      case "order": if (!isOrderShape(v)) return false; break;
+      case "rally": if (typeof v !== "string" || !RALLY_KINDS.has(v)) return false; break;
+    }
+  }
+  return true;
+}
 
 export interface Accepted {
   player: number;
@@ -98,6 +199,7 @@ export class CommandRouter {
     if (!isCommandMessage(data)) return "not-a-command";
     const player = this.playerFor(from);
     if (player === null) return "no-seat";
+    if (!isCommandShape(data.cmd)) return "bad-shape";
     return { player, cmd: data.cmd };
   }
 }

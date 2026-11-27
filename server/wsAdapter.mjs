@@ -14,6 +14,21 @@
 // duplicate starts drifting from the original.
 
 /**
+ * The largest single frame a relay accepts, for every `WebSocketServer` that carries one.
+ * `ws` defaults to 100 MiB, which lets one client make the relay buffer — and fan out — a
+ * hundred megabytes at a time. The biggest honest frames are a FULL snapshot on a rejoin and
+ * the 48 KiB map / replay parts (net/mapTransfer.ts, game/matchLink.ts), base64'd; 8 MiB is
+ * far above all of them.
+ */
+export const MAX_PAYLOAD = 8 * 1024 * 1024;
+
+/** Sockets one relay holds at once. Ours, sized for a free-tier box. */
+export const MAX_CONNECTIONS = 2000;
+
+/** Messages one connection may send in a second before the rest of that second is dropped. */
+export const MAX_MESSAGES_PER_SECOND = 1500;
+
+/**
  * Wire a `ws` server up to a `RelayCore`. The server may be port-bound (`relay.mjs`) or in
  * `noServer` mode with somebody else routing upgrades to it (the Vite plugin) — an adapter
  * that only ever sees `connection` does not care which.
@@ -25,8 +40,12 @@
  * Returns a `stop()` that clears the sweep — a dev server that restarts must not leave one
  * ticking over a `wss` nobody reads.
  */
-export function attachRelay(wss, core, { heartbeatMs = 15_000 } = {}) {
+export function attachRelay(wss, core, { heartbeatMs = 15_000, maxConnections = MAX_CONNECTIONS, maxMessagesPerSecond = MAX_MESSAGES_PER_SECOND } = {}) {
   wss.on("connection", (ws) => {
+    // A cap on how many sockets one relay holds. Each is a few KB of buffers and a slot in the
+    // heartbeat sweep; an unbounded count is a memory bill anybody on the internet can run up.
+    // 1013 is RFC 6455's "Try Again Later".
+    if (wss.clients.size > maxConnections) { ws.close(1013, "Relay is full."); return; }
     const conn = {
       send: (msg) => {
         if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
@@ -48,13 +67,32 @@ export function attachRelay(wss, core, { heartbeatMs = 15_000 } = {}) {
     ws.isAlive = true;
     ws.on("pong", () => { ws.isAlive = true; });
 
+    // Per-connection message rate: a fixed one-second window. A HOST is the busiest honest
+    // sender — a snapshot per peer at 20 Hz, eleven peers, plus chat, dialogs and direct-link
+    // signalling — which is a few hundred a second at worst; the cap is several times that, so
+    // it only ever meets a client that is flooding. Over it, the message is DROPPED rather than
+    // the socket closed: a burst from a real host (a rejoin's full snapshot on top of the
+    // cadence) must cost at most a stale frame, never the match.
+    let windowStart = 0;
+    let windowCount = 0;
+
     ws.on("message", (raw) => {
+      const now = Date.now();
+      if (now - windowStart >= 1000) { windowStart = now; windowCount = 0; }
+      if (++windowCount > maxMessagesPerSecond) return;
+
       let msg;
       try {
         msg = JSON.parse(raw.toString());
       } catch {
         // A parse failure is a WIRE fault, so it is answered here rather than in the core —
         // the core only ever sees messages that already parsed.
+        core.log?.("relay.malformed", { conn: conn.connId, bytes: raw.length ?? null }, "warn");
+        return conn.send({ t: "error", message: "Malformed message." });
+      }
+      // Valid JSON is not yet a message: `null`, `3` and `[]` all parse, and the core reads
+      // `msg.t` first thing — refused here as the wire fault it is, before the core sees it.
+      if (typeof msg !== "object" || msg === null || Array.isArray(msg) || typeof msg.t !== "string") {
         core.log?.("relay.malformed", { conn: conn.connId, bytes: raw.length ?? null }, "warn");
         return conn.send({ t: "error", message: "Malformed message." });
       }

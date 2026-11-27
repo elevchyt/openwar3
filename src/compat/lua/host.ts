@@ -62,6 +62,18 @@ const MIN_WAIT = 0;
 /** A coroutine that yields this many times without finishing is abandoned. */
 const MAX_RESUMES = 100000;
 
+/**
+ * The CPU a map's Lua may spend in one go — from the moment the engine calls into it until it
+ * returns or yields — counted in VM instructions. JASS has the same kind of ceiling
+ * (`MAX_LOOP_ITERS`, `MAX_CALL_DEPTH`); without one here `while true do end` in `war3map.lua`
+ * hung the tab, and since the host hands its map to everyone who joins, a host could hang every
+ * machine in the room. Generous on purpose: a whole map's `main()` is a few million, and this is
+ * tens of millions (fengari runs on the order of 10^7 a second, so a few seconds at most). Ours.
+ */
+const LUA_INSTRUCTION_BUDGET = 50_000_000;
+/** How often the count hook fires, in instructions. The budget is checked at this grain. */
+const LUA_HOOK_STEP = 100_000;
+
 /** The names this host answers ITSELF rather than routing into the runtime (see the note). */
 const INTERCEPTED = new Set(["TriggerSleepAction", "PolledWait"]);
 
@@ -101,6 +113,44 @@ export function createLuaMapScript(interp: Interpreter, seed: number): LuaMapScr
   const rt: Runtime = interp.rt;
   const L = lauxlib.luaL_newstate();
   lualib.luaL_openlibs(L);
+
+  // The budget (LUA_INSTRUCTION_BUDGET). A count hook on the main state is inherited by every
+  // coroutine `lua_newthread` makes, so one hook covers all of it. The count restarts only at the
+  // OUTERMOST entry: a Lua callback the engine runs while Lua is already running (a `ForGroup`
+  // filter, say) is part of the same go, or a loop that calls one would never run out.
+  //
+  // Once the budget is gone the hook fires on EVERY instruction, not every STEP: Lua's own
+  // `pcall` catches the error, and a loop round `pcall(spin)` would otherwise spend nearly all of
+  // each step inside the protected call and never let the error out.
+  let spent = 0;
+  let depth = 0;
+  let exhausted = false;
+  /** Threads put on the every-instruction hook, to be put back on the STEP at the next go. */
+  const tight = new Set<LuaState>();
+  const hook = (S: LuaState): void => {
+    if (!exhausted) {
+      spent += LUA_HOOK_STEP;
+      if (spent <= LUA_INSTRUCTION_BUDGET) return;
+      exhausted = true;
+    }
+    if (!tight.has(S)) { tight.add(S); lua.lua_sethook(S, hook, lua.LUA_MASKCOUNT, 1); }
+    lauxlib.luaL_error(S, to_luastring("script ran too long without waiting — stopped"));
+  };
+  lua.lua_sethook(L, hook, lua.LUA_MASKCOUNT, LUA_HOOK_STEP);
+  /** Run `fn` as one go of Lua, on the budget. */
+  const onBudget = <T>(fn: () => T): T => {
+    if (depth++ === 0) {
+      spent = 0;
+      exhausted = false;
+      for (const S of tight) lua.lua_sethook(S, hook, lua.LUA_MASKCOUNT, LUA_HOOK_STEP);
+      tight.clear();
+    }
+    try {
+      return fn();
+    } finally {
+      depth--;
+    }
+  };
 
   /** Handle boxes, interned per handle id — see note 2. */
   const handleBoxes = new Map<number, { h: number; ty: string }>();
@@ -222,7 +272,7 @@ export function createLuaMapScript(interp: Interpreter, seed: number): LuaMapScr
       for (const a of args) push(co, a);
       let nargs = args.length;
       for (let i = 0; i < MAX_RESUMES; i++) {
-        const status = lua.lua_resume(co, null, nargs);
+        const status = onBudget(() => lua.lua_resume(co, null, nargs));
         if (status === lua.LUA_YIELD) {
           const secs = lua.lua_gettop(co) ? Math.max(MIN_WAIT, lua.lua_tonumber(co, -1)) : MIN_WAIT;
           lua.lua_settop(co, 0);
@@ -388,7 +438,7 @@ export function createLuaMapScript(interp: Interpreter, seed: number): LuaMapScr
       lua.lua_pop(L, 1);
       throw new Error(`${chunkName}: ${msg}`);
     }
-    if (lua.lua_pcall(L, 0, 0, 0) !== lua.LUA_OK) {
+    if (onBudget(() => lua.lua_pcall(L, 0, 0, 0)) !== lua.LUA_OK) {
       const msg = lua.lua_gettop(L) ? to_jsstring(lua.lua_tostring(L, -1)) : "run failed";
       lua.lua_pop(L, 1);
       throw new Error(`${chunkName}: ${msg}`);
@@ -423,7 +473,7 @@ export function createLuaMapScript(interp: Interpreter, seed: number): LuaMapScr
       lua.lua_pop(L, 1);
       return [];
     }
-    if (lua.lua_pcall(L, 0, 1, 0) !== lua.LUA_OK) { lua.lua_pop(L, 1); return []; }
+    if (onBudget(() => lua.lua_pcall(L, 0, 1, 0)) !== lua.LUA_OK) { lua.lua_pop(L, 1); return []; }
     const list = lua.lua_gettop(L) ? to_jsstring(lua.lua_tostring(L, -1)) : "";
     lua.lua_pop(L, 1);
     return list ? list.split("\n") : [];

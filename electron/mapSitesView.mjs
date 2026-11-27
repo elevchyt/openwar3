@@ -40,7 +40,7 @@ import * as electron from "electron";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFile, rm } from "node:fs/promises";
-import { mapSiteOpenable } from "./mapSites.mjs";
+import { MAP_SITE_MAX_BYTES, OPENABLE_HOSTS, mapSiteOpenable } from "./mapSites.mjs";
 
 const { session, shell } = electron;
 const PARTITION = "persist:mapsites";
@@ -82,6 +82,26 @@ function mapName(name) {
   const last = String(name ?? "").split(/[\\/]/).pop() ?? "";
   const safe = last.replace(/[<>:"|?*\u0000-\u001f]/g, "_").replace(/^\.+/, "").trim();
   return /\.(w3m|w3x)$/i.test(safe) && safe.length <= 200 ? safe : null;
+}
+
+/**
+ * Is `url` on one of the map sites (or a subdomain of one — a site's CDN or its login page)?
+ * The view is a dialog OF THE GAME for those sites, and everything it does without asking —
+ * load a page in place, save a download into the install — is limited to them. A link anywhere
+ * else is the player's own browsing and goes to their browser instead (`shell.openExternal`).
+ */
+function onMapSite(url) {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "https:") return false;
+    const host = u.hostname.toLowerCase();
+    return OPENABLE_HOSTS.some((h) => {
+      const bare = h.replace(/^www\./, "");
+      return host === h || host === bare || host.endsWith(`.${bare}`);
+    });
+  } catch {
+    return false;
+  }
 }
 
 const bounds = (r) => ({
@@ -130,11 +150,18 @@ export function wireMapSiteViews(ipcMain, BrowserWindow, save) {
     session.fromPartition(PARTITION).on("will-download", (_event, item, wc) => {
       const name = mapName(item.getFilename());
       if (!name) return; // not a map: Chromium's own save dialog
+      // Saved without a prompt only when the page that started it IS a map site — and only a
+      // file of a sane size, since it is read whole into memory and handed to the game. Anything
+      // else is Chromium's own save dialog, the player's decision as in any browser.
+      const from = wc && !wc.isDestroyed() ? wc.getURL() : "";
+      if (!onMapSite(from) || item.getTotalBytes() > MAP_SITE_MAX_BYTES) return;
       const game = [...views.values()].find((v) => v.view.webContents === wc)?.game
         ?? [...views.values()][0]?.game;
       const tmp = join(tmpdir(), `ow3-map-${Date.now()}-${name}`);
       item.setSavePath(tmp);
       item.on("updated", () => {
+        // A length the server did not state up front is held to the same ceiling as it arrives.
+        if (item.getReceivedBytes() > MAP_SITE_MAX_BYTES) { item.cancel(); return; }
         tell(game, "ow3:mapsite-progress", { name, received: item.getReceivedBytes(), total: item.getTotalBytes() });
       });
       item.once("done", async (_e, result) => {
@@ -145,8 +172,10 @@ export function wireMapSiteViews(ipcMain, BrowserWindow, save) {
           }
           const bytes = new Uint8Array(await readFile(tmp));
           let saveError = null;
-          try { await save(name, bytes); } catch (err) { saveError = err instanceof Error ? err.message : String(err); }
-          tell(game, "ow3:mapsite-downloaded", name, bytes, saveError);
+          let saved = name;
+          // Never over a different map of the same name: the page chose that name, not the player.
+          try { saved = (await save(name, bytes, { overwrite: false })) ?? name; } catch (err) { saveError = err instanceof Error ? err.message : String(err); }
+          tell(game, "ow3:mapsite-downloaded", saved, bytes, saveError);
         } finally {
           void rm(tmp, { force: true });
         }
@@ -194,9 +223,17 @@ export function wireMapSiteViews(ipcMain, BrowserWindow, save) {
     const wc = view.webContents;
     // A link that wants a new window stays in this view: the player is in a dialog, and a
     // second window would be outside the game again.
+    // A link anywhere ELSE is the player's own browsing, and goes to their browser.
     wc.setWindowOpenHandler(({ url }) => {
-      if (/^https?:/.test(url)) void wc.loadURL(url);
+      if (onMapSite(url)) void wc.loadURL(url);
+      else if (/^https?:\/\//.test(url)) void shell.openExternal(url);
       return { action: "deny" };
+    });
+    // The same rule for a link followed in place: the view only ever SHOWS the map sites.
+    wc.on("will-navigate", (event, url) => {
+      if (onMapSite(url)) return;
+      event.preventDefault();
+      if (/^https?:\/\//.test(url)) void shell.openExternal(url);
     });
     wc.on("dom-ready", () => insertCursor(wc));
     for (const ev of ["did-start-loading", "did-stop-loading", "did-navigate", "did-navigate-in-page", "page-title-updated"]) {

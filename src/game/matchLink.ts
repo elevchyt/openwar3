@@ -733,16 +733,23 @@ export class MatchLink {
     // through, so a future message type does not have to touch this seam.
     const previous = channel.onPeerData;
     channel.onPeerData = (from, data) => {
-      if (isWireSnapshotMessage(data)) this.receive(decodeSnapshot(data.snap));
-      else if (isSnapshotMessage(data)) this.receive(data.snap);
+      // Everything the HOST tells a client — the world, its rulings on chat, voice, signals and
+      // the pause, a dialog, a refusal, the score table — is taken from the host's peer ONLY.
+      // The relay lets any peer address any other, so without this a client could speak in
+      // chat as anybody (the very forgery ChatMessage's stamp is there to prevent), hand
+      // another client a forged world, raise a forged dialog or freeze it with a forged pause.
+      // `suspend` and `replaypart` were already gated this way; this is the same rule for all.
+      const fromHost = from === this.hostPeer;
+      if (isWireSnapshotMessage(data)) { if (fromHost) this.receive(decodeSnapshot(data.snap)); }
+      else if (isSnapshotMessage(data)) { if (fromHost) this.receive(data.snap); }
       else if (isCommandMessage(data)) {
         // Counted BEFORE it is judged: a dropped or refused command is still one the client
         // is no longer waiting on (WorldSnapshot.ack).
         this.heard.set(from, (this.heard.get(from) ?? 0) + 1);
         this.onCommand(from, data);
       }
-      else if (isDialogMessage(data)) this.onDialog(data);
-      else if (isRefusalMessage(data)) this.onRefusal(data);
+      else if (isDialogMessage(data)) { if (fromHost) this.onDialog(data); }
+      else if (isRefusalMessage(data)) { if (fromHost) this.onRefusal(data); }
       // Host side: a client asking to say something. The sender is the RELAY's stamp, never
       // the payload's — see ChatMessage. A peer holding no seat is simply not heard.
       else if (isChatMessage(data)) {
@@ -750,29 +757,29 @@ export class MatchLink {
         if (player !== undefined) this.onChatSaid({ from: player, text: data.text, target: data.target });
       }
       // Client side: the host's ruling on something somebody said.
-      else if (isChatSaidMessage(data)) this.onChatSaid({ from: data.from, text: data.text, target: data.target });
+      else if (isChatSaidMessage(data)) { if (fromHost) this.onChatSaid({ from: data.from, text: data.text, target: data.target }); }
       else if (isVoiceMessage(data)) {
         const player = this.seats.find((s) => s.peer === from)?.id;
         if (player !== undefined) this.onVoice(player, data.d);
-      } else if (isVoiceSentMessage(data)) this.onVoice(data.from, data.d);
+      } else if (isVoiceSentMessage(data)) { if (fromHost) this.onVoice(data.from, data.d); }
       // Host side: a client's minimap signal, stamped with the relay's sender like chat.
       else if (isSignalMessage(data)) {
         const player = this.seats.find((s) => s.peer === from)?.id;
         if (player !== undefined) this.onSignal(player, data.x, data.y);
       }
       // Client side: an ally's signal the host routed to us.
-      else if (isSignalSentMessage(data)) this.onSignal(data.from, data.x, data.y);
+      else if (isSignalSentMessage(data)) { if (fromHost) this.onSignal(data.from, data.x, data.y); }
       // Host side: somebody wants the match stopped (or started again). Stamped, like chat.
       else if (isPauseRequestMessage(data)) {
         const player = this.seats.find((s) => s.peer === from)?.id;
         if (player !== undefined) this.onPauseAsked(player, data.on);
       }
       // Client side: it IS stopped (or running again), and here is who did it.
-      else if (isPauseStateMessage(data)) this.onPauseRuled(data);
+      else if (isPauseStateMessage(data)) { if (fromHost) this.onPauseRuled(data); }
       // Client side: the host is waiting for a dropped player. Only the host may say so — a
       // client that could freeze the room with a forged one could hold the match hostage.
       else if (isSuspendMessage(data)) {
-        if (from === this.hostPeer) this.onSuspend(data);
+        if (fromHost) this.onSuspend(data);
       }
       // Host side: a player on their way out asking for the score table. Stamped, like chat.
       else if (isScoreRequestMessage(data)) {
@@ -780,7 +787,7 @@ export class MatchLink {
         if (player !== undefined) this.onScoresAsked(player);
       }
       // Client side: the table we asked for.
-      else if (isScoresMessage(data)) this.onScores(data.scores);
+      else if (isScoresMessage(data)) { if (fromHost) this.onScores(data.scores); }
       // Host side: a batch of a player's input track. Stamped, like chat.
       else if (isInputsMessage(data)) {
         const player = this.seats.find((s) => s.peer === from)?.id;
@@ -788,7 +795,7 @@ export class MatchLink {
       }
       // Client side: a piece of the match's replay, from the HOST only.
       else if (isReplayPartMessage(data)) {
-        if (from === this.hostPeer) this.takeReplayPart(data);
+        if (fromHost) this.takeReplayPart(data);
       }
       // A probe: echo the sender's clock straight back to the sender. Theirs, not ours.
       else if (isPingMessage(data)) this.channel.send({ k: "pong", at: data.at } satisfies PongMessage, from);

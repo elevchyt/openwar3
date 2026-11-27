@@ -27,7 +27,7 @@
 
 import { WebSocketServer } from "ws";
 import { RelayCore } from "./rooms.mjs";
-import { attachRelay } from "./wsAdapter.mjs";
+import { attachRelay, MAX_PAYLOAD } from "./wsAdapter.mjs";
 import { createEventLog } from "./eventLog.mjs";
 
 const PORT = Number(process.env.PORT) || 8787;
@@ -36,7 +36,7 @@ const HEARTBEAT_MS = Number(process.env.RELAY_HEARTBEAT_MS) || 15_000;
 // The event log (eventLog.mjs): stdout for Railway's log explorer, and the `logs` bucket for
 // keeps. RELAY_NAME is the service's own (eu, us, asia) and names it in every line.
 const events = createEventLog({ relay: process.env.RELAY_NAME || "local" });
-const wss = new WebSocketServer({ port: PORT });
+const wss = new WebSocketServer({ port: PORT, maxPayload: MAX_PAYLOAD });
 attachRelay(wss, new RelayCore({ log: events.log }), { heartbeatMs: HEARTBEAT_MS });
 events.log("relay.start", { port: PORT, toBucket: events.toBucket, retentionDays: events.retentionDays, node: process.version });
 

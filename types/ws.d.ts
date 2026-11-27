@@ -13,11 +13,14 @@ declare module "ws" {
     ping(): void;
     terminate(): void;
     on(event: string, listener: (...args: unknown[]) => void): this;
+    close(code?: number, reason?: string): void;
   }
 
   export interface WebSocketServerOptions {
     noServer?: boolean;
     port?: number;
+    /** Largest frame accepted, in bytes (server/wsAdapter.mjs MAX_PAYLOAD). */
+    maxPayload?: number;
   }
 
   export class WebSocketServer {

@@ -313,6 +313,38 @@ async function watchInVersion(mainWin, request) {
   }
 }
 
+/** May `target` be handed to the OS's browser? Web and mail links only. */
+function externalOk(target) {
+  try {
+    return ["https:", "http:", "mailto:"].includes(new URL(target).protocol);
+  } catch {
+    return false;
+  }
+}
+
+function sameOrigin(a, b) {
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
+}
+
+/** The game page's origin, once it is known (below). Every `ow3:` IPC call is answered only
+ *  for a frame on it: the bridge is the game's, not any page's that ends up in a window. */
+let appOrigin = null;
+const fromApp = (event) => appOrigin !== null && sameOrigin(event.senderFrame?.url ?? "", appOrigin);
+/** `ipcMain.handle`/`.on`, refusing a sender that is not the game page. */
+const appIpc = {
+  handle: (channel, fn) => ipcMain.handle(channel, (event, ...args) => {
+    if (!fromApp(event)) throw new Error("Refused: not the game page.");
+    return fn(event, ...args);
+  }),
+  on: (channel, fn) => ipcMain.on(channel, (event, ...args) => {
+    if (fromApp(event)) fn(event, ...args);
+  }),
+};
+
 function createWindow(url) {
   const win = new BrowserWindow({
     width: 1600,
@@ -358,10 +390,20 @@ function createWindow(url) {
       fullscreenEnter = false;
     }
   });
-  // A link out of the game opens in the player's browser, never in a second game window.
+  // A link out of the game opens in the player's browser, never in a second game window — and
+  // only a WEB link: `shell.openExternal` hands its argument to the OS, which will just as happily
+  // launch a `file:` path or any registered custom scheme.
   win.webContents.setWindowOpenHandler(({ url: target }) => {
-    void shell.openExternal(target);
+    if (externalOk(target)) void shell.openExternal(target);
     return { action: "deny" };
+  });
+  // …and the window itself never LEAVES the game. Everything the preload bridge can do — write
+  // into the install, delete saves, fetch a download — is offered to whatever page this window
+  // shows, so the page must stay ours; a link followed in place goes to the browser instead.
+  win.webContents.on("will-navigate", (event, target) => {
+    if (sameOrigin(target, url)) return;
+    event.preventDefault();
+    if (externalOk(target)) void shell.openExternal(target);
   });
   // Closing the window (Alt+F4, the title bar's X, Exit Program) is a CHOSEN departure, and a
   // player in a LAN game has to say so before the socket goes: a bare close reads to the relay
@@ -456,8 +498,8 @@ app.whenReady().then(async () => {
   // rather than captured, so choosing a different folder takes effect without a relaunch.
   protocol.handle(INSTALL_SCHEME, (request) => serveInstall(currentInstall().path, request));
 
-  ipcMain.handle("ow3:install-get", () => currentInstall());
-  ipcMain.handle("ow3:install-pick", async () => {
+  appIpc.handle("ow3:install-get", () => currentInstall());
+  appIpc.handle("ow3:install-pick", async () => {
     const { canceled, filePaths } = await dialog.showOpenDialog({
       title: "Select your Warcraft III folder",
       properties: ["openDirectory"],
@@ -478,7 +520,7 @@ app.whenReady().then(async () => {
   // Resolves to the folder, or null if the player cancelled the dialog. The load gate's Cancel
   // (below) aborts the transfer; pressed during the dialog it takes effect before a byte moves.
   let downloadAbort = null;
-  ipcMain.handle("ow3:install-download", async (event, sources) => {
+  appIpc.handle("ow3:install-download", async (event, sources) => {
     downloadAbort = new AbortController();
     try {
       const { canceled, filePaths } = await dialog.showOpenDialog({
@@ -499,46 +541,46 @@ app.whenReady().then(async () => {
       downloadAbort = null;
     }
   });
-  ipcMain.on("ow3:install-download-cancel", () => { downloadAbort?.abort(); });
+  appIpc.on("ow3:install-download-cancel", () => { downloadAbort?.abort(); });
   // The hotkey editor's Save (issue #156): the page's bytes, into the CURRENT folder's
   // CustomKeys.txt. The root is read here, never taken from the page.
-  ipcMain.handle("ow3:customkeys-save", (_event, bytes) => writeCustomKeys(currentInstall().path, bytes));
+  appIpc.handle("ow3:customkeys-save", (_event, bytes) => writeCustomKeys(currentInstall().path, bytes));
   // …and a map a LAN game handed us, into Maps\Download\ (src/assets/downloadedMaps.ts).
-  ipcMain.handle("ow3:map-save", (_event, name, bytes) => writeDownloadedMap(currentInstall().path, name, bytes));
+  appIpc.handle("ow3:map-save", (_event, name, bytes) => writeDownloadedMap(currentInstall().path, name, bytes));
   // The map list's Download Maps dialog (src/ui/mapSites.ts): EpicWar READ for the page, under
   // the allow-list in electron/mapSites.mjs — and the sites it cannot read SHOWN in a web view
   // laid over the dialog, whose map downloads land in Maps\Download\ and on the page's list.
-  ipcMain.handle("ow3:mapsite-fetch", (_event, url) => readMapSite(String(url)));
-  wireMapSiteViews(ipcMain, BrowserWindow, (name, bytes) => writeDownloadedMap(currentInstall().path, name, bytes));
+  appIpc.handle("ow3:mapsite-fetch", (_event, url) => readMapSite(String(url)));
+  wireMapSiteViews(appIpc, BrowserWindow, (name, bytes, opts) => writeDownloadedMap(currentInstall().path, name, bytes, opts));
   // Options → Video → "Vertical Sync". The SAVED choice, not the running one: a player who turns it
   // off and reopens the panel before relaunching should see the box they left, not the old state.
   // The match log (see `matchLogs` above). The page names a MAP, never a path: the file is the
   // store's to place, inside the one folder, so this is not a general write primitive either.
-  ipcMain.handle("ow3:log-begin", (_event, name) => matchLogs.begin(String(name ?? ""))?.id ?? null);
-  ipcMain.on("ow3:log-append", (_event, id, text) => { matchLogs.append(String(id), String(text ?? "")); });
-  ipcMain.handle("ow3:log-end", (_event, id) => matchLogs.end(String(id)));
+  appIpc.handle("ow3:log-begin", (_event, name) => matchLogs.begin(String(name ?? ""))?.id ?? null);
+  appIpc.on("ow3:log-append", (_event, id, text) => { matchLogs.append(String(id), String(text ?? "")); });
+  appIpc.handle("ow3:log-end", (_event, id) => matchLogs.end(String(id)));
   // Replays (see `replayFiles` above). The page names a FILE, never a path: the store reduces it
   // to a name in its one folder.
-  ipcMain.handle("ow3:replay-save-last", (_event, bytes, keep) => replayFiles.saveLast(Buffer.from(bytes), keep ? String(keep) : undefined));
-  ipcMain.handle("ow3:replay-keep", (_event, name) => replayFiles.keepLast(String(name ?? "")));
-  ipcMain.handle("ow3:replay-add", (_event, name, bytes) => replayFiles.add(String(name ?? ""), Buffer.from(bytes)));
-  ipcMain.handle("ow3:replay-list", () => replayFiles.list());
-  ipcMain.handle("ow3:replay-read", (_event, name) => replayFiles.read(String(name ?? "")));
-  ipcMain.handle("ow3:replay-delete", (_event, name) => replayFiles.remove(String(name ?? "")));
-  ipcMain.handle("ow3:save-write", (_event, name, bytes) => saveFiles.write(String(name ?? ""), Buffer.from(bytes)));
-  ipcMain.handle("ow3:save-list", () => saveFiles.list());
-  ipcMain.handle("ow3:save-read", (_event, name) => saveFiles.read(String(name ?? "")));
-  ipcMain.handle("ow3:save-exists", (_event, name) => saveFiles.exists(String(name ?? "")));
-  ipcMain.handle("ow3:save-delete", (_event, name) => saveFiles.remove(String(name ?? "")));
+  appIpc.handle("ow3:replay-save-last", (_event, bytes, keep) => replayFiles.saveLast(Buffer.from(bytes), keep ? String(keep) : undefined));
+  appIpc.handle("ow3:replay-keep", (_event, name) => replayFiles.keepLast(String(name ?? "")));
+  appIpc.handle("ow3:replay-add", (_event, name, bytes) => replayFiles.add(String(name ?? ""), Buffer.from(bytes)));
+  appIpc.handle("ow3:replay-list", () => replayFiles.list());
+  appIpc.handle("ow3:replay-read", (_event, name) => replayFiles.read(String(name ?? "")));
+  appIpc.handle("ow3:replay-delete", (_event, name) => replayFiles.remove(String(name ?? "")));
+  appIpc.handle("ow3:save-write", (_event, name, bytes) => saveFiles.write(String(name ?? ""), Buffer.from(bytes)));
+  appIpc.handle("ow3:save-list", () => saveFiles.list());
+  appIpc.handle("ow3:save-read", (_event, name) => saveFiles.read(String(name ?? "")));
+  appIpc.handle("ow3:save-exists", (_event, name) => saveFiles.exists(String(name ?? "")));
+  appIpc.handle("ow3:save-delete", (_event, name) => saveFiles.remove(String(name ?? "")));
   // Another version's replay (electron/replayBundles.mjs): is there a bundle for it, and how big —
   // what the View Replay list says before the player commits to a download…
-  ipcMain.handle("ow3:replay-bundle-info", async (_event, version) => {
+  appIpc.handle("ow3:replay-bundle-info", async (_event, version) => {
     if (typeof fetch !== "function") return null; // the 32-bit Linux shell's Node has none
     const m = await fetchBundleManifest(String(version ?? ""));
     return m ? { size: m.size, fingerprint: m.fingerprint, usable: m.contract <= SHELL_CONTRACT } : null;
   });
   // …and the watching itself. Resolves once the replay window is up.
-  ipcMain.handle("ow3:replay-watch-version", (event, request) => watchInVersion(BrowserWindow.fromWebContents(event.sender), request));
+  appIpc.handle("ow3:replay-watch-version", (event, request) => watchInVersion(BrowserWindow.fromWebContents(event.sender), request));
   ipcMain.on("ow3replay:boot", (event) => {
     const s = replayWindows.get(event.sender.id);
     event.returnValue = s ? { options: s.options, version: s.version, contract: SHELL_CONTRACT, maxFps: MAX_FPS } : null;
@@ -547,8 +589,8 @@ app.whenReady().then(async () => {
   ipcMain.on("ow3replay:exit", (event) => {
     if (replayWindows.has(event.sender.id)) BrowserWindow.fromWebContents(event.sender)?.close();
   });
-  ipcMain.handle("ow3:vsync-get", () => readSettings().vsync !== false);
-  ipcMain.handle("ow3:vsync-set", (_event, on) => { writeSettings({ vsync: on === true }); });
+  appIpc.handle("ow3:vsync-get", () => readSettings().vsync !== false);
+  appIpc.handle("ow3:vsync-set", (_event, on) => { writeSettings({ vsync: on === true }); });
   // …and the restart that applies it. Vsync is a launch switch (see VSYNC above), so the Options
   // screen offers to relaunch rather than make the player quit and start the game again. `quit`,
   // not `exit`, so `before-quit` still closes the relay cleanly and the new process finds the port
@@ -559,7 +601,7 @@ app.whenReady().then(async () => {
   // the GPU, written into `.logs/` through the one log writer (so it is swept with the rest) —
   // that file is what a player with a broken driver sends to get it looked at. Returns where it
   // went and whether software rendering is already on, which changes what the screen offers.
-  ipcMain.handle("ow3:gpu-report", async (_event, probe) => {
+  appIpc.handle("ow3:gpu-report", async (_event, probe) => {
     let info;
     try {
       // `complete` carries the GL renderer and driver strings, and can take a while on Linux;
@@ -587,23 +629,23 @@ app.whenReady().then(async () => {
   });
   // The no-WebGL screen's "Restart with Software Rendering" — and, from an older page, its old
   // name for the same thing.
-  ipcMain.handle("ow3:software-gl-set", (_event, on) => { writeSettings({ renderer: on === true ? "software" : "webgl", rendererTrial: false }); });
+  appIpc.handle("ow3:software-gl-set", (_event, on) => { writeSettings({ renderer: on === true ? "software" : "webgl", rendererTrial: false }); });
   // Options → Video → "Renderer" (see RENDERER above). `get` is the SAVED rung and what this
   // launch is actually drawing with — they differ after a change that has not been relaunched
   // yet, and after an Experimental launch that was undone. `set` saves a rung for the next launch.
-  ipcMain.handle("ow3:renderer-get", () => {
+  appIpc.handle("ow3:renderer-get", () => {
     const saved = readSettings().renderer;
     return { saved: RENDERERS.includes(saved) ? saved : RENDERER, running: RENDERER, experimentalFailed: EXPERIMENTAL_FAILED };
   });
-  ipcMain.handle("ow3:renderer-set", (_event, rung) => {
+  appIpc.handle("ow3:renderer-set", (_event, rung) => {
     if (RENDERERS.includes(rung)) writeSettings({ renderer: rung, rendererTrial: false });
   });
   // The page reached the main menu with the world drawing: this launch's renderer WORKS. Only
   // Experimental is on trial (RENDERER above); it is cleared here, so the next launch keeps it.
-  ipcMain.handle("ow3:renderer-ok", () => {
+  appIpc.handle("ow3:renderer-ok", () => {
     if (RENDERER === "experimental" && readSettings().rendererTrial === true) writeSettings({ rendererTrial: false });
   });
-  ipcMain.handle("ow3:relaunch", () => {
+  appIpc.handle("ow3:relaunch", () => {
     app.relaunch(process.env.APPIMAGE ? { execPath: process.env.APPIMAGE, args: process.argv.slice(1) } : {});
     app.quit();
   });
@@ -611,7 +653,7 @@ app.whenReady().then(async () => {
   // CHANGES, and the game subscribes when the LAN screen opens — long after the beacon found
   // whoever was already there — so without this a machine that has been quietly present the
   // whole time is never mentioned.
-  ipcMain.handle("ow3:servers-now", () => heard);
+  appIpc.handle("ow3:servers-now", () => heard);
 
   // Updates. Both decisions are the PLAYER's — nothing downloads until they ask and nothing
   // installs until they ask again — so all three of these are things the game calls, never
@@ -624,9 +666,9 @@ app.whenReady().then(async () => {
       for (const win of BrowserWindow.getAllWindows()) win.webContents.send("ow3:update", next);
     },
   });
-  ipcMain.handle("ow3:update-state", () => updateState ?? updates.state);
-  ipcMain.handle("ow3:update-download", () => { updates.download(); });
-  ipcMain.handle("ow3:update-install", () => { updates.install(); });
+  appIpc.handle("ow3:update-state", () => updateState ?? updates.state);
+  appIpc.handle("ow3:update-download", () => { updates.download(); });
+  appIpc.handle("ow3:update-install", () => { updates.install(); });
   // Only a PACKAGED app has a release to compare itself against; a dev run has no
   // `app-update.yml` and the updater says so at length. Checked at start, as asked, because a
   // player who is about to sit down for an hour is the one who wants to know.
@@ -669,6 +711,7 @@ app.whenReady().then(async () => {
     },
   });
 
+  appOrigin = new URL(url).origin;
   createWindow(url);
 
   // macOS: the app outlives its windows.

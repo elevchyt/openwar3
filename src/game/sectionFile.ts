@@ -11,9 +11,36 @@ export async function gzip(bytes: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-export async function gunzip(bytes: Uint8Array): Promise<Uint8Array> {
+/**
+ * The most a section may inflate to. A replay or a save is a file somebody can hand you, and a
+ * few kilobytes of gzip can expand to gigabytes; read whole, that is the tab's memory gone before
+ * a byte of it is looked at. Nothing past this could be decoded anyway — V8 caps a string at
+ * about 2^29 characters, and every section is JSON text — so the cap refuses no real file.
+ */
+export const MAX_INFLATED = 512 * 1024 * 1024;
+
+export async function gunzip(bytes: Uint8Array, max = MAX_INFLATED): Promise<Uint8Array> {
   const stream = new Blob([bytes as BlobPart]).stream().pipeThrough(new DecompressionStream("gzip"));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > max) {
+      await reader.cancel();
+      throw new Error(`section inflates past ${max} bytes`);
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const c of chunks) {
+    out.set(c, at);
+    at += c.length;
+  }
+  return out;
 }
 
 /** JSON that survives a non-finite number (an aura's `Infinity` would arrive as `null`). */

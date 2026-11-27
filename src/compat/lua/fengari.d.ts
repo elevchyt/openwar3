@@ -15,6 +15,7 @@ declare module "fengari" {
     LUA_TUSERDATA: number; LUA_TTHREAD: number;
     LUA_REGISTRYINDEX: number;
     LUA_MULTRET: number;
+    LUA_MASKCOUNT: number;
 
     lua_gettop(L: LuaState): number;
     lua_settop(L: LuaState, n: number): void;
@@ -52,6 +53,7 @@ declare module "fengari" {
     lua_yield(L: LuaState, nresults: number): number;
     lua_isyieldable(L: LuaState): boolean;
     lua_tojsstring(L: LuaState, i: number): string;
+    lua_sethook(L: LuaState, fn: ((L: LuaState, ar: unknown) => void) | null, mask: number, count: number): void;
   };
 
   export const lauxlib: {
@@ -59,6 +61,7 @@ declare module "fengari" {
     luaL_loadbuffer(L: LuaState, buff: Uint8Array, size: number | null, name: Uint8Array): number;
     luaL_ref(L: LuaState, t: number): number;
     luaL_unref(L: LuaState, t: number, ref: number): void;
+    luaL_error(L: LuaState, fmt: Uint8Array, ...args: unknown[]): never;
   };
 
   export const lualib: {

@@ -20,7 +20,7 @@ import { stat } from "node:fs/promises";
 import { join, normalize, extname, sep } from "node:path";
 import { WebSocketServer } from "ws";
 import { RelayCore, PROTOCOL_VERSION } from "../server/rooms.mjs";
-import { attachRelay } from "../server/wsAdapter.mjs";
+import { attachRelay, MAX_PAYLOAD } from "../server/wsAdapter.mjs";
 import { describeHost } from "../server/hostInfo.mjs";
 
 /** MUST equal `RELAY_PATH` in src/net/protocol.ts — the same hand-kept pairing the Vite plugin
@@ -53,7 +53,15 @@ const TYPES = new Map(Object.entries({
  *  own code and the server is bound to this machine, but a static server that can be walked out
  *  of is a static server that serves the player's home directory to the LAN. */
 function resolveInRoot(root, urlPath) {
-  const decoded = decodeURIComponent(urlPath.split("?")[0]);
+  // A malformed escape (`GET /%`) makes `decodeURIComponent` THROW, and this runs synchronously
+  // in the request callback of a server bound to every interface — so one request from anybody
+  // on the LAN was an uncaught exception in the app's main process. It names no file: refused.
+  let decoded;
+  try {
+    decoded = decodeURIComponent(urlPath.split("?")[0]);
+  } catch {
+    return null;
+  }
   const full = normalize(join(root, decoded));
   return full === root || full.startsWith(root + sep) ? full : null;
 }
@@ -99,7 +107,7 @@ export async function startServer({ root, port = PREFERRED_PORT, host = "0.0.0.0
       return addr && typeof addr !== "string" ? describeHost("app", host, addr.port) : null;
     },
   });
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD });
   const stopSweep = attachRelay(wss, core);
 
   const http = createServer((req, res) => {
@@ -111,7 +119,12 @@ export async function startServer({ root, port = PREFERRED_PORT, host = "0.0.0.0
       // Single-page fallback: any unmatched route is the app's own.
       if (await sendFile(res, join(root, "index.html"))) return;
       res.writeHead(404).end("Not found");
-    })();
+    })().catch(() => {
+      // A request that fails half-way (the socket gone, a file vanished) is that request's
+      // failure, never an unhandled rejection in the app's main process.
+      if (!res.headersSent) res.writeHead(500).end();
+      else res.destroy();
+    });
   });
 
   http.on("upgrade", (req, socket, head) => {

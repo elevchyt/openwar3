@@ -96,6 +96,13 @@ const CHUNK = [
   'function fireIt(t) TriggerExecute(t) end',
   'function firedCount() return fired end',
   'function sameFunctionTwice() return onEvent == onEvent end',
+  '',
+  // A map is untrusted: a loop that never waits must be STOPPED, not hang the tab — even one
+  // that tries to swallow the stop with pcall.
+  'after = 0',
+  'function spin() while true do end end',
+  'function spinCaught() while true do pcall(spin) end end',
+  'function afterSpin() after = after + 1 return after end',
 ].join('\n');
 
 lua.load(CHUNK, 'test.lua');
@@ -141,6 +148,21 @@ call('fireIt', [trig]);
 check('a Lua trigger action fired', call('firedCount').n, 1);
 call('fireIt', [trig]);
 check('…and fires again', call('firedCount').n, 2);
+
+console.log('\n--- a script that never waits is stopped ---');
+{
+  const quiet = console.info;
+  console.info = console.warn = () => {};
+  const t0 = Date.now();
+  call('spin');
+  call('spinCaught');
+  const secs = (Date.now() - t0) / 1000;
+  console.info = quiet;
+  console.warn = realWarn;
+  check('both endless loops came back (in under a minute)', secs < 60, true);
+  // …and the budget is per go: the next call into Lua runs normally.
+  check('the next call runs on a fresh budget', call('afterSpin').n, 1);
+}
 
 if (notes.length) {
   console.log('\nnotes while loading:');

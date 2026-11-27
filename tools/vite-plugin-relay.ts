@@ -43,7 +43,7 @@ export function relay(): Plugin {
     // devDependency) — and so a config load costs nothing when the plugin will not be used.
     const { WebSocketServer } = await import("ws");
     const { RelayCore } = await import("../server/rooms.mjs");
-    const { attachRelay } = await import("../server/wsAdapter.mjs");
+    const { attachRelay, MAX_PAYLOAD } = await import("../server/wsAdapter.mjs");
     const { describeHost } = await import("../server/hostInfo.mjs");
 
     // What the handshake tells the client about this machine's reachability. Asked of the
@@ -56,7 +56,7 @@ export function relay(): Plugin {
       return describeHost("dev", addr.address, addr.port);
     };
 
-    const wss = new WebSocketServer({ noServer: true });
+    const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD });
     const stop = attachRelay(wss, new RelayCore({ describeHost: host }));
 
     httpServer.on("upgrade", (req, socket, head) => {

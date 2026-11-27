@@ -462,7 +462,10 @@ export async function mountLanLobbyScreen(
     const msg = data as { k?: string } | null;
     if (!msg) return;
     if (msg.k === "lobby") {
-      if (isHost()) return; // the host is the author of these; it never takes one
+      // The host is the author of these; it never takes one — and a client takes one only FROM
+      // the host. Any peer may address any other through the relay, and a seating sent by a
+      // joiner would otherwise rewrite every client's lobby (the relay's `from` stamp settles it).
+      if (isHost() || from !== hostPeer()) return;
       const prev = setup;
       setup = msg as LobbySetup;
       // The roster is in the payload, so a client says who came and went off the SAME facts

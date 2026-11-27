@@ -1,3 +1,20 @@
+diff --git a/src/lapi.js b/src/lapi.js
+--- a/src/lapi.js
++++ b/src/lapi.js
+@@ -1003,7 +1003,12 @@
+         ci.extra = funcOff;
+         ci.c_old_errfunc = L.errfunc;
+         L.errfunc = func;
+-        ci.callstatus &= ~lstate.CIST_OAH | L.allowhook;
++        // OpenWar3 fix: C Lua's `setoah(ci->callstatus, L->allowhook)` is
++        // `st = (st & ~CIST_OAH) | v`. Translated as `st &= ~CIST_OAH | v` it can only CLEAR the
++        // bit, so error recovery (ldo.js `recover`) restored `allowhook` as 0 — and a `pcall`
++        // that caught an error inside a coroutine turned every hook off on that thread for good,
++        // the instruction budget in src/compat/lua/host.ts included.
++        ci.callstatus = (ci.callstatus & ~lstate.CIST_OAH) | L.allowhook;
+         ci.callstatus |= lstate.CIST_YPCALL;  /* function can do error recovery */
+         ldo.luaD_call(L, funcOff, nresults);  /* do the call */
+         ci.callstatus &= ~lstate.CIST_YPCALL;
 diff --git a/src/liolib.js b/src/liolib.js
 index 92dda580e726cf5d4914132df363869cef6fefe2..22f8c91b615d81fdf298bd66802438ea5a30a01e 100644
 --- a/src/liolib.js

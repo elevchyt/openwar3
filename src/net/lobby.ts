@@ -1050,7 +1050,16 @@ export class LanLobby {
         // Game traffic. `start` is the one message the lobby itself understands — everything
         // else is passed through to whoever owns the match (Phase C/E).
         const data = m.data as Partial<GameMessage> | null;
-        if (data && data.k === "start") return this.onStart(data as GameMessage & { k: "start" });
+        // `start` is the HOST's to send and nobody else's: it carries the whole seating — who
+        // sits where, on which team, as which race, with which seed — and every client builds
+        // its match from it. The relay lets any peer address any other, so a joiner could send
+        // one, and the lobby took it without asking who it was from: every machine, the host's
+        // included, then ran the attacker's seating. The relay's `from` stamp settles it, as it
+        // does for `mappart` below; and the host itself never takes one off the wire.
+        if (data && data.k === "start") {
+          if (!this.isHost && m.from === this.state.peers.find((p) => p.host)?.id) this.onStart(data as GameMessage & { k: "start" });
+          return;
+        }
         // The map, on its way to a joiner without it (net/mapTransfer.ts) — lobby business, not
         // a screen's: the host answers whatever screen it is on, and the joiner's download
         // outlives the LAN screen that started it.

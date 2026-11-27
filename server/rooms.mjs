@@ -53,6 +53,25 @@ const roomInfo = (r) => ({
 
 const peerInfo = (p) => ({ id: p.id, name: p.name, host: p.host });
 
+/**
+ * A client-supplied string, made safe to store and to re-broadcast: anything that is not a
+ * string becomes the fallback, and a string is cut to `max` characters. Every one of these is
+ * echoed to every browsing connection on each room change, so an unbounded one is a payload
+ * anybody can make the relay fan out to everyone — and a NON-string (an object, a number) was
+ * passed straight through to a game list that calls string methods on it.
+ */
+const text = (v, max, fallback = "") => (typeof v === "string" && v.length > 0 ? v.slice(0, max) : fallback);
+
+/** Lengths for the strings above. A WC3 player name is 15 characters; the rest are generous. */
+const NAME_MAX = 32;
+const ROOM_NAME_MAX = 64;
+const MAP_NAME_MAX = 128;
+const MAP_PATH_MAX = 512;
+
+/** Rooms one relay holds at once. Each connection can own one room, so this only bites a
+ *  flood of connections; ours, sized for a free-tier box. */
+const MAX_ROOMS = 500;
+
 /** A rejoin token: unguessable enough that another client cannot seize a dropped player's
  *  slot, cheap enough to mint on a free tier. Node's global crypto in every runtime we target. */
 const mkToken = () => globalThis.crypto.randomUUID();
@@ -305,15 +324,16 @@ export class RelayCore {
 
       case "create": {
         if (conn.roomId) return conn.send({ t: "error", message: "Already in a game." });
+        if (this.rooms.size >= MAX_ROOMS) return conn.send({ t: "error", message: "The server is full." });
         const id = String(this.nextRoomId++);
-        const peer = { id: 1, name: msg.playerName || "Player", host: true, conn, token: mkToken(), disconnected: false };
+        const peer = { id: 1, name: text(msg.playerName, NAME_MAX, "Player"), host: true, conn, token: mkToken(), disconnected: false };
         const room = {
           id,
-          name: msg.name || "OpenWar3 Game",
+          name: text(msg.name, ROOM_NAME_MAX, "OpenWar3 Game"),
           hostName: peer.name,
-          mapName: msg.mapName || "",
-          mapPath: msg.mapPath || "",
-          maxPlayers: Math.max(2, Math.min(12, msg.maxPlayers || 12)),
+          mapName: text(msg.mapName, MAP_NAME_MAX),
+          mapPath: text(msg.mapPath, MAP_PATH_MAX),
+          maxPlayers: Number.isInteger(msg.maxPlayers) ? Math.max(2, Math.min(12, msg.maxPlayers)) : 12,
           observers: msg.observers === true,
           edition: msg.edition === "roc" ? "roc" : "tft",
           // 0 Slow … 3 Fastest; anything else (an older client's silence) is Fast, 2.
@@ -347,13 +367,13 @@ export class RelayCore {
         // new one. Checked before the full-room test, because reclaiming your own held slot is
         // not taking a new one; a room that is "full" of held slots must still let its own
         // players back in.
-        const held = msg.token && [...room.peers.values()].find((p) => p.disconnected && p.token === msg.token);
+        const held = typeof msg.token === "string" && msg.token && [...room.peers.values()].find((p) => p.disconnected && p.token === msg.token);
         if (held) {
           clearTimeout(held.dropTimer); // back in time: the seat is not let go
           held.dropTimer = null;
           held.conn = conn;
           held.disconnected = false;
-          if (msg.playerName) held.name = msg.playerName;
+          if (typeof msg.playerName === "string" && msg.playerName) held.name = text(msg.playerName, NAME_MAX);
           conn.roomId = room.id;
           conn.peerId = held.id;
           conn.send({
@@ -382,7 +402,7 @@ export class RelayCore {
           this.log("join.refused", { ...this.roomFields(room), ...this.connFields(conn), why: "full" });
           return conn.send({ t: "error", message: "That game is full." });
         }
-        const peer = { id: room.nextPeerId++, name: msg.playerName || "Player", host: false, conn, token: mkToken(), disconnected: false };
+        const peer = { id: room.nextPeerId++, name: text(msg.playerName, NAME_MAX, "Player"), host: false, conn, token: mkToken(), disconnected: false };
         room.peers.set(peer.id, peer);
         conn.roomId = room.id;
         conn.peerId = peer.id;
@@ -408,7 +428,7 @@ export class RelayCore {
       // token alone, from a connection in no room: nothing about the room is told but yes/no.
       case "seat": {
         const room = this.rooms.get(msg.roomId);
-        const seat = msg.token && room && [...room.peers.values()].find((p) => p.disconnected && p.token === msg.token);
+        const seat = typeof msg.token === "string" && msg.token && room && [...room.peers.values()].find((p) => p.disconnected && p.token === msg.token);
         // …and how long it will stay so, for the prompt's own "Time to reconnect".
         const left = seat ? Math.max(0, seat.droppedAt + this.holdMs - Date.now()) : 0;
         return conn.send({ t: "seat", held: !!seat, left });
@@ -419,7 +439,7 @@ export class RelayCore {
       // into the map's EVENT_PLAYER_LEAVE.
       case "abandon": {
         const room = this.rooms.get(msg.roomId);
-        const held = msg.token && room && [...room.peers.values()].find((p) => p.disconnected && p.token === msg.token);
+        const held = typeof msg.token === "string" && msg.token && room && [...room.peers.values()].find((p) => p.disconnected && p.token === msg.token);
         if (!held) return;
         clearTimeout(held.dropTimer);
         held.dropTimer = null;
@@ -514,7 +534,7 @@ export class RelayCore {
 
       default:
         this.log("relay.unknown-message", { ...this.connFields(conn), t: word(String(msg.t), 32) }, "warn");
-        return conn.send({ t: "error", message: `Unknown message: ${String(msg.t)}` });
+        return conn.send({ t: "error", message: `Unknown message: ${String(msg.t).slice(0, 32)}` });
     }
   }
 }

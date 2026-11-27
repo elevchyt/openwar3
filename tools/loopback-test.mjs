@@ -346,6 +346,26 @@ console.log("rubbish on the game channel is refused, not thrown");
   check("nor is a bare string", router.receive(1, "cmd"), "not-a-command");
 }
 
+console.log("a command whose fields are the wrong KIND is refused at the door");
+{
+  const router = new CommandRouter([{ id: 0, peer: 1 }]);
+  const recv = (cmd) => router.receive(1, commandMessage(cmd));
+  check("a rally to a string and an object", recv({ c: "rally", unitId: 3, x: "a", y: {}, kind: "point", targetId: 0 }), "bad-shape");
+  check("a move to NaN", recv({ c: "order", unitId: 3, order: { kind: "move", x: NaN, y: 0 }, queued: false }), "bad-shape");
+  check("an unknown command", recv({ c: "explode", unitId: 3 }), "bad-shape");
+  check("a fractional unit id", recv({ c: "cancelbuild", buildingId: 1.5 }), "bad-shape");
+  check("a rally of no known kind", recv({ c: "rally", unitId: 3, x: 0, y: 0, kind: "anywhere", targetId: 0 }), "bad-shape");
+  // The two orders that carry what the ENGINE derives — a price paid, a repair's rates — are
+  // the authority's to build, never a client's to send (game/commands.ts).
+  check("a pre-paid buildnew order", recv({ c: "order", unitId: 3, order: { kind: "buildnew", defId: "hcas", x: 0, y: 0, gold: 0, lumber: 0, paid: true }, queued: false }), "bad-shape");
+  check("a repair order with its own rates", recv({ c: "order", unitId: 3, order: { kind: "repair", buildingId: 4, hpPerSec: 9999, goldPerHp: 0, lumberPerHp: 0 }, queued: false }), "bad-shape");
+  // …while the honest shapes pass untouched.
+  check("a plain move", accepted(recv({ c: "order", unitId: 3, order: { kind: "move", x: 10, y: -20 }, queued: true })), true);
+  check("a rally onto a unit", accepted(recv({ c: "rally", unitId: 3, x: 0, y: 0, kind: "unit", targetId: 9 })), true);
+  check("the last job cancelled (index -1)", accepted(recv({ c: "canceltrain", buildingId: 3, index: -1 })), true);
+  check("an intent-only repair", accepted(recv({ c: "repair", unitId: 3, buildingId: 4, queued: false })), true);
+}
+
 // ---------------------------------------------------------------------------------------
 // Item 10b: snapshots actually cross the wire, through the real relay core, and the receiving
 // client diffs them against what it simulated for itself. This is the first test in the whole
@@ -414,8 +434,8 @@ const sources = { viewers: () => [{ player: 0, viewer: seer }, { player: 1, view
 console.log("\nthe host's snapshot reaches the client it was addressed to");
 {
   const { host, peer } = await room();
-  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
-  const peerLink = new MatchLink(channelFor(peer), 1, SEATS);
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS, 1);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS, 1);
   peer.clear();
 
   const sent = hostLink.tickHost(1, worldAt(420), sources, 5);
@@ -431,8 +451,8 @@ console.log("\nthe host's snapshot reaches the client it was addressed to");
 console.log("the client diffs what it was sent against what it simulated");
 {
   const { host, peer } = await room();
-  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
-  const peerLink = new MatchLink(channelFor(peer), 1, SEATS);
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS, 1);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS, 1);
 
   hostLink.tickHost(1, worldAt(245), sources, 5);
   await tick();
@@ -456,8 +476,8 @@ console.log("the client diffs what it was sent against what it simulated");
 console.log("once a command has landed, the comparison stops rather than reporting inputs as drift");
 {
   const { host, peer } = await room();
-  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
-  const peerLink = new MatchLink(channelFor(peer), 1, SEATS);
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS, 1);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS, 1);
 
   // Same disagreement as above, and while both worlds are pristine it is still reported —
   // pinning that the gate below is the gate, and not the diff having quietly stopped working.
@@ -493,8 +513,8 @@ console.log("the authority's verdict reaches the player it is about, and nobody 
   third.send({ t: "join", roomId, playerName: "Bystander" });
   await tick();
   const THREE = [{ id: 0, peer: 1 }, { id: 1, peer: 2 }, { id: 2, peer: 3 }];
-  const hostLink = new MatchLink(channelFor(host), 0, THREE);
-  const peerLink = new MatchLink(channelFor(peer), 1, THREE);
+  const hostLink = new MatchLink(channelFor(host), 0, THREE, 1);
+  const peerLink = new MatchLink(channelFor(peer), 1, THREE, 1);
   const seen = [];
   peerLink.onDialog = (d) => seen.push(d);
 
@@ -511,7 +531,7 @@ console.log("the authority's verdict reaches the player it is about, and nobody 
   // HOST whether it received its own broadcast proves nothing: the relay never echoes a sender
   // its own message, so a `send` with no recipient passes that check while spraying the room.
   // Written the easy way first, and the injection walked straight through it.
-  const thirdLink = new MatchLink(channelFor(third), 2, THREE);
+  const thirdLink = new MatchLink(channelFor(third), 2, THREE, 1);
   const bystander = [];
   thirdLink.onDialog = (d) => bystander.push(d);
   hostLink.sendDialog(1, { k: "dlg", message: "You failed to achieve victory.", buttons: [] });
@@ -540,7 +560,7 @@ console.log("a minimap signal is stamped by the relay and reaches only the ally 
   // traffic away from the link built on the first. The host is peer 1 in this room, so the
   // clients are told so — `askToSignal` aims at `hostPeer`.
   const hostCh = channelFor(host), peerCh = channelFor(peer), thirdCh = channelFor(third);
-  const hostLink = new MatchLink(hostCh, 0, THREE);
+  const hostLink = new MatchLink(hostCh, 0, THREE, 1);
   const peerLink = new MatchLink(peerCh, 1, THREE, 1);
   const thirdLink = new MatchLink(thirdCh, 2, THREE, 1);
   const atHost = [], atPeer = [], atThird = [];
@@ -576,8 +596,8 @@ console.log("the authority stamps which screen is the END of a player's game");
   const { host, peer } = await room();
   const hostCh = channelFor(host);
   const peerCh = channelFor(peer);
-  const hostLink = new MatchLink(hostCh, 0, SEATS);
-  const peerLink = new MatchLink(peerCh, 1, SEATS);
+  const hostLink = new MatchLink(hostCh, 0, SEATS, 1);
+  const peerLink = new MatchLink(peerCh, 1, SEATS, 1);
   const seen = [];
   peerLink.onDialog = (d) => seen.push(d);
 
@@ -595,7 +615,7 @@ console.log("…and ending the match hangs up that end of the wire");
 {
   const { host } = await room();
   const ch = channelFor(host);
-  const link = new MatchLink(ch, 0, SEATS);
+  const link = new MatchLink(ch, 0, SEATS, 1);
   check("the wire is open while the match runs", ch.closed, 0);
   link.endMatch();
   check("the match ending closes it", ch.closed, 1);
@@ -604,7 +624,7 @@ console.log("…and ending the match hangs up that end of the wire");
 console.log("a verdict for a seat nobody is sitting in goes nowhere, and says so");
 {
   const { host } = await room();
-  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS, 1);
   // Player 0 is the host itself — its own script already showed it — and a computer slot has
   // no peer at all. Both must report FALSE rather than being silently counted as delivered,
   // so the caller retries a seat that simply is not seated yet instead of writing it off.
@@ -616,8 +636,8 @@ console.log("…and the AUTHORITY's own input ends it too, which a client cannot
 {
   const { host, peer } = await room();
   const commanded = { ...sources, commandsApplied: () => 3 }; // the host player moved something
-  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
-  const peerLink = new MatchLink(channelFor(peer), 1, SEATS);
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS, 1);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS, 1);
 
   hostLink.tickHost(1, worldAt(245), sources, 5);
   await tick();
@@ -669,8 +689,8 @@ console.log("the pause is asked for by a client and RULED by the host, in that o
 console.log("an out-of-order or mis-addressed snapshot is refused, not rendered");
 {
   const { host, peer } = await room();
-  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
-  const peerLink = new MatchLink(channelFor(peer), 1, SEATS);
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS, 1);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS, 1);
 
   hostLink.tickHost(1, worldAt(300), sources, 10);
   await tick();
@@ -693,8 +713,8 @@ console.log("an out-of-order or mis-addressed snapshot is refused, not rendered"
 console.log("both ends of the pipe are counted, so a dead pipe is distinguishable from a quiet one");
 {
   const { host, peer } = await room();
-  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
-  const peerLink = new MatchLink(channelFor(peer), 1, SEATS);
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS, 1);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS, 1);
 
   // The heartbeat these counters feed (rts.ts, dev-only) is what makes the two-client LAN
   // harness watchable: a silent [sync] with received === 0 is a broken pipe, with received
@@ -719,10 +739,10 @@ console.log("the link demuxes the two kinds of game traffic and passes anything 
   const other = [];
   const ch = channelFor(peer);
   ch.onPeerData = (from, data) => other.push(data.k);
-  const link = new MatchLink(ch, 1, SEATS); // wraps the handler above
+  const link = new MatchLink(ch, 1, SEATS, 1); // wraps the handler above
   const cmds = [];
   link.onCommand = (from, msg) => cmds.push([from, msg.cmd.c]);
-  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS, 1);
 
   // A snapshot: consumed internally, not surfaced to either callback.
   hostLink.tickHost(1, worldAt(420), sources, 5);
@@ -824,7 +844,7 @@ console.log("\na reconnected player is handed the world it missed, off the caden
   const hostChannel = channelFor(host);
   const realSend = hostChannel.send;
   hostChannel.send = (data, to) => { outbox.push({ k: data.k, to }); realSend(data, to); };
-  const hostLink = new MatchLink(hostChannel, 0, SEATS);
+  const hostLink = new MatchLink(hostChannel, 0, SEATS, 1);
   // Settle the cadence first: one ordinary broadcast leaves `accum` at zero, so anything that
   // goes out later on a tiny dt can only be a catch-up and not a broadcast that came due.
   hostLink.tickHost(1, worldAt(420), sources, 1);
@@ -837,7 +857,7 @@ console.log("\na reconnected player is handed the world it missed, off the caden
   await tick();
   back.send({ t: "join", roomId, playerName: "Joiner", token });
   await tick();
-  const backLink = new MatchLink(channelFor(back), 1, SEATS);
+  const backLink = new MatchLink(channelFor(back), 1, SEATS, 1);
   back.clear();
 
   // A tick far below SNAPSHOT_INTERVAL. Under the old gate this returned 0 and the player
@@ -864,8 +884,8 @@ console.log("\na reconnected player is handed the world it missed, off the caden
 console.log("\nspell fx ride due broadcasts, filtered per recipient, and never replay (item 9c-fx)");
 {
   const { host, peer } = await room();
-  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
-  const peerLink = new MatchLink(channelFor(peer), 1, SEATS);
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS, 1);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS, 1);
 
   // A viewer whose eyes end at x=500 — the far burst must not cross to it.
   const halfBlind = { ...seer, fogBlocksAt: (p) => p.x > 500, team: 1 };
@@ -909,8 +929,8 @@ console.log("\nspell fx ride due broadcasts, filtered per recipient, and never r
 console.log("deaths ride EVERY send — the expedited payload that carries the absence carries the collapse");
 {
   const { host, peer } = await room();
-  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
-  const peerLink = new MatchLink(channelFor(peer), 1, SEATS);
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS, 1);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS, 1);
   const deathsThisTick = [[{ id: 42, x: 10, y: 20 }]];
   const dSources = { ...sources, drainDeaths: () => deathsThisTick.shift() ?? [] };
   hostLink.tickHost(0.05, worldAt(420), dSources, 1); // settle the cadence + consume the death
@@ -942,8 +962,8 @@ console.log("deaths ride EVERY send — the expedited payload that carries the a
 console.log("a client slower than the wire still gets every burst and every collapse");
 {
   const { host, peer } = await room();
-  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
-  const peerLink = new MatchLink(channelFor(peer), 1, SEATS);
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS, 1);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS, 1);
   const fxQ = [
     { ...EMPTY_FX, effects: [{ art: "A.mdx", x: 1, y: 2, targetId: 0, z: 0 }] },
     { ...EMPTY_FX, effects: [{ art: "B.mdx", x: 3, y: 4, targetId: 0, z: 0 }] },
@@ -972,8 +992,8 @@ console.log("a client slower than the wire still gets every burst and every coll
 console.log("a command's consequences are expedited off-cadence, without fx and without disturbing the clock");
 {
   const { host, peer } = await room();
-  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
-  const peerLink = new MatchLink(channelFor(peer), 1, SEATS);
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS, 1);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS, 1);
   hostLink.tickHost(0.05, worldAt(420), sources, 1); // settle the cadence
   await tick();
 
@@ -988,8 +1008,8 @@ console.log("a command's consequences are expedited off-cadence, without fx and 
 console.log("a felled tree waits for the recipient's eyes; a notice goes to whose news it is");
 {
   const { host, peer } = await room();
-  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
-  const peerLink = new MatchLink(channelFor(peer), 1, SEATS);
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS, 1);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS, 1);
   // Player 1's eyes are on x < 1000 only: tree 11 fell where it can see, tree 12 in the dark.
   let sightEdge = 1000;
   const eyes = { ...seer, fogBlocksAt: (p) => p.x >= sightEdge };

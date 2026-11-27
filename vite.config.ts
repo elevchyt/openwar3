@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import { devInstall } from "./tools/vite-plugin-dev-install";
+import { sameOriginWrites } from "./tools/vite-plugin-same-origin";
 import { driveProxy } from "./tools/vite-plugin-drive-proxy";
 import { mapSiteProxy } from "./tools/vite-plugin-mapsite-proxy";
 import { matchLog } from "./tools/vite-plugin-match-log";
@@ -60,7 +61,7 @@ const commit = (() => {
 const fingerprint = simFingerprint(root);
 
 export default defineConfig({
-  plugins: [devInstall(), driveProxy(), mapSiteProxy(), perfLog(), matchLog(), replays(), saves(), relay()],
+  plugins: [sameOriginWrites(), devInstall(), driveProxy(), mapSiteProxy(), perfLog(), matchLog(), replays(), saves(), relay()],
   define: {
     ...perfLogDefines(),
     __OW3_VERSION__: JSON.stringify(version),

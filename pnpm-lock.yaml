@@ -6,7 +6,7 @@ settings:
 
 patchedDependencies:
   fengari@0.1.5:
-    hash: 8949c3f6bad2f86f49a7d5fb2ec7f2ae67217e3183f01ad50bcdd7e6d18b59f3
+    hash: 6f30a7eff0334f619205d6d36e1253cb25d7cea033d9818ef778d13a288d6bb1
     path: patches/fengari@0.1.5.patch
   mdx-m3-viewer@5.12.0:
     hash: a69f5a15807679da465afa41b55097b98b0ece8ea6de46753f8b45dfa7a15461
@@ -49,7 +49,7 @@ importers:
         version: 3.3.0
       fengari:
         specifier: 0.1.5
-        version: 0.1.5(patch_hash=8949c3f6bad2f86f49a7d5fb2ec7f2ae67217e3183f01ad50bcdd7e6d18b59f3)
+        version: 0.1.5(patch_hash=6f30a7eff0334f619205d6d36e1253cb25d7cea033d9818ef778d13a288d6bb1)
       gl-matrix:
         specifier: ^3.4.3
         version: 3.4.4
@@ -2939,7 +2939,7 @@ snapshots:
     optionalDependencies:
       picomatch: 4.0.7
 
-  fengari@0.1.5(patch_hash=8949c3f6bad2f86f49a7d5fb2ec7f2ae67217e3183f01ad50bcdd7e6d18b59f3):
+  fengari@0.1.5(patch_hash=6f30a7eff0334f619205d6d36e1253cb25d7cea033d9818ef778d13a288d6bb1):
     dependencies:
       readline-sync: 1.4.10
       sprintf-js: 1.1.3
@@ -3214,7 +3214,7 @@ snapshots:
 
   mdx-m3-viewer@5.12.0(patch_hash=a69f5a15807679da465afa41b55097b98b0ece8ea6de46753f8b45dfa7a15461):
     dependencies:
-      fengari: 0.1.5(patch_hash=8949c3f6bad2f86f49a7d5fb2ec7f2ae67217e3183f01ad50bcdd7e6d18b59f3)
+      fengari: 0.1.5(patch_hash=6f30a7eff0334f619205d6d36e1253cb25d7cea033d9818ef778d13a288d6bb1)
       gl-matrix: 3.3.0
       pako: 2.2.0
       tga-js: 1.1.1

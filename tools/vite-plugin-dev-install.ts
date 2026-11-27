@@ -80,6 +80,10 @@ async function collectCasc(root: string): Promise<CascManifest | null> {
   return out;
 }
 
+/** Request-body ceilings for the two endpoints that write into the install. */
+const CUSTOM_KEYS_MAX = 1024 * 1024;
+const MAP_MAX = 256 * 1024 * 1024;
+
 export function devInstall(): Plugin {
   return {
     name: "openwar3-dev-install",
@@ -115,7 +119,13 @@ export function devInstall(): Plugin {
 
         if (url.pathname === "/customkeys" && req.method === "POST") {
           const chunks: Buffer[] = [];
-          req.on("data", (c: Buffer) => chunks.push(c));
+          let size = 0;
+          // A CustomKeys.txt is a few tens of KB; a body past this is not one.
+          req.on("data", (c: Buffer) => {
+            size += c.length;
+            if (size > CUSTOM_KEYS_MAX) req.destroy();
+            else chunks.push(c);
+          });
           req.on("end", () => {
             void (async () => {
               try {
@@ -143,7 +153,13 @@ export function devInstall(): Plugin {
             return;
           }
           const chunks: Buffer[] = [];
-          req.on("data", (c: Buffer) => chunks.push(c));
+          let size = 0;
+          // The same ceiling the desktop app's map downloads have (electron/mapSites.mjs).
+          req.on("data", (c: Buffer) => {
+            size += c.length;
+            if (size > MAP_MAX) req.destroy();
+            else chunks.push(c);
+          });
           req.on("end", () => {
             void (async () => {
               try {

@@ -370,10 +370,21 @@ function allow(counter, who, ceiling) {
   return true;
 }
 
+/** All sends this hour, whoever made them: a ceiling on the bucket that no choice of address
+ *  gets round. Ours, sized well above what the player base sends. */
+let sentThisHour = 0;
+setInterval(() => { sentThisHour = 0; }, 60 * 60 * 1000).unref();
+const ALL_PER_HOUR = 2000;
+
 function clientAddress(req) {
-  // Railway's edge puts the caller first in X-Forwarded-For.
+  // The LAST entry of X-Forwarded-For, never the first. A proxy APPENDS the address it saw, so
+  // everything before the edge's own entry is whatever the caller chose to send — keyed on the
+  // first, a client that sent a fresh `X-Forwarded-For: <anything>` with every upload was a
+  // fresh address every time and the hourly cap meant nothing. With one proxy in front (Railway's
+  // edge), its entry is the last; if it overwrites the header instead, first and last agree.
   const fwd = req.headers["x-forwarded-for"];
-  return (typeof fwd === "string" && fwd.split(",")[0].trim()) || req.socket.remoteAddress || "?";
+  const last = typeof fwd === "string" ? fwd.split(",").pop()?.trim() : "";
+  return last || req.socket.remoteAddress || "?";
 }
 
 function answer(res, status, body) {
@@ -411,7 +422,12 @@ async function collect(req, res) {
 
   const who = clientAddress(req);
   const count = sent.get(who) ?? 0;
-  if (count >= PER_HOUR) return answer(res, 429, { error: "too many replays this hour" });
+  if (count >= PER_HOUR || sentThisHour >= ALL_PER_HOUR) return answer(res, 429, { error: "too many replays this hour" });
+  // Counted NOW, before the body is read: counted after a successful store, any number of
+  // uploads sent at once all read the same count and all went through. A send that turns out
+  // malformed still spent its turn, which is the point of a ceiling on a flood.
+  sent.set(who, count + 1);
+  sentThisHour++;
 
   const bytes = await readBody(req);
   if (!bytes) return answer(res, 413, { error: "too large" });
@@ -429,7 +445,6 @@ async function collect(req, res) {
     console.error("replays: upload failed", e);
     return answer(res, 503, { error: "storage unavailable" });
   }
-  sent.set(who, count + 1);
   // On the list at once (a restart would find it anyway).
   const entry = describe(key, bytes);
   if (entry) { remember(entry); saveIndexSoon(); }

@@ -329,7 +329,8 @@ export function decodeGraph(doc: GraphDoc, target: unknown, opts: DecodeOptions 
       case "s": return new Set();
       case "b": {
         const bytes = fromB64(n.d);
-        const C = TYPED[n.c];
+        const C = Object.prototype.hasOwnProperty.call(TYPED, n.c) ? TYPED[n.c] : undefined;
+        if (!C) throw new Error(`save: ${path} is a typed array of unknown kind ${String(n.c)}`);
         return new C(bytes.buffer as ArrayBuffer);
       }
       case "o": {
@@ -368,9 +369,12 @@ export function decodeGraph(doc: GraphDoc, target: unknown, opts: DecodeOptions 
   const ref = (id: number, old: unknown, path: string, ownerIsClass: boolean): unknown => {
     if (filled[id]) return made[id];
     const n = doc.nodes[id];
+    if (n === undefined || n === null || typeof n !== "object") throw new Error(`save: ${path} names node ${id}, which the file does not have`);
     let obj: unknown;
     const reusable = (n.t === "o" && !!n.c) || ownerIsClass || carriesWiring(old);
-    if (reusable && old !== null && typeof old === "object" && !Object.isFrozen(old) && !claimed.has(old) && kindOf(old) === nodeKind(n)) {
+    // A PROTOTYPE is never a field's value in a live match, so it is never reused as one —
+    // however a (hostile) file arrived at it, writing into it would change every instance.
+    if (reusable && old !== null && typeof old === "object" && !Object.isFrozen(old) && !claimed.has(old) && !isPrototype(old) && kindOf(old) === nodeKind(n)) {
       obj = old;
       // A typed array is reused only when it can hold the saved bytes as they are: same class
       // and same length. Anything else is a new array.
@@ -443,7 +447,12 @@ export function decodeGraph(doc: GraphDoc, target: unknown, opts: DecodeOptions 
         const o = obj as Record<string, unknown>;
         const owner = !!n.c || id === rootId;
         for (const k of Object.keys(n.p)) {
-          const prev = o[k];
+          // A save is a FILE, and a file can be anybody's: `JSON.parse` keeps `__proto__` as an
+          // own key, so `o["__proto__"]` read back `Object.prototype` (or a class's prototype)
+          // as the field's "previous value", `ref` reused it, and the node's fields were written
+          // INTO it — every object in the page then had them. Nothing we save is ever named so.
+          if (UNSAFE_KEYS.has(k)) { report?.lost.push(`${path}.${k} (refused key)`); continue; }
+          const prev = Object.prototype.hasOwnProperty.call(o, k) ? o[k] : undefined;
           const sub = `${path}.${k}`;
           o[k] = value(n.p[k], prev, sub, () => prev, owner);
         }
@@ -515,25 +524,52 @@ export class ExternalIndex {
   }
 }
 
-/** Follow an external key back to its object, through `sources` (prefix → lookup by id). */
+/** Follow an external key back to its object, through `sources` (prefix → lookup by id).
+ *
+ *  The key comes out of a save FILE, so every step is an OWN property and none of them may be a
+ *  prototype hook: `x/constructor/constructor` would otherwise walk from any row to `Function`,
+ *  and `x/__proto__` to a prototype the loader would then hand back as a value. */
 export function resolveExternalKey(key: string, sources: ReadonlyMap<string, (id: string) => unknown>): unknown {
+  if (typeof key !== "string") return undefined;
   const colon = key.indexOf(":");
   if (colon < 0) return undefined;
   const prefix = key.slice(0, colon);
   const parts = key.slice(colon + 1).split("/");
   const lookup = sources.get(prefix);
   if (!lookup) return undefined;
-  let cur: unknown = lookup(decodeURIComponent(parts[0]));
+  const decode = (p: string): string | undefined => {
+    try {
+      return decodeURIComponent(p);
+    } catch {
+      return undefined; // a malformed escape names nothing
+    }
+  };
+  const first = decode(parts[0]);
+  if (first === undefined || UNSAFE_KEYS.has(first)) return undefined;
+  let cur: unknown = lookup(first);
   for (let i = 1; i < parts.length && cur !== undefined && cur !== null; i++) {
     const p = parts[i];
     if (cur instanceof Map && p.startsWith("m")) {
       const raw = p.slice(1);
       const numeric = raw.endsWith("#");
-      const k = decodeURIComponent(numeric ? raw.slice(0, -1) : raw);
+      const k = decode(numeric ? raw.slice(0, -1) : raw);
+      if (k === undefined) return undefined;
       cur = cur.get(numeric ? Number(k) : k);
     } else {
-      cur = (cur as Record<string, unknown>)[decodeURIComponent(p)];
+      const k = decode(p);
+      if (k === undefined || UNSAFE_KEYS.has(k) || typeof cur !== "object" || !Object.prototype.hasOwnProperty.call(cur, k)) return undefined;
+      cur = (cur as Record<string, unknown>)[k];
     }
   }
+  if (cur !== null && typeof cur === "object" && isPrototype(cur)) return undefined;
   return cur ?? undefined;
+}
+
+/** Property names a save file may never write or walk through (see `fill`, `resolveExternalKey`). */
+const UNSAFE_KEYS: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
+
+/** Is `o` some constructor's `prototype` object (`Object.prototype`, a class's, an array's…)? */
+function isPrototype(o: object): boolean {
+  const ctor = Object.prototype.hasOwnProperty.call(o, "constructor") ? (o as { constructor?: unknown }).constructor : undefined;
+  return typeof ctor === "function" && (ctor as { prototype?: unknown }).prototype === o;
 }
