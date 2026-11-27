@@ -8609,8 +8609,9 @@ export class RtsController {
     for (const id of this.orderees) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "hold" }, queued: false });
   }
 
-  /** Order the selected workers to repair a damaged friendly building. WC3
-   *  rates: 35% of the build cost and 150% of the build time to go 1 HP→full. */
+  /** Order the selected workers to repair a damaged friendly building or mechanical unit —
+   *  ours or an ally's (SimWorld.repairRefusal decides, at the authority). WC3 rates: 35% of
+   *  the build cost and 150% of the build time to go 1 HP→full. */
   private repairAt(picked: number | null, queued = false, skip?: ReadonlySet<number>): boolean {
     if (picked === null) return false;
     // Repair aimed at one of our own buildings still going up is POWERBUILDING it — the
@@ -11049,19 +11050,31 @@ export class RtsController {
             this.flashRing(target.x, target.y, selR, FLASH_GREEN, false, lift);
             return;
           }
+          // A damaged MECHANICAL unit of ours or an ally's — a Siege Engine, a Glaive Thrower,
+          // a Flying Machine — is what a worker's right-click MENDS, as it mends a building:
+          // "Repairs mechanical units and structures" ([Ahrp] Ubertip; [Errors] `Targetrepair`).
+          // The workers repair and everyone else follows it as below. Each is asked through the
+          // authority, which refuses what the row refuses (an enemy, a Wisp's own limits).
+          const menders = new Set<number>();
+          if (!enemy && target.mechanical && target.hp < target.maxHp) {
+            for (const id of this.orderees) {
+              if (id === picked || !this.sim.units.get(id)?.worker) continue;
+              if (this.execute(this.localPlayer, { c: "repair", unitId: id, buildingId: picked, queued })) menders.add(id);
+            }
+          }
           // Friendly / neutral UNIT: FOLLOW it (move-follow, no auto-acquire) — for
           // marshalling large forces or scouting a unit you can't attack (WC3). Fan
           // the group into distinct slots around the leader (formation offsets) so
           // they hold a spread instead of stacking on its centre and shoving.
-          const followers = [...this.orderees].filter((id) => id !== picked);
+          const followers = [...this.orderees].filter((id) => id !== picked && !menders.has(id));
           const offs = followOffsets(this.sim, followers, target);
           let any = false;
           for (const id of followers) {
             const o = offs.get(id);
             if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "follow", targetId: picked, offX: o?.[0], offY: o?.[1] }, queued: queued })) any = true;
           }
-          if (any) {
-            this.flashRing(target.x, target.y, selR, FLASH_GREEN, false, lift); // green follow confirm
+          if (any || menders.size) {
+            this.flashRing(target.x, target.y, selR, FLASH_GREEN, false, lift); // green follow / repair confirm
             return;
           }
         }
@@ -11461,7 +11474,14 @@ export class RtsController {
       this.flashRing(target.x, target.y, selR, FLASH_RED);
       return;
     }
-    const own = this.primary !== null ? target.owner === this.sim.units.get(this.primary)?.owner : false;
+    const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
+    const own = prim ? target.owner === prim.owner : false;
+    // A damaged building a worker may MEND: ours or an ALLY's — Repair's rows say `friend`,
+    // which is an ally's too, and Renew's Ubertip names "allied buildings" (SimWorld.
+    // repairRefusal, issue #382). The authority asks the row again, so an allied Ancient is
+    // still turned away from a Peasant.
+    const mendable = (own || (!!prim && this.sim.allied(prim, target))) && target.hp < target.maxHp
+      && !(target.building && target.building.constructionLeft > 0);
     // A Moon Well is the one friendly building you right-click to USE. Every selected unit
     // that a well can do something for is sent to drink from it — its own or an ALLY'S, which
     // is the point of the ability's `friend` targeting and of night elf team play. Units the
@@ -11473,7 +11493,7 @@ export class RtsController {
       // on a hurt own building has always meant, and a wisp is organic enough to drink, so the
       // two orders would otherwise collide on exactly the case that matters (a well taking
       // fire). Both can happen at once in a mixed selection: the workers repair, the rest drink.
-      const mending = own && target.hp < target.maxHp;
+      const mending = mendable;
       let any = false;
       for (const id of this.orderees) {
         if (mending && this.sim.units.get(id)?.worker) continue;
@@ -11538,8 +11558,8 @@ export class RtsController {
     let handled = false;
     if (own && target.building && target.building.constructionLeft > 0) {
       handled = this.resumeBuildAt(picked, queued);
-    } else if (own && target.hp < target.maxHp) {
-      handled = this.repairAt(picked, queued, carriers); // own damaged building: workers repair
+    } else if (mendable) {
+      handled = this.repairAt(picked, queued, carriers); // own or allied damaged building: workers repair
     }
     if (!handled && carriers.size < this.orderees.size) this.groupMoveTo(target, picked, queued, carriers); // walk up to it (no arrow)
     this.flashRing(target.x, target.y, selR, own ? FLASH_GREEN : FLASH_YELLOW);
