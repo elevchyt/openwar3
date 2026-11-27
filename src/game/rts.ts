@@ -8651,10 +8651,43 @@ export class RtsController {
   }
 
   selectedInfo(): SelectionInfo | null {
+    if (this.infoHeld && this.infoMemo !== undefined) return this.infoMemo;
+    const info = this.selectedInfoNow();
+    if (this.infoHeld) this.infoMemo = info;
+    return info;
+  }
+
+  private selectedInfoNow(): SelectionInfo | null {
     if (this.selectedMine !== null) return this.mineInfo(this.selectedMine);
     if (this.selectedItem !== null) return this.itemInfo(this.selectedItem);
     if (this.primary === null) return null;
     return this.infoFor(this.primary);
+  }
+
+  /**
+   * Hold `selectedInfo` for the frame's interface pass (issue #391). A full `infoFor` is a
+   * few hundred fields' worth of derived stats, and one frame asked for it three and four times
+   * over — the HUD, the portrait, the command card, a hovered tooltip — about a world that does
+   * not move in between. While held the first answer is the answer; released, every call is
+   * fresh again, so a click handler between frames (which may have just changed the selection
+   * or the stash) never reads the frame's copy. The renderer opens and closes it around the
+   * HUD pass and nowhere else, which is the only window this is true of.
+   */
+  holdSelectionInfo(on: boolean): void {
+    this.infoHeld = on;
+    this.infoMemo = undefined;
+  }
+  private infoHeld = false;
+  private infoMemo: SelectionInfo | null | undefined = undefined;
+
+  /** `selectedInfo()?.id` without building the info — the HUD asks it every frame only to see
+   *  whether the selection CHANGED (#391). The same ids, synthetic ones included: a mine is
+   *  `-1000 - id`, a ground item `-2000 - id`, and a selection whose thing is gone is null. */
+  selectionKey(): number | null {
+    if (this.selectedMine !== null) return this.sim.mines.has(this.selectedMine) ? -1000 - this.selectedMine : null;
+    if (this.selectedItem !== null) return this.sim.items.has(this.selectedItem) ? -2000 - this.selectedItem : null;
+    if (this.primary === null) return null;
+    return this.frameUnit(this.primary) ? this.primary : null;
   }
 
   /** Selection info for a ground item: its name + description + model (for the HUD

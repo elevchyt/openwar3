@@ -12118,6 +12118,7 @@ export class MapViewerScene {
         this.rts.orderMode = "signal";
       },
       selection: () => this.rts?.selectedInfo() ?? null,
+      selectionId: () => this.rts?.selectionKey() ?? null,
       dots: () => this.rts?.dots() ?? [],
       allyColorMode: () => this.rts?.allyColorMode() ?? 0,
       cycleAllyColorMode: () => this.rts?.cycleAllyColorMode() ?? 0,
@@ -17991,9 +17992,16 @@ export class MapViewerScene {
       this.updateCamera(dt);
       this.rts?.reprojectBars(); // the bars follow THIS camera, not the one the step saw
       this.metrics.frame(dt, this.rts?.unitCount() ?? 0, this.rts?.pingMs());
-      this.hud?.frame(dt);
-      this.updateClock(wdt);
-      this.updatePortrait();
+      // One `selectedInfo` for the whole interface pass: the HUD, its command card and the
+      // portrait each asked for it again about the same world (issue #391).
+      this.rts?.holdSelectionInfo(true);
+      try {
+        this.hud?.frame(dt);
+        this.updateClock(wdt);
+        this.updatePortrait();
+      } finally {
+        this.rts?.holdSelectionInfo(false);
+      }
 
       // Re-scan for new on-map unit types (trained units, scouted enemies) a couple
       // times a second and warm their portraits before they're clicked.

@@ -335,6 +335,9 @@ export interface HudDriver {
   controlEnabled(): boolean;
   resources(): { gold: number; lumber: number; foodUsed: number; foodMax: number };
   selection(): HudSelection | null;
+  /** `selection()?.id` without building the selection — what the frame asks to see whether it
+   *  CHANGED (issue #391). Optional: a driver without it is asked `selection()` instead. */
+  selectionId?(): number | null;
   /** Minimap dots: world positions + owning player (for colour), and the friend-or-foe
    *  `tone` that overrides that colour on the local player's own minimap — white for their
    *  own units in every mode, teal/red for allies and enemies once an Ally Color Mode is on
@@ -1585,10 +1588,10 @@ export class GameHud {
   private cmdCdText: HTMLSpanElement[] = []; // per-slot cooldown seconds count
   private cmdCount: HTMLSpanElement[] = []; // per-slot corner count badge (skill points)
   private cmdHotkey: HTMLSpanElement[] = []; // per-slot corner key box ("Show hotkeys on command buttons")
+  /** What the card was last DRAWN from — every field the drawing reads, slot by slot — and
+   *  the printed-hotkey mode it was drawn under; "" forces a redraw (see refreshCommandCard). */
   private cmdKey = "";
-  /** The icon each button was last drawn with — compared per slot rather than folded into
-   *  `cmdKey`, because an icon is a data URL (see refreshCommandCard). */
-  private cmdIcons: Array<string | null> = [];
+  private cmdShown: CardFace[] = [];
   // Hero inventory: 6 slot buttons (2×3) with icon, charge badge, cooldown sweep.
   private invSlots: HTMLButtonElement[] = [];
   private invCount: HTMLSpanElement[] = []; // per-slot charge count badge
@@ -1895,7 +1898,7 @@ export class GameHud {
     this.textT += dtMs;
     // Refresh the info panel immediately when the selection changes, so the
     // construction/training display never lingers from the previous selection.
-    const selId = this.driver.selection()?.id ?? null;
+    const selId = this.selectionId();
     if (selId !== this.lastSelId) {
       this.lastSelId = selId;
       this.textT = TEXT_PERIOD;
@@ -1943,7 +1946,7 @@ export class GameHud {
    *  Priming `lastSelId` keeps frame() from redoing the work a moment later. */
   private refreshSelectionNow(): void {
     if (this.root.hidden) return;
-    this.lastSelId = this.driver.selection()?.id ?? null;
+    this.lastSelId = this.selectionId();
     this.textT = 0;
     this.updateTexts();
     this.refreshCommandCard();
@@ -3931,14 +3934,18 @@ export class GameHud {
     // it Storm Bolt's. The titles are short and go in the key; the icon is a DATA URL, kilobytes
     // per button on a key rebuilt every frame, so it is compared per slot instead — the cached
     // string for an unchanged icon is the same string, and that comparison costs nothing.
-    const key = `${printKeys ? hotkeyMode() : "-"}#` + cmds.map((c) => `${c.id}:${c.hotkey}:${c.disabled}:${!!c.cantAfford}:${!!c.noMana}:${c.active}:${c.modal}:${c.count ?? 0}:${c.name}:${c.tip ?? ""}:${c.desc}`).join("|");
-    const iconsSame = cmds.length === this.cmdIcons.length && cmds.every((c, i) => c.icon === this.cmdIcons[i]);
-    if (key === this.cmdKey && iconsSame) {
+    //
+    // Compared FIELD BY FIELD against what was last drawn rather than joined into one key: the
+    // join built a string of every button's whole Ubertip every frame only to find it equal
+    // (issue #391). A string compare of two equal strings is the same answer with nothing
+    // allocated, and the icon is no longer the odd one out.
+    const key = printKeys ? hotkeyMode() : "-";
+    if (key === this.cmdKey && sameCard(this.cmdShown, cmds)) {
       this.refreshCmdTooltip(cmds); // every frame: the stash moves without the card changing
       return;
     }
     this.cmdKey = key;
-    this.cmdIcons = cmds.map((c) => c.icon);
+    this.cmdShown = cmds.map(cardFace);
     for (let i = 0; i < this.cmdSlots.length; i++) {
       const btn = this.cmdSlots[i];
       btn.disabled = true;
@@ -4249,9 +4256,23 @@ export class GameHud {
    *  runs and `|n` breaks intact. Where a button has no game string behind it (the
    *  hand-written Move/Stop/… orders) the name + hotkey stand in. */
   private showTooltip(c: CommandButton): void {
-    const title = gridHotkeys()
-      ? gridTitle(c)
-      : c.tip ? wc3ToHtml(c.tip) : highlightHotkey(c.id.startsWith("build:") ? `Build ${c.name}` : c.name, c.hotkey);
+    // The TEXT half is held while the button's words are the same: a hovered button is
+    // re-shown every frame (the stash moves under a still cursor), and the markup pass over a
+    // whole Ubertip was being redone each time to the same answer (issue #391). The cost row
+    // is a handful of short strings and stays live, since it is what moves.
+    const grid = gridHotkeys();
+    let words = this.tipWords;
+    if (!words || words.grid !== grid || words.id !== c.id || words.row !== c.row || words.col !== c.col
+      || words.tip !== c.tip || words.name !== c.name || words.hotkey !== c.hotkey || words.desc !== c.desc) {
+      const title = grid
+        ? gridTitle(c)
+        : c.tip ? wc3ToHtml(c.tip) : highlightHotkey(c.id.startsWith("build:") ? `Build ${c.name}` : c.name, c.hotkey);
+      words = this.tipWords = {
+        grid, id: c.id, row: c.row, col: c.col, tip: c.tip, name: c.name, hotkey: c.hotkey, desc: c.desc,
+        title, body: wc3ToHtml(c.desc),
+      };
+    }
+    const { title } = words;
     const r = this.driver.resources();
     const sel = this.driver.selection();
     const costs =
@@ -4260,7 +4281,17 @@ export class GameHud {
       this.costItem("supply", c.food, r.foodMax - r.foodUsed) +
       this.costItem("mana", c.mana ?? 0, sel?.mana ?? 0);
     const cost = costs ? `<div class="hud-tooltip-cost">${costs}</div>` : "";
-    this.setTooltip(`<div class="hud-tooltip-title">${title}</div>${cost}<div class="hud-tooltip-desc">${wc3ToHtml(c.desc)}</div>`);
+    this.setTooltip(`<div class="hud-tooltip-title">${title}</div>${cost}<div class="hud-tooltip-desc">${words.body}</div>`);
+  }
+  /** The last button's tooltip words, as markup — see showTooltip. */
+  private tipWords: {
+    grid: boolean; id: string; row: number; col: number; tip?: string; name: string; hotkey: string; desc: string;
+    title: string; body: string;
+  } | null = null;
+
+  /** The selection's id, as cheaply as the driver can answer it (`selectionId`, #391). */
+  private selectionId(): number | null {
+    return this.driver.selectionId ? this.driver.selectionId() : this.driver.selection()?.id ?? null;
   }
 
   // --- per-frame updates ----------------------------------------------------
@@ -5624,4 +5655,33 @@ function highlightHotkey(name: string, hotkey: string): string {
   const idx = name.toUpperCase().indexOf(hotkey.toUpperCase());
   if (idx < 0) return escapeHtml(name);
   return escapeHtml(name.slice(0, idx)) + `<b>${escapeHtml(name[idx])}</b>` + escapeHtml(name.slice(idx + 1));
+}
+
+/** The fields of a command button that its DRAWING reads (refreshCommandCard) — kept per slot
+ *  so the next frame's card can be compared without joining every Ubertip into a key (#391).
+ *  `desc` is in it because a button keeps every other property while its "Requires:" line
+ *  shrinks, and `icon` because a map can re-art an ability under an unchanged id. */
+type CardFace = Pick<CommandButton, "id" | "row" | "col" | "hotkey" | "disabled" | "active" | "name" | "desc" | "icon">
+  & { cantAfford: boolean; noMana: boolean; modal: boolean; count: number; tip: string };
+
+function cardFace(c: CommandButton): CardFace {
+  return {
+    id: c.id, row: c.row, col: c.col, hotkey: c.hotkey, disabled: c.disabled, active: c.active,
+    name: c.name, desc: c.desc, icon: c.icon,
+    cantAfford: !!c.cantAfford, noMana: !!c.noMana, modal: !!c.modal, count: c.count ?? 0, tip: c.tip ?? "",
+  };
+}
+
+function sameCard(shown: readonly CardFace[], cmds: readonly CommandButton[]): boolean {
+  if (shown.length !== cmds.length) return false;
+  for (let i = 0; i < cmds.length; i++) {
+    const a = shown[i];
+    const c = cmds[i];
+    if (
+      a.id !== c.id || a.row !== c.row || a.col !== c.col || a.hotkey !== c.hotkey || a.disabled !== c.disabled
+      || a.active !== c.active || a.cantAfford !== !!c.cantAfford || a.noMana !== !!c.noMana || a.modal !== !!c.modal
+      || a.count !== (c.count ?? 0) || a.name !== c.name || a.tip !== (c.tip ?? "") || a.desc !== c.desc || a.icon !== c.icon
+    ) return false;
+  }
+  return true;
 }

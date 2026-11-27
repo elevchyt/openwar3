@@ -32,6 +32,8 @@ export function registerGameSaveClasses(): void {
     "lastVoiceId", "voiceStreak",
     // scratch
     "loc", "quat", "world", "screen", "world2", "screen2", "ray", "groundT", "volumes", "rideLoc", "rideQuat", "poseOut",
+    // the interface pass's held selection info (`holdSelectionInfo`) — a cache of one frame
+    "infoHeld", "infoMemo",
     // a LAN game's wire (a saved game is single-player)
     "matchLink", "snapshot", "matchLinkIsHost", "lastApplied", "pendingWireDeaths", "wireDeaths", "snapshotMorphs",
     "poses", "poseLive", "poseGliding", "snapshotSpawns", "snapshotItemSpawns", "snapshotItemRemovals",
