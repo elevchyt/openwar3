@@ -309,6 +309,18 @@ console.log("\nAcha (Berserker Upgrade / Tank Upgrade): the unit becomes UnitID1
   check("…and a Troll Berserker (UnitID1 otbk) once Robk is in", hunter.typeId, "otbk");
 }
 
+console.log("\nnonsapper (issue #362): a Goblin Sapper is refused by the rows that name it");
+{
+  const w = world();
+  const sapper = spawn(w, "ngsp", C, C, 0, 0);
+  const grunt = spawn(w, "ogru", C + 60, C, 0, 0);
+  const zep = spawn(w, "nzep", C + 30, C + 30, 0, 0);
+  check("the Sapper is classified one", [sapper.sapper, grunt.sapper], [true, false]);
+  check("the Goblin Zeppelin's hold (Sch3) refuses the Sapper", w.issueGarrison(sapper.id, zep.id), false);
+  check("…and takes the Grunt", w.issueGarrison(grunt.id, zep.id), true);
+  check("Banish refuses it: Notsapper", w.targetError(spawn(w, "Hblm", C, C + 200, 1, 1, 1), sapper, ABILITIES.get("AHbn").targetFlags, "AHbn"), "Notsapper");
+}
+
 if (failed) {
   console.log(`\n${failed} check(s) FAILED`);
   process.exit(1);

@@ -41,6 +41,9 @@ it.
   somewhere keeps its order and the passenger walks the whole way. With the aimed passenger
   aboard, `tickLoad` goes on to the nearest other unit still walking to it, so a group is
   collected rather than made to finish the walk.
+- **The hold has a Targets Allowed** (`issueGarrison`). `Sch3`/`Sch5` are
+  `ground,friend,vuln,invu,nonsapper`, read through `targsKindError` like a spell's, so a Goblin
+  Sapper (UnitBalance `type` "Sapper") is refused at the door — issue #362.
 - **Seats, not heads** (`garrisonLoad`, `holdRoom`). A full hold refuses at the door; the card
   greys Load on `holdRoom <= 0` and the right-click sends only as many as fit. The Entangled
   Gold Mine HIDES its two instead (seen in the real 1.30.4 client under Wine): an empty mine

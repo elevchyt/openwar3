@@ -36,6 +36,8 @@ export interface TargetKind {
    *  one — Charm and Polymorph name `nonhero` and refuse it, and anything hero-only accepts
    *  it. The DURATION half of the same rule is `dur()` in spells.ts. */
   resistant?: boolean;
+  /** UnitBalance `type` "Sapper" — refused by a `nonsapper` row (issue #362). */
+  sapper?: boolean;
 }
 
 /**
@@ -82,6 +84,13 @@ export function targsKindError(target: TargetKind, flags: readonly string[] = []
   // (see repairRefusal). commandstrings.txt [Errors] Notancient = "Unable to target
   // Ancients." — which exists for precisely this flag and nothing else.
   if (F.has("nonancient") && !F.has("ancient") && target.ancient) return "Notancient";
+  // `nonsapper` is the table's second exclusion, the same shape: Banish (`AHbn`/`ACbn`),
+  // Invisibility (`Aivs`), the Scroll of Haste (`AIsa`) and both transports' cargo holds
+  // (`Sch3`/`Sch5`) name it, so a Goblin Sapper (and Gazlowe, the other `Sapper` in
+  // UnitBalance) cannot be banished, hidden, hasted onto a base or flown over a wall.
+  // commandstrings.txt [Errors] Notsapper = "Unable to target Sappers." (UnitEditorData
+  // [targetList] 14 = nonsapper, and 18 = `sapper` its pair, which restricts nothing with it.)
+  if (F.has("nonsapper") && !F.has("sapper") && target.sapper) return "Notsapper";
   if (F.has("air") || F.has("ground") || F.has("structure")) {
     const kind = target.building ? "structure" : target.flying ? "air" : "ground";
     if (!F.has(kind)) return kind === "air" ? "Noair" : kind === "structure" ? "Nostructure" : "Noground";

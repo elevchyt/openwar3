@@ -80,6 +80,11 @@ CASES.push(
   ["ANfd", "air,ground,nonhero,structure,ancient,nonancient,friend", ancientAlly, null, "ancient AND nonancient admits an ancient"],
   ["Aslo", "air,ground,enemy,nonancient", unit({ owner: 1, team: 1, ancient: true }), "Notancient", "…while nonancient alone still refuses one"],
   ["Aslo", "air,ground,enemy,hero,nonhero", heroFoe, null, "hero AND nonhero admits a hero"],
+  // `nonsapper` (issue #362): Banish is `air,ground,nonsapper,organic`, and a Goblin Sapper is
+  // UnitBalance `type` "Sapper".
+  ["AHbn", "air,ground,nonsapper,organic", unit({ owner: 1, team: 1, sapper: true }), "Notsapper", "no Banish on a Goblin Sapper"],
+  ["AHbn", "air,ground,nonsapper,organic", enemyGround, null, "…while anybody else is banished"],
+  ["AHbn", "air,ground,sapper,nonsapper,organic", unit({ owner: 1, team: 1, sapper: true }), null, "sapper AND nonsapper admits one"],
 );
 
 // Magic Immunity (`Amim`) — the Dryad, Spell Breaker, Destroyer, Faerie Dragon. It refuses

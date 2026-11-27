@@ -2343,6 +2343,10 @@ export interface SimUnit {
    *   • the game's own Targets Allowed carries a `nonancient` flag (the human Repair's targs
    *     list it), so this is the data's own idea of the category rather than ours. */
   ancient: boolean;
+  /** UnitBalance `type` "Sapper" (the Goblin Sapper and its campaign twin): what a `nonsapper`
+   *  Targets Allowed entry refuses — Banish, Invisibility, the Scroll of Animate… (targeting.ts).
+   *  Derived from the type at `add`, re-derived on a transform, and `UnitAddType`'s to change. */
+  sapper: boolean;
   /** `UnitAddType` / `UnitRemoveType` on the classifications that have no flag of their own
    *  here (giant, stunned, plagued, snared, undead, sapper, townhall, tauren), keyed by
    *  common.j's `ConvertUnitType` index: what IsUnitType answers for this one unit instead of
@@ -6903,6 +6907,13 @@ export class SimWorld {
     if (workersOnly ? !p.worker : p.building || p.flying) return false;
     if (p.id === b.id || p.garrisonCap > 0) return false; // a hold does not board a hold
     if (this.hostile(p, b)) return false; // only your own / allied holds
+    // A TRANSPORT's hold has a Targets Allowed of its own: `Sch3`/`Sch5` are
+    // `ground,friend,vuln,invu,nonsapper`, so a Goblin Sapper may not be carried (issue #362).
+    if (this.isTransport(b)) {
+      const hold = this.cargoHold(b.typeId);
+      const flags = hold ? this.abilities?.get(hold.alias)?.targetFlags : undefined;
+      if (flags && targsKindError(p, flags) !== null) return false;
+    }
     // FULL is a refusal ("Cargo capacity unavailable."); a hold that is merely not open yet —
     // an Entangled Gold Mine still closing its roots — is not, and the walk-up waits at the
     // door for it (tickGarrison).
@@ -8732,6 +8743,7 @@ export class SimWorld {
     u.ward = cls.includes("ward");
     u.mechanical = cls.includes("mechanical");
     u.ancient = cls.includes("ancient");
+    u.sapper = cls.includes("sapper");
   }
 
   private morphUnit(u: SimUnit, toTypeId: string): void {
@@ -8802,6 +8814,7 @@ export class SimWorld {
     u.ward = cls.includes("ward");
     u.mechanical = cls.includes("mechanical");
     u.ancient = cls.includes("ancient");
+    u.sapper = cls.includes("sapper");
     // …and so does the JOB. A Militia is not a Peasant holding a sword: while it is armed it
     // gathers nothing, builds nothing and mends nothing, and `worker` is the one switch all
     // three hang off (`SelectionInfo.isWorker` is `!!u.worker`, and so are issueHarvest and
@@ -10088,6 +10101,7 @@ export class SimWorld {
       | "desiredFacing"
       | "waterborne" // derived from the type's movetype, below
       | "targClass" // …and from the type's targType, alongside it
+      | "sapper" // …and from its UnitBalance classification
       | "cargoSize" // …and its transported size
       | "path"
       | "waypoint"
@@ -10386,6 +10400,8 @@ export class SimWorld {
       // …and which class another unit's "Targets Allowed" list has to name to reach it. Same
       // reasoning as waterborne: a fact about the TYPE, so no caller has to remember it.
       targClass: this.unitReg?.get(unit.typeId)?.targType ?? "",
+      // …and whether it is a Sapper, which `nonsapper` Targets Allowed rows refuse (issue #362).
+      sapper: !!this.unitReg?.get(unit.typeId)?.classification?.includes("sapper"),
       cargoSize: Math.max(1, this.unitReg?.get(unit.typeId)?.cargoSize ?? 1),
       // Pre-upgrade vision baselines. recomputeStats() rebuilds the live values from these
       // every tick, so researching Forged Swords mid-game lifts every existing Footman (the
@@ -19602,6 +19618,7 @@ export class SimWorld {
       case 10: u.isSummon = on; break; // UNIT_TYPE_SUMMONED
       case 15: u.mechanical = on; break; // UNIT_TYPE_MECHANICAL
       case 16: u.isPeon = on; break; // UNIT_TYPE_PEON
+      case 17: u.sapper = on; break; // UNIT_TYPE_SAPPER
       case 19: u.ancient = on; break; // UNIT_TYPE_ANCIENT
       default: (u.classOverrides ??= {})[t] = on;
     }

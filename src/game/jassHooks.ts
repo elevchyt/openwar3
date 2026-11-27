@@ -839,10 +839,10 @@ export function rosterHooks(
         case 14: return u.race === "undead";
         case 15: return u.mechanical;
         case 16: return u.isPeon;
-        // The UnitBalance `type` words these four are named by (giant, sapper, townhall,
-        // tauren), and the ancients' flag the sim keeps for itself.
+        // The UnitBalance `type` words these three are named by (giant, townhall, tauren), and
+        // the sapper's and the ancients' flags the sim keeps for itself.
         case 9: return !!cls?.includes("giant");
-        case 17: return !!cls?.includes("sapper");
+        case 17: return u.sapper;
         case 18: return !!cls?.includes("townhall");
         case 19: return u.ancient;
         case 20: return !!cls?.includes("tauren");
