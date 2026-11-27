@@ -295,9 +295,20 @@ function sameShape(a: number[], b: number[]): boolean {
   return true;
 }
 
-class ReturnSignal {
-  constructor(readonly value: JassValue) {}
-}
+/**
+ * How a `return` and an `exitwhen` leave the statements they are in: as a MARK the statement
+ * hands back, which every enclosing block passes up unread until the function (a return) or the
+ * loop (an exit) that it belongs to takes it. They used to be THROWN — `ReturnSignal` and
+ * `ExitLoop` — and a throw unwinding a stack of generators is the most expensive thing a
+ * statement could do: on a script that returns a value from a small function in a loop, it was
+ * most of the time spent running JASS at all (issue #388). The returned VALUE waits in
+ * `Interpreter.returned`: it is written by the `return` and taken by the function it leaves with
+ * no wait and no JASS in between (only the enclosing blocks' `finally`s run), so one register is
+ * enough and a saved thread never holds one in flight — TRANSIENT, game/save/classes.ts. Never a
+ * value a script can see: nothing but a statement returns these.
+ */
+const RETURN_MARK: JassValue = Object.freeze({ k: "null" }) as JassValue;
+const EXIT_MARK: JassValue = Object.freeze({ k: "null" }) as JassValue;
 
 /** A function call frame: local variables + local arrays. Parameters live in the
  *  same var map (JASS has no separate parameter scope). */
@@ -669,6 +680,9 @@ export class Interpreter {
     });
   }
 
+  /** The value of the `return` on its way out of its function (RETURN_MARK). */
+  private returned: JassValue = JNULL;
+
   private *callUserG(fn: FunctionDecl, args: JassValue[], ts: Trace): ThreadGen {
     // On a RESUME the frame comes back from the saved trace, so `args` are not looked at; the
     // depth and the record-only scope are re-entered exactly as the first time (a restored
@@ -704,10 +718,7 @@ export class Interpreter {
         }
         r.ph = 1;
       }
-      yield* this.execBlockG(fn.body, frame, ts);
-    } catch (e) {
-      if (e instanceof ReturnSignal) return e.value;
-      throw e;
+      if ((yield* this.execBlockG(fn.body, frame, ts)) === RETURN_MARK) return this.returned;
     } finally {
       ts.recs.pop();
       this.depth--;
@@ -720,7 +731,10 @@ export class Interpreter {
     const r = ts.take("block") ?? { k: "block" as const, i: 0 };
     ts.recs.push(r);
     try {
-      for (; r.i < stmts.length; r.i++) yield* this.exec(stmts[r.i], frame, ts);
+      for (; r.i < stmts.length; r.i++) {
+        const v = yield* this.exec(stmts[r.i], frame, ts);
+        if (v === RETURN_MARK || v === EXIT_MARK) return v; // …up to the function or the loop it leaves
+      }
     } finally {
       ts.recs.pop();
     }
@@ -738,7 +752,7 @@ export class Interpreter {
         const nat = thread ? undefined : this.rt.natives.get(s.name);
         // A plain native over arguments that cannot wait never suspends, so it keeps no record
         // (nearly every statement there is — see TraceRec on which levels keep one).
-        if (nat && !s.args.some((a) => this.mayWait(a))) {
+        if (nat && !this.argsMayWait(s)) {
           this.callNative(s.name, nat, s.args.map((a) => this.eval(a, frame)));
           return JNULL;
         }
@@ -792,7 +806,8 @@ export class Interpreter {
         return JNULL;
       }
       case "return":
-        throw new ReturnSignal(s.value ? yield* this.evalG(s.value, frame, ts) : JNULL);
+        this.returned = s.value ? yield* this.evalG(s.value, frame, ts) : JNULL;
+        return RETURN_MARK;
       case "if": {
         const resumed = ts.take("if");
         const r = resumed ?? {
@@ -820,8 +835,9 @@ export class Interpreter {
             r.ph = 1;
           }
           if (r.ph === 1) {
-            if (r.bi >= 0) yield* this.execBlockG(s.branches[r.bi].body, frame, ts);
-            else if (r.bi === -1) yield* this.execBlockG(s.elseBody!, frame, ts);
+            const left = r.bi >= 0 ? yield* this.execBlockG(s.branches[r.bi].body, frame, ts)
+              : r.bi === -1 ? yield* this.execBlockG(s.elseBody!, frame, ts) : JNULL;
+            if (left === RETURN_MARK || left === EXIT_MARK) return left;
             if (this.aiScript) return JNULL;
             // (The HOST's own pass above is the statement exactly as it has always run —
             // docs/multiplayer.md Phase E item 7b.)
@@ -850,8 +866,9 @@ export class Interpreter {
                 }
                 r.pt = t >= 0 ? t : s.elseBody ? -1 : -3;
               }
-              if (r.pt >= 0) yield* this.execBlockG(s.branches[r.pt].body, frame, ts);
-              else if (r.pt === -1) yield* this.execBlockG(s.elseBody!, frame, ts);
+              const left = r.pt >= 0 ? yield* this.execBlockG(s.branches[r.pt].body, frame, ts)
+                : r.pt === -1 ? yield* this.execBlockG(s.elseBody!, frame, ts) : JNULL;
+              if (left === RETURN_MARK || left === EXIT_MARK) return left;
             } finally {
               // Restored even if the block throws, or the runtime answers `GetLocalPlayer` as
               // somebody else for the rest of the match — the same care `forAudience` takes.
@@ -877,11 +894,10 @@ export class Interpreter {
               }
               r.mid = true;
             }
-            try {
-              for (; r.j < s.body.length; r.j++) yield* this.exec(s.body[r.j], frame, ts);
-            } catch (e) {
-              if (e instanceof ExitLoop) return JNULL;
-              throw e;
+            for (; r.j < s.body.length; r.j++) {
+              const v = yield* this.exec(s.body[r.j], frame, ts);
+              if (v === EXIT_MARK) return JNULL; // this loop's exitwhen
+              if (v === RETURN_MARK) return v;
             }
             r.j = 0;
             r.mid = false;
@@ -891,8 +907,7 @@ export class Interpreter {
         }
       }
       case "exitwhen":
-        if (truthy(yield* this.evalG(s.cond, frame, ts))) throw EXIT_LOOP;
-        return JNULL;
+        return truthy(yield* this.evalG(s.cond, frame, ts)) ? EXIT_MARK : JNULL;
     }
   }
 
@@ -1110,7 +1125,7 @@ export class Interpreter {
           yield* this.callFunctionG(fn, [], ts);
         } catch (err) {
           if (err instanceof ThreadAbort) throw err;
-          if (!(err instanceof ReturnSignal)) this.rt.warnOnce(fn, `trigger action threw: ${(err as Error).message}`);
+          this.rt.warnOnce(fn, `trigger action threw: ${(err as Error).message}`);
         }
       }
     } finally {
@@ -1153,7 +1168,9 @@ export class Interpreter {
       case "code":
         return { k: "code", fn: e.name };
       case "var": {
-        if (frame?.vars.has(e.name)) return frame.vars.get(e.name)!;
+        // One lookup a scope: a stored value is never `undefined`, so a miss is the answer.
+        const l = frame?.vars.get(e.name);
+        if (l !== undefined) return l;
         const g = this.rt.globals.get(e.name);
         if (g !== undefined) return g;
         this.rt.warnOnce(e.name, "undefined variable");
@@ -1267,6 +1284,20 @@ export class Interpreter {
     return r;
   }
   private readonly waitCache = new WeakMap<Expr, boolean>();
+
+  /** Can any argument of this CALL STATEMENT wait — `mayWait` over its arguments, kept per
+   *  statement as `mayWait` is per expression, since a native call statement asks it every time
+   *  it runs. */
+  private argsMayWait(s: Extract<Stmt, { kind: "call" }>): boolean {
+    let hit = this.stmtWaitCache.get(s);
+    if (hit === undefined) {
+      hit = false;
+      for (const a of s.args) if (this.mayWait(a)) { hit = true; break; }
+      this.stmtWaitCache.set(s, hit);
+    }
+    return hit;
+  }
+  private readonly stmtWaitCache = new WeakMap<Stmt, boolean>();
 
   private evalUnary(op: "-" | "not" | "+", v: JassValue): JassValue {
     if (op === "not") return jBool(!truthy(v));
@@ -1387,7 +1418,7 @@ export class Interpreter {
         t.wakeAt = this.rt.gameTime + Math.max(0, typeof r.value === "number" ? r.value : 0);
       }
     } catch (err) {
-      if (!(err instanceof ReturnSignal) && !(err instanceof ThreadAbort)) {
+      if (!(err instanceof ThreadAbort)) {
         this.rt.warnOnce(t.label, `trigger thread threw: ${(err as Error).message}`);
       }
       t.done = true;
@@ -2663,7 +2694,3 @@ export class Interpreter {
       && this.eventFilterPasses(reg.params[2], filterUnit);
   }
 }
-
-/** Non-error control-flow token for `exitwhen` (thrown to unwind out of loop body). */
-class ExitLoop {}
-const EXIT_LOOP = new ExitLoop();
